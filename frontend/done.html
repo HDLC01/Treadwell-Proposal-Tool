@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — Done</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">T</span>
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+  <div class="progress">
+    <span class="step">1 · Intake</span>
+    <span class="step">2 · Estimate</span>
+    <span class="step">3 · Proposal</span>
+    <span class="step active">4 · Done</span>
+  </div>
+</header>
+
+<main class="container">
+  <div class="success-card">
+    <div class="success-mark">✓</div>
+    <h1>Proposal generated</h1>
+    <p class="lede" id="project-line">—</p>
+
+    <div id="dropbox-info"></div>
+
+    <div class="download-row">
+      <a id="dl-xlsx" class="download-link" href="#" download>↓ Download Estimate (.xlsx)</a>
+      <a id="dl-docx" class="download-link" href="#" download>↓ Download Proposal (.docx)</a>
+    </div>
+
+    <p class="hint" style="margin-top:24px;">
+      Files are also accessible at the Dropbox folder above (if configured).
+      Direct-download links expire when this session ends.
+    </p>
+
+    <div class="actions" style="justify-content: center; margin-top: 32px;">
+      <button id="restart-btn" class="btn-secondary">↻ Start a new project</button>
+    </div>
+  </div>
+</main>
+
+<script src="/shared.js"></script>
+<script>
+  const state = TW.getState();
+  const result = state.generate_result;
+
+  if (!result) { window.location.assign("/"); }
+
+  // Project line
+  const wt = (state.work_type || "epoxy").toUpperCase();
+  const audience = state.audience || "Direct";
+  document.getElementById("project-line").textContent =
+    `${state.project_name} · ${wt} · ${audience}`;
+
+  // Direct download links (always work). Wrap with absoluteUrl so when
+  // frontend (Vercel) and backend (Railway) are on different origins,
+  // the link points at the backend.
+  document.getElementById("dl-xlsx").href = TW.absoluteUrl(result.xlsx_download_url);
+  document.getElementById("dl-docx").href = TW.absoluteUrl(result.docx_download_url);
+
+  // Dropbox status banner
+  const dbox = result.dropbox || {};
+  const dboxEl = document.getElementById("dropbox-info");
+  if (dbox.configured && dbox.folder_url) {
+    dboxEl.innerHTML = `
+      <div class="alert alert-info">
+        <strong>Saved to Dropbox:</strong>
+        <a href="${dbox.folder_url}" target="_blank" rel="noopener">${dbox.folder_path}</a>
+      </div>
+    `;
+  } else if (dbox.error) {
+    dboxEl.innerHTML = `
+      <div class="alert alert-warn">
+        <strong>Dropbox upload skipped:</strong> ${dbox.error}
+        <br><span class="hint">Files are available via the download buttons below.</span>
+      </div>
+    `;
+  }
+
+  document.getElementById("restart-btn").addEventListener("click", () => {
+    TW.clearState();
+    window.location.assign("/");
+  });
+</script>
+
+</body>
+</html>

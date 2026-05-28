@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — Estimate Review</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">T</span>
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+  <div class="progress">
+    <span class="step">1 · Intake</span>
+    <span class="step active">2 · Estimate</span>
+    <span class="step">3 · Proposal</span>
+    <span class="step">4 · Done</span>
+  </div>
+</header>
+
+<main class="container wide">
+  <h1>Estimate Review <span id="type-badge" class="type-badge">EPOXY</span></h1>
+  <p class="lede">
+    Edit any input. Totals on the right update as you type. Detected work
+    type is shown above &mdash; override if needed.
+  </p>
+
+  <div class="split">
+    <form id="estimate-form">
+
+      <fieldset>
+        <legend>Override work type</legend>
+        <p class="hint">Auto-detected from your scope inputs. Override if needed.</p>
+        <div class="radio-row">
+          <label class="radio"><input type="radio" name="work_type" value="epoxy">  <span>Epoxy</span></label>
+          <label class="radio"><input type="radio" name="work_type" value="polish"> <span>Polish</span></label>
+          <label class="radio"><input type="radio" name="work_type" value="combo">  <span>Combo</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset id="epoxy-section">
+        <legend>Epoxy inputs</legend>
+        <div class="row three">
+          <label>System 1 cost/SF
+            <input type="number" name="system_1_cost_per_sf" step="0.01" value="0.10">
+          </label>
+          <label>System 1 SF
+            <input type="number" name="system_1_sf" min="0" step="1">
+          </label>
+          <label>System 2 SF
+            <input type="number" name="system_2_sf" min="0" step="1" value="0">
+          </label>
+        </div>
+        <div class="row">
+          <label>Cove 1 LF
+            <input type="number" name="cove_1_lf" min="0" step="1" value="0">
+          </label>
+          <label>Cove 2 LF
+            <input type="number" name="cove_2_lf" min="0" step="1" value="0">
+          </label>
+        </div>
+
+        <h2>Labor — Crew</h2>
+        <div class="row three">
+          <label>Crew size
+            <input type="number" name="labor_crew_size" min="0" step="1" value="3">
+          </label>
+          <label>Days
+            <input type="number" name="labor_days" min="0" step="0.5" value="5">
+          </label>
+          <label>Rate $/hr
+            <input type="number" name="labor_rate" step="0.01" value="32.20">
+          </label>
+        </div>
+        <div class="row three">
+          <label>Travel hours
+            <input type="number" name="travel_hours" min="0" step="0.5" value="0">
+          </label>
+          <label>Travel rate $/hr
+            <input type="number" name="travel_rate" step="0.01" value="32.20">
+          </label>
+          <label>Labor burden %
+            <input type="number" name="labor_burden_pct" step="0.001" value="0.12">
+          </label>
+        </div>
+
+        <h2>Tooling</h2>
+        <div class="row three">
+          <label>Moisture test $
+            <input type="number" name="moisture_test_cost" step="1" value="35">
+          </label>
+          <label>Tooling &amp; consumables $/SF
+            <input type="number" name="tooling_consumables" step="0.01" value="0.33">
+          </label>
+          <label>Demo tooling $/SF
+            <input type="number" name="demo_tooling" step="0.01" value="0.33">
+          </label>
+        </div>
+
+        <h2>Tax &amp; Markup</h2>
+        <div class="row three">
+          <label>Superintendent + PTO %
+            <input type="number" name="superintendent_pto_pct" step="0.001" value="0.03">
+          </label>
+          <label>Soft costs %
+            <input type="number" name="soft_costs_pct" step="0.001" value="0.13">
+          </label>
+          <label>Contingency $
+            <input type="number" name="contingency" step="1" value="0">
+          </label>
+        </div>
+        <div class="row three">
+          <label>Bond $
+            <input type="number" name="bond" step="1" value="0">
+          </label>
+          <label>Taxable?
+            <select name="taxable">
+              <option value="Yes" selected>Yes</option>
+              <option value="No">No</option>
+            </select>
+          </label>
+          <label>Local? (&lt;70mi)
+            <select name="local">
+              <option value="Yes" selected>Yes</option>
+              <option value="No">No</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset id="polish-section">
+        <legend>Polish inputs</legend>
+        <div class="row three">
+          <label>Polish floor SF
+            <input type="number" name="polish_sf" min="0" step="1" value="0">
+          </label>
+          <label>Densifier cost $/SF
+            <input type="number" name="densifier_cost" step="0.01" value="0.07">
+          </label>
+          <label>Sealer cost $/SF
+            <input type="number" name="sealer_cost" step="0.01" value="0.10">
+          </label>
+        </div>
+        <div class="row three">
+          <label>Polish crew size
+            <input type="number" name="polish_labor_crew_size" min="0" step="1" value="3">
+          </label>
+          <label>Polish rate $/hr
+            <input type="number" name="polish_labor_rate" step="0.01" value="32.20">
+          </label>
+          <label>Polish burden %
+            <input type="number" name="polish_labor_burden_pct" step="0.001" value="0.12">
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="actions">
+        <button type="button" id="back-btn" class="btn-secondary">← Back to Intake</button>
+        <button type="submit" class="btn-primary">Continue to Proposal Review →</button>
+      </div>
+    </form>
+
+    <aside class="totals-card">
+      <h2>Live totals</h2>
+      <div id="totals-list">
+        <div class="totals-row"><span class="label">Material total</span><span id="t-material">$—</span></div>
+        <div class="totals-row"><span class="label">Labor + burden</span><span id="t-labor">$—</span></div>
+        <div class="totals-row"><span class="label">Tooling total</span><span id="t-tooling">$—</span></div>
+        <div class="totals-row"><span class="label">Subtotal</span><span id="t-subtotal">$—</span></div>
+        <div class="totals-row total"><span>LUMP SUM</span><span id="t-lump">$—</span></div>
+      </div>
+      <p class="hint" style="margin-top:12px;">
+        Preview only — Excel re-computes formulas when the file opens.
+      </p>
+    </aside>
+  </div>
+</main>
+
+<script src="/shared.js"></script>
+<script>
+  const form = document.getElementById("estimate-form");
+  const state = TW.getState();
+
+  if (!state.project_name) {
+    // Came here directly without filling intake — bounce back.
+    window.location.assign("/");
+  }
+
+  // Pre-fill from saved state
+  TW.writeForm(form, state);
+  document.querySelector(`input[name="work_type"][value="${state.work_type || "epoxy"}"]`).checked = true;
+
+  // Show/hide sections based on detected type
+  function showSections() {
+    const wt = form.querySelector('input[name="work_type"]:checked').value;
+    document.getElementById("type-badge").textContent = wt.toUpperCase();
+    document.getElementById("epoxy-section").style.display  = (wt === "polish") ? "none" : "";
+    document.getElementById("polish-section").style.display = (wt === "epoxy")  ? "none" : "";
+  }
+  showSections();
+  form.querySelectorAll('input[name="work_type"]').forEach(r => r.addEventListener("change", showSections));
+
+  // Live totals — recompute on any input change, debounced
+  let debounceTimer = null;
+  async function refreshTotals() {
+    const values = TW.readForm(form);
+    try {
+      const totals = await TW.postJSON("/api/compute-estimate", { values });
+      const epoxy = totals.epoxy || {};
+      const polish = totals.polish || {};
+      document.getElementById("t-material").textContent = TW.fmtUsd((epoxy.material_total || 0) + (polish.material_total || 0));
+      document.getElementById("t-labor").textContent    = TW.fmtUsd((epoxy.labor_install  || 0) + (polish.labor_install  || 0));
+      document.getElementById("t-tooling").textContent  = TW.fmtUsd((epoxy.tooling_total  || 0));
+      document.getElementById("t-subtotal").textContent = TW.fmtUsd((epoxy.subtotal       || 0) + (polish.subtotal       || 0));
+      document.getElementById("t-lump").textContent     = TW.fmtUsd(totals.combined_lump_sum || 0);
+    } catch (err) {
+      console.warn("totals refresh failed", err);
+    }
+  }
+  refreshTotals();
+  form.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(refreshTotals, 300);
+  });
+
+  document.getElementById("back-btn").addEventListener("click", () => {
+    TW.setState(TW.readForm(form));
+    window.location.assign("/");
+  });
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    TW.setState(TW.readForm(form));
+    window.location.assign("/proposal-review.html");
+  });
+</script>
+
+</body>
+</html>

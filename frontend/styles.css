@@ -1,0 +1,302 @@
+/* Treadwell Proposal Generator — minimal styling.
+   Single file so the 4 screens share visual language without a build step. */
+
+:root {
+  --treadwell-red:       #9e001f;
+  --treadwell-red-dark:  #6c0015;
+  --treadwell-red-light: #ffdad8;
+  --ink:                 #1a1a1a;
+  --ink-variant:         #5c403f;
+  --surface:             #fbf9f8;
+  --surface-low:         #f3eeed;
+  --surface-dim:         #dbdad9;
+  --surface-lowest:      #ffffff;
+  --success:             #16a34a;
+  --warning:             #f59e0b;
+  --danger:              #ba1a1a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ─── Topbar ──────────────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--surface-dim);
+  background: var(--surface-lowest);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark {
+  display: inline-flex;
+  width: 36px; height: 36px;
+  background: var(--treadwell-red);
+  color: white;
+  font-weight: 800;
+  font-size: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+.brand-name { font-weight: 800; font-size: 16px; }
+.brand-sub  { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-variant); }
+.progress   { display: flex; gap: 4px; flex-wrap: wrap; }
+.progress .step {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-variant);
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: var(--surface-low);
+}
+.progress .step.active {
+  background: var(--treadwell-red);
+  color: white;
+  font-weight: 700;
+}
+
+/* ─── Container ───────────────────────────────────────────────────── */
+.container {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+.container.wide { max-width: 1200px; }
+
+h1 {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--treadwell-red-dark);
+  margin: 0 0 4px;
+}
+h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 24px 0 8px;
+}
+.lede { color: var(--ink-variant); margin: 0 0 24px; }
+
+/* ─── Forms ───────────────────────────────────────────────────────── */
+fieldset {
+  border: 1px solid var(--surface-dim);
+  border-radius: 8px;
+  padding: 16px 20px 20px;
+  margin: 0 0 16px;
+  background: var(--surface-lowest);
+}
+legend {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--treadwell-red-dark);
+  padding: 0 6px;
+}
+.hint { font-size: 12px; color: var(--ink-variant); margin: 0 0 12px; }
+
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 12px 0 0;
+}
+input[type="text"], input[type="email"], input[type="number"],
+input[type="date"], textarea, select {
+  width: 100%;
+  display: block;
+  margin-top: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--surface-dim);
+  border-radius: 4px;
+  min-height: 36px;
+}
+input:focus, textarea:focus, select:focus {
+  outline: 2px solid var(--treadwell-red-light);
+  outline-offset: 1px;
+  border-color: var(--treadwell-red);
+}
+textarea { min-height: 100px; resize: vertical; }
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.row.three { grid-template-columns: 1fr 1fr 1fr; }
+@media (max-width: 600px) {
+  .row, .row.three { grid-template-columns: 1fr; }
+}
+
+.radio-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+.radio { display: inline-flex; gap: 6px; align-items: center; font-weight: 500; cursor: pointer; }
+.radio input { width: auto; min-height: 0; margin: 0; }
+
+/* ─── Buttons ─────────────────────────────────────────────────────── */
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  padding: 10px 18px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.btn-primary {
+  background: var(--treadwell-red);
+  color: white;
+  border-color: var(--treadwell-red-dark);
+}
+.btn-primary:hover { background: var(--treadwell-red-dark); }
+.btn-primary:disabled { opacity: 0.5; cursor: wait; }
+.btn-secondary {
+  background: var(--surface-lowest);
+  color: var(--ink);
+  border-color: var(--surface-dim);
+}
+.btn-secondary:hover { background: var(--surface-low); }
+
+/* ─── Two-column layout (estimate review) ────────────────────────── */
+.split {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 24px;
+}
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+.totals-card {
+  background: var(--surface-lowest);
+  border: 1px solid var(--surface-dim);
+  border-radius: 8px;
+  padding: 20px;
+  position: sticky;
+  top: 24px;
+  align-self: start;
+}
+.totals-card h2 { margin-top: 0; }
+.totals-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px dashed var(--surface-dim);
+  font-size: 13px;
+}
+.totals-row:last-child { border-bottom: none; }
+.totals-row .label { color: var(--ink-variant); }
+.totals-row.total {
+  margin-top: 12px;
+  padding: 12px 0 0;
+  border-top: 2px solid var(--treadwell-red);
+  border-bottom: none;
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--treadwell-red-dark);
+}
+
+/* ─── Canonical (locked) block on proposal review ─────────────────── */
+.canonical-block {
+  background: var(--surface-low);
+  border-left: 4px solid var(--treadwell-red);
+  padding: 12px 16px;
+  margin: 0 0 24px;
+  border-radius: 0 6px 6px 0;
+}
+.canonical-block dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-variant);
+  font-weight: 700;
+  margin-top: 8px;
+}
+.canonical-block dt:first-child { margin-top: 0; }
+.canonical-block dd { margin: 2px 0 0; font-weight: 600; }
+
+/* ─── Done screen ─────────────────────────────────────────────────── */
+.success-card {
+  background: var(--surface-lowest);
+  border: 1px solid var(--surface-dim);
+  border-radius: 10px;
+  padding: 32px;
+  text-align: center;
+}
+.success-mark {
+  display: inline-flex;
+  width: 64px; height: 64px;
+  background: var(--success);
+  color: white;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  margin: 0 auto 16px;
+}
+.download-row {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.download-link {
+  display: inline-block;
+  padding: 12px 20px;
+  background: var(--treadwell-red);
+  color: white;
+  text-decoration: none;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.download-link:hover { background: var(--treadwell-red-dark); }
+.download-link.secondary {
+  background: var(--surface-lowest);
+  color: var(--treadwell-red-dark);
+  border: 1px solid var(--treadwell-red);
+}
+
+.alert {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin: 16px 0;
+  font-size: 13px;
+}
+.alert-info { background: #e0f2fe; color: #075985; border-left: 4px solid #0284c7; }
+.alert-warn { background: #fef3c7; color: #92400e; border-left: 4px solid #f59e0b; }
+.alert-error { background: #fee2e2; color: #991b1b; border-left: 4px solid #dc2626; }
+
+/* ─── Detected-type badge ─────────────────────────────────────────── */
+.type-badge {
+  display: inline-block;
+  background: var(--treadwell-red);
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 99px;
+  margin-left: 8px;
+}

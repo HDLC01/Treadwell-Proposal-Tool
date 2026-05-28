@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — Intake</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">T</span>
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+  <div class="progress">
+    <span class="step active">1 · Intake</span>
+    <span class="step">2 · Estimate</span>
+    <span class="step">3 · Proposal</span>
+    <span class="step">4 · Done</span>
+  </div>
+</header>
+
+<main class="container">
+  <h1>New Project</h1>
+  <p class="lede">
+    Fill in the basics. You can edit the estimate and proposal narrative on
+    the next two screens before generating the files.
+  </p>
+
+  <form id="intake-form">
+
+    <fieldset>
+      <legend>Project Info</legend>
+      <label>Project name
+        <input type="text" name="project_name" required placeholder="Acme Mfg — Warehouse Floor Coating">
+      </label>
+      <label>Address
+        <input type="text" name="address" placeholder="8500 NW Prairie View Rd">
+      </label>
+      <label>City &amp; State
+        <input type="text" name="city_state" placeholder="Kansas City, MO">
+      </label>
+      <div class="row">
+        <label>Bid date
+          <input type="date" name="bid_date">
+        </label>
+        <label>Architect / GC
+          <input type="text" name="architect" placeholder="(optional)">
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Contact</legend>
+      <label>Contact name
+        <input type="text" name="contact_name" placeholder="Hanz de la Cruz">
+      </label>
+      <div class="row">
+        <label>Email
+          <input type="email" name="contact_email" placeholder="hanz@example.com">
+        </label>
+        <label>Phone
+          <input type="text" name="contact_phone" placeholder="(913) 555-0142">
+        </label>
+      </div>
+      <label>Source
+        <select name="source">
+          <option value="website">Website</option>
+          <option value="referral">Referral</option>
+          <option value="basis_board">Basis Board</option>
+          <option value="treadwell_vehicle">Treadwell vehicle</option>
+          <option value="email">Email</option>
+          <option value="phone">Phone</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Scope (quick)</legend>
+      <p class="hint">
+        Used to auto-detect work type and pre-fill the estimate.
+        You'll be able to refine on the next screen.
+      </p>
+      <div class="row">
+        <label>Epoxy floor SF
+          <input type="number" name="system_1_sf" min="0" step="1" value="0">
+        </label>
+        <label>Polish floor SF
+          <input type="number" name="polish_sf" min="0" step="1" value="0">
+        </label>
+      </div>
+      <div class="row">
+        <label>Cove LF (epoxy)
+          <input type="number" name="cove_1_lf" min="0" step="1" value="0">
+        </label>
+        <label>Bid date / Approx start
+          <input type="date" name="approx_start_date">
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Audience</legend>
+      <p class="hint">Picks which proposal template the tool fills.</p>
+      <div class="radio-row">
+        <label class="radio">
+          <input type="radio" name="audience" value="Direct" checked>
+          <span>Direct customer</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="audience" value="GC">
+          <span>General contractor (GC)</span>
+        </label>
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="btn-primary">
+        Continue to Estimate Review →
+      </button>
+    </div>
+  </form>
+</main>
+
+<script src="/shared.js"></script>
+<script>
+  // Restore previous state if user clicked Back from screen 2
+  const form = document.getElementById("intake-form");
+  TW.writeForm(form, TW.getState());
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const values = TW.readForm(form);
+
+    // Detect work type so screen 2 routes correctly
+    let workType = "epoxy";
+    try {
+      const out = await TW.postJSON("/api/detect-work-type", {
+        system_1_sf: values.system_1_sf,
+        system_2_sf: 0,
+        polish_sf:   values.polish_sf,
+      });
+      workType = out.work_type;
+    } catch (err) {
+      console.warn("detect-work-type failed; defaulting to epoxy", err);
+    }
+
+    TW.setState({ ...values, work_type: workType });
+    window.location.assign("/estimate-review.html");
+  });
+</script>
+
+</body>
+</html>
