@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "comment_for_dev": "Vercel auto-detects this as a static project when Root Directory is set to /frontend. The cleanUrls + trailingSlash settings make /estimate-review work in addition to /estimate-review.html.",
+  "cleanUrls": true,
+  "trailingSlash": false
+}

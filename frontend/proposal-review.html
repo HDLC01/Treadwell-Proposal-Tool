@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — Proposal Review</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">T</span>
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+  <div class="progress">
+    <span class="step">1 · Intake</span>
+    <span class="step">2 · Estimate</span>
+    <span class="step active">3 · Proposal</span>
+    <span class="step">4 · Done</span>
+  </div>
+</header>
+
+<main class="container">
+  <h1>Proposal Review</h1>
+  <p class="lede">
+    Edit the narrative fields below. The locked block at the top flows in
+    from the estimate &mdash; if you need to change those, go back to step 2.
+  </p>
+
+  <dl class="canonical-block">
+    <dt>Project</dt><dd id="c-project">—</dd>
+    <dt>Address</dt><dd id="c-address">—</dd>
+    <dt>Work type / Audience</dt><dd id="c-type">—</dd>
+    <dt>Lump sum (preview)</dt><dd id="c-lump">$—</dd>
+  </dl>
+
+  <form id="proposal-form">
+
+    <fieldset>
+      <legend>System &amp; texture</legend>
+      <div class="row">
+        <label>System name (proposal wording)
+          <input type="text" name="system_name" placeholder="Treadwell Macro Flake Single Broadcast">
+        </label>
+        <label>Texture
+          <input type="text" name="texture" placeholder="Orange Peel">
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Narrative</legend>
+      <label>Scope notes
+        <textarea name="scope_notes" placeholder="Demo plan, substrate prep notes, install assumptions…"></textarea>
+      </label>
+      <label>Schedule notes
+        <textarea name="schedule_notes" placeholder="All areas available at one time, ~2 weeks…"></textarea>
+      </label>
+      <label>Exclusions
+        <textarea name="exclusions" placeholder="Multi-layer; FF&E moving; weekend work; touch-up paint…"></textarea>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Tax</legend>
+      <div class="radio-row">
+        <label class="radio">
+          <input type="radio" name="sales_tax_handling" value="INCLUDED" checked>
+          <span>Sales tax INCLUDED in lump sum</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="sales_tax_handling" value="NOT INCLUDED">
+          <span>NOT INCLUDED (added at invoice)</span>
+        </label>
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="button" id="back-btn" class="btn-secondary">← Back to Estimate</button>
+      <button type="submit" id="generate-btn" class="btn-primary">
+        Generate &amp; Save to Dropbox →
+      </button>
+    </div>
+  </form>
+</main>
+
+<script src="/shared.js"></script>
+<script>
+  const state = TW.getState();
+  if (!state.project_name) { window.location.assign("/"); }
+
+  const form = document.getElementById("proposal-form");
+  TW.writeForm(form, state);
+
+  // Canonical block (read-only from estimate state)
+  document.getElementById("c-project").textContent = state.project_name || "—";
+  const addr = [state.address, state.city_state].filter(Boolean).join(", ");
+  document.getElementById("c-address").textContent = addr || "—";
+  document.getElementById("c-type").textContent =
+    `${(state.work_type || "epoxy").toUpperCase()} · ${state.audience || "Direct"}`;
+
+  // Live lump-sum preview
+  (async () => {
+    try {
+      const totals = await TW.postJSON("/api/compute-estimate", { values: state });
+      document.getElementById("c-lump").textContent = TW.fmtUsd(totals.combined_lump_sum || 0);
+    } catch {/* non-fatal */}
+  })();
+
+  document.getElementById("back-btn").addEventListener("click", () => {
+    TW.setState(TW.readForm(form));
+    window.location.assign("/estimate-review.html");
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("generate-btn");
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+
+    const mergedValues = Object.assign({}, state, TW.readForm(form));
+
+    // Token-name mapping: estimate field names → proposal template token names
+    const tokenValues = {
+      job_name:           mergedValues.project_name,
+      project_name:       mergedValues.project_name,
+      city_state:         mergedValues.city_state,
+      address:            mergedValues.address,
+      work_description:   mergedValues.address,
+      proposal_date:      new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
+      bid_date:           mergedValues.bid_date,
+      site_visit_date:    mergedValues.approx_start_date,
+      system_name:        mergedValues.system_name,
+      texture:            mergedValues.texture,
+      epoxy_sf:           mergedValues.system_1_sf,
+      sqft:               mergedValues.system_1_sf,
+      cove_lf:            mergedValues.cove_1_lf,
+      lf:                 mergedValues.cove_1_lf,
+      demo_sf:            mergedValues.system_1_sf,
+      disposal:           mergedValues.scope_notes,
+      scope_notes:        mergedValues.scope_notes,
+      schedule_notes:     mergedValues.schedule_notes,
+      exclusions:         mergedValues.exclusions,
+      sales_tax_handling: mergedValues.sales_tax_handling,
+      tax_phrase: mergedValues.sales_tax_handling === "INCLUDED"
+        ? "Sales tax is included in the lump sum above."
+        : "Sales tax is NOT included and will be added at invoice.",
+      // pass everything through too so any uncovered tokens find a value
+      ...mergedValues,
+    };
+
+    try {
+      const out = await TW.postJSON("/api/generate", {
+        work_type: state.work_type || "epoxy",
+        audience:  state.audience  || "Direct",
+        values:    { ...mergedValues, ...tokenValues },
+      });
+      TW.setState({ generate_result: out });
+      window.location.assign("/done.html");
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Generate & Save to Dropbox →";
+      alert("Generate failed: " + err.message);
+    }
+  });
+</script>
+
+</body>
+</html>
