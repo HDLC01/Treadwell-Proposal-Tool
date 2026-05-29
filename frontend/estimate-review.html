@@ -1673,7 +1673,26 @@ if (state.county) {
 
 loadCounties();
 
-// Autofill button
+// Autofill button — calls Claude via the backend, applies inferred cell
+// values to the estimate grid + stashes narrative for the proposal.
+// Shows a sticky banner with the full breakdown so the estimator can
+// verify what the AI did instead of guessing from a 2-second flash.
+function showAutofillBanner(html, kind /* "success" | "error" */) {
+  let b = document.getElementById("autofill-banner");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "autofill-banner";
+    b.style.cssText = "position:fixed;top:62px;right:16px;max-width:340px;" +
+      "background:white;border:1px solid var(--xl-border);" +
+      "border-left:4px solid #16a34a;padding:10px 14px;font-size:12px;" +
+      "z-index:90;box-shadow:0 4px 14px rgba(0,0,0,0.12);border-radius:6px;";
+    document.body.appendChild(b);
+  }
+  b.style.borderLeftColor = kind === "error" ? "#dc2626" : "#16a34a";
+  b.innerHTML = html +
+    `<button type="button" style="float:right;border:none;background:none;cursor:pointer;font-size:14px;color:#666;margin:-2px -4px 0 6px;" onclick="this.parentElement.remove()">×</button>`;
+}
+
 document.getElementById("autofill-btn").addEventListener("click", async (e) => {
   const btn = e.target;
   const orig = btn.textContent;
@@ -1692,25 +1711,27 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
     });
     const j = await r.json();
     if (j.ok && j.cell_values) {
-      // Apply cell-addressed keys to the estimate grid; stash the
-      // narrative fields (system_name, texture, scope_notes, etc.) into
-      // state so the Proposal Review can pre-fill them automatically.
-      let n = 0;
+      const FLAG_LABELS = {
+        "Epoxy!B4":"Local",   "Epoxy!B5":"Hard Bid", "Epoxy!D5":"Prevailing Wage",
+        "Epoxy!B6":"Taxable", "Epoxy!D6":"Remodel",  "Epoxy!B9":"Drawings dated",
+        "Epoxy!B10":"New/Reno",
+      };
       const narrativeKeys = ["system_name","texture","scope_notes","schedule_notes","exclusions"];
       const carriedNarrative = {};
+      const filledFlags = [];
+      let n = 0;
       for (const k of Object.keys(j.cell_values)) {
         const v = j.cell_values[k];
         if (v == null) continue;
         if (k.includes("!")) {
           cellValues[k] = v;
+          if (FLAG_LABELS[k]) filledFlags.push(`${FLAG_LABELS[k]}: <b>${v}</b>`);
           n++;
         } else if (narrativeKeys.includes(k)) {
           carriedNarrative[k] = v;
           n++;
         }
       }
-      // Persist narrative fields into state. The inline System/Texture
-      // inputs on this screen also update if they're empty.
       if (Object.keys(carriedNarrative).length) {
         Object.assign(state, carriedNarrative);
         TW.setState({ ...state, ...carriedNarrative });
@@ -1721,21 +1742,31 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
           texInput.value = carriedNarrative.texture;
         }
       }
-      btn.textContent = `✓ Filled ${n} value${n === 1 ? "" : "s"}`;
-      // Re-render current sheet so updates appear
+      // Persistent banner showing exactly what got filled.
+      const missingFlags = Object.keys(FLAG_LABELS)
+        .filter(k => !(k in j.cell_values) || j.cell_values[k] == null)
+        .map(k => FLAG_LABELS[k]);
+      const narrFilled = Object.keys(carriedNarrative);
+      const html =
+        `<div style="font-weight:700;color:#0f5132;margin-bottom:4px;">✓ Autofilled ${n} value${n===1?"":"s"}</div>` +
+        `<div style="margin:4px 0;"><b>Flags:</b><br>${filledFlags.join("<br>")}</div>` +
+        (narrFilled.length ? `<div style="margin:4px 0;"><b>Proposal text:</b><br>${narrFilled.join(", ")}</div>` : "") +
+        (missingFlags.length ? `<div style="margin-top:6px;color:#a16207;"><b>AI skipped:</b> ${missingFlags.join(", ")}<br><span style="font-size:11px;">(re-click Autofill to retry, or edit manually)</span></div>` : "");
+      showAutofillBanner(html, "success");
+      btn.textContent = `✓ Filled ${n}`;
       if (activeSheet) {
         delete sheetCache[activeSheet];
         await showSheet(activeSheet);
       }
     } else {
       btn.textContent = "Unavailable";
-      console.warn("Autofill failed:", j.error);
+      showAutofillBanner(`<b>Autofill unavailable.</b><br>${j.error || "Check that the backend's claude CLI is reachable."}`, "error");
     }
   } catch (err) {
     btn.textContent = "Failed";
-    console.error(err);
+    showAutofillBanner(`<b>Autofill failed.</b><br>${err.message || err}`, "error");
   } finally {
-    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2200);
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 3000);
   }
 });
 
