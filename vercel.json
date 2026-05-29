@@ -3,12 +3,6 @@
   "buildCommand": null,
   "outputDirectory": "frontend",
   "framework": null,
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://guidebooky-gideon-pellucid.ngrok-free.dev/api/:path*"
-    }
-  ],
   "headers": [
     {
       "source": "/(.*)",
