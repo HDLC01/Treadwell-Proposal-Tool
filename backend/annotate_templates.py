@@ -56,6 +56,7 @@ EPOXY_DIRECT_RULES: list[tuple[str, str]] = [
     ("~xxx SF",                                               "~{{epoxy_sf}} SF"),
     ("xxx LF",                                                "{{cove_lf}} LF"),
     ("xx/xx/26",                                              "{{site_visit_date}}"),
+    ("1/1/26",                                                "{{bid_date_formatted}}"),
     ("Assumes all areas available at one time, approx. 1 week to complete full scope",
                                                               "{{schedule_notes}}"),
     ("$    xx – Kansas Remodel Tax",                          "{{tax_amount_formatted}} – {{state_name}} Remodel Tax"),
@@ -73,6 +74,9 @@ POLISH_DIRECT_RULES: list[tuple[str, str]] = [
     ("dumpster provided by owner",                               "{{disposal}}"),
     # Job header — left sidebar
     ("xxx, KS",                                                  "{{city_state}}"),
+    # Header date (hardcoded by Kyle as 1/1/26)
+    ("01/1/26",                                                  "{{bid_date_formatted}}"),
+    ("1/1/26",                                                   "{{bid_date_formatted}}"),
     # Money placeholders — match with context labels so the right value lands
     ("$xx – Polished Concrete Flooring as described above",      "{{lump_sum_label}}"),
     ("$xx – Polished Concrete Flooring as described above", "{{lump_sum_label}}"),
@@ -91,10 +95,14 @@ COMBO_DIRECT_RULES: list[tuple[str, str]] = [
     ("Treadwell Epoxy Flooring System",                       "{{system_name_epoxy}}"),
     ("dumpster provided by owner",                            "{{disposal}}"),
     ("xxx, KS",                                               "{{city_state}}"),
+    ("01/1/26",                                               "{{bid_date_formatted}}"),
+    ("1/1/26",                                                "{{bid_date_formatted}}"),
 ]
 
 BUDGET_DIRECT_RULES: list[tuple[str, str]] = [
     ("xxx, KS",                                               "{{city_state}}"),
+    ("01/1/26",                                               "{{bid_date_formatted}}"),
+    ("1/1/26",                                                "{{bid_date_formatted}}"),
 ]
 
 GC_POLISH_RULES: list[tuple[str, str]] = [
