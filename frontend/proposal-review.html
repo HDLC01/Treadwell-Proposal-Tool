@@ -342,7 +342,7 @@
   </div>
   <div class="ribbon-spacer"></div>
   <button type="button" id="back-btn" class="secondary">← Back to Estimate</button>
-  <button type="submit" form="proposal-form" id="generate-btn">Generate &amp; Save to Dropbox →</button>
+  <button type="submit" form="proposal-form" id="generate-btn">Continue to Done →</button>
 </div>
 
 <!-- The Word canvas with the floating document page -->
@@ -676,20 +676,23 @@
       ...mergedValues,
     };
 
-    try {
-      const out = await TW.postJSON("/api/generate", {
+    // We no longer call /api/generate here. The actual file generation
+    // + Dropbox upload moved to the Done page so the user has one final
+    // review screen before anything customer-facing happens. Stash the
+    // payload that Done.html will POST when the user clicks Generate.
+    TW.setState({
+      ...mergedValues,
+      proposal_payload: {
         work_type: state.work_type || "epoxy",
         audience:  state.audience  || "Direct",
         values:    { ...mergedValues, ...tokenValues },
         cell_values: state.cell_values || {},
-      });
-      TW.setState({ generate_result: out });
-      window.location.assign("/done.html");
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = "Generate & Save to Dropbox →";
-      alert("Generate failed: " + err.message);
-    }
+      },
+      // Also persist the lump sum string so Done can show it without
+      // re-reading from HF (which lives on the Estimate Review page).
+      lump_sum_display: lumpSumText,
+    });
+    window.location.assign("/done.html");
   });
 </script>
 
