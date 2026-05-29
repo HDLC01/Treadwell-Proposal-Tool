@@ -5,8 +5,526 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Treadwell Proposal Generator — Estimate Review</title>
 <link rel="stylesheet" href="/styles.css">
+<!-- HyperFormula — Excel-compatible formula engine for live recompute -->
+<script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js"></script>
+<style>
+  /* Full-viewport layout — the estimate review uses the whole window,
+     not the standard centred 1200px container. */
+  html, body { height: 100%; overflow: hidden; margin: 0; }
+  .estimate-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+  }
+  .estimate-app .topbar {
+    flex: 0 0 auto;
+    padding: 4px 12px;       /* very tight */
+    min-height: 0;
+  }
+  .estimate-app .topbar .brand-mark { width: 28px; height: 28px; font-size: 14px; }
+  .estimate-app .topbar .brand-name { font-size: 14px; }
+  .estimate-app .topbar .brand-sub  { display: none; }     /* drop tagline to save height */
+  .estimate-app .topbar .progress .step { padding: 2px 8px; font-size: 10px; }
+  .estimate-app main {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    min-height: 0;     /* allow children to shrink/scroll */
+    max-width: none;
+    width: 100%;
+  }
+
+  /* Single compact toolbar row: heading + autofill + county all inline */
+  .top-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    background: white;
+    border-bottom: 1px solid var(--surface-dim);
+    flex-wrap: nowrap;
+  }
+  .top-toolbar h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .top-toolbar .type-badge {
+    margin-left: 4px;
+    font-size: 10px;
+    padding: 2px 8px;
+  }
+  .top-toolbar .spacer { flex: 1; }
+  .top-toolbar .inline-county {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .top-toolbar .inline-county label {
+    margin: 0;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-variant);
+    white-space: nowrap;
+  }
+  .top-toolbar .county-input {
+    width: 260px;
+    padding: 5px 8px;
+    font-size: 12px;
+    min-height: 28px;
+    border: 1px solid var(--surface-dim);
+    border-radius: 4px;
+  }
+  .top-toolbar .btn-ai {
+    padding: 5px 12px;
+    font-size: 12px;
+    background: var(--treadwell-red);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .top-toolbar .field-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .top-toolbar .field-inline label {
+    margin: 0;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-variant);
+    white-space: nowrap;
+  }
+  .top-toolbar .field-inline input {
+    padding: 5px 8px;
+    font-size: 12px;
+    min-height: 28px;
+    border: 1px solid var(--surface-dim);
+    border-radius: 4px;
+  }
+  .top-toolbar .field-inline input.sysname { width: 220px; }
+  .top-toolbar .field-inline input.tex     { width: 120px; }
+
+  .estimate-app .xl-tab-bar { flex: 0 0 auto; }
+  .estimate-app .total-bar  { flex: 0 0 auto; margin-top: 0; padding: 8px 16px; }
+
+  /* ─── True cell-for-cell xlsx viewport ──────────────────────────── */
+  .xl-viewport {
+    overflow: scroll;   /* always show both scrollbars */
+    background: white;
+    border: 1px solid var(--xl-border);
+    flex: 1 1 auto;       /* fill remaining vertical space */
+    min-height: 240px;
+    position: relative;
+    scrollbar-width: auto;
+    scrollbar-color: #9c9c9c #f3f3f3;
+    /* Performance: isolate viewport scrolling from page layout */
+    contain: strict;
+    will-change: scroll-position;
+  }
+  /* Make scrollbars visible on macOS/Chrome */
+  .xl-viewport::-webkit-scrollbar         { width: 14px; height: 14px; }
+  .xl-viewport::-webkit-scrollbar-track   { background: #f3f3f3; }
+  .xl-viewport::-webkit-scrollbar-thumb   { background: #c0c0c0; border-radius: 4px; border: 3px solid #f3f3f3; }
+  .xl-viewport::-webkit-scrollbar-thumb:hover { background: #9c9c9c; }
+  .xl-viewport::-webkit-scrollbar-corner  { background: #f3f3f3; }
+
+  /* Tab bar — always show horizontal scrollbar */
+  .xl-tab-bar.full {
+    overflow-x: scroll;
+    scrollbar-width: thin;
+    scrollbar-color: #b8b8b8 #e6e6e6;
+  }
+  .xl-tab-bar.full::-webkit-scrollbar         { height: 10px; }
+  .xl-tab-bar.full::-webkit-scrollbar-track   { background: #e6e6e6; }
+  .xl-tab-bar.full::-webkit-scrollbar-thumb   { background: #b8b8b8; border-radius: 4px; }
+  .xl-grid {
+    display: grid;
+    font-family: "Calibri", "Inter", -apple-system, sans-serif;
+    font-size: 11px;
+    color: var(--ink);
+    background: white;
+    width: max-content;
+    /* paint/layout containment keeps drag updates from triggering
+       full document reflows */
+    contain: layout style;
+    will-change: grid-template-columns, grid-template-rows;
+  }
+  .xl-grid .gridcell {
+    /* Default thin-grey gridline on RIGHT and BOTTOM only — each wall
+       is owned by one cell. Avoids the gray-covers-black issue where
+       a neighbor's default border would override a sibling's explicit
+       border. */
+    border-right: 1px solid #d4d4d4;
+    border-bottom: 1px solid #d4d4d4;
+    padding: 2px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-height: 18px;
+    display: flex;
+    align-items: center;
+    contain: layout paint;
+  }
+  /* Close the outer left edge of the visible grid (first content column) */
+  .xl-grid .gridcell[style*="grid-column: 2 /"]:not(.row-header):not(.col-header):not(.corner) {
+    border-left: 1px solid #d4d4d4;
+  }
+  /* Close the outer top edge of the visible grid (first content row) */
+  .xl-grid .gridcell[style*="grid-row: 2 /"]:not(.row-header):not(.col-header):not(.corner) {
+    border-top: 1px solid #d4d4d4;
+  }
+  .xl-grid .gridcell.row-header,
+  .xl-grid .gridcell.col-header {
+    background: #f3f3f3;
+    color: var(--ink-variant);
+    font-weight: 600;
+    font-size: 10px;
+    justify-content: center;
+    position: sticky;
+    z-index: 2;
+  }
+  .xl-grid .gridcell.row-header { left: 0; }
+  .xl-grid .gridcell.col-header { top: 0; }
+  .xl-grid .gridcell.corner    { top: 0; left: 0; z-index: 3; }
+
+  /* Resize handles on headers — Excel-style draggable column/row borders */
+  .xl-grid .col-header { position: sticky; top: 0; }
+  .xl-grid .row-header { position: sticky; left: 0; }
+  .xl-grid .resize-h, .xl-grid .resize-v {
+    position: absolute;
+    background: transparent;
+    z-index: 4;
+  }
+  .xl-grid .resize-h {  /* sits on right edge of a column header */
+    width: 6px;
+    top: 0;
+    bottom: 0;
+    right: -3px;
+    cursor: col-resize;
+  }
+  .xl-grid .resize-v {  /* sits on bottom edge of a row header */
+    height: 6px;
+    left: 0;
+    right: 0;
+    bottom: -3px;
+    cursor: row-resize;
+  }
+  .xl-grid .resize-h:hover, .xl-grid .resize-v:hover,
+  .xl-grid .resize-h.dragging, .xl-grid .resize-v.dragging {
+    background: var(--treadwell-red);
+    opacity: 0.6;
+  }
+  .xl-grid .gridcell.col-header, .xl-grid .gridcell.row-header {
+    position: sticky;
+    user-select: none;
+  }
+  .xl-grid .gridcell.col-header { position: sticky; top: 0; }
+  .xl-grid .gridcell.row-header { position: sticky; left: 0; }
+  /* Need relative positioning to anchor resize handles */
+  .xl-grid .gridcell.col-header,
+  .xl-grid .gridcell.row-header {
+    /* sticky is already position:sticky which establishes a positioning context */
+  }
+  .xl-grid .gridcell.bold      { font-weight: 700; }
+  .xl-grid .gridcell.italic    { font-style: italic; }
+  .xl-grid .gridcell.formula   { color: #555; font-style: italic; }
+  .xl-grid .gridcell.numeric   { justify-content: flex-end; font-variant-numeric: tabular-nums; }
+  .xl-grid .gridcell.editable  { background: var(--xl-input); }
+  .xl-grid .gridcell input,
+  .xl-grid .gridcell select {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    padding: 0 4px;
+    margin: 0;
+    min-height: 0;
+    border-radius: 0;
+    text-align: inherit;
+    cursor: text;
+    /* Make the blinking text caret highly visible (Excel-red) */
+    caret-color: var(--treadwell-red);
+  }
+  /* When a cell input is focused, show a clear inline edit state */
+  .xl-grid .gridcell:has(input:focus),
+  .xl-grid .gridcell:has(select:focus) {
+    outline: 2px solid var(--treadwell-red);
+    outline-offset: -2px;
+    background: white !important;
+    z-index: 2;
+  }
+  .xl-grid .gridcell input:focus,
+  .xl-grid .gridcell select:focus {
+    outline: none;             /* parent cell has the red outline */
+    background: transparent;
+  }
+  .xl-grid .gridcell.numeric input { text-align: right; }
+  .xl-grid .gridcell select {
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-color: transparent;
+    /* No arrow / no tint — looks exactly like the cell behind it. The
+       dropdown still works on click; Excel itself doesn't show inline
+       dropdown arrows on cells until you click them either. */
+  }
+  /* Make non-yellow inputs visually subtle until clicked */
+  .xl-grid .gridcell:not(.editable) input,
+  .xl-grid .gridcell:not(.editable) select {
+    cursor: cell;
+  }
+  .xl-grid .gridcell:not(.editable):hover { outline: 1px solid #c0c0c0; outline-offset: -1px; }
+  /* Formula cells — show the cached value, but mark visually so you
+     know typing will overwrite the formula */
+  .xl-grid .gridcell.formula-cell input { color: #5c403f; font-style: italic; }
+  .xl-grid .gridcell.formula-cell:focus-within input { color: var(--ink); font-style: normal; }
+  /* Canonical-mirror cells (Project Info on non-Epoxy tabs) — these
+     edit the Epoxy source, so show a tiny chain icon to signal it */
+  .xl-grid .gridcell.canonical-mirror input { color: var(--ink); font-style: normal; }
+  .xl-grid .gridcell.canonical-mirror::before {
+    content: "⟲";
+    position: absolute;
+    top: 1px;
+    right: 2px;
+    font-size: 9px;
+    color: var(--treadwell-red);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .xl-grid .gridcell.canonical-mirror { position: relative; }
+
+  /* Tab bar */
+  .xl-tab-bar.full {
+    overflow-x: auto;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+    border-bottom: 1px solid var(--xl-border);
+    background: #f3f3f3;
+  }
+  .xl-tab-bar.full button {
+    flex-shrink: 0;
+    font-size: 11px;
+    padding: 6px 12px;
+  }
+
+  /* Autofill banner */
+  .ai-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 14px;
+    background: #f3eeed;
+    border: 1px solid var(--surface-dim);
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  .ai-bar .ai-ico {
+    width: 22px; height: 22px;
+    background: var(--treadwell-red);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 12px;
+  }
+  .ai-bar .ai-text { flex: 1; font-size: 12px; color: var(--ink-variant); }
+  .ai-bar .btn-ai {
+    background: var(--treadwell-red);
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .ai-bar .btn-ai:disabled { opacity: 0.6; cursor: wait; }
+
+  /* County / remodel-tax picker — searchable dropdown */
+  .tax-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 14px;
+    background: white;
+    border: 1px solid var(--surface-dim);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    position: relative;
+  }
+  .tax-bar label {
+    margin: 0;
+    font-weight: 700;
+    color: var(--ink-variant);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+  .tax-bar .county-input {
+    flex: 0 1 320px;
+    padding: 6px 10px;
+    border: 1px solid var(--surface-dim);
+    border-radius: 4px;
+    font: inherit;
+    min-height: 32px;
+  }
+  .tax-bar .county-input:focus { outline: 2px solid var(--treadwell-red-light); border-color: var(--treadwell-red); }
+  .county-results {
+    position: absolute;
+    top: 100%;
+    left: 14px;
+    right: 14px;
+    max-height: 280px;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid var(--surface-dim);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    z-index: 50;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+    display: none;
+  }
+  .county-results.open { display: block; }
+  .county-row {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0eeec;
+    font-size: 12px;
+  }
+  .county-row:last-child { border-bottom: none; }
+  .county-row:hover, .county-row.active { background: var(--treadwell-red-light); }
+  .county-row .county-name { font-weight: 700; }
+  .county-row .county-meta { color: var(--ink-variant); font-size: 11px; margin-left: 6px; }
+  .county-row .county-notes { color: var(--ink-variant); font-size: 11px; margin-top: 2px; font-style: italic; }
+  .tax-bar .county-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--surface-low);
+    border-radius: 99px;
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--treadwell-red-dark);
+  }
+  .tax-bar .county-pill .x {
+    cursor: pointer;
+    color: var(--ink-variant);
+    font-weight: 400;
+  }
+
+  .sheet-loading {
+    padding: 60px;
+    text-align: center;
+    color: var(--ink-variant);
+    font-size: 13px;
+  }
+
+  /* Sticky bottom Total bar (mirrors Treadwell v2 layout) */
+  .total-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 14px 20px;
+    background: white;
+    border: 1px solid var(--xl-border);
+    border-top: 3px solid var(--treadwell-red);
+    border-radius: 0 0 6px 6px;
+    margin-top: -1px;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.06);
+    font-variant-numeric: tabular-nums;
+  }
+  .total-bar .tb-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .total-bar .tb-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--ink-variant);
+  }
+  .total-bar .tb-value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .total-bar .tb-block.primary .tb-value {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--treadwell-red-dark);
+  }
+  .total-bar .tb-spacer { flex: 1; }
+  .total-bar .tb-note {
+    font-size: 11px;
+    color: var(--ink-variant);
+    font-style: italic;
+    max-width: 220px;
+  }
+
+  /* ═══ Mobile responsive ═══════════════════════════════════════════════ */
+  @media (max-width: 900px) {
+    /* Top toolbar: let it wrap, keep h1 + buttons visible, drop inline-county
+       and field-inline inputs to a row of their own */
+    .top-toolbar {
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 12px;
+    }
+    .top-toolbar h1 { font-size: 16px; flex: 1 1 100%; }
+    .top-toolbar .inline-county,
+    .top-toolbar .field-inline {
+      flex: 1 1 100%;
+      gap: 4px;
+    }
+    .top-toolbar .field-inline input.sysname { width: 100%; }
+    .top-toolbar .field-inline input.tex     { width: 100%; }
+    .top-toolbar .county-input { width: 100%; }
+    .top-toolbar .spacer { display: none; }
+    .top-toolbar #back-btn,
+    .top-toolbar #continue-btn { flex: 1 1 0; }
+    .top-toolbar .btn-ai { flex: 1 1 100%; }
+
+    /* Total bar: stack vertically, primary number stays large */
+    .total-bar {
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      padding: 10px 14px;
+    }
+    .total-bar .tb-spacer { display: none; }
+    .total-bar .tb-note { max-width: 100%; }
+
+    /* The xl-viewport / cell grid stays as a horizontal-scroll surface —
+       phones get pinch-zoom + swipe. Don't try to reflow the grid. */
+    .xl-viewport { min-height: 320px; }
+  }
+</style>
 </head>
-<body>
+<body class="estimate-app">
 
 <header class="topbar">
   <div class="brand">
@@ -17,229 +535,1167 @@
     </div>
   </div>
   <div class="progress">
-    <span class="step">1 · Intake</span>
+    <a class="step" href="/">1 · Intake</a>
     <span class="step active">2 · Estimate</span>
-    <span class="step">3 · Proposal</span>
-    <span class="step">4 · Done</span>
+    <a class="step" href="/proposal-review.html">3 · Proposal</a>
+    <a class="step" href="/done.html">4 · Done</a>
   </div>
 </header>
 
-<main class="container wide">
-  <h1>Estimate Review <span id="type-badge" class="type-badge">EPOXY</span></h1>
-  <p class="lede">
-    Edit any input. Totals on the right update as you type. Detected work
-    type is shown above &mdash; override if needed.
-  </p>
-
-  <div class="split">
-    <form id="estimate-form">
-
-      <fieldset>
-        <legend>Override work type</legend>
-        <p class="hint">Auto-detected from your scope inputs. Override if needed.</p>
-        <div class="radio-row">
-          <label class="radio"><input type="radio" name="work_type" value="epoxy">  <span>Epoxy</span></label>
-          <label class="radio"><input type="radio" name="work_type" value="polish"> <span>Polish</span></label>
-          <label class="radio"><input type="radio" name="work_type" value="combo">  <span>Combo</span></label>
-        </div>
-      </fieldset>
-
-      <fieldset id="epoxy-section">
-        <legend>Epoxy inputs</legend>
-        <div class="row three">
-          <label>System 1 cost/SF
-            <input type="number" name="system_1_cost_per_sf" step="0.01" value="0.10">
-          </label>
-          <label>System 1 SF
-            <input type="number" name="system_1_sf" min="0" step="1">
-          </label>
-          <label>System 2 SF
-            <input type="number" name="system_2_sf" min="0" step="1" value="0">
-          </label>
-        </div>
-        <div class="row">
-          <label>Cove 1 LF
-            <input type="number" name="cove_1_lf" min="0" step="1" value="0">
-          </label>
-          <label>Cove 2 LF
-            <input type="number" name="cove_2_lf" min="0" step="1" value="0">
-          </label>
-        </div>
-
-        <h2>Labor — Crew</h2>
-        <div class="row three">
-          <label>Crew size
-            <input type="number" name="labor_crew_size" min="0" step="1" value="3">
-          </label>
-          <label>Days
-            <input type="number" name="labor_days" min="0" step="0.5" value="5">
-          </label>
-          <label>Rate $/hr
-            <input type="number" name="labor_rate" step="0.01" value="32.20">
-          </label>
-        </div>
-        <div class="row three">
-          <label>Travel hours
-            <input type="number" name="travel_hours" min="0" step="0.5" value="0">
-          </label>
-          <label>Travel rate $/hr
-            <input type="number" name="travel_rate" step="0.01" value="32.20">
-          </label>
-          <label>Labor burden %
-            <input type="number" name="labor_burden_pct" step="0.001" value="0.12">
-          </label>
-        </div>
-
-        <h2>Tooling</h2>
-        <div class="row three">
-          <label>Moisture test $
-            <input type="number" name="moisture_test_cost" step="1" value="35">
-          </label>
-          <label>Tooling &amp; consumables $/SF
-            <input type="number" name="tooling_consumables" step="0.01" value="0.33">
-          </label>
-          <label>Demo tooling $/SF
-            <input type="number" name="demo_tooling" step="0.01" value="0.33">
-          </label>
-        </div>
-
-        <h2>Tax &amp; Markup</h2>
-        <div class="row three">
-          <label>Superintendent + PTO %
-            <input type="number" name="superintendent_pto_pct" step="0.001" value="0.03">
-          </label>
-          <label>Soft costs %
-            <input type="number" name="soft_costs_pct" step="0.001" value="0.13">
-          </label>
-          <label>Contingency $
-            <input type="number" name="contingency" step="1" value="0">
-          </label>
-        </div>
-        <div class="row three">
-          <label>Bond $
-            <input type="number" name="bond" step="1" value="0">
-          </label>
-          <label>Taxable?
-            <select name="taxable">
-              <option value="Yes" selected>Yes</option>
-              <option value="No">No</option>
-            </select>
-          </label>
-          <label>Local? (&lt;70mi)
-            <select name="local">
-              <option value="Yes" selected>Yes</option>
-              <option value="No">No</option>
-            </select>
-          </label>
-        </div>
-      </fieldset>
-
-      <fieldset id="polish-section">
-        <legend>Polish inputs</legend>
-        <div class="row three">
-          <label>Polish floor SF
-            <input type="number" name="polish_sf" min="0" step="1" value="0">
-          </label>
-          <label>Densifier cost $/SF
-            <input type="number" name="densifier_cost" step="0.01" value="0.07">
-          </label>
-          <label>Sealer cost $/SF
-            <input type="number" name="sealer_cost" step="0.01" value="0.10">
-          </label>
-        </div>
-        <div class="row three">
-          <label>Polish crew size
-            <input type="number" name="polish_labor_crew_size" min="0" step="1" value="3">
-          </label>
-          <label>Polish rate $/hr
-            <input type="number" name="polish_labor_rate" step="0.01" value="32.20">
-          </label>
-          <label>Polish burden %
-            <input type="number" name="polish_labor_burden_pct" step="0.001" value="0.12">
-          </label>
-        </div>
-      </fieldset>
-
-      <div class="actions">
-        <button type="button" id="back-btn" class="btn-secondary">← Back to Intake</button>
-        <button type="submit" class="btn-primary">Continue to Proposal Review →</button>
-      </div>
-    </form>
-
-    <aside class="totals-card">
-      <h2>Live totals</h2>
-      <div id="totals-list">
-        <div class="totals-row"><span class="label">Material total</span><span id="t-material">$—</span></div>
-        <div class="totals-row"><span class="label">Labor + burden</span><span id="t-labor">$—</span></div>
-        <div class="totals-row"><span class="label">Tooling total</span><span id="t-tooling">$—</span></div>
-        <div class="totals-row"><span class="label">Subtotal</span><span id="t-subtotal">$—</span></div>
-        <div class="totals-row total"><span>LUMP SUM</span><span id="t-lump">$—</span></div>
-      </div>
-      <p class="hint" style="margin-top:12px;">
-        Preview only — Excel re-computes formulas when the file opens.
-      </p>
-    </aside>
+<main>
+  <div class="top-toolbar">
+    <h1>Estimate Review <span id="type-badge" class="type-badge">EPOXY</span></h1>
+    <button type="button" id="autofill-btn" class="btn-ai">↺ Autofill with AI</button>
+    <div class="inline-county" style="position: relative;">
+      <label for="county-input">County (Remodel Tax)</label>
+      <input type="text" id="county-input" class="county-input" placeholder="Search counties…">
+      <span id="county-selected"></span>
+      <div id="county-results" class="county-results"></div>
+    </div>
+    <div class="field-inline">
+      <label for="sys-name">System Name</label>
+      <input type="text" id="sys-name" class="sysname" placeholder="Treadwell Macro Flake Single Broadcast">
+    </div>
+    <div class="field-inline">
+      <label for="tex-name">Texture</label>
+      <input type="text" id="tex-name" class="tex" placeholder="Orange Peel">
+    </div>
+    <div class="spacer"></div>
+    <button type="button" id="back-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 12px;">← Back</button>
+    <button type="button" id="continue-btn" class="btn-primary" style="padding: 5px 12px; font-size: 12px;">Continue to Proposal →</button>
   </div>
+
+  <div class="xl-tab-bar full" id="tab-bar"></div>
+  <div class="xl-viewport">
+    <div id="sheet-grid" class="sheet-loading">Loading sheet…</div>
+  </div>
+
+  <div class="total-bar" id="total-bar">
+    <div class="tb-block">
+      <span class="tb-label">Project</span>
+      <span class="tb-value" id="tb-project">—</span>
+    </div>
+    <div class="tb-block">
+      <span class="tb-label">Sheet</span>
+      <span class="tb-value" id="tb-sheet">Epoxy</span>
+    </div>
+    <div class="tb-block">
+      <span class="tb-label">$ / SF</span>
+      <span class="tb-value" id="tb-psf">—</span>
+    </div>
+    <div class="tb-block">
+      <span class="tb-label">Material</span>
+      <span class="tb-value" id="tb-material">—</span>
+    </div>
+    <div class="tb-block">
+      <span class="tb-label">Labor</span>
+      <span class="tb-value" id="tb-labor">—</span>
+    </div>
+    <div class="tb-block">
+      <span class="tb-label">Tooling</span>
+      <span class="tb-value" id="tb-tooling">—</span>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-note">
+      Cached from last Excel save · re-opens at exact value
+    </div>
+    <div class="tb-block primary">
+      <span class="tb-label">Total Lump Sum</span>
+      <span class="tb-value" id="tb-total">$—</span>
+    </div>
+  </div>
+
+  <form id="estimate-form" style="display:none;"></form>
 </main>
 
 <script src="/shared.js"></script>
 <script>
-  const form = document.getElementById("estimate-form");
-  const state = TW.getState();
+// ─── HyperFormula engine ─────────────────────────────────────────────
+// One global engine instance holds all 16 sheets. As the user edits
+// a cell, HF recomputes downstream formulas and we update the DOM for
+// every affected cell on the currently-visible sheet.
+const HF = {
+  instance: null,
+  sheetIdByName: {},       // "Epoxy" -> 0, "Polish" -> 1, ...
+  domBySheetAddr: {},      // "Epoxy!B4" -> input element
+  ready: false,
 
-  if (!state.project_name) {
-    // Came here directly without filling intake — bounce back.
-    window.location.assign("/");
-  }
+  init(sheetNames) {
+    const hf = HyperFormula.buildEmpty({
+      licenseKey: "gpl-v3",  // free for GPL-compatible use
+      smartRounding: true,
+      precisionRounding: 4,
+    });
+    for (const name of sheetNames) {
+      hf.addSheet(name);
+      this.sheetIdByName[name] = hf.getSheetId(name);
+    }
+    this.instance = hf;
+    this.ready = true;
+  },
 
-  // Pre-fill from saved state
-  TW.writeForm(form, state);
-  document.querySelector(`input[name="work_type"][value="${state.work_type || "epoxy"}"]`).checked = true;
-
-  // Show/hide sections based on detected type
-  function showSections() {
-    const wt = form.querySelector('input[name="work_type"]:checked').value;
-    document.getElementById("type-badge").textContent = wt.toUpperCase();
-    document.getElementById("epoxy-section").style.display  = (wt === "polish") ? "none" : "";
-    document.getElementById("polish-section").style.display = (wt === "epoxy")  ? "none" : "";
-  }
-  showSections();
-  form.querySelectorAll('input[name="work_type"]').forEach(r => r.addEventListener("change", showSections));
-
-  // Live totals — recompute on any input change, debounced
-  let debounceTimer = null;
-  async function refreshTotals() {
-    const values = TW.readForm(form);
+  /** Load all cells from one sheet's API payload into the engine. */
+  loadSheet(sheetName, cells) {
+    if (!this.instance) return;
+    const sheetId = this.sheetIdByName[sheetName];
+    if (sheetId === undefined) return;
+    // Build a sparse array of values keyed by row/col then setSheetContent
+    const maxRow = Math.max(...cells.map(c => c.row), 0);
+    const maxCol = Math.max(...cells.map(c => c.col), 0);
+    const data = [];
+    for (let r = 0; r < maxRow; r++) {
+      data.push(new Array(maxCol).fill(null));
+    }
+    for (const c of cells) {
+      // Use the FORMULA TEXT when present (so HF computes it).
+      // Otherwise the raw value.
+      const cellInput = c.formula ?? c.value;
+      data[c.row - 1][c.col - 1] = cellInput;
+    }
     try {
-      const totals = await TW.postJSON("/api/compute-estimate", { values });
-      const epoxy = totals.epoxy || {};
-      const polish = totals.polish || {};
-      document.getElementById("t-material").textContent = TW.fmtUsd((epoxy.material_total || 0) + (polish.material_total || 0));
-      document.getElementById("t-labor").textContent    = TW.fmtUsd((epoxy.labor_install  || 0) + (polish.labor_install  || 0));
-      document.getElementById("t-tooling").textContent  = TW.fmtUsd((epoxy.tooling_total  || 0));
-      document.getElementById("t-subtotal").textContent = TW.fmtUsd((epoxy.subtotal       || 0) + (polish.subtotal       || 0));
-      document.getElementById("t-lump").textContent     = TW.fmtUsd(totals.combined_lump_sum || 0);
-    } catch (err) {
-      console.warn("totals refresh failed", err);
+      // HF 2.7+ wants a raw sheetId number, NOT an object wrapper.
+      this.instance.setSheetContent(sheetId, data);
+    } catch (e) {
+      console.warn(`HF setSheetContent failed for ${sheetName}:`, e);
+    }
+  },
+
+  /** Get the current computed value for a cell. */
+  getValue(sheetName, addr) {
+    if (!this.instance) return null;
+    try {
+      const sheetId = this.sheetIdByName[sheetName];
+      if (sheetId === undefined) return null;
+      const [colLetter, rowStr] = (addr.match(/^([A-Z]+)(\d+)$/) || []).slice(1);
+      if (!colLetter || !rowStr) return null;
+      const col = colLetter.split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+      const row = parseInt(rowStr, 10) - 1;
+      // SimpleCellAddress: { sheet, col, row } — note: 'sheet' is the property name
+      const v = this.instance.getCellValue({ sheet: sheetId, col, row });
+      return v;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  /** User typed something — push it into HF and return the affected cells. */
+  setCellValue(sheetName, addr, value) {
+    if (!this.instance) return [];
+    const sheetId = this.sheetIdByName[sheetName];
+    if (sheetId === undefined) return [];
+    const [colLetter, rowStr] = (addr.match(/^([A-Z]+)(\d+)$/) || []).slice(1);
+    if (!colLetter || !rowStr) return [];
+    const col = colLetter.split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+    const row = parseInt(rowStr, 10) - 1;
+    // Coerce numeric strings to numbers so HF treats them as numbers
+    let coerced = value;
+    if (typeof value === "string" && value.trim() !== "" && !isNaN(Number(value))) {
+      coerced = Number(value);
+    }
+    const changes = this.instance.setCellContents({ sheet: sheetId, col, row }, coerced);
+    // Map HF "changes" back to {sheet, addr} pairs
+    const affected = [];
+    for (const ch of changes) {
+      const sheet = Object.keys(this.sheetIdByName).find(
+        n => this.sheetIdByName[n] === ch.address.sheet
+      );
+      const colLet = (() => {
+        let n = ch.address.col + 1, s = "";
+        while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+        return s;
+      })();
+      affected.push({
+        sheet,
+        addr: `${colLet}${ch.address.row + 1}`,
+        value: ch.newValue,
+      });
+    }
+    return affected;
+  },
+
+  /** Register an input element so we can find it later when its value changes. */
+  registerDom(sheetName, addr, inputEl) {
+    this.domBySheetAddr[`${sheetName}!${addr}`] = inputEl;
+  },
+
+  unregisterAll() {
+    this.domBySheetAddr = {};
+  },
+};
+
+const state = TW.getState();
+if (!state.project_name) {
+  document.querySelector("main").innerHTML = `
+    <div style="padding:60px;text-align:center;">
+      <h1 style="color: var(--ink-variant);">No project started</h1>
+      <p>Start an intake first to enable the Estimate step.</p>
+      <a href="/" class="btn-primary" style="text-decoration:none;padding:12px 20px;">← Go to Intake</a>
+    </div>
+  `;
+  throw new Error("estimate-review: no project in state");
+}
+
+// ─── Project Info canonicalization ──────────────────────────────────
+// In the source xlsx, the Polish/Gyp/Seal/etc sheets reference Epoxy's
+// project-info block via formulas (=Epoxy!B1, =Epoxy!B2, ...).
+// In our editable UI we mirror that: rows 1-10, columns A-D are the
+// "Project Info" zone and ALWAYS write to Epoxy!{addr} no matter which
+// tab the user is currently on. Other tabs render the same value live.
+const CANONICAL_SHEET = "Epoxy";
+function isProjectInfoCell(addr) {
+  const m = (addr || "").match(/^([A-D])(\d+)$/);
+  if (!m) return false;
+  const row = parseInt(m[2], 10);
+  return row >= 1 && row <= 10;
+}
+function canonicalKey(sheet, addr) {
+  return isProjectInfoCell(addr)
+    ? `${CANONICAL_SHEET}!${addr}`
+    : `${sheet}!${addr}`;
+}
+
+// Same canonicalization but returns the {sheet, addr} pair separately —
+// HF needs both, not a single combined key.
+function canonicalTarget(sheet, addr) {
+  return isProjectInfoCell(addr)
+    ? { sheet: CANONICAL_SHEET, addr }
+    : { sheet, addr };
+}
+
+// In-memory store of cell edits keyed by "{Sheet}!{Address}"
+const cellValues = Object.assign({}, state.cell_values || {});
+
+// Auto-fill Screen 1 intake values into the matching estimate cells.
+// Mapping derived from the EPOXY_CELL_MAP in the backend (project name
+// added explicitly; the sheet keeps it in B1 next to the "Project" label).
+const FORM_TO_CELL = {
+  // Intake → Epoxy tab
+  project_name:      "Epoxy!B1",
+  bid_date:          "Epoxy!B2",
+  address:           "Epoxy!B3",
+  city_state:        "Epoxy!C3",   // sits next to the address
+  approx_start_date: "Epoxy!B7",
+  architect:         "Epoxy!B8",
+  // Intake → Polish tab (mirror — Polish references Epoxy by formula
+  // for most of this but we also write directly so it's visible)
+};
+
+(function autofillFromIntake() {
+  for (const [field, addr] of Object.entries(FORM_TO_CELL)) {
+    const v = state[field];
+    if (v !== undefined && v !== null && v !== "" && cellValues[addr] === undefined) {
+      cellValues[addr] = v;
     }
   }
-  refreshTotals();
-  form.addEventListener("input", () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(refreshTotals, 300);
-  });
+})();
 
-  document.getElementById("back-btn").addEventListener("click", () => {
-    TW.setState(TW.readForm(form));
-    window.location.assign("/");
-  });
+// ─── System Name + Texture inline inputs (flow into proposal too) ──
+const sysNameInput = document.getElementById("sys-name");
+const texInput     = document.getElementById("tex-name");
+if (state.system_name) sysNameInput.value = state.system_name;
+if (state.texture)     texInput.value     = state.texture;
+function pushSysTextureToState() {
+  state.system_name = sysNameInput.value;
+  state.texture     = texInput.value;
+  TW.setState({ ...state, system_name: state.system_name, texture: state.texture });
+}
+sysNameInput.addEventListener("input", pushSysTextureToState);
+texInput.addEventListener("input", pushSysTextureToState);
 
-  form.addEventListener("submit", (e) => {
+const tabBar    = document.getElementById("tab-bar");
+const sheetGrid = document.getElementById("sheet-grid");
+const badge     = document.getElementById("type-badge");
+
+let sheets = [];
+let activeSheet = null;
+let sheetCache = {};  // name → fetched cell data
+
+async function init() {
+  // 1. Tab bar + sheet list
+  try {
+    const res = await fetch("/api/sheets");
+    const j = await res.json();
+    sheets = j.sheets || [];
+  } catch (err) {
+    sheetGrid.textContent = "Could not load sheets: " + err;
+    return;
+  }
+  renderTabs();
+
+  // 2. Initialize HyperFormula with ALL sheet names. We need the engine
+  //    to know about every sheet up front so cross-sheet formulas
+  //    (=Epoxy!B1 on Polish) resolve correctly.
+  HF.init(sheets);
+
+  // 2b. Register the workbook's named expressions (e.g. AT_Clear_Satin_w_Grit)
+  //    so formulas referencing them resolve instead of throwing #NAME?
+  try {
+    const nameRes = await fetch("/api/named-expressions");
+    const nameData = await nameRes.json();
+    let registered = 0;
+    for (const n of nameData.names || []) {
+      try {
+        // HyperFormula API: addNamedExpression(expressionName, expression, scope?)
+        if (n.scope && HF.sheetIdByName[n.scope] !== undefined) {
+          HF.instance.addNamedExpression(n.name, n.expression, HF.sheetIdByName[n.scope]);
+        } else {
+          HF.instance.addNamedExpression(n.name, n.expression);
+        }
+        registered++;
+      } catch (e) {
+        // Skip names HF can't parse (some have ranges/syntax it doesn't accept)
+      }
+    }
+    console.log(`Registered ${registered}/${(nameData.names || []).length} named expressions`);
+  } catch (err) {
+    console.warn("Failed to load named expressions:", err);
+  }
+
+  // 3. Fetch + load all sheets into HF up front. This is a one-time
+  //    cost (~1-2 seconds) but lets formulas recompute live with no
+  //    further server round-trips. Apply any saved cell_values overrides.
+  sheetGrid.textContent = "Loading workbook into formula engine…";
+  await Promise.all(sheets.map(async (name) => {
+    try {
+      const r = await fetch("/api/sheet/" + encodeURIComponent(name));
+      const data = await r.json();
+      sheetCache[name] = data;
+      HF.loadSheet(name, data.cells);
+    } catch (err) {
+      console.warn(`Failed to load ${name}:`, err);
+    }
+  }));
+  // Apply saved overrides
+  for (const [key, val] of Object.entries(cellValues)) {
+    const [sheet, addr] = key.split("!");
+    if (sheet && addr) HF.setCellValue(sheet, addr, val);
+  }
+
+  // 4. Open the right starting tab
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  const initialSheet = wt === "polish"
+      ? "Polish"
+      : (wt === "combo" ? "Epoxy" : "Epoxy");
+  badge.textContent = wt.toUpperCase();
+  showSheet(initialSheet);
+}
+
+function renderTabs() {
+  tabBar.innerHTML = "";
+  for (const name of sheets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = name;
+    btn.dataset.sheet = name;
+    btn.addEventListener("click", () => showSheet(name));
+    tabBar.appendChild(btn);
+  }
+}
+
+async function showSheet(name) {
+  activeSheet = name;
+  for (const btn of tabBar.querySelectorAll("button")) {
+    btn.classList.toggle("active", btn.dataset.sheet === name);
+  }
+  badge.textContent = name.toUpperCase();
+  // Clear stale DOM registrations from the previous sheet — those input
+  // elements got detached when we tore down the prior grid.
+  if (HF && HF.unregisterAll) HF.unregisterAll();
+  sheetGrid.className = "sheet-loading";
+  sheetGrid.textContent = "Loading " + name + "…";
+
+  if (!sheetCache[name]) {
+    try {
+      const r = await fetch("/api/sheet/" + encodeURIComponent(name));
+      if (!r.ok) {
+        sheetGrid.textContent = "Failed to load " + name;
+        return;
+      }
+      sheetCache[name] = await r.json();
+    } catch (err) {
+      sheetGrid.textContent = "Failed to load " + name + ": " + err;
+      return;
+    }
+  }
+  renderSheet(sheetCache[name]);
+}
+
+// Map Excel border styles → CSS border declarations
+const _BORDER_STYLE_MAP = {
+  thin:           "1px solid",
+  medium:         "2px solid",
+  thick:          "3px solid",
+  double:         "3px double",
+  hair:           "1px dotted",
+  dotted:         "1px dotted",
+  dashed:         "1px dashed",
+  mediumDashed:   "2px dashed",
+  dashDot:        "1px dashed",
+  mediumDashDot:  "2px dashed",
+  dashDotDot:     "1px dotted",
+  mediumDashDotDot: "2px dotted",
+  slantDashDot:   "1px dashed",
+};
+
+function applyBorders(el, borders) {
+  for (const side of ["top", "right", "bottom", "left"]) {
+    const b = borders[side];
+    if (!b || !b.style) continue;
+    const css = _BORDER_STYLE_MAP[b.style] || "1px solid";
+    el.style["border-" + side] = `${css} ${b.color || "#000"}`;
+  }
+}
+
+function formatNumericValue(v, fmt) {
+  if (v === null || v === undefined) return "";
+  if (typeof v !== "number") return String(v);
+  fmt = fmt || "";
+  // Currency
+  if (/\$/.test(fmt)) {
+    const decimals = /0\.0{2}/.test(fmt) ? 2 : 0;
+    return "$" + v.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  }
+  // Percent
+  if (/%/.test(fmt)) {
+    const decimals = /0\.0/.test(fmt) ? 1 : 0;
+    return (v * 100).toFixed(decimals) + "%";
+  }
+  // Generic number with commas
+  if (/#,##0/.test(fmt)) {
+    const decimals = /0\.0/.test(fmt) ? 2 : 0;
+    return v.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  }
+  // Plain number — trim long decimals
+  if (Math.floor(v) === v) return String(v);
+  return String(Math.round(v * 10000) / 10000);
+}
+
+function colLetter(n) {
+  // 1 -> A, 2 -> B, 27 -> AA, ...
+  let s = "";
+  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+
+function renderSheet(data) {
+  // Clip to a viewable size. Most sheets only really use rows 1-100 / cols A-H
+  // for the actual estimate; the rest is reference tables we still want
+  // available but at least show the workable area.
+  const maxRow = Math.min(data.max_row, 100);
+  const maxCol = Math.min(data.max_col, 30);
+
+  // Build a sparse map address → cell
+  const byAddr = new Map();
+  for (const c of data.cells) byAddr.set(c.addr, c);
+
+  // Build merged-cell lookups:
+  //   anchorMap: addr → {rowSpan, colSpan} for cells that ARE the anchor
+  //   insideMerged: Set of addresses that are inside a merge (but NOT the anchor) — skip rendering
+  const anchorMap = new Map();
+  const insideMerged = new Set();
+  for (const m of (data.merged || [])) {
+    if (!m.anchor) continue;
+    anchorMap.set(m.anchor, { rowSpan: m.rowSpan, colSpan: m.colSpan });
+    // Mark every cell inside the range (except the anchor) as hidden
+    for (let rr = m.minRow; rr <= m.maxRow; rr++) {
+      for (let cc = m.minCol; cc <= m.maxCol; cc++) {
+        const addr = colLetter(cc) + rr;
+        if (addr !== m.anchor) insideMerged.add(addr);
+      }
+    }
+  }
+
+  // Column widths — Excel "characters" ≈ ~7.5px wide
+  const colPx = [];
+  for (let c = 1; c <= maxCol; c++) {
+    const letter = colLetter(c);
+    const w = data.col_widths[letter];
+    colPx.push(Math.max(48, Math.round((w || 9) * 7.5)));
+  }
+  const rowPx = [];
+  for (let r = 1; r <= maxRow; r++) {
+    const h = data.row_heights[r];
+    rowPx.push(Math.max(20, Math.round((h || 15) * 1.33)));
+  }
+
+  // Build grid container
+  const grid = document.createElement("div");
+  grid.className = "xl-grid";
+  grid.style.gridTemplateColumns = `40px ${colPx.map(p => p + "px").join(" ")}`;
+  grid.style.gridTemplateRows    = `22px ${rowPx.map(p => p + "px").join(" ")}`;
+
+  // Top-left corner
+  grid.appendChild(makeCell("corner", "", { row: 1, col: 1 }));
+  // Column letter headers — with draggable right-edge resize handle
+  for (let c = 1; c <= maxCol; c++) {
+    const header = makeCell("col-header", colLetter(c), { row: 1, col: c + 1 });
+    const handle = document.createElement("div");
+    handle.className = "resize-h";
+    handle.dataset.colIndex = String(c);
+    header.appendChild(handle);
+    grid.appendChild(header);
+  }
+  // Row number headers — with draggable bottom-edge resize handle
+  for (let r = 1; r <= maxRow; r++) {
+    const header = makeCell("row-header", String(r), { row: r + 1, col: 1 });
+    const handle = document.createElement("div");
+    handle.className = "resize-v";
+    handle.dataset.rowIndex = String(r);
+    header.appendChild(handle);
+    grid.appendChild(header);
+  }
+
+  // Data cells — every cell in the visible grid gets an editable input,
+  // matching Excel's behaviour where you can click any cell and type.
+  // For merged ranges: render only the anchor with row/col spans applied,
+  // skip the interior cells entirely.
+  for (let r = 1; r <= maxRow; r++) {
+    for (let c = 1; c <= maxCol; c++) {
+      const addr = colLetter(c) + r;
+      if (insideMerged.has(addr)) continue;   // hidden inside a merge
+      const cell = byAddr.get(addr) || {
+        addr, row: r, col: c,
+        value: null, isFormula: false,
+        fill: null, fontColor: null,
+        bold: false, italic: false, fmt: "", align: "",
+      };
+      const cellEl = makeDataCell(cell, data.sheet, r, c, data.dropdowns);
+      const span = anchorMap.get(addr);
+      if (span) {
+        // Stretch the anchor across its merged range
+        cellEl.style.gridRow = `${r + 1} / span ${span.rowSpan}`;
+        cellEl.style.gridColumn = `${c + 1} / span ${span.colSpan}`;
+        cellEl.classList.add("merged-anchor");
+      }
+      grid.appendChild(cellEl);
+    }
+  }
+
+  sheetGrid.className = "";
+  sheetGrid.innerHTML = "";
+  sheetGrid.appendChild(grid);
+
+  // Wire up draggable column/row resizers
+  attachResizers(grid, colPx, rowPx);
+  // Wire up Excel-style keyboard nav between cells
+  attachKeyboardNav(grid, maxRow, maxCol, data.sheet);
+  // Update the project/sheet labels in the bar (the rest is filled below)
+  document.getElementById("tb-project").textContent = state.project_name || "—";
+  document.getElementById("tb-sheet").textContent   = data.sheet;
+  // Sync every formula cell's DOM with HF's live computed value so
+  // we don't display stale xlsx-cached values when HF disagrees.
+  refreshDomFromHF(data, grid);
+  // Then pull bid totals from Epoxy/Polish via HF — these don't change
+  // when the user switches tabs, only when they edit a driver cell.
+  if (HF && HF.ready) updateTotalBarFromHF();
+}
+
+function refreshDomFromHF(data, grid) {
+  if (!HF || !HF.ready) return;
+  const sheet = data.sheet;
+  for (const cell of data.cells) {
+    if (!cell.isFormula) continue;
+    // Look up the cell's DOM input via HF's registration map — avoids
+    // having to CSS-escape sheet names that contain special chars like
+    // 'Gyp (USG 1-8")'.
+    const tgt = canonicalTarget(sheet, cell.addr);
+    const inp = HF.domBySheetAddr[`${tgt.sheet}!${cell.addr}`];
+    if (!inp) continue;
+    if (document.activeElement === inp) continue; // don't clobber a focused cell
+    const hfVal = HF.getValue(sheet, cell.addr);
+    let display;
+    if (hfVal && typeof hfVal === "object" && "value" in hfVal) {
+      // HF error wrapper. Match what Excel shows for the same condition,
+      // BUT fall back to the cached value if HF errors AND we have a cache
+      // (covers cells using named expressions HF doesn't know — DOM still
+      // shows Excel's last-good value rather than #NAME?).
+      const cached = cell.value;
+      if (cached !== null && cached !== undefined) {
+        display = formatNumericValue(cached, cell.fmt);
+      } else {
+        display = String(hfVal.value);
+      }
+    } else if (typeof hfVal === "number") {
+      display = formatNumericValue(hfVal, cell.fmt);
+    } else if (hfVal === null || hfVal === undefined) {
+      // HF returned nothing — keep the cached value if we have one
+      if (cell.value !== null && cell.value !== undefined) {
+        display = formatNumericValue(cell.value, cell.fmt);
+      } else {
+        display = "";
+      }
+    } else {
+      display = String(hfVal);
+    }
+    inp.value = display;
+  }
+}
+
+// Cell addresses where each sheet keeps its key totals. Verified against
+// the actual Excel labels in templates/estimate_sheet_5.7.xlsx:
+//   Epoxy   A16='Total Base Bid:' → B16=D88 (lump), D16=$/SF
+//           A43='Material Total' → D43
+//           A53='Install Labor'  → D53  (NOT D55 — D55 is just Labor Burden)
+//           A57='TOOLING & CONSUMABLES' section → D62 (Tooling Total)
+//   Polish  A15='Total Base Bid:' → B15=D82 (lump), D15=$/SF
+//           A33='Material Total' → D33
+//           A45='Labor Total'    → D45  (NOT D47 — D47 is Labor Burden)
+//           A49='TOOLING & CONSUMABLES' section → D55 (Tooling Total)
+//
+// Per user direction: lump sum is based on Epoxy + Polish only. Other
+// sheets (Seal, Gyp, Leveling, etc.) are reference tabs — the Total
+// Bar shows the same bid totals regardless of which tab is active.
+const TOTAL_CELLS = {
+  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62" },
+  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55" },
+};
+
+function updateTotalBar(data, byAddr) {
+  const map = TOTAL_CELLS[data.sheet] || {};
+  const cellVal = (addr) => {
+    if (!addr) return null;
+    const c = byAddr.get(addr);
+    return c && c.value != null ? c.value : null;
+  };
+  document.getElementById("tb-sheet").textContent    = data.sheet;
+  document.getElementById("tb-project").textContent  = state.project_name || "—";
+  document.getElementById("tb-psf").textContent      = fmtMoney(cellVal(map.psf));
+  document.getElementById("tb-material").textContent = fmtMoney(cellVal(map.material));
+  document.getElementById("tb-labor").textContent    = fmtMoney(cellVal(map.labor));
+  document.getElementById("tb-tooling").textContent  = fmtMoney(cellVal(map.tooling));
+  document.getElementById("tb-total").textContent    = fmtMoney(cellVal(map.total));
+}
+
+function fmtMoney(v) {
+  if (v == null || isNaN(v)) return "—";
+  return "$" + Number(v).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+function attachKeyboardNav(grid, maxRow, maxCol, sheetName) {
+  grid.addEventListener("keydown", (e) => {
+    const inp = e.target;
+    if (!(inp.tagName === "INPUT" || inp.tagName === "SELECT")) return;
+    const addr = (inp.dataset.cellAddr || "").split("!")[1];
+    if (!addr) return;
+    const m = addr.match(/^([A-Z]+)(\d+)$/);
+    if (!m) return;
+    let col = m[1].split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    let row = parseInt(m[2], 10);
+
+    let dRow = 0, dCol = 0;
+    if (e.key === "ArrowDown")  dRow = 1;
+    else if (e.key === "ArrowUp")    dRow = -1;
+    else if (e.key === "ArrowRight" && (inp.selectionStart === inp.value.length || inp.tagName === "SELECT")) dCol = 1;
+    else if (e.key === "ArrowLeft"  && (inp.selectionStart === 0 || inp.tagName === "SELECT")) dCol = -1;
+    else if (e.key === "Tab")    { dCol = e.shiftKey ? -1 : 1; e.preventDefault(); }
+    else if (e.key === "Enter")  { dRow = 1; e.preventDefault(); }
+    else return;
+
+    if (dRow === 0 && dCol === 0) return;
+
+    const newRow = Math.max(1, Math.min(maxRow, row + dRow));
+    const newCol = Math.max(1, Math.min(maxCol, col + dCol));
+    if (newRow === row && newCol === col) return;
     e.preventDefault();
-    TW.setState(TW.readForm(form));
-    window.location.assign("/proposal-review.html");
+    const newAddr = `${sheetName}!${colLetter(newCol)}${newRow}`;
+    const target = grid.querySelector(`[data-cell-addr="${newAddr}"]`);
+    if (target) {
+      target.focus();
+      if (target.tagName === "INPUT" && target.type === "text") target.select();
+    }
   });
-</script>
+}
 
+function attachResizers(grid, colPx, rowPx) {
+  // Resizing a 3000-cell CSS Grid on every mousemove pixel is what makes
+  // the drag feel laggy — every change to gridTemplateColumns/Rows
+  // reflows every cell. Excel's trick: show a thin "ghost line" at the
+  // cursor during drag (cheap — one absolutely-positioned div), and
+  // only commit the new size ONCE on mouseup (one reflow at the end).
+  let dragging = null;  // { kind, index, startX, startY, startSize, ghost, viewport }
+
+  function onMouseDown(e) {
+    const target = e.target;
+    const isCol = target.classList.contains("resize-h");
+    const isRow = target.classList.contains("resize-v");
+    if (!isCol && !isRow) return;
+
+    const viewport = grid.closest(".xl-viewport");
+    const vpRect = viewport.getBoundingClientRect();
+    const ghost = document.createElement("div");
+    ghost.style.cssText = `
+      position: absolute;
+      background: var(--treadwell-red);
+      opacity: 0.55;
+      z-index: 100;
+      pointer-events: none;
+    `;
+    if (isCol) {
+      ghost.style.top = "0";
+      ghost.style.bottom = "0";
+      ghost.style.width = "2px";
+      ghost.style.left = (e.clientX - vpRect.left + viewport.scrollLeft) + "px";
+    } else {
+      ghost.style.left = "0";
+      ghost.style.right = "0";
+      ghost.style.height = "2px";
+      ghost.style.top = (e.clientY - vpRect.top + viewport.scrollTop) + "px";
+    }
+    viewport.appendChild(ghost);
+
+    const idx = parseInt(isCol ? target.dataset.colIndex : target.dataset.rowIndex, 10);
+    dragging = {
+      kind: isCol ? "col" : "row",
+      index: idx,
+      startX: e.clientX, startY: e.clientY,
+      startSize: isCol ? colPx[idx - 1] : rowPx[idx - 1],
+      ghost, viewport, vpRect,
+    };
+    target.classList.add("dragging");
+    document.body.style.cursor = isCol ? "col-resize" : "row-resize";
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  }
+
+  // Pure visual update: just move the ghost line. No grid reflow.
+  function onMouseMove(e) {
+    if (!dragging) return;
+    const { kind, ghost, viewport, vpRect } = dragging;
+    if (kind === "col") {
+      ghost.style.left = (e.clientX - vpRect.left + viewport.scrollLeft) + "px";
+    } else {
+      ghost.style.top  = (e.clientY - vpRect.top  + viewport.scrollTop)  + "px";
+    }
+  }
+
+  function onMouseUp(e) {
+    if (!dragging) return;
+    const { kind, index, startX, startY, startSize, ghost } = dragging;
+    // ONE commit at the end — single reflow.
+    if (kind === "col") {
+      const delta = e.clientX - startX;
+      colPx[index - 1] = Math.max(24, startSize + delta);
+      grid.style.gridTemplateColumns = `40px ${colPx.map(p => p + "px").join(" ")}`;
+    } else {
+      const delta = e.clientY - startY;
+      rowPx[index - 1] = Math.max(14, startSize + delta);
+      grid.style.gridTemplateRows = `22px ${rowPx.map(p => p + "px").join(" ")}`;
+    }
+    ghost.remove();
+    document.querySelectorAll(".resize-h.dragging, .resize-v.dragging")
+      .forEach(el => el.classList.remove("dragging"));
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    dragging = null;
+  }
+
+  grid.addEventListener("mousedown", onMouseDown);
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+
+  // Double-click handle to auto-size — simple approximation: longest cell text
+  grid.addEventListener("dblclick", (e) => {
+    if (!e.target.classList.contains("resize-h")) return;
+    const idx = parseInt(e.target.dataset.colIndex, 10);
+    let maxLen = 6;
+    for (const inp of grid.querySelectorAll(
+      `.gridcell:not(.col-header):not(.row-header):not(.corner) input, ` +
+      `.gridcell:not(.col-header):not(.row-header):not(.corner) select`
+    )) {
+      const cell = inp.parentElement;
+      // grid-column is "<idx+1>" because col 1 = row-headers
+      if (parseInt(cell.style.gridColumn, 10) === idx + 1) {
+        maxLen = Math.max(maxLen, (inp.value || "").length);
+      }
+    }
+    colPx[idx - 1] = Math.max(48, Math.min(360, maxLen * 7.5 + 12));
+    grid.style.gridTemplateColumns = `40px ${colPx.map(p => p + "px").join(" ")}`;
+  });
+}
+
+function makeCell(kind, text, pos) {
+  const d = document.createElement("div");
+  d.className = "gridcell " + kind;
+  d.textContent = text;
+  d.style.gridRow = pos.row;
+  d.style.gridColumn = pos.col;
+  return d;
+}
+
+function makeDataCell(cell, sheet, r, c, dropdowns) {
+  const d = document.createElement("div");
+  d.className = "gridcell";
+  d.style.gridRow = r + 1;
+  d.style.gridColumn = c + 1;
+
+  // Visual styling from the original sheet
+  if (cell.fill) d.style.background = cell.fill;
+  if (cell.fontColor) d.style.color = cell.fontColor;
+  if (cell.bold) d.classList.add("bold");
+  if (cell.italic) d.classList.add("italic");
+  if (cell.underline) d.style.textDecoration = "underline";
+  if (cell.fontSize) d.style.fontSize = (cell.fontSize * 0.92) + "pt";
+  if (cell.wrap) d.style.whiteSpace = "normal";
+  // Horizontal alignment
+  if (cell.align === "right") d.style.justifyContent = "flex-end";
+  else if (cell.align === "center") d.style.justifyContent = "center";
+  else if (cell.align === "left") d.style.justifyContent = "flex-start";
+  if (cell.align === "right" || /[\\$#,0]/.test(cell.fmt || "")) d.classList.add("numeric");
+  // Vertical alignment
+  if (cell.valign === "top") d.style.alignItems = "flex-start";
+  else if (cell.valign === "bottom") d.style.alignItems = "flex-end";
+  else if (cell.valign === "center") d.style.alignItems = "center";
+  // Borders from the source xlsx (overrides the default grid lines)
+  if (cell.borders) applyBorders(d, cell.borders);
+
+  // Canonical-key remap: Project Info cells (A1:D10) always live on
+  // Epoxy. Editing them on any tab writes to Epoxy!{addr} so all tabs
+  // stay in sync (mirroring how the source xlsx wires Polish/Gyp/etc
+  // to Epoxy via cross-sheet formula references).
+  const addrKey = canonicalKey(sheet, cell.addr);
+  const isYellow = cell.fill && /^#FFF[F4][0A][03A]/i.test(cell.fill);
+  if (isYellow) d.classList.add("editable");
+  // Visual cue when a cell is canonicalised but we're not on the source tab
+  if (isProjectInfoCell(cell.addr) && sheet !== CANONICAL_SHEET) {
+    d.classList.add("canonical-mirror");
+    d.title = `Project Info — canonical source: ${CANONICAL_SHEET}!${cell.addr}`;
+  }
+
+  // Every cell is editable. Dropdowns become <select>; everything else
+  // becomes <input>. Formula cells show the formula string in the input —
+  // editing replaces the formula with the typed value.
+  const dropOpts = dropdowns[cell.addr];
+  let inp;
+  if (dropOpts && dropOpts.length) {
+    inp = document.createElement("select");
+    const blank = document.createElement("option");
+    blank.value = ""; blank.textContent = "";
+    inp.appendChild(blank);
+    for (const o of dropOpts) {
+      const opt = document.createElement("option");
+      opt.value = o; opt.textContent = o;
+      inp.appendChild(opt);
+    }
+    inp.value = cellValues[addrKey] != null
+        ? cellValues[addrKey]
+        : (cell.value != null ? String(cell.value) : "");
+  } else {
+    inp = document.createElement("input");
+    inp.type = "text";
+    let displayVal;
+    // For canonical-mirror cells: prefer the user's edit, else the
+    // Epoxy source cell's cached value, else fall back to the local
+    // cell's value. This way Polish's "Project Info" rows actually
+    // show what Epoxy holds, not the local formula's stale 0.
+    let displaySource = cell;
+    if (isProjectInfoCell(cell.addr) && sheet !== CANONICAL_SHEET && sheetCache[CANONICAL_SHEET]) {
+      const epoxyCells = sheetCache[CANONICAL_SHEET].cells || [];
+      const sourceCell = epoxyCells.find(c => c.addr === cell.addr);
+      if (sourceCell) displaySource = sourceCell;
+    }
+    if (cellValues[addrKey] != null) {
+      displayVal = cellValues[addrKey];
+    } else if (displaySource.value !== null && displaySource.value !== undefined) {
+      displayVal = formatNumericValue(displaySource.value, displaySource.fmt);
+    } else {
+      displayVal = "";
+    }
+    inp.value = displayVal;
+    // Formula cells are editable but visually marked — matches Excel,
+    // where you CAN overwrite a formula by typing over it (you just
+    // lose the formula). Untouched formula cells still pass through
+    // verbatim in the downloaded xlsx because we only write
+    // cell_values keys the user actually edited.
+    if (cell.isFormula) {
+      d.classList.add("formula-cell");
+      inp.title = "Formula cell — typing here will replace the formula";
+    }
+  }
+  inp.dataset.cellAddr = addrKey;
+  // Register this input with HF using the CANONICAL key — that way
+  // refreshDomFromHF and propagateChangesToDom can both find it whether
+  // the cell is on its source sheet or mirrored from another.
+  if (typeof HF !== "undefined" && HF.registerDom) {
+    const tgt = canonicalTarget(sheet, cell.addr);
+    HF.registerDom(tgt.sheet, tgt.addr, inp);
+  }
+  // Track only real edits (the original formula/value stays in the xlsx
+  // unless the user actually types something different).
+  const original = inp.value;
+  inp.addEventListener("input", (e) => {
+    const newVal = e.target.value;
+    if (newVal === original) {
+      delete cellValues[addrKey];
+    } else {
+      cellValues[addrKey] = newVal;
+    }
+    // Push the edit into HyperFormula and update every dependent cell's DOM
+    // value. This is what makes the grid "feel" like Excel.
+    // IMPORTANT: route project-info edits to the CANONICAL source on Epoxy.
+    // Editing Polish!B1 should update Epoxy!B1; the formula =Epoxy!B1 on
+    // Polish!B1 then recomputes naturally without us touching it.
+    if (HF && HF.ready) {
+      const tgt = canonicalTarget(sheet, cell.addr);
+      const affected = HF.setCellValue(tgt.sheet, tgt.addr, newVal);
+      propagateChangesToDom(affected);
+      updateTotalBarFromHF();
+    }
+  });
+  d.appendChild(inp);
+  return d;
+}
+
+function propagateChangesToDom(changes) {
+  // changes is an array of {sheet, addr, value} from HF.setCellValue.
+  // Walk each, find its DOM input on the *current* sheet, and update the
+  // displayed value (formatted using the cell's number format if we have it).
+  if (!changes || !changes.length) return;
+  for (const ch of changes) {
+    if (!ch.sheet || !ch.addr) continue;
+    const inputEl = HF.domBySheetAddr[`${ch.sheet}!${ch.addr}`];
+    if (!inputEl) continue;
+    // Skip the cell the user is actively typing in
+    if (document.activeElement === inputEl) continue;
+    // Find the original cell from cache to get fmt
+    const sourceCells = (sheetCache[ch.sheet] || {}).cells || [];
+    const sourceCell = sourceCells.find(c => c.addr === ch.addr);
+    let display;
+    if (ch.value && typeof ch.value === "object" && "value" in ch.value) {
+      // HF error wrapper, e.g. { value: '#DIV/0!', type: 'DIV_BY_ZERO' }
+      display = String(ch.value.value);
+    } else if (typeof ch.value === "number") {
+      display = formatNumericValue(ch.value, sourceCell ? sourceCell.fmt : "");
+    } else if (ch.value === null || ch.value === undefined) {
+      display = "";
+    } else {
+      display = String(ch.value);
+    }
+    inputEl.value = display;
+  }
+}
+
+function updateTotalBarFromHF() {
+  // Refresh the sticky Total bar from HF. We always pull from Epoxy
+  // and/or Polish (the bid-driver sheets) — never the currently-active
+  // tab — because reference tabs like Seal/Gyp don't have their own
+  // bid totals; they're lookup data.
+  if (!HF.ready) return;
+  const workType = (state.work_type || "epoxy").toLowerCase();
+  // Sums numeric HF values, skipping errors / nulls
+  const sumCells = (sources) => sources.reduce((acc, src) => {
+    const v = HF.getValue(src.sheet, src.addr);
+    if (v && typeof v === "object" && "value" in v) return acc;  // HF error
+    if (typeof v !== "number") return acc;
+    return acc + v;
+  }, 0);
+  const cellsFor = (key) => {
+    const out = [];
+    if (workType !== "polish") out.push({ sheet: "Epoxy",  addr: TOTAL_CELLS.Epoxy[key]  });
+    if (workType !== "epoxy")  out.push({ sheet: "Polish", addr: TOTAL_CELLS.Polish[key] });
+    return out;
+  };
+
+  document.getElementById("tb-material").textContent = fmtMoney(sumCells(cellsFor("material")));
+  document.getElementById("tb-labor").textContent    = fmtMoney(sumCells(cellsFor("labor")));
+  document.getElementById("tb-tooling").textContent  = fmtMoney(sumCells(cellsFor("tooling")));
+  document.getElementById("tb-total").textContent    = fmtMoney(sumCells(cellsFor("total")));
+
+  // $/SF — for single work type, read that sheet's $/SF directly.
+  // For combo, compute as total / total-SF.
+  if (workType === "combo") {
+    const totalLump = sumCells(cellsFor("total"));
+    const epoxySF   = Number(HF.getValue("Epoxy", "E20") || 0);
+    const polishSF  = Number(HF.getValue("Polish", "E19") || 0);
+    const sumSF = epoxySF + polishSF;
+    document.getElementById("tb-psf").textContent = sumSF > 0
+      ? fmtMoney(totalLump / sumSF)
+      : "—";
+  } else {
+    const srcSheet = workType === "polish" ? "Polish" : "Epoxy";
+    const v = HF.getValue(srcSheet, TOTAL_CELLS[srcSheet].psf);
+    const isErr = v && typeof v === "object" && "value" in v;
+    document.getElementById("tb-psf").textContent =
+      isErr ? String(v.value) : (typeof v === "number" ? fmtMoney(v) : "—");
+  }
+}
+
+// ─── County (Remodel Tax) searchable dropdown ──────────────────────
+const countyInput    = document.getElementById("county-input");
+const countyResults  = document.getElementById("county-results");
+const countySelected = document.getElementById("county-selected");
+let allCounties = [];
+let countyHighlight = -1;
+
+async function loadCounties() {
+  try {
+    const r = await fetch("/api/reference/counties");
+    const j = await r.json();
+    allCounties = j.counties || [];
+  } catch (err) {
+    console.warn("Failed to load counties:", err);
+  }
+}
+
+function renderCountyResults(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) { countyResults.classList.remove("open"); return; }
+  // Match name, state, or notes
+  const matches = allCounties.filter(c => {
+    return c.name.toLowerCase().includes(q)
+        || (c.state || "").toLowerCase().includes(q)
+        || (c.notes || "").toLowerCase().includes(q)
+        || `${c.name} ${c.state}`.toLowerCase().includes(q)
+        || `${c.name} county, ${c.state}`.toLowerCase().includes(q);
+  }).slice(0, 30);
+  if (!matches.length) {
+    countyResults.innerHTML = `<div class="county-row" style="cursor:default;color:var(--ink-variant);">No counties match "${q}"</div>`;
+    countyResults.classList.add("open");
+    return;
+  }
+  countyHighlight = -1;
+  countyResults.innerHTML = matches.map((c, i) => `
+    <div class="county-row" data-idx="${i}">
+      <div>
+        <span class="county-name">${c.name} County</span>
+        <span class="county-meta">${c.state} · ${(c.rate * 100).toFixed(3)}% base</span>
+      </div>
+      ${c.notes ? `<div class="county-notes">${c.notes}</div>` : ""}
+    </div>
+  `).join("");
+  countyResults._matches = matches;
+  countyResults.classList.add("open");
+  for (const row of countyResults.querySelectorAll(".county-row")) {
+    row.addEventListener("click", () => pickCounty(matches[parseInt(row.dataset.idx, 10)]));
+  }
+}
+
+function pickCounty(c) {
+  countySelected.innerHTML = `
+    <span class="county-pill">${c.name} County, ${c.state}
+      <span class="x" id="county-clear">×</span>
+    </span>
+  `;
+  countyInput.value = "";
+  countyResults.classList.remove("open");
+  // Persist to state so the proposal step can use it (token: {{county}})
+  state.county = `${c.name} County, ${c.state}`;
+  state.county_tax_rate = c.rate;
+  state.county_notes = c.notes;
+  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_notes: state.county_notes });
+  document.getElementById("county-clear").addEventListener("click", () => {
+    delete state.county; delete state.county_tax_rate; delete state.county_notes;
+    TW.setState(state);
+    countySelected.innerHTML = "";
+  });
+}
+
+countyInput.addEventListener("input", e => renderCountyResults(e.target.value));
+countyInput.addEventListener("focus", e => { if (e.target.value) renderCountyResults(e.target.value); });
+countyInput.addEventListener("keydown", e => {
+  const matches = countyResults._matches || [];
+  if (!matches.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    countyHighlight = Math.min(countyHighlight + 1, matches.length - 1);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    countyHighlight = Math.max(countyHighlight - 1, 0);
+  } else if (e.key === "Enter" && countyHighlight >= 0) {
+    e.preventDefault();
+    pickCounty(matches[countyHighlight]);
+    return;
+  } else if (e.key === "Escape") {
+    countyResults.classList.remove("open");
+    return;
+  } else {
+    return;
+  }
+  for (const row of countyResults.querySelectorAll(".county-row")) {
+    row.classList.toggle("active", parseInt(row.dataset.idx, 10) === countyHighlight);
+  }
+});
+
+document.addEventListener("click", e => {
+  if (!countyInput.contains(e.target) && !countyResults.contains(e.target)) {
+    countyResults.classList.remove("open");
+  }
+});
+
+// Restore prior selection if user revisits
+if (state.county) {
+  pickCounty({
+    name: state.county.replace(/ County,.*$/, ""),
+    state: (state.county.match(/,\s*([A-Z]{2})/) || [])[1] || "",
+    rate: state.county_tax_rate || 0,
+    notes: state.county_notes || "",
+  });
+}
+
+loadCounties();
+
+// Autofill button
+document.getElementById("autofill-btn").addEventListener("click", async (e) => {
+  const btn = e.target;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Thinking…";
+  try {
+    const r = await fetch("/api/autofill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_name: state.project_name,
+        address:      state.address,
+        city_state:   state.city_state,
+        notes:        state.notes || "",
+      }),
+    });
+    const j = await r.json();
+    if (j.ok && j.cell_values) {
+      // Apply only the cell-addressed keys; ignore the `reasoning` blob
+      let n = 0;
+      for (const k of Object.keys(j.cell_values)) {
+        if (k.includes("!") && j.cell_values[k] != null) {
+          cellValues[k] = j.cell_values[k];
+          n++;
+        }
+      }
+      btn.textContent = `✓ Filled ${n} cell${n === 1 ? "" : "s"}`;
+      // Re-render current sheet so updates appear
+      if (activeSheet) {
+        delete sheetCache[activeSheet];
+        await showSheet(activeSheet);
+      }
+    } else {
+      btn.textContent = "Unavailable";
+      console.warn("Autofill failed:", j.error);
+    }
+  } catch (err) {
+    btn.textContent = "Failed";
+    console.error(err);
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2200);
+  }
+});
+
+document.getElementById("back-btn").addEventListener("click", () => {
+  TW.setState({ ...state, cell_values: cellValues });
+  window.location.assign("/");
+});
+document.getElementById("continue-btn").addEventListener("click", () => {
+  TW.setState({ ...state, cell_values: cellValues });
+  window.location.assign("/proposal-review.html");
+});
+
+init();
+</script>
 </body>
 </html>

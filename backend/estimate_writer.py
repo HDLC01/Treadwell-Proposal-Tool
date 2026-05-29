@@ -31,6 +31,200 @@ TEMPLATE_PATH = (
     Path(__file__).parent / "templates" / "estimate_sheet_5.7.xlsx"
 )
 
+# Hand-curated dropdowns the UI exposes on the canonical Epoxy sheet —
+# the source xlsx leaves these as plain text cells, but Treadwell uses
+# them as Yes/No / New-Reno toggles. Maps cell address → option list.
+PROJECT_INFO_DROPDOWNS: Dict[str, list] = {
+    "B4":  ["Yes", "No"],          # Local?
+    "B5":  ["Yes", "No"],          # Hard Bid?
+    "D5":  ["Yes", "No"],          # Prevailing Wage?
+    "B6":  ["Yes", "No"],          # Taxable?
+    "D6":  ["Yes", "No"],          # Remodel Tax (tax-exempt)?
+    "B10": ["New", "Reno"],        # New construction or Renovation
+}
+
+
+def _parse_x14_data_validations(sheet_name: str) -> list[tuple[list[str], list]]:
+    """Parse Excel-extension (x14 namespace) data validations that
+    openpyxl drops with a warning. Returns a list of (cell_addresses,
+    options) tuples.
+
+    The xlsx zip contains a per-sheet XML file (word/worksheet1.xml or
+    similar) with an <extLst> at the bottom holding x14 validations:
+
+        <extLst>
+          <ext uri="{CCE6A557-...}">
+            <x14:dataValidations>
+              <x14:dataValidation type="list">
+                <x14:formula1><xm:f>"Yes,No"</xm:f></x14:formula1>
+                <xm:sqref>B4 B5</xm:sqref>
+              </x14:dataValidation>
+              ...
+    """
+    import re as _re
+    import zipfile
+    from xml.etree import ElementTree as _ET
+    from openpyxl import load_workbook as _load_workbook
+
+    # Find the worksheet's relative path in the xlsx
+    wb = _load_template(data_only=False)
+    if sheet_name not in wb.sheetnames:
+        return []
+    sheet_index = wb.sheetnames.index(sheet_name)
+    sheet_xml_name = f"xl/worksheets/sheet{sheet_index + 1}.xml"
+
+    with zipfile.ZipFile(TEMPLATE_PATH, "r") as z:
+        if sheet_xml_name not in z.namelist():
+            return []
+        xml = z.read(sheet_xml_name).decode("utf-8", errors="replace")
+
+    # Pull out the x14:dataValidations block via regex (simpler than parsing
+    # the whole 5MB xml tree). Then parse only that fragment with ET.
+    m = _re.search(r"<x14:dataValidations\b.*?</x14:dataValidations>", xml, _re.DOTALL)
+    if not m:
+        return []
+
+    NS = {
+        "x14": "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
+        "xm":  "http://schemas.microsoft.com/office/excel/2006/main",
+    }
+    # Wrap in a root so we can parse. Include every namespace Excel might
+    # reference inside the data-validation block (uid, revision IDs, etc.).
+    fragment = (
+        '<root '
+        'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" '
+        'xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main" '
+        'xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" '
+        'xmlns:xr2="http://schemas.microsoft.com/office/spreadsheetml/2015/revision2" '
+        'xmlns:xr3="http://schemas.microsoft.com/office/spreadsheetml/2016/revision3">'
+        + m.group(0) + "</root>"
+    )
+    try:
+        root = _ET.fromstring(fragment)
+    except _ET.ParseError:
+        return []
+
+    out: list[tuple[list[str], list]] = []
+    for dv in root.iter("{http://schemas.microsoft.com/office/spreadsheetml/2009/9/main}dataValidation"):
+        if dv.get("type") != "list":
+            continue
+        f1 = dv.find(".//x14:formula1/xm:f", NS)
+        sqref_el = dv.find("xm:sqref", NS)
+        if f1 is None or f1.text is None or sqref_el is None or sqref_el.text is None:
+            continue
+        formula = f1.text.strip()
+        # Inline list
+        if formula.startswith('"') and formula.endswith('"'):
+            opts = [s.strip() for s in formula.strip('"').split(",") if s.strip()]
+        else:
+            opts = _resolve_range_to_options(wb, wb[sheet_name], formula)
+        if not opts:
+            continue
+
+        # Expand the sqref into individual cell addresses.
+        # sqref is space-separated, each token is an addr or range
+        addrs: list[str] = []
+        for token in sqref_el.text.split():
+            if ":" in token:
+                # Range — enumerate cells inside
+                try:
+                    rng = wb[sheet_name][token]
+                    if not isinstance(rng, tuple):
+                        rng = ((rng,),)
+                    elif rng and not isinstance(rng[0], tuple):
+                        rng = (rng,)
+                    for row in rng:
+                        for cell in row:
+                            addrs.append(cell.coordinate)
+                except Exception:
+                    pass
+            else:
+                addrs.append(token)
+        if addrs:
+            out.append((addrs, opts))
+    return out
+
+
+def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
+    """Resolve a data-validation range reference (like `$B$161:$B$165`
+    or `'Stnd Alts'!$A$1:$A$10`) into a list of option strings.
+
+    Reads each cell in the range, keeps non-empty string/number values.
+    Returns [] if the formula can't be parsed."""
+    import re as _re
+
+    f = formula.lstrip("=").strip()
+    # Optional sheet prefix — either quoted ('Sheet Name'!range) or bare
+    # (validation!$A$1:$A$10).
+    sheet_match = _re.match(r"^'([^']+)'!(.+)$", f) or _re.match(r"^([A-Za-z_][\w\s\(\)\.\-]*)!(.+)$", f)
+    if sheet_match:
+        sheet_name = sheet_match.group(1)
+        cell_range = sheet_match.group(2)
+        if sheet_name not in wb.sheetnames:
+            return []
+        ws = wb[sheet_name]
+    else:
+        ws = current_ws
+        cell_range = f
+
+    # Strip $ signs
+    cell_range = cell_range.replace("$", "")
+    if ":" not in cell_range:
+        cell_range = f"{cell_range}:{cell_range}"
+
+    try:
+        cells = ws[cell_range]
+    except Exception:
+        return []
+
+    out: list = []
+    # Could be a single row, single col, or rect — flatten
+    if not hasattr(cells, "__iter__"):
+        cells = [[cells]]
+    for row in cells:
+        if not hasattr(row, "__iter__"):
+            row = [row]
+        for c in row:
+            v = c.value
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s and s not in out:
+                out.append(s)
+    return out
+
+
+# ─── Workbook caches ───────────────────────────────────────────────────
+# Loading the 797 KB template costs ~300ms per call. We read it twice per
+# /api/sheet call (formulas + cached values), and the user may switch
+# between 16 tabs back and forth. Cache both reads as module globals,
+# invalidated by file mtime so a manual swap of the template still works.
+
+_WB_CACHE: Dict[str, tuple[float, Any]] = {}
+# Per-sheet JSON-response cache, keyed by (sheet_name, file_mtime).
+# Building one Epoxy response takes ~80ms over 5K cells; caching brings
+# repeat tab visits to ~1ms.
+_SHEET_GRID_CACHE: Dict[tuple[str, float], Dict[str, Any]] = {}
+
+
+def _load_template(*, data_only: bool):
+    """Load + cache the template workbook. Re-loads if the file mtime
+    on disk changed (so swapping a new template still works without
+    restarting the server)."""
+    key = f"data_only={data_only}"
+    mtime = TEMPLATE_PATH.stat().st_mtime
+    if key in _WB_CACHE:
+        cached_mtime, wb = _WB_CACHE[key]
+        if cached_mtime == mtime:
+            return wb
+    wb = load_workbook(
+        TEMPLATE_PATH,
+        keep_vba=False,
+        data_only=data_only,
+    )
+    _WB_CACHE[key] = (mtime, wb)
+    return wb
+
 
 # ─── Cell maps per tab ─────────────────────────────────────────────────
 # Each entry: form_field_name → (cell_coordinate, value_transformer?)
@@ -38,8 +232,10 @@ TEMPLATE_PATH = (
 
 EPOXY_CELL_MAP: Dict[str, str] = {
     # Project-level metadata
+    "project_name":      "B1",     # next to "Project" label in row 1
     "bid_date":          "B2",
     "address":           "B3",
+    "city_state":        "C3",     # sits next to the address
     "local":             "B4",     # "Yes" / "No"
     "prevailing_wage":   "D5",     # "Yes" / "No"
     "taxable":           "B6",     # "Yes" / "No"
@@ -144,36 +340,437 @@ POLISH_TOTALS: Dict[str, str] = {
 
 
 # ─── Public API ────────────────────────────────────────────────────────
-def fill_estimate(values: Mapping[str, Any]) -> bytes:
+def fill_estimate(
+    values: Mapping[str, Any],
+    cell_values: Mapping[str, Any] | None = None,
+) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
-    `values` is a flat dict from the frontend. Keys not present in the
-    cell maps are silently ignored — the frontend can send a superset of
-    fields without breaking the backend.
+    Two ways to specify what to write:
 
-    Always writes to BOTH Epoxy and Polish tabs (each map handles its
-    own field names with prefixes where they collide). The Combo case
-    is implicit — if Troy fills both tabs' fields, both get written.
+    1. `values` — flat dict from named fields. Keys map to the
+       EPOXY_CELL_MAP / POLISH_CELL_MAP lookups above. Kept for
+       backward compatibility.
+
+    2. `cell_values` — dict keyed by `"<SheetName>!<CellAddress>"`,
+       e.g. `{"Epoxy!E20": 18000, "Polish!C20": 0.07}`. Bypasses the
+       named-field maps entirely so the UI can write to ANY cell
+       without us having to hand-curate every one.
+
+    Both are applied; `cell_values` wins on conflicts.
     """
     wb = load_workbook(TEMPLATE_PATH, keep_vba=False)
 
-    # Epoxy tab
+    # 1. Named-field writes (legacy / typed-form path)
     epoxy = wb["Epoxy"]
     for field, coord in EPOXY_CELL_MAP.items():
         if field in values and values[field] not in (None, ""):
-            epoxy[coord] = values[field]
+            epoxy[coord] = _coerce(values[field])
 
-    # Polish tab
     polish = wb["Polish"]
     for field, coord in POLISH_CELL_MAP.items():
         if field in values and values[field] not in (None, ""):
-            polish[coord] = values[field]
+            polish[coord] = _coerce(values[field])
+
+    # 2. Direct-cell writes (verbatim cell-for-cell editor path)
+    for sheet_addr, val in (cell_values or {}).items():
+        if val in (None, ""):
+            continue
+        if "!" not in sheet_addr:
+            continue
+        sheet_name, addr = sheet_addr.split("!", 1)
+        if sheet_name not in wb.sheetnames:
+            continue
+        try:
+            wb[sheet_name][addr] = _coerce(val)
+        except Exception:
+            pass  # bad coordinate — skip silently
 
     # Stream to bytes
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def _coerce(v: Any) -> Any:
+    """Cast strings to numbers where the user typed a number, leave
+    everything else alone. Keeps the workbook's number-format intact."""
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return v
+        try:
+            if "." in s or "e" in s or "E" in s:
+                return float(s)
+            return int(s)
+        except ValueError:
+            return v
+    return v
+
+
+# ─── Cell-for-cell sheet reader ───────────────────────────────────────
+def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
+    """Return every used cell on `sheet_name` as a flat list.
+
+    Used by `GET /api/sheet/{name}` to power the cell-for-cell UI. We
+    walk every cell up to (max_row, max_column), capturing value,
+    formula, fill colour, font weight, number format, and merge info.
+
+    Loads the workbook TWICE:
+      - `data_only=False` to get the formula text + styling
+      - `data_only=True`  to get the cached value Excel computed on
+        its last save (so `=D88` shows as $25,135 instead of "=D88").
+    Both modes are needed because openpyxl chooses one or the other
+    at load time and can't expose both for the same cell.
+
+    Cells that have neither value nor distinguishing formatting are
+    omitted (keeps the payload manageable for huge sheets like Takeoff).
+    """
+    mtime = TEMPLATE_PATH.stat().st_mtime
+    cache_key = (sheet_name, mtime)
+    if cache_key in _SHEET_GRID_CACHE:
+        return _SHEET_GRID_CACHE[cache_key]
+
+    wb = _load_template(data_only=False)
+    if sheet_name not in wb.sheetnames:
+        raise KeyError(sheet_name)
+    ws = wb[sheet_name]
+
+    # Second workbook just for the cached values
+    wb_vals = _load_template(data_only=True)
+    ws_vals = wb_vals[sheet_name]
+
+    # Merged ranges — structured for the frontend:
+    #   { anchor: 'A1', minRow, maxRow, minCol, maxCol, rowSpan, colSpan }
+    merged = []
+    merged_inner: set[str] = set()
+    for mr in ws.merged_cells.ranges:
+        anchor = mr.coord.split(":")[0]
+        merged.append({
+            "anchor":  anchor,
+            "range":   mr.coord,
+            "minRow":  mr.min_row,
+            "maxRow":  mr.max_row,
+            "minCol":  mr.min_col,
+            "maxCol":  mr.max_col,
+            "rowSpan": mr.max_row - mr.min_row + 1,
+            "colSpan": mr.max_col - mr.min_col + 1,
+        })
+        for row in ws[mr.coord]:
+            for cell in row:
+                if cell.coordinate != anchor:
+                    merged_inner.add(cell.coordinate)
+
+    cells: list[Dict[str, Any]] = []
+    max_row, max_col = ws.max_row, ws.max_column
+
+    for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
+        for cell in row:
+            if cell.coordinate in merged_inner:
+                continue
+
+            value = cell.value
+            fill_hex = _fill_hex(cell)
+            font_color = _font_color(cell)
+            is_formula = isinstance(value, str) and value.startswith("=")
+
+            # Skip truly empty cells (no value, no fill, not a merge anchor)
+            if value is None and not fill_hex and not cell.font.bold:
+                continue
+
+            # For formula cells, pull the cached computed value Excel left
+            # in the file — that's what users see in Excel itself.
+            # We deliberately DO NOT expose the formula text over the
+            # API; formulas live server-side only. The user sees the
+            # computed result, the backend preserves the formula verbatim.
+            if is_formula:
+                cached = ws_vals[cell.coordinate].value
+                display_value = (
+                    cached if cached is not None and not (
+                        isinstance(cached, str) and cached.startswith("=")
+                    )
+                    else None
+                )
+            else:
+                display_value = value
+
+            cells.append({
+                "addr":   cell.coordinate,
+                "row":    cell.row,
+                "col":    cell.column,
+                "value":  display_value,
+                "isFormula": is_formula,
+                "formula": value if is_formula else None,
+                "fill":    fill_hex,
+                "fontColor": font_color,
+                "bold":    bool(cell.font.bold),
+                "italic":  bool(cell.font.italic),
+                "underline": bool(cell.font.underline),
+                "fmt":     cell.number_format or "",
+                "align":   (cell.alignment.horizontal or ""),
+                "valign":  (cell.alignment.vertical or ""),
+                "wrap":    bool(cell.alignment.wrap_text),
+                "fontSize": float(cell.font.size) if cell.font.size else None,
+                "borders": _cell_borders(cell),
+            })
+
+    # Column widths (in Excel's char-width units; multiply by ~7px for px approx)
+    col_widths: Dict[str, float] = {}
+    for letter, dim in ws.column_dimensions.items():
+        if dim.width:
+            col_widths[letter] = dim.width
+
+    # Row heights (Excel points; multiply by ~1.33 for px)
+    row_heights: Dict[int, float] = {}
+    for idx, dim in ws.row_dimensions.items():
+        if dim.height:
+            row_heights[int(idx)] = dim.height
+
+    # Cells with data validations (e.g. dropdowns).
+    # Two sources combine here:
+    #   1. Data validations defined in the xlsx (inline lists + range refs)
+    #   2. Hand-added project-info dropdowns Treadwell needs (Yes/No, New/Reno)
+    #      — Kyle's xlsx leaves these as plain text cells but the tool
+    #      treats them as dropdowns for usability.
+    dropdowns: Dict[str, list[str]] = {}
+
+    # (1) xlsx-defined validations
+    for dv in ws.data_validations.dataValidation:
+        if dv.type != "list" or not dv.formula1:
+            continue
+        formula = dv.formula1.strip()
+        opts: list[str] = []
+        # Inline list like '"Yes,No"'
+        if formula.startswith('"') and formula.endswith('"'):
+            opts = [s.strip() for s in formula.strip('"').split(",")]
+        else:
+            # Range reference, e.g. '$B$161:$B$165' or "'Stnd Alts'!$A$1:$A$10"
+            # Strip leading '=' and resolve via openpyxl
+            opts = _resolve_range_to_options(wb, ws, formula)
+        if not opts:
+            continue
+        for cell_range in dv.sqref.ranges:
+            cells_in_range = ws[cell_range.coord]
+            # ws[range] returns either a single Cell, a row tuple,
+            # or a tuple-of-rows depending on the range shape. Normalize.
+            if not isinstance(cells_in_range, tuple):
+                cells_in_range = ((cells_in_range,),)
+            elif cells_in_range and not isinstance(cells_in_range[0], tuple):
+                cells_in_range = (cells_in_range,)
+            for row in cells_in_range:
+                for cell in row:
+                    dropdowns[cell.coordinate] = opts
+
+    # (1b) Excel "extension" data validations (x14 namespace, Excel 2010+).
+    # openpyxl strips these and logs a warning — we parse them ourselves
+    # from the raw XML. These are where most of Kyle's dropdowns live.
+    try:
+        x14_dvs = _parse_x14_data_validations(sheet_name)
+        for cells_addrs, opts in x14_dvs:
+            for addr in cells_addrs:
+                if addr not in dropdowns:
+                    dropdowns[addr] = opts
+    except Exception as exc:
+        # Non-fatal — log and continue with the regular dropdowns
+        import logging
+        logging.getLogger("proposal_tool.estimate_writer").warning(
+            "x14 data validation parse failed for %s: %s", sheet_name, exc
+        )
+
+    # (2) Project-info hard-coded dropdowns — appear on every sheet so
+    # the user can toggle them from any tab. Limited to the canonical
+    # source sheet (Epoxy) — the mirror cells on other tabs are formula
+    # references and editing them is canonicalised by the frontend.
+    if sheet_name == "Epoxy":
+        for addr, options in PROJECT_INFO_DROPDOWNS.items():
+            dropdowns.setdefault(addr, options)
+
+    # Border-symmetry pass: if cell A has `right` defined and cell to
+    # its right (B) has no `left`, mirror A.right → B.left (and same
+    # for top/bottom). Excel often defines borders on only one side of
+    # a shared wall, but the user wants the line visible whichever way
+    # they look at it. Without this, adjacent un-defined cells appear
+    # to "lose" the wall because they have no override on that side and
+    # fall back to the default thin gridline.
+    by_addr: Dict[str, Dict[str, Any]] = {c["addr"]: c for c in cells}
+    OPPOSITES = {"right": "left", "left": "right", "top": "bottom", "bottom": "top"}
+    NEIGHBOR_OFFSET = {
+        "right":  (0, 1),   # right of A is left of (A.row, A.col+1)
+        "left":   (0, -1),
+        "bottom": (1, 0),
+        "top":    (-1, 0),
+    }
+    from openpyxl.utils import get_column_letter
+    for c in cells:
+        b = c.get("borders")
+        if not b:
+            continue
+        for side, info in list(b.items()):
+            if not info or not info.get("style"):
+                continue
+            dr, dc = NEIGHBOR_OFFSET[side]
+            nr = c["row"] + dr
+            nc = c["col"] + dc
+            if nr < 1 or nc < 1:
+                continue
+            naddr = get_column_letter(nc) + str(nr)
+            neighbor = by_addr.get(naddr)
+            if not neighbor:
+                continue
+            opp = OPPOSITES[side]
+            nb = neighbor.get("borders") or {}
+            if not nb.get(opp):
+                nb[opp] = info
+                neighbor["borders"] = nb
+
+    result = {
+        "sheet":      sheet_name,
+        "max_row":    max_row,
+        "max_col":    max_col,
+        "cells":      cells,
+        "merged":     merged,
+        "col_widths": col_widths,
+        "row_heights": row_heights,
+        "dropdowns":  dropdowns,
+    }
+    _SHEET_GRID_CACHE[cache_key] = result
+    return result
+
+
+def read_named_expressions() -> list[Dict[str, Any]]:
+    """Return the workbook's defined names (named ranges/expressions).
+
+    These are formulas like `AT_Clear_Satin_w_Grit` that resolve to a
+    cell or range. HyperFormula needs them registered explicitly,
+    otherwise any formula that uses one returns #NAME?.
+
+    Returns a list of {name, expression, scope} dicts where:
+      - name: the defined name (e.g. "AT_Clear_Satin_w_Grit")
+      - expression: the formula it resolves to (e.g. "='Stnd Alts'!$E$145")
+      - scope: sheet name if scoped to a sheet, else None (workbook-wide)
+    """
+    wb = _load_template(data_only=False)
+    out: list[Dict[str, Any]] = []
+    try:
+        defined_names = wb.defined_names
+    except Exception:
+        return out
+
+    # openpyxl's defined_names is a dict-like collection
+    try:
+        items = list(defined_names.items())
+    except AttributeError:
+        # Older openpyxl: defined_names is an iterable of (name, DefinedName)
+        items = [(dn.name, dn) for dn in defined_names.definedName]
+
+    for name, dn in items:
+        try:
+            # `value` is the formula string, e.g. "Sheet1!$A$1" or "{2,3}"
+            expression = getattr(dn, "value", None) or getattr(dn, "attr_text", None)
+            if not expression:
+                continue
+            # Skip print areas, hidden ranges, etc. — only keep real names
+            if name.startswith("_xlnm."):
+                continue
+            scope = None
+            if hasattr(dn, "localSheetId") and dn.localSheetId is not None:
+                try:
+                    scope = wb.sheetnames[dn.localSheetId]
+                except (IndexError, TypeError):
+                    pass
+            out.append({
+                "name": name,
+                "expression": "=" + expression if not expression.startswith("=") else expression,
+                "scope": scope,
+            })
+        except Exception:
+            continue
+    return out
+
+
+def list_sheet_names() -> list[str]:
+    """List every sheet in the template (used by tab bar)."""
+    wb = load_workbook(TEMPLATE_PATH, read_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def _fill_hex(cell) -> str | None:
+    """Return cell fill colour as '#RRGGBB' or None if no/default fill."""
+    try:
+        f = cell.fill
+        if not f or f.patternType in (None, "none"):
+            return None
+        rgb = f.start_color.rgb if f.start_color else None
+        if not rgb or not isinstance(rgb, str):
+            return None
+        # openpyxl returns 'AARRGGBB' — drop alpha
+        if len(rgb) == 8:
+            rgb = rgb[2:]
+        if rgb == "000000" or rgb == "FFFFFF":
+            # Treat plain black/white as "no fill" for visual clarity
+            return None
+        return f"#{rgb}"
+    except Exception:
+        return None
+
+
+def _cell_borders(cell) -> dict | None:
+    """Return per-side border info {side: {style, color}} or None if no borders.
+
+    Excel border styles map roughly to CSS as:
+        thin    → 1px solid
+        medium  → 2px solid
+        thick   → 3px solid
+        double  → 3px double
+        dashed  → 1px dashed
+        dotted  → 1px dotted
+        hair    → 1px dotted
+        mediumDashed/dashDot/etc. → 2px dashed
+    """
+    try:
+        b = cell.border
+        if not b:
+            return None
+        out = {}
+        for side in ("top", "right", "bottom", "left"):
+            s = getattr(b, side, None)
+            if not s or not s.style:
+                continue
+            color = None
+            try:
+                if s.color and s.color.type == "rgb" and isinstance(s.color.rgb, str):
+                    rgb = s.color.rgb
+                    if len(rgb) == 8:
+                        rgb = rgb[2:]
+                    if rgb and rgb != "000000":
+                        color = f"#{rgb}"
+            except Exception:
+                pass
+            out[side] = {"style": s.style, "color": color}
+        return out or None
+    except Exception:
+        return None
+
+
+def _font_color(cell) -> str | None:
+    try:
+        c = cell.font.color
+        if not c:
+            return None
+        rgb = c.rgb if c.type == "rgb" else None
+        if not rgb or not isinstance(rgb, str):
+            return None
+        if len(rgb) == 8:
+            rgb = rgb[2:]
+        if rgb in ("000000", "FFFFFF"):
+            return None
+        return f"#{rgb}"
+    except Exception:
+        return None
 
 
 def read_totals(filled_xlsx_bytes: bytes) -> Dict[str, Dict[str, Any]]:

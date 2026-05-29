@@ -60,12 +60,21 @@ html, body {
   padding: 4px 10px;
   border-radius: 99px;
   background: var(--surface-low);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.progress a.step:hover {
+  background: var(--treadwell-red-light);
+  color: var(--treadwell-red-dark);
 }
 .progress .step.active {
   background: var(--treadwell-red);
   color: white;
   font-weight: 700;
+  cursor: default;
 }
+.progress .step.active:hover { background: var(--treadwell-red); color: white; }
 
 /* ─── Container ───────────────────────────────────────────────────── */
 .container {
@@ -269,12 +278,52 @@ button {
   text-decoration: none;
   border-radius: 6px;
   font-weight: 700;
+  font: inherit;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
 }
 .download-link:hover { background: var(--treadwell-red-dark); }
+.download-link:disabled { opacity: 0.6; cursor: wait; }
 .download-link.secondary {
   background: var(--surface-lowest);
   color: var(--treadwell-red-dark);
   border: 1px solid var(--treadwell-red);
+}
+
+/* ═══ Mobile responsive ═══════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Topbar collapses into a stack */
+  .topbar { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 14px; }
+  .progress { flex-wrap: wrap; justify-content: flex-start; }
+  .progress .step { font-size: 10px; padding: 3px 8px; }
+
+  /* Container loses its desktop padding */
+  .container { padding: 16px 12px 48px; }
+  .container.wide { padding: 12px; }
+
+  /* Headlines smaller */
+  h1 { font-size: 22px; }
+  h2 { font-size: 16px; }
+
+  /* Form rows stack vertically */
+  .row, .row.three { grid-template-columns: 1fr; gap: 8px; }
+
+  /* Fieldsets get tighter padding */
+  fieldset { padding: 12px 14px; margin-bottom: 12px; }
+
+  /* Buttons take full width on phones */
+  .actions { flex-direction: column-reverse; gap: 8px; }
+  .actions button { width: 100%; }
+
+  /* Topbar progress should wrap nicely */
+  .progress { gap: 4px; }
+}
+
+@media (max-width: 480px) {
+  /* On very narrow phones, drop the brand subtitle to save vertical space */
+  .brand-sub { display: none; }
+  .progress .step { font-size: 9px; letter-spacing: 0.03em; }
 }
 
 .alert {
@@ -300,3 +349,165 @@ button {
   border-radius: 99px;
   margin-left: 8px;
 }
+
+/* ─── Spreadsheet-style grid (estimate review) ────────────────────── */
+/* Colors lifted from Kyle's actual estimate sheet 5.7.xlsx */
+:root {
+  --xl-input:        #fff4a3;  /* light yellow — editable cells (most inputs) */
+  --xl-toggle:       #ffff00;  /* bright yellow — Yes/No toggles in rows 4-6 */
+  --xl-calc:         #c6efce;  /* light green — material computed cells */
+  --xl-total:        #41ecff;  /* cyan — section subtotals + grand totals */
+  --xl-polish-labor: #92d050;  /* dark green — polish-specific labor */
+  --xl-note:         #d4beff;  /* light purple — help-text cells */
+  --xl-border:       #b1b1b1;  /* Excel cell gridline */
+  --xl-header-bg:    #f3f3f3;  /* column/row headers */
+}
+
+.xl-tab-bar {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--xl-border);
+}
+.xl-tab-bar button {
+  background: var(--xl-header-bg);
+  border: 1px solid var(--xl-border);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  padding: 6px 18px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-variant);
+  cursor: pointer;
+}
+.xl-tab-bar button.active {
+  background: white;
+  color: var(--treadwell-red-dark);
+  border-bottom: 1px solid white;
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
+}
+
+.xl-sheet {
+  background: white;
+  border: 1px solid var(--xl-border);
+  border-top: none;
+  font-family: "Calibri", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11px;
+  color: var(--ink);
+  overflow-x: auto;
+}
+
+/* Column letter header row */
+.xl-col-headers {
+  display: grid;
+  background: var(--xl-header-bg);
+  border-bottom: 1px solid var(--xl-border);
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--ink-variant);
+  text-align: center;
+}
+.xl-col-headers > div {
+  padding: 3px 0;
+  border-right: 1px solid var(--xl-border);
+}
+.xl-col-headers > div:first-child {
+  background: var(--xl-header-bg);
+}
+
+/* Each cell row */
+.xl-row {
+  display: grid;
+  border-bottom: 1px solid var(--xl-border);
+  min-height: 22px;
+}
+.xl-row > div {
+  border-right: 1px solid var(--xl-border);
+  padding: 2px 6px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xl-row-num {
+  background: var(--xl-header-bg);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-variant);
+  justify-content: center !important;
+  text-align: center;
+}
+
+/* Cell type variants */
+.xl-cell-input    { background: var(--xl-input);  }
+.xl-cell-toggle   { background: var(--xl-toggle); font-weight: 700; }
+.xl-cell-calc     { background: var(--xl-calc);   font-variant-numeric: tabular-nums; justify-content: flex-end; }
+.xl-cell-total    { background: var(--xl-total);  font-variant-numeric: tabular-nums; font-weight: 800; justify-content: flex-end; }
+.xl-cell-polish   { background: var(--xl-polish-labor); }
+.xl-cell-note     { background: var(--xl-note);  font-style: italic; font-size: 10px; color: var(--ink-variant); }
+.xl-cell-label    { font-weight: 600; }
+.xl-cell-section-header {
+  background: var(--treadwell-red);
+  color: white;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  justify-content: flex-start !important;
+}
+.xl-cell-section-header.span-all {
+  grid-column: 2 / -1;
+}
+.xl-cell-numeric { font-variant-numeric: tabular-nums; justify-content: flex-end; }
+.xl-cell-bold    { font-weight: 700; }
+.xl-cell-blank   { background: white; }
+
+/* Inputs inside cells */
+.xl-row input[type="text"],
+.xl-row input[type="number"],
+.xl-row input[type="date"],
+.xl-row select {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  margin: 0;
+  min-height: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  border-radius: 0;
+}
+.xl-row input[type="text"],
+.xl-row input[type="date"],
+.xl-row select {
+  text-align: left;
+}
+.xl-row input:focus,
+.xl-row select:focus {
+  outline: 2px solid var(--treadwell-red);
+  outline-offset: -2px;
+  background: white;
+}
+
+/* Grid templates — A=2.5fr | B=1.5fr | C=1.5fr | D=1.7fr | E=2fr | F=1.2fr | G=1.2fr | H=1.5fr  */
+/* Row-number column = 30px */
+.xl-col-headers,
+.xl-row {
+  grid-template-columns:
+    30px           /* row # */
+    minmax(200px, 2.5fr)  /* A */
+    minmax(110px, 1.5fr)  /* B */
+    minmax(110px, 1.5fr)  /* C */
+    minmax(130px, 1.7fr)  /* D */
+    minmax(120px, 2fr)    /* E */
+    minmax(100px, 1.2fr)  /* F */
+    minmax(100px, 1.2fr)  /* G */
+    minmax(110px, 1.5fr); /* H */
+}
+
+/* Polish has a slightly different layout but reuses same grid */
