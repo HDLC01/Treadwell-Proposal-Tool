@@ -1747,6 +1747,14 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
         if (v == null) continue;
         if (k.includes("!")) {
           cellValues[k] = v;
+          // Also push the value into the live HF engine so downstream
+          // formulas pick it up immediately. Without this the change
+          // only shows up after a sheet reload + cellValues replay.
+          const [sheet, addr] = k.split("!");
+          if (sheet && addr) {
+            try { HF.setCellValue(sheet, addr, v); }
+            catch (e) { console.warn("HF.setCellValue failed for", k, v, e); }
+          }
           if (FLAG_LABELS[k]) filledFlags.push(`${FLAG_LABELS[k]}: <b>${v}</b>`);
           n++;
         } else if (narrativeKeys.includes(k)) {
