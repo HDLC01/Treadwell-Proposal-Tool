@@ -29,7 +29,38 @@ class DropboxNotConfigured(RuntimeError):
 
 
 def _is_configured() -> bool:
-    return bool(os.environ.get("DROPBOX_ACCESS_TOKEN"))
+    """Either a long-lived access token (legacy) OR the refresh-token
+    triple (App Key + App Secret + Refresh Token, modern) counts as
+    configured."""
+    if os.environ.get("DROPBOX_ACCESS_TOKEN"):
+        return True
+    return bool(
+        os.environ.get("DROPBOX_APP_KEY")
+        and os.environ.get("DROPBOX_APP_SECRET")
+        and os.environ.get("DROPBOX_REFRESH_TOKEN")
+    )
+
+
+def _build_client():
+    """Construct a `dropbox.Dropbox` from whichever env-var combo is set.
+
+    Preference order:
+      1. Refresh-token flow (App Key + App Secret + Refresh Token) — modern
+      2. Long-lived access token — legacy fallback
+    """
+    import dropbox
+
+    if (
+        os.environ.get("DROPBOX_APP_KEY")
+        and os.environ.get("DROPBOX_APP_SECRET")
+        and os.environ.get("DROPBOX_REFRESH_TOKEN")
+    ):
+        return dropbox.Dropbox(
+            app_key=os.environ["DROPBOX_APP_KEY"],
+            app_secret=os.environ["DROPBOX_APP_SECRET"],
+            oauth2_refresh_token=os.environ["DROPBOX_REFRESH_TOKEN"],
+        )
+    return dropbox.Dropbox(os.environ["DROPBOX_ACCESS_TOKEN"])
 
 
 def _sanitize_folder_name(name: str) -> str:
@@ -40,11 +71,63 @@ def _sanitize_folder_name(name: str) -> str:
     return cleaned[:120] or "Untitled Project"
 
 
-def _build_folder_path(project_name: str) -> str:
+def _build_folder_path(
+    project_name: str,
+    *,
+    job_number: str | int | None = None,
+    work_type: str | None = None,
+    status_marker: str | None = "!",
+) -> str:
+    """Build a Treadwell-style project folder name.
+
+    Matches Treadwell's existing Dropbox convention (verified against
+    `Treadwell Dropbox/2023 Treadwell Team Folder/Projects/`):
+
+        YY.NNN  Project Name  (work_type)?  status_marker?
+
+    Production examples:
+        24.117 Olathe CTE OSC (Polish) !
+        24.162 FCI Leavenworth FBOP ! #
+        25.104 SPX Crane Pads $
+
+    `job_number` is the 3-digit sequence Troy assigns; if not supplied
+    we fall back to the date so the folder still has a unique sortable
+    prefix. `work_type` only renders when it's "polish" or "combo"
+    (epoxy is the default and isn't called out, per Treadwell convention).
+    `status_marker` defaults to '!' which appears on most active jobs.
+    """
     root = os.environ.get("DROPBOX_ROOT_FOLDER", "/Proposals").rstrip("/")
-    date_prefix = datetime.now().strftime("%y.%m.%d")
+
+    # Prefix
+    yy = datetime.now().strftime("%y")
+    if job_number not in (None, ""):
+        raw = str(job_number).strip()
+        if "." in raw:
+            # User typed full YY.NNN — use as-is
+            prefix = raw
+        else:
+            try:
+                nnn = f"{int(raw):03d}"
+            except (ValueError, TypeError):
+                nnn = raw
+            prefix = f"{yy}.{nnn}"
+    else:
+        prefix = datetime.now().strftime("%y.%m.%d")
+
     name = _sanitize_folder_name(project_name)
-    return f"{root}/{date_prefix} {name}"
+
+    # Optional (Polish) / (Combo) suffix per Treadwell convention
+    suffix_parts: list[str] = []
+    wt = (work_type or "").strip().lower()
+    if wt == "polish":
+        suffix_parts.append("(Polish)")
+    elif wt == "combo":
+        suffix_parts.append("(Combo)")
+    if status_marker:
+        suffix_parts.append(status_marker.strip())
+
+    suffix = " " + " ".join(suffix_parts) if suffix_parts else ""
+    return f"{root}/{prefix} {name}{suffix}"
 
 
 def upload_project_files(
@@ -52,6 +135,9 @@ def upload_project_files(
     project_name: str,
     xlsx_bytes: bytes,
     docx_bytes: bytes,
+    job_number: str | int | None = None,
+    work_type: str | None = None,
+    status_marker: str | None = "!",
 ) -> dict:
     """Create a project folder + upload both files. Returns links.
 
@@ -79,9 +165,16 @@ def upload_project_files(
         import dropbox
         from dropbox.exceptions import ApiError
 
-        dbx = dropbox.Dropbox(os.environ["DROPBOX_ACCESS_TOKEN"])
+        # Pick the right auth flow — refresh-token if all 3 vars are set,
+        # otherwise fall back to the legacy single-token constructor.
+        dbx = _build_client()
 
-        folder_path = _build_folder_path(project_name)
+        folder_path = _build_folder_path(
+            project_name,
+            job_number=job_number,
+            work_type=work_type,
+            status_marker=status_marker,
+        )
         try:
             dbx.files_create_folder_v2(folder_path)
         except ApiError as exc:

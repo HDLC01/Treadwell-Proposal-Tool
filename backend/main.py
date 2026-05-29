@@ -21,7 +21,22 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+# Auto-load .env from this folder so the user doesn't have to source it
+# before running uvicorn. In production (Railway), the platform sets
+# the env vars directly — load_dotenv is a no-op if .env doesn't exist.
+# override=True so .env values win over any empty shell env vars that
+# Windows might have pre-set during PowerShell startup.
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).parent / ".env"
+    _loaded = load_dotenv(_env_path, override=True)
+    print(f"[main] load_dotenv({_env_path}) = {_loaded}")
+    print(f"[main] DROPBOX_APP_KEY set: {bool(os.environ.get('DROPBOX_APP_KEY'))}")
+    print(f"[main] DROPBOX_REFRESH_TOKEN set: {bool(os.environ.get('DROPBOX_REFRESH_TOKEN'))}")
+except ImportError:
+    pass
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +47,7 @@ from pydantic import BaseModel, Field
 import dropbox_client
 import estimate_writer
 import proposal_writer
+import reference_tax
 
 
 # ─── Logging ──────────────────────────────────────────────────────────
@@ -84,6 +100,18 @@ class GenerateIn(BaseModel):
     audience:  str = "Direct"  # "Direct" | "GC" | (other)
     # All intake + estimate + proposal fields flattened
     values: Dict[str, Any] = Field(default_factory=dict)
+    # Direct cell-for-cell writes (Estimate Review verbatim mode):
+    #   { "Epoxy!E20": 18000, "Polish!C20": 0.07, ... }
+    cell_values: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AutofillIn(BaseModel):
+    """Inputs we send to Claude for the 'Autofill with AI' button."""
+
+    project_name: str | None = None
+    address:      str | None = None
+    city_state:   str | None = None
+    notes:        str | None = None
 
 
 class GenerateOut(BaseModel):
@@ -129,7 +157,7 @@ def detect_work_type(epoxy_sf: float, polish_sf: float) -> str:
 def healthz() -> Dict[str, Any]:
     return {
         "ok": True,
-        "dropbox_configured": bool(os.environ.get("DROPBOX_ACCESS_TOKEN")),
+        "dropbox_configured": dropbox_client._is_configured(),
     }
 
 
@@ -148,6 +176,145 @@ def api_compute_estimate(payload: ComputeEstimateIn) -> Dict[str, Any]:
     return estimate_writer.compute_estimate_totals(payload.values)
 
 
+@app.get("/api/sheets")
+def api_list_sheets() -> Dict[str, Any]:
+    """List every tab in the estimate template (powers Screen 2's tab bar)."""
+    return {"sheets": estimate_writer.list_sheet_names()}
+
+
+@app.get("/api/named-expressions")
+def api_named_expressions() -> Dict[str, Any]:
+    """Workbook-wide defined names that HyperFormula needs registered
+    so formulas referencing them (e.g. =AT_Clear_Satin_w_Grit) resolve."""
+    return {"names": estimate_writer.read_named_expressions()}
+
+
+@app.get("/api/reference/tax-rate")
+def api_tax_rate(city_state: str = "") -> Dict[str, Any]:
+    """Server-side reference lookup for sales-tax rates. NOT exposed
+    as one of the visible 16 sheets — pure reference data."""
+    return reference_tax.lookup(city_state)
+
+
+@app.get("/api/reference/counties")
+def api_counties(state: str = "") -> Dict[str, Any]:
+    """Searchable county list for the Remodel-Tax dropdown.
+    Optional ?state=MO|KS filter."""
+    return {"counties": reference_tax.list_counties(state)}
+
+
+@app.get("/api/sheet/{sheet_name}")
+def api_get_sheet(sheet_name: str) -> Dict[str, Any]:
+    """Return every used cell on `sheet_name` so the UI can render it
+    cell-for-cell (values, formulas, fills, fonts, merges, dropdowns)."""
+    try:
+        return estimate_writer.read_sheet_grid(sheet_name)
+    except KeyError:
+        raise HTTPException(404, f"Sheet {sheet_name!r} not found")
+
+
+_AUTOFILL_SYSTEM_PROMPT = (
+    "You're an assistant for Treadwell, a Kansas City commercial epoxy/"
+    "polish contractor. Given a project's lead notes, infer the standard "
+    "yes/no flags + work-type hints + ballpark quantities on the estimate "
+    "sheet.\n\n"
+    "Return STRICT JSON only (no markdown fences). Schema:\n"
+    '{"Epoxy!B4": "Yes|No",   // Local? (under 70mi from KC)\n'
+    ' "Epoxy!B5": "Yes|No",   // Hard Bid?\n'
+    ' "Epoxy!D5": "Yes|No",   // Prevailing Wage?\n'
+    ' "Epoxy!B6": "Yes|No",   // Taxable?\n'
+    ' "Epoxy!D6": "Yes|No",   // Remodel (tax exempt)?\n'
+    ' "Epoxy!B10": "New|Reno",\n'
+    ' "Epoxy!B12": <number>,  // Epoxy floor SF (only if explicitly stated)\n'
+    ' "Epoxy!B13": <number>,  // Cove LF (only if explicitly stated)\n'
+    ' "Epoxy!B14": <number>,  // Demo/walls SF (only if explicit)\n'
+    ' "Polish!B12": <number>, // Polish floor SF (only if explicit)\n'
+    ' "reasoning": {"Epoxy!B4": "why", ...}}\n\n'
+    "Rules:\n"
+    "- If uncertain, OMIT the key entirely (don't write null).\n"
+    "- For quantities, ONLY fill if a square footage / linear footage is "
+    "explicitly stated in the notes. Don't guess.\n"
+    "- Be conservative — default Taxable=Yes, Hard Bid=No, Prevailing "
+    "Wage=No when the notes don't speak to it.\n"
+    "- Local=Yes if the address is within ~70 miles of Kansas City, MO.\n"
+    "- The reasoning field should be a SHORT phrase per cell, citing the "
+    "source in the notes."
+)
+
+
+def _autofill_via_cli(user_input: str) -> Dict[str, Any]:
+    """Run the `claude -p` CLI subprocess and parse its JSON response.
+
+    This is the ONLY autofill path. We deliberately don't call the
+    Anthropic API directly — all Claude calls go through the CLI
+    subprocess. The CLI uses the user's logged-in Pro/Max session
+    (no API key needed).
+    """
+    import json
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "claude", "-p",
+            "--output-format", "text",
+            "--append-system-prompt", _AUTOFILL_SYSTEM_PROMPT,
+        ],
+        input=user_input,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    log.info("Autofill CLI returncode=%s, stdout=%r, stderr=%r",
+             proc.returncode, out[:300], err[:300])
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"claude CLI exited with code {proc.returncode}. "
+            f"stderr: {err[:200]}"
+        )
+    if not out:
+        raise ValueError(f"claude CLI returned empty stdout. stderr: {err[:200]}")
+
+    # Strip ```json fences
+    if out.startswith("```"):
+        out = out.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    # Sometimes Claude prefixes prose before the JSON; jump to first {
+    brace = out.find("{")
+    if brace > 0:
+        out = out[brace:]
+    return json.loads(out)
+
+
+@app.post("/api/autofill")
+def api_autofill(payload: AutofillIn) -> Dict[str, Any]:
+    """Infer Yes/No flags + system selections from lead notes via the
+    local `claude -p` CLI. No Anthropic API key is used — the CLI
+    handles auth via the user's logged-in Claude session."""
+    user_input = (
+        f"Project name: {payload.project_name or '(none)'}\n"
+        f"Address: {payload.address or '(none)'}\n"
+        f"City/State: {payload.city_state or '(none)'}\n"
+        f"Notes: {payload.notes or '(none)'}\n"
+    )
+
+    try:
+        data = _autofill_via_cli(user_input)
+        return {"ok": True, "cell_values": data, "via": "cli"}
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "error": "`claude` CLI not on PATH. Install it from "
+                     "https://claude.com/cli to enable Autofill.",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Autofill failed: {exc}"}
+
+
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn) -> GenerateOut:
     """Final generate: fill xlsx + docx, upload to Dropbox, return links."""
@@ -155,7 +322,10 @@ def api_generate(payload: GenerateIn) -> GenerateOut:
 
     # Fill estimate workbook
     try:
-        xlsx_bytes = estimate_writer.fill_estimate(values)
+        xlsx_bytes = estimate_writer.fill_estimate(
+            values,
+            cell_values=payload.cell_values,
+        )
     except Exception as exc:
         log.exception("Estimate fill failed")
         raise HTTPException(500, f"Estimate fill failed: {exc}") from exc
@@ -173,12 +343,16 @@ def api_generate(payload: GenerateIn) -> GenerateOut:
         log.exception("Proposal fill failed")
         raise HTTPException(500, f"Proposal fill failed: {exc}") from exc
 
-    # Try Dropbox upload (non-fatal on failure)
+    # Try Dropbox upload (non-fatal on failure). Folder name follows
+    # Treadwell's convention: "YY.NNN Project Name (Polish)? !?"
     project_name = (values.get("project_name") or "Untitled Project").strip()
     dropbox_result = dropbox_client.upload_project_files(
         project_name=project_name,
         xlsx_bytes=xlsx_bytes,
         docx_bytes=docx_bytes,
+        job_number=values.get("job_number"),
+        work_type=payload.work_type,
+        status_marker=values.get("status_marker") or "!",
     )
 
     # Always cache files for direct download (Done screen always has working links)
@@ -222,11 +396,36 @@ def api_get_file(token: str) -> Response:
 # ─── Static frontend ──────────────────────────────────────────────────
 # Serve the 4 HTML pages from ../frontend. Mount AFTER the API routes
 # so /api/* takes precedence.
+#
+# We intentionally disable HTTP caching on the static files because this
+# tool is iterating frequently (filename fixes, layout tweaks). A
+# browser sitting on a stale done.html would miss the fetch+Blob
+# downloader and downloads would still come down with UUID names —
+# don't make users hard-refresh every time.
 FRONTEND_DIR = (Path(__file__).parent.parent / "frontend").resolve()
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve static files with `Cache-Control: no-store, must-revalidate`
+    so the browser always re-fetches HTML/JS/CSS during dev + early
+    production. Cheap because the files are tiny."""
+
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        # Disable If-Modified-Since / ETag short-circuit
+        return False
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+
+
 if FRONTEND_DIR.exists():
     app.mount(
         "/",
-        StaticFiles(directory=str(FRONTEND_DIR), html=True),
+        NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True),
         name="frontend",
     )
 else:

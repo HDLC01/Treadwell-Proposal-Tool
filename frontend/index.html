@@ -18,9 +18,9 @@
   </div>
   <div class="progress">
     <span class="step active">1 · Intake</span>
-    <span class="step">2 · Estimate</span>
-    <span class="step">3 · Proposal</span>
-    <span class="step">4 · Done</span>
+    <a class="step" href="/estimate-review.html">2 · Estimate</a>
+    <a class="step" href="/proposal-review.html">3 · Proposal</a>
+    <a class="step" href="/done.html">4 · Done</a>
   </div>
 </header>
 
@@ -35,9 +35,20 @@
 
     <fieldset>
       <legend>Project Info</legend>
-      <label>Project name
-        <input type="text" name="project_name" required placeholder="Acme Mfg — Warehouse Floor Coating">
-      </label>
+      <div class="row">
+        <label style="flex: 0 0 160px;">Folder name
+          <input type="text" name="job_number" id="folder-name-input"
+                 placeholder="26.222"
+                 pattern="\d{2}\.\d{3}"
+                 inputmode="decimal"
+                 maxlength="6"
+                 required
+                 title="Format: xx.xxx (two-digit year, dot, three-digit number). Numbers only. Example: 26.222">
+        </label>
+        <label>Project name / company
+          <input type="text" name="project_name" required placeholder="Olathe CTE OSC">
+        </label>
+      </div>
       <label>Address
         <input type="text" name="address" placeholder="8500 NW Prairie View Rd">
       </label>
@@ -78,13 +89,34 @@
           <option value="other">Other</option>
         </select>
       </label>
+      <label>Lead notes <span style="font-weight: 400; color: var(--ink-variant);">(paste full email / call notes — fuels the AI Autofill on the next screen)</span>
+        <textarea name="notes" rows="5" placeholder="Paste the full lead email, RFP excerpt, or call notes. The more context the AI has, the better it infers Local/Hard-Bid/Prevailing-Wage/Taxable/New-vs-Reno and the right system."></textarea>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Work Type</legend>
+      <p class="hint">Picks which estimate tab and proposal template are used.</p>
+      <div class="radio-row">
+        <label class="radio">
+          <input type="radio" name="work_type" value="epoxy" checked>
+          <span>Epoxy</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="work_type" value="polish">
+          <span>Polish</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="work_type" value="combo">
+          <span>Combo (Epoxy + Polish)</span>
+        </label>
+      </div>
     </fieldset>
 
     <fieldset>
       <legend>Scope (quick)</legend>
       <p class="hint">
-        Used to auto-detect work type and pre-fill the estimate.
-        You'll be able to refine on the next screen.
+        Pre-fills the estimate. You can refine on the next screen.
       </p>
       <div class="row">
         <label>Epoxy floor SF
@@ -133,24 +165,34 @@
   const form = document.getElementById("intake-form");
   TW.writeForm(form, TW.getState());
 
-  form.addEventListener("submit", async (e) => {
+  // Folder name field — enforce strict xx.xxx format on every keystroke.
+  // Strip any non-digit character, auto-insert the dot after the 2nd digit.
+  const folderNameInput = document.getElementById("folder-name-input");
+  if (folderNameInput) {
+    folderNameInput.addEventListener("input", (e) => {
+      const el = e.target;
+      const caret = el.selectionStart;
+      // Strip everything that isn't a digit
+      const digits = el.value.replace(/\D/g, "").slice(0, 5);
+      // Format as xx.xxx
+      let formatted;
+      if (digits.length <= 2) {
+        formatted = digits;
+      } else {
+        formatted = digits.slice(0, 2) + "." + digits.slice(2);
+      }
+      el.value = formatted;
+      // Keep the caret position reasonable after auto-insert
+      const newCaret = caret === 3 && el.value[2] === "." ? 4 : caret;
+      el.setSelectionRange(newCaret, newCaret);
+    });
+  }
+
+  form.addEventListener("submit", (e) => {
     e.preventDefault();
     const values = TW.readForm(form);
-
-    // Detect work type so screen 2 routes correctly
-    let workType = "epoxy";
-    try {
-      const out = await TW.postJSON("/api/detect-work-type", {
-        system_1_sf: values.system_1_sf,
-        system_2_sf: 0,
-        polish_sf:   values.polish_sf,
-      });
-      workType = out.work_type;
-    } catch (err) {
-      console.warn("detect-work-type failed; defaulting to epoxy", err);
-    }
-
-    TW.setState({ ...values, work_type: workType });
+    // work_type is now picked by the user on this screen.
+    TW.setState({ ...values, work_type: values.work_type || "epoxy" });
     window.location.assign("/estimate-review.html");
   });
 </script>
