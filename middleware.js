@@ -1,18 +1,20 @@
-// Vercel Edge function — proxies /api/* to the laptop's ngrok tunnel
-// while injecting `ngrok-skip-browser-warning` so ngrok doesn't serve
-// its browser interstitial HTML page on free-tier tunnels.
+// Vercel Edge Middleware — proxies /api/* to the laptop's ngrok tunnel
+// and injects `ngrok-skip-browser-warning` so the free-tier interstitial
+// HTML doesn't break our JSON responses.
 //
-// When ngrok URL changes, update NGROK_BASE below + redeploy.
-
-export const config = { runtime: "edge" };
+// When ngrok URL changes, update NGROK_BASE and redeploy.
 
 const NGROK_BASE = "https://guidebooky-gideon-pellucid.ngrok-free.dev";
 
-export default async function handler(request) {
+export const config = {
+  matcher: "/api/:path*",
+};
+
+export default async function middleware(request) {
   const url = new URL(request.url);
   const target = NGROK_BASE + url.pathname + url.search;
 
-  // Forward most headers but rewrite host + add ngrok skip header.
+  // Clone request headers, drop hop-by-hop ones, add ngrok bypass.
   const headers = new Headers();
   request.headers.forEach((value, key) => {
     const k = key.toLowerCase();
@@ -33,7 +35,7 @@ export default async function handler(request) {
 
   const upstream = await fetch(target, init);
 
-  // Strip headers that Vercel's edge can't forward as-is.
+  // Strip headers that the edge can't pass through unchanged.
   const respHeaders = new Headers();
   upstream.headers.forEach((value, key) => {
     const k = key.toLowerCase();
