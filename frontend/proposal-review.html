@@ -509,11 +509,21 @@
     } catch { /* non-fatal */ }
   })();
 
-  // Default the site_visit_date field from bid_date if not already set
-  const visitInput = form.querySelector("[name='site_visit_date_display']");
+  // Default the bid date to today if intake didn't carry one through.
+  // Use the local timezone so the displayed date matches what the user
+  // sees in their calendar (UTC-based ISO strings drift by ±1 day).
   const bidInput = form.querySelector("[name='bid_date']");
+  const visitInput = form.querySelector("[name='site_visit_date_display']");
+  if (bidInput && !bidInput.value) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    bidInput.value = `${y}-${m}-${d}`;
+    state.bid_date = bidInput.value;
+  }
   if (bidInput && bidInput.value && !visitInput.value) {
-    const d = new Date(bidInput.value);
+    const d = new Date(bidInput.value + "T00:00:00");
     if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
   }
   bidInput?.addEventListener("change", () => {

@@ -165,6 +165,16 @@
   const form = document.getElementById("intake-form");
   TW.writeForm(form, TW.getState());
 
+  // Default the bid date to today so users don't have to think about it.
+  const bidInput = form.querySelector("[name='bid_date']");
+  if (bidInput && !bidInput.value) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    bidInput.value = `${y}-${m}-${d}`;
+  }
+
   // Folder name field — enforce strict xx.xxx format on every keystroke.
   // Strip any non-digit character, auto-insert the dot after the 2nd digit.
   const folderNameInput = document.getElementById("folder-name-input");
