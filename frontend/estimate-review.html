@@ -782,6 +782,12 @@ const FORM_TO_CELL = {
   system_1_sf:       "Epoxy!E20",
   cove_1_lf:         "Epoxy!E34",
   polish_sf:         "Polish!E19",
+  // Bidding Contacts block (header lives in Epoxy!G1; estimator
+  // historically filled the rows beneath by hand). Flow the intake
+  // contact info into the rows so Troy sees it on the estimate.
+  contact_name:      "Epoxy!G2",
+  contact_email:     "Epoxy!H2",
+  contact_phone:     "Epoxy!I2",
 };
 
 // Lookup-table automations layered on top of the raw intake → cell map.
@@ -1693,23 +1699,39 @@ function showAutofillBanner(html, kind /* "success" | "error" */) {
     `<button type="button" style="float:right;border:none;background:none;cursor:pointer;font-size:14px;color:#666;margin:-2px -4px 0 6px;" onclick="this.parentElement.remove()">×</button>`;
 }
 
+async function callAutofillEndpoint(payload, attempt = 1) {
+  // Vercel Edge has a ~25s limit on Hobby; claude -p occasionally
+  // exceeds it and Vercel returns an HTML error page that breaks
+  // JSON parsing. Quietly retry once before surfacing failure.
+  const r = await fetch("/api/autofill", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const text = await r.text();
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    if (attempt < 2) {
+      console.warn("Autofill response wasn't JSON, retrying once…", text.slice(0,120));
+      return callAutofillEndpoint(payload, attempt + 1);
+    }
+    throw new Error("Autofill timed out twice. Try once more or fill manually.");
+  }
+}
+
 document.getElementById("autofill-btn").addEventListener("click", async (e) => {
   const btn = e.target;
   const orig = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Thinking…";
   try {
-    const r = await fetch("/api/autofill", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        project_name: state.project_name,
-        address:      state.address,
-        city_state:   state.city_state,
-        notes:        state.notes || "",
-      }),
+    const j = await callAutofillEndpoint({
+      project_name: state.project_name,
+      address:      state.address,
+      city_state:   state.city_state,
+      notes:        state.notes || "",
     });
-    const j = await r.json();
     if (j.ok && j.cell_values) {
       const FLAG_LABELS = {
         "Epoxy!B4":"Local",   "Epoxy!B5":"Hard Bid", "Epoxy!D5":"Prevailing Wage",
