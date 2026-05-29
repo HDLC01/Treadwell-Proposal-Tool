@@ -577,6 +577,14 @@
       work_description:   safe(mergedValues.work_description || mergedValues.address || "0"),
       proposal_date:      new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
       bid_date:           safe(mergedValues.bid_date),
+      // M/D/YY for the header date that the template hardcoded as 1/1/26
+      bid_date_formatted: (() => {
+        const raw = mergedValues.bid_date;
+        if (!raw) return new Date().toLocaleDateString("en-US", { month:"numeric", day:"numeric", year:"2-digit" });
+        const d = new Date(String(raw) + "T00:00:00");
+        if (isNaN(d)) return safe(raw);
+        return `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
+      })(),
       site_visit_date:    safe(mergedValues.site_visit_date_display || mergedValues.bid_date),
       system_name:        safe(mergedValues.system_name),
       system_name_epoxy:  safe(mergedValues.system_name),
