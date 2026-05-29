@@ -1739,11 +1739,37 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
   }
 });
 
+// Snapshot the audit-grade HF-computed lump sums into state so the
+// Proposal Review can use the workbook's exact values instead of the
+// rough Python approximation. Work-type-aware — Polish-only job
+// snapshots only the Polish lump; Combo snapshots both.
+function snapshotLumpSumsToState() {
+  if (!HF.ready) return;
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  const num = (s, a) => {
+    const v = HF.getValue(s, a);
+    return typeof v === "number" ? v : 0;
+  };
+  const epoxyLump  = num("Epoxy",  TOTAL_CELLS.Epoxy.total);   // D88
+  const polishLump = num("Polish", TOTAL_CELLS.Polish.total);  // D82
+  state.hf_lump_sums = {
+    epoxy:    epoxyLump,
+    polish:   polishLump,
+    combined: epoxyLump + polishLump,
+  };
+  // The single number the proposal should show, given work_type.
+  state.proposal_lump_sum =
+    wt === "epoxy"  ? epoxyLump :
+    wt === "polish" ? polishLump :
+                      epoxyLump + polishLump;
+}
+
 document.getElementById("back-btn").addEventListener("click", () => {
   TW.setState({ ...state, cell_values: cellValues });
   window.location.assign("/");
 });
 document.getElementById("continue-btn").addEventListener("click", () => {
+  snapshotLumpSumsToState();
   TW.setState({ ...state, cell_values: cellValues });
   window.location.assign("/proposal-review.html");
 });
