@@ -381,7 +381,7 @@
       <div class="body">
         <p style="margin: 0 0 8pt;">
           <span style="font-weight:700;text-decoration:underline;">
-            <input type="text" name="work_type_label" class="doc-input" style="width: 140px;" value="Epoxy Flooring">:</span>
+            <input type="text" name="work_type_label" id="work-type-label" class="doc-input" style="width: 220px;" value="Epoxy Flooring">:</span>
           per site visit on
           <input type="text" name="site_visit_date_display" class="doc-input" style="width: 75px;" placeholder="xx/xx/26">
         </p>
@@ -390,15 +390,21 @@
           <div class="key">System:</div>
           <div><input type="text" name="system_name" class="doc-input wide" placeholder="Treadwell Macro Flake Single Broadcast"></div>
         </div>
-        <div class="doc-bullet-row">
+        <div class="doc-bullet-row" id="texture-row">
           <div class="key">Texture:</div>
           <div><input type="text" name="texture" class="doc-input med" placeholder="Orange Peel"></div>
         </div>
-        <div class="doc-bullet-row">
-          <div class="key">Area:</div>
+        <div class="doc-bullet-row" id="area-row-epoxy">
+          <div class="key">Epoxy Area:</div>
           <div>
             ~<input type="number" name="system_1_sf" class="doc-input short" placeholder="0" min="0"> SF of epoxy flooring and
             <input type="number" name="cove_1_lf" class="doc-input short" placeholder="0" min="0"> LF of epoxy base
+          </div>
+        </div>
+        <div class="doc-bullet-row" id="area-row-polish">
+          <div class="key">Polish Area:</div>
+          <div>
+            ~<input type="number" name="polish_sf" class="doc-input short" placeholder="0" min="0"> SF of polished concrete flooring
           </div>
         </div>
         <div class="doc-bullet-row">
@@ -470,6 +476,44 @@
 
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
+
+  // ─── Work-type-aware UI ────────────────────────────────────────
+  // The proposal layout differs per work_type:
+  //   epoxy  → "Epoxy Flooring" + Epoxy area row + texture row
+  //   polish → "Polished Concrete Flooring" + Polish area row, no texture
+  //   combo  → "Epoxy + Polished Concrete Flooring" + BOTH area rows + texture
+  (function adaptToWorkType() {
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    const label = wt === "polish" ? "Polished Concrete Flooring"
+                : wt === "combo"  ? "Epoxy & Polished Concrete Flooring"
+                :                   "Epoxy Flooring";
+    document.getElementById("work-type-label").value = label;
+
+    // Toggle area rows by work_type
+    const epoxyRow  = document.getElementById("area-row-epoxy");
+    const polishRow = document.getElementById("area-row-polish");
+    const textureRow = document.getElementById("texture-row");
+    if (wt === "polish") {
+      epoxyRow.style.display  = "none";
+      polishRow.style.display = "";
+      textureRow.style.display = "none"; // polish doesn't have texture
+    } else if (wt === "epoxy") {
+      epoxyRow.style.display  = "";
+      polishRow.style.display = "none";
+      textureRow.style.display = "";
+    } else { // combo
+      epoxyRow.style.display  = "";
+      polishRow.style.display = "";
+      textureRow.style.display = "";
+      // For combo, clarify which area is which in the key
+      epoxyRow.querySelector(".key").textContent  = "Epoxy Area:";
+      polishRow.querySelector(".key").textContent = "Polish Area:";
+    }
+    // For pure single-type, simplify the key back to just "Area:"
+    if (wt === "epoxy")  epoxyRow.querySelector(".key").textContent  = "Area:";
+    if (wt === "polish") polishRow.querySelector(".key").textContent = "Area:";
+  })();
+
   document.getElementById("doc-name").textContent =
     (state.project_name || "Untitled") + " - " +
     (state.work_type || "Epoxy").charAt(0).toUpperCase() +
@@ -491,22 +535,40 @@
     document.getElementById("total-display").textContent = fmtUSD(lumpSumN + taxAmt);
   }
 
-  // Pull totals from the estimate-review's HF cache via the compute endpoint
+  // Pick the lump sum that matches this project's work type. Order of
+  // preference:
+  //   1. state.proposal_lump_sum — the HF-computed snapshot we took on
+  //      Continue from Estimate Review. This is the audit-grade number
+  //      coming straight from Kyle's workbook formulas.
+  //   2. /api/compute-estimate — rough Python fallback (less accurate
+  //      but available even if the user skipped Estimate Review).
+  // Within each, we honor the work-type rule:
+  //   epoxy  → only epoxy lump sum
+  //   polish → only polish lump sum
+  //   combo  → epoxy + polish (customer pays for both)
   (async () => {
-    try {
-      const totals = await TW.postJSON("/api/compute-estimate", { values: state });
-      const lump = totals.combined_lump_sum || 0;
-      // Stash into a hidden "tb-total" so refreshPriceDisplay finds it
-      let el = document.querySelector("#tb-total");
-      if (!el) {
-        el = document.createElement("span");
-        el.id = "tb-total";
-        el.style.display = "none";
-        document.body.appendChild(el);
-      }
-      el.textContent = fmtUSD(lump);
-      refreshPriceDisplay();
-    } catch { /* non-fatal */ }
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    let lump = null;
+    if (typeof state.proposal_lump_sum === "number") {
+      lump = state.proposal_lump_sum;
+    } else {
+      try {
+        const totals = await TW.postJSON("/api/compute-estimate", { values: state });
+        lump = wt === "epoxy"  ? (totals.epoxy?.lump_sum  || 0)
+             : wt === "polish" ? (totals.polish?.lump_sum || 0)
+             :                   (totals.combined_lump_sum || 0);
+      } catch { lump = 0; }
+    }
+    // Stash into a hidden "tb-total" so refreshPriceDisplay finds it
+    let el = document.querySelector("#tb-total");
+    if (!el) {
+      el = document.createElement("span");
+      el.id = "tb-total";
+      el.style.display = "none";
+      document.body.appendChild(el);
+    }
+    el.textContent = fmtUSD(lump);
+    refreshPriceDisplay();
   })();
 
   // Default the bid date to today if intake didn't carry one through.
