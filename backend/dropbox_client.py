@@ -42,25 +42,47 @@ def _is_configured() -> bool:
 
 
 def _build_client():
-    """Construct a `dropbox.Dropbox` from whichever env-var combo is set.
+    """Construct a `dropbox.Dropbox` from whichever env-var combo is set,
+    rebound to the team-root namespace so folder writes land in
+    *Treadwell Dropbox*, not the signed-in user's personal namespace.
 
     Preference order:
       1. Refresh-token flow (App Key + App Secret + Refresh Token) — modern
       2. Long-lived access token — legacy fallback
     """
     import dropbox
+    from dropbox.common import PathRoot
 
     if (
         os.environ.get("DROPBOX_APP_KEY")
         and os.environ.get("DROPBOX_APP_SECRET")
         and os.environ.get("DROPBOX_REFRESH_TOKEN")
     ):
-        return dropbox.Dropbox(
+        dbx = dropbox.Dropbox(
             app_key=os.environ["DROPBOX_APP_KEY"],
             app_secret=os.environ["DROPBOX_APP_SECRET"],
             oauth2_refresh_token=os.environ["DROPBOX_REFRESH_TOKEN"],
         )
-    return dropbox.Dropbox(os.environ["DROPBOX_ACCESS_TOKEN"])
+    else:
+        dbx = dropbox.Dropbox(os.environ["DROPBOX_ACCESS_TOKEN"])
+
+    # Members of a Dropbox Team have two namespaces: their personal "home"
+    # namespace and the team's "root" namespace. By default the SDK operates
+    # in the home namespace, which means folders we create disappear from
+    # everyone else on the team. Rebind to root so writes show up under
+    # "Treadwell Dropbox" for the whole team.
+    try:
+        acct = dbx.users_get_current_account()
+        root_ns = acct.root_info.root_namespace_id
+        home_ns = acct.root_info.home_namespace_id
+        if root_ns and root_ns != home_ns:
+            dbx = dbx.with_path_root(PathRoot.root(root_ns))
+    except Exception:
+        # Personal accounts (no team) don't have a root namespace —
+        # the default behavior is correct, so swallow.
+        pass
+
+    return dbx
 
 
 def _sanitize_folder_name(name: str) -> str:
