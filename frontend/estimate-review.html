@@ -776,9 +776,38 @@ const FORM_TO_CELL = {
   city_state:        "Epoxy!C3",   // sits next to the address
   approx_start_date: "Epoxy!B7",
   architect:         "Epoxy!B8",
-  // Intake → Polish tab (mirror — Polish references Epoxy by formula
-  // for most of this but we also write directly so it's visible)
+  // Quantities from Screen 1 → matching estimate cells. Without these
+  // the user sees zero material/cost-per-SF on first load until they
+  // re-type the same numbers they already gave us.
+  system_1_sf:       "Epoxy!E20",
+  cove_1_lf:         "Epoxy!E34",
+  polish_sf:         "Polish!E19",
 };
+
+// Lookup-table automations layered on top of the raw intake → cell map.
+// These never override the user's saved edits (we skip if cellValues
+// already has the address). Each one cites the rule it's encoding.
+function applyHeuristics(intake, putIfBlank) {
+  const sf = Number(intake.system_1_sf || 0);
+  // Crew + days heuristic — scale a baseline crew to floor SF.
+  //   ≤ 5k SF  → 2 guys × 3 days
+  //   ≤15k SF  → 3 guys × 5 days
+  //   ≤30k SF  → 4 guys × 8 days
+  //    >30k SF → 5 guys × 12 days
+  if (sf > 0) {
+    let crew = 2, days = 3;
+    if (sf > 30000)      { crew = 5; days = 12; }
+    else if (sf > 15000) { crew = 4; days = 8;  }
+    else if (sf > 5000)  { crew = 3; days = 5;  }
+    putIfBlank("Epoxy!A47", crew);
+    putIfBlank("Epoxy!B47", days);
+  }
+  // Labor rate from Prevailing Wage flag (D5). Default $32.20 standard,
+  // $48.00 PW. The flag itself gets set by the AI Autofill button.
+  const pwRaw = (intake.cell_values || {})["Epoxy!D5"] || "";
+  const pw = String(pwRaw).toLowerCase() === "yes";
+  putIfBlank("Epoxy!C47", pw ? 48.00 : 32.20);
+}
 
 (function autofillFromIntake() {
   for (const [field, addr] of Object.entries(FORM_TO_CELL)) {
@@ -787,6 +816,9 @@ const FORM_TO_CELL = {
       cellValues[addr] = v;
     }
   }
+  applyHeuristics(state, (addr, val) => {
+    if (cellValues[addr] === undefined) cellValues[addr] = val;
+  });
 })();
 
 // ─── System Name + Texture inline inputs (flow into proposal too) ──
