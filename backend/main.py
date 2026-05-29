@@ -215,30 +215,56 @@ def api_get_sheet(sheet_name: str) -> Dict[str, Any]:
 
 _AUTOFILL_SYSTEM_PROMPT = (
     "You're an assistant for Treadwell, a Kansas City commercial epoxy/"
-    "polish contractor. Given a project's lead notes, infer the standard "
-    "yes/no flags + work-type hints + ballpark quantities on the estimate "
-    "sheet.\n\n"
-    "Return STRICT JSON only (no markdown fences). Schema:\n"
-    '{"Epoxy!B4": "Yes|No",   // Local? (under 70mi from KC)\n'
-    ' "Epoxy!B5": "Yes|No",   // Hard Bid?\n'
-    ' "Epoxy!D5": "Yes|No",   // Prevailing Wage?\n'
-    ' "Epoxy!B6": "Yes|No",   // Taxable?\n'
-    ' "Epoxy!D6": "Yes|No",   // Remodel (tax exempt)?\n'
-    ' "Epoxy!B10": "New|Reno",\n'
-    ' "Epoxy!B12": <number>,  // Epoxy floor SF (only if explicitly stated)\n'
-    ' "Epoxy!B13": <number>,  // Cove LF (only if explicitly stated)\n'
-    ' "Epoxy!B14": <number>,  // Demo/walls SF (only if explicit)\n'
-    ' "Polish!B12": <number>, // Polish floor SF (only if explicit)\n'
-    ' "reasoning": {"Epoxy!B4": "why", ...}}\n\n'
+    "polish flooring contractor. Given a project's intake summary + lead "
+    "notes, fill in EVERYTHING you can reasonably infer to save the "
+    "estimator time. The estimator can override any value.\n\n"
+    "Return STRICT JSON only (no markdown fences). Top-level shape:\n"
+    "{\n"
+    '  // ─── Estimate-sheet cells (Yes/No flags) ───────────\n'
+    '  "Epoxy!B4":  "Yes|No",   // Local? Address within ~70mi of KC, MO\n'
+    '  "Epoxy!B5":  "Yes|No",   // Hard Bid? (multiple contractors bidding)\n'
+    '  "Epoxy!D5":  "Yes|No",   // Prevailing Wage? (public funding)\n'
+    '  "Epoxy!B6":  "Yes|No",   // Taxable? (default Yes unless exempt cert mentioned)\n'
+    '  "Epoxy!D6":  "Yes|No",   // Remodel tax (often Yes if user has remodel exemption)\n'
+    '  "Epoxy!B9":  "<date M/D/YY>", // Drawings dated — ONLY if a drawing/spec date is in the notes\n'
+    '  "Epoxy!B10": "New|Reno", // New construction vs renovation\n'
+    "\n"
+    '  // ─── Proposal narrative fields (free text for the docx) ───\n'
+    '  "system_name":     "<one-line Treadwell system name>",   // e.g. "Treadwell Macro Flake Single Broadcast"\n'
+    '  "texture":         "<one or two words>",                 // e.g. "Orange Peel"  or  "Smooth"\n'
+    '  "scope_notes":     "<one paragraph, 2-4 sentences>",     // Demo plan + prep + install\n'
+    '  "schedule_notes":  "<one short sentence>",               // "Assumes all areas available at one time, approx. N weeks to complete full scope"\n'
+    '  "exclusions":      "<comma-separated list of standard exclusions>", // multi-layer demo, FF&E moving, etc.\n'
+    "\n"
+    '  // ─── Reasoning trail (auditability) ─────────────────\n'
+    '  "reasoning": {"<key>": "<short why-this-value>", ...}\n'
+    "}\n"
+    "\n"
     "Rules:\n"
-    "- If uncertain, OMIT the key entirely (don't write null).\n"
-    "- For quantities, ONLY fill if a square footage / linear footage is "
-    "explicitly stated in the notes. Don't guess.\n"
-    "- Be conservative — default Taxable=Yes, Hard Bid=No, Prevailing "
-    "Wage=No when the notes don't speak to it.\n"
-    "- Local=Yes if the address is within ~70 miles of Kansas City, MO.\n"
-    "- The reasoning field should be a SHORT phrase per cell, citing the "
-    "source in the notes."
+    "- If uncertain about a key, OMIT it (don't write null/empty).\n"
+    "- BUT — if the notes EXPLICITLY state a fact (e.g. 'hard bid against "
+    "3 contractors', 'renovation of existing facility', 'drawings dated "
+    "5/20/26'), you MUST fill the matching field. Don't be conservative "
+    "when the answer is in the text.\n"
+    "- Conservative DEFAULTS only apply when notes are silent — "
+    "Taxable=Yes, Hard Bid=No, Prevailing Wage=No, Remodel=No.\n"
+    "- DO NOT touch SF/LF quantities — the estimator types those in intake "
+    "and those are authoritative.\n"
+    "- For system_name + texture, infer from product mentions ('Macro "
+    "Flake', 'Polish', 'Decorative Quartz', etc.). If the project is "
+    "Polish, use 'Standard Sheen with Salt & Pepper Aggregate Exposure'.\n"
+    "- scope_notes should reuse Treadwell's standard phrasing: "
+    "'Demo (one layer of) existing flooring and place in dumpster provided "
+    "by owner. Prepare substrate via mechanical means (grinding or shot "
+    "blasting). Prep minor cracks and non-moving joints. Install <System>.'\n"
+    "- exclusions should be the standard Treadwell list: 'Multiple layers "
+    "of floor to be removed (change order required), Moving of "
+    "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (skim coating "
+    "& more than 1 bag per 1,000 sf), Demo of Existing Floor/Glue/Etc., "
+    "Weekend or night work, Credit for Unused mobilizations'.\n"
+    "- schedule_notes: estimate duration from SF — ≤5k SF: 1 week, ≤15k: "
+    "2 weeks, ≤30k: 3 weeks, >30k: 4+ weeks.\n"
+    "- reasoning: one short phrase per filled key citing the source in notes."
 )
 
 

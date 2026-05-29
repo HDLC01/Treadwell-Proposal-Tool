@@ -1692,15 +1692,36 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
     });
     const j = await r.json();
     if (j.ok && j.cell_values) {
-      // Apply only the cell-addressed keys; ignore the `reasoning` blob
+      // Apply cell-addressed keys to the estimate grid; stash the
+      // narrative fields (system_name, texture, scope_notes, etc.) into
+      // state so the Proposal Review can pre-fill them automatically.
       let n = 0;
+      const narrativeKeys = ["system_name","texture","scope_notes","schedule_notes","exclusions"];
+      const carriedNarrative = {};
       for (const k of Object.keys(j.cell_values)) {
-        if (k.includes("!") && j.cell_values[k] != null) {
-          cellValues[k] = j.cell_values[k];
+        const v = j.cell_values[k];
+        if (v == null) continue;
+        if (k.includes("!")) {
+          cellValues[k] = v;
+          n++;
+        } else if (narrativeKeys.includes(k)) {
+          carriedNarrative[k] = v;
           n++;
         }
       }
-      btn.textContent = `✓ Filled ${n} cell${n === 1 ? "" : "s"}`;
+      // Persist narrative fields into state. The inline System/Texture
+      // inputs on this screen also update if they're empty.
+      if (Object.keys(carriedNarrative).length) {
+        Object.assign(state, carriedNarrative);
+        TW.setState({ ...state, ...carriedNarrative });
+        if (carriedNarrative.system_name && !sysNameInput.value) {
+          sysNameInput.value = carriedNarrative.system_name;
+        }
+        if (carriedNarrative.texture && !texInput.value) {
+          texInput.value = carriedNarrative.texture;
+        }
+      }
+      btn.textContent = `✓ Filled ${n} value${n === 1 ? "" : "s"}`;
       // Re-render current sheet so updates appear
       if (activeSheet) {
         delete sheetCache[activeSheet];
