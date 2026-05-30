@@ -45,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import dropbox_client
+import drafts
 import estimate_writer
 import proposal_writer
 import reference_tax
@@ -435,6 +436,51 @@ def api_get_file(token: str) -> Response:
     )
 
 
+# ─── Draft persistence (SQLite) ───────────────────────────────────────
+# Multi-device draft autosave: the frontend POSTs the whole state blob
+# here every few seconds, keyed by a UUID in the URL (?d=<uuid>). Opening
+# that same URL on another device GETs the draft back. See drafts.py.
+class DraftIn(BaseModel):
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.on_event("startup")
+def _init_drafts_db() -> None:
+    try:
+        drafts.init_db()
+        log.info("Drafts DB ready")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Drafts DB init failed (drafts disabled): %s", exc)
+
+
+@app.put("/api/draft/{draft_id}")
+@app.post("/api/draft/{draft_id}")
+def api_save_draft(draft_id: str, payload: DraftIn) -> Dict[str, Any]:
+    """Upsert a draft's full state blob. Called on a debounce as the
+    estimator types — so a tab close / device switch doesn't lose work."""
+    try:
+        return {"ok": True, **drafts.save_draft(draft_id, payload.data)}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("save_draft failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/draft/{draft_id}")
+def api_load_draft(draft_id: str) -> Dict[str, Any]:
+    """Fetch a draft by id. 404 if it doesn't exist (fresh draft id)."""
+    row = drafts.load_draft(draft_id)
+    if row is None:
+        raise HTTPException(404, "Draft not found")
+    return {"ok": True, **row}
+
+
+@app.delete("/api/draft/{draft_id}")
+def api_delete_draft(draft_id: str) -> Dict[str, Any]:
+    """Remove a draft (Start-a-new-project)."""
+    existed = drafts.delete_draft(draft_id)
+    return {"ok": True, "existed": existed}
+
+
 # ─── Static frontend ──────────────────────────────────────────────────
 # Serve the 4 HTML pages from ../frontend. Mount AFTER the API routes
 # so /api/* takes precedence.
@@ -444,7 +490,17 @@ def api_get_file(token: str) -> Response:
 # browser sitting on a stale done.html would miss the fetch+Blob
 # downloader and downloads would still come down with UUID names —
 # don't make users hard-refresh every time.
-FRONTEND_DIR = (Path(__file__).parent.parent / "frontend").resolve()
+# Frontend dir — handle BOTH layouts:
+#   local dev:  backend/main.py + frontend/  → parent.parent/frontend
+#   Docker:     /app/main.py   + /app/frontend/ → parent/frontend
+_FRONTEND_CANDIDATES = [
+    Path(__file__).parent.parent / "frontend",  # local dev
+    Path(__file__).parent / "frontend",          # Docker (COPY frontend/ /app/frontend/)
+]
+FRONTEND_DIR = next(
+    (p.resolve() for p in _FRONTEND_CANDIDATES if p.exists()),
+    _FRONTEND_CANDIDATES[0].resolve(),
+)
 
 
 class NoCacheStaticFiles(StaticFiles):
