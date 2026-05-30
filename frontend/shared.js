@@ -11,6 +11,8 @@
  */
 (function () {
   const STATE_KEY = "treadwell.proposal_tool.state";
+  const DRAFT_ID_KEY = "treadwell.proposal_tool.draft_id";
+  const RELOAD_GUARD = "treadwell.proposal_tool.hydrated_once";
 
   /**
    * API base URL resolution (in priority order):
@@ -30,9 +32,12 @@
   }
 
   // ─── State accessors ──────────────────────────────────────────────
+  // Storage is localStorage (not sessionStorage) so a draft survives the
+  // tab being closed + reopened on the SAME machine. Cross-device is
+  // handled by the SQLite sync layer below (draft id travels in the URL).
   function getState() {
     try {
-      const raw = sessionStorage.getItem(STATE_KEY);
+      const raw = localStorage.getItem(STATE_KEY);
       return raw ? JSON.parse(raw) : {};
     } catch {
       return {};
@@ -41,13 +46,123 @@
 
   function setState(partial) {
     const merged = Object.assign(getState(), partial || {});
-    sessionStorage.setItem(STATE_KEY, JSON.stringify(merged));
+    try { localStorage.setItem(STATE_KEY, JSON.stringify(merged)); }
+    catch {/* quota / private mode */}
+    scheduleServerSave(merged);   // debounced push to SQLite
     return merged;
   }
 
   function clearState() {
-    sessionStorage.removeItem(STATE_KEY);
+    const id = getDraftId();
+    try { localStorage.removeItem(STATE_KEY); } catch {}
+    try { localStorage.removeItem(DRAFT_ID_KEY); } catch {}
+    try { sessionStorage.removeItem(RELOAD_GUARD); } catch {}
+    // Best-effort delete the server copy too (fire-and-forget).
+    if (id) {
+      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+    // Drop the ?d= from the URL so a fresh start gets a fresh id.
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("d");
+      window.history.replaceState({}, "", url);
+    } catch {}
   }
+
+  // ─── Draft id + multi-device sync ─────────────────────────────────
+  // The draft id lives in the URL (?d=<uuid>) so the URL is shareable
+  // across devices, and in localStorage so it persists across same-tab
+  // navigations (which drop the query string).
+  function getDraftId() {
+    try {
+      const fromUrl = new URL(window.location.href).searchParams.get("d");
+      if (fromUrl) return fromUrl;
+    } catch {}
+    try { return localStorage.getItem(DRAFT_ID_KEY) || null; } catch { return null; }
+  }
+
+  function newDraftId() {
+    try {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    } catch {}
+    // Fallback: timestamp + random
+    return "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  }
+
+  function setDraftId(id) {
+    try { localStorage.setItem(DRAFT_ID_KEY, id); } catch {}
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("d") !== id) {
+        url.searchParams.set("d", id);
+        window.history.replaceState({}, "", url);
+      }
+    } catch {}
+  }
+
+  let _saveTimer = null;
+  function scheduleServerSave(state) {
+    const id = getDraftId();
+    if (!id) return;            // no id yet → nothing to sync
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(() => {
+      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: state }),
+        keepalive: true,         // let it finish even if the tab is closing
+      }).catch(() => {/* offline / backend down — local copy still safe */});
+    }, 2500);                    // debounce: save 2.5s after the last edit
+  }
+
+  // Runs once on every page load (before the page's own init reads state).
+  // Handles three cases:
+  //   1. URL has ?d= matching local  → same session, trust local, sync URL
+  //   2. URL has ?d= NOT in local    → cross-device open → pull from server,
+  //                                     write to localStorage, reload once
+  //   3. no ?d= but local has a draft → assert the id back into the URL
+  //   4. nothing                      → mint a fresh id (lazily, on first save)
+  async function initDraftSync() {
+    let urlId = null;
+    try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
+    const localId = (() => { try { return localStorage.getItem(DRAFT_ID_KEY); } catch { return null; } })();
+    const guard = (() => { try { return sessionStorage.getItem(RELOAD_GUARD); } catch { return null; } })();
+
+    if (urlId && urlId !== localId && guard !== urlId) {
+      // Cross-device (or returning) open — pull the server copy.
+      try {
+        const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(urlId));
+        if (res.ok) {
+          const body = await res.json();
+          if (body && body.data) {
+            try { localStorage.setItem(STATE_KEY, JSON.stringify(body.data)); } catch {}
+            try { localStorage.setItem(DRAFT_ID_KEY, urlId); } catch {}
+            try { sessionStorage.setItem(RELOAD_GUARD, urlId); } catch {}
+            window.location.reload();   // re-run page init with hydrated state
+            return;
+          }
+        }
+        // 404 → treat the url id as a brand-new draft on this device.
+        setDraftId(urlId);
+      } catch {
+        setDraftId(urlId);              // backend unreachable — adopt id locally
+      }
+    } else if (urlId) {
+      setDraftId(urlId);                // same-session, keep URL + local in sync
+    } else if (localId) {
+      setDraftId(localId);             // re-assert id into URL after navigation
+    } else {
+      // No draft yet. Mint one only once the user actually has state, so
+      // a bare visit to "/" doesn't create empty drafts. We set it here
+      // anyway so the very first setState() syncs.
+      setDraftId(newDraftId());
+    }
+  }
+
+  // Kick off sync as soon as the script loads.
+  try { initDraftSync(); } catch {/* never block page render */}
 
   // ─── Form helpers ─────────────────────────────────────────────────
   /** Serialise a <form> into a plain object. Numbers become Numbers. */
@@ -123,5 +238,7 @@
     fmtUsd,
     absoluteUrl,
     resolveApiBase,
+    getDraftId,
+    initDraftSync,
   };
 })();

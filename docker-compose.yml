@@ -12,6 +12,9 @@ services:
     ports:
       # bind to localhost only — nginx is the public face
       - "127.0.0.1:8888:8888"
+    environment:
+      # Point the SQLite drafts DB at the persistent volume below
+      - DRAFTS_DB_PATH=/app/data/drafts.db
     env_file:
       - .env
     volumes:
@@ -19,6 +22,8 @@ services:
       # After deploy, run: docker exec -it treadwell-proposal-tool claude login
       # The browser-auth tokens land here and survive `docker compose down`.
       - claude_credentials:/root/.claude
+      # Persist the SQLite drafts DB across restarts / rebuilds.
+      - draft_data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8888/healthz"]
       interval: 30s
@@ -28,4 +33,6 @@ services:
 
 volumes:
   claude_credentials:
+    driver: local
+  draft_data:
     driver: local
