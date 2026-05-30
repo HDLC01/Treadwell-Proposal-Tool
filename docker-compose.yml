@@ -1,0 +1,31 @@
+# Single-service orchestration for the proposal tool.
+# `docker compose up -d` on the VPS = app running on :8888.
+# nginx on the host reverse-proxies 80/443 → this container.
+
+services:
+  proposal-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: treadwell-proposal-tool
+    restart: unless-stopped
+    ports:
+      # bind to localhost only — nginx is the public face
+      - "127.0.0.1:8888:8888"
+    env_file:
+      - .env
+    volumes:
+      # Persist Claude CLI login state across container restarts.
+      # After deploy, run: docker exec -it treadwell-proposal-tool claude login
+      # The browser-auth tokens land here and survive `docker compose down`.
+      - claude_credentials:/root/.claude
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  claude_credentials:
+    driver: local
