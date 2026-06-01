@@ -70,7 +70,11 @@ if [[ ! -f "$APP_DIR/.env" ]]; then
 DROPBOX_APP_KEY=
 DROPBOX_APP_SECRET=
 DROPBOX_REFRESH_TOKEN=
-DROPBOX_ROOT_FOLDER=/2023 Treadwell Team Folder/Hanz AI Test
+# NOTE: DROPBOX_ROOT_FOLDER is intentionally NOT set here. It's defined in
+# docker-compose.yml (environment:) because the production path contains a
+# literal "$" that must be escaped as "$$" — and env_file values are also
+# interpolated by Compose, which would corrupt it. environment: overrides
+# env_file:, so the compose value always wins.
 
 # Anthropic API (optional fallback if Claude CLI login expires)
 ANTHROPIC_API_KEY=

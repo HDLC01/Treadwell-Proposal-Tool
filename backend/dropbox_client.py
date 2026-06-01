@@ -85,6 +85,17 @@ def _build_client():
     return dbx
 
 
+def get_root_folder() -> str:
+    """The Dropbox folder that new project folders are created under.
+
+    Single source of truth for the output root — used by both
+    `_build_folder_path` (where files actually land) and the `/healthz`
+    endpoint (so the UI's "Dropbox target" label can't drift from reality).
+    Defaults to "/Proposals" when DROPBOX_ROOT_FOLDER is unset.
+    """
+    return os.environ.get("DROPBOX_ROOT_FOLDER", "/Proposals").rstrip("/")
+
+
 def _sanitize_folder_name(name: str) -> str:
     """Strip / clean characters Dropbox dislikes in folder names."""
     # Replace illegal chars with a space; collapse repeats; trim.
@@ -118,7 +129,7 @@ def _build_folder_path(
     (epoxy is the default and isn't called out, per Treadwell convention).
     `status_marker` defaults to '!' which appears on most active jobs.
     """
-    root = os.environ.get("DROPBOX_ROOT_FOLDER", "/Proposals").rstrip("/")
+    root = get_root_folder()
 
     # Prefix
     yy = datetime.now().strftime("%y")
