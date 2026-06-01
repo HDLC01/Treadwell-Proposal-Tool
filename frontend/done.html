@@ -136,7 +136,7 @@
 
     <div class="review-callout" id="rv-callout">
       Once you click Generate, this creates a new folder in
-      <strong>/2023 Treadwell Team Folder/Hanz AI Test/</strong> visible to the entire team.
+      <strong id="rv-root-label">your team Dropbox</strong> visible to the entire team.
     </div>
 
     <div class="review-actions">
@@ -217,7 +217,21 @@
     document.getElementById("rv-lump").textContent     = state.lump_sum_display || "—";
     const sanitizedName = (state.project_name || "Project").replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
     const subfolder = `${state.job_number || "00.000"} ${sanitizedName} !`;
-    document.getElementById("rv-dropbox-path").textContent = `/2023 Treadwell Team Folder/Hanz AI Test/${subfolder}`;
+    // Pull the real output root from the backend (/healthz → dropbox_root) so
+    // this label always matches where files actually land — no hardcoded path
+    // to drift when the Dropbox target changes.
+    const pathEl = document.getElementById("rv-dropbox-path");
+    const rootLabelEl = document.getElementById("rv-root-label");
+    pathEl.textContent = `…/${subfolder}`;
+    fetch(TW.absoluteUrl("/healthz"))
+      .then((r) => r.json())
+      .then((h) => {
+        const root = (h && h.dropbox_root) || "";
+        if (!root) return;
+        pathEl.textContent = `${root}/${subfolder}`;
+        if (rootLabelEl) rootLabelEl.textContent = `${root}/`;
+      })
+      .catch(() => {/* backend unreachable — leave the placeholder, non-fatal */});
 
     document.getElementById("back-btn-done").addEventListener("click", () => {
       window.location.assign("/proposal-review.html");

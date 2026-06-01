@@ -159,6 +159,9 @@ def healthz() -> Dict[str, Any]:
     return {
         "ok": True,
         "dropbox_configured": dropbox_client._is_configured(),
+        # Surface the live output root so the Done-page review card can show
+        # the real Dropbox target instead of a hardcoded (drift-prone) string.
+        "dropbox_root": dropbox_client.get_root_folder(),
     }
 
 
