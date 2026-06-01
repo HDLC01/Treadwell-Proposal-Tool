@@ -149,8 +149,17 @@ def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
     """Resolve a data-validation range reference (like `$B$161:$B$165`
     or `'Stnd Alts'!$A$1:$A$10`) into a list of option strings.
 
-    Reads each cell in the range, keeps non-empty string/number values.
-    Returns [] if the formula can't be parsed."""
+    Option cells are frequently FORMULAS that mirror the real names stored
+    elsewhere on the sheet (e.g. R184 holds `=A192`, whose value is
+    "MACRO Flake Single Broadcast"). So we read each option cell's CACHED
+    value from the data_only workbook — that's the resolved name Excel
+    shows in its own dropdown. Reading the formula workbook instead surfaces
+    the formula text ("=A192") as the option label — which was the bug where
+    dropdowns showed "=A171, =A177, …" instead of system names.
+
+    Falls back to the literal formula-workbook value for plain-text option
+    cells that happen to have no cached value, so we never drop a real
+    option. Returns [] if the formula can't be parsed."""
     import re as _re
 
     f = formula.lstrip("=").strip()
@@ -160,12 +169,11 @@ def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
     if sheet_match:
         sheet_name = sheet_match.group(1)
         cell_range = sheet_match.group(2)
-        if sheet_name not in wb.sheetnames:
-            return []
-        ws = wb[sheet_name]
     else:
-        ws = current_ws
+        sheet_name = current_ws.title
         cell_range = f
+    if sheet_name not in wb.sheetnames:
+        return []
 
     # Strip $ signs
     cell_range = cell_range.replace("$", "")
@@ -173,23 +181,36 @@ def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
         cell_range = f"{cell_range}:{cell_range}"
 
     try:
-        cells = ws[cell_range]
+        cells_f = wb[sheet_name][cell_range]                       # formulas
+        cells_v = _load_template(data_only=True)[sheet_name][cell_range]  # cached values
     except Exception:
         return []
 
+    def _grid(cells):
+        # ws[range] may return a single Cell, a row tuple, or a tuple-of-rows.
+        if not hasattr(cells, "__iter__"):
+            return [[cells]]
+        return [list(row) if hasattr(row, "__iter__") else [row] for row in cells]
+
+    grid_f, grid_v = _grid(cells_f), _grid(cells_v)
     out: list = []
-    # Could be a single row, single col, or rect — flatten
-    if not hasattr(cells, "__iter__"):
-        cells = [[cells]]
-    for row in cells:
-        if not hasattr(row, "__iter__"):
-            row = [row]
-        for c in row:
-            v = c.value
+    for r_idx, row in enumerate(grid_v):
+        for c_idx, cell_v in enumerate(row):
+            v = cell_v.value
+            # Prefer the cached (resolved) value. If it's missing or itself a
+            # formula string, fall back to the literal formula-workbook value
+            # so plain-text options (e.g. "None") aren't lost.
+            if v is None or (isinstance(v, str) and v.startswith("=")):
+                try:
+                    v = grid_f[r_idx][c_idx].value
+                except IndexError:
+                    v = None
             if v is None:
                 continue
             s = str(v).strip()
-            if s and s not in out:
+            if not s or s.startswith("="):
+                continue
+            if s not in out:
                 out.append(s)
     return out
 
