@@ -5,6 +5,26 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Treadwell Proposal Generator — Intake</title>
 <link rel="stylesheet" href="/styles.css">
+<style>
+  /* Address autocomplete dropdown (Photon / OSM) */
+  .addr-field { position: relative; }
+  .addr-results {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+    background: var(--surface, #1b1b1d); border: 1px solid var(--treadwell-red, #c0392b);
+    border-radius: 6px; max-height: 280px; overflow-y: auto; margin-top: 2px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .addr-results.open { display: block; }
+  .addr-row { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .addr-row:last-child { border-bottom: none; }
+  .addr-row:hover { background: rgba(192,57,43,.18); }
+  .addr-l1 { font-weight: 600; }
+  .addr-l2 { font-size: 12px; color: var(--ink-variant, #9aa0a6); }
+  /* Per-system Scope groups */
+  .system-block + .system-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(128,128,128,.3); }
+  .system-tag { font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--treadwell-red, #c0392b); margin: 2px 0 6px; }
+</style>
 </head>
 <body>
 
@@ -36,25 +56,32 @@
     <fieldset>
       <legend>Project Info</legend>
       <div class="row">
-        <label style="flex: 0 0 160px;">Folder name
-          <input type="text" name="job_number" id="folder-name-input"
-                 placeholder="26.222"
-                 pattern="\d{2}\.\d{3}"
-                 inputmode="decimal"
-                 maxlength="6"
-                 required
-                 title="Format: xx.xxx (two-digit year, dot, three-digit number). Numbers only. Example: 26.222">
+        <label style="flex: 0 0 280px;">Project deadline (Dropbox folder name)
+          <input type="date" name="deadline" id="deadline-input" required
+                 title="Project deadline. The Dropbox folder is named YY.MM.DD from this date.">
         </label>
         <label>Project name / company
           <input type="text" name="project_name" required placeholder="Olathe CTE OSC">
         </label>
       </div>
-      <label>Address
-        <input type="text" name="address" placeholder="8500 NW Prairie View Rd">
+      <label class="addr-field">Address
+        <input type="text" name="address" id="address-input" autocomplete="off"
+               placeholder="Start typing the jobsite address…">
+        <div id="address-results" class="addr-results"></div>
       </label>
-      <label>City &amp; State
-        <input type="text" name="city_state" placeholder="Kansas City, MO">
-      </label>
+      <div class="row">
+        <label>City
+          <input type="text" name="city" id="city-input" placeholder="Kansas City">
+        </label>
+        <label style="flex: 0 0 90px;">State
+          <input type="text" name="state" id="state-input" maxlength="2"
+                 placeholder="MO" style="text-transform: uppercase;">
+        </label>
+        <label style="flex: 0 0 130px;">Zip
+          <input type="text" name="zip" id="zip-input" maxlength="10"
+                 inputmode="numeric" placeholder="64153">
+        </label>
+      </div>
       <div class="row">
         <label>Bid date
           <input type="date" name="bid_date">
@@ -68,21 +95,20 @@
     <fieldset>
       <legend>Contact</legend>
       <label>Contact name
-        <input type="text" name="contact_name" placeholder="Hanz de la Cruz">
+        <input type="text" name="contact_name" placeholder="Full name">
       </label>
       <div class="row">
         <label>Email
-          <input type="email" name="contact_email" placeholder="hanz@example.com">
+          <input type="email" name="contact_email" placeholder="name@example.com">
         </label>
         <label>Phone
-          <input type="text" name="contact_phone" placeholder="(913) 555-0142">
+          <input type="text" name="contact_phone" placeholder="(555) 123-4567">
         </label>
       </div>
       <label>Source
         <select name="source">
-          <option value="website">Website</option>
+          <option value="google_lead" selected>Google Lead</option>
           <option value="referral">Referral</option>
-          <option value="basis_board">Basis Board</option>
           <option value="treadwell_vehicle">Treadwell vehicle</option>
           <option value="email">Email</option>
           <option value="phone">Phone</option>
@@ -119,17 +145,15 @@
         Pre-fills the estimate. You can refine on the next screen.
       </p>
       <div class="row">
-        <label>Epoxy floor SF
-          <input type="number" name="system_1_sf" min="0" step="1" value="0">
-        </label>
-        <label>Polish floor SF
-          <input type="number" name="polish_sf" min="0" step="1" value="0">
+        <label style="flex: 0 0 200px;">Number of systems
+          <input type="number" name="num_systems" id="num-systems-input"
+                 min="1" max="6" step="1" placeholder="How many?">
         </label>
       </div>
+      <!-- One {Epoxy SF, Polish SF, Cove LF} group per system —
+           rendered by JS from the "Number of systems" value. -->
+      <div id="systems-container"></div>
       <div class="row">
-        <label>Cove LF (epoxy)
-          <input type="number" name="cove_1_lf" min="0" step="1" value="0">
-        </label>
         <label>Bid date / Approx start
           <input type="date" name="approx_start_date">
         </label>
@@ -163,7 +187,60 @@
 <script>
   // Restore previous state if user clicked Back from screen 2
   const form = document.getElementById("intake-form");
+
+  // ── Dynamic per-system Scope fields ───────────────────────────────
+  // "Number of systems" controls how many {Epoxy SF, Polish SF, Cove LF}
+  // groups appear. System 1 keeps the legacy field names so the existing
+  // estimate-cell mappings keep working; systems 2+ use suffixed names.
+  const numSystemsInput  = document.getElementById("num-systems-input");
+  const systemsContainer = document.getElementById("systems-container");
+
+  function systemFieldNames(k) {
+    return k === 1
+      ? { epoxy: "system_1_sf", polish: "polish_sf",      cove: "cove_1_lf" }
+      : { epoxy: `system_${k}_sf`, polish: `polish_${k}_sf`, cove: `cove_${k}_lf` };
+  }
+
+  function renderSystems(n) {
+    n = Math.max(1, Math.min(6, parseInt(n, 10) || 1));
+    // Preserve anything already typed before we rebuild the markup.
+    const prev = {};
+    systemsContainer.querySelectorAll("input[name]").forEach(i => { prev[i.name] = i.value; });
+    let html = "";
+    for (let k = 1; k <= n; k++) {
+      const f = systemFieldNames(k);
+      const tag = n > 1 ? `<div class="system-tag">System ${k}</div>` : "";
+      html += `
+        <div class="system-block">
+          ${tag}
+          <div class="row">
+            <label>Epoxy floor SF
+              <input type="number" name="${f.epoxy}" min="0" step="1" value="0">
+            </label>
+            <label>Polish floor SF
+              <input type="number" name="${f.polish}" min="0" step="1" value="0">
+            </label>
+          </div>
+          <div class="row">
+            <label>Cove LF (epoxy)
+              <input type="number" name="${f.cove}" min="0" step="1" value="0">
+            </label>
+          </div>
+        </div>`;
+    }
+    systemsContainer.innerHTML = html;
+    // Restore preserved values into the rebuilt fields.
+    systemsContainer.querySelectorAll("input[name]").forEach(i => {
+      if (prev[i.name] != null && prev[i.name] !== "") i.value = prev[i.name];
+    });
+  }
+
+  // Render from saved state (default 1 system), then hydrate the whole form.
+  renderSystems(parseInt(TW.getState().num_systems, 10) || 1);
   TW.writeForm(form, TW.getState());
+  if (numSystemsInput) {
+    numSystemsInput.addEventListener("input", () => renderSystems(numSystemsInput.value));
+  }
 
   // Default the bid date to today so users don't have to think about it.
   const bidInput = form.querySelector("[name='bid_date']");
@@ -175,34 +252,96 @@
     bidInput.value = `${y}-${m}-${d}`;
   }
 
-  // Folder name field — enforce strict xx.xxx format on every keystroke.
-  // Strip any non-digit character, auto-insert the dot after the 2nd digit.
-  const folderNameInput = document.getElementById("folder-name-input");
-  if (folderNameInput) {
-    folderNameInput.addEventListener("input", (e) => {
-      const el = e.target;
-      const caret = el.selectionStart;
-      // Strip everything that isn't a digit
-      const digits = el.value.replace(/\D/g, "").slice(0, 5);
-      // Format as xx.xxx
-      let formatted;
-      if (digits.length <= 2) {
-        formatted = digits;
-      } else {
-        formatted = digits.slice(0, 2) + "." + digits.slice(2);
-      }
-      el.value = formatted;
-      // Keep the caret position reasonable after auto-insert
-      const newCaret = caret === 3 && el.value[2] === "." ? 4 : caret;
-      el.setSelectionRange(newCaret, newCaret);
-    });
+  // ── Address autocomplete (keyless — OpenStreetMap via Photon) ──────
+  // Photon is a free public address database; we query it as the user
+  // types and fill Address / City / State / Zip. No API key, nothing to
+  // host, no scraping — just a fetch to a public endpoint.
+  const addrInput   = document.getElementById("address-input");
+  const addrResults = document.getElementById("address-results");
+  const cityInput   = document.getElementById("city-input");
+  const stateInput  = document.getElementById("state-input");
+  const zipInput    = document.getElementById("zip-input");
+
+  const STATE_ABBR = {Alabama:"AL",Alaska:"AK",Arizona:"AZ",Arkansas:"AR",California:"CA",
+    Colorado:"CO",Connecticut:"CT",Delaware:"DE","District of Columbia":"DC",Florida:"FL",
+    Georgia:"GA",Hawaii:"HI",Idaho:"ID",Illinois:"IL",Indiana:"IN",Iowa:"IA",Kansas:"KS",
+    Kentucky:"KY",Louisiana:"LA",Maine:"ME",Maryland:"MD",Massachusetts:"MA",Michigan:"MI",
+    Minnesota:"MN",Mississippi:"MS",Missouri:"MO",Montana:"MT",Nebraska:"NE",Nevada:"NV",
+    "New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC",
+    "North Dakota":"ND",Ohio:"OH",Oklahoma:"OK",Oregon:"OR",Pennsylvania:"PA","Rhode Island":"RI",
+    "South Carolina":"SC","South Dakota":"SD",Tennessee:"TN",Texas:"TX",Utah:"UT",Vermont:"VT",
+    Virginia:"VA",Washington:"WA","West Virginia":"WV",Wisconsin:"WI",Wyoming:"WY"};
+
+  const fmtLine1 = p => [p.housenumber, p.street || p.name].filter(Boolean).join(" ") || p.name || "";
+
+  function showAddrMsg(text) {
+    addrResults.innerHTML = `<div class="addr-row addr-msg">${text}</div>`;
+    addrResults.classList.add("open");
   }
+
+  function renderAddr(features) {
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    // Photon often returns several OSM objects for the same address — dedupe
+    // on the displayed text so we don't show identical rows.
+    const seen = new Set(), items = [];
+    for (const f of features) {
+      const p = f.properties;
+      const l1 = fmtLine1(p);
+      const l2 = [p.city || p.county, STATE_ABBR[p.state] || p.state, p.postcode].filter(Boolean).join(", ");
+      if (!l1 && !l2) continue;
+      const key = (l1 + "|" + l2).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ f, l1, l2 });
+    }
+    if (!items.length) { showAddrMsg("No matches — keep typing the address"); return; }
+    addrResults.innerHTML = items.map((it, i) =>
+      `<div class="addr-row" data-idx="${i}"><div class="addr-l1">${esc(it.l1)}</div><div class="addr-l2">${esc(it.l2)}</div></div>`
+    ).join("");
+    addrResults.classList.add("open");
+    addrResults.querySelectorAll(".addr-row").forEach(row =>
+      row.addEventListener("click", () => pickAddr(items[+row.dataset.idx].f)));
+  }
+
+  function pickAddr(f) {
+    const p = f.properties;
+    addrInput.value  = fmtLine1(p);
+    cityInput.value  = p.city || p.county || "";
+    stateInput.value = STATE_ABBR[p.state] || (p.state || "").slice(0, 2).toUpperCase();
+    zipInput.value   = p.postcode || "";
+    addrResults.classList.remove("open");
+  }
+
+  let addrTimer = null, addrSeq = 0;
+  addrInput.addEventListener("input", () => {
+    const q = addrInput.value.trim();
+    if (addrTimer) clearTimeout(addrTimer);
+    if (q.length < 4) { addrResults.classList.remove("open"); return; }
+    addrTimer = setTimeout(async () => {
+      const seq = ++addrSeq;
+      try {
+        // Bias toward the Kansas City metro (lat/lon); filter to US results.
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en&lat=39.0997&lon=-94.5786`;
+        const data = await (await fetch(url)).json();
+        if (seq !== addrSeq) return;  // a newer keystroke already fired
+        const feats = (data.features || []).filter(f => (f.properties.countrycode || "US") === "US");
+        renderAddr(feats);
+      } catch { addrResults.classList.remove("open"); }
+    }, 300);  // debounce
+  });
+  document.addEventListener("click", e => {
+    if (!addrInput.contains(e.target) && !addrResults.contains(e.target))
+      addrResults.classList.remove("open");
+  });
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     const values = TW.readForm(form);
-    // work_type is now picked by the user on this screen.
-    TW.setState({ ...values, work_type: values.work_type || "epoxy" });
+    // Keep a combined "City, ST" so the estimate sheet (C3), proposal
+    // ({{city_state}}) and tax lookup keep working unchanged. Zip is new
+    // and stored separately.
+    const cs = [values.city, (values.state || "").toUpperCase()].filter(Boolean).join(", ");
+    TW.setState({ ...values, city_state: cs, work_type: values.work_type || "epoxy" });
     window.location.assign("/estimate-review.html");
   });
 </script>

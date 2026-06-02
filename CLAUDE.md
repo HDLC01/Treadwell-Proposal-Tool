@@ -7,6 +7,84 @@ context loaded.
 
 ---
 
+## ⚡ CURRENT PRODUCTION STATE (last updated 2026-05-30)
+
+> **This block overrides any stale info further down.** The sections below
+> were written for v1 and are partly outdated — trust THIS block first.
+
+**🟢 LIVE IN PRODUCTION 24/7:** https://proposals.wetreadwell.com
+
+### Hosting
+- **Bluehost VPS** (Standard NVMe 2), Ubuntu 24.04, IP `50.6.110.215`,
+  hostname `ovn.bfk.mybluehost.me`. Account holder: Will Buchanan; Hanz has
+  Tech-contact access. Order 1891957625 (~$32 year 1).
+- **Single Docker container** (`treadwell-proposal-tool`) — FastAPI serves
+  BOTH the API and the static frontend on port 8888.
+- **nginx** reverse-proxies 80/443 → 8888, **Let's Encrypt** SSL (auto-renews).
+- DNS: A-record `proposals` → `50.6.110.215` in Bluehost DNS for `wetreadwell.com`.
+- App lives at `/opt/treadwell` on the VPS; `docker-compose.yml` + `Dockerfile`
+  at repo root.
+
+### Deploy / ops (SSH to the VPS)
+- Update: `cd /opt/treadwell && git pull && docker compose up -d --build`
+- Restart: `docker compose restart`  ·  Logs: `docker compose logs -f`
+- The image bakes in Node + the **Claude CLI** (`@anthropic-ai/claude-code`).
+- **AI Autofill** runs `claude -p` inside the container, logged in as
+  `hanz@wetreadwell.com` (Claude **Team** seat). Login persists on a Docker
+  volume (`/root/.claude`). Re-login if it expires:
+  `docker exec -it treadwell-proposal-tool claude` → OAuth URL → paste code.
+
+### What actually shipped (corrects the v1 sections below)
+- **AI Autofill IS live** (not "out of scope"). Reads the pasted lead notes,
+  returns 7 estimate flags (B4 Local, B5 Hard Bid, D5 Prevailing Wage,
+  B6 Taxable, D6 Remodel, B9 Drawings-dated, B10 New/Reno) + drafts the
+  proposal narrative (system_name, texture, scope, schedule, exclusions),
+  each with a reasoning trail. Endpoint `/api/autofill` in `backend/main.py`.
+- **State = localStorage + SQLite drafts** (NOT just sessionStorage). Draft id
+  travels in the URL (`?d=<uuid>`); debounced autosave to SQLite at
+  `/app/data/drafts.db` (Docker volume) → multi-device + tab-close recovery.
+  See `backend/drafts.py` + `/api/draft/{id}`.
+- **Templates ARE annotated** with `{{tokens}}` (all 4 Direct templates:
+  Epoxy/Polish/Combo/Budget). `annotate_templates.py` does it. Fixed the
+  hardcoded `1/1/26` header date → `{{bid_date_formatted}}`.
+- **Work-type-aware**: Epoxy/Polish/Combo show different proposal layouts +
+  lump-sum logic (epoxy-only / polish-only / both summed).
+- **Intake auto-fills estimate cells**: SF→E20, cove→E34, polish→Polish!E19,
+  contact→Bidding Contacts G2/H2/I2, plus a crew/days/rate heuristic by SF.
+- **Generate moved to the Done page** (was on Proposal Review). One generate
+  per project; Done shows a pre-generate review card then the success view.
+- **Dropbox**: refresh-token OAuth (`backend/dropbox_client.py`), rebound to
+  the **team namespace** so the whole team sees output. Sandbox folder:
+  `/2023 Treadwell Team Folder/Hanz AI Test/`. Flip to `/Projects` for real use.
+
+### Frontend hosting note
+- Production serves the frontend FROM the container (FastAPI StaticFiles),
+  NOT Vercel. The earlier Vercel + ngrok dev setup (`vercel.json`,
+  `middleware.js`, `frontend/vercel.json`) and the Railway configs
+  (`backend/railway.toml`, `backend/Procfile`) were **deleted on 2026-05-30**.
+
+### Open items / known issues
+1. **⚠️ Rotate the VPS root password** — it was exposed in a chat transcript
+   during deploy (Bluehost → VPS → MANAGE → Reset Root Password).
+2. **Autofill banner overlaps the Continue button** on Estimate Review — must
+   dismiss (×) before clicking Continue. Small CSS fix pending.
+3. **Lead capture is still manual** — estimator pastes the lead email into the
+   notes box. Next big feature: an inbox/webhook watcher that pre-fills intake.
+4. **Local `.venv` was invalidated** when this folder moved to
+   `Documents/Treadwell Main/` (venvs hardcode absolute paths). Recreate for
+   local dev: `cd backend && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt`.
+   Production (Docker on VPS) is unaffected.
+
+### Locations
+- This repo (after 2026-05-30 move): `C:/Users/Admin/Documents/Treadwell Main/treadwell-proposal-tool/`
+- Sibling main Treadwell folder: `C:/Users/Admin/Documents/Treadwell Main/Treadwell/`
+- GitHub: `https://github.com/HDLC01/Treadwell-Proposal-Tool` (creds in global
+  ~/.gitconfig: HDLC01 / hanz@wetreadwell.com — unaffected by the folder move).
+- Portfolio writeup + genericized screenshots:
+  `C:/Users/Admin/Documents/Flask Python Portfolio/static/images/Treadwell Proposal Tool/`
+
+---
+
 ## What this repo is
 
 A small, standalone tool that automates Treadwell's bid-paperwork:
@@ -50,8 +128,8 @@ be extracted to its own machine without untangling dependencies.
 | File generation | `openpyxl` (xlsx) + `python-docx` (docx) | `backend/estimate_writer.py`, `backend/proposal_writer.py` |
 | Storage | Dropbox API (app-level access token) | `backend/dropbox_client.py` |
 | Frontend | Plain HTML + vanilla JS + 1 CSS file | `frontend/` |
-| State between screens | `sessionStorage` | `frontend/shared.js` |
-| Deploy | Backend → Railway, Frontend → Vercel | `backend/railway.toml`, `frontend/vercel.json` |
+| State between screens | `localStorage` + SQLite drafts | `frontend/shared.js`, `backend/drafts.py` |
+| Deploy | Single Docker container on a Bluehost VPS (FastAPI serves API + frontend) behind nginx + Let's Encrypt | `Dockerfile`, `docker-compose.yml` |
 
 **No React. No Expo. No Supabase. No Tailwind / NativeWind.** This is
 deliberate — keeps the dependency surface tiny and the build trivially
@@ -121,14 +199,21 @@ Reload — fetches go to Railway, page is served by the local static server.
 
 ---
 
-## Deploy
+## Deploy (PRODUCTION — Docker on Bluehost VPS)
 
-- **Backend → Railway**: connect this repo, set Root Directory = `backend`.
-  Railway auto-detects Python via `requirements.txt`. Set env var
-  `DROPBOX_ACCESS_TOKEN` (and optionally `DROPBOX_ROOT_FOLDER`).
-- **Frontend → Vercel**: connect this repo, set Root Directory = `frontend`.
-  In each HTML page (or via Vercel env vars + a small build step) set
-  `window.TW_API_BASE` to the Railway URL.
+> The old Railway/Vercel/ngrok configs were **removed on 2026-05-30** —
+> everything runs in one Docker container on the VPS now. See the
+> "⚡ CURRENT PRODUCTION STATE" block at the top for the live details.
+
+- **One container** built from `Dockerfile` (FastAPI serves API + the static
+  frontend on :8888; image bakes in Node + the Claude CLI).
+- `docker-compose.yml` mounts two volumes: `/root/.claude` (Claude login) and
+  `/app/data` (SQLite drafts).
+- On the VPS at `/opt/treadwell`:
+  `git pull && docker compose up -d --build`
+- **nginx** (host) reverse-proxies 80/443 → 8888; **certbot** issues/renews SSL.
+- Env vars live in `/opt/treadwell/.env` (Dropbox app key/secret/refresh token,
+  `DROPBOX_ROOT_FOLDER`). NOT committed.
 
 ---
 

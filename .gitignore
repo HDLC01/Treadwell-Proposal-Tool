@@ -52,3 +52,9 @@ Thumbs.db
 # Test artefacts
 test_output_*.xlsx
 test_output_*.docx
+.playwright-mcp/
+/estimate-2systems.png
+/intake-redesign.png
+
+# Local SQLite drafts (runtime data — production uses a Docker volume)
+backend/data/

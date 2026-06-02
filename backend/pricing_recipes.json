@@ -1,0 +1,575 @@
+{
+  "epoxy_systems": {
+    "3/16\" Urethne Cement With Color Fast (SLB)": {
+      "liquids": [
+        {
+          "product": "Poly-Crete SL",
+          "coverage_sf_per_unit": 55,
+          "unit_price": 118.4126,
+          "bulk_price": 107.59
+        },
+        {
+          "product": "Poly-Crete Color Fast",
+          "coverage_sf_per_unit": 200,
+          "unit_price": 305.55559999999997
+        }
+      ],
+      "media": [
+        {
+          "product": "Silica     (@ 50#s)",
+          "coverage_lb_per_sf": 0.75,
+          "bag_size": 50,
+          "unit_price": 0.44
+        }
+      ]
+    },
+    "3/16\" Urethne Cement With Shop Floor and Armor Top": {
+      "liquids": [
+        {
+          "product": "Poly-Crete SL",
+          "coverage_sf_per_unit": 55,
+          "unit_price": 118.4126,
+          "bulk_price": 107.59
+        },
+        {
+          "product": "Shop Floor",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.48078666666667
+        },
+        {
+          "product": "Pigmented AT Satin W/ Grit",
+          "coverage_sf_per_unit": 850,
+          "unit_price": 426.68179999999995,
+          "bulk_price": 364.73539999999997
+        }
+      ],
+      "media": [
+        {
+          "product": "Silica     (@ 50#s)",
+          "coverage_lb_per_sf": 0.75,
+          "bag_size": 50,
+          "unit_price": 0.44
+        }
+      ]
+    },
+    "1/4\" Urethne Cement With Color Fast (MDB)": {
+      "liquids": [
+        {
+          "product": "Poly-Crete MD",
+          "coverage_sf_per_unit": 32,
+          "unit_price": 134.7472
+        },
+        {
+          "product": "Poly-Crete Color Fast",
+          "coverage_sf_per_unit": 200,
+          "unit_price": 305.55559999999997
+        }
+      ],
+      "media": [
+        {
+          "product": "Silica     (@ 50#s)",
+          "coverage_lb_per_sf": 1,
+          "bag_size": 50,
+          "unit_price": 0.44
+        }
+      ]
+    },
+    "MACRO Flake Single Broadcast": {
+      "liquids": [
+        {
+          "product": "OPF",
+          "coverage_sf_per_unit": 275,
+          "unit_price": 85.38229333333334
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 125,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "price_break_lbs": 240,
+          "price_below": 2.3,
+          "price_above": 2.25
+        }
+      ]
+    },
+    "micro Flake Double Broadcast": {
+      "liquids": [
+        {
+          "product": "OPF",
+          "coverage_sf_per_unit": 275,
+          "unit_price": 85.38229333333334
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 150,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 125,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "unit_price": 2.4
+        },
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "unit_price": 2.4
+        }
+      ]
+    },
+    "Hybrid  MACRO Flake": {
+      "liquids": [
+        {
+          "product": "Poly-Crete SL",
+          "coverage_sf_per_unit": 55,
+          "unit_price": 118.4126,
+          "bulk_price": 107.59
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 150,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 125,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "unit_price": 2.3
+        },
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.12,
+          "bag_size": 40,
+          "unit_price": 2.3
+        }
+      ]
+    },
+    "Hybrid  micro Flake": {
+      "liquids": [
+        {
+          "product": "Poly-Crete SL",
+          "coverage_sf_per_unit": 55,
+          "unit_price": 118.4126,
+          "bulk_price": 107.59
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 150,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 125,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "unit_price": 2.4
+        },
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "unit_price": 2.4
+        }
+      ]
+    },
+    "Fast Cure *MACRO Flake Single Broadcast* Fast Cure": {
+      "liquids": [
+        {
+          "product": "Accelera EXT (Pgmnt)",
+          "coverage_sf_per_unit": 75,
+          "unit_price": 146.9902
+        },
+        {
+          "product": "Accelera EXT (Clear)",
+          "coverage_sf_per_unit": 65,
+          "unit_price": 124.5394
+        }
+      ],
+      "media": [
+        {
+          "product": "Flake     (@ 40#s)",
+          "coverage_lb_per_sf": 0.15,
+          "bag_size": 40,
+          "price_break_lbs": 240,
+          "price_below": 2.3,
+          "price_above": 2.25
+        }
+      ]
+    },
+    "40-S (Q28) Quartz Double Broadcast": {
+      "liquids": [
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 90,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 90,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Quartz    (@ 50#s)",
+          "coverage_lb_per_sf": 0.5,
+          "bag_size": 50,
+          "unit_price": 0.52
+        },
+        {
+          "product": "Quartz    (@ 50#s)",
+          "coverage_lb_per_sf": 0.4,
+          "bag_size": 50,
+          "unit_price": 0.52
+        }
+      ]
+    },
+    "Hybrid Quartz Double Broadcast (Standard Texture)": {
+      "liquids": [
+        {
+          "product": "Poly-Crete SL",
+          "coverage_sf_per_unit": 55,
+          "unit_price": 118.4126,
+          "bulk_price": 107.59
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 90,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 90,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Quartz    (@ 50#s)",
+          "coverage_lb_per_sf": 0.8,
+          "bag_size": 50,
+          "unit_price": 0.52
+        },
+        {
+          "product": "Quartz    (@ 50#s)",
+          "coverage_lb_per_sf": 0.4,
+          "bag_size": 50,
+          "unit_price": 0.52
+        }
+      ]
+    },
+    "Trowel - Hybrid Quartz Double Broadcast (Orange Peel Texture/Trowel Texture)": {
+      "liquids": [
+        {
+          "product": "Poly-Crete SL",
+          "coverage_sf_per_unit": 55,
+          "unit_price": 118.4126,
+          "bulk_price": 107.59
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 90,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 90,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Glaze #4",
+          "coverage_sf_per_unit": 250,
+          "unit_price": 79.75722666666668,
+          "bulk_price": 61.67567600000001
+        },
+        {
+          "product": "Armor Top Satin W/ Grit",
+          "coverage_sf_per_unit": 775,
+          "unit_price": 382.44800000000004,
+          "bulk_price": 324.837
+        }
+      ],
+      "media": [
+        {
+          "product": "Quartz    (@ 50#s)",
+          "coverage_lb_per_sf": 0.8,
+          "bag_size": 50,
+          "unit_price": 0.52
+        },
+        {
+          "product": "Quartz    (@ 50#s)",
+          "coverage_lb_per_sf": 0.4,
+          "bag_size": 50,
+          "unit_price": 0.52
+        }
+      ]
+    },
+    "Shop Floor Double Broadcast": {
+      "liquids": [
+        {
+          "product": "Shop Floor",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.48078666666667
+        },
+        {
+          "product": "Shop Floor",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.48078666666667
+        },
+        {
+          "product": "Shop Floor",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.48078666666667
+        },
+        {
+          "product": "Pigmented AT Satin W/ Grit",
+          "coverage_sf_per_unit": 850,
+          "unit_price": 426.68179999999995,
+          "bulk_price": 364.73539999999997
+        }
+      ],
+      "media": [
+        {
+          "product": "Silica     (@ 50#s)",
+          "coverage_lb_per_sf": 0.5,
+          "bag_size": 50,
+          "unit_price": 0.44
+        },
+        {
+          "product": "Silica     (@ 50#s)",
+          "coverage_lb_per_sf": 0.4,
+          "bag_size": 50,
+          "unit_price": 0.44
+        }
+      ]
+    },
+    "Shop Floor Single Broadcast": {
+      "liquids": [
+        {
+          "product": "Shop Floor",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.48078666666667
+        },
+        {
+          "product": "Shop Floor",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.48078666666667
+        },
+        {
+          "product": "Pigmented AT Satin W/ Grit",
+          "coverage_sf_per_unit": 850,
+          "unit_price": 426.68179999999995,
+          "bulk_price": 364.73539999999997
+        }
+      ],
+      "media": [
+        {
+          "product": "Silica     (@ 50#s)",
+          "coverage_lb_per_sf": 0.5,
+          "bag_size": 50,
+          "unit_price": 0.44
+        }
+      ]
+    },
+    "Dur-A-Gard": {
+      "liquids": [
+        {
+          "product": "Dur-A-Gard",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 81.43556000000001
+        },
+        {
+          "product": "Pigmented AT Satin W/ Grit",
+          "coverage_sf_per_unit": 850,
+          "unit_price": 426.68179999999995,
+          "bulk_price": 364.73539999999997
+        }
+      ],
+      "media": []
+    },
+    "Dur-A-Gard Novolac": {
+      "liquids": [
+        {
+          "product": "Novolac (Dur-A-Gard)",
+          "coverage_sf_per_unit": 100,
+          "unit_price": 150.16808
+        }
+      ],
+      "media": []
+    }
+  },
+  "polish": {
+    "patch_new": 0.05,
+    "patch_reno": 0.15,
+    "densifier": 0.07,
+    "sealer": 0.1,
+    "grout": 0.11,
+    "dye_per_coat": 0.14,
+    "dye_coats": 2,
+    "joint_filler_per_kit": 500,
+    "shipping_pct": 0.02
+  },
+  "cove": {
+    "Epoxy 4\"": {
+      "resin": "CoveRez",
+      "divisor": 30,
+      "agg_coverage": 25,
+      "has_cap": false
+    },
+    "WR 4\"": {
+      "resin": "WR",
+      "divisor": 30,
+      "agg_coverage": 25,
+      "has_cap": false
+    },
+    "Epoxy 6\"": {
+      "resin": "CoveRez",
+      "divisor": 20,
+      "agg_coverage": 25,
+      "has_cap": false
+    },
+    "WR 6\"": {
+      "resin": "WR",
+      "divisor": 20,
+      "agg_coverage": 25,
+      "has_cap": false
+    },
+    "Epoxy 4\" + Cap": {
+      "resin": "CoveRez",
+      "divisor": 15,
+      "agg_coverage": 25,
+      "has_cap": true
+    },
+    "WR 4\" + Cap": {
+      "resin": "WR",
+      "divisor": 15,
+      "agg_coverage": 25,
+      "has_cap": true
+    },
+    "Epoxy 6\" + Cap": {
+      "resin": "CoveRez",
+      "divisor": 10,
+      "agg_coverage": 25,
+      "has_cap": true
+    },
+    "WR 6\" + Cap": {
+      "resin": "WR",
+      "divisor": 10,
+      "agg_coverage": 25,
+      "has_cap": true
+    },
+    "Epoxy 8\"": {
+      "resin": "CoveRez",
+      "divisor": 10.5,
+      "agg_coverage": 20,
+      "has_cap": false
+    },
+    "WR 8\"": {
+      "resin": "WR",
+      "divisor": 10.5,
+      "agg_coverage": 20,
+      "has_cap": false
+    },
+    "Epoxy 8\" + Cap": {
+      "resin": "CoveRez",
+      "divisor": 6.5,
+      "agg_coverage": 21,
+      "has_cap": true
+    },
+    "WR 8\" + Cap": {
+      "resin": "WR",
+      "divisor": 6.5,
+      "agg_coverage": 21,
+      "has_cap": true
+    }
+  },
+  "cove_prices": {
+    "CoveRez": 88.83082666666667,
+    "WR": 66.6952,
+    "silica": 0.44,
+    "q28": 0.47,
+    "zinc": 0.75
+  }
+}
