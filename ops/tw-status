@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Show whether the Treadwell tool container is running.
+# Installed on the VPS at /usr/local/bin/tw-status. Usage: just type `tw-status`.
+cd /opt/treadwell && docker compose ps
