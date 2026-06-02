@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Bring the Treadwell tool back ONLINE.
+# Installed on the VPS at /usr/local/bin/tw-up. Usage: just type `tw-up`.
+cd /opt/treadwell && docker compose up -d
+echo ">>> Treadwell tool is STARTING. Check it with:  tw-status"

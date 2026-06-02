@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# EMERGENCY kill switch — take the Treadwell tool OFFLINE immediately.
+# Installed on the VPS at /usr/local/bin/tw-down. Usage: just type `tw-down`.
+cd /opt/treadwell && docker compose stop
+echo ">>> Treadwell tool STOPPED — site is OFFLINE. Bring it back with:  tw-up"
