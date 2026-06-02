@@ -613,6 +613,25 @@ def _init_drafts_db() -> None:
         log.warning("Drafts DB init failed (drafts disabled): %s", exc)
 
 
+@app.on_event("startup")
+def _warm_sheet_cache() -> None:
+    """Pre-build + cache the heavy grids in a background thread so the first
+    real user after a deploy doesn't pay the ~7 s cold serialization cost.
+    Runs off-thread so it never blocks startup / the health check.
+    """
+    import threading
+
+    def _warm() -> None:
+        for name in ("Epoxy", "Polish"):
+            try:
+                estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
+                log.info("Warmed sheet cache: %s", name)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Sheet warm failed for %s: %s", name, exc)
+
+    threading.Thread(target=_warm, daemon=True).start()
+
+
 @app.put("/api/draft/{draft_id}")
 @app.post("/api/draft/{draft_id}")
 def api_save_draft(draft_id: str, payload: DraftIn) -> Dict[str, Any]:
