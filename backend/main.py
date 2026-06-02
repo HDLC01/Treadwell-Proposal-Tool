@@ -554,9 +554,13 @@ _AUTOFILL_HITS: Dict[str, list] = {}   # bucket(project id) -> [timestamps]
 
 
 def _autofill_bucket(request: Request) -> str:
-    """Per-project rate bucket from the `X-Project-Id` header (the draft id).
-    Falls back to a shared bucket if the header is absent."""
-    return (request.headers.get("x-project-id") or "").strip() or "anon"
+    """Rate bucket = authenticated email (+ project id). Keying on the email
+    from the verified token (not just the client-controlled X-Project-Id header)
+    stops a user from bypassing the cap by spoofing project ids, while still
+    giving each project its own budget."""
+    email = getattr(request.state, "user_email", None) or "anon"
+    pid = (request.headers.get("x-project-id") or "").strip()
+    return f"{email}|{pid}" if pid else email
 
 
 def _autofill_rate_retry(bucket: str) -> int | None:
@@ -834,11 +838,21 @@ def api_me(request: Request) -> Dict[str, Any]:
     The DB trigger creates profiles on signup; this just reads it, with a
     safe fallback if the row isn't there yet."""
     email = _user_email(request) or ""
+    prof = None
     try:
-        prof = profiles.get_by_email(email)
+        claims = supabase_client.verify_token_claims(request.headers.get("authorization"))
+        meta = claims.get("user_metadata") or {}
+        name = meta.get("full_name") or meta.get("name")
+        if claims.get("sub"):
+            prof = profiles.ensure_profile(claims["sub"], email or claims.get("email"), name)
+        else:
+            prof = profiles.get_by_email(email)
     except Exception as exc:  # noqa: BLE001
-        log.warning("get profile failed: %s", exc)
-        prof = None
+        log.warning("api_me profile resolve failed: %s", exc)
+        try:
+            prof = profiles.get_by_email(email)
+        except Exception:  # noqa: BLE001
+            prof = None
     if prof:
         return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
                 "role": prof.get("role", "user"), "status": prof.get("status", "active")}

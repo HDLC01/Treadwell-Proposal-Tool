@@ -276,8 +276,8 @@ def upload_project_files(
         }
 
     except Exception as exc:  # noqa: BLE001 — translate to graceful degradation
-        log.warning("Dropbox upload failed: %s", exc)
+        log.warning("Dropbox upload failed: %s", exc)   # full detail server-side only
         return {
             "configured": False,
-            "error": f"Dropbox upload failed: {exc}",
+            "error": "Dropbox upload failed — your files are available as direct downloads.",
         }

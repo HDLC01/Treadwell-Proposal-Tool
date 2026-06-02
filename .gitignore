@@ -55,6 +55,8 @@ test_output_*.docx
 .playwright-mcp/
 /estimate-2systems.png
 /intake-redesign.png
+/local-login.png
+/vps-*.png
 
 # Local SQLite drafts (runtime data — production uses a Docker volume)
 backend/data/

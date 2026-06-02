@@ -5,33 +5,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin · Treadwell Proposal Generator</title>
   <style>
-    :root { --red:#c0392b; }
+    :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
     * { box-sizing:border-box; }
-    body { margin:0; background:#0f1115; color:#e9e9ea; font:400 13.5px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:26px 22px 90px; }
+    body { margin:0; background:#f4f4f5; color:var(--ink); font:400 13.5px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:26px 22px 90px; }
     .wrap { max-width:1200px; margin:0 auto; }
     .top { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
     .logo { width:32px;height:32px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
-    h1 { font-size:20px; margin:0; } .tag { background:#c9a227;color:#1a1a1a;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:800;letter-spacing:.04em; }
-    .sub { color:#9aa0a6; margin:0 0 20px 44px; }
+    h1 { font-size:20px; margin:0; } .tag { background:#7a5c00;color:#ffe9a8;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:800;letter-spacing:.04em; }
+    .sub { color:var(--ink-v); margin:0 0 20px 44px; }
     .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
-    .stat { background:#1a1d23; border:1px solid rgba(255,255,255,.08); border-radius:11px; padding:14px 16px; }
-    .stat .k { color:#9aa0a6; font-size:11px; text-transform:uppercase; letter-spacing:.05em; } .stat .v { font-size:26px; font-weight:800; margin-top:4px; }
-    .panel { background:#1a1d23; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
-    .ph { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.07); }
-    .ph input,.ph select { background:#0f1115; color:#e9e9ea; border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:7px 10px; font:inherit; }
+    .stat { background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:11px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+    .stat .k { color:var(--ink-v); font-size:11px; text-transform:uppercase; letter-spacing:.05em; } .stat .v { font-size:26px; font-weight:800; margin-top:4px; }
+    .panel { background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+    .ph { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid rgba(27,28,28,.08); }
+    .ph input,.ph select { background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.18); border-radius:8px; padding:7px 10px; font:inherit; }
     .ph .grow { flex:1; }
     table { width:100%; border-collapse:collapse; }
-    th,td { text-align:left; padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.05); white-space:nowrap; }
-    th { color:#9aa0a6; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+    th,td { text-align:left; padding:10px 14px; border-bottom:1px solid rgba(27,28,28,.06); white-space:nowrap; }
+    th { color:var(--ink-v); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
     .badge { border-radius:6px; padding:2px 8px; font-size:10.5px; font-weight:700; text-transform:uppercase; }
-    .b-user{background:#2a2d33;color:#cdd} .b-admin{background:#264b8b;color:#cfe} .b-super{background:#7a5c00;color:#ffe9a8}
-    .b-active{background:#15402a;color:#7ee787} .b-paused{background:#5a4a12;color:#f2d479} .b-banned{background:#4a1515;color:#ff8d83}
-    .you { color:#9aa0a6; font-size:10px; margin-left:6px; }
-    select.role { background:#0f1115; color:#e9e9ea; border:1px solid rgba(255,255,255,.14); border-radius:7px; padding:5px 8px; }
-    .act { background:none; border:1px solid rgba(255,255,255,.16); color:#ddd; border-radius:7px; padding:5px 9px; font:600 12px system-ui; cursor:pointer; margin-left:6px; }
-    .act:disabled { opacity:.35; cursor:default; }
-    .act.danger { color:#ff8d83; border-color:rgba(255,141,131,.4); }
-    .loading,.denied { text-align:center; color:#9aa0a6; padding:50px; }
+    .b-user{background:#e9e8e7;color:#5c403f} .b-admin{background:#dbe7ff;color:#1a3d7c} .b-super{background:#fff0c2;color:#7a5c00}
+    .b-active{background:#dcf5e5;color:#1a7f37} .b-paused{background:#fbeec2;color:#8a6d00} .b-banned{background:#fadbd8;color:#a4232b}
+    .you { color:var(--ink-v); font-size:10px; margin-left:6px; }
+    select.role { background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.18); border-radius:7px; padding:5px 8px; }
+    .act { background:#fff; border:1px solid rgba(27,28,28,.18); color:var(--ink); border-radius:7px; padding:5px 9px; font:600 12px system-ui; cursor:pointer; margin-left:6px; }
+    .act:hover { background:#f4f4f5; }
+    .act:disabled { opacity:.4; cursor:default; }
+    .act.danger { color:#c8102e; border-color:rgba(200,16,46,.4); }
+    .loading,.denied { text-align:center; color:var(--ink-v); padding:50px; }
   </style>
 </head>
 <body>
@@ -65,7 +66,7 @@
         <p class="sub">User management + system overview</p>
         <div class="cards" id="cards"></div>
         <div class="panel">
-          <div class="ph"><strong>Users</strong><span id="ucount" style="color:#9aa0a6"></span>
+          <div class="ph"><strong>Users</strong><span id="ucount" style="color:var(--ink-v)"></span>
             <span class="grow"></span>
             <input id="search" placeholder="Search email or name…" />
             <select id="rolefilter"><option value="">All roles</option><option value="user">Users</option><option value="admin">Admins</option><option value="super_admin">Super admins</option></select>
@@ -119,7 +120,7 @@
             <button class="act" data-act="${banned?"unban":"ban"}" ${canEdit?"":"disabled"}>${banned?"Unban":"Ban"}</button>
             <button class="act danger" data-act="delete" ${canEdit?"":"disabled"}>Delete</button>
           </td></tr>`;
-      }).join("") || '<tr><td colspan="8" style="color:#9aa0a6;padding:24px">No users.</td></tr>';
+      }).join("") || '<tr><td colspan="8" style="color:#5c403f;padding:24px">No users.</td></tr>';
 
       document.querySelectorAll("#tbody [data-act]").forEach(el => {
         const act = el.dataset.act, id = el.closest("tr").dataset.id;
