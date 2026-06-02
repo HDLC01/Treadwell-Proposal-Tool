@@ -61,6 +61,19 @@ def test_pricing_systems_etag_then_304():
 
 
 # ── /api/price end-to-end (the canonical bid) ─────────────────────────
+# ── state_name default (proposal remodel-tax line) ────────────────────
+def test_state_name_defaults_to_kansas_when_blank():
+    for v in ({}, {"state_name": ""}, {"state_name": "   "}, {"state_name": None}):
+        main._ensure_state_name(v)
+        assert v["state_name"] == "Kansas"
+
+
+def test_state_name_preserved_when_present():
+    v = {"state_name": "Missouri"}
+    main._ensure_state_name(v)
+    assert v["state_name"] == "Missouri"
+
+
 def test_price_endpoint_full_bid():
     payload = {
         "systems": [
