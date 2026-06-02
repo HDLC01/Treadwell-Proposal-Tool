@@ -488,44 +488,21 @@ def _autofill_via_cli(user_input: str) -> Dict[str, Any]:
     return json.loads(out)
 
 
-# ─── Autofill protection: idempotency + per-project rate limit ────────
-# `/api/autofill` runs the PAID Claude CLI (~20-30s). Two safeguards:
-#   1. Idempotency — an identical request (same Idempotency-Key) returns the
-#      first result from a short-lived cache, so a double-click / retry never
-#      runs the AI twice.
-#   2. Rate limit — max N runs per window, counted per project (draft id).
-# Single uvicorn worker (Dockerfile: --workers 1) → these in-memory dicts are
-# shared across requests, so no external store is needed.
+# ─── Autofill rate limit (per project) ────────────────────────────────
+# `/api/autofill` runs the PAID Claude CLI (~20-30s). Cap it at N runs per
+# window, counted per project (the client sends `X-Project-Id: <draftId>`).
+# The button-disable on the client already stops ordinary double-clicks; this
+# is the cost backstop. Single uvicorn worker (Dockerfile: --workers 1) → the
+# in-memory dict is shared across requests, so no external store is needed.
 _AUTOFILL_RATE_MAX    = 3
 _AUTOFILL_RATE_WINDOW = 300   # seconds (5 minutes)
-_AUTOFILL_IDEM_TTL    = 300   # seconds an identical result is replayed
-_AUTOFILL_IDEM: Dict[str, Dict[str, Any]] = {}   # idem_key -> {"result", "ts"}
-_AUTOFILL_HITS: Dict[str, list] = {}             # bucket(draft id) -> [timestamps]
+_AUTOFILL_HITS: Dict[str, list] = {}   # bucket(project id) -> [timestamps]
 
 
-def _autofill_keys(request: Request, payload: "AutofillIn") -> tuple[str, str]:
-    """Derive (idempotency_key, rate-limit bucket) for an autofill request.
-
-    The client sends `Idempotency-Key: <draftId>:<contentHash>`. The draft id
-    prefix is the per-project rate bucket; the whole header is the idempotency
-    key. If the header is missing we fall back to a content hash + shared bucket
-    so the safeguards still apply.
-    """
-    header = (request.headers.get("idempotency-key") or "").strip()
-    if header:
-        return header, header.split(":", 1)[0] or "anon"
-    content = "|".join(str(x or "") for x in
-                       (payload.project_name, payload.address, payload.city_state, payload.notes))
-    return hashlib.md5(content.encode()).hexdigest(), "anon"
-
-
-def _autofill_idem_get(key: str) -> Dict[str, Any] | None:
-    """Return a cached result for `key` if still fresh, pruning stale entries."""
-    now = time.time()
-    for k in [k for k, v in _AUTOFILL_IDEM.items() if now - v["ts"] > _AUTOFILL_IDEM_TTL]:
-        _AUTOFILL_IDEM.pop(k, None)
-    hit = _AUTOFILL_IDEM.get(key)
-    return hit["result"] if hit else None
+def _autofill_bucket(request: Request) -> str:
+    """Per-project rate bucket from the `X-Project-Id` header (the draft id).
+    Falls back to a shared bucket if the header is absent."""
+    return (request.headers.get("x-project-id") or "").strip() or "anon"
 
 
 def _autofill_rate_retry(bucket: str) -> int | None:
@@ -555,16 +532,10 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
     local `claude -p` CLI. No Anthropic API key is used — the CLI
     handles auth via the user's logged-in Claude session.
 
-    Guarded by idempotency (identical request runs the AI once) and a
-    per-project rate limit (see `_autofill_*` helpers above)."""
-    idem_key, bucket = _autofill_keys(request, payload)
+    Guarded by a per-project rate limit (see `_autofill_*` helpers above)."""
+    bucket = _autofill_bucket(request)
 
-    # 1. Idempotent replay — identical request already answered recently.
-    cached = _autofill_idem_get(idem_key)
-    if cached is not None:
-        return {**cached, "idempotent_replay": True}
-
-    # 2. Rate limit (only genuinely new runs count; replays above are free).
+    # Rate limit — at most N runs per window for this project.
     retry = _autofill_rate_retry(bucket)
     if retry is not None:
         return JSONResponse(
@@ -578,7 +549,7 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
             },
         )
 
-    # 3. Reserve a slot up front so concurrent calls can't overshoot the cap.
+    # Reserve a slot up front so concurrent calls can't overshoot the cap.
     _autofill_rate_record(bucket)
 
     user_input = (
@@ -590,9 +561,7 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
 
     try:
         data = _autofill_via_cli(user_input)
-        result = {"ok": True, "cell_values": data, "via": "cli"}
-        _AUTOFILL_IDEM[idem_key] = {"result": result, "ts": time.time()}
-        return result
+        return {"ok": True, "cell_values": data, "via": "cli"}
     except FileNotFoundError:
         _autofill_rate_refund(bucket)   # error → don't consume the project's budget
         return {
