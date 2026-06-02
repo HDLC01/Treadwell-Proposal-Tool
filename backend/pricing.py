@@ -41,6 +41,15 @@ _POLISH: Dict[str, Any] = _DATA.get("polish", {})
 _COVE: Dict[str, Any] = _DATA.get("cove", {})
 _COVE_PRICES: Dict[str, Any] = _DATA.get("cove_prices", {})
 
+
+def recipes_version() -> str:
+    """Cache-version token for the pricing data — the recipes file's mtime.
+    Changes on deploy when pricing_recipes.json changes, busting ETag caches."""
+    try:
+        return str(_RECIPES_PATH.stat().st_mtime_ns)
+    except OSError:
+        return "0"
+
 _JF_SF_PER_KIT = 3500  # joint filler: ROUNDUP(sf / 3500) kits
 
 
