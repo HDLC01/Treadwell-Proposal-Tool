@@ -53,8 +53,12 @@ import dropbox_client
 import drafts
 import estimate_writer
 import pricing
+import profiles
 import proposal_writer
 import reference_tax
+import supabase_client
+
+_SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
 
 
 # ─── Logging ──────────────────────────────────────────────────────────
@@ -103,6 +107,56 @@ def _template_version() -> str:
     """Cache version token for template-derived endpoints — the .xlsx mtime
     (changes on deploy when the committed template changes)."""
     return str(estimate_writer.TEMPLATE_PATH.stat().st_mtime_ns)
+
+
+# ─── Auth gate (Supabase Google login, @wetreadwell.com only) ──────────
+# One middleware gates EVERY /api/* route so no endpoint can be forgotten.
+# Public exceptions: /healthz (monitoring), /api/public-config (frontend needs
+# it to init the login client), /api/file/* (download links are random
+# capability tokens hit by the browser without an auth header), and OPTIONS
+# (CORS preflight). Static frontend pages are served freely — they hold no data
+# and gate themselves client-side; the protection is this API check.
+_AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config"}
+
+
+def _auth_is_public(path: str, method: str) -> bool:
+    if method == "OPTIONS":
+        return True
+    if not path.startswith("/api/"):
+        return True
+    if path in _AUTH_PUBLIC_PATHS:
+        return True
+    if path.startswith("/api/file/"):
+        return True
+    return False
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    if _auth_is_public(request.url.path, request.method):
+        return await call_next(request)
+    try:
+        request.state.user_email = supabase_client.verify_token(
+            request.headers.get("authorization")
+        )
+    except supabase_client.AuthError as exc:
+        return JSONResponse(status_code=exc.status, content={"ok": False, "error": exc.detail})
+    return await call_next(request)
+
+
+def _user_email(request: Request) -> Optional[str]:
+    return getattr(request.state, "user_email", None)
+
+
+@app.get("/api/public-config")
+def api_public_config() -> Dict[str, Any]:
+    """Publishable config the static frontend needs to init Supabase Auth.
+    The anon key is safe to expose; the service-role key never leaves the server."""
+    return {
+        "supabase_url": supabase_client.supabase_url(),
+        "supabase_anon_key": supabase_client.anon_key(),
+        "allowed_domain": supabase_client.ALLOWED_DOMAIN,
+    }
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────
@@ -588,7 +642,7 @@ def _ensure_state_name(values: Dict[str, Any]) -> None:
 
 
 @app.post("/api/generate", response_model=GenerateOut)
-def api_generate(payload: GenerateIn) -> GenerateOut:
+def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     """Final generate: fill xlsx + docx, upload to Dropbox, return links."""
     values = payload.values
     _ensure_state_name(values)
@@ -644,6 +698,21 @@ def api_generate(payload: GenerateIn) -> GenerateOut:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
+    # Audit trail: who generated this proposal, for what, and where it landed.
+    fb = (payload.computed_bid or {}).get("full_bid") or {}
+    drafts.log_event(
+        request.headers.get("x-project-id"),
+        _user_email(request),
+        "generated",
+        {
+            "project_name": project_name,
+            "total": fb.get("total_base_bid"),
+            "work_type": payload.work_type,
+            "audience": payload.audience,
+            "folder": (dropbox_result or {}).get("folder_path"),
+        },
+    )
+
     return GenerateOut(
         work_type=payload.work_type,
         audience=payload.audience,
@@ -672,10 +741,10 @@ def api_get_file(token: str) -> Response:
     )
 
 
-# ─── Draft persistence (SQLite) ───────────────────────────────────────
-# Multi-device draft autosave: the frontend POSTs the whole state blob
-# here every few seconds, keyed by a UUID in the URL (?d=<uuid>). Opening
-# that same URL on another device GETs the draft back. See drafts.py.
+# ─── Project persistence (Supabase) ───────────────────────────────────
+# Multi-device autosave: the frontend POSTs the whole state blob here every
+# few seconds, keyed by a UUID in the URL (?d=<uuid>). Stored in Supabase so
+# every signed-in user shares one unified project list. See drafts.py.
 class DraftIn(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
 
@@ -710,11 +779,13 @@ def _warm_sheet_cache() -> None:
 
 @app.put("/api/draft/{draft_id}")
 @app.post("/api/draft/{draft_id}")
-def api_save_draft(draft_id: str, payload: DraftIn) -> Dict[str, Any]:
+def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[str, Any]:
     """Upsert a draft's full state blob. Called on a debounce as the
-    estimator types — so a tab close / device switch doesn't lose work."""
+    estimator types — so a tab close / device switch doesn't lose work.
+    Stamps the signed-in user as the project owner on first save."""
     try:
-        return {"ok": True, **drafts.save_draft(draft_id, payload.data)}
+        return {"ok": True, **drafts.save_draft(draft_id, payload.data,
+                                                owner_email=_user_email(request))}
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": str(exc)}
@@ -734,6 +805,129 @@ def api_delete_draft(draft_id: str) -> Dict[str, Any]:
     """Remove a draft (Start-a-new-project)."""
     existed = drafts.delete_draft(draft_id)
     return {"ok": True, "existed": existed}
+
+
+@app.get("/api/drafts")
+def api_list_drafts() -> Dict[str, Any]:
+    """Unified project list (all users) for the Projects dashboard."""
+    try:
+        return {"ok": True, "projects": drafts.list_drafts()}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("list_drafts failed: %s", exc)
+        return {"ok": False, "error": str(exc), "projects": []}
+
+
+@app.get("/api/history")
+def api_history() -> Dict[str, Any]:
+    """Recent activity (who created / generated each proposal) for History."""
+    try:
+        return {"ok": True, "events": drafts.list_events()}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("list_events failed: %s", exc)
+        return {"ok": False, "error": str(exc), "events": []}
+
+
+# ─── Identity + admin (Supabase profiles / roles) ─────────────────────
+@app.get("/api/me")
+def api_me(request: Request) -> Dict[str, Any]:
+    """Current signed-in user (drives the login indicator + Admin link).
+    The DB trigger creates profiles on signup; this just reads it, with a
+    safe fallback if the row isn't there yet."""
+    email = _user_email(request) or ""
+    try:
+        prof = profiles.get_by_email(email)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("get profile failed: %s", exc)
+        prof = None
+    if prof:
+        return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
+                "role": prof.get("role", "user"), "status": prof.get("status", "active")}
+    # Fallback (profile row not created yet) — bootstrap super admin by email.
+    role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
+    return {"ok": True, "email": email, "name": None, "role": role, "status": "active"}
+
+
+def _require_admin(request: Request) -> Dict[str, Any]:
+    """Resolve the caller's profile and require admin/super_admin; else 403."""
+    email = _user_email(request) or ""
+    prof = profiles.get_by_email(email)
+    if not prof and email == _SUPER_ADMIN_EMAIL:
+        prof = {"id": None, "email": email, "role": "super_admin"}
+    if not prof or prof.get("role") not in ("admin", "super_admin"):
+        raise HTTPException(403, "Admin access required.")
+    return prof
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+class StatusIn(BaseModel):
+    status: str
+
+
+class BanIn(BaseModel):
+    reason: str = ""
+
+
+@app.get("/api/admin/users")
+def api_admin_users(request: Request, search: str = "", role: str = "") -> Dict[str, Any]:
+    _require_admin(request)
+    return {"ok": True, "users": profiles.list_users(search=search, role=role)}
+
+
+@app.get("/api/admin/stats")
+def api_admin_stats(request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    return {"ok": True, "stats": profiles.stats()}
+
+
+@app.patch("/api/admin/users/{user_id}/role")
+def api_admin_set_role(user_id: str, payload: RoleIn, request: Request) -> Dict[str, Any]:
+    actor = _require_admin(request)
+    out = profiles.set_role(actor, user_id, payload.role)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"), "role_changed",
+                         {"target": user_id, "role": payload.role})
+    return out
+
+
+@app.put("/api/admin/users/{user_id}/status")
+def api_admin_set_status(user_id: str, payload: StatusIn, request: Request) -> Dict[str, Any]:
+    actor = _require_admin(request)
+    out = profiles.set_status(actor, user_id, payload.status)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"), "status_changed",
+                         {"target": user_id, "status": payload.status})
+    return out
+
+
+@app.post("/api/admin/users/{user_id}/ban")
+def api_admin_ban(user_id: str, payload: BanIn, request: Request) -> Dict[str, Any]:
+    actor = _require_admin(request)
+    out = profiles.ban_user(actor, user_id, reason=payload.reason)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"), "banned", {"target": user_id})
+    return out
+
+
+@app.post("/api/admin/users/{user_id}/unban")
+def api_admin_unban(user_id: str, request: Request) -> Dict[str, Any]:
+    actor = _require_admin(request)
+    out = profiles.unban_user(actor, user_id)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"), "unbanned", {"target": user_id})
+    return out
+
+
+@app.delete("/api/admin/users/{user_id}")
+def api_admin_delete(user_id: str, request: Request) -> Dict[str, Any]:
+    actor = _require_admin(request)
+    out = profiles.delete_user(actor, user_id)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"), "deleted_user",
+                         {"target": user_id, "email": out.get("email")})
+    return out
 
 
 # ─── Static frontend ──────────────────────────────────────────────────

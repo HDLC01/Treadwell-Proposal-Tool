@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Projects · Treadwell Proposal Generator</title>
+  <style>
+    :root { --red:#c0392b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#0f1115; color:#e9e9ea; font:400 14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 90px; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1100px; margin:0 auto 20px; }
+    .logo { width:34px;height:34px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    h1 { font-size:20px; margin:0; flex:1; }
+    .btn { background:var(--red); color:#fff; border:none; border-radius:9px; padding:9px 16px; font:600 13px system-ui; cursor:pointer; text-decoration:none; }
+    .wrap { max-width:1100px; margin:0 auto; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+    .card { background:#1a1d23; border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:16px; cursor:pointer; transition:border-color .15s; }
+    .card:hover { border-color:var(--red); }
+    .pname { font-weight:700; font-size:15px; margin:0 0 6px; }
+    .meta { color:#9aa0a6; font-size:12.5px; display:flex; flex-wrap:wrap; gap:8px 14px; }
+    .total { color:#7ee787; font-weight:700; }
+    .badge { background:#2a2d33; border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
+    .empty,.loading { color:#9aa0a6; text-align:center; padding:40px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="logo">T</div>
+    <h1>Projects</h1>
+    <a class="btn" id="new-project">+ New project</a>
+  </div>
+  <div class="wrap"><div id="list" class="loading">Loading projects…</div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script>
+    document.getElementById("new-project").addEventListener("click", (e) => {
+      e.preventDefault();
+      // Fresh start: clear LOCAL state only (server copies are kept) so intake
+      // mints a new draft id. Does NOT delete any saved project.
+      try { localStorage.removeItem("treadwell.proposal_tool.state"); } catch {}
+      try { localStorage.removeItem("treadwell.proposal_tool.draft_id"); } catch {}
+      try { sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once"); } catch {}
+      window.location.assign("/");
+    });
+
+    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
+
+    async function load() {
+      await window.TWAuth.ready;
+      const el = document.getElementById("list");
+      try {
+        const r = await fetch("/api/drafts", { headers: TW.authHeaders() });
+        const j = await r.json();
+        const projects = (j && j.projects) || [];
+        if (!projects.length) { el.className="empty"; el.textContent="No projects yet. Click “+ New project” to start."; return; }
+        el.className = "grid";
+        el.innerHTML = projects.map(p => `
+          <div class="card" data-id="${encodeURIComponent(p.id)}">
+            <p class="pname">${esc(p.project_name||"(untitled)")}</p>
+            <div class="meta">
+              ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
+              ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
+              ${p.deadline?`<span>due ${esc(p.deadline)}</span>`:""}
+            </div>
+            <div class="meta" style="margin-top:8px;">
+              <span>by ${esc(p.owner_email||"—")}</span>
+              <span>updated ${fmtDate(p.updated_at)}</span>
+            </div>
+          </div>`).join("");
+        el.querySelectorAll(".card").forEach(c =>
+          c.addEventListener("click", () => window.location.assign("/?d=" + c.dataset.id)));
+      } catch (err) {
+        el.className="empty"; el.textContent="Couldn't load projects. " + (err.message||"");
+      }
+    }
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+    load();
+  </script>
+</body>
+</html>

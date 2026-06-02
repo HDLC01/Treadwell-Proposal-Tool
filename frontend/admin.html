@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin · Treadwell Proposal Generator</title>
+  <style>
+    :root { --red:#c0392b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#0f1115; color:#e9e9ea; font:400 13.5px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:26px 22px 90px; }
+    .wrap { max-width:1200px; margin:0 auto; }
+    .top { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+    .logo { width:32px;height:32px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    h1 { font-size:20px; margin:0; } .tag { background:#c9a227;color:#1a1a1a;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:800;letter-spacing:.04em; }
+    .sub { color:#9aa0a6; margin:0 0 20px 44px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
+    .stat { background:#1a1d23; border:1px solid rgba(255,255,255,.08); border-radius:11px; padding:14px 16px; }
+    .stat .k { color:#9aa0a6; font-size:11px; text-transform:uppercase; letter-spacing:.05em; } .stat .v { font-size:26px; font-weight:800; margin-top:4px; }
+    .panel { background:#1a1d23; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
+    .ph { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.07); }
+    .ph input,.ph select { background:#0f1115; color:#e9e9ea; border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:7px 10px; font:inherit; }
+    .ph .grow { flex:1; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { text-align:left; padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.05); white-space:nowrap; }
+    th { color:#9aa0a6; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+    .badge { border-radius:6px; padding:2px 8px; font-size:10.5px; font-weight:700; text-transform:uppercase; }
+    .b-user{background:#2a2d33;color:#cdd} .b-admin{background:#264b8b;color:#cfe} .b-super{background:#7a5c00;color:#ffe9a8}
+    .b-active{background:#15402a;color:#7ee787} .b-paused{background:#5a4a12;color:#f2d479} .b-banned{background:#4a1515;color:#ff8d83}
+    .you { color:#9aa0a6; font-size:10px; margin-left:6px; }
+    select.role { background:#0f1115; color:#e9e9ea; border:1px solid rgba(255,255,255,.14); border-radius:7px; padding:5px 8px; }
+    .act { background:none; border:1px solid rgba(255,255,255,.16); color:#ddd; border-radius:7px; padding:5px 9px; font:600 12px system-ui; cursor:pointer; margin-left:6px; }
+    .act:disabled { opacity:.35; cursor:default; }
+    .act.danger { color:#ff8d83; border-color:rgba(255,141,131,.4); }
+    .loading,.denied { text-align:center; color:#9aa0a6; padding:50px; }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="root"><div class="loading">Loading…</div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script>
+    let ME = null, USERS = [];
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    async function api(path, opts){ const r = await fetch(path, Object.assign({ headers: TW.authHeaders() }, opts||{})); return r.json().catch(()=>({ok:false,error:"bad response", status:r.status})); }
+
+    async function boot(){
+      await window.TWAuth.ready;
+      ME = window.TWAuth.user() || {};
+      const root = document.getElementById("root");
+      if (ME.role !== "admin" && ME.role !== "super_admin") {
+        root.innerHTML = '<div class="denied">Admin access only. Redirecting…</div>';
+        setTimeout(()=>window.location.assign("/projects.html"), 1500); return;
+      }
+      shell();
+      await refresh();
+    }
+
+    function shell(){
+      document.getElementById("root").innerHTML = `
+        <div class="top"><div class="logo">T</div><h1>Admin</h1>
+          <span class="tag">${ME.role==="super_admin"?"SUPER ADMIN":"ADMIN"}</span></div>
+        <p class="sub">User management + system overview</p>
+        <div class="cards" id="cards"></div>
+        <div class="panel">
+          <div class="ph"><strong>Users</strong><span id="ucount" style="color:#9aa0a6"></span>
+            <span class="grow"></span>
+            <input id="search" placeholder="Search email or name…" />
+            <select id="rolefilter"><option value="">All roles</option><option value="user">Users</option><option value="admin">Admins</option><option value="super_admin">Super admins</option></select>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr>
+            <th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Joined</th><th>Last change</th><th>Set role</th><th style="text-align:right">Actions</th>
+          </tr></thead><tbody id="tbody"></tbody></table></div>
+        </div>`;
+      document.getElementById("search").addEventListener("input", renderRows);
+      document.getElementById("rolefilter").addEventListener("change", refresh);
+    }
+
+    async function refresh(){
+      const role = document.getElementById("rolefilter").value;
+      const s = await api("/api/admin/stats");
+      if (s.ok) {
+        const st = s.stats||{};
+        document.getElementById("cards").innerHTML =
+          card("Users", st.users) + card("Admins", st.admins) + card("Projects", st.projects) + card("Proposals generated", st.proposals_generated);
+      }
+      const u = await api("/api/admin/users" + (role?`?role=${role}`:""));
+      USERS = (u && u.users) || [];
+      document.getElementById("ucount").textContent = `${USERS.length} loaded`;
+      renderRows();
+    }
+    function card(k,v){ return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${v==null?"—":v}</div></div>`; }
+
+    function roleBadge(r){ return `<span class="badge ${r==="super_admin"?"b-super":r==="admin"?"b-admin":"b-user"}">${r==="super_admin"?"super admin":r}</span>`; }
+    function statusBadge(s){ return `<span class="badge ${s==="banned"?"b-banned":s==="paused"?"b-paused":"b-active"}">${esc(s||"active")}</span>`; }
+
+    function renderRows(){
+      const q = (document.getElementById("search").value||"").toLowerCase();
+      const isSuper = ME.role==="super_admin";
+      const rows = USERS.filter(u => !q || (u.email||"").toLowerCase().includes(q) || (u.full_name||"").toLowerCase().includes(q));
+      document.getElementById("tbody").innerHTML = rows.map(u => {
+        const isSelf = (u.email||"").toLowerCase() === (ME.email||"").toLowerCase();
+        const tSuper = u.role==="super_admin", tAdmin = u.role==="admin";
+        const canEdit = !isSelf && !tSuper && (isSuper || !tAdmin);
+        const paused = u.status==="paused", banned = u.status==="banned";
+        const opt = (val,label)=>`<option value="${val}" ${u.role===val?"selected":""} ${(val==="admin"&&!isSuper)?"disabled":""}>${label}</option>`;
+        return `<tr data-id="${esc(u.id)}">
+          <td>${esc(u.email)}${isSelf?'<span class="you">you</span>':""}</td>
+          <td>${esc(u.full_name||"—")}</td>
+          <td>${roleBadge(u.role)}</td>
+          <td>${statusBadge(u.status)}</td>
+          <td>${fmtDate(u.created_at)}</td>
+          <td>${fmtDate(u.updated_at)}</td>
+          <td><select class="role" ${canEdit?"":"disabled"} data-act="role">${opt("user","User")}${opt("admin","Admin")}${tSuper?'<option selected disabled>Super Admin</option>':""}</select></td>
+          <td style="text-align:right">
+            <button class="act" data-act="${paused?"resume":"pause"}" ${canEdit?"":"disabled"}>${paused?"Resume":"Pause"}</button>
+            <button class="act" data-act="${banned?"unban":"ban"}" ${canEdit?"":"disabled"}>${banned?"Unban":"Ban"}</button>
+            <button class="act danger" data-act="delete" ${canEdit?"":"disabled"}>Delete</button>
+          </td></tr>`;
+      }).join("") || '<tr><td colspan="8" style="color:#9aa0a6;padding:24px">No users.</td></tr>';
+
+      document.querySelectorAll("#tbody [data-act]").forEach(el => {
+        const act = el.dataset.act, id = el.closest("tr").dataset.id;
+        if (act==="role") el.addEventListener("change", ()=>doRole(id, el.value));
+        else el.addEventListener("click", ()=>doAction(act, id, el.closest("tr")));
+      });
+    }
+
+    async function doRole(id, role){ const r = await api(`/api/admin/users/${id}/role`,{method:"PATCH",body:JSON.stringify({role})}); after(r); }
+    async function doAction(act, id, tr){
+      const email = tr.children[0].textContent;
+      if (act==="delete" && !confirm(`Delete ${email}? This can't be undone.`)) return;
+      if (act==="ban" && !confirm(`Ban ${email}? They won't be able to sign in.`)) return;
+      let r;
+      if (act==="pause") r = await api(`/api/admin/users/${id}/status`,{method:"PUT",body:JSON.stringify({status:"paused"})});
+      else if (act==="resume") r = await api(`/api/admin/users/${id}/status`,{method:"PUT",body:JSON.stringify({status:"active"})});
+      else if (act==="ban") r = await api(`/api/admin/users/${id}/ban`,{method:"POST",body:JSON.stringify({reason:""})});
+      else if (act==="unban") r = await api(`/api/admin/users/${id}/unban`,{method:"POST",body:"{}"});
+      else if (act==="delete") r = await api(`/api/admin/users/${id}`,{method:"DELETE"});
+      after(r);
+    }
+    function after(r){ if(!r || r.ok===false){ alert((r&&r.error)||"Action failed"); } refresh(); }
+
+    boot();
+  </script>
+</body>
+</html>

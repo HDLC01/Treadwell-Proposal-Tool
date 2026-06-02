@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>History · Treadwell Proposal Generator</title>
+  <style>
+    :root { --red:#c0392b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#0f1115; color:#e9e9ea; font:400 14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 90px; }
+    .top { display:flex; align-items:center; gap:14px; max-width:900px; margin:0 auto 20px; }
+    .logo { width:34px;height:34px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    h1 { font-size:20px; margin:0; flex:1; }
+    .wrap { max-width:900px; margin:0 auto; }
+    .row { display:flex; gap:12px; padding:12px 14px; background:#1a1d23; border:1px solid rgba(255,255,255,.07); border-radius:10px; margin-bottom:8px; align-items:baseline; }
+    .dot { width:8px;height:8px;border-radius:50%;background:#3a3a3c;flex:none;align-self:center; }
+    .dot.generated { background:#7ee787; } .dot.created { background:#58a6ff; }
+    .dot.banned,.dot.deleted_user { background:#ff7b72; } .dot.role_changed,.dot.status_changed,.dot.unbanned { background:#c9a227; }
+    .who { font-weight:700; } .act { color:#9aa0a6; } .proj { font-weight:600; }
+    .total { color:#7ee787; } .when { margin-left:auto; color:#6b7280; font-size:12px; white-space:nowrap; }
+    .empty,.loading { color:#9aa0a6; text-align:center; padding:40px; }
+  </style>
+</head>
+<body>
+  <div class="top"><div class="logo">T</div><h1>History</h1><a href="/projects.html" style="color:#9ab;text-decoration:none;">← Projects</a></div>
+  <div class="wrap"><div id="feed" class="loading">Loading activity…</div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script>
+    const VERB = { created:"created", generated:"generated", role_changed:"changed the role on",
+      status_changed:"changed status on", banned:"banned", unbanned:"unbanned", deleted_user:"deleted" };
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+    function money(n){ return (typeof n==="number") ? " — $"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : ""; }
+    function when(iso){ if(!iso) return ""; const d=new Date(iso); return isNaN(d)?"":d.toLocaleString(); }
+
+    async function load(){
+      await window.TWAuth.ready;
+      const el = document.getElementById("feed");
+      try {
+        const j = await (await fetch("/api/history", { headers: TW.authHeaders() })).json();
+        const ev = (j && j.events) || [];
+        if(!ev.length){ el.className="empty"; el.textContent="No activity yet."; return; }
+        el.className=""; el.innerHTML = ev.map(e => {
+          const d = e.detail || {};
+          const proj = d.project_name ? `<span class="proj">${esc(d.project_name)}</span>` : "";
+          return `<div class="row"><span class="dot ${esc(e.action)}"></span>
+            <div><span class="who">${esc(e.actor_email||"someone")}</span>
+            <span class="act">${esc(VERB[e.action]||e.action)}</span> ${proj}
+            <span class="total">${money(d.total)}</span></div>
+            <span class="when">${esc(when(e.created_at))}</span></div>`;
+        }).join("");
+      } catch(err){ el.className="empty"; el.textContent="Couldn't load history. "+(err.message||""); }
+    }
+    load();
+  </script>
+</body>
+</html>
