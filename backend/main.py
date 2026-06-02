@@ -17,6 +17,7 @@ Then open http://127.0.0.1:8888 in a browser.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import math
 import os
@@ -39,9 +40,11 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -61,8 +64,13 @@ logging.basicConfig(
 log = logging.getLogger("proposal_tool")
 
 
-# ─── App + CORS ───────────────────────────────────────────────────────
+# ─── App + middleware ─────────────────────────────────────────────────
 app = FastAPI(title="Treadwell Proposal Generator")
+
+# gzip every response over ~500 bytes. The estimate-sheet grid JSON is the
+# heavy hitter (~2.1 MB raw for the Epoxy tab); gzip takes it to ~90 KB
+# (-95%), turning a ~14 s first paint into ~1-2 s. Cheap and global.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 app.add_middleware(
     CORSMiddleware,
@@ -71,6 +79,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Conditional-GET helper (ETag / 304) ──────────────────────────────
+def _versioned_json(request: Request, payload: Any, *, version: str) -> Response:
+    """Serve `payload` as JSON with an ETag derived from `version`, honoring
+    `If-None-Match` so the browser revalidates cheaply (304, no body) instead
+    of re-downloading static-ish data (sheet grids, named ranges, system list).
+
+    `Cache-Control: no-cache` = the browser MAY cache but must revalidate every
+    time. Because `version` embeds the source file's mtime, a deploy that
+    changes the template/recipes changes the ETag and busts the cache safely.
+    """
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(content=jsonable_encoder(payload), headers=headers)
+
+
+def _template_version() -> str:
+    """Cache version token for template-derived endpoints — the .xlsx mtime
+    (changes on deploy when the committed template changes)."""
+    return str(estimate_writer.TEMPLATE_PATH.stat().st_mtime_ns)
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────
@@ -287,22 +318,25 @@ def api_price(payload: PriceIn) -> Dict[str, Any]:
 
 
 @app.get("/api/pricing/systems")
-def api_pricing_systems() -> Dict[str, Any]:
+def api_pricing_systems(request: Request) -> Response:
     """The epoxy systems + cove options the tool can price (for the UI)."""
-    return {"systems": pricing.list_systems(), "coves": pricing.list_cove_options()}
+    payload = {"systems": pricing.list_systems(), "coves": pricing.list_cove_options()}
+    return _versioned_json(request, payload, version=pricing.recipes_version())
 
 
 @app.get("/api/sheets")
-def api_list_sheets() -> Dict[str, Any]:
+def api_list_sheets(request: Request) -> Response:
     """List every tab in the estimate template (powers Screen 2's tab bar)."""
-    return {"sheets": estimate_writer.list_sheet_names()}
+    return _versioned_json(request, {"sheets": estimate_writer.list_sheet_names()},
+                           version=_template_version())
 
 
 @app.get("/api/named-expressions")
-def api_named_expressions() -> Dict[str, Any]:
+def api_named_expressions(request: Request) -> Response:
     """Workbook-wide defined names that HyperFormula needs registered
     so formulas referencing them (e.g. =AT_Clear_Satin_w_Grit) resolve."""
-    return {"names": estimate_writer.read_named_expressions()}
+    return _versioned_json(request, {"names": estimate_writer.read_named_expressions()},
+                           version=_template_version())
 
 
 @app.get("/api/reference/tax-rate")
@@ -320,13 +354,18 @@ def api_counties(state: str = "") -> Dict[str, Any]:
 
 
 @app.get("/api/sheet/{sheet_name}")
-def api_get_sheet(sheet_name: str) -> Dict[str, Any]:
+def api_get_sheet(sheet_name: str, request: Request) -> Response:
     """Return every used cell on `sheet_name` so the UI can render it
-    cell-for-cell (values, formulas, fills, fonts, merges, dropdowns)."""
+    cell-for-cell (values, formulas, fills, fonts, merges, dropdowns).
+
+    This is the heaviest endpoint (~2.1 MB raw for Epoxy). gzip middleware
+    shrinks it ~95% and the ETag lets repeat loads revalidate as a 304.
+    """
     try:
-        return estimate_writer.read_sheet_grid(sheet_name)
+        payload = estimate_writer.read_sheet_grid(sheet_name)
     except KeyError:
         raise HTTPException(404, f"Sheet {sheet_name!r} not found")
+    return _versioned_json(request, payload, version=f"{sheet_name}:{_template_version()}")
 
 
 _AUTOFILL_SYSTEM_PROMPT = (

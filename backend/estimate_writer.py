@@ -498,6 +498,51 @@ def _coerce(v: Any) -> Any:
 
 
 # ─── Cell-for-cell sheet reader ───────────────────────────────────────
+def _serialize_cell(cell, *, display_value, is_formula, fill_hex, font_color) -> Dict[str, Any]:
+    """Build a COMPACT cell dict for the grid API.
+
+    Only `addr`/`row`/`col` are always present; every other field is included
+    only when it differs from its default. The frontend reads each field
+    defensively (`cell.bold`, `cell.fmt || ""`, `c.formula ?? c.value`, …), so
+    a missing field == its default. Omitting the ~12 mostly-default fields per
+    cell cuts the raw payload and the client's JSON.parse time roughly in half
+    (on top of gzip, which the transport layer adds).
+    """
+    out: Dict[str, Any] = {"addr": cell.coordinate, "row": cell.row, "col": cell.column}
+    if display_value is not None:
+        out["value"] = display_value
+    if is_formula:
+        out["isFormula"] = True
+        out["formula"] = cell.value          # HyperFormula needs the formula text
+    if fill_hex:
+        out["fill"] = fill_hex
+    if font_color:
+        out["fontColor"] = font_color
+    font = cell.font
+    if font.bold:
+        out["bold"] = True
+    if font.italic:
+        out["italic"] = True
+    if font.underline:
+        out["underline"] = True
+    if font.size:
+        out["fontSize"] = float(font.size)
+    fmt = cell.number_format or ""
+    if fmt and fmt != "General":
+        out["fmt"] = fmt
+    al = cell.alignment
+    if al.horizontal:
+        out["align"] = al.horizontal
+    if al.vertical:
+        out["valign"] = al.vertical
+    if al.wrap_text:
+        out["wrap"] = True
+    borders = _cell_borders(cell)
+    if borders:
+        out["borders"] = borders
+    return out
+
+
 def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
     """Return every used cell on `sheet_name` as a flat list.
 
@@ -583,25 +628,10 @@ def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
             else:
                 display_value = value
 
-            cells.append({
-                "addr":   cell.coordinate,
-                "row":    cell.row,
-                "col":    cell.column,
-                "value":  display_value,
-                "isFormula": is_formula,
-                "formula": value if is_formula else None,
-                "fill":    fill_hex,
-                "fontColor": font_color,
-                "bold":    bool(cell.font.bold),
-                "italic":  bool(cell.font.italic),
-                "underline": bool(cell.font.underline),
-                "fmt":     cell.number_format or "",
-                "align":   (cell.alignment.horizontal or ""),
-                "valign":  (cell.alignment.vertical or ""),
-                "wrap":    bool(cell.alignment.wrap_text),
-                "fontSize": float(cell.font.size) if cell.font.size else None,
-                "borders": _cell_borders(cell),
-            })
+            cells.append(_serialize_cell(
+                cell, display_value=display_value, is_formula=is_formula,
+                fill_hex=fill_hex, font_color=font_color,
+            ))
 
     # Column widths (in Excel's char-width units; multiply by ~7px for px approx)
     col_widths: Dict[str, float] = {}
