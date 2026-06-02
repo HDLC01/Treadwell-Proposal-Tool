@@ -13,6 +13,8 @@ Guardrails (mirrors ARIA):
 """
 from __future__ import annotations
 
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +22,30 @@ from supabase_client import get_client
 
 _PROFILE_COLS = "id,email,full_name,role,status,banned_at,banned_until,ban_reason,created_at,updated_at"
 _BAN_FOREVER = "876000h"  # ~100 years ≈ permanent (Supabase Admin API ban_duration)
+SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
+
+
+def ensure_profile(user_id: str, email: Optional[str], full_name: Optional[str]) -> Dict[str, Any]:
+    """Create-or-update the caller's profile from their verified JWT claims.
+
+    Belt-and-suspenders alongside the DB signup trigger — it also backfills
+    users who signed in before the trigger existed (so they show in Admin).
+    Preserves an existing role; bootstraps SUPER_ADMIN_EMAIL to super_admin.
+    """
+    sb = get_client()
+    email_l = (email or "").lower()
+    existing = sb.table("profiles").select(_PROFILE_COLS).eq("id", user_id).limit(1).execute()
+    if existing.data:
+        row = existing.data[0]
+        patch = {"email": email_l, "full_name": full_name}
+        if email_l == SUPER_ADMIN_EMAIL and row.get("role") != "super_admin":
+            patch["role"] = "super_admin"
+        sb.table("profiles").update(patch).eq("id", user_id).execute()
+        return {**row, **patch}
+    role = "super_admin" if email_l == SUPER_ADMIN_EMAIL else "user"
+    row = {"id": user_id, "email": email_l, "full_name": full_name, "role": role, "status": "active"}
+    sb.table("profiles").insert(row).execute()
+    return row
 
 
 def _now_iso() -> str:
@@ -46,8 +72,11 @@ def list_users(search: str = "", role: str = "") -> List[Dict[str, Any]]:
     if role in ("user", "admin", "super_admin"):
         q = q.eq("role", role)
     if search:
-        # ILIKE on email OR full_name
-        q = q.or_(f"email.ilike.%{search}%,full_name.ilike.%{search}%")
+        # Sanitize: strip PostgREST filter metacharacters ( , ( ) * : etc. ) so a
+        # crafted search can't inject extra filters. Keep word chars, @ . - space.
+        safe = re.sub(r"[^\w@.\- ]", "", search)[:80]
+        if safe:
+            q = q.or_(f"email.ilike.%{safe}%,full_name.ilike.%{safe}%")
     return q.execute().data or []
 
 

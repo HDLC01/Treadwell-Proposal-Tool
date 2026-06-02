@@ -64,13 +64,14 @@ def _jwk_client():
     return jwt.PyJWKClient(f"{supabase_url()}/auth/v1/.well-known/jwks.json")
 
 
-def verify_token(authorization: Optional[str]) -> str:
-    """Verify a `Authorization: Bearer <jwt>` Supabase token and return the
-    user's email. Supports both HS256 (legacy shared secret) and asymmetric
-    (RS/ES via JWKS) signing, so it works regardless of the project's setting.
+def verify_token_claims(authorization: Optional[str]) -> dict:
+    """Verify a `Authorization: Bearer <jwt>` Supabase token and return its
+    validated claims (with `email` lowercased). Supports both HS256 (legacy
+    shared secret) and asymmetric (RS/ES via JWKS) signing — PyJWT enforces
+    the `exp` claim, so expired tokens are rejected here.
 
-    Raises AuthError(401) if the token is missing/invalid/expired, or
-    AuthError(403) if the email's domain isn't allowed.
+    Raises AuthError(401) if missing/invalid/expired, AuthError(403) if the
+    email's domain isn't allowed.
     """
     import jwt
 
@@ -98,4 +99,10 @@ def verify_token(authorization: Optional[str]) -> str:
         raise AuthError(401, "Token carries no email.")
     if not email.endswith("@" + ALLOWED_DOMAIN):
         raise AuthError(403, f"Access is restricted to @{ALLOWED_DOMAIN} accounts.")
-    return email
+    payload["email"] = email
+    return payload
+
+
+def verify_token(authorization: Optional[str]) -> str:
+    """Verify the token and return just the (lowercased) email — the gate path."""
+    return verify_token_claims(authorization)["email"]
