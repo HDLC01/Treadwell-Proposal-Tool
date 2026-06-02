@@ -338,7 +338,7 @@ POLISH_CELL_MAP: Dict[str, str] = {
 }
 
 # Computed total cells we surface back to the frontend (read-only).
-# Used by /api/compute-estimate to drive Screen 2's live totals.
+# Used by `read_totals` to read back cached totals from a saved workbook.
 EPOXY_TOTALS: Dict[str, str] = {
     "material_total":  "D43",
     "labor_install":   "D53",
@@ -361,13 +361,20 @@ POLISH_TOTALS: Dict[str, str] = {
 
 
 # ─── Public API ────────────────────────────────────────────────────────
+# Epoxy material section spare manual rows — the "=B*C" lines that fall
+# inside D40's SUM(D18:D39) range (Super Stick / Floor Graphic live here).
+# A = label, B = qty, C = unit price; D is the =B*C formula we leave intact.
+EPOXY_EXTRA_ROWS: list[int] = [23, 27, 28, 32, 33, 39]
+
+
 def fill_estimate(
     values: Mapping[str, Any],
     cell_values: Mapping[str, Any] | None = None,
+    extras: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
-    Two ways to specify what to write:
+    Three ways to specify what to write:
 
     1. `values` — flat dict from named fields. Keys map to the
        EPOXY_CELL_MAP / POLISH_CELL_MAP lookups above. Kept for
@@ -378,7 +385,12 @@ def fill_estimate(
        named-field maps entirely so the UI can write to ANY cell
        without us having to hand-curate every one.
 
-    Both are applied; `cell_values` wins on conflicts.
+    3. `extras` — custom material lines (label/qty/unit_price), written
+       into the Epoxy spare "=B*C" rows so they roll into D40 Material
+       Sub Total. Beyond the 6 native rows the overflow is lumped into a
+       single "Misc materials" line so the .xlsx formulas stay intact.
+
+    All are applied; `cell_values` wins on conflicts.
     """
     wb = load_workbook(TEMPLATE_PATH, keep_vba=False)
 
@@ -407,11 +419,66 @@ def fill_estimate(
         except Exception:
             pass  # bad coordinate — skip silently
 
+    # 3. Extra material lines -> spare "=B*C" rows on the Epoxy tab.
+    _write_extra_materials(epoxy, extras)
+
     # Stream to bytes
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:
+    """Write custom material lines into the Epoxy spare rows.
+
+    Each spare row's D is a `=B*C` formula, so we only set A/B/C and let
+    Excel compute the amount. Up to 6 lines map one-to-one; if there are
+    more, the first 5 are itemized and the rest are summed into a single
+    "Misc materials" line in the last spare row — keeping every formula
+    below (D40 SUM, the bid chain) valid without inserting rows.
+    """
+    items = []
+    for e in (extras or []):
+        label = str(e.get("label") or "").strip()
+        if not label:
+            continue
+        try:
+            qty = float(e.get("qty") or 0)
+            up = float(e.get("unit_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        amount = e.get("amount")
+        try:
+            amount = float(amount) if amount is not None else qty * up
+        except (TypeError, ValueError):
+            amount = qty * up
+        if not amount:
+            continue
+        items.append({"label": label, "qty": qty, "up": up, "amount": amount})
+
+    if not items:
+        return
+
+    rows = EPOXY_EXTRA_ROWS
+    cap = len(rows)
+    if len(items) <= cap:
+        placed = [(r, it) for r, it in zip(rows, items)]
+    else:
+        # Itemize the first cap-1, lump the remainder into the last row.
+        placed = [(r, it) for r, it in zip(rows[:cap - 1], items[:cap - 1])]
+        overflow = items[cap - 1:]
+        lump_amt = round(sum(it["amount"] for it in overflow), 2)
+        placed.append((rows[cap - 1], {
+            "label": f"Misc materials ({len(overflow)} lines)",
+            "qty": 1, "up": lump_amt, "amount": lump_amt,
+        }))
+
+    for r, it in placed:
+        epoxy[f"A{r}"] = it["label"]
+        epoxy[f"B{r}"] = _coerce(it["qty"])
+        epoxy[f"C{r}"] = _coerce(it["up"])
+        # D{r} stays as the template's =B{r}*C{r} formula.
 
 
 def _coerce(v: Any) -> Any:
@@ -806,9 +873,9 @@ def read_totals(filled_xlsx_bytes: bytes) -> Dict[str, Dict[str, Any]]:
     Excel and saved again, OR for previewing totals from a workbook
     Troy filled in Excel and uploaded.
 
-    For Screen 2's live totals we compute totals in Python instead (see
-    `compute_estimate_totals` below), so this function is mostly here
-    for completeness.
+    For Screen 2's live totals we use the `pricing` engine via /api/price
+    (the Computed Bid panel), so this function is mostly here for
+    completeness.
     """
     wb = load_workbook(io.BytesIO(filled_xlsx_bytes), data_only=True)
     out: Dict[str, Dict[str, Any]] = {"epoxy": {}, "polish": {}}
@@ -819,73 +886,8 @@ def read_totals(filled_xlsx_bytes: bytes) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def compute_estimate_totals(values: Mapping[str, Any]) -> Dict[str, Any]:
-    """Pure-Python totals computation for Screen 2's live preview.
-
-    Mirrors the SUM/markup formulas in the workbook, but kept simple —
-    this is for the on-screen "running total" only. The authoritative
-    totals come from Excel re-evaluating the workbook on open.
-
-    Returns a flat dict (epoxy + polish + combined) for easy frontend
-    binding.
-    """
-    # Epoxy material total = SUM of system 1 + system 2 SF * their cost/SF
-    sys1_cost = float(values.get("system_1_cost_per_sf") or 0)
-    sys1_sf   = float(values.get("system_1_sf")          or 0)
-    sys2_sf   = float(values.get("system_2_sf")          or 0)
-    cove_1_lf = float(values.get("cove_1_lf")            or 0)
-    cove_2_lf = float(values.get("cove_2_lf")            or 0)
-
-    epoxy_material = (sys1_sf * sys1_cost) + (sys2_sf * sys1_cost) \
-                   + ((cove_1_lf + cove_2_lf) * 8.0)  # rough cove $/LF
-
-    epoxy_labor_rate = float(values.get("labor_rate") or 32.20)
-    epoxy_crew       = float(values.get("labor_crew_size") or 0)
-    epoxy_days       = float(values.get("labor_days") or 0)
-    epoxy_labor      = epoxy_crew * epoxy_days * 8 * epoxy_labor_rate
-    epoxy_burden     = epoxy_labor * float(values.get("labor_burden_pct") or 0.12)
-
-    epoxy_tooling_per_sf = float(values.get("tooling_consumables") or 0.33)
-    epoxy_tooling = (sys1_sf + sys2_sf) * epoxy_tooling_per_sf
-
-    epoxy_subtotal = epoxy_material + epoxy_labor + epoxy_burden + epoxy_tooling
-
-    super_pto = float(values.get("superintendent_pto_pct") or 0.03)
-    soft_pct  = float(values.get("soft_costs_pct") or 0.13)
-    epoxy_markup = epoxy_subtotal * (super_pto + soft_pct)
-    epoxy_lump_sum = round(epoxy_subtotal + epoxy_markup
-                           + float(values.get("contingency") or 0)
-                           + float(values.get("bond") or 0))
-
-    # Polish material — simpler approximation
-    polish_sf       = float(values.get("polish_sf")
-                            or values.get("patch_material_sf") or 0)
-    polish_dens     = float(values.get("densifier_cost") or 0.07)
-    polish_seal     = float(values.get("sealer_cost") or 0.10)
-    polish_material = polish_sf * (polish_dens + polish_seal)
-
-    polish_rate = float(values.get("polish_labor_rate") or 32.20)
-    polish_crew = float(values.get("polish_labor_crew_size") or 0)
-    polish_labor = polish_crew * 8 * polish_rate * 5  # rough: 5 days
-
-    polish_subtotal = polish_material + polish_labor
-    polish_lump_sum = round(polish_subtotal * (1 +
-        float(values.get("polish_superintendent_pto_pct") or 0.027) +
-        float(values.get("polish_soft_costs_pct")         or 0.16)))
-
-    return {
-        "epoxy": {
-            "material_total": round(epoxy_material),
-            "labor_install":  round(epoxy_labor + epoxy_burden),
-            "tooling_total":  round(epoxy_tooling),
-            "subtotal":       round(epoxy_subtotal),
-            "lump_sum":       epoxy_lump_sum,
-        },
-        "polish": {
-            "material_total": round(polish_material),
-            "labor_install":  round(polish_labor),
-            "subtotal":       round(polish_subtotal),
-            "lump_sum":       polish_lump_sum,
-        },
-        "combined_lump_sum": epoxy_lump_sum + polish_lump_sum,
-    }
+# NOTE: the old `compute_estimate_totals` Python mirror was removed —
+# it could never be accurate (it had no access to the system *selection*
+# that determines price). The authoritative bid now comes from the
+# `pricing` engine via /api/price (see backend/pricing.py), surfaced in
+# the Estimate screen's Computed Bid panel and passed through generate.

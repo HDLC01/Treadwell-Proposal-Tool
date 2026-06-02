@@ -106,7 +106,7 @@
     </p>
 
     <div class="review-row">
-      <div class="lbl">Folder #</div>
+      <div class="lbl">Folder date</div>
       <div class="val" id="rv-folder">—</div>
     </div>
     <div class="review-row">
@@ -209,14 +209,20 @@
 
   function showPreGenerate() {
     preEl.style.display = "";
-    document.getElementById("rv-folder").textContent   = state.job_number || "—";
+    // Folder prefix is the project deadline as YY.MM.DD (mirrors backend).
+    const deadlinePrefix = (iso) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+      return m ? `${m[1].slice(2)}.${m[2]}.${m[3]}` : "00.00.00";
+    };
+    const folderDate = deadlinePrefix(state.deadline);
+    document.getElementById("rv-folder").textContent   = state.deadline ? folderDate : "—";
     document.getElementById("rv-project").textContent  = state.project_name || "—";
-    document.getElementById("rv-location").textContent = [state.address, state.city_state].filter(Boolean).join(" · ") || "—";
+    document.getElementById("rv-location").textContent = [state.address, state.city_state, state.zip].filter(Boolean).join(" · ") || "—";
     document.getElementById("rv-worktype").textContent = (state.work_type || "epoxy").toUpperCase();
     document.getElementById("rv-audience").textContent = state.audience || "Direct";
     document.getElementById("rv-lump").textContent     = state.lump_sum_display || "—";
     const sanitizedName = (state.project_name || "Project").replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-    const subfolder = `${state.job_number || "00.000"} ${sanitizedName} !`;
+    const subfolder = `${folderDate} ${sanitizedName} !`;
     // Pull the real output root from the backend (/healthz → dropbox_root) so
     // this label always matches where files actually land — no hardcoded path
     // to drift when the Dropbox target changes.

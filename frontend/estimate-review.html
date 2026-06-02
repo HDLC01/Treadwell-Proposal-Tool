@@ -605,6 +605,36 @@
     </div>
   </div>
 
+  <!-- Tool-computed bid from the extracted 5.7 recipes: multi-system,
+       bulk-aware, full Total Base Bid — computed server-side so it never
+       shows #NAME? the way the in-browser sheet engine does. -->
+  <div id="computed-bid" style="margin:14px 0;border:2px solid var(--treadwell-red,#c0392b);border-radius:8px;overflow:hidden;">
+    <div style="display:flex;align-items:center;gap:18px;background:var(--treadwell-red,#c0392b);color:#fff;padding:8px 14px;">
+      <strong style="font-size:14px;">Computed Bid — 5.7 recipes</strong>
+      <label style="font-size:13px;cursor:pointer;display:flex;gap:5px;align-items:center;">
+        <input type="checkbox" id="cb-bulk"> Bulk discount
+      </label>
+      <span id="cb-status" style="font-size:12px;opacity:.85;margin-left:auto;"></span>
+    </div>
+    <div id="cb-grid" style="padding:6px 14px 12px;font-size:13px;"></div>
+
+    <!-- Extra materials: manual qty x unit-price lines (the sheet's spare
+         "=B*C" rows like Super Stick / Floor Graphic), appendable for
+         edge-case materials. These flow into Material Total -> bid. -->
+    <div style="border-top:1px solid rgba(0,0,0,.1);padding:8px 14px 12px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+        <strong style="font-size:12.5px;">Extra materials</strong>
+        <span style="font-size:11.5px;color:var(--ink-variant,#888);">manual qty × unit price — Super Stick, Floor Graphic, edge-case adds</span>
+        <button type="button" id="cb-add-extra" style="margin-left:auto;font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
+      </div>
+      <div id="cb-extras-head" style="display:none;grid-template-columns:1fr 70px 90px 90px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
+        <span>Material</span><span style="text-align:right;">Qty</span><span style="text-align:right;">Unit $</span><span style="text-align:right;">Amount</span><span></span>
+      </div>
+      <div id="cb-extras"></div>
+      <div id="cb-extras-note" style="font-size:11.5px;color:var(--treadwell-red,#c0392b);margin-top:5px;display:none;"></div>
+    </div>
+  </div>
+
   <form id="estimate-form" style="display:none;"></form>
 </main>
 
@@ -696,6 +726,9 @@ const HF = {
     // Map HF "changes" back to {sheet, addr} pairs
     const affected = [];
     for (const ch of changes) {
+      // Named-expression recalcs come back as changes with no `.address`
+      // (they carry `.name` instead) — skip them so we don't deref undefined.
+      if (!ch || !ch.address) continue;
       const sheet = Object.keys(this.sheetIdByName).find(
         n => this.sheetIdByName[n] === ch.address.sheet
       );
@@ -782,6 +815,12 @@ const FORM_TO_CELL = {
   system_1_sf:       "Epoxy!E20",
   cove_1_lf:         "Epoxy!E34",
   polish_sf:         "Polish!E19",
+  // System 2 (the sheet is fully wired for two systems — see analysis).
+  system_2_sf:       "Epoxy!E24",
+  cove_2_lf:         "Epoxy!E37",
+  // Systems 3+ have no estimate cells yet (template must be extended by
+  // Kyle first — see docs); their intake values are captured but not
+  // written to the sheet until those cells exist.
   // Bidding Contacts block (header lives in Epoxy!G1; estimator
   // historically filled the rows beneath by hand). Flow the intake
   // contact info into the rows so Troy sees it on the estimate.
@@ -1603,7 +1642,9 @@ function renderCountyResults(query) {
     <div class="county-row" data-idx="${i}">
       <div>
         <span class="county-name">${c.name} County</span>
-        <span class="county-meta">${c.state} · ${(c.rate * 100).toFixed(3)}% base</span>
+        <span class="county-meta">${c.state}${c.remodel_rate != null
+          ? ` · Remodel ${(c.remodel_rate * 100).toFixed(3)}%`
+          : ` · ${(c.rate * 100).toFixed(3)}%`}</span>
       </div>
       ${c.notes ? `<div class="county-notes">${c.notes}</div>` : ""}
     </div>
@@ -1616,8 +1657,14 @@ function renderCountyResults(query) {
 }
 
 function pickCounty(c) {
+  // Kansas remodel tax = state 6.5% + county portion (exact, not rounded).
+  // Shown here so the estimator can type it into the sheet's manual
+  // "ks remodel (enter rounded)" cell (Epoxy!K81 / per-tab equivalent).
+  const remodelNote = c.remodel_rate != null
+    ? ` — KS remodel tax <b>${(c.remodel_rate * 100).toFixed(3)}%</b> (enter in K81)`
+    : "";
   countySelected.innerHTML = `
-    <span class="county-pill">${c.name} County, ${c.state}
+    <span class="county-pill">${c.name} County, ${c.state}${remodelNote}
       <span class="x" id="county-clear">×</span>
     </span>
   `;
@@ -1626,10 +1673,11 @@ function pickCounty(c) {
   // Persist to state so the proposal step can use it (token: {{county}})
   state.county = `${c.name} County, ${c.state}`;
   state.county_tax_rate = c.rate;
+  state.county_remodel_rate = c.remodel_rate != null ? c.remodel_rate : null;
   state.county_notes = c.notes;
-  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_notes: state.county_notes });
+  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_remodel_rate: state.county_remodel_rate, county_notes: state.county_notes });
   document.getElementById("county-clear").addEventListener("click", () => {
-    delete state.county; delete state.county_tax_rate; delete state.county_notes;
+    delete state.county; delete state.county_tax_rate; delete state.county_remodel_rate; delete state.county_notes;
     TW.setState(state);
     countySelected.innerHTML = "";
   });
@@ -1673,6 +1721,7 @@ if (state.county) {
     name: state.county.replace(/ County,.*$/, ""),
     state: (state.county.match(/,\s*([A-Z]{2})/) || [])[1] || "",
     rate: state.county_tax_rate || 0,
+    remodel_rate: state.county_remodel_rate != null ? state.county_remodel_rate : null,
     notes: state.county_notes || "",
   });
 }
@@ -1835,7 +1884,175 @@ document.getElementById("continue-btn").addEventListener("click", () => {
   window.location.assign("/proposal-review.html");
 });
 
+// ── Computed Bid panel (tool's 5.7-recipe pricing: multi-system, bulk, full bid) ──
+const _cbNum = x => { const n = parseFloat(String(x).replace(/[$,]/g, "")); return isNaN(n) ? 0 : n; };
+const _cbFmt = n => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+let _cbTimer = null;
+let VALID_SYSTEMS = new Set();
+// Read a cell's LIVE value from the grid DOM (reflects autofill + the user's
+// dropdown pick), falling back to the saved-edit map. cellValues only holds
+// cells the user actually changed, so the DOM is the source of truth here.
+const _cbCell = a => {
+  const el = document.querySelector(`[data-cell-addr="${a}"]`);
+  return (el && el.value != null && el.value !== "") ? el.value : (cellValues[a] ?? "");
+};
+// Dropdown header placeholders ("System 1 Options", "Cove 1 Options", "Walls…")
+// are not real selections — only count a system the recipe set actually knows.
+const _cbRealSystem = n => VALID_SYSTEMS.has(n);
+const _cbRealCove = o => /^(Epoxy|WR)\s+\d/.test(o || "");
+
+async function computeBid() {
+  const systems = [], coves = [];
+  [["Epoxy!A22", "Epoxy!E20"], ["Epoxy!A26", "Epoxy!E24"]].forEach(([na, sa]) => {
+    const name = _cbCell(na), sf = _cbNum(_cbCell(sa));
+    if (_cbRealSystem(name) && sf > 0) systems.push({ name, sf });
+  });
+  [["Epoxy!A35", "Epoxy!E34"], ["Epoxy!A37", "Epoxy!E37"]].forEach(([oa, la]) => {
+    const option = _cbCell(oa), lf = _cbNum(_cbCell(la));
+    if (_cbRealCove(option) && lf > 0) coves.push({ option, lf });
+  });
+  const payload = {
+    systems, coves,
+    extras: getExtras(),
+    bulk_discount: document.getElementById("cb-bulk").checked,
+    taxable: String(_cbCell("Epoxy!B6") || "yes").toLowerCase() !== "no",
+    remodel: String(_cbCell("Epoxy!D6") || "").toLowerCase() === "yes",
+    remodel_rate: state.county_remodel_rate || 0,
+    sales_tax_rate: 0.09475,
+    full_bid: true,
+  };
+  const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
+  if (psf > 0) payload.polish_sf = psf;
+  const grid = document.getElementById("cb-grid"), st = document.getElementById("cb-status");
+  if (!systems.length && !payload.polish_sf) {
+    grid.innerHTML = '<div style="color:var(--ink-variant,#888)">Select a system and enter SF to compute the bid.</div>';
+    return;
+  }
+  st.textContent = "computing…";
+  try {
+    const r = await TW.postJSON("/api/price", payload);
+    renderBid(r); st.textContent = "";
+    state.computed_bid = r; TW.setState({ ...state, computed_bid: r });
+  } catch (e) { st.textContent = "error"; }
+}
+
+function renderBid(r) {
+  const fb = r.full_bid, rows = [];
+  r.systems.forEach((s, i) => rows.push([`System ${i + 1}: ${s.system}`, s.material]));
+  if (r.coves && r.coves.length) rows.push(["Cove", r.coves.reduce((a, c) => a + c.material, 0)]);
+  if (r.polish) rows.push(["Polish", r.polish.material]);
+  if (r.patch) rows.push(["Patch", r.patch]);
+  if (r.extras_total) rows.push([`Extra materials (${(r.extras || []).length})`, r.extras_total]);
+  rows.push([`Shipping + escalation (${Math.round((r.shipping_pct || 0) * 100)}%)`, r.shipping_escalation]);
+  rows.push(["Material Total", r.material_total, true]);
+  if (fb) {
+    rows.push(["Install labor + burden", fb.install_labor + fb.labor_burden]);
+    rows.push(["Tooling", fb.tooling]);
+    rows.push([`GP markup (${Math.round(fb.gp_pct * 100)}%)`, fb.gp_markup]);
+    rows.push(["Super/PTO + Soft costs", fb.superintendent_pto + fb.soft_costs]);
+    rows.push(["Sales tax", fb.sales_tax]);
+    rows.push(["KS remodel tax", fb.remodel_tax]);
+    rows.push(["TOTAL BASE BID", fb.total_base_bid, true]);
+  }
+  document.getElementById("cb-grid").innerHTML = rows.map(([l, v, bold]) =>
+    `<div style="display:flex;justify-content:space-between;padding:3px 0;${bold ? 'font-weight:700;border-top:2px solid var(--treadwell-red,#c0392b);margin-top:3px;padding-top:5px' : ''}"><span>${l}</span><span>${_cbFmt(v)}</span></div>`
+  ).join("");
+}
+
+// ── Extra materials (appendable manual qty × unit-price lines) ──────────
+// Mirrors the sheet's spare "=B*C" rows (rows 23,27,28,32,33,39 → 6 native
+// slots). Unlimited in the tool/proposal; on generate the first 6 fill the
+// native rows and any overflow lumps into one line + a note.
+const SHEET_SPARE_ROWS = 6;
+let EXTRAS = Array.isArray(state.extras) ? state.extras.slice() : [];
+
+function getExtras() {
+  // Only lines with a label and a non-zero amount count.
+  return EXTRAS
+    .map(e => ({ label: (e.label || "").trim(), qty: _cbNum(e.qty), unit_price: _cbNum(e.unit_price) }))
+    .filter(e => e.label && e.qty * e.unit_price !== 0);
+}
+
+function persistExtras() { state.extras = EXTRAS; TW.setState({ ...state, extras: EXTRAS }); }
+
+function renderExtras() {
+  const wrap = document.getElementById("cb-extras");
+  document.getElementById("cb-extras-head").style.display = EXTRAS.length ? "grid" : "none";
+  wrap.innerHTML = "";
+  EXTRAS.forEach((e, i) => {
+    const amt = _cbNum(e.qty) * _cbNum(e.unit_price);
+    const row = document.createElement("div");
+    row.style.cssText = "display:grid;grid-template-columns:1fr 70px 90px 90px 28px;gap:6px;align-items:center;margin-bottom:4px;";
+    row.innerHTML =
+      `<input type="text" data-k="label" placeholder="Material name" value="${(e.label || "").replace(/"/g, "&quot;")}" style="font-size:12.5px;padding:3px 6px;">
+       <input type="number" data-k="qty" placeholder="0" value="${e.qty ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
+       <input type="number" step="0.01" data-k="unit_price" placeholder="0.00" value="${e.unit_price ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
+       <span style="text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;">${_cbFmt(amt)}</span>
+       <button type="button" data-act="rm" title="Remove" style="cursor:pointer;border:none;background:none;color:var(--treadwell-red,#c0392b);font-size:15px;">×</button>`;
+    row.querySelectorAll("input").forEach(inp => {
+      inp.addEventListener("input", () => {
+        EXTRAS[i][inp.dataset.k] = inp.value;
+        // live-update just this row's amount, persist, recompute (debounced)
+        row.children[3].textContent = _cbFmt(_cbNum(EXTRAS[i].qty) * _cbNum(EXTRAS[i].unit_price));
+        persistExtras();
+        clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
+      });
+    });
+    row.querySelector('[data-act="rm"]').addEventListener("click", () => {
+      EXTRAS.splice(i, 1); persistExtras(); renderExtras(); computeBid();
+    });
+    wrap.appendChild(row);
+  });
+  const note = document.getElementById("cb-extras-note");
+  if (EXTRAS.length > SHEET_SPARE_ROWS) {
+    note.style.display = "block";
+    note.textContent = `⚠ ${EXTRAS.length} lines — the estimate sheet has ${SHEET_SPARE_ROWS} spare material rows; extras beyond that are lumped into one "Misc materials" line in the .xlsx (all lines still itemized in the proposal).`;
+  } else {
+    note.style.display = "none";
+  }
+}
+
+// Seed from the sheet's spare rows if the estimator already typed materials
+// there (e.g. an imported draft) — read label/qty/price straight off the grid.
+function seedExtrasFromSheet() {
+  if (EXTRAS.length) return;   // user/draft data wins
+  const SPARE = [23, 27, 28, 32, 33, 39];
+  for (const r of SPARE) {
+    const label = _cbCell(`Epoxy!A${r}`);
+    if (!label || /^=/.test(label) || /^MATERIAL|Options|Sub Total|Discount/i.test(label)) continue;
+    const qty = _cbNum(_cbCell(`Epoxy!B${r}`)), up = _cbNum(_cbCell(`Epoxy!C${r}`));
+    if (label.trim() && (qty || up)) EXTRAS.push({ label: label.trim(), qty, unit_price: up });
+  }
+}
+
+document.getElementById("cb-add-extra").addEventListener("click", () => {
+  EXTRAS.push({ label: "", qty: "", unit_price: "" });
+  persistExtras(); renderExtras();
+  // focus the new row's name field
+  const inputs = document.querySelectorAll("#cb-extras input[data-k='label']");
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+document.getElementById("cb-bulk").addEventListener("change", e => {
+  // mirror Kyle's D41 toggle into the grid so it flows to the generated sheet
+  cellValues["Epoxy!D41"] = e.target.checked ? "BULK Discount ON" : "Bulk Discount OFF";
+  state.cb_bulk = e.target.checked;
+  computeBid();
+});
+// recompute when any grid selection / SF changes (debounced)
+document.getElementById("sheet-grid").addEventListener("change", () => {
+  clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
+});
+
 init();
+if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
+// Load the recipe-known system names so the panel only counts real picks,
+// then compute once the grid + cellValues have hydrated.
+fetch(TW.absoluteUrl("/api/pricing/systems"))
+  .then(r => r.json())
+  .then(d => { (d.systems || d.epoxy || []).forEach(n => VALID_SYSTEMS.add(n)); })
+  .catch(() => {})
+  .finally(() => setTimeout(() => { seedExtrasFromSheet(); renderExtras(); computeBid(); }, 1200));
 </script>
 </body>
 </html>

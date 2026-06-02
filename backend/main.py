@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import math
 import os
 import uuid
 from pathlib import Path
@@ -47,6 +48,7 @@ from pydantic import BaseModel, Field
 import dropbox_client
 import drafts
 import estimate_writer
+import pricing
 import proposal_writer
 import reference_tax
 
@@ -84,16 +86,6 @@ class DetectWorkTypeOut(BaseModel):
     work_type: str  # "epoxy" | "polish" | "combo"
 
 
-class ComputeEstimateIn(BaseModel):
-    """All estimate inputs Screen 2 sends for live total recomputes.
-
-    Loose schema — we use a dict because the field set is large and
-    evolves; backend just looks up what it needs.
-    """
-
-    values: Dict[str, Any] = Field(default_factory=dict)
-
-
 class GenerateIn(BaseModel):
     """Final payload from Screen 3's Generate button."""
 
@@ -104,6 +96,12 @@ class GenerateIn(BaseModel):
     # Direct cell-for-cell writes (Estimate Review verbatim mode):
     #   { "Epoxy!E20": 18000, "Polish!C20": 0.07, ... }
     cell_values: Dict[str, Any] = Field(default_factory=dict)
+    # Custom material lines -> Epoxy spare "=B*C" rows:
+    #   [{"label": "Super Stick", "qty": 2, "unit_price": 50}, ...]
+    extras: list = Field(default_factory=list)
+    # Authoritative bid from the 5.7-recipe engine (computed on Screen 2).
+    # Echoed back in the response `totals` so nothing shows a stale number.
+    computed_bid: Dict[str, Any] | None = None
 
 
 class AutofillIn(BaseModel):
@@ -174,10 +172,124 @@ def api_detect_work_type(payload: DetectWorkTypeIn) -> DetectWorkTypeOut:
     )
 
 
-@app.post("/api/compute-estimate")
-def api_compute_estimate(payload: ComputeEstimateIn) -> Dict[str, Any]:
-    """Live-totals endpoint for Screen 2. Pure Python — no Excel involved."""
-    return estimate_writer.compute_estimate_totals(payload.values)
+class PriceIn(BaseModel):
+    """Selections + quantities to price via the extracted 5.7 recipes.
+
+    systems: [{"name": "<epoxy system>", "sf": 12000}, ...]   (1..N systems)
+    polish_sf + polish flags (reno/grout/dye/joint_filler)
+    coves:   [{"option": "Epoxy 4\"", "lf": 250, "quartz": false}, ...]
+    """
+    systems: list = Field(default_factory=list)
+    polish_sf: float = 0
+    polish: Dict[str, Any] = Field(default_factory=dict)
+    coves: list = Field(default_factory=list)
+    extras: list = Field(default_factory=list)   # custom material lines: [{"label","qty","unit_price"}] or [{"label","amount"}]
+    bulk_discount: bool = False   # Kyle's D41 toggle — swaps 6 materials to bulk rates
+    sales_tax_rate: float = 0.09475   # combined sales-tax rate (on material) if taxable
+    remodel_rate: float = 0       # KS remodel rate = state 6.5% + county (on labor/service)
+    taxable: bool = True
+    remodel: bool = False
+    full_bid: bool = False        # also compute labor+markup+bond -> Total Base Bid
+    labor: Dict[str, Any] = Field(default_factory=dict)   # crews/rate/markup overrides (manual)
+
+
+@app.post("/api/price")
+def api_price(payload: PriceIn) -> Dict[str, Any]:
+    """Compute MATERIAL pricing from selections — the tool's own pricing
+    engine (replaces the estimate sheet's named-range formulas the browser
+    can't evaluate, which is what shows #NAME? in the live preview)."""
+    material = 0.0
+    systems = []
+    for s in payload.systems:
+        r = pricing.compute_system(s.get("name"), s.get("sf") or 0,
+                                   bulk_discount=payload.bulk_discount)
+        systems.append(r)
+        material += r["material"]
+
+    polish = None
+    if payload.polish_sf:
+        pf = payload.polish or {}
+        polish = pricing.compute_polish(
+            payload.polish_sf,
+            reno=bool(pf.get("reno")), grout=bool(pf.get("grout")),
+            dye=bool(pf.get("dye")), joint_filler=bool(pf.get("joint_filler")),
+        )
+        material += polish["material"]
+
+    coves = []
+    for c in payload.coves:
+        r = pricing.compute_cove(c.get("option"), c.get("lf") or 0,
+                                 quartz_system=bool(c.get("quartz")))
+        coves.append(r)
+
+    # Roll up to the sheet's Material Total (D40 sub -> +D42 shipping -> D43),
+    # including the per-system patch line (epoxy SF * 0.10).
+    patch_sf = sum((s.get("sf") or 0) for s in payload.systems)
+    cove_total = sum(c["material"] for c in coves)
+    polish_total = polish["material"] if polish else 0.0
+
+    # Custom material lines ("Super Stick", "Floor Graphic", + edge-case adds):
+    # amount = qty * unit_price (the sheet's =B*C spare rows), or a direct amount.
+    extras = []
+    extras_total = 0.0
+    for e in (payload.extras or []):
+        try:
+            if e.get("amount") is not None:
+                amt = float(e.get("amount") or 0)
+                qty = e.get("qty"); up = e.get("unit_price")
+            else:
+                qty = float(e.get("qty") or 0)
+                up = float(e.get("unit_price") or 0)
+                amt = qty * up
+        except (TypeError, ValueError):
+            continue
+        amt = round(amt, 2)
+        if not amt:
+            continue
+        extras.append({"label": (e.get("label") or "").strip() or "Material",
+                       "qty": qty, "unit_price": up, "amount": amt})
+        extras_total += amt
+
+    roll = pricing.roll_up(systems, cove_total=cove_total,
+                           polish_total=polish_total, patch_sf=patch_sf,
+                           extras_total=extras_total)
+    mt = roll["material_total"]
+
+    sales_tax = math.ceil(mt * payload.sales_tax_rate) if (payload.taxable and payload.sales_tax_rate) else 0
+
+    resp = {
+        "systems": systems, "polish": polish, "coves": coves,
+        "extras": extras, "extras_total": round(extras_total, 2),
+        "patch": round(patch_sf * pricing.EPOXY_PATCH_RATE, 2),
+        **roll,
+        "sales_tax": sales_tax,
+    }
+
+    if payload.full_bid:
+        lb = payload.labor or {}
+        crews = lb.get("crews")
+        crews = [tuple(c) for c in crews] if crews else None
+        resp["full_bid"] = pricing.compute_full_bid(
+            mt, patch_sf,
+            crews=crews, labor_rate=lb.get("labor_rate", 32.2),
+            day_hours=lb.get("day_hours", 8), travel_hours=lb.get("travel_hours", 0),
+            prevailing_wage=lb.get("prevailing_wage", False), demo_sf=lb.get("demo_sf", 0),
+            local=lb.get("local", True), super_pct=lb.get("super_pct", 0.03),
+            soft_pct=lb.get("soft_pct", 0.13), contingency=lb.get("contingency", 0),
+            hard_bid=lb.get("hard_bid", False), taxable=payload.taxable,
+            sales_tax_rate=payload.sales_tax_rate, remodel=payload.remodel,
+            remodel_rate=payload.remodel_rate or 0.0,
+            fees=lb.get("fees", 0), bond_pct=lb.get("bond_pct", 0),
+        )
+    else:
+        resp["grand_total"] = round(mt + sales_tax, 2)
+    return resp
+
+
+@app.get("/api/pricing/systems")
+def api_pricing_systems() -> Dict[str, Any]:
+    """The epoxy systems + cove options the tool can price (for the UI)."""
+    return {"systems": pricing.list_systems(), "coves": pricing.list_cove_options()}
 
 
 @app.get("/api/sheets")
@@ -371,6 +483,7 @@ def api_generate(payload: GenerateIn) -> GenerateOut:
         xlsx_bytes = estimate_writer.fill_estimate(
             values,
             cell_values=payload.cell_values,
+            extras=payload.extras,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -396,9 +509,11 @@ def api_generate(payload: GenerateIn) -> GenerateOut:
         project_name=project_name,
         xlsx_bytes=xlsx_bytes,
         docx_bytes=docx_bytes,
-        job_number=values.get("job_number"),
+        deadline=values.get("deadline"),
         work_type=payload.work_type,
         status_marker=values.get("status_marker") or "!",
+        bid_date=values.get("bid_date"),
+        audience=payload.audience,
     )
 
     # Always cache files for direct download (Done screen always has working links)
@@ -420,7 +535,10 @@ def api_generate(payload: GenerateIn) -> GenerateOut:
         dropbox=dropbox_result,
         xlsx_download_url=f"/api/file/{xlsx_token}",
         docx_download_url=f"/api/file/{docx_token}",
-        totals=estimate_writer.compute_estimate_totals(values),
+        # Authoritative totals from the 5.7-recipe engine (computed on
+        # Screen 2 and passed through). Falls back to an empty dict if a
+        # caller generated without first running the pricing engine.
+        totals=payload.computed_bid or {},
     )
 
 

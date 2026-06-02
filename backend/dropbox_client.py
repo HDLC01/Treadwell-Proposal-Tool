@@ -104,48 +104,48 @@ def _sanitize_folder_name(name: str) -> str:
     return cleaned[:120] or "Untitled Project"
 
 
+def _deadline_prefix(deadline: str | None) -> str:
+    """Format the project deadline as a YY.MM.DD folder prefix.
+
+    Accepts the date input's ISO form ('YYYY-MM-DD'), an already-formatted
+    'YY.MM.DD', or common US date strings. Falls back to today's date so the
+    folder always has a sortable prefix.
+    """
+    if deadline:
+        s = str(deadline).strip()
+        for fmt in ("%Y-%m-%d", "%y.%m.%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(s, fmt).strftime("%y.%m.%d")
+            except ValueError:
+                continue
+    return datetime.now().strftime("%y.%m.%d")
+
+
 def _build_folder_path(
     project_name: str,
     *,
-    job_number: str | int | None = None,
+    deadline: str | None = None,
     work_type: str | None = None,
     status_marker: str | None = "!",
 ) -> str:
     """Build a Treadwell-style project folder name.
 
-    Matches Treadwell's existing Dropbox convention (verified against
-    `Treadwell Dropbox/2023 Treadwell Team Folder/Projects/`):
+    Folder convention (prefix is the project DEADLINE so folders sort by
+    due date):
 
-        YY.NNN  Project Name  (work_type)?  status_marker?
+        YY.MM.DD  Project Name  (work_type)?  status_marker?
 
-    Production examples:
-        24.117 Olathe CTE OSC (Polish) !
-        24.162 FCI Leavenworth FBOP ! #
-        25.104 SPX Crane Pads $
+    Examples:
+        26.08.15 Olathe CTE OSC (Polish) !
+        26.09.01 FCI Leavenworth FBOP !
 
-    `job_number` is the 3-digit sequence Troy assigns; if not supplied
-    we fall back to the date so the folder still has a unique sortable
-    prefix. `work_type` only renders when it's "polish" or "combo"
-    (epoxy is the default and isn't called out, per Treadwell convention).
-    `status_marker` defaults to '!' which appears on most active jobs.
+    `deadline` is the date the estimator picks on intake; if missing/
+    unparseable we fall back to today. `work_type` only renders when it's
+    "polish" or "combo" (epoxy is the default and isn't called out, per
+    Treadwell convention). `status_marker` defaults to '!' (active jobs).
     """
     root = get_root_folder()
-
-    # Prefix
-    yy = datetime.now().strftime("%y")
-    if job_number not in (None, ""):
-        raw = str(job_number).strip()
-        if "." in raw:
-            # User typed full YY.NNN — use as-is
-            prefix = raw
-        else:
-            try:
-                nnn = f"{int(raw):03d}"
-            except (ValueError, TypeError):
-                nnn = raw
-            prefix = f"{yy}.{nnn}"
-    else:
-        prefix = datetime.now().strftime("%y.%m.%d")
+    prefix = _deadline_prefix(deadline)
 
     name = _sanitize_folder_name(project_name)
 
@@ -163,14 +163,43 @@ def _build_folder_path(
     return f"{root}/{prefix} {name}{suffix}"
 
 
+def _proposal_date(value: str | None) -> str:
+    """MM.DD for the proposal filename (from bid date / deadline / today)."""
+    if value:
+        s = str(value).strip()
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%y.%m.%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(s, fmt).strftime("%m.%d")
+            except ValueError:
+                continue
+    return datetime.now().strftime("%m.%d")
+
+
+def _output_filenames(project_name: str, work_type: str | None,
+                      audience: str | None, bid_date: str | None) -> tuple[str, str]:
+    """Treadwell file-naming convention (verified against the team's files):
+        estimate:  $estimate sheet - <Project Name>.xlsx
+        proposal:  MM.DD TREADWELL <TYPE> PROPOSAL - <audience>.docx
+    """
+    name = _sanitize_folder_name(project_name)
+    est = _sanitize_folder_name(f"$estimate sheet - {name}") + ".xlsx"
+    wt = {"epoxy": "EPOXY", "polish": "POLISH", "combo": "COMBO"}.get(
+        (work_type or "").strip().lower(), (work_type or "EPOXY").upper())
+    aud = "New Direct" if (audience or "Direct").strip().lower() in ("direct", "new direct") else (audience or "GC")
+    prop = _sanitize_folder_name(f"{_proposal_date(bid_date)} TREADWELL {wt} PROPOSAL - {aud}") + ".docx"
+    return est, prop
+
+
 def upload_project_files(
     *,
     project_name: str,
     xlsx_bytes: bytes,
     docx_bytes: bytes,
-    job_number: str | int | None = None,
+    deadline: str | None = None,
     work_type: str | None = None,
     status_marker: str | None = "!",
+    bid_date: str | None = None,
+    audience: str | None = None,
 ) -> dict:
     """Create a project folder + upload both files. Returns links.
 
@@ -204,7 +233,7 @@ def upload_project_files(
 
         folder_path = _build_folder_path(
             project_name,
-            job_number=job_number,
+            deadline=deadline,
             work_type=work_type,
             status_marker=status_marker,
         )
@@ -215,9 +244,10 @@ def upload_project_files(
             if "path/conflict/folder" not in str(exc):
                 raise
 
-        # Upload both files.
-        xlsx_path = f"{folder_path}/Estimate.xlsx"
-        docx_path = f"{folder_path}/Proposal.docx"
+        # Upload both files — team naming convention.
+        est_name, prop_name = _output_filenames(project_name, work_type, audience, bid_date)
+        xlsx_path = f"{folder_path}/{est_name}"
+        docx_path = f"{folder_path}/{prop_name}"
         dbx.files_upload(
             xlsx_bytes, xlsx_path,
             mode=dropbox.files.WriteMode("overwrite"),
