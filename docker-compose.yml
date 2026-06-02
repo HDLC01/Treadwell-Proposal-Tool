@@ -16,12 +16,17 @@ services:
       # Point the SQLite drafts DB at the persistent volume below
       - DRAFTS_DB_PATH=/app/data/drafts.db
       # Production output root for generated project folders.
+      # Target: Hanz's real working folder "*Hanz" (the team's per-estimator
+      # convention: *Hanz / *Kyle / *Liz / *Troy), inside a dedicated
+      # "Hanz Estimate Automation" subfolder so tool output stays separate
+      # from manually-created projects.
       # IMPORTANT: the literal "$" in "$Commercial" MUST be written as "$$".
       # Compose interpolates a single "$", so "$Commercial" would expand to a
       # blank string and silently corrupt the path. "$$" escapes to a literal
-      # "$". Set here (not in .env) so it ships with the repo and overrides any
-      # stale DROPBOX_ROOT_FOLDER left in .env (environment: beats env_file:).
-      - "DROPBOX_ROOT_FOLDER=/2023 Treadwell Team Folder/Estimating/$$Commercial Sales Estimates/_Hanz"
+      # "$". "*Hanz" needs no escaping (Compose only interpolates "$"). Set
+      # here (not in .env) so it ships with the repo and overrides any stale
+      # DROPBOX_ROOT_FOLDER left in .env (environment: beats env_file:).
+      - "DROPBOX_ROOT_FOLDER=/2023 Treadwell Team Folder/Estimating/$$Commercial Sales Estimates/*Hanz/Hanz Estimate Automation"
     env_file:
       - .env
     volumes:
