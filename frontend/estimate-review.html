@@ -1748,24 +1748,16 @@ function showAutofillBanner(html, kind /* "success" | "error" */) {
     `<button type="button" style="float:right;border:none;background:none;cursor:pointer;font-size:14px;color:#666;margin:-2px -4px 0 6px;" onclick="this.parentElement.remove()">×</button>`;
 }
 
-// Stable string hash (djb2) — so an identical autofill payload always yields
-// the same idempotency key (a double-click / retry is deduped server-side).
-function _djb2(str) {
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
-  return h.toString(36);
-}
-
 async function callAutofillEndpoint(payload, attempt = 1) {
   // claude -p occasionally returns slowly / non-JSON; quietly retry once
-  // before surfacing failure. The Idempotency-Key (draft id + a hash of the
-  // inputs) means the retry reuses the FIRST run's result instead of paying
-  // for a second AI call — and the draft-id prefix is the per-project rate
-  // bucket the server counts against.
-  const idemKey = (TW.getDraftId() || "no-draft") + ":" + _djb2(JSON.stringify(payload));
+  // before surfacing failure. `X-Project-Id` (the draft id) is the per-project
+  // bucket the server's rate limit counts against (max 3 / 5 min per project).
   const r = await fetch("/api/autofill", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": idemKey },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Project-Id": TW.getDraftId() || "no-draft",
+    },
     body: JSON.stringify(payload),
   });
   const text = await r.text();
