@@ -1,41 +1,27 @@
 """
-Draft persistence — SQLite-backed, so a half-filled project survives a
-tab close AND can be reopened on another device via its draft URL.
+Project (draft) persistence + activity log — Supabase Postgres.
 
-Design:
-  - One row per draft, keyed by a client-generated UUID (the `d` query
-    param in the URL: proposals.wetreadwell.com/?d=<uuid>).
-  - `data` is the full sessionStorage state blob as JSON text. We don't
-    normalise it into columns — the field set is large + evolving, and
-    we only ever read/write the whole blob.
-  - Auto-saved from the frontend every few seconds as the user types.
+Two tables (created via the Supabase MCP / SQL editor):
 
-DB file location is configurable via DRAFTS_DB_PATH so Docker can point
-it at a persistent volume (/app/data/drafts.db). Defaults to a `data/`
-folder next to this file for local dev.
+  drafts(id text pk, data jsonb, owner_email text, created_at timestamptz,
+         updated_at timestamptz)
+      One row per project, keyed by the client UUID in the URL (?d=<uuid>).
+      `data` is the whole client state blob (we never normalise it).
+
+  events(id bigint pk, project_id text, actor_email text, action text,
+         detail jsonb, created_at timestamptz)
+      Audit trail — who created / generated each proposal. `detail` denormalises
+      the project name + total so the History feed needs no join.
+
+The project list is UNIFIED: every signed-in user sees all projects (one
+company view), attributed by owner_email.
 """
 from __future__ import annotations
 
-import json
-import os
-import sqlite3
-import threading
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-# Resolve the DB path. In Docker we set DRAFTS_DB_PATH=/app/data/drafts.db
-# and mount a volume there; locally it lands in backend/data/drafts.db.
-_DB_PATH = Path(
-    os.environ.get("DRAFTS_DB_PATH")
-    or (Path(__file__).parent / "data" / "drafts.db")
-)
-
-# SQLite connections aren't safe to share across threads by default; a
-# process-wide lock keeps the writes serialized. Volume is tiny + writes
-# are infrequent (debounced ~3s), so a single lock is plenty.
-_LOCK = threading.Lock()
-_conn: Optional[sqlite3.Connection] = None
+from supabase_client import get_client
 
 
 def _now_iso() -> str:
@@ -43,69 +29,115 @@ def _now_iso() -> str:
 
 
 def init_db() -> None:
-    """Create the data dir + table if missing. Called once at app start."""
-    global _conn
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
-    _conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS drafts (
-            id          TEXT PRIMARY KEY,
-            data        TEXT NOT NULL,
-            created_at  TEXT NOT NULL,
-            updated_at  TEXT NOT NULL
-        )
-        """
-    )
-    _conn.commit()
+    """No-op: the schema lives in Supabase (provisioned via MCP/SQL editor).
+    Kept so the app-startup hook can call it unconditionally."""
+    return None
 
 
-def save_draft(draft_id: str, data: Dict[str, Any]) -> Dict[str, str]:
-    """Upsert a draft. Returns {id, updated_at}."""
-    if _conn is None:
-        init_db()
-    blob = json.dumps(data, ensure_ascii=False)
+# ── drafts ────────────────────────────────────────────────────────────
+def save_draft(draft_id: str, data: Dict[str, Any],
+               owner_email: Optional[str] = None) -> Dict[str, str]:
+    """Upsert a project. On first save, stamps owner_email + logs a `created`
+    event. On update, preserves owner_email/created_at. Returns {id, updated_at}."""
+    sb = get_client()
     now = _now_iso()
-    with _LOCK:
-        # Preserve created_at on update via COALESCE against the existing row.
-        _conn.execute(
-            """
-            INSERT INTO drafts (id, data, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                data = excluded.data,
-                updated_at = excluded.updated_at
-            """,
-            (draft_id, blob, now, now),
-        )
-        _conn.commit()
+    existing = sb.table("drafts").select("id").eq("id", draft_id).limit(1).execute()
+
+    if existing.data:
+        sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
+    else:
+        sb.table("drafts").insert({
+            "id": draft_id, "data": data, "owner_email": owner_email,
+            "created_at": now, "updated_at": now,
+        }).execute()
+        log_event(draft_id, owner_email, "created", _summary_detail(data))
     return {"id": draft_id, "updated_at": now}
 
 
 def load_draft(draft_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch a draft by id. Returns {id, data, created_at, updated_at} or None."""
-    if _conn is None:
-        init_db()
-    with _LOCK:
-        row = _conn.execute(
-            "SELECT id, data, created_at, updated_at FROM drafts WHERE id = ?",
-            (draft_id,),
-        ).fetchone()
-    if row is None:
+    """Fetch a project by id. Returns {id, data, created_at, updated_at} or None."""
+    sb = get_client()
+    res = sb.table("drafts").select("id,data,owner_email,created_at,updated_at") \
+        .eq("id", draft_id).limit(1).execute()
+    if not res.data:
         return None
+    row = res.data[0]
     return {
-        "id": row[0],
-        "data": json.loads(row[1]),
-        "created_at": row[2],
-        "updated_at": row[3],
+        "id": row["id"],
+        "data": row.get("data") or {},
+        "owner_email": row.get("owner_email"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
     }
 
 
 def delete_draft(draft_id: str) -> bool:
-    """Remove a draft (called on 'Start a new project'). Returns True if existed."""
-    if _conn is None:
-        init_db()
-    with _LOCK:
-        cur = _conn.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
-        _conn.commit()
-        return cur.rowcount > 0
+    """Remove a project ('Start a new project'). Returns True if it existed."""
+    sb = get_client()
+    res = sb.table("drafts").delete().eq("id", draft_id).execute()
+    return bool(res.data)
+
+
+def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
+    """Unified project list (all owners), newest-updated first, as summaries."""
+    sb = get_client()
+    res = sb.table("drafts").select("id,data,owner_email,created_at,updated_at") \
+        .order("updated_at", desc=True).limit(limit).execute()
+    return [_summary(row) for row in (res.data or [])]
+
+
+# ── events (history log) ──────────────────────────────────────────────
+def log_event(project_id: Optional[str], actor_email: Optional[str],
+              action: str, detail: Optional[Dict[str, Any]] = None) -> None:
+    """Append an audit event (best-effort; never breaks the main flow)."""
+    try:
+        get_client().table("events").insert({
+            "project_id": project_id,
+            "actor_email": actor_email,
+            "action": action,
+            "detail": detail or {},
+            "created_at": _now_iso(),
+        }).execute()
+    except Exception:  # noqa: BLE001 — logging must not break save/generate
+        pass
+
+
+def list_events(limit: int = 100) -> List[Dict[str, Any]]:
+    """Recent activity, newest first — powers the History view."""
+    sb = get_client()
+    res = sb.table("events").select("*").order("created_at", desc=True).limit(limit).execute()
+    return res.data or []
+
+
+# ── helpers: pull display fields out of the state blob ────────────────
+def _bid_total(data: Dict[str, Any]) -> Optional[float]:
+    cb = (data or {}).get("computed_bid") or {}
+    fb = cb.get("full_bid") or {}
+    if isinstance(fb.get("total_base_bid"), (int, float)):
+        return float(fb["total_base_bid"])
+    return None
+
+
+def _summary_detail(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact project descriptor stored on events so History needs no join."""
+    return {
+        "project_name": (data or {}).get("project_name"),
+        "total": _bid_total(data),
+    }
+
+
+def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
+    data = row.get("data") or {}
+    return {
+        "id": row["id"],
+        "project_name": data.get("project_name") or "(untitled)",
+        "deadline": data.get("deadline"),
+        "city_state": data.get("city_state"),
+        "work_type": data.get("work_type"),
+        "audience": data.get("audience"),
+        "total": _bid_total(data),
+        "lump_sum_display": data.get("lump_sum_display"),
+        "owner_email": row.get("owner_email"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }

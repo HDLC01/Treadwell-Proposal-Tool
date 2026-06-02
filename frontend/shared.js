@@ -61,6 +61,7 @@
     if (id) {
       fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
         method: "DELETE",
+        headers: authHeaders(),
       }).catch(() => {});
     }
     // Drop the ?d= from the URL so a fresh start gets a fresh id.
@@ -110,7 +111,7 @@
     _saveTimer = setTimeout(() => {
       fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ data: state }),
         keepalive: true,         // let it finish even if the tab is closing
       }).catch(() => {/* offline / backend down — local copy still safe */});
@@ -133,7 +134,8 @@
     if (urlId && urlId !== localId && guard !== urlId) {
       // Cross-device (or returning) open — pull the server copy.
       try {
-        const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(urlId));
+        const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(urlId),
+                                { headers: authHeaders() });
         if (res.ok) {
           const body = await res.json();
           if (body && body.data) {
@@ -199,10 +201,23 @@
   }
 
   // ─── API helpers ──────────────────────────────────────────────────
+  // Every API call carries the Supabase auth token (set by auth.js on
+  // window.__TW_TOKEN) + the current project id. The backend gates /api/*
+  // on the token and uses X-Project-Id for the per-project rate bucket +
+  // history attribution.
+  function authHeaders(extra) {
+    const h = Object.assign({ "Content-Type": "application/json" }, extra || {});
+    const tok = (typeof window !== "undefined") ? window.__TW_TOKEN : null;
+    if (tok) h["Authorization"] = "Bearer " + tok;
+    const id = getDraftId();
+    if (id) h["X-Project-Id"] = id;
+    return h;
+  }
+
   async function postJSON(path, body) {
     const res = await fetch(resolveApiBase() + path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -235,6 +250,7 @@
     readForm,
     writeForm,
     postJSON,
+    authHeaders,
     fmtUsd,
     absoluteUrl,
     resolveApiBase,
