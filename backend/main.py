@@ -512,10 +512,24 @@ def api_autofill(payload: AutofillIn) -> Dict[str, Any]:
         return {"ok": False, "error": f"Autofill failed: {exc}"}
 
 
+def _ensure_state_name(values: Dict[str, Any]) -> None:
+    """Default a blank state_name to "Kansas" in-place.
+
+    The Direct-Epoxy proposal template has a "{{state_name}} Remodel Tax"
+    line; a blank value would render "– Remodel Tax". The KS remodel tax is
+    Kansas-specific and Treadwell is KC-based, so Kansas is the safe default.
+    The frontend already resolves the real state from city_state/state; this
+    is the server-side belt-and-suspenders.
+    """
+    if not str(values.get("state_name") or "").strip():
+        values["state_name"] = "Kansas"
+
+
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn) -> GenerateOut:
     """Final generate: fill xlsx + docx, upload to Dropbox, return links."""
     values = payload.values
+    _ensure_state_name(values)
 
     # Fill estimate workbook
     try:
