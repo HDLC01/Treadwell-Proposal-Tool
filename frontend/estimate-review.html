@@ -46,12 +46,14 @@
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 8px 12px;
     padding: 8px 16px;
     background: white;
     border-bottom: 1px solid var(--surface-dim);
-    flex-wrap: nowrap;
+    flex-wrap: wrap;   /* wrap instead of pushing buttons off-screen */
   }
+  /* keep Back/Continue pinned to the right even when the row wraps */
+  .top-toolbar #back-btn { margin-left: auto; }
   .top-toolbar h1 {
     margin: 0;
     font-size: 18px;
@@ -79,7 +81,7 @@
     white-space: nowrap;
   }
   .top-toolbar .county-input {
-    width: 260px;
+    width: 200px;
     padding: 5px 8px;
     font-size: 12px;
     min-height: 28px;
@@ -118,8 +120,8 @@
     border: 1px solid var(--surface-dim);
     border-radius: 4px;
   }
-  .top-toolbar .field-inline input.sysname { width: 220px; }
-  .top-toolbar .field-inline input.tex     { width: 120px; }
+  .top-toolbar .field-inline input.sysname { width: 180px; }
+  .top-toolbar .field-inline input.tex     { width: 100px; }
 
   .estimate-app .xl-tab-bar { flex: 0 0 auto; }
   .estimate-app .total-bar  { flex: 0 0 auto; margin-top: 0; padding: 8px 16px; }
