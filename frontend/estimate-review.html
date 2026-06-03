@@ -52,8 +52,8 @@
     border-bottom: 1px solid var(--surface-dim);
     flex-wrap: wrap;   /* wrap instead of pushing buttons off-screen */
   }
-  /* keep Back/Continue pinned to the right even when the row wraps */
-  .top-toolbar #back-btn { margin-left: auto; }
+  /* keep Back + Continue together, right-aligned, wrapping as one unit */
+  .top-toolbar .nav-btns { display: flex; gap: 8px; align-items: center; margin-left: auto; }
   .top-toolbar h1 {
     margin: 0;
     font-size: 18px;
@@ -574,9 +574,10 @@
       <label for="tex-name">Texture</label>
       <input type="text" id="tex-name" class="tex" placeholder="Orange Peel">
     </div>
-    <div class="spacer"></div>
-    <button type="button" id="back-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 12px;">← Back</button>
-    <button type="button" id="continue-btn" class="btn-primary" style="padding: 5px 12px; font-size: 12px;">Continue to Proposal →</button>
+    <div class="nav-btns">
+      <button type="button" id="back-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 12px;">← Back</button>
+      <button type="button" id="continue-btn" class="btn-primary" style="padding: 5px 12px; font-size: 12px;">Continue to Proposal →</button>
+    </div>
   </div>
 
   <div class="xl-tab-bar full" id="tab-bar"></div>
