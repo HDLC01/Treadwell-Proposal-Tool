@@ -15,7 +15,11 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    width: 100vw;
+    /* width is auto (not 100vw) so it shrinks to fit beside the fixed 240px
+       sidebar, which shifts the body via margin-left. 100vw ignored that
+       margin and pushed the right edge (progress steps + Back/Continue
+       buttons) off-screen. auto adapts when the sidebar collapses too. */
+    width: auto;
     overflow: hidden;
   }
   .estimate-app .topbar {
