@@ -543,6 +543,29 @@ def _serialize_cell(cell, *, display_value, is_formula, fill_hex, font_color) ->
     return out
 
 
+def _normalize_cell_value(v):
+    """Make openpyxl's date/time objects render sensibly in the grid.
+
+    openpyxl (data_only) hands back `datetime`/`date`/`time` for date-formatted
+    cells. We want:
+      - a real date  → a readable "M/D/YYYY" string (not an ISO datetime)
+      - the Excel epoch (serial 0) → BLANK. A formula like `=Epoxy!B2` over an
+        EMPTY B2 computes to 0, which a date-formatted cell stores/caches as
+        midnight 1899 → openpyxl reads it back as time(0,0) → "00:00:00" (or an
+        1899/1900 date). That's a non-value and should show blank.
+      - a bare time-of-day → BLANK (no estimate field is a clock time; it's the
+        same epoch-zero artifact).
+    """
+    import datetime as _dt
+    if isinstance(v, _dt.datetime):
+        return None if v.year <= 1900 else f"{v.month}/{v.day}/{v.year}"
+    if isinstance(v, _dt.date):          # plain date (datetime already handled)
+        return None if v.year <= 1900 else f"{v.month}/{v.day}/{v.year}"
+    if isinstance(v, _dt.time):
+        return None
+    return v
+
+
 def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
     """Return every used cell on `sheet_name` as a flat list.
 
@@ -628,6 +651,7 @@ def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
             else:
                 display_value = value
 
+            display_value = _normalize_cell_value(display_value)
             cells.append(_serialize_cell(
                 cell, display_value=display_value, is_formula=is_formula,
                 fill_hex=fill_hex, font_color=font_color,

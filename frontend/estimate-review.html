@@ -1209,6 +1209,24 @@ function refreshDomFromHF(data, grid) {
     const inp = HF.domBySheetAddr[`${tgt.sheet}!${cell.addr}`];
     if (!inp) continue;
     if (document.activeElement === inp) continue; // don't clobber a focused cell
+
+    // Project-info cells (rows 1-10) on Polish/Gyp/… are =Epoxy!Bn formulas.
+    // An empty Epoxy source makes that formula compute to 0 → "0" (text cells)
+    // or a date artifact. Mirror the CANONICAL Epoxy value so the block is
+    // identical on every tab (blank when Epoxy is blank).
+    if (isProjectInfoCell(cell.addr) && sheet !== CANONICAL_SHEET) {
+      const cKey = `${CANONICAL_SHEET}!${cell.addr}`;
+      if (cellValues[cKey] != null) {
+        inp.value = cellValues[cKey];
+      } else {
+        const epoxy = sheetCache[CANONICAL_SHEET];
+        const src = epoxy && epoxy.cells ? epoxy.cells.find(c => c.addr === cell.addr) : null;
+        inp.value = (src && src.value !== null && src.value !== undefined)
+          ? formatNumericValue(src.value, src.fmt) : "";
+      }
+      continue;
+    }
+
     const hfVal = HF.getValue(sheet, cell.addr);
     let display;
     if (hfVal && typeof hfVal === "object" && "value" in hfVal) {
