@@ -890,9 +890,13 @@ let activeSheet = null;
 let sheetCache = {};  // name → fetched cell data
 
 async function init() {
+  // Wait for the Supabase session/token to be ready before any /api/* call —
+  // every endpoint is auth-gated, so firing before the token is set 401s and
+  // the grid shows "Failed to load …".
+  try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
   // 1. Tab bar + sheet list
   try {
-    const res = await fetch("/api/sheets");
+    const res = await fetch("/api/sheets", { headers: TW.authHeaders() });
     const j = await res.json();
     sheets = j.sheets || [];
   } catch (err) {
@@ -909,7 +913,7 @@ async function init() {
   // 2b. Register the workbook's named expressions (e.g. AT_Clear_Satin_w_Grit)
   //    so formulas referencing them resolve instead of throwing #NAME?
   try {
-    const nameRes = await fetch("/api/named-expressions");
+    const nameRes = await fetch("/api/named-expressions", { headers: TW.authHeaders() });
     const nameData = await nameRes.json();
     let registered = 0;
     for (const n of nameData.names || []) {
@@ -936,7 +940,7 @@ async function init() {
   sheetGrid.textContent = "Loading workbook into formula engine…";
   await Promise.all(sheets.map(async (name) => {
     try {
-      const r = await fetch("/api/sheet/" + encodeURIComponent(name));
+      const r = await fetch("/api/sheet/" + encodeURIComponent(name), { headers: TW.authHeaders() });
       const data = await r.json();
       sheetCache[name] = data;
       HF.loadSheet(name, data.cells);
@@ -985,7 +989,7 @@ async function showSheet(name) {
 
   if (!sheetCache[name]) {
     try {
-      const r = await fetch("/api/sheet/" + encodeURIComponent(name));
+      const r = await fetch("/api/sheet/" + encodeURIComponent(name), { headers: TW.authHeaders() });
       if (!r.ok) {
         sheetGrid.textContent = "Failed to load " + name;
         return;
@@ -1615,7 +1619,8 @@ let countyHighlight = -1;
 
 async function loadCounties() {
   try {
-    const r = await fetch("/api/reference/counties");
+    if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
+    const r = await fetch("/api/reference/counties", { headers: TW.authHeaders() });
     const j = await r.json();
     allCounties = j.counties || [];
   } catch (err) {
@@ -1756,10 +1761,10 @@ async function callAutofillEndpoint(payload, attempt = 1) {
   // bucket the server's rate limit counts against (max 3 / 5 min per project).
   const r = await fetch("/api/autofill", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Project-Id": TW.getDraftId() || "no-draft",
-    },
+    // authHeaders() carries Content-Type + Authorization (Bearer) + X-Project-Id
+    // (the draft id, the per-project rate-limit bucket). Without the Bearer the
+    // gate 401s the paid endpoint.
+    headers: TW.authHeaders({ "X-Project-Id": TW.getDraftId() || "no-draft" }),
     body: JSON.stringify(payload),
   });
   const text = await r.text();
@@ -2052,8 +2057,10 @@ document.getElementById("sheet-grid").addEventListener("change", () => {
 init();
 if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
 // Load the recipe-known system names so the panel only counts real picks,
-// then compute once the grid + cellValues have hydrated.
-fetch(TW.absoluteUrl("/api/pricing/systems"))
+// then compute once the grid + cellValues have hydrated. Wait for the auth
+// token first (gated endpoint) + send it, else it 401s and VALID_SYSTEMS is empty.
+(window.TWAuth && window.TWAuth.ready ? window.TWAuth.ready : Promise.resolve())
+  .then(() => fetch(TW.absoluteUrl("/api/pricing/systems"), { headers: TW.authHeaders() }))
   .then(r => r.json())
   .then(d => { (d.systems || d.epoxy || []).forEach(n => VALID_SYSTEMS.add(n)); })
   .catch(() => {})

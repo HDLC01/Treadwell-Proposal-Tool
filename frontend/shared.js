@@ -126,6 +126,10 @@
   //   3. no ?d= but local has a draft → assert the id back into the URL
   //   4. nothing                      → mint a fresh id (lazily, on first save)
   async function initDraftSync() {
+    // The cross-device pull below hits the auth-gated /api/draft/{id}. Wait for
+    // the Supabase token (set by auth.js) so the GET isn't 401'd — otherwise a
+    // reopened project link would silently start empty instead of hydrating.
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     let urlId = null;
     try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
     const localId = (() => { try { return localStorage.getItem(DRAFT_ID_KEY); } catch { return null; } })();
