@@ -126,7 +126,7 @@
     background: white;
     border: 1px solid var(--xl-border);
     flex: 1 1 auto;       /* fill remaining vertical space */
-    min-height: 240px;
+    min-height: 360px;    /* worksheet gets the lion's share of the window */
     position: relative;
     scrollbar-width: auto;
     scrollbar-color: #9c9c9c #f3f3f3;
@@ -140,6 +140,14 @@
   .xl-viewport::-webkit-scrollbar-thumb   { background: #c0c0c0; border-radius: 4px; border: 3px solid #f3f3f3; }
   .xl-viewport::-webkit-scrollbar-thumb:hover { background: #9c9c9c; }
   .xl-viewport::-webkit-scrollbar-corner  { background: #f3f3f3; }
+
+  /* Collapsible Computed Bid panel — keeps the worksheet viewport large.
+     When collapsed only the red header shows; the headline numbers (Total
+     Lump Sum, Material, Labor, Tooling) stay visible in the total-bar above. */
+  #computed-bid { flex: 0 0 auto; }
+  #cb-header { user-select: none; }
+  #cb-header:hover { filter: brightness(1.07); }
+  #computed-bid.cb-collapsed #cb-body { display: none; }
 
   /* Tab bar — always show horizontal scrollbar */
   .xl-tab-bar.full {
@@ -608,14 +616,16 @@
   <!-- Tool-computed bid from the extracted 5.7 recipes: multi-system,
        bulk-aware, full Total Base Bid — computed server-side so it never
        shows #NAME? the way the in-browser sheet engine does. -->
-  <div id="computed-bid" style="margin:14px 0;border:2px solid var(--treadwell-red,#c0392b);border-radius:8px;overflow:hidden;">
-    <div style="display:flex;align-items:center;gap:18px;background:var(--treadwell-red,#c0392b);color:#fff;padding:8px 14px;">
+  <div id="computed-bid" style="margin:6px 0 0;border:2px solid var(--treadwell-red,#c0392b);border-radius:8px;overflow:hidden;">
+    <div id="cb-header" style="display:flex;align-items:center;gap:18px;background:var(--treadwell-red,#c0392b);color:#fff;padding:8px 14px;cursor:pointer;" title="Show / hide the bid breakdown">
       <strong style="font-size:14px;">Computed Bid — 5.7 recipes</strong>
-      <label style="font-size:13px;cursor:pointer;display:flex;gap:5px;align-items:center;">
+      <label style="font-size:13px;cursor:pointer;display:flex;gap:5px;align-items:center;" onclick="event.stopPropagation()">
         <input type="checkbox" id="cb-bulk"> Bulk discount
       </label>
-      <span id="cb-status" style="font-size:12px;opacity:.85;margin-left:auto;"></span>
+      <span id="cb-status" style="font-size:12px;opacity:.85;"></span>
+      <span id="cb-caret" style="margin-left:auto;font-size:12px;font-weight:700;opacity:.95;">▾ Hide</span>
     </div>
+    <div id="cb-body">
     <div id="cb-grid" style="padding:6px 14px 12px;font-size:13px;"></div>
 
     <!-- Extra materials: manual qty x unit-price lines (the sheet's spare
@@ -633,6 +643,7 @@
       <div id="cb-extras"></div>
       <div id="cb-extras-note" style="font-size:11.5px;color:var(--treadwell-red,#c0392b);margin-top:5px;display:none;"></div>
     </div>
+    </div><!-- /#cb-body -->
   </div>
 
   <form id="estimate-form" style="display:none;"></form>
@@ -2056,6 +2067,27 @@ document.getElementById("sheet-grid").addEventListener("change", () => {
 
 init();
 if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
+
+// Collapsible Computed Bid → the worksheet gets the rest of the window.
+// Default collapsed (headline totals stay in the total-bar); choice is remembered.
+(function initCbCollapse(){
+  const panel  = document.getElementById("computed-bid");
+  const header = document.getElementById("cb-header");
+  const caret  = document.getElementById("cb-caret");
+  if (!panel || !header) return;
+  let collapsed = true;
+  try { const v = localStorage.getItem("tw_cb_collapsed"); if (v !== null) collapsed = v === "1"; } catch {}
+  const apply = () => {
+    panel.classList.toggle("cb-collapsed", collapsed);
+    if (caret) caret.textContent = collapsed ? "▸ Show breakdown" : "▾ Hide";
+  };
+  apply();
+  header.addEventListener("click", () => {
+    collapsed = !collapsed;
+    try { localStorage.setItem("tw_cb_collapsed", collapsed ? "1" : "0"); } catch {}
+    apply();
+  });
+})();
 // Load the recipe-known system names so the panel only counts real picks,
 // then compute once the grid + cellValues have hydrated. Wait for the auth
 // token first (gated endpoint) + send it, else it 401s and VALID_SYSTEMS is empty.
