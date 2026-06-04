@@ -132,7 +132,9 @@
     background: white;
     border: 1px solid var(--xl-border);
     flex: 1 1 auto;       /* fill remaining vertical space */
-    min-height: 360px;    /* worksheet gets the lion's share of the window */
+    min-height: 160px;    /* low floor so the resizer can trade space with the bid panel;
+                             when the bid panel is collapsed (default) the worksheet still
+                             fills the whole window via flex:1 */
     position: relative;
     scrollbar-width: auto;
     scrollbar-color: #9c9c9c #f3f3f3;
@@ -2252,8 +2254,10 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
   function applySaved(){
     if (panel.classList.contains("cb-collapsed")) { panel.style.height = ""; rez.style.display = "none"; return; }
     rez.style.display = "";
-    const h = parseInt(localStorage.getItem(KEY) || "", 10);
-    if (h) panel.style.height = clamp(h) + "px";
+    // Bounded default (≈38% of the window) when the user hasn't dragged yet, so
+    // the expanded panel never runs off-screen and the worksheet fills the rest.
+    const saved = parseInt(localStorage.getItem(KEY) || "", 10);
+    panel.style.height = clamp(saved || Math.round(window.innerHeight * 0.38)) + "px";
   }
   window.__twCbApplySaved = applySaved;
   let startY = 0, startH = 0, dragging = false;
