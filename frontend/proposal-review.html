@@ -667,6 +667,7 @@
       system_name_polish: safe(mergedValues.system_name),
       texture:            safe(mergedValues.texture),
       epoxy_sf:           epoxySF ? Number(epoxySF).toLocaleString("en-US") : "0",
+      polish_sf:          polishSF ? Number(polishSF).toLocaleString("en-US") : "0",
       cove_lf:            coveLF  ? Number(coveLF).toLocaleString("en-US")  : "0",
       sqft:               (workType === "polish" ? Number(polishSF || 0) : Number(epoxySF || 0)).toLocaleString("en-US"),
       lf:                 coveLF  ? Number(coveLF).toLocaleString("en-US")  : "0",
