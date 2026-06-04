@@ -15,7 +15,7 @@
     .row { display:flex; gap:12px; padding:12px 14px; background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:10px; margin-bottom:8px; align-items:baseline; box-shadow:0 1px 3px rgba(0,0,0,.04); }
     .dot { width:8px;height:8px;border-radius:50%;background:#c7c4c2;flex:none;align-self:center; }
     .dot.generated { background:#1a7f37; } .dot.created { background:#1f6feb; }
-    .dot.banned,.dot.deleted_user { background:#c8102e; } .dot.role_changed,.dot.status_changed,.dot.unbanned { background:#bf8700; }
+    .dot.banned,.dot.deleted_user,.dot.deleted_project { background:#c8102e; } .dot.role_changed,.dot.status_changed,.dot.unbanned { background:#bf8700; }
     .who { font-weight:700; } .act { color:var(--ink-v); } .proj { font-weight:600; }
     .total { color:#1a7f37; } .when { margin-left:auto; color:#8a8a8a; font-size:12px; white-space:nowrap; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
@@ -30,7 +30,8 @@
   <script src="/shared.js"></script>
   <script>
     const VERB = { created:"created", generated:"generated", role_changed:"changed the role on",
-      status_changed:"changed status on", banned:"banned", unbanned:"unbanned", deleted_user:"deleted" };
+      status_changed:"changed status on", banned:"banned", unbanned:"unbanned", deleted_user:"deleted",
+      deleted_project:"deleted project" };
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function money(n){ return (typeof n==="number") ? " — $"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : ""; }
     function when(iso){ if(!iso) return ""; const d=new Date(iso); return isNaN(d)?"":d.toLocaleString(); }
