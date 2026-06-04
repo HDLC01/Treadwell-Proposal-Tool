@@ -160,7 +160,7 @@
   #computed-bid.cb-collapsed { height: auto !important; }
   #computed-bid.cb-collapsed #cb-body { display: none; }
   /* Drag handle between the worksheet and the Computed Bid panel */
-  #cb-resizer { flex: 0 0 auto; height: 10px; cursor: row-resize; position: relative;
+  #cb-resizer { flex: 0 0 auto; height: 10px; cursor: row-resize; position: relative; touch-action: none;
     background: var(--surface-dim, #e9e8e7); border-top: 1px solid rgba(0,0,0,.12); }
   #cb-resizer::before { content: ""; position: absolute; left: 50%; top: 3px;
     width: 46px; height: 4px; transform: translateX(-50%); border-radius: 3px; background: rgba(0,0,0,.30); }
@@ -2257,23 +2257,29 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
   }
   window.__twCbApplySaved = applySaved;
   let startY = 0, startH = 0, dragging = false;
+  // Bind move/up on WINDOW during the drag (not the 10px handle) so the drag
+  // keeps tracking once the cursor leaves the thin handle.
+  function onMove(e){
+    if (!dragging) return;
+    panel.style.height = clamp(startH + (startY - e.clientY)) + "px";  // drag up => taller panel
+    e.preventDefault();
+  }
+  function onUp(){
+    if (!dragging) return;
+    dragging = false; document.body.style.userSelect = "";
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
+    try { localStorage.setItem(KEY, String(Math.round(panel.getBoundingClientRect().height))); } catch {}
+  }
   rez.addEventListener("pointerdown", e => {
     if (panel.classList.contains("cb-collapsed")) return;
     dragging = true; startY = e.clientY; startH = panel.getBoundingClientRect().height;
-    try { rez.setPointerCapture(e.pointerId); } catch {}
     document.body.style.userSelect = "none"; e.preventDefault();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   });
-  rez.addEventListener("pointermove", e => {
-    if (!dragging) return;
-    panel.style.height = clamp(startH + (startY - e.clientY)) + "px";  // drag up => taller panel
-  });
-  const end = () => {
-    if (!dragging) return;
-    dragging = false; document.body.style.userSelect = "";
-    try { localStorage.setItem(KEY, String(Math.round(panel.getBoundingClientRect().height))); } catch {}
-  };
-  rez.addEventListener("pointerup", end);
-  rez.addEventListener("pointercancel", end);
   applySaved();
 })();
 // Load the recipe-known system names so the panel only counts real picks,
