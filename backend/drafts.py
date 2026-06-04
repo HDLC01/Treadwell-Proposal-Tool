@@ -79,11 +79,34 @@ def delete_draft(draft_id: str) -> bool:
 
 
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
-    """Unified project list (all owners), newest-updated first, as summaries."""
+    """Unified project list (all owners), newest-updated first, as summaries.
+
+    Selects only the card fields (+ the small computed_bid object) via JSON
+    extraction instead of the FULL state blob — the blob also holds every edited
+    grid cell, so as projects accumulate the old `select=data` ballooned the
+    payload. Falls back to the full read on any PostgREST quirk."""
     sb = get_client()
-    res = sb.table("drafts").select("id,data,owner_email,created_at,updated_at") \
-        .order("updated_at", desc=True).limit(limit).execute()
-    return [_summary(row) for row in (res.data or [])]
+    try:
+        cols = ("id,owner_email,created_at,updated_at,"
+                "project_name:data->>project_name,"
+                "work_type:data->>work_type,"
+                "deadline:data->>deadline,"
+                "computed_bid:data->computed_bid")
+        res = sb.table("drafts").select(cols).order("updated_at", desc=True).limit(limit).execute()
+        return [{
+            "id": r["id"],
+            "project_name": r.get("project_name") or "(untitled)",
+            "total": _bid_total({"computed_bid": r.get("computed_bid")}),
+            "work_type": r.get("work_type"),
+            "deadline": r.get("deadline"),
+            "owner_email": r.get("owner_email"),
+            "created_at": r.get("created_at"),
+            "updated_at": r.get("updated_at"),
+        } for r in (res.data or [])]
+    except Exception:  # noqa: BLE001 — fall back to the full-blob read
+        res = sb.table("drafts").select("id,data,owner_email,created_at,updated_at") \
+            .order("updated_at", desc=True).limit(limit).execute()
+        return [_summary(row) for row in (res.data or [])]
 
 
 # ── events (history log) ──────────────────────────────────────────────

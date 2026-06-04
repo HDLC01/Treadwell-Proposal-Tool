@@ -150,14 +150,21 @@
   /* Collapsible Computed Bid panel — keeps the worksheet viewport large.
      When collapsed only the red header shows; the headline numbers (Total
      Lump Sum, Material, Labor, Tooling) stay visible in the total-bar above. */
-  #computed-bid { flex: 0 0 auto; }
-  #cb-header { user-select: none; }
+  /* Computed Bid is a flex column (header + scrollable body) with a USER-
+     DRAGGABLE height via the #cb-resizer handle — drag up = bigger bid / smaller
+     worksheet, drag down = the reverse. The body scrolls so nothing runs off. */
+  #computed-bid { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
+  #cb-header { flex: 0 0 auto; user-select: none; }
   #cb-header:hover { filter: brightness(1.07); }
+  #cb-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  #computed-bid.cb-collapsed { height: auto !important; }
   #computed-bid.cb-collapsed #cb-body { display: none; }
-  /* When expanded, the breakdown + extras + price lines + alternate selector can
-     exceed the screen (the page itself doesn't scroll) — cap the body and give
-     it its own scrollbars (both axes) so nothing runs off-screen. */
-  #cb-body { max-height: 42vh; overflow: auto; }
+  /* Drag handle between the worksheet and the Computed Bid panel */
+  #cb-resizer { flex: 0 0 auto; height: 10px; cursor: row-resize; position: relative;
+    background: var(--surface-dim, #e9e8e7); border-top: 1px solid rgba(0,0,0,.12); }
+  #cb-resizer::before { content: ""; position: absolute; left: 50%; top: 3px;
+    width: 46px; height: 4px; transform: translateX(-50%); border-radius: 3px; background: rgba(0,0,0,.30); }
+  #cb-resizer:hover::before { background: var(--treadwell-red, #c0392b); }
 
   /* Tab bar — always show horizontal scrollbar */
   .xl-tab-bar.full {
@@ -623,6 +630,9 @@
       <span class="tb-value" id="tb-total">$—</span>
     </div>
   </div>
+
+  <!-- Drag handle: resize the worksheet vs the Computed Bid panel -->
+  <div id="cb-resizer" title="Drag to resize the worksheet / bid panel"></div>
 
   <!-- Tool-computed bid from the extracted 5.7 recipes: multi-system,
        bulk-aware, full Total Base Bid — computed server-side so it never
@@ -2220,6 +2230,7 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
   const apply = () => {
     panel.classList.toggle("cb-collapsed", collapsed);
     if (caret) caret.textContent = collapsed ? "▸ Show breakdown" : "▾ Hide";
+    if (window.__twCbApplySaved) window.__twCbApplySaved();   // re-apply dragged height / hide resizer
   };
   apply();
   header.addEventListener("click", () => {
@@ -2227,6 +2238,43 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
     try { localStorage.setItem("tw_cb_collapsed", collapsed ? "1" : "0"); } catch {}
     apply();
   });
+})();
+
+// Drag the #cb-resizer handle to resize the worksheet vs the Computed Bid panel.
+// The panel gets an explicit height (persisted); the worksheet (flex:1) fills the
+// rest; the bid body scrolls. Hidden/disabled while the panel is collapsed.
+(function initCbResize(){
+  const panel = document.getElementById("computed-bid");
+  const rez = document.getElementById("cb-resizer");
+  if (!panel || !rez) return;
+  const KEY = "tw_cb_height";
+  const clamp = h => Math.max(120, Math.min(h, Math.round(window.innerHeight * 0.78)));
+  function applySaved(){
+    if (panel.classList.contains("cb-collapsed")) { panel.style.height = ""; rez.style.display = "none"; return; }
+    rez.style.display = "";
+    const h = parseInt(localStorage.getItem(KEY) || "", 10);
+    if (h) panel.style.height = clamp(h) + "px";
+  }
+  window.__twCbApplySaved = applySaved;
+  let startY = 0, startH = 0, dragging = false;
+  rez.addEventListener("pointerdown", e => {
+    if (panel.classList.contains("cb-collapsed")) return;
+    dragging = true; startY = e.clientY; startH = panel.getBoundingClientRect().height;
+    try { rez.setPointerCapture(e.pointerId); } catch {}
+    document.body.style.userSelect = "none"; e.preventDefault();
+  });
+  rez.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    panel.style.height = clamp(startH + (startY - e.clientY)) + "px";  // drag up => taller panel
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; document.body.style.userSelect = "";
+    try { localStorage.setItem(KEY, String(Math.round(panel.getBoundingClientRect().height))); } catch {}
+  };
+  rez.addEventListener("pointerup", end);
+  rez.addEventListener("pointercancel", end);
+  applySaved();
 })();
 // Load the recipe-known system names so the panel only counts real picks,
 // then compute once the grid + cellValues have hydrated. Wait for the auth
