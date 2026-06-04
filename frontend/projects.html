@@ -67,37 +67,51 @@
       });
     }
 
+    const CACHE_KEY = "tw_projects_cache";
+    function render(projects) {
+      const el = document.getElementById("list");
+      if (!projects.length) { el.className="empty"; el.textContent="No projects yet. Click “+ New project” to start."; return; }
+      el.className = "grid";
+      el.innerHTML = projects.map(p => `
+        <div class="card" data-id="${encodeURIComponent(p.id)}">
+          <p class="pname">${esc(p.project_name||"(untitled)")}</p>
+          <div class="meta">
+            ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
+            ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
+            ${p.deadline?`<span>due ${esc(p.deadline)}</span>`:""}
+          </div>
+          <div class="meta" style="margin-top:8px;">
+            <span>by ${esc(p.owner_email||"—")}</span>
+            <span>updated ${fmtDate(p.updated_at)}</span>
+          </div>
+          <div class="card-foot"><button type="button" class="open-btn">Open / Edit →</button></div>
+        </div>`).join("");
+      const open = (c) => window.location.assign("/?d=" + c.dataset.id);
+      el.querySelectorAll(".card").forEach(c => {
+        c.addEventListener("click", () => open(c));
+        const btn = c.querySelector(".open-btn");
+        if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
+      });
+    }
+
     async function load() {
+      // Stale-while-revalidate: paint the last-known list instantly (perceived
+      // 0ms), then fetch fresh in the background and update. The list is shared,
+      // so we always revalidate — the cache only removes the spinner.
+      try {
+        const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null");
+        if (Array.isArray(cached) && cached.length) render(cached);
+      } catch {}
       await tokenSoon();
       const el = document.getElementById("list");
       try {
         const r = await fetch("/api/drafts", { headers: TW.authHeaders() });
         const j = await r.json();
         const projects = (j && j.projects) || [];
-        if (!projects.length) { el.className="empty"; el.textContent="No projects yet. Click “+ New project” to start."; return; }
-        el.className = "grid";
-        el.innerHTML = projects.map(p => `
-          <div class="card" data-id="${encodeURIComponent(p.id)}">
-            <p class="pname">${esc(p.project_name||"(untitled)")}</p>
-            <div class="meta">
-              ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
-              ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
-              ${p.deadline?`<span>due ${esc(p.deadline)}</span>`:""}
-            </div>
-            <div class="meta" style="margin-top:8px;">
-              <span>by ${esc(p.owner_email||"—")}</span>
-              <span>updated ${fmtDate(p.updated_at)}</span>
-            </div>
-            <div class="card-foot"><button type="button" class="open-btn">Open / Edit →</button></div>
-          </div>`).join("");
-        const open = (c) => window.location.assign("/?d=" + c.dataset.id);
-        el.querySelectorAll(".card").forEach(c => {
-          c.addEventListener("click", () => open(c));
-          const btn = c.querySelector(".open-btn");
-          if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
-        });
+        try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(projects)); } catch {}
+        render(projects);
       } catch (err) {
-        el.className="empty"; el.textContent="Couldn't load projects. " + (err.message||"");
+        if (el.className !== "grid") { el.className="empty"; el.textContent="Couldn't load projects. " + (err.message||""); }
       }
     }
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }

@@ -53,17 +53,13 @@
   }
 
   function clearState() {
-    const id = getDraftId();
+    // Start a fresh project: clear LOCAL state only. We intentionally do NOT
+    // delete the server draft — projects are unified + persistent (shared with
+    // the whole @wetreadwell domain), so "start new" must never remove a saved
+    // project from everyone's Projects list. Removal is an explicit Admin action.
     try { localStorage.removeItem(STATE_KEY); } catch {}
     try { localStorage.removeItem(DRAFT_ID_KEY); } catch {}
     try { sessionStorage.removeItem(RELOAD_GUARD); } catch {}
-    // Best-effort delete the server copy too (fire-and-forget).
-    if (id) {
-      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
-        method: "DELETE",
-        headers: authHeaders(),
-      }).catch(() => {});
-    }
     // Drop the ?d= from the URL so a fresh start gets a fresh id.
     try {
       const url = new URL(window.location.href);
