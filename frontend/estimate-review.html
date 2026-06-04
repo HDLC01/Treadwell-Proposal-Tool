@@ -132,7 +132,7 @@
     background: white;
     border: 1px solid var(--xl-border);
     flex: 1 1 auto;       /* fill remaining vertical space */
-    min-height: 160px;    /* low floor so the resizer can trade space with the bid panel;
+    min-height: 120px;    /* low floor so the resizer can trade space with the bid panel;
                              when the bid panel is collapsed (default) the worksheet still
                              fills the whole window via flex:1 */
     position: relative;
@@ -155,11 +155,16 @@
   /* Computed Bid is a flex column (header + scrollable body) with a USER-
      DRAGGABLE height via the #cb-resizer handle — drag up = bigger bid / smaller
      worksheet, drag down = the reverse. The body scrolls so nothing runs off. */
+  /* Collapsed: panel is just its header (flex:0 0 auto) and the worksheet fills
+     the window. Expanded: the panel FLEXES to fill whatever's left after the
+     user-sized worksheet, and its body scrolls — so the panel can never run
+     off-screen no matter how much content it holds. The resizer sizes the
+     WORKSHEET (JS sets .xl-viewport height); the panel takes the remainder. */
   #computed-bid { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
+  #computed-bid:not(.cb-collapsed) { flex: 1 1 auto; }
   #cb-header { flex: 0 0 auto; user-select: none; }
   #cb-header:hover { filter: brightness(1.07); }
   #cb-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
-  #computed-bid.cb-collapsed { height: auto !important; }
   #computed-bid.cb-collapsed #cb-body { display: none; }
   /* Drag handle between the worksheet and the Computed Bid panel */
   #cb-resizer { flex: 0 0 auto; height: 10px; cursor: row-resize; position: relative; touch-action: none;
@@ -2242,30 +2247,34 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
   });
 })();
 
-// Drag the #cb-resizer handle to resize the worksheet vs the Computed Bid panel.
-// The panel gets an explicit height (persisted); the worksheet (flex:1) fills the
-// rest; the bid body scrolls. Hidden/disabled while the panel is collapsed.
+// Drag the #cb-resizer to resize the WORKSHEET; the Computed Bid panel flexes to
+// fill whatever's left (and its body scrolls), so nothing runs off-screen. We
+// size the worksheet (not the panel) because the panel's content is unbounded.
 (function initCbResize(){
   const panel = document.getElementById("computed-bid");
+  const vp = document.querySelector(".xl-viewport");
   const rez = document.getElementById("cb-resizer");
-  if (!panel || !rez) return;
-  const KEY = "tw_cb_height";
-  const clamp = h => Math.max(120, Math.min(h, Math.round(window.innerHeight * 0.78)));
+  if (!panel || !vp || !rez) return;
+  const KEY = "tw_ws_height";   // persisted WORKSHEET height (expanded mode)
+  const clamp = h => Math.max(120, Math.min(h, Math.round(window.innerHeight * 0.82)));
   function applySaved(){
-    if (panel.classList.contains("cb-collapsed")) { panel.style.height = ""; rez.style.display = "none"; return; }
+    if (panel.classList.contains("cb-collapsed")) {
+      // Collapsed: worksheet fills the window (back to flex:1), no resizer.
+      vp.style.height = ""; vp.style.flex = ""; rez.style.display = "none"; return;
+    }
     rez.style.display = "";
-    // Bounded default (≈38% of the window) when the user hasn't dragged yet, so
-    // the expanded panel never runs off-screen and the worksheet fills the rest.
+    // Expanded: fix the worksheet height (default ≈ half the window); the panel
+    // flexes into the remainder and scrolls.
     const saved = parseInt(localStorage.getItem(KEY) || "", 10);
-    panel.style.height = clamp(saved || Math.round(window.innerHeight * 0.38)) + "px";
+    vp.style.flex = "0 0 auto";
+    vp.style.height = clamp(saved || Math.round(window.innerHeight * 0.50)) + "px";
   }
   window.__twCbApplySaved = applySaved;
   let startY = 0, startH = 0, dragging = false;
-  // Bind move/up on WINDOW during the drag (not the 10px handle) so the drag
-  // keeps tracking once the cursor leaves the thin handle.
   function onMove(e){
     if (!dragging) return;
-    panel.style.height = clamp(startH + (startY - e.clientY)) + "px";  // drag up => taller panel
+    // Drag DOWN (clientY increases) => bigger worksheet / smaller bid panel.
+    vp.style.height = clamp(startH + (e.clientY - startY)) + "px";
     e.preventDefault();
   }
   function onUp(){
@@ -2274,11 +2283,11 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
     window.removeEventListener("pointercancel", onUp);
-    try { localStorage.setItem(KEY, String(Math.round(panel.getBoundingClientRect().height))); } catch {}
+    try { localStorage.setItem(KEY, String(Math.round(vp.getBoundingClientRect().height))); } catch {}
   }
   rez.addEventListener("pointerdown", e => {
     if (panel.classList.contains("cb-collapsed")) return;
-    dragging = true; startY = e.clientY; startH = panel.getBoundingClientRect().height;
+    dragging = true; startY = e.clientY; startH = vp.getBoundingClientRect().height;
     document.body.style.userSelect = "none"; e.preventDefault();
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
