@@ -1,0 +1,94 @@
+# Staging stack for staging.proposals.wetreadwell.com (VPS :8889).
+#
+# DATA (drafts/events/profiles) lives in a self-hosted Postgres on the VPS,
+# fronted by PostgREST (so the app's existing supabase-py .table() calls work
+# unchanged). AUTH stays on cloud Supabase — Google login + JWT verification —
+# via the cloud keys in .env.staging. So staging test data NEVER touches prod's
+# Supabase, while login still works.
+#
+#   app  →  SUPABASE_DATA_URL=http://rest  (nginx → postgrest → db)   [staging data]
+#   app  →  SUPABASE_URL=<cloud>           (auth/JWKS only)           [shared auth]
+#
+# Deploy: docker compose -f docker-compose.staging.yml up -d --build
+# Seed:   docker compose -f docker-compose.staging.yml exec app \
+#             python /app/staging/copy_from_supabase.py
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: treadwell-staging
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8889:8888"          # nginx (host) proxies staging.proposals → here
+    environment:
+      - DRAFTS_DB_PATH=/app/data/drafts.db
+      # Staging output goes to a clearly-marked test subfolder so it never mixes
+      # with prod output. ("$$" escapes the literal "$" in $Commercial.)
+      - "DROPBOX_ROOT_FOLDER=/2023 Treadwell Team Folder/Estimating/$$Commercial Sales Estimates/*Hanz/Hanz Estimate Automation/_staging"
+      # DATA store = the local PostgREST proxy (NOT cloud Supabase).
+      - SUPABASE_DATA_URL=http://rest
+      - SUPABASE_DATA_KEY=staging-local
+    env_file:
+      - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
+    volumes:
+      - staging_claude:/root/.claude
+      - staging_data:/app/data
+    depends_on:
+      - rest
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  db:
+    image: postgres:16-alpine
+    container_name: treadwell-staging-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: treadwell
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: staging_pg_pw
+    volumes:
+      - staging_pg:/var/lib/postgresql/data
+      - ./backend/staging/schema_pg.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d treadwell"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: treadwell-staging-postgrest
+    restart: unless-stopped
+    environment:
+      # 'authenticator' logs in; PostgREST switches to the anon role (service_role)
+      # for every request. No JWT secret => the app's apikey/Bearer are ignored and
+      # all requests run as service_role (full table access). Safe: db is internal-only.
+      PGRST_DB_URI: "postgres://authenticator:staging_auth_pw@db:5432/treadwell"
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: service_role
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  rest:
+    image: nginx:alpine
+    container_name: treadwell-staging-rest
+    restart: unless-stopped
+    volumes:
+      - ./backend/staging/rest-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - postgrest
+
+volumes:
+  staging_pg:
+    driver: local
+  staging_data:
+    driver: local
+  staging_claude:
+    driver: local

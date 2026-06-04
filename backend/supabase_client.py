@@ -46,14 +46,40 @@ def is_configured() -> bool:
     return bool(supabase_url() and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
 
 
+def data_url() -> str:
+    """Base URL for the DATA store (drafts/events/profiles). Defaults to the
+    Supabase project URL, but staging overrides it (SUPABASE_DATA_URL) to point
+    at a self-hosted PostgREST in front of a VPS Postgres — so staging's test
+    data lives on the VPS while AUTH still verifies against cloud Supabase."""
+    return (os.environ.get("SUPABASE_DATA_URL") or supabase_url()).rstrip("/")
+
+
+def data_key() -> str:
+    return os.environ.get("SUPABASE_DATA_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+
+
 @lru_cache(maxsize=1)
 def get_client():
-    """Service-role Supabase client (server-side; bypasses RLS). Lazy + cached."""
+    """Service-role client for DATA access (drafts/events/profiles tables).
+    Points at `data_url()` — cloud Supabase in prod, the VPS PostgREST in staging."""
+    from supabase import create_client
+
+    url, key = data_url(), data_key()
+    if not (url and key):
+        raise AuthError(503, "Data store not configured (SUPABASE_DATA_URL / KEY).")
+    return create_client(url, key)
+
+
+@lru_cache(maxsize=1)
+def get_auth_client():
+    """Service-role client bound to the cloud Supabase project for AUTH ADMIN
+    ops (ban/unban/delete user via GoTrue). Always the real Supabase project,
+    even in staging (auth never moves off Supabase)."""
     from supabase import create_client
 
     url, key = supabase_url(), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not (url and key):
-        raise AuthError(503, "Supabase not configured (SUPABASE_URL / SERVICE_ROLE_KEY).")
+        raise AuthError(503, "Supabase auth not configured (SUPABASE_URL / SERVICE_ROLE_KEY).")
     return create_client(url, key)
 
 
