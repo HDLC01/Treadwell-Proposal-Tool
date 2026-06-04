@@ -190,6 +190,13 @@ class GenerateIn(BaseModel):
     # Authoritative bid from the 5.7-recipe engine (computed on Screen 2).
     # Echoed back in the response `totals` so nothing shows a stale number.
     computed_bid: Dict[str, Any] | None = None
+    # Structured proposal price lines (options / unit prices): [{"label","amount"}].
+    # Rendered as repeatable {{#price_line}} rows under PRICE; NOT priced into the bid.
+    price_lines: list = Field(default_factory=list)
+    # Recommended ALTERNATE system bid (the full /api/price response with an
+    # `alternate_full_bid` + `alternate`), and its proposal label.
+    alternate_computed_bid: Dict[str, Any] | None = None
+    alternate_label: str = ""
 
 
 class AutofillIn(BaseModel):
@@ -279,40 +286,47 @@ class PriceIn(BaseModel):
     remodel: bool = False
     full_bid: bool = False        # also compute labor+markup+bond -> Total Base Bid
     labor: Dict[str, Any] = Field(default_factory=dict)   # crews/rate/markup overrides (manual)
+    # Optional ALTERNATE (recommended) system — priced as a second, independent
+    # bid with the SAME tax/labor params. Empty alternate_systems => no alternate.
+    alternate_systems: list = Field(default_factory=list)
+    alternate_coves: list = Field(default_factory=list)
+    alternate_polish_sf: float = 0
+    alternate_polish: Dict[str, Any] = Field(default_factory=dict)
+    alternate_label: str = ""
 
 
-@app.post("/api/price")
-def api_price(payload: PriceIn) -> Dict[str, Any]:
-    """Compute MATERIAL pricing from selections — the tool's own pricing
-    engine (replaces the estimate sheet's named-range formulas the browser
-    can't evaluate, which is what shows #NAME? in the live preview)."""
+def _price_bundle(payload: PriceIn, systems_in: list, coves_in: list,
+                  polish_sf: float, polish_flags: Dict[str, Any]) -> Dict[str, Any]:
+    """Price one bundle of selections (systems + polish + coves + extras) into the
+    sheet's Material Total and (optionally) a Total Base Bid. Shared by the base
+    bid and the alternate-system bid so both use identical tax/labor params."""
     material = 0.0
     systems = []
-    for s in payload.systems:
+    for s in (systems_in or []):
         r = pricing.compute_system(s.get("name"), s.get("sf") or 0,
                                    bulk_discount=payload.bulk_discount)
         systems.append(r)
         material += r["material"]
 
     polish = None
-    if payload.polish_sf:
-        pf = payload.polish or {}
+    if polish_sf:
+        pf = polish_flags or {}
         polish = pricing.compute_polish(
-            payload.polish_sf,
+            polish_sf,
             reno=bool(pf.get("reno")), grout=bool(pf.get("grout")),
             dye=bool(pf.get("dye")), joint_filler=bool(pf.get("joint_filler")),
         )
         material += polish["material"]
 
     coves = []
-    for c in payload.coves:
+    for c in (coves_in or []):
         r = pricing.compute_cove(c.get("option"), c.get("lf") or 0,
                                  quartz_system=bool(c.get("quartz")))
         coves.append(r)
 
     # Roll up to the sheet's Material Total (D40 sub -> +D42 shipping -> D43),
     # including the per-system patch line (epoxy SF * 0.10).
-    patch_sf = sum((s.get("sf") or 0) for s in payload.systems)
+    patch_sf = sum((s.get("sf") or 0) for s in (systems_in or []))
     cove_total = sum(c["material"] for c in coves)
     polish_total = polish["material"] if polish else 0.0
 
@@ -371,6 +385,36 @@ def api_price(payload: PriceIn) -> Dict[str, Any]:
         )
     else:
         resp["grand_total"] = round(mt + sales_tax, 2)
+    return resp
+
+
+@app.post("/api/price")
+def api_price(payload: PriceIn) -> Dict[str, Any]:
+    """Compute MATERIAL pricing from selections — the tool's own pricing
+    engine (replaces the estimate sheet's named-range formulas the browser
+    can't evaluate, which is what shows #NAME? in the live preview).
+
+    When `alternate_systems` is supplied, a SECOND independent bid is computed
+    (Kyle's recommended alternate) using the same tax/labor params, and returned
+    under `alternate_full_bid` + `alternate`. Omitting it leaves the response
+    byte-for-byte the same as before (back-compat)."""
+    resp = _price_bundle(payload, payload.systems, payload.coves,
+                         payload.polish_sf, payload.polish)
+
+    if payload.alternate_systems:
+        alt = _price_bundle(payload, payload.alternate_systems, payload.alternate_coves,
+                           payload.alternate_polish_sf, payload.alternate_polish)
+        resp["alternate_full_bid"] = alt.get("full_bid")
+        alt_sf = sum((s.get("sf") or 0) for s in payload.alternate_systems)
+        resp["alternate"] = {
+            "systems": alt["systems"], "coves": alt["coves"], "polish": alt["polish"],
+            "material_total": alt["material_total"],
+            "material_sub": alt["material_sub"],   # pre-shipping; injected into the alt xlsx tab
+            "sales_tax": alt["sales_tax"],
+            "label": (payload.alternate_label or "").strip()
+                     or (payload.alternate_systems[0].get("name") if payload.alternate_systems else ""),
+            "sf": alt_sf,
+        }
     return resp
 
 
@@ -510,6 +554,13 @@ def _autofill_via_cli(user_input: str) -> Dict[str, Any]:
     proc = subprocess.run(
         [
             "claude", "-p",
+            # Pin the model so autofill is deterministic and doesn't drift with
+            # CLI defaults. Sonnet = best accuracy/cost/latency for this
+            # structured-extraction + short-drafting task (the flags it sets —
+            # prevailing wage / remodel / taxable — affect price, so accuracy
+            # matters; Opus is overkill for the 60s button, Haiku cheaper but
+            # we keep Sonnet's extraction accuracy). Override via AUTOFILL_MODEL.
+            "--model", os.environ.get("AUTOFILL_MODEL", "sonnet"),
             "--output-format", "text",
             "--append-system-prompt", _AUTOFILL_SYSTEM_PROMPT,
         ],
@@ -634,6 +685,17 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         return {"ok": False, "error": f"Autofill failed: {exc}"}
 
 
+def _fmt_usd(n) -> str:
+    """Currency for proposal price lines: "$4,200" (drop trailing .00), "$4,200.50".
+    Matches the frontend fmtUSD style so price-line/alternate text reads consistently."""
+    try:
+        v = float(n)
+    except (TypeError, ValueError):
+        return ""
+    s = f"${v:,.2f}"
+    return s[:-3] if s.endswith(".00") else s
+
+
 def _ensure_state_name(values: Dict[str, Any]) -> None:
     """Default a blank state_name to "Kansas" in-place.
 
@@ -653,12 +715,46 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     values = payload.values
     _ensure_state_name(values)
 
+    # Structured PRICE option lines -> repeatable {{#price_line}} rows.
+    price_line_dicts = []
+    for pl in (payload.price_lines or []):
+        label = str((pl or {}).get("label") or "").strip()
+        try:
+            amt = float((pl or {}).get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        if label and amt:
+            price_line_dicts.append({"label": label, "amount_formatted": _fmt_usd(amt)})
+
+    # Recommended ALTERNATE system -> a 0/1-item {{#alternate}} block + a second
+    # estimate tab. Tax-inclusive total; flooring = total − remodel tax.
+    acb = payload.alternate_computed_bid or {}
+    alt_fb = acb.get("alternate_full_bid") or {}
+    alt_meta = acb.get("alternate") or {}
+    alternates = []
+    alternate_arg = None
+    alt_total = None
+    if alt_fb.get("total_base_bid"):
+        alt_total = float(alt_fb["total_base_bid"])
+        alt_remodel = float(alt_fb.get("remodel_tax") or 0)
+        alt_label = (payload.alternate_label or alt_meta.get("label") or "Alternate System").strip()
+        alternates = [{
+            "system_name": alt_label,
+            "lump_sum_formatted": _fmt_usd(alt_total - alt_remodel),
+            "remodel_tax": _fmt_usd(alt_remodel),
+            "total_formatted": _fmt_usd(alt_total),
+        }]
+        alternate_arg = {"sf": alt_meta.get("sf"),
+                         "material_sub": alt_meta.get("material_sub"),
+                         "label": alt_label}
+
     # Fill estimate workbook
     try:
         xlsx_bytes = estimate_writer.fill_estimate(
             values,
             cell_values=payload.cell_values,
             extras=payload.extras,
+            alternate=alternate_arg,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -670,6 +766,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             work_type=payload.work_type,
             audience=payload.audience,
             values=values,
+            price_lines=price_line_dicts,
+            alternates=alternates,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
@@ -713,6 +811,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         {
             "project_name": project_name,
             "total": fb.get("total_base_bid"),
+            "alternate_total": alt_total,
+            "alternate_label": (alternates[0]["system_name"] if alternates else None),
+            "price_lines_count": len(price_line_dicts),
             "work_type": payload.work_type,
             "audience": payload.audience,
             "folder": (dropbox_result or {}).get("folder_path"),
