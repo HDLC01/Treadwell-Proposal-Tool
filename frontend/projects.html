@@ -53,8 +53,22 @@
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
     function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
 
+    // Resolve as soon as auth.js sets the token (right after getSession) so the
+    // projects fetch runs in PARALLEL with the sidebar's /api/me + render —
+    // instead of waiting for the whole auth handshake (saves a round-trip).
+    function tokenSoon() {
+      return new Promise(res => {
+        const t0 = Date.now();
+        (function poll(){
+          if (window.__TW_TOKEN) return res(true);
+          if (Date.now() - t0 > 8000) return res(false);  // unauth → auth.js redirects
+          setTimeout(poll, 40);
+        })();
+      });
+    }
+
     async function load() {
-      await window.TWAuth.ready;
+      await tokenSoon();
       const el = document.getElementById("list");
       try {
         const r = await fetch("/api/drafts", { headers: TW.authHeaders() });

@@ -154,6 +154,10 @@
   #cb-header { user-select: none; }
   #cb-header:hover { filter: brightness(1.07); }
   #computed-bid.cb-collapsed #cb-body { display: none; }
+  /* When expanded, the breakdown + extras + price lines + alternate selector can
+     exceed the screen (the page itself doesn't scroll) — cap the body and give
+     it its own scrollbars (both axes) so nothing runs off-screen. */
+  #cb-body { max-height: 42vh; overflow: auto; }
 
   /* Tab bar — always show horizontal scrollbar */
   .xl-tab-bar.full {

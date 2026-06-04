@@ -37,10 +37,19 @@ def ensure_profile(user_id: str, email: Optional[str], full_name: Optional[str])
     existing = sb.table("profiles").select(_PROFILE_COLS).eq("id", user_id).limit(1).execute()
     if existing.data:
         row = existing.data[0]
-        patch = {"email": email_l, "full_name": full_name}
+        # Only write fields that actually changed — skip the UPDATE round-trip
+        # entirely for a returning user with an unchanged profile. /api/me runs
+        # on every page load (it gates Projects), so avoiding a needless write
+        # to Supabase noticeably speeds up the auth handshake.
+        patch = {}
+        if row.get("email") != email_l:
+            patch["email"] = email_l
+        if full_name and row.get("full_name") != full_name:
+            patch["full_name"] = full_name
         if email_l == SUPER_ADMIN_EMAIL and row.get("role") != "super_admin":
             patch["role"] = "super_admin"
-        sb.table("profiles").update(patch).eq("id", user_id).execute()
+        if patch:
+            sb.table("profiles").update(patch).eq("id", user_id).execute()
         return {**row, **patch}
     role = "super_admin" if email_l == SUPER_ADMIN_EMAIL else "user"
     row = {"id": user_id, "email": email_l, "full_name": full_name, "role": role, "status": "active"}
