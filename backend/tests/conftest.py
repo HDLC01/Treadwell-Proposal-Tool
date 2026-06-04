@@ -45,6 +45,7 @@ class FakeTable:
         self.store, self.name, self.captures = store, name, captures
         self._op = self._payload = None
         self._filters = []
+        self._negate_next = False
 
     def select(self, *a, **k):
         self._op = "select"; return self
@@ -64,6 +65,16 @@ class FakeTable:
     def in_(self, k, vals):
         self._filters.append((k, list(vals))); return self
 
+    @property
+    def not_(self):
+        self._negate_next = True; return self
+
+    def is_(self, k, v):
+        # PostgREST IS NULL filter (v == "null"). Records (k, sentinel, negate).
+        self._filters.append((k, "__isnull__", self._negate_next))
+        self._negate_next = False
+        return self
+
     def order(self, *a, **k):
         return self
 
@@ -75,11 +86,16 @@ class FakeTable:
 
     def _match(self, rows):
         sel = list(rows)
-        for k, v in self._filters:
-            if isinstance(v, list):
-                sel = [r for r in sel if r.get(k) in v]
+        for f in self._filters:
+            if len(f) == 3 and f[1] == "__isnull__":
+                k, _, neg = f
+                sel = [r for r in sel if (r.get(k) is not None) == bool(neg)]
             else:
-                sel = [r for r in sel if r.get(k) == v]
+                k, v = f
+                if isinstance(v, list):
+                    sel = [r for r in sel if r.get(k) in v]
+                else:
+                    sel = [r for r in sel if r.get(k) == v]
         return sel
 
     def execute(self):
@@ -92,9 +108,9 @@ class FakeTable:
                 r.update(self._payload)
             return FakeResult(data=self._match(rows))
         if self._op == "delete":
-            keep = [r for r in rows if r not in self._match(rows)]
-            self.store[self.name] = keep
-            return FakeResult(data=[])
+            matched = self._match(rows)
+            self.store[self.name] = [r for r in rows if r not in matched]
+            return FakeResult(data=matched)  # supabase-py returns the deleted rows
         sel = self._match(rows)
         return FakeResult(data=sel, count=len(sel))
 

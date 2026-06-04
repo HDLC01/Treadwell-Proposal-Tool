@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trash · Treadwell Proposal Generator</title>
+  <style>
+    :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f4f4f5; color:var(--ink); font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 90px; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1100px; margin:0 auto 20px; }
+    .logo { width:34px;height:34px;border-radius:9px;background:var(--ink-v);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    h1 { font-size:20px; margin:0; flex:1; }
+    .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
+    .wrap { max-width:1100px; margin:0 auto; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+    .card { background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.05); opacity:.92; }
+    .pname { font-weight:700; font-size:15px; margin:0 0 6px; }
+    .meta { color:var(--ink-v); font-size:12.5px; display:flex; flex-wrap:wrap; gap:8px 14px; }
+    .total { color:#1a7f37; font-weight:700; }
+    .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
+    .trashed { color:#9e001f; font-weight:600; }
+    .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .restore-btn { background:#1a7f37; color:#fff; border:none; border-radius:7px; padding:7px 14px; font:600 13px system-ui; cursor:pointer; }
+    .restore-btn:hover { background:#156a2d; }
+    .purge-btn { background:transparent; color:var(--red); border:1px solid rgba(200,16,46,.4); border-radius:7px; padding:7px 12px; font:600 13px system-ui; cursor:pointer; }
+    .purge-btn:hover { background:var(--red); color:#fff; }
+    .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="logo">🗑</div>
+    <h1>Trash</h1>
+  </div>
+  <p class="hint">Deleted projects land here first. <b>Restore</b> puts one back in the active Projects list; <b>Delete forever</b> removes it permanently (can't be undone). Files already saved to Dropbox are never affected.</p>
+  <div class="wrap"><div id="list" class="loading">Loading trash…</div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script>
+    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+    function tokenSoon() {
+      return new Promise(res => {
+        const t0 = Date.now();
+        (function poll(){
+          if (window.__TW_TOKEN) return res(true);
+          if (Date.now() - t0 > 8000) return res(false);
+          setTimeout(poll, 40);
+        })();
+      });
+    }
+
+    function render(projects) {
+      const el = document.getElementById("list");
+      if (!projects.length) { el.className="empty"; el.textContent="Trash is empty."; return; }
+      el.className = "grid";
+      el.innerHTML = projects.map(p => `
+        <div class="card" data-id="${encodeURIComponent(p.id)}">
+          <p class="pname">${esc(p.project_name||"(untitled)")}</p>
+          <div class="meta">
+            ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
+            ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
+          </div>
+          <div class="meta" style="margin-top:8px;">
+            <span>by ${esc(p.owner_email||"—")}</span>
+            <span class="trashed">trashed ${fmtDate(p.deleted_at)}</span>
+          </div>
+          <div class="card-foot">
+            <button type="button" class="purge-btn" title="Delete permanently">Delete forever</button>
+            <button type="button" class="restore-btn">↩ Restore</button>
+          </div>
+        </div>`).join("");
+      el.querySelectorAll(".card").forEach(c => {
+        c.querySelector(".restore-btn").addEventListener("click", () => restore(c));
+        c.querySelector(".purge-btn").addEventListener("click", () => purge(c));
+      });
+    }
+
+    function _name(c){ return (c.querySelector(".pname")||{}).textContent || c.dataset.id; }
+    function _emptyIfNone(){
+      const el = document.getElementById("list");
+      if (el && !el.querySelector(".card")) { el.className="empty"; el.textContent="Trash is empty."; }
+    }
+
+    async function restore(c) {
+      const id = decodeURIComponent(c.dataset.id);
+      try {
+        const r = await fetch("/api/draft/" + encodeURIComponent(id) + "/restore", { method:"POST", headers: TW.authHeaders() });
+        const j = await r.json();
+        if (!j || j.ok === false) { alert((j&&j.error)||"Restore failed."); return; }
+        c.remove(); _emptyIfNone();
+        try { sessionStorage.removeItem("tw_projects_cache"); } catch {}
+      } catch (err) { alert("Restore failed. " + (err.message||"")); }
+    }
+
+    async function purge(c) {
+      const id = decodeURIComponent(c.dataset.id);
+      if (!confirm(`Permanently delete “${_name(c)}”?\n\nThis can't be undone.`)) return;
+      try {
+        const r = await fetch("/api/draft/" + encodeURIComponent(id) + "?permanent=true", { method:"DELETE", headers: TW.authHeaders() });
+        const j = await r.json();
+        if (!j || j.ok === false) { alert((j&&j.error)||"Delete failed."); return; }
+        c.remove(); _emptyIfNone();
+      } catch (err) { alert("Delete failed. " + (err.message||"")); }
+    }
+
+    async function load() {
+      await tokenSoon();
+      const el = document.getElementById("list");
+      try {
+        const r = await fetch("/api/trash", { headers: TW.authHeaders() });
+        const j = await r.json();
+        render((j && j.projects) || []);
+      } catch (err) {
+        el.className="empty"; el.textContent="Couldn't load trash. " + (err.message||"");
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

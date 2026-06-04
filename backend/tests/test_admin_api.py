@@ -73,27 +73,23 @@ def test_delete_project_blocked_for_non_admin(monkeypatch):
     assert client.delete("/api/admin/projects/proj-1").status_code == 403
 
 
-def test_delete_project_runs_for_admin_and_logs(monkeypatch):
+def test_delete_project_trashes_for_admin(monkeypatch):
+    # Admin "delete" is now a SOFT delete — it moves the project to Trash
+    # (restorable) via drafts.trash_draft, not a hard delete.
     monkeypatch.setattr(profiles, "get_by_email",
                         lambda e: {"id": "a1", "email": e, "role": "admin"})
-    monkeypatch.setattr(main.drafts, "load_draft",
-                        lambda i: {"id": i, "data": {"project_name": "Acme HQ"}})
-    deleted = {}
+    trashed = {}
 
-    def fake_delete(i):
-        deleted["id"] = i
+    def fake_trash(i, actor_email=None):
+        trashed.update(id=i, actor=actor_email)
         return True
 
-    monkeypatch.setattr(main.drafts, "delete_draft", fake_delete)
-    events = []
-    monkeypatch.setattr(main.drafts, "log_event",
-                        lambda *a, **k: events.append((a, k)))
+    monkeypatch.setattr(main.drafts, "trash_draft", fake_trash)
     r = client.delete("/api/admin/projects/proj-9")
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True and body["existed"] is True and body["project_name"] == "Acme HQ"
-    assert deleted["id"] == "proj-9"
-    assert events and events[0][0][2] == "deleted_project"
+    assert body["ok"] is True and body["existed"] is True and body["trashed"] is True
+    assert trashed["id"] == "proj-9" and trashed["actor"] == "tester@wetreadwell.com"
 
 
 # ── /api/me ────────────────────────────────────────────────────────────

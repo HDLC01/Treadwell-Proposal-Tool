@@ -136,6 +136,7 @@
       '<div class="tw-section">Workspace</div>' +
       navItem("/projects.html", "▣", "Projects") +
       navItem("/history.html", "⟲", "History") +
+      navItem("/trash.html", "🗑", "Trash") +
       (isAdmin ? '<div class="tw-section">System</div>' + navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar">' + esc(initials(u.name, u.email)) + '</div>' +
