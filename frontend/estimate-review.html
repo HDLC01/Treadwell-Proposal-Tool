@@ -2256,7 +2256,17 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
   const rez = document.getElementById("cb-resizer");
   if (!panel || !vp || !rez) return;
   const KEY = "tw_ws_height";   // persisted WORKSHEET height (expanded mode)
-  const clamp = h => Math.max(120, Math.min(h, Math.round(window.innerHeight * 0.82)));
+  const tbEl = document.getElementById("total-bar");
+  // Cap the worksheet at the actual space available between it and the bottom of
+  // the window, reserving room for the total-bar, the handle, and a >=90px panel —
+  // so dragging the worksheet bigger can never push the bid panel off-screen.
+  function maxWs(){
+    const vpTop = vp.getBoundingClientRect().top;
+    const tbH = tbEl ? tbEl.getBoundingClientRect().height : 0;
+    const rezH = rez.getBoundingClientRect().height || 10;
+    return Math.max(160, Math.floor(window.innerHeight - vpTop - tbH - rezH - 90));
+  }
+  const clamp = h => Math.max(120, Math.min(h, maxWs()));
   function applySaved(){
     if (panel.classList.contains("cb-collapsed")) {
       // Collapsed: worksheet fills the window (back to flex:1), no resizer.
