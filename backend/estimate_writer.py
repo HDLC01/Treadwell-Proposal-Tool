@@ -366,11 +366,24 @@ POLISH_TOTALS: Dict[str, str] = {
 # A = label, B = qty, C = unit price; D is the =B*C formula we leave intact.
 EPOXY_EXTRA_ROWS: list[int] = [23, 27, 28, 32, 33, 39]
 
+# ── Alternate (recommended) system tab ──────────────────────────────────
+# The spare "Epoxy blank" tab is repurposed to show Kyle's recommended
+# alternate. Its project-info + labor cells are FORMULA MIRRORS to `Epoxy!`
+# (don't overwrite). We drive it with the engine's alternate material SUBTOTAL
+# (pre-shipping) injected into a "MATERIAL - Extras" =B*C row + the alt SF, and
+# let the tab's own formulas recompute its Total Base Bid (D85). We never
+# hard-write D85 (openpyxl can't evaluate formulas — Excel recomputes on open).
+ALT_TAB_NAME = "Epoxy blank"
+ALT_TAB_RENAME = "Alternate System"
+ALT_SF_CELL = "E20"
+ALT_MATERIAL_ROW = 29          # first "MATERIAL - Extras" =B*C row on the blank tab
+
 
 def fill_estimate(
     values: Mapping[str, Any],
     cell_values: Mapping[str, Any] | None = None,
     extras: list[Mapping[str, Any]] | None = None,
+    alternate: Mapping[str, Any] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
@@ -422,11 +435,51 @@ def fill_estimate(
     # 3. Extra material lines -> spare "=B*C" rows on the Epoxy tab.
     _write_extra_materials(epoxy, extras)
 
+    # 4. Alternate (recommended) system -> the spare "Epoxy blank" tab.
+    if alternate:
+        _write_alternate_tab(wb, alternate)
+
     # Stream to bytes
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
+    """Populate the spare 'Epoxy blank' tab as the recommended alternate.
+
+    `alternate` = {"sf", "material_sub", "label"}. We set the SF input and drop
+    the engine's alternate material subtotal into a "MATERIAL - Extras" =B*C row
+    so it flows D37 -> D40 -> ... -> D85 (the tab recomputes its own Total Base
+    Bid on open). The PROPOSAL uses the engine's alternate total as authoritative;
+    this tab is the supporting worksheet.
+    """
+    if ALT_TAB_NAME not in wb.sheetnames:
+        return
+
+    def _f(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return 0.0
+
+    ws = wb[ALT_TAB_NAME]
+    sf = _f(alternate.get("sf"))
+    if sf:
+        ws[ALT_SF_CELL] = sf
+    material_sub = _f(alternate.get("material_sub"))
+    if material_sub:
+        r = ALT_MATERIAL_ROW
+        ws[f"A{r}"] = (alternate.get("label") or "Alternate system").strip()
+        ws[f"B{r}"] = 1
+        ws[f"C{r}"] = material_sub      # D{r} stays =B{r}*C{r} -> flows into D37/D40/D85
+    # Rename so the tab reads as the alternate (safe: its formulas reference
+    # `Epoxy!`, not its own title, and no other tab references it by name).
+    try:
+        ws.title = ALT_TAB_RENAME
+    except Exception:  # noqa: BLE001 — duplicate name or odd char; keep original
+        pass
 
 
 def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:

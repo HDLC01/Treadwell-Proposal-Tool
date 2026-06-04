@@ -650,6 +650,36 @@
       <div id="cb-extras"></div>
       <div id="cb-extras-note" style="font-size:11.5px;color:var(--treadwell-red,#c0392b);margin-top:5px;display:none;"></div>
     </div>
+
+    <!-- Proposal price lines: options / unit prices shown UNDER PRICE on the
+         proposal (e.g. "$4,200 – Onsite mockup"). Display-only — these do NOT
+         change the computed bid. -->
+    <div style="border-top:1px solid rgba(0,0,0,.1);padding:8px 14px 12px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
+        <strong style="font-size:12.5px;">Proposal price lines</strong>
+        <span style="font-size:11.5px;color:var(--ink-variant,#888);">options &amp; unit prices listed under Price on the proposal</span>
+        <button type="button" id="cb-add-priceline" style="margin-left:auto;font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
+      </div>
+      <div id="cb-pricelines-head" style="display:none;grid-template-columns:1fr 120px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
+        <span>Label</span><span style="text-align:right;">Amount&nbsp;$</span><span></span>
+      </div>
+      <div id="cb-pricelines"></div>
+    </div>
+
+    <!-- Alternate (recommended) system: a second, independent bid priced with
+         the same tax/labor as the base, shown beside the Base Bid on the proposal. -->
+    <div style="border-top:1px solid rgba(0,0,0,.1);padding:8px 14px 12px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
+        <strong style="font-size:12.5px;">Alternate (recommended) system</strong>
+        <span style="font-size:11.5px;color:var(--ink-variant,#888);">optional — adds a 2nd priced option to the proposal</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 90px;gap:8px;align-items:center;">
+        <select id="alt-system" style="font-size:12.5px;padding:4px 6px;"><option value="">— none —</option></select>
+        <input type="number" id="alt-sf" placeholder="SF" style="font-size:12.5px;padding:4px 6px;text-align:right;">
+      </div>
+      <input type="text" id="alt-label" placeholder="Proposal label (e.g. 3/16&quot; Urethane Cement)" style="width:100%;font-size:12.5px;padding:4px 6px;margin-top:6px;box-sizing:border-box;">
+      <div id="alt-result" style="font-size:12.5px;margin-top:6px;color:var(--ink-variant,#888);"></div>
+    </div>
     </div><!-- /#cb-body -->
   </div>
 
@@ -1969,6 +1999,11 @@ async function computeBid() {
   };
   const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
   if (psf > 0) payload.polish_sf = psf;
+  // Alternate (recommended) system — priced with the SAME tax/labor as the base.
+  if (typeof altActive === "function" && altActive()) {
+    payload.alternate_systems = [{ name: ALT.system, sf: _cbNum(ALT.sf) }];
+    payload.alternate_label = (ALT.label || "").trim();
+  }
   const grid = document.getElementById("cb-grid"), st = document.getElementById("cb-status");
   if (!systems.length && !payload.polish_sf) {
     grid.innerHTML = '<div style="color:var(--ink-variant,#888)">Select a system and enter SF to compute the bid.</div>';
@@ -1978,7 +2013,11 @@ async function computeBid() {
   try {
     const r = await TW.postJSON("/api/price", payload);
     renderBid(r); st.textContent = "";
-    state.computed_bid = r; TW.setState({ ...state, computed_bid: r });
+    // The full response carries `alternate_full_bid` + `alternate` when an
+    // alternate was priced — stash it so the proposal step can render it.
+    state.computed_bid = r;
+    state.alternate_computed_bid = r.alternate_full_bid ? r : null;
+    TW.setState({ ...state, computed_bid: r, alternate_computed_bid: state.alternate_computed_bid });
   } catch (e) { st.textContent = "error"; }
 }
 
@@ -1999,6 +2038,15 @@ function renderBid(r) {
     rows.push(["Sales tax", fb.sales_tax]);
     rows.push(["KS remodel tax", fb.remodel_tax]);
     rows.push(["TOTAL BASE BID", fb.total_base_bid, true]);
+  }
+  // Alternate (recommended) system — a second priced option beside the base.
+  const altRes = document.getElementById("alt-result");
+  if (r.alternate_full_bid && r.alternate_full_bid.total_base_bid) {
+    const albl = (r.alternate && r.alternate.label) || "Alternate system";
+    rows.push([`ALTERNATE — ${albl}`, r.alternate_full_bid.total_base_bid, true]);
+    if (altRes) altRes.textContent = `Alternate Total Base Bid: ${_cbFmt(r.alternate_full_bid.total_base_bid)}`;
+  } else if (altRes) {
+    altRes.textContent = "";
   }
   document.getElementById("cb-grid").innerHTML = rows.map(([l, v, bold]) =>
     `<div style="display:flex;justify-content:space-between;padding:3px 0;${bold ? 'font-weight:700;border-top:2px solid var(--treadwell-red,#c0392b);margin-top:3px;padding-top:5px' : ''}"><span>${l}</span><span>${_cbFmt(v)}</span></div>`
@@ -2079,6 +2127,69 @@ document.getElementById("cb-add-extra").addEventListener("click", () => {
   if (inputs.length) inputs[inputs.length - 1].focus();
 });
 
+// ── Proposal price lines (options / unit prices; display-only) ──────────
+let PRICE_LINES = Array.isArray(state.price_lines) ? state.price_lines.slice() : [];
+function getPriceLines() {
+  return PRICE_LINES
+    .map(p => ({ label: (p.label || "").trim(), amount: _cbNum(p.amount) }))
+    .filter(p => p.label && p.amount);
+}
+function persistPriceLines() { state.price_lines = PRICE_LINES; TW.setState({ ...state, price_lines: PRICE_LINES }); }
+function renderPriceLines() {
+  const wrap = document.getElementById("cb-pricelines");
+  if (!wrap) return;
+  document.getElementById("cb-pricelines-head").style.display = PRICE_LINES.length ? "grid" : "none";
+  wrap.innerHTML = "";
+  PRICE_LINES.forEach((p, i) => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:grid;grid-template-columns:1fr 120px 28px;gap:6px;align-items:center;margin-bottom:4px;";
+    row.innerHTML =
+      `<input type="text" data-k="label" placeholder="e.g. Onsite mockup" value="${(p.label || "").replace(/"/g, "&quot;")}" style="font-size:12.5px;padding:3px 6px;">
+       <input type="number" data-k="amount" placeholder="0" value="${p.amount ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
+       <button type="button" data-act="rm" title="Remove" style="cursor:pointer;border:none;background:none;color:var(--treadwell-red,#c0392b);font-size:15px;">×</button>`;
+    row.querySelectorAll("input").forEach(inp => inp.addEventListener("input", () => {
+      PRICE_LINES[i][inp.dataset.k] = inp.value; persistPriceLines();
+    }));
+    row.querySelector('[data-act="rm"]').addEventListener("click", () => {
+      PRICE_LINES.splice(i, 1); persistPriceLines(); renderPriceLines();
+    });
+    wrap.appendChild(row);
+  });
+}
+document.getElementById("cb-add-priceline").addEventListener("click", () => {
+  PRICE_LINES.push({ label: "", amount: "" });
+  persistPriceLines(); renderPriceLines();
+  const inputs = document.querySelectorAll("#cb-pricelines input[data-k='label']");
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+// ── Alternate (recommended) system selector ─────────────────────────────
+let ALT = Object.assign({ system: "", sf: "", label: "" }, state.alternate || {});
+function altActive() { return _cbRealSystem(ALT.system) && _cbNum(ALT.sf) > 0; }
+function persistAlt() { state.alternate = ALT; TW.setState({ ...state, alternate: ALT }); }
+function populateAltSystems(list) {
+  const sys = document.getElementById("alt-system");
+  if (!sys) return;
+  const cur = ALT.system || "";
+  sys.innerHTML = '<option value="">— none —</option>' +
+    (list || []).map(n => `<option value="${String(n).replace(/"/g, "&quot;")}"${n === cur ? " selected" : ""}>${n}</option>`).join("");
+}
+function wireAlt() {
+  const sys = document.getElementById("alt-system"),
+        sf = document.getElementById("alt-sf"),
+        lab = document.getElementById("alt-label");
+  if (!sys) return;
+  if (ALT.sf) sf.value = ALT.sf;
+  if (ALT.label) lab.value = ALT.label;
+  const recompute = () => {
+    ALT.system = sys.value; ALT.sf = sf.value; ALT.label = lab.value; persistAlt();
+    clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
+  };
+  sys.addEventListener("change", recompute);
+  sf.addEventListener("input", recompute);
+  lab.addEventListener("input", () => { ALT.label = lab.value; persistAlt(); });
+}
+
 document.getElementById("cb-bulk").addEventListener("change", e => {
   // mirror Kyle's D41 toggle into the grid so it flows to the generated sheet
   cellValues["Epoxy!D41"] = e.target.checked ? "BULK Discount ON" : "Bulk Discount OFF";
@@ -2119,9 +2230,13 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
 (window.TWAuth && window.TWAuth.ready ? window.TWAuth.ready : Promise.resolve())
   .then(() => fetch(TW.absoluteUrl("/api/pricing/systems"), { headers: TW.authHeaders() }))
   .then(r => r.json())
-  .then(d => { (d.systems || d.epoxy || []).forEach(n => VALID_SYSTEMS.add(n)); })
+  .then(d => { const list = (d.systems || d.epoxy || []); list.forEach(n => VALID_SYSTEMS.add(n)); populateAltSystems(list); })
   .catch(() => {})
-  .finally(() => setTimeout(() => { seedExtrasFromSheet(); renderExtras(); computeBid(); }, 1200));
+  .finally(() => setTimeout(() => {
+    seedExtrasFromSheet(); renderExtras();
+    renderPriceLines(); wireAlt();
+    computeBid();
+  }, 1200));
 </script>
 </body>
 </html>

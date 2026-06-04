@@ -706,9 +706,14 @@
         cell_values: state.cell_values || {},
         // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows
         extras: Array.isArray(state.extras) ? state.extras : [],
+        // Structured proposal price lines (options / unit prices) -> {{#price_line}} rows
+        price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
         // Authoritative bid from the 5.7-recipe engine — the generate
         // response echoes this so nothing downstream shows a stale total.
         computed_bid: state.computed_bid || null,
+        // Recommended alternate system (2nd bid) -> {{#alternate}} block + 2nd estimate tab
+        alternate_computed_bid: state.alternate_computed_bid || null,
+        alternate_label: (state.alternate && state.alternate.label) || "",
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).

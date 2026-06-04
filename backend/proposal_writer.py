@@ -172,12 +172,15 @@ def _iter_all_paragraphs(d: Document):
 # drawing/shape — so it is safe inside floating text boxes (no drawing-id
 # or VML-fallback duplication problems). The whole block must therefore
 # live inside ONE container (one text box, one table cell, or the body).
-BLOCK_START_RE = re.compile(r"\{\{\s*#\s*system\s*\}\}")
-BLOCK_END_RE = re.compile(r"\{\{\s*/\s*system\s*\}\}")
-# `{{system.field}}` — dotted per-system token.
-SYS_TOKEN_RE = re.compile(
-    r"\{\{\s*system\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}"
-)
+# Name-capturing block markers — `{{#<name>}}` / `{{/<name>}}` — so any named
+# list can drive a repeatable block (`system`, `price_line`, `alternate`, …).
+BLOCK_START_RE = re.compile(r"\{\{\s*#\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+BLOCK_END_RE = re.compile(r"\{\{\s*/\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+
+
+def _dotted_token_re(name: str) -> "re.Pattern":
+    """`{{<name>.field}}` — dotted per-item token for a given block name."""
+    return re.compile(r"\{\{\s*" + re.escape(name) + r"\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 
 def _p_text(p_elem) -> str:
@@ -185,29 +188,27 @@ def _p_text(p_elem) -> str:
     return "".join(t.text or "" for t in p_elem.iter(qn("w:t")))
 
 
-def _substitute_system_tokens(p_elem, system: Mapping[str, Any]) -> None:
-    """Replace `{{system.field}}` / bare `{{field}}` in one <w:p> element.
+def _substitute_item_tokens(p_elem, item: Mapping[str, Any], block_name: str) -> None:
+    """Replace `{{<block>.field}}` / bare `{{field}}` in one cloned <w:p>.
 
-    Mirrors `_replace_in_paragraph`'s run-collapsing strategy but works on
-    a raw lxml element (the cloned block paragraphs aren't attached to a
-    python-docx parent). Only system-scoped tokens are touched; foreign
-    `{{tokens}}` are left for the later flat pass.
+    Mirrors `_replace_in_paragraph`'s run-collapsing strategy but works on a raw
+    lxml element (cloned block paragraphs aren't attached to a python-docx
+    parent). `{{<block>.field}}` always resolves against `item`; bare
+    `{{field}}` resolves against `item` ONLY when the key exists there — any
+    other `{{token}}` (e.g. {{state_name}}) is left for the flat pass.
     """
     full = _p_text(p_elem)
     if "{{" not in full:
         return
 
-    def repl(m: re.Match) -> str:
-        # `{{system.field}}` always resolves against the system dict.
-        return str(system.get(m.group(1), m.group(0)))
+    dotted = _dotted_token_re(block_name)
+    new_text = dotted.sub(lambda m: str(item.get(m.group(1), m.group(0))), full)
 
-    new_text = SYS_TOKEN_RE.sub(repl, full)
-
-    # Bare `{{field}}` resolves against the system dict ONLY when the key
-    # exists there — otherwise it's left for the flat pass against `values`.
+    # Bare `{{field}}` resolves against `item` ONLY when the key exists there —
+    # otherwise it's left for the flat pass against `values`.
     def repl_bare(m: re.Match) -> str:
         key = m.group(1)
-        return str(system[key]) if key in system else m.group(0)
+        return str(item[key]) if key in item else m.group(0)
 
     new_text = TOKEN_RE.sub(repl_bare, new_text)
 
@@ -229,76 +230,77 @@ def _substitute_system_tokens(p_elem, system: Mapping[str, Any]) -> None:
             t.text = ""
 
 
-def _expand_system_blocks(container, systems: list[Mapping[str, Any]]) -> int:
-    """Expand one `{{#system}}…{{/system}}` block within a parent element.
+def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]]) -> int:
+    """Expand EVERY `{{#<block_name>}}…{{/<block_name>}}` block in `container`.
 
-    `container` is any element whose direct <w:p> children may hold the
-    markers (a <w:body>, <w:tc>, or <w:txbxContent>). Returns the number
-    of blocks expanded (0 or 1 per container per call — we handle the
-    first block found; templates ship with a single repeatable block).
+    `container` is any element whose direct <w:p> children may hold the markers
+    (a <w:body>, <w:tc>, or <w:txbxContent>). One container may hold several
+    blocks of different names (e.g. the PRICE cell has {{#price_line}} AND
+    {{#alternate}}) — this expands only the blocks whose name matches
+    `block_name`, re-scanning after each so element indices stay valid.
+    `items==[]` still removes the markers + template body (renders zero rows).
+    Returns how many blocks were expanded.
     """
-    children = list(container)
-    start_idx = end_idx = None
-    for i, child in enumerate(children):
-        if child.tag != qn("w:p"):
-            continue
-        txt = _p_text(child)
-        if start_idx is None and BLOCK_START_RE.search(txt):
-            start_idx = i
-        elif start_idx is not None and BLOCK_END_RE.search(txt):
-            end_idx = i
+    expanded = 0
+    while True:
+        children = list(container)
+        start_idx = end_idx = None
+        for i, child in enumerate(children):
+            if child.tag != qn("w:p"):
+                continue
+            txt = _p_text(child)
+            if start_idx is None:
+                m = BLOCK_START_RE.search(txt)
+                if m and m.group(1) == block_name:
+                    start_idx = i
+            else:
+                m = BLOCK_END_RE.search(txt)
+                if m and m.group(1) == block_name:
+                    end_idx = i
+                    break
+        if start_idx is None or end_idx is None:
             break
 
-    if start_idx is None or end_idx is None:
-        return 0
+        # Template paragraphs strictly between the two markers.
+        template_elems = children[start_idx + 1:end_idx]
+        start_elem = children[start_idx]
+        end_elem = children[end_idx]
 
-    # Template paragraphs strictly between the two markers.
-    template_elems = children[start_idx + 1:end_idx]
-    start_elem = children[start_idx]
-    end_elem = children[end_idx]
+        # For each item, a fresh deep copy of every template paragraph with
+        # per-item tokens substituted.
+        new_elems = []
+        for item in items:
+            for tmpl in template_elems:
+                clone = copy.deepcopy(tmpl)
+                _substitute_item_tokens(clone, item, block_name)
+                new_elems.append(clone)
 
-    # Build the expansion: for each system, a fresh deep copy of every
-    # template paragraph with per-system tokens substituted.
-    new_elems = []
-    for system in systems:
-        for tmpl in template_elems:
-            clone = copy.deepcopy(tmpl)
-            _substitute_system_tokens(clone, system)
-            new_elems.append(clone)
-
-    # Insert all clones right before the start marker, then drop the
-    # markers and the original (un-substituted) template paragraphs.
-    for clone in new_elems:
-        start_elem.addprevious(clone)
-    for stale in [start_elem, end_elem, *template_elems]:
-        container.remove(stale)
-    return 1
+        for clone in new_elems:
+            start_elem.addprevious(clone)
+        for stale in [start_elem, end_elem, *template_elems]:
+            container.remove(stale)
+        expanded += 1
+    return expanded
 
 
-def _expand_all_system_blocks(d: Document, systems: list[Mapping[str, Any]]) -> int:
-    """Find every block-bearing container in the doc and expand it.
+def _expand_all_blocks(d: Document, block_lists: Mapping[str, list]) -> int:
+    """Expand every named block in `block_lists` across the whole document.
 
-    Walks the body, every table cell (recursively), and every text box
-    (<w:txbxContent>, including the VML-fallback duplicate) so a block
-    annotated in any of those locations is expanded consistently.
+    Walks the body, every table cell, and every text box (<w:txbxContent>,
+    including the VML-fallback duplicate) for each block name — so a block
+    authored in any of those locations expands consistently. A block whose
+    list is empty is still processed: its markers + template body are stripped
+    (zero rows) rather than left as literal `{{#name}}` text in the output.
     """
-    blocks = 0
+    total = 0
     body = d.element.body
-
-    # Body itself.
-    blocks += _expand_system_blocks(body, systems)
-
-    # Table cells (recursive — body.iter walks nested tables too).
-    for tc in body.iter(qn("w:tc")):
-        blocks += _expand_system_blocks(tc, systems)
-
-    # Text boxes — both the DrawingML <mc:Choice> copy and the VML
-    # <mc:Fallback> copy each contain their own <w:txbxContent>, so this
-    # keeps the two renderings of the same box in sync.
-    for txbx in body.iter(qn("w:txbxContent")):
-        blocks += _expand_system_blocks(txbx, systems)
-
-    return blocks
+    containers = [body]
+    containers += list(body.iter(qn("w:tc")))
+    containers += list(body.iter(qn("w:txbxContent")))
+    for block_name, items in block_lists.items():
+        for container in containers:
+            total += _expand_named_block(container, block_name, list(items or []))
+    return total
 
 
 def fill_proposal(
@@ -307,6 +309,8 @@ def fill_proposal(
     audience: str | None,
     values: Mapping[str, Any],
     systems: list[Mapping[str, Any]] | None = None,
+    price_lines: list[Mapping[str, Any]] | None = None,
+    alternates: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -314,32 +318,40 @@ def fill_proposal(
     `lump_sum`, `scope_notes`). Tokens not present in `values` are left
     as-is in the doc, so Troy can see which fields were missing.
 
-    `systems` (optional) is a list of per-system dicts. When given AND the
-    template contains a `{{#system}}…{{/system}}` block, that block is
-    cloned once per system with `{{system.field}}` substitution BEFORE the
-    flat pass. Passing `systems=None` (the default), or a template with no
-    block marker, is 100% backward-compatible with v1 single-system fills.
+    Repeatable blocks (Phase 1), each cloned once per list item before the
+    flat pass:
+      - `systems`     → `{{#system}}…{{/system}}`     (only when supplied)
+      - `price_lines` → `{{#price_line}}…{{/price_line}}` (option/unit-price lines)
+      - `alternates`  → `{{#alternate}}…{{/alternate}}`   (0/1 recommended system)
+    `price_line`/`alternate` always run so their markers are stripped (zero
+    rows) when empty — never left as literal text. A template with no marker,
+    and the default args, is 100% backward-compatible with v1 fills.
     """
     template_path = pick_template(work_type, audience)
-    log.info("Filling proposal: work_type=%s audience=%s template=%s systems=%d",
+    log.info("Filling proposal: work_type=%s audience=%s template=%s systems=%d price_lines=%d alt=%d",
              work_type, audience, template_path.name,
-             len(systems) if systems else 0)
+             len(systems) if systems else 0,
+             len(price_lines) if price_lines else 0,
+             len(alternates) if alternates else 0)
 
     if not template_path.exists():
         raise FileNotFoundError(f"Proposal template not found: {template_path}")
 
     d = docx.Document(str(template_path))
 
-    # Phase 1 — expand repeatable per-system blocks (no-op unless BOTH a
-    # non-empty `systems` list is supplied AND the template has a marker).
+    # Phase 1 — expand repeatable blocks. `system` only when supplied (don't
+    # strip a {{#system}} block when no systems are given); `price_line` and
+    # `alternate` always run so their markers are stripped (zero rows when
+    # empty) rather than left as literal {{#…}} text in the output.
+    block_lists: dict[str, list] = {
+        "price_line": list(price_lines or []),
+        "alternate": list(alternates or []),
+    }
     if systems:
-        n_blocks = _expand_all_system_blocks(d, list(systems))
-        if n_blocks:
-            log.info("Expanded %d system block(s) for %d system(s)",
-                     n_blocks, len(systems))
-        else:
-            log.info("systems supplied but template has no {{#system}} block; "
-                     "falling back to flat single-system fill")
+        block_lists["system"] = list(systems)
+    n_blocks = _expand_all_blocks(d, block_lists)
+    if n_blocks:
+        log.info("Expanded %d repeatable block(s)", n_blocks)
 
     # Phase 2 — flat {{token}} substitution against `values`. This runs
     # unchanged from v1 and also fills any non-system tokens left inside
