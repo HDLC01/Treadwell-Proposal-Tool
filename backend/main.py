@@ -21,8 +21,10 @@ import hashlib
 import logging
 import math
 import os
+import re
 import time
 import uuid
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -736,12 +738,16 @@ def api_get_file(token: str) -> Response:
     entry = _FILE_CACHE.get(token)
     if not entry:
         raise HTTPException(404, "File expired or already downloaded")
+    # HTTP headers are latin-1 only, so a filename with non-ASCII chars (em-dash,
+    # accents — common in project names) would 500 the response. Send an ASCII
+    # fallback `filename=` plus an RFC 5987 UTF-8 `filename*` for real browsers.
+    fname = entry["filename"]
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", fname).replace('"', "'")
+    disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(fname)}"
     return Response(
         content=entry["content"],
         media_type=entry["content_type"],
-        headers={
-            "Content-Disposition": f'attachment; filename="{entry["filename"]}"',
-        },
+        headers={"Content-Disposition": disposition},
     )
 
 
