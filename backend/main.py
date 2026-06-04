@@ -820,6 +820,23 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         },
     )
 
+    # Persist the generated proposal as a SAVED PROJECT so it appears in the
+    # unified, domain-wide Projects list for everyone (not just whoever was
+    # mid-edit). Normal flow already autosaved the draft while editing; this is
+    # belt-and-suspenders so a proposal is never generated without a visible
+    # project. Keyed on the draft id (X-Project-Id); non-fatal on failure.
+    draft_id = (request.headers.get("x-project-id") or "").strip()
+    if draft_id and draft_id != "no-draft":
+        try:
+            proj_data = dict(values)
+            proj_data["work_type"] = payload.work_type
+            proj_data.setdefault("project_name", project_name)
+            if payload.computed_bid:
+                proj_data["computed_bid"] = payload.computed_bid
+            drafts.save_draft(draft_id, proj_data, owner_email=_user_email(request))
+        except Exception as exc:  # noqa: BLE001 — never block the download
+            log.warning("generate: project save failed: %s", exc)
+
     return GenerateOut(
         work_type=payload.work_type,
         audience=payload.audience,
