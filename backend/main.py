@@ -950,6 +950,26 @@ def api_admin_delete(user_id: str, request: Request) -> Dict[str, Any]:
     return out
 
 
+@app.delete("/api/admin/projects/{project_id}")
+def api_admin_delete_project(project_id: str, request: Request) -> Dict[str, Any]:
+    """Admin: remove a project from the unified Projects list (audit-logged).
+    Files already uploaded to Dropbox are NOT affected — this only clears the
+    in-app draft/state."""
+    actor = _require_admin(request)
+    name = None
+    try:
+        row = drafts.load_draft(project_id)
+        if row:
+            name = (row.get("data") or {}).get("project_name")
+    except Exception:  # noqa: BLE001
+        pass
+    existed = drafts.delete_draft(project_id)
+    if existed:
+        drafts.log_event(project_id, actor.get("email"), "deleted_project",
+                         {"project_name": name, "id": project_id})
+    return {"ok": True, "existed": existed, "project_name": name}
+
+
 # ─── Static frontend ──────────────────────────────────────────────────
 # Serve the 4 HTML pages from ../frontend. Mount AFTER the API routes
 # so /api/* takes precedence.

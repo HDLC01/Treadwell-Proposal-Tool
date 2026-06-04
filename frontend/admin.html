@@ -42,7 +42,7 @@
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
   <script>
-    let ME = null, USERS = [];
+    let ME = null, USERS = [], PROJECTS = [];
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
     async function api(path, opts){ const r = await fetch(path, Object.assign({ headers: TW.authHeaders() }, opts||{})); return r.json().catch(()=>({ok:false,error:"bad response", status:r.status})); }
@@ -63,7 +63,7 @@
       document.getElementById("root").innerHTML = `
         <div class="top"><div class="logo">T</div><h1>Admin</h1>
           <span class="tag">${ME.role==="super_admin"?"SUPER ADMIN":"ADMIN"}</span></div>
-        <p class="sub">User management + system overview</p>
+        <p class="sub">User & project management + system overview</p>
         <div class="cards" id="cards"></div>
         <div class="panel">
           <div class="ph"><strong>Users</strong><span id="ucount" style="color:var(--ink-v)"></span>
@@ -74,9 +74,19 @@
           <div style="overflow-x:auto"><table><thead><tr>
             <th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Joined</th><th>Last change</th><th>Set role</th><th style="text-align:right">Actions</th>
           </tr></thead><tbody id="tbody"></tbody></table></div>
+        </div>
+        <div class="panel" style="margin-top:18px;">
+          <div class="ph"><strong>Projects</strong><span id="pcount" style="color:var(--ink-v)"></span>
+            <span class="grow"></span>
+            <input id="psearch" placeholder="Search project or owner…" />
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr>
+            <th>Project</th><th>Owner</th><th>Total</th><th>Work</th><th>Updated</th><th style="text-align:right">Actions</th>
+          </tr></thead><tbody id="ptbody"></tbody></table></div>
         </div>`;
       document.getElementById("search").addEventListener("input", renderRows);
       document.getElementById("rolefilter").addEventListener("change", refresh);
+      document.getElementById("psearch").addEventListener("input", renderProjects);
     }
 
     async function refresh(){
@@ -91,8 +101,44 @@
       USERS = (u && u.users) || [];
       document.getElementById("ucount").textContent = `${USERS.length} loaded`;
       renderRows();
+      loadProjects();
     }
     function card(k,v){ return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${v==null?"—":v}</div></div>`; }
+    function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : "—"; }
+
+    // ── Projects (unified list) + admin delete ──
+    async function loadProjects(){
+      const r = await api("/api/drafts");
+      PROJECTS = (r && r.projects) || [];
+      document.getElementById("pcount").textContent = `${PROJECTS.length} loaded`;
+      renderProjects();
+    }
+    function renderProjects(){
+      const q = (document.getElementById("psearch").value||"").toLowerCase();
+      const rows = PROJECTS.filter(p => !q
+        || (p.project_name||"").toLowerCase().includes(q)
+        || (p.owner_email||"").toLowerCase().includes(q));
+      document.getElementById("ptbody").innerHTML = rows.map(p => `
+        <tr data-id="${esc(p.id)}" data-name="${esc(p.project_name||"")}">
+          <td>${esc(p.project_name||"(untitled)")}</td>
+          <td>${esc(p.owner_email||"—")}</td>
+          <td>${money(p.total)}</td>
+          <td>${p.work_type?`<span class="badge b-user">${esc(p.work_type)}</span>`:"—"}</td>
+          <td>${fmtDate(p.updated_at)}</td>
+          <td style="text-align:right"><button class="act danger" data-act="delproj">Delete</button></td>
+        </tr>`).join("") || '<tr><td colspan="6" style="color:#5c403f;padding:24px">No projects.</td></tr>';
+      document.querySelectorAll("#ptbody [data-act='delproj']").forEach(el =>
+        el.addEventListener("click", () => {
+          const tr = el.closest("tr");
+          doDeleteProject(tr.dataset.id, tr.dataset.name);
+        }));
+    }
+    async function doDeleteProject(id, name){
+      if (!confirm(`Delete project "${name||id}"?\n\nThis removes it from the shared Projects list for everyone and can't be undone. (Files already saved to Dropbox are not affected.)`)) return;
+      const r = await api(`/api/admin/projects/${encodeURIComponent(id)}`, { method:"DELETE" });
+      if (!r || r.ok===false){ alert((r&&r.error)||"Delete failed"); }
+      refresh();
+    }
 
     function roleBadge(r){ return `<span class="badge ${r==="super_admin"?"b-super":r==="admin"?"b-admin":"b-user"}">${r==="super_admin"?"super admin":r}</span>`; }
     function statusBadge(s){ return `<span class="badge ${s==="banned"?"b-banned":s==="paused"?"b-paused":"b-active"}">${esc(s||"active")}</span>`; }

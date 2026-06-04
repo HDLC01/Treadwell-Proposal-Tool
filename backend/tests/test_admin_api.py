@@ -65,6 +65,37 @@ def test_set_role_endpoint_runs_for_admin(monkeypatch):
     assert captured["target"] == "target-1" and captured["role"] == "admin"
 
 
+# ── admin: delete a project ────────────────────────────────────────────
+def test_delete_project_blocked_for_non_admin(monkeypatch):
+    monkeypatch.setattr(main, "_SUPER_ADMIN_EMAIL", "nobody@wetreadwell.com")
+    monkeypatch.setattr(profiles, "get_by_email",
+                        lambda e: {"id": "u1", "email": e, "role": "user"})
+    assert client.delete("/api/admin/projects/proj-1").status_code == 403
+
+
+def test_delete_project_runs_for_admin_and_logs(monkeypatch):
+    monkeypatch.setattr(profiles, "get_by_email",
+                        lambda e: {"id": "a1", "email": e, "role": "admin"})
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: {"id": i, "data": {"project_name": "Acme HQ"}})
+    deleted = {}
+
+    def fake_delete(i):
+        deleted["id"] = i
+        return True
+
+    monkeypatch.setattr(main.drafts, "delete_draft", fake_delete)
+    events = []
+    monkeypatch.setattr(main.drafts, "log_event",
+                        lambda *a, **k: events.append((a, k)))
+    r = client.delete("/api/admin/projects/proj-9")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["existed"] is True and body["project_name"] == "Acme HQ"
+    assert deleted["id"] == "proj-9"
+    assert events and events[0][0][2] == "deleted_project"
+
+
 # ── /api/me ────────────────────────────────────────────────────────────
 def test_me_upserts_profile_from_claims(monkeypatch):
     monkeypatch.setattr(supabase_client, "verify_token_claims", lambda auth: {
