@@ -20,9 +20,11 @@
     .meta { color:var(--ink-v); font-size:12.5px; display:flex; flex-wrap:wrap; gap:8px 14px; }
     .total { color:#1a7f37; font-weight:700; }
     .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
-    .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:flex-end; }
+    .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:space-between; align-items:center; gap:8px; }
     .open-btn { background:var(--red); color:#fff; border:none; border-radius:7px; padding:7px 14px; font:600 13px system-ui; cursor:pointer; }
     .open-btn:hover { background:#a4232b; }
+    .trash-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 11px; font:600 13px system-ui; cursor:pointer; }
+    .trash-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
   </style>
@@ -84,14 +86,38 @@
             <span>by ${esc(p.owner_email||"—")}</span>
             <span>updated ${fmtDate(p.updated_at)}</span>
           </div>
-          <div class="card-foot"><button type="button" class="open-btn">Open / Edit →</button></div>
+          <div class="card-foot">
+            <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
+            <button type="button" class="open-btn">Open / Edit →</button>
+          </div>
         </div>`).join("");
       const open = (c) => window.location.assign("/?d=" + c.dataset.id);
       el.querySelectorAll(".card").forEach(c => {
         c.addEventListener("click", () => open(c));
         const btn = c.querySelector(".open-btn");
         if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
+        const tb = c.querySelector(".trash-btn");
+        if (tb) tb.addEventListener("click", (e) => { e.stopPropagation(); trashCard(c); });
       });
+    }
+
+    async function trashCard(c) {
+      const id = decodeURIComponent(c.dataset.id);
+      const name = (c.querySelector(".pname")||{}).textContent || id;
+      if (!confirm(`Move “${name}” to Trash?\n\nIt leaves the active list but stays restorable from the Trash page.`)) return;
+      try {
+        const r = await fetch("/api/draft/" + encodeURIComponent(id), { method:"DELETE", headers: TW.authHeaders() });
+        const j = await r.json();
+        if (!j || j.ok === false) { alert((j&&j.error)||"Couldn't move to Trash."); return; }
+        c.remove();
+        // keep the SWR cache honest so it doesn't flash back on next load
+        try {
+          const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "[]");
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify(cached.filter(p => p.id !== id)));
+        } catch {}
+        const el = document.getElementById("list");
+        if (el && !el.querySelector(".card")) { el.className="empty"; el.textContent="No projects yet. Click “+ New project” to start."; }
+      } catch (err) { alert("Couldn't move to Trash. " + (err.message||"")); }
     }
 
     async function load() {

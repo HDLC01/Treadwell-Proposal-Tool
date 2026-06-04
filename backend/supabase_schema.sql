@@ -8,9 +8,15 @@ create table if not exists public.drafts (
   data         jsonb not null default '{}'::jsonb,-- full project state blob
   owner_email  text,                              -- who created it
   created_at   timestamptz not null default now(),
-  updated_at   timestamptz not null default now()
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz                        -- NULL = active; set = in Trash
 );
+-- Soft-delete column for existing deployments (idempotent).
+alter table public.drafts add column if not exists deleted_at timestamptz;
 create index if not exists drafts_updated_idx on public.drafts (updated_at desc);
+-- Partial index: the active-list query filters on deleted_at IS NULL.
+create index if not exists drafts_active_idx on public.drafts (updated_at desc) where deleted_at is null;
+create index if not exists drafts_trashed_idx on public.drafts (deleted_at desc) where deleted_at is not null;
 
 -- 2) Activity / history log -------------------------------------------
 create table if not exists public.events (

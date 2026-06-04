@@ -929,19 +929,44 @@ def api_load_draft(draft_id: str) -> Dict[str, Any]:
 
 
 @app.delete("/api/draft/{draft_id}")
-def api_delete_draft(draft_id: str) -> Dict[str, Any]:
-    """Remove a draft (Start-a-new-project)."""
-    existed = drafts.delete_draft(draft_id)
+def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -> Dict[str, Any]:
+    """Delete a project. Default = soft-delete (moves it to Trash, restorable).
+    `?permanent=true` = hard delete (used by 'Delete forever' from the Trash
+    page). Any signed-in user can manage the shared list."""
+    actor = _user_email(request)
+    if permanent:
+        existed = drafts.delete_draft(draft_id)
+        if existed:
+            drafts.log_event(draft_id, actor, "purged_project", {"id": draft_id})
+        return {"ok": True, "existed": existed, "permanent": True}
+    existed = drafts.trash_draft(draft_id, actor)
+    return {"ok": True, "existed": existed, "trashed": True}
+
+
+@app.post("/api/draft/{draft_id}/restore")
+def api_restore_draft(draft_id: str, request: Request) -> Dict[str, Any]:
+    """Restore a soft-deleted project from Trash back to the active list."""
+    existed = drafts.restore_draft(draft_id, _user_email(request))
     return {"ok": True, "existed": existed}
 
 
 @app.get("/api/drafts")
 def api_list_drafts() -> Dict[str, Any]:
-    """Unified project list (all users) for the Projects dashboard."""
+    """Unified ACTIVE project list (all users) for the Projects dashboard."""
     try:
         return {"ok": True, "projects": drafts.list_drafts()}
     except Exception as exc:  # noqa: BLE001
         log.warning("list_drafts failed: %s", exc)
+        return {"ok": False, "error": str(exc), "projects": []}
+
+
+@app.get("/api/trash")
+def api_list_trash() -> Dict[str, Any]:
+    """Soft-deleted projects for the Trash page (all users, newest-trashed first)."""
+    try:
+        return {"ok": True, "projects": drafts.list_trashed()}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("list_trashed failed: %s", exc)
         return {"ok": False, "error": str(exc), "projects": []}
 
 
@@ -1070,22 +1095,12 @@ def api_admin_delete(user_id: str, request: Request) -> Dict[str, Any]:
 
 @app.delete("/api/admin/projects/{project_id}")
 def api_admin_delete_project(project_id: str, request: Request) -> Dict[str, Any]:
-    """Admin: remove a project from the unified Projects list (audit-logged).
-    Files already uploaded to Dropbox are NOT affected — this only clears the
-    in-app draft/state."""
+    """Admin: move a project to Trash (soft-delete, audit-logged). It can be
+    restored or permanently removed from the Trash page. Files already uploaded
+    to Dropbox are NOT affected — this only touches the in-app draft/state."""
     actor = _require_admin(request)
-    name = None
-    try:
-        row = drafts.load_draft(project_id)
-        if row:
-            name = (row.get("data") or {}).get("project_name")
-    except Exception:  # noqa: BLE001
-        pass
-    existed = drafts.delete_draft(project_id)
-    if existed:
-        drafts.log_event(project_id, actor.get("email"), "deleted_project",
-                         {"project_name": name, "id": project_id})
-    return {"ok": True, "existed": existed, "project_name": name}
+    existed = drafts.trash_draft(project_id, actor.get("email"))
+    return {"ok": True, "existed": existed, "trashed": True}
 
 
 # ─── Static frontend ──────────────────────────────────────────────────
