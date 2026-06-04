@@ -20,6 +20,10 @@
     .meta { color:var(--ink-v); font-size:12.5px; display:flex; flex-wrap:wrap; gap:8px 14px; }
     .total { color:#1a7f37; font-weight:700; }
     .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
+    .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:flex-end; }
+    .open-btn { background:var(--red); color:#fff; border:none; border-radius:7px; padding:7px 14px; font:600 13px system-ui; cursor:pointer; }
+    .open-btn:hover { background:#a4232b; }
+    .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
   </style>
 </head>
@@ -29,6 +33,7 @@
     <h1>Projects</h1>
     <a class="btn" id="new-project">+ New project</a>
   </div>
+  <p class="hint">Open any saved project to reopen and re-edit it — your intake, estimate cells, and bid come back exactly as saved, then you can change anything and re-generate.</p>
   <div class="wrap"><div id="list" class="loading">Loading projects…</div></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -69,9 +74,14 @@
               <span>by ${esc(p.owner_email||"—")}</span>
               <span>updated ${fmtDate(p.updated_at)}</span>
             </div>
+            <div class="card-foot"><button type="button" class="open-btn">Open / Edit →</button></div>
           </div>`).join("");
-        el.querySelectorAll(".card").forEach(c =>
-          c.addEventListener("click", () => window.location.assign("/?d=" + c.dataset.id)));
+        const open = (c) => window.location.assign("/?d=" + c.dataset.id);
+        el.querySelectorAll(".card").forEach(c => {
+          c.addEventListener("click", () => open(c));
+          const btn = c.querySelector(".open-btn");
+          if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
+        });
       } catch (err) {
         el.className="empty"; el.textContent="Couldn't load projects. " + (err.message||"");
       }
