@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from supabase_client import get_client
+from supabase_client import get_client, get_auth_client
 
 _PROFILE_COLS = "id,email,full_name,role,status,banned_at,banned_until,ban_reason,created_at,updated_at"
 _BAN_FOREVER = "876000h"  # ~100 years ≈ permanent (Supabase Admin API ban_duration)
@@ -163,12 +163,11 @@ def ban_user(actor: Dict[str, Any], target_id: str, reason: str = "") -> Dict[st
     err = _can_act(actor, target)
     if err:
         return {"ok": False, "error": err}
-    sb = get_client()
     try:
-        sb.auth.admin.update_user_by_id(target_id, {"ban_duration": _BAN_FOREVER})
+        get_auth_client().auth.admin.update_user_by_id(target_id, {"ban_duration": _BAN_FOREVER})
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Auth ban failed: {exc}"}
-    sb.table("profiles").update({
+    get_client().table("profiles").update({
         "status": "banned", "banned_at": _now_iso(), "ban_reason": reason or None,
     }).eq("id", target_id).execute()
     return {"ok": True, "status": "banned"}
@@ -179,12 +178,11 @@ def unban_user(actor: Dict[str, Any], target_id: str) -> Dict[str, Any]:
     err = _can_act(actor, target)
     if err:
         return {"ok": False, "error": err}
-    sb = get_client()
     try:
-        sb.auth.admin.update_user_by_id(target_id, {"ban_duration": "none"})
+        get_auth_client().auth.admin.update_user_by_id(target_id, {"ban_duration": "none"})
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Auth unban failed: {exc}"}
-    sb.table("profiles").update({
+    get_client().table("profiles").update({
         "status": "active", "banned_at": None, "banned_until": None, "ban_reason": None,
     }).eq("id", target_id).execute()
     return {"ok": True, "status": "active"}
@@ -195,13 +193,12 @@ def delete_user(actor: Dict[str, Any], target_id: str) -> Dict[str, Any]:
     err = _can_act(actor, target)
     if err:
         return {"ok": False, "error": err}
-    sb = get_client()
     try:
-        sb.auth.admin.delete_user(target_id)  # cascades to profiles via FK
+        get_auth_client().auth.admin.delete_user(target_id)  # cascades to profiles via FK (cloud)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Delete failed: {exc}"}
     try:
-        sb.table("profiles").delete().eq("id", target_id).execute()  # in case no cascade
+        get_client().table("profiles").delete().eq("id", target_id).execute()  # data store
     except Exception:  # noqa: BLE001
         pass
     return {"ok": True, "email": target.get("email")}
