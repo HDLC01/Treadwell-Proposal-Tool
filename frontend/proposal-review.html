@@ -446,6 +446,12 @@
           <strong id="total-display">$0</strong> – Total
         </p>
 
+        <!-- Structured proposal price lines (options) + recommended alternate
+             system. Populated by renderProposalExtras() from state so the live
+             preview matches what the generated .docx will contain. -->
+        <div id="price-lines-block"></div>
+        <div id="alternate-block"></div>
+
         <p style="margin: 0;">
           <textarea name="price_options" class="doc-textarea" rows="3"
             placeholder="Add Option: $500- Treadwell Epoxy Cleaning Demonstration (within one hour of KC). Demonstration includes a gallon of cleaner and a step by step demonstration on caring for your new floors."></textarea>
@@ -542,6 +548,50 @@
     // so keep the separate remodel-tax line hidden.
     const rr = document.getElementById("remodel-tax-row");
     if (rr) rr.style.display = "none";
+    renderProposalExtras();
+  }
+
+  // Render the structured price lines + the recommended ALTERNATE system into
+  // the visible PRICE section, mirroring the {{#price_line}} / {{#alternate}}
+  // blocks the backend writes into the .docx. Driven by state (set on the
+  // Estimate screen), so the estimator sees the alternate BEFORE generating.
+  function renderProposalExtras() {
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    // (a) Structured price lines (options / unit prices listed under PRICE)
+    const plBlock = document.getElementById("price-lines-block");
+    if (plBlock) {
+      const pls = Array.isArray(state.price_lines) ? state.price_lines : [];
+      plBlock.innerHTML = pls.map(l => {
+        const amt = Number(l.amount || 0);
+        const label = (l.label || "").trim();
+        if (!amt || !label) return "";
+        return `<p style="margin:0 0 6pt;"><strong>${fmtUSD(amt)}</strong> – ${esc(label)}</p>`;
+      }).join("");
+    }
+
+    // (b) Recommended alternate system — a 2nd, independent priced bid.
+    const altBlock = document.getElementById("alternate-block");
+    if (!altBlock) return;
+    const acb   = state.alternate_computed_bid;
+    const altFb = acb && acb.alternate_full_bid;
+    if (!altFb || typeof altFb.total_base_bid !== "number") { altBlock.innerHTML = ""; return; }
+    const altTotal   = altFb.total_base_bid;
+    const altRemodel = Number(altFb.remodel_tax || 0);
+    const altFloor   = altTotal - altRemodel;
+    const altLabel   = (state.alternate && state.alternate.label)
+                       || (acb.alternate && acb.alternate.label) || "Alternate System";
+    const stateName  = (form.querySelector("[name='state_name']") || {}).value || "Kansas";
+    altBlock.innerHTML =
+      `<p style="margin:14pt 0 6pt;font-weight:bold;color:#c8102e;border-top:1px solid #c8102e;padding-top:10pt;">` +
+      `ALTERNATE SYSTEM — ${esc(altLabel)}</p>` +
+      `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altFloor)}</strong> – ${esc(altLabel)} ` +
+      `<em>(sales &amp; ${esc(stateName)} remodel tax INCLUDED)</em></p>` +
+      (altRemodel > 0
+        ? `<p style="margin:0 0 6pt;"><strong><mark>${fmtUSD(altRemodel)}</mark></strong> – ${esc(stateName)} Remodel Tax</p>`
+        : "") +
+      `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
 
   // Lump sum = the Computed Bid from the 5.7-recipe pricing engine
