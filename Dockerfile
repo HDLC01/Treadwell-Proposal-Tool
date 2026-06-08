@@ -16,6 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+# LibreOffice (headless) renders the filled .docx proposal to PDF for the
+# "Download as PDF" button (see backend/pdf_writer.py). The Writer-only subset
+# keeps the image as small as this feature allows (no Calc/Impress). Carlito is
+# metric-compatible with Calibri and Liberation with Arial/Times/Courier, so the
+# rendered PDF lays out like Word even though those Microsoft fonts aren't shipped.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer fonts-crosextra-carlito fonts-liberation \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install Python deps first (separate layer = cache-friendly)

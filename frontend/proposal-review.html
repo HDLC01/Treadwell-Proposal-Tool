@@ -744,9 +744,9 @@
     };
 
     // We no longer call /api/generate here. The actual file generation
-    // + Dropbox upload moved to the Done page so the user has one final
-    // review screen before anything customer-facing happens. Stash the
-    // payload that Done.html will POST when the user clicks Generate.
+    // moved to the Done page so the user has one final review screen before
+    // anything customer-facing happens. Stash the payload that Done.html
+    // will POST when the user clicks Generate.
     TW.setState({
       ...mergedValues,
       proposal_payload: {

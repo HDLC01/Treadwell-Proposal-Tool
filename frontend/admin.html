@@ -134,7 +134,7 @@
         }));
     }
     async function doDeleteProject(id, name){
-      if (!confirm(`Move project "${name||id}" to Trash?\n\nIt leaves the shared Projects list but stays restorable from the Trash page. (Files already saved to Dropbox are not affected.)`)) return;
+      if (!confirm(`Move project "${name||id}" to Trash?\n\nIt leaves the shared Projects list but stays restorable from the Trash page.`)) return;
       const r = await api(`/api/admin/projects/${encodeURIComponent(id)}`, { method:"DELETE" });
       if (!r || r.ok===false){ alert((r&&r.error)||"Move to Trash failed"); }
       refresh();
