@@ -705,12 +705,33 @@ def _ensure_state_name(values: Dict[str, Any]) -> None:
         values["state_name"] = "Kansas"
 
 
+# Token aliases that mean the same value (see CLAUDE.md "Proposal template
+# tokens"). Generation must NOT depend on the frontend having mapped these — a
+# literal "{{job_name}}" in a customer-facing proposal is worse than anything
+# this guards against. For each (target, source) pair, a blank/missing target
+# is backfilled from a non-empty source, in-place. The real flow already sets
+# both, so this is a no-op there; it only rescues callers/older payloads that
+# sent just one side (e.g. project_name without job_name).
+_VALUE_ALIASES = (
+    ("job_name", "project_name"),
+    ("project_name", "job_name"),
+)
+
+
+def _ensure_value_aliases(values: Dict[str, Any]) -> None:
+    """Backfill blank token aliases in-place (e.g. job_name <- project_name)."""
+    for target, source in _VALUE_ALIASES:
+        if not str(values.get(target) or "").strip() and str(values.get(source) or "").strip():
+            values[target] = values[source]
+
+
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually."""
     values = payload.values
     _ensure_state_name(values)
+    _ensure_value_aliases(values)
 
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
     price_line_dicts = []
