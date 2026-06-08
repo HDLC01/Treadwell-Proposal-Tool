@@ -7,7 +7,7 @@ context loaded.
 
 ---
 
-## ⚡ CURRENT PRODUCTION STATE (last updated 2026-05-30)
+## ⚡ CURRENT PRODUCTION STATE (last updated 2026-06-09)
 
 > **This block overrides any stale info further down.** The sections below
 > were written for v1 and are partly outdated — trust THIS block first.
@@ -24,11 +24,19 @@ context loaded.
 - DNS: A-record `proposals` → `50.6.110.215` in Bluehost DNS for `wetreadwell.com`.
 - App lives at `/opt/treadwell` on the VPS; `docker-compose.yml` + `Dockerfile`
   at repo root.
+- **Staging** is a parallel stack: container `treadwell-staging` on port 8889 at
+  `/opt/treadwell-staging` (the `staging` branch), behind
+  `staging.proposals.wetreadwell.com`. Deploy:
+  `cd /opt/treadwell-staging && git pull origin staging && docker compose -f docker-compose.staging.yml up -d --build`.
+  **All changes hit staging FIRST, then promote to `main`/prod.** Staging uses a
+  self-hosted Postgres+PostgREST for DATA and cloud Supabase for AUTH only.
 
 ### Deploy / ops (SSH to the VPS)
 - Update: `cd /opt/treadwell && git pull && docker compose up -d --build`
 - Restart: `docker compose restart`  ·  Logs: `docker compose logs -f`
-- The image bakes in Node + the **Claude CLI** (`@anthropic-ai/claude-code`).
+- The image bakes in Node + the **Claude CLI** (`@anthropic-ai/claude-code`)
+  and **LibreOffice** (`libreoffice-writer` + Carlito/Liberation fonts) for the
+  docx→PDF export.
 - **AI Autofill** runs `claude -p` inside the container, logged in as
   `hanz@wetreadwell.com` (Claude **Team** seat). Login persists on a Docker
   volume (`/root/.claude`). Re-login if it expires:
@@ -52,10 +60,28 @@ context loaded.
 - **Intake auto-fills estimate cells**: SF→E20, cove→E34, polish→Polish!E19,
   contact→Bidding Contacts G2/H2/I2, plus a crew/days/rate heuristic by SF.
 - **Generate moved to the Done page** (was on Proposal Review). One generate
-  per project; Done shows a pre-generate review card then the success view.
-- **Dropbox**: refresh-token OAuth (`backend/dropbox_client.py`), rebound to
-  the **team namespace** so the whole team sees output. Sandbox folder:
-  `/2023 Treadwell Team Folder/Hanz AI Test/`. Flip to `/Projects` for real use.
+  per project; Done shows a pre-generate review card, then a success view with
+  three downloads: estimate (`.xlsx`), proposal (`.docx`), and proposal **PDF**.
+- **Download-only — NO Dropbox folder (changed 2026-06-09).** `/api/generate`
+  fills the xlsx + docx and returns download links; it no longer creates or
+  uploads a Dropbox project folder. The estimator downloads + files them
+  manually. (`dropbox_client.py` stays on disk — still exercised by tests — but
+  is unused by the live path; the `DROPBOX_*` env vars are now inert. `/healthz`
+  was slimmed to `{"ok": true}`.)
+- **PDF export (added 2026-06-09).** `GET /api/file/{token}/pdf` renders the
+  cached `.docx` to PDF on demand via **LibreOffice headless**
+  (`backend/pdf_writer.py`); lazy + memoized on the cache entry. The Done page's
+  download helper builds the blob as `application/octet-stream` so the browser
+  downloads it under the real `<project>_proposal.pdf` name rather than the blob
+  UUID / opening it in the inline PDF viewer.
+- **Generation never emits a raw `{{token}}`.** `_ensure_value_aliases` in
+  `main.py` backfills `job_name`↔`project_name`, `work_description`←address, and
+  `site_visit_date`←bid date before filling, so a customer-facing proposal can't
+  show a literal token even if a caller omits a field.
+- **Downloads self-heal after a restart.** Download tokens live in the FastAPI
+  process memory, so a container restart (deploy/crash) expires them with a 404.
+  The Done page re-generates fresh files on a 404 and retries, instead of
+  dead-ending on "Failed — try again".
 
 ### Frontend hosting note
 - Production serves the frontend FROM the container (FastAPI StaticFiles),
@@ -82,6 +108,10 @@ context loaded.
   ~/.gitconfig: HDLC01 / hanz@wetreadwell.com — unaffected by the folder move).
 - Portfolio writeup + genericized screenshots:
   `C:/Users/Admin/Documents/Flask Python Portfolio/static/images/Treadwell Proposal Tool/`
+- **Auto knowledge-base snapshot**: `.claude/knowledge/SYSTEM-KB.md` is
+  regenerated (git state + timestamp) by `~/scripts/refresh-treadwell-knowledge.ps1`
+  on the Stop + SessionEnd hooks and a 5-min scheduled task. It's auto-generated —
+  don't hand-edit; update CLAUDE.md instead.
 
 ---
 
