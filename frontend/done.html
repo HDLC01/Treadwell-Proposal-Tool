@@ -183,8 +183,18 @@
   const postEl  = document.getElementById("post-generate");
   const emptyEl = document.getElementById("empty-state");
 
+  // "View files" entry from the Projects list: /done.html?d=<id>&files=1 —
+  // skip the intake→estimate→proposal walk and just produce + show the
+  // downloads for this saved project (initDraftSync already hydrated its state).
+  const filesMode = (() => {
+    try { return new URLSearchParams(location.search).get("files") === "1"; }
+    catch { return false; }
+  })();
+
   // ─── Decide which mode to show ────────────────────────────────────
-  if (result) {
+  if (filesMode && (state.proposal_payload || state.project_name || state.job_name)) {
+    viewFiles();                       // generate fresh + show downloads
+  } else if (result) {
     // Already generated — show download buttons
     showPostGenerate(result);
   } else if (state.proposal_payload && state.project_name) {
@@ -193,6 +203,39 @@
   } else {
     // No project in flight
     emptyEl.style.display = "";
+  }
+
+  // Generate the files for a saved project and jump straight to downloads.
+  async function viewFiles() {
+    emptyEl.style.display = "";
+    emptyEl.querySelector("h1").textContent = "Preparing files…";
+    const lede = emptyEl.querySelector(".lede");
+    if (lede) lede.textContent = "Generating the estimate, proposal, and PDF for this project — a few seconds.";
+    const s = TW.getState();
+    // Prefer the exact payload this project was generated from; otherwise
+    // rebuild one from the saved values (backend backfills job_name etc.).
+    const pp = s.proposal_payload;
+    const payload = (pp && pp.values) ? pp : {
+      work_type: s.work_type || "epoxy",
+      audience:  s.audience  || "Direct",
+      values: s,
+      cell_values: s.cell_values || {},
+      extras: Array.isArray(s.extras) ? s.extras : [],
+      price_lines: Array.isArray(s.price_lines) ? s.price_lines : [],
+      computed_bid: s.computed_bid || null,
+      alternate_computed_bid: s.alternate_computed_bid || null,
+      alternate_label: (s.alternate && s.alternate.label) || s.alternate_label || "",
+    };
+    try {
+      const out = await TW.postJSON("/api/generate", payload);
+      TW.setState({ generate_result: out });
+      emptyEl.style.display = "none";
+      showPostGenerate(out);
+    } catch (err) {
+      emptyEl.querySelector("h1").textContent = "Couldn't load files";
+      if (lede) lede.textContent = "Generating failed: " + (err.message || err) +
+        ". Try “Open / Edit” from Projects instead.";
+    }
   }
 
   function fmtUSD(n) {

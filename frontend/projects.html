@@ -21,8 +21,11 @@
     .total { color:#1a7f37; font-weight:700; }
     .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
     .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .foot-actions { display:flex; gap:8px; align-items:center; }
     .open-btn { background:var(--red); color:#fff; border:none; border-radius:7px; padding:7px 14px; font:600 13px system-ui; cursor:pointer; }
     .open-btn:hover { background:#a4232b; }
+    .files-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 12px; font:600 13px system-ui; cursor:pointer; }
+    .files-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .trash-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 11px; font:600 13px system-ui; cursor:pointer; }
     .trash-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
@@ -88,7 +91,10 @@
           </div>
           <div class="card-foot">
             <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
-            <button type="button" class="open-btn">Open / Edit →</button>
+            <div class="foot-actions">
+              <button type="button" class="files-btn" title="Generate + download the files (no need to re-walk intake)">📄 Files</button>
+              <button type="button" class="open-btn">Open / Edit →</button>
+            </div>
           </div>
         </div>`).join("");
       const open = (c) => window.location.assign("/?d=" + c.dataset.id);
@@ -98,6 +104,13 @@
         if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
         const tb = c.querySelector(".trash-btn");
         if (tb) tb.addEventListener("click", (e) => { e.stopPropagation(); trashCard(c); });
+        const fb = c.querySelector(".files-btn");
+        if (fb) fb.addEventListener("click", (e) => {
+          e.stopPropagation();
+          // c.dataset.id is already encodeURIComponent'd. files=1 → done.html
+          // generates + shows downloads without the intake walk.
+          window.location.assign("/done.html?d=" + c.dataset.id + "&files=1");
+        });
       });
     }
 
