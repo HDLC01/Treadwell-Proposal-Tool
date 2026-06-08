@@ -51,9 +51,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-import dropbox_client
 import drafts
 import estimate_writer
+import pdf_writer
 import pricing
 import profiles
 import proposal_writer
@@ -211,16 +211,18 @@ class AutofillIn(BaseModel):
 class GenerateOut(BaseModel):
     work_type: str
     audience: str
-    dropbox: Dict[str, Any]    # see dropbox_client.upload_project_files()
     xlsx_download_url: str
     docx_download_url: str
+    pdf_download_url: str       # on-demand LibreOffice render of the .docx
     totals: Dict[str, Any]     # Python-computed preview totals
 
 
-# ─── In-memory file cache for direct downloads ────────────────────────
-# When Dropbox is configured we still keep a direct-download fallback so
-# the Done screen always has a button that works. Keyed by random token,
-# trimmed after first download or 1 hour, whichever comes first.
+# ─── In-memory file cache for downloads ───────────────────────────────
+# Generate fills the xlsx + docx in memory and stashes the bytes here under a
+# random token; the Done screen's download buttons hit /api/file/{token}.
+# The docx entry also memoizes its rendered PDF (entry["_pdf"]) on first
+# /api/file/{token}/pdf request. Cache lives for the process lifetime
+# (single uvicorn worker), so a container restart invalidates old tokens.
 _FILE_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
@@ -249,13 +251,7 @@ def detect_work_type(epoxy_sf: float, polish_sf: float) -> str:
 # ─── Endpoints ────────────────────────────────────────────────────────
 @app.get("/healthz")
 def healthz() -> Dict[str, Any]:
-    return {
-        "ok": True,
-        "dropbox_configured": dropbox_client._is_configured(),
-        # Surface the live output root so the Done-page review card can show
-        # the real Dropbox target instead of a hardcoded (drift-prone) string.
-        "dropbox_root": dropbox_client.get_root_folder(),
-    }
+    return {"ok": True}
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
@@ -711,7 +707,8 @@ def _ensure_state_name(values: Dict[str, Any]) -> None:
 
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
-    """Final generate: fill xlsx + docx, upload to Dropbox, return links."""
+    """Final generate: fill xlsx + docx, return download links (xlsx / docx /
+    on-demand pdf). The estimator downloads + files them manually."""
     values = payload.values
     _ensure_state_name(values)
 
@@ -775,21 +772,11 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         log.exception("Proposal fill failed")
         raise HTTPException(500, f"Proposal fill failed: {exc}") from exc
 
-    # Try Dropbox upload (non-fatal on failure). Folder name follows
-    # Treadwell's convention: "YY.NNN Project Name (Polish)? !?"
     project_name = (values.get("project_name") or "Untitled Project").strip()
-    dropbox_result = dropbox_client.upload_project_files(
-        project_name=project_name,
-        xlsx_bytes=xlsx_bytes,
-        docx_bytes=docx_bytes,
-        deadline=values.get("deadline"),
-        work_type=payload.work_type,
-        status_marker=values.get("status_marker") or "!",
-        bid_date=values.get("bid_date"),
-        audience=payload.audience,
-    )
 
-    # Always cache files for direct download (Done screen always has working links)
+    # Cache files for download (Done screen download buttons hit /api/file/{token}).
+    # The docx token doubles as the PDF source: /api/file/{docx_token}/pdf renders
+    # it on demand via LibreOffice.
     safe_name = (project_name or "proposal").replace(" ", "_")[:80]
     xlsx_token = _cache_file(
         xlsx_bytes,
@@ -816,7 +803,6 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             "price_lines_count": len(price_line_dicts),
             "work_type": payload.work_type,
             "audience": payload.audience,
-            "folder": (dropbox_result or {}).get("folder_path"),
         },
     )
 
@@ -840,9 +826,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     return GenerateOut(
         work_type=payload.work_type,
         audience=payload.audience,
-        dropbox=dropbox_result,
         xlsx_download_url=f"/api/file/{xlsx_token}",
         docx_download_url=f"/api/file/{docx_token}",
+        pdf_download_url=f"/api/file/{docx_token}/pdf",
         # Authoritative totals from the 5.7-recipe engine (computed on
         # Screen 2 and passed through). Falls back to an empty dict if a
         # caller generated without first running the pricing engine.
@@ -865,6 +851,39 @@ def api_get_file(token: str) -> Response:
     return Response(
         content=entry["content"],
         media_type=entry["content_type"],
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@app.get("/api/file/{token}/pdf")
+def api_get_file_pdf(token: str) -> Response:
+    """Render a cached .docx proposal to PDF on demand (LibreOffice headless).
+
+    Lazy by design: the PDF isn't built at generate time (keeps Generate fast),
+    only when someone clicks "Download as PDF". The result is memoized on the
+    cache entry so repeat clicks are instant. Public like /api/file/{token}
+    (the token is the capability)."""
+    entry = _FILE_CACHE.get(token)
+    if not entry:
+        raise HTTPException(404, "File expired or already downloaded")
+    if not str(entry["filename"]).lower().endswith(".docx"):
+        raise HTTPException(400, "Only .docx files can be converted to PDF")
+
+    pdf_bytes = entry.get("_pdf")
+    if pdf_bytes is None:
+        try:
+            pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
+        except Exception as exc:  # noqa: BLE001
+            log.exception("PDF conversion failed")
+            raise HTTPException(500, f"PDF conversion failed: {exc}") from exc
+        entry["_pdf"] = pdf_bytes   # memoize for repeat downloads
+
+    fname = re.sub(r"\.docx$", ".pdf", str(entry["filename"]), flags=re.IGNORECASE)
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", fname).replace('"', "'")
+    disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(fname)}"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
         headers={"Content-Disposition": disposition},
     )
 

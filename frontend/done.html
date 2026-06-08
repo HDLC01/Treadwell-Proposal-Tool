@@ -100,13 +100,13 @@
   <div id="pre-generate" class="review-card" style="display:none;">
     <h1 style="margin-top:0;">Ready to generate</h1>
     <p class="lede">
-      One last look before this becomes a real Dropbox folder + downloadable files.
-      Click <strong>Generate</strong> to fill the estimate sheet + proposal doc and
-      upload them to the team Dropbox.
+      One last look before the files are built. Click <strong>Generate</strong> to
+      fill the estimate sheet + proposal doc — then download the estimate (.xlsx),
+      the proposal (.docx), and the proposal as a PDF.
     </p>
 
     <div class="review-row">
-      <div class="lbl">Folder date</div>
+      <div class="lbl">Due date</div>
       <div class="val" id="rv-folder">—</div>
     </div>
     <div class="review-row">
@@ -129,19 +129,10 @@
       <div class="lbl">Lump Sum</div>
       <div class="val money" id="rv-lump">—</div>
     </div>
-    <div class="review-row">
-      <div class="lbl">Dropbox target</div>
-      <div class="val" id="rv-dropbox-path" style="font-size:11px;color:var(--ink-variant);">—</div>
-    </div>
-
-    <div class="review-callout" id="rv-callout">
-      Once you click Generate, this creates a new folder in
-      <strong id="rv-root-label">your team Dropbox</strong> visible to the entire team.
-    </div>
 
     <div class="review-actions">
       <button id="back-btn-done" type="button">← Back to Proposal</button>
-      <button id="gen-btn" type="button">Generate &amp; Save to Dropbox →</button>
+      <button id="gen-btn" type="button">Generate Files →</button>
     </div>
   </div>
 
@@ -151,15 +142,15 @@
     <h1>Proposal generated</h1>
     <p class="lede" id="project-line">—</p>
 
-    <div id="dropbox-info"></div>
-
     <div class="download-row">
       <button id="dl-xlsx" class="download-link" type="button">↓ Download Estimate (.xlsx)</button>
       <button id="dl-docx" class="download-link" type="button">↓ Download Proposal (.docx)</button>
+      <button id="dl-pdf" class="download-link" type="button">↓ Download Proposal (PDF)</button>
     </div>
 
     <p class="hint" style="margin-top:24px;">
-      Direct-download links expire when this session ends.
+      Download links expire when this session ends. The PDF is rendered from the
+      proposal when you click it, so it may take a few seconds.
     </p>
 
     <div class="actions" style="justify-content: center; margin-top: 32px;">
@@ -171,7 +162,7 @@
   <div id="empty-state" class="success-card" style="display:none;">
     <h1 style="color: var(--ink-variant);">Nothing to generate yet</h1>
     <p class="lede">
-      Finish the Proposal Review step first. Downloads + Dropbox link will appear here.
+      Finish the Proposal Review step first. Your downloads will appear here.
     </p>
     <div class="actions" style="justify-content: center; margin-top: 24px;">
       <a href="/proposal-review.html" class="btn-primary" style="text-decoration: none; padding: 12px 20px;">
@@ -194,7 +185,7 @@
 
   // ─── Decide which mode to show ────────────────────────────────────
   if (result) {
-    // Already generated — show downloads + Dropbox link
+    // Already generated — show download buttons
     showPostGenerate(result);
   } else if (state.proposal_payload && state.project_name) {
     // Ready to generate — show review card with Generate button
@@ -211,35 +202,17 @@
 
   function showPreGenerate() {
     preEl.style.display = "";
-    // Folder prefix is the project deadline as YY.MM.DD (mirrors backend).
-    const deadlinePrefix = (iso) => {
+    // Show the project deadline as a compact YY.MM.DD due date.
+    const dueDate = (iso) => {
       const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
-      return m ? `${m[1].slice(2)}.${m[2]}.${m[3]}` : "00.00.00";
+      return m ? `${m[1].slice(2)}.${m[2]}.${m[3]}` : "—";
     };
-    const folderDate = deadlinePrefix(state.deadline);
-    document.getElementById("rv-folder").textContent   = state.deadline ? folderDate : "—";
+    document.getElementById("rv-folder").textContent   = state.deadline ? dueDate(state.deadline) : "—";
     document.getElementById("rv-project").textContent  = state.project_name || "—";
     document.getElementById("rv-location").textContent = [state.address, state.city_state, state.zip].filter(Boolean).join(" · ") || "—";
     document.getElementById("rv-worktype").textContent = (state.work_type || "epoxy").toUpperCase();
     document.getElementById("rv-audience").textContent = state.audience || "Direct";
     document.getElementById("rv-lump").textContent     = state.lump_sum_display || "—";
-    const sanitizedName = (state.project_name || "Project").replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-    const subfolder = `${folderDate} ${sanitizedName} !`;
-    // Pull the real output root from the backend (/healthz → dropbox_root) so
-    // this label always matches where files actually land — no hardcoded path
-    // to drift when the Dropbox target changes.
-    const pathEl = document.getElementById("rv-dropbox-path");
-    const rootLabelEl = document.getElementById("rv-root-label");
-    pathEl.textContent = `…/${subfolder}`;
-    fetch(TW.absoluteUrl("/healthz"))
-      .then((r) => r.json())
-      .then((h) => {
-        const root = (h && h.dropbox_root) || "";
-        if (!root) return;
-        pathEl.textContent = `${root}/${subfolder}`;
-        if (rootLabelEl) rootLabelEl.textContent = `${root}/`;
-      })
-      .catch(() => {/* backend unreachable — leave the placeholder, non-fatal */});
 
     document.getElementById("back-btn-done").addEventListener("click", () => {
       window.location.assign("/proposal-review.html");
@@ -259,7 +232,7 @@
       showPostGenerate(out);
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = "Generate & Save to Dropbox →";
+      btn.textContent = "Generate Files →";
       alert("Generate failed: " + err.message);
     }
   }
@@ -303,6 +276,7 @@
 
     const xlsxBtn = document.getElementById("dl-xlsx");
     const docxBtn = document.getElementById("dl-docx");
+    const pdfBtn  = document.getElementById("dl-pdf");
     xlsxBtn.addEventListener("click", () => downloadAs(
       TW.absoluteUrl(result.xlsx_download_url),
       `${safeName}_estimate.xlsx`,
@@ -313,16 +287,16 @@
       `${safeName}_proposal.docx`,
       docxBtn,
     ));
-
-    const dbox = result.dropbox || {};
-    const dboxEl = document.getElementById("dropbox-info");
-    if (dbox.configured && dbox.folder_url) {
-      dboxEl.innerHTML = `
-        <div class="alert alert-info">
-          <strong>Saved to Dropbox:</strong>
-          <a href="${dbox.folder_url}" target="_blank" rel="noopener">${dbox.folder_path}</a>
-        </div>
-      `;
+    // PDF is rendered on demand from the .docx (LibreOffice). Only wire the
+    // button when the backend returned a pdf url (older cached results won't).
+    if (result.pdf_download_url) {
+      pdfBtn.addEventListener("click", () => downloadAs(
+        TW.absoluteUrl(result.pdf_download_url),
+        `${safeName}_proposal.pdf`,
+        pdfBtn,
+      ));
+    } else {
+      pdfBtn.style.display = "none";
     }
 
     document.getElementById("restart-btn").addEventListener("click", () => {
