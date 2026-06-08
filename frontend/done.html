@@ -211,6 +211,9 @@
     emptyEl.querySelector("h1").textContent = "Preparing files…";
     const lede = emptyEl.querySelector(".lede");
     if (lede) lede.textContent = "Generating the estimate, proposal, and PDF for this project — a few seconds.";
+    // viewFiles auto-runs on load; auth.js sets the bearer token asynchronously,
+    // so wait for it before the (auth-gated) /api/generate or we'd 401.
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     const s = TW.getState();
     // Prefer the exact payload this project was generated from; otherwise
     // rebuild one from the saved values (backend backfills job_name etc.).
