@@ -256,7 +256,11 @@
       try {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(resp.statusText);
-        const blob = await resp.blob();
+        // Force a generic type so the browser DOWNLOADS the file under our
+        // `a.download` name. If we kept the real type (application/pdf), Chrome's
+        // inline PDF viewer hijacks the click, ignores the filename, and saves
+        // it as the blob URL's UUID. octet-stream sidesteps that for every type.
+        const blob = new Blob([await resp.arrayBuffer()], { type: "application/octet-stream" });
         const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = blobUrl;
