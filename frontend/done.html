@@ -249,13 +249,23 @@
       .replace(/[^A-Za-z0-9._-]+/g, "_")
       .slice(0, 60);
 
-    async function downloadAs(url, filename, button) {
+    async function downloadAs(urlKey, filename, button) {
       const orig = button.textContent;
       button.disabled = true;
       button.textContent = "Downloading…";
+      const latestUrl = () => TW.absoluteUrl(TW.getState().generate_result[urlKey]);
       try {
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(resp.statusText);
+        let resp = await fetch(latestUrl());
+        // Download links live in server memory; a restart (deploy/crash/reboot)
+        // expires them with a 404. Self-heal: re-generate fresh files from the
+        // stashed payload, then retry — invisible to the user (no dead-end).
+        if (resp.status === 404 && state.proposal_payload) {
+          button.textContent = "Refreshing…";
+          const fresh = await TW.postJSON("/api/generate", state.proposal_payload);
+          TW.setState({ generate_result: fresh });
+          resp = await fetch(latestUrl());
+        }
+        if (!resp.ok) throw new Error(resp.statusText || ("HTTP " + resp.status));
         // Force a generic type so the browser DOWNLOADS the file under our
         // `a.download` name. If we kept the real type (application/pdf), Chrome's
         // inline PDF viewer hijacks the click, ignores the filename, and saves
@@ -282,23 +292,14 @@
     const docxBtn = document.getElementById("dl-docx");
     const pdfBtn  = document.getElementById("dl-pdf");
     xlsxBtn.addEventListener("click", () => downloadAs(
-      TW.absoluteUrl(result.xlsx_download_url),
-      `${safeName}_estimate.xlsx`,
-      xlsxBtn,
-    ));
+      "xlsx_download_url", `${safeName}_estimate.xlsx`, xlsxBtn));
     docxBtn.addEventListener("click", () => downloadAs(
-      TW.absoluteUrl(result.docx_download_url),
-      `${safeName}_proposal.docx`,
-      docxBtn,
-    ));
+      "docx_download_url", `${safeName}_proposal.docx`, docxBtn));
     // PDF is rendered on demand from the .docx (LibreOffice). Only wire the
     // button when the backend returned a pdf url (older cached results won't).
     if (result.pdf_download_url) {
       pdfBtn.addEventListener("click", () => downloadAs(
-        TW.absoluteUrl(result.pdf_download_url),
-        `${safeName}_proposal.pdf`,
-        pdfBtn,
-      ));
+        "pdf_download_url", `${safeName}_proposal.pdf`, pdfBtn));
     } else {
       pdfBtn.style.display = "none";
     }
