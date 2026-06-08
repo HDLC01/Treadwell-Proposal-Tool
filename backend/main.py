@@ -717,12 +717,33 @@ _VALUE_ALIASES = (
     ("project_name", "job_name"),
 )
 
+# A blank target is backfilled from the first non-empty source in the list; if
+# none are present it's set to "" so the token renders empty rather than as a
+# literal "{{token}}" in a customer-facing proposal. Mirrors the frontend's
+# fallbacks (work_description -> address; site_visit_date -> bid date) so any
+# caller / older payload still produces a clean doc.
+_VALUE_FALLBACKS = (
+    ("work_description", ("address", "city_state")),
+    ("site_visit_date", ("bid_date_formatted", "bid_date")),
+)
+
+
+def _blank(v: Any) -> bool:
+    return not str(v or "").strip()
+
 
 def _ensure_value_aliases(values: Dict[str, Any]) -> None:
-    """Backfill blank token aliases in-place (e.g. job_name <- project_name)."""
+    """Backfill blank token aliases / fallbacks in-place so the proposal never
+    emits a raw {{token}} (e.g. job_name <- project_name, work_description <-
+    address, site_visit_date <- bid date)."""
     for target, source in _VALUE_ALIASES:
-        if not str(values.get(target) or "").strip() and str(values.get(source) or "").strip():
+        if _blank(values.get(target)) and not _blank(values.get(source)):
             values[target] = values[source]
+    for target, sources in _VALUE_FALLBACKS:
+        if _blank(values.get(target)):
+            values[target] = next(
+                (values[s] for s in sources if not _blank(values.get(s))), ""
+            )
 
 
 @app.post("/api/generate", response_model=GenerateOut)
