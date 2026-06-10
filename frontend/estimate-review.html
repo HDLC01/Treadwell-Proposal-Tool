@@ -1337,6 +1337,11 @@ function refreshDomFromHF(data, grid) {
     } else {
       display = String(hfVal);
     }
+    // Empty subsections (e.g. a "$ / SF" row with no SF, System 2 when only
+    // System 1 is used) divide by zero and read as #DIV/0! in this live preview.
+    // Show blank instead — the cell fills once the section has quantities, and
+    // the authoritative bid lives in the Computed Bid panel, not these cells.
+    if (typeof display === "string" && /^\s*#DIV\/0!?/.test(display)) display = "";
     inp.value = display;
   }
 }
