@@ -719,6 +719,7 @@ const HF = {
   instance: null,
   sheetIdByName: {},       // "Epoxy" -> 0, "Polish" -> 1, ...
   domBySheetAddr: {},      // "Epoxy!B4" -> input element
+  nameAliases: {},         // HF-invalid name -> valid alias, e.g. "Glaze4" -> "Glaze_4"
   ready: false,
 
   init(sheetNames) {
@@ -749,8 +750,9 @@ const HF = {
     }
     for (const c of cells) {
       // Use the FORMULA TEXT when present (so HF computes it).
-      // Otherwise the raw value.
-      const cellInput = c.formula ?? c.value;
+      // Otherwise the raw value. Rewrite any HF-invalid named-range tokens
+      // (e.g. "Glaze4" -> "Glaze_4") so the formula resolves instead of #NAME?.
+      const cellInput = c.formula != null ? this.rewriteNames(c.formula) : c.value;
       data[c.row - 1][c.col - 1] = cellInput;
     }
     try {
@@ -759,6 +761,19 @@ const HF = {
     } catch (e) {
       console.warn(`HF setSheetContent failed for ${sheetName}:`, e);
     }
+  },
+
+  /** Replace HF-invalid named-range tokens in a formula with their valid
+   *  aliases (whole-token only — never inside a longer identifier). */
+  rewriteNames(formula) {
+    if (typeof formula !== "string" || formula.charAt(0) !== "=") return formula;
+    let out = formula;
+    for (const orig in this.nameAliases) {
+      const esc = orig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      out = out.replace(new RegExp("(?<![A-Za-z0-9_.])" + esc + "(?![A-Za-z0-9_.])", "g"),
+                        this.nameAliases[orig]);
+    }
+    return out;
   },
 
   /** Get the current computed value for a cell. */
@@ -984,21 +999,40 @@ async function init() {
   try {
     const nameRes = await fetch("/api/named-expressions", { headers: TW.authHeaders() });
     const nameData = await nameRes.json();
+    // HyperFormula rejects names shaped like a cell reference — letters then
+    // only digits, e.g. "Glaze4" (used by the MACRO Flake / quartz systems).
+    // Alias those to a valid form ("Glaze4" -> "Glaze_4") and remember the map
+    // so loadSheet() rewrites the same token in every formula. Without this the
+    // whole product block returns #NAME? in the live preview.
+    const aliasFor = (name) => {
+      let a = name.replace(/(\d+)$/, "_$1");      // Glaze4 -> Glaze_4
+      if (a === name) a = name + "_n";            // no trailing digits → suffix
+      return a;
+    };
     let registered = 0;
     for (const n of nameData.names || []) {
+      const scopeId = (n.scope && HF.sheetIdByName[n.scope] !== undefined)
+        ? HF.sheetIdByName[n.scope] : undefined;
+      let regName = n.name;
       try {
-        // HyperFormula API: addNamedExpression(expressionName, expression, scope?)
-        if (n.scope && HF.sheetIdByName[n.scope] !== undefined) {
-          HF.instance.addNamedExpression(n.name, n.expression, HF.sheetIdByName[n.scope]);
-        } else {
-          HF.instance.addNamedExpression(n.name, n.expression);
+        // If HF won't accept the raw name, register it under a valid alias and
+        // record the rename so formula tokens get rewritten to match.
+        if (!HF.instance.isItPossibleToAddNamedExpression(regName, n.expression, scopeId)) {
+          regName = aliasFor(n.name);
+          HF.nameAliases[n.name] = regName;
         }
+        if (scopeId !== undefined) HF.instance.addNamedExpression(regName, n.expression, scopeId);
+        else HF.instance.addNamedExpression(regName, n.expression);
         registered++;
       } catch (e) {
-        // Skip names HF can't parse (some have ranges/syntax it doesn't accept)
+        // Couldn't register even the alias — drop the rename so we don't rewrite
+        // formula tokens to a name that doesn't exist (would still be #NAME?,
+        // but at least matches the unregistered original).
+        delete HF.nameAliases[n.name];
       }
     }
-    console.log(`Registered ${registered}/${(nameData.names || []).length} named expressions`);
+    console.log(`Registered ${registered}/${(nameData.names || []).length} named expressions`,
+                Object.keys(HF.nameAliases).length ? `(aliased: ${JSON.stringify(HF.nameAliases)})` : "");
   } catch (err) {
     console.warn("Failed to load named expressions:", err);
   }
