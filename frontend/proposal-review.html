@@ -594,21 +594,22 @@
       `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
 
-  // Lump sum = the Computed Bid from the 5.7-recipe pricing engine
-  // (state.computed_bid, set on the Estimate screen). This is the single
-  // source of truth — it already reflects the systems, bulk discount,
-  // county remodel tax, labor + markup for whatever scope was entered,
-  // so no per-work-type slicing is needed. Falls back to the legacy HF
-  // snapshot only if the engine number is somehow missing.
+  // Lump sum = the estimate sheet's own TOTAL LUMP SUM (D88/D82, snapshotted
+  // into state.proposal_lump_sum when leaving the Estimate screen). That cell
+  // already reflects EVERYTHING the estimator entered in the grid — crew/days,
+  // demo, and hand-typed markup overrides like a -17% hard-bid discount — so
+  // the proposal price always matches the sheet the estimator is looking at.
+  // The Computed Bid engine is the FALLBACK only (e.g. older drafts saved
+  // before the sheet total computed reliably in the browser).
   (() => {
     const cb = state.computed_bid;
     let lump = null;
-    if (cb && cb.full_bid && typeof cb.full_bid.total_base_bid === "number") {
-      lump = cb.full_bid.total_base_bid;          // full Total Base Bid (D88)
+    if (typeof state.proposal_lump_sum === "number" && state.proposal_lump_sum > 0) {
+      lump = state.proposal_lump_sum;              // sheet's Total Lump Sum (D88/D82)
+    } else if (cb && cb.full_bid && typeof cb.full_bid.total_base_bid === "number") {
+      lump = cb.full_bid.total_base_bid;           // engine Total Base Bid
     } else if (cb && typeof cb.grand_total === "number") {
       lump = cb.grand_total;                       // material-only mode
-    } else if (typeof state.proposal_lump_sum === "number") {
-      lump = state.proposal_lump_sum;              // legacy HF snapshot
     } else {
       lump = 0;
     }
