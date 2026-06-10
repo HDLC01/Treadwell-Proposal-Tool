@@ -255,8 +255,7 @@ def compute_full_bid(material_total: float, sf: float, *,
                      burden_pct: float = 0.12, demo_sf: float = 0, plastic: float = 0,
                      local: bool = True, lodging_rate: float = 70, food_rate: float = 45,
                      super_pct: float = 0.03, soft_pct: float = 0.13, contingency: float = 0,
-                     hard_bid: bool = False, hard_bid_pct=None, gp_pct=None,
-                     taxable: bool = True,
+                     hard_bid: bool = False, taxable: bool = True,
                      sales_tax_rate: float = 0.09475, remodel: bool = False,
                      remodel_rate: float = 0.10, fees: float = 0, bond_pct: float = 0) -> Dict[str, Any]:
     """Full Total Base Bid (sheet D88) from material_total (D43) + labor/markup.
@@ -300,16 +299,10 @@ def compute_full_bid(material_total: float, sf: float, *,
     D80 = ceil(D43 * sales_tax_rate) if taxable else 0   # sales tax on MATERIAL
     D83 = ceil(fees)                                     # fees
 
-    # GP markup (D73), hard-bid (D74), super (D75), soft (D76), contingency (D77).
-    # gp_pct / hard_bid_pct let the estimator's actual grid cells (B73 / B74)
-    # override the sheet's default formulas — e.g. a hand-typed -17% hard-bid
-    # discount on a competitive job. When not supplied, fall back to the sheet's
-    # tiered defaults so existing behavior is unchanged.
-    gp = gp_pct if gp_pct is not None else _gp_pct(D70)
+    # GP markup (D73), hard-bid (D74), super (D75), soft (D76), contingency (D77)
+    gp = _gp_pct(D70)
     D73 = ceil((D70 + D80 + D83) / (1 - gp)) - ceil(D70 + D80)
-    if hard_bid_pct is not None:
-        b74 = hard_bid_pct
-    elif hard_bid:
+    if hard_bid:
         b74 = -0.04 if D70 >= 60000 else (-0.025 if D70 >= 13000 else 0)
     else:
         b74 = 0

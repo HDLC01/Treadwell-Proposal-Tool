@@ -2057,28 +2057,6 @@ async function computeBid() {
     sales_tax_rate: 0.09475,
     full_bid: true,
   };
-  // Mirror the estimator's actual labor + markup inputs from the grid so the
-  // Computed Bid (and the proposal) match the sheet — crew/days, demo SF, and
-  // any hand-typed hard-bid / super / soft % overrides (e.g. a -17% competitive
-  // discount). Engine defaults equal the template, so an untouched sheet prices
-  // identically; only real edits move the number.
-  const _cbPct = a => { const v = _cbCell(a); if (v === "" || v == null) return null;
-    const s = String(v).trim(); const n = parseFloat(s.replace(/[^0-9.\-]/g, ""));
-    if (isNaN(n)) return null; return (s.includes("%") || Math.abs(n) > 1) ? n / 100 : n; };
-  const labor = {};
-  const crews = [];
-  [["Epoxy!A47", "Epoxy!B47"], ["Epoxy!A48", "Epoxy!B48"]].forEach(([ga, da]) => {
-    const g = _cbNum(_cbCell(ga)), d = _cbNum(_cbCell(da));
-    if (g && d) crews.push([g, d]);
-  });
-  if (crews.length) labor.crews = crews;
-  const rate = _cbNum(_cbCell("Epoxy!C47")); if (rate) labor.labor_rate = rate;
-  labor.day_hours = String(_cbCell("Epoxy!E45") || "").includes("10") ? 10 : 8;
-  const demo = _cbNum(_cbCell("Epoxy!B60")); if (demo) labor.demo_sf = demo;
-  const hb = _cbPct("Epoxy!B74"); if (hb != null) labor.hard_bid_pct = hb;
-  const sup = _cbPct("Epoxy!B75"); if (sup != null) labor.super_pct = sup;
-  const soft = _cbPct("Epoxy!B76"); if (soft != null) labor.soft_pct = soft;
-  if (Object.keys(labor).length) payload.labor = labor;
   const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
   if (psf > 0) payload.polish_sf = psf;
   // Alternate (recommended) system — priced with the SAME tax/labor as the base.
