@@ -806,6 +806,12 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     if not str(values.get("material_tax_formatted") or "").strip():
         values["material_tax_formatted"] = "$0.00"
 
+    # Combo WORK lists the real picked epoxy system as "Option 1: <name>" (from
+    # the Epoxy!A22 dropdown), falling back to the generic label.
+    if not str(values.get("epoxy_system_name") or "").strip():
+        a22 = str(payload.cell_values.get("Epoxy!A22") or "").strip()
+        values["epoxy_system_name"] = a22 if (a22 and "Options" not in a22) else "Epoxy System"
+
     # Sign the proposal with the logged-in estimator (the templates' old
     # hardcoded "Troy Holmes" is now the {{estimator_name}} token). The frontend
     # sets this from the signed-in user; backfill here so it's never blank or a

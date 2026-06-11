@@ -60,6 +60,8 @@ COMBO_VALUES = {
     "estimator_name": "Kyle Loseke",
     # PRICE breakdown tokens (Base Bid + Material Sales Tax)
     "base_bid_formatted": "$61,162.00", "material_tax_formatted": "$2,639.00",
+    # combo WORK "Option 1: <real epoxy system>"
+    "epoxy_system_name": "MACRO Flake Single Broadcast",
 }
 
 
@@ -70,7 +72,8 @@ def test_combo_proposal_fills_price_and_areas():
     text = _rendered_text(data)
     for needle in ["Base Bid", "$61,162.00", "Material Sales Tax", "$63,801.00",
                    "Kansas Remodel Tax", "12,000 Square Feet", "8,000 Square Feet",
-                   "Epoxy & Polished Concrete flooring", "6/15/26"]:
+                   "Epoxy & Polished Concrete flooring", "6/15/26",
+                   "Option 1: MACRO Flake Single Broadcast"]:
         assert needle in text, f"combo proposal missing {needle!r}"
 
 
