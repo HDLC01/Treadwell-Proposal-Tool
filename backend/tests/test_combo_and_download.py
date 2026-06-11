@@ -58,14 +58,18 @@ COMBO_VALUES = {
     "lump_sum_formatted": "$61,162.00", "tax_amount_formatted": "$2,639.00",
     "state_name": "Kansas", "total_formatted": "$63,801.00",
     "estimator_name": "Kyle Loseke",
+    # PRICE breakdown tokens (Base Bid + Material Sales Tax)
+    "base_bid_formatted": "$61,162.00", "material_tax_formatted": "$2,639.00",
 }
 
 
 def test_combo_proposal_fills_price_and_areas():
-    data = proposal_writer.fill_proposal(work_type="combo", audience="Direct", values=COMBO_VALUES)
+    data = proposal_writer.fill_proposal(work_type="combo", audience="Direct",
+                                         values=COMBO_VALUES,
+                                         remodel=[{"amount_formatted": "$2,639.00"}])
     text = _rendered_text(data)
-    for needle in ["$61,162.00", "$2,639.00", "$63,801.00", "Kansas Remodel Tax",
-                   "12,000 Square Feet", "8,000 Square Feet",
+    for needle in ["Base Bid", "$61,162.00", "Material Sales Tax", "$63,801.00",
+                   "Kansas Remodel Tax", "12,000 Square Feet", "8,000 Square Feet",
                    "Epoxy & Polished Concrete flooring", "6/15/26"]:
         assert needle in text, f"combo proposal missing {needle!r}"
 

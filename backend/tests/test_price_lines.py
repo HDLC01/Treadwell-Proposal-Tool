@@ -182,10 +182,11 @@ def test_epoxy_price_breakdown_kansas_and_remodel_toggle():
     import proposal_writer as pw
     on = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct",
         values=_BASE_VALS, remodel=[{"amount_formatted": "$2,639.00"}]))
-    assert "$58,523.00 – Epoxy flooring as described above" in on
+    assert "Base Bid" in on and "Options:" in on
+    assert "$58,523.00 – Epoxy flooring as described above (material sales tax INCLUDED)" in on
     assert "$2,639.00 – Material Sales Tax" in on
     assert "Kansas Remodel Tax" in on
-    assert "Missouri Remodel Tax" not in on and "INCLUDED" not in on
+    assert "Missouri Remodel Tax" not in on
     assert not re.search(r"\{\{[#/]", on)
     off = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS))
     assert "Material Sales Tax" in off          # always shown (transparency)
