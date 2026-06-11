@@ -754,6 +754,25 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     _ensure_state_name(values)
     _ensure_value_aliases(values)
 
+    # Sign the proposal with the logged-in estimator (the templates' old
+    # hardcoded "Troy Holmes" is now the {{estimator_name}} token). The frontend
+    # sets this from the signed-in user; backfill here so it's never blank or a
+    # raw token if a caller (e.g. "View files") omits it.
+    if not str(values.get("estimator_name") or "").strip():
+        nm = ""
+        try:
+            claims = supabase_client.verify_token_claims(request.headers.get("authorization"))
+            meta = claims.get("user_metadata") or {}
+            nm = (meta.get("full_name") or meta.get("name") or "").strip()
+        except Exception:  # noqa: BLE001
+            nm = ""
+        if not nm:
+            em = (_user_email(request) or "").strip()
+            if em:
+                nm = em.split("@")[0].replace(".", " ").replace("_", " ").title()
+        if nm:
+            values["estimator_name"] = nm
+
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
     price_line_dicts = []
     for pl in (payload.price_lines or []):

@@ -459,6 +459,20 @@
       </div>
     </div>
 
+    <!-- SIGNATURE section — the name that signs the proposal -->
+    <div class="doc-section">
+      <div class="sidebar">Sign</div>
+      <div class="body">
+        <div class="doc-bullet-row">
+          <div class="key">Estimator:</div>
+          <div><input type="text" name="estimator_name" id="estimator-name" class="doc-input wide" placeholder="Your name"></div>
+        </div>
+        <p class="hint" style="margin:4pt 0 0;font-size:11px;color:var(--ink-variant,#5c403f);">
+          Signs the proposal. Defaults to your signed-in name — edit if someone else should sign.
+        </p>
+      </div>
+    </div>
+
     <!-- Tax handling (kept as a form field for backend) -->
     <input type="hidden" name="sales_tax_handling" value="INCLUDED">
   </form>
@@ -482,6 +496,24 @@
 
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
+
+  // Pre-fill the Estimator (signature) with the signed-in user's name unless
+  // the project already carries one. Editable — they can change who signs.
+  (function prefillEstimator() {
+    const el = document.getElementById("estimator-name");
+    if (!el || el.value) return;
+    const apply = () => {
+      if (el.value) return;
+      const u = (window.TWAuth && TWAuth.user && TWAuth.user()) || null;
+      let name = (state.estimator_name || "").trim() || (u && u.name) || "";
+      if (!name && u && u.email) {
+        name = u.email.split("@")[0].replace(/[._]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      }
+      if (name) el.value = name;
+    };
+    apply();
+    try { if (window.TWAuth && window.TWAuth.ready) window.TWAuth.ready.then(apply); } catch {}
+  })();
 
   // ─── Work-type-aware UI ────────────────────────────────────────
   // The proposal layout differs per work_type:
@@ -699,6 +731,10 @@
     const tokenValues = {
       job_name:           safe(mergedValues.project_name),
       project_name:       safe(mergedValues.project_name),
+      // Signs the proposal — the field (pre-filled from the signed-in user),
+      // else the signed-in user's name. Replaces the old hardcoded "Troy Holmes".
+      estimator_name:     (String(mergedValues.estimator_name || "").trim()
+                           || ((window.TWAuth && TWAuth.user() && TWAuth.user().name) || "")),
       city_state:         safe(mergedValues.city_state),
       address:            safe(mergedValues.address),
       work_description:   safe(mergedValues.work_description || mergedValues.address || "0"),
