@@ -585,12 +585,12 @@
       <div id="county-results" class="county-results"></div>
     </div>
     <div class="field-inline">
-      <label for="sys-name">System Name</label>
-      <input type="text" id="sys-name" class="sysname" placeholder="Treadwell Macro Flake Single Broadcast">
+      <label for="sys-name">System Name <span style="font-weight:400;opacity:.55;font-size:11px;">(auto from System 1/2)</span></label>
+      <input type="text" id="sys-name" class="sysname">
     </div>
     <div class="field-inline">
       <label for="tex-name">Texture</label>
-      <input type="text" id="tex-name" class="tex" placeholder="Orange Peel">
+      <input type="text" id="tex-name" class="tex">
     </div>
     <div class="nav-btns">
       <button type="button" id="back-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 12px;">← Back</button>
@@ -955,16 +955,38 @@ function applyHeuristics(intake, putIfBlank) {
 
 // ─── System Name + Texture inline inputs (flow into proposal too) ──
 const sysNameInput = document.getElementById("sys-name");
-const texInput     = document.getElementById("tex-name");
+let texInput       = document.getElementById("tex-name");
 if (state.system_name) sysNameInput.value = state.system_name;
-if (state.texture)     texInput.value     = state.texture;
+
+// Texture: Epoxy/Combo pick from a fixed dropdown; Polish keeps free text (the
+// field there describes sheen, e.g. "Standard sheen, salt & pepper").
+const TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
+(function buildTextureControl() {
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  if (wt === "polish") { if (state.texture) texInput.value = state.texture; return; }
+  const cur = state.texture || "";
+  const sel = document.createElement("select");
+  sel.id = "tex-name"; sel.className = "tex";
+  const opts = TEXTURE_OPTIONS.slice();
+  if (cur && !opts.includes(cur)) opts.unshift(cur);   // don't lose an off-list value
+  sel.innerHTML = '<option value="">—</option>' +
+    opts.map(o => `<option value="${o.replace(/"/g, "&quot;")}">${o}</option>`).join("");
+  sel.value = cur;
+  texInput.replaceWith(sel);
+  texInput = sel;
+})();
+
+// System Name auto-derives from the live System 1/2 picks (see refreshSystemName
+// below); a manual edit sets `systemNameDirty` and stops the auto-overwrite.
+let systemNameDirty = false;
 function pushSysTextureToState() {
   state.system_name = sysNameInput.value;
   state.texture     = texInput.value;
   TW.setState({ ...state, system_name: state.system_name, texture: state.texture });
 }
-sysNameInput.addEventListener("input", pushSysTextureToState);
-texInput.addEventListener("input", pushSysTextureToState);
+sysNameInput.addEventListener("input", () => { systemNameDirty = true; pushSysTextureToState(); });
+texInput.addEventListener("input",  pushSysTextureToState);
+texInput.addEventListener("change", pushSysTextureToState);
 
 const tabBar    = document.getElementById("tab-bar");
 const sheetGrid = document.getElementById("sheet-grid");
@@ -2060,6 +2082,28 @@ const _cbCell = a => {
 const _cbRealSystem = n => VALID_SYSTEMS.has(n);
 const _cbRealCove = o => /^(Epoxy|WR)\s+\d/.test(o || "");
 
+// Build "System Name" from the live System 1/2 picks (Epoxy!A22 / A26) plus the
+// Polished Concrete option on combos, e.g. "Treadwell MACRO Flake Single
+// Broadcast & Polished Concrete". Empty until a real system is picked.
+function deriveSystemName() {
+  const names = [];
+  ["Epoxy!A22", "Epoxy!A26"].forEach(a => {
+    const v = _cbCell(a);
+    if (_cbRealSystem(v) && !names.includes(v)) names.push(v);
+  });
+  const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
+  if (psf > 0 && !names.includes("Polished Concrete")) names.push("Polished Concrete");
+  return names.length ? "Treadwell " + names.join(" & ") : "";
+}
+// Push the derived name into the field unless the user has typed their own.
+function refreshSystemName() {
+  if (systemNameDirty) return;
+  const derived = deriveSystemName();
+  if (!derived || sysNameInput.value === derived) return;
+  sysNameInput.value = derived;
+  pushSysTextureToState();
+}
+
 async function computeBid() {
   const systems = [], coves = [];
   [["Epoxy!A22", "Epoxy!E20"], ["Epoxy!A26", "Epoxy!E24"]].forEach(([na, sa]) => {
@@ -2281,6 +2325,7 @@ document.getElementById("cb-bulk").addEventListener("change", e => {
 });
 // recompute when any grid selection / SF changes (debounced)
 document.getElementById("sheet-grid").addEventListener("change", () => {
+  refreshSystemName();
   clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
 });
 
@@ -2378,6 +2423,7 @@ if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
   .finally(() => setTimeout(() => {
     seedExtrasFromSheet(); renderExtras();
     renderPriceLines(); wireAlt();
+    refreshSystemName();
     computeBid();
   }, 1200));
 </script>
