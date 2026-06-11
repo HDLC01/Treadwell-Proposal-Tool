@@ -61,25 +61,25 @@
                  title="Project deadline / bid due date.">
         </label>
         <label>Project name / company
-          <input type="text" name="project_name" required placeholder="Olathe CTE OSC">
+          <input type="text" name="project_name" required>
         </label>
       </div>
       <label class="addr-field">Address
         <input type="text" name="address" id="address-input" autocomplete="off"
-               placeholder="Start typing the jobsite address…">
+>
         <div id="address-results" class="addr-results"></div>
       </label>
       <div class="row">
         <label>City
-          <input type="text" name="city" id="city-input" placeholder="Kansas City">
+          <input type="text" name="city" id="city-input">
         </label>
         <label style="flex: 0 0 90px;">State
           <input type="text" name="state" id="state-input" maxlength="2"
-                 placeholder="MO" style="text-transform: uppercase;">
+ style="text-transform: uppercase;">
         </label>
         <label style="flex: 0 0 130px;">Zip
           <input type="text" name="zip" id="zip-input" maxlength="10"
-                 inputmode="numeric" placeholder="64153">
+                 inputmode="numeric">
         </label>
       </div>
       <div class="row">
@@ -87,7 +87,7 @@
           <input type="date" name="bid_date">
         </label>
         <label>Architect / GC
-          <input type="text" name="architect" placeholder="(optional)">
+          <input type="text" name="architect">
         </label>
       </div>
     </fieldset>
@@ -95,14 +95,14 @@
     <fieldset>
       <legend>Contact</legend>
       <label>Contact name
-        <input type="text" name="contact_name" placeholder="Full name">
+        <input type="text" name="contact_name">
       </label>
       <div class="row">
         <label>Email
-          <input type="email" name="contact_email" placeholder="name@example.com">
+          <input type="email" name="contact_email">
         </label>
         <label>Phone
-          <input type="text" name="contact_phone" placeholder="(555) 123-4567">
+          <input type="text" name="contact_phone">
         </label>
       </div>
       <label>Source
@@ -116,7 +116,7 @@
         </select>
       </label>
       <label>Lead notes <span style="font-weight: 400; color: var(--ink-variant);">(paste full email / call notes — fuels the AI Autofill on the next screen)</span>
-        <textarea name="notes" rows="5" placeholder="Paste the full lead email, RFP excerpt, or call notes. The more context the AI has, the better it infers Local/Hard-Bid/Prevailing-Wage/Taxable/New-vs-Reno and the right system."></textarea>
+        <textarea name="notes" rows="5"></textarea>
       </label>
     </fieldset>
 
@@ -147,7 +147,7 @@
       <div class="row">
         <label style="flex: 0 0 200px;">Number of systems
           <input type="number" name="num_systems" id="num-systems-input"
-                 min="1" max="6" step="1" placeholder="How many?">
+                 min="1" max="6" step="1">
         </label>
       </div>
       <!-- One {Epoxy SF, Polish SF, Cove LF} group per system —
