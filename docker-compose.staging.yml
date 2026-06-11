@@ -23,6 +23,9 @@ services:
       - "127.0.0.1:8889:8888"          # nginx (host) proxies staging.proposals → here
     environment:
       - DRAFTS_DB_PATH=/app/data/drafts.db
+      # AI Autofill's `claude -p` config + creds on the persistent volume (see
+      # prod compose). Auth = CLAUDE_CODE_OAUTH_TOKEN in .env.staging.
+      - CLAUDE_CONFIG_DIR=/root/.claude
       # Staging output goes to a clearly-marked test subfolder so it never mixes
       # with prod output. ("$$" escapes the literal "$" in $Commercial.)
       - "DROPBOX_ROOT_FOLDER=/2023 Treadwell Team Folder/Estimating/$$Commercial Sales Estimates/*Hanz/Hanz Estimate Automation/_staging"
