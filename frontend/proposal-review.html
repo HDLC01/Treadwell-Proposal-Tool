@@ -769,7 +769,11 @@
     //  "(material sales tax INCLUDED)" label. No tax is added on top.)
     const _fb = (state.computed_bid && state.computed_bid.full_bid) || {};
     const remodelTax = Number(_fb.remodel_tax || 0);
+    const salesTax   = Number(_fb.sales_tax || 0);   // material sales tax (engine D80)
     const flooringPortion = lumpSumNumber - remodelTax;
+    // Itemized breakdown (Base Bid + Material Sales Tax [+ Remodel Tax] = Total).
+    // Base Bid is the remainder so the three lines sum to the sheet's lump sum.
+    const baseBid = Math.max(0, lumpSumNumber - salesTax - remodelTax);
     const safe = (v) => (v === undefined || v === null || v === "" ? "0" : v);
 
     const tokenValues = {
@@ -810,9 +814,12 @@
       //   flooring (sales tax incl)  +  KS remodel tax  =  Total
       total_label:        `${fmtUSD(lumpSumNumber)} – Total`,
       lump_sum_label:     `${fmtUSD(flooringPortion)} – ${workType === "polish" ? "Polished Concrete Flooring" : "Epoxy Flooring"} as described above`,
-      lump_sum_formatted: fmtUSD(flooringPortion),  // Total Base Bid − remodel tax (sales tax still included)
-      tax_amount_formatted: fmtUSD(remodelTax),     // the KS remodel-tax line
+      lump_sum_formatted: fmtUSD(flooringPortion),  // (combo/polish templates) flooring incl sales tax
+      tax_amount_formatted: fmtUSD(remodelTax),     // legacy remodel-tax token (combo/polish)
       total_formatted:    fmtUSD(lumpSumNumber),    // the tax-inclusive Total Base Bid
+      // Epoxy PRICE breakdown (Base Bid + Material Sales Tax [+ Kansas Remodel Tax] = Total):
+      base_bid_formatted:    fmtUSD(baseBid),
+      material_tax_formatted: fmtUSD(salesTax),
       state_name:         safe(mergedValues.state_name),
       scope_notes:        safe(mergedValues.scope_notes),
       schedule_notes:     safe(mergedValues.schedule_notes),
@@ -845,6 +852,8 @@
         // Recommended alternate system (2nd bid) -> {{#alternate}} block + 2nd estimate tab
         alternate_computed_bid: state.alternate_computed_bid || null,
         alternate_label: (state.alternate && state.alternate.label) || "",
+        // Conditional Kansas Remodel Tax line — only when remodel tax applies.
+        remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSD(remodelTax) }] : [],
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).

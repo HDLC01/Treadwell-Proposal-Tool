@@ -311,6 +311,7 @@ def fill_proposal(
     systems: list[Mapping[str, Any]] | None = None,
     price_lines: list[Mapping[str, Any]] | None = None,
     alternates: list[Mapping[str, Any]] | None = None,
+    remodel: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -347,6 +348,9 @@ def fill_proposal(
         "price_line": list(price_lines or []),
         "alternate": list(alternates or []),
         "system": list(systems or []),
+        # {{#remodel}} line — present (1 row) only when a remodel tax applies,
+        # stripped otherwise so the proposal hides "Kansas Remodel Tax" entirely.
+        "remodel": list(remodel or []),
     }
     n_blocks = _expand_all_blocks(d, block_lists)
     if n_blocks:
