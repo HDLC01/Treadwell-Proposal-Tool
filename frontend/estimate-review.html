@@ -977,14 +977,21 @@ const TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
 })();
 
 // System Name auto-derives from the live System 1/2 picks (see refreshSystemName
-// below); a manual edit sets `systemNameDirty` and stops the auto-overwrite.
-let systemNameDirty = false;
+// below). A non-empty manual edit sets `system_name_manual` (persisted in state,
+// so the override survives reloads); clearing the field re-enables auto-derive.
+let systemNameDirty = !!state.system_name_manual;
 function pushSysTextureToState() {
   state.system_name = sysNameInput.value;
   state.texture     = texInput.value;
-  TW.setState({ ...state, system_name: state.system_name, texture: state.texture });
+  TW.setState({ ...state, system_name: state.system_name, texture: state.texture,
+                system_name_manual: state.system_name_manual });
 }
-sysNameInput.addEventListener("input", () => { systemNameDirty = true; pushSysTextureToState(); });
+sysNameInput.addEventListener("input", () => {
+  const manual = sysNameInput.value.trim() !== "";
+  systemNameDirty = manual; state.system_name_manual = manual;
+  pushSysTextureToState();
+  if (!manual) refreshSystemName();   // cleared → fall back to System 1/2 auto-name
+});
 texInput.addEventListener("input",  pushSysTextureToState);
 texInput.addEventListener("change", pushSysTextureToState);
 
