@@ -189,16 +189,17 @@ def test_epoxy_work_lists_systems():
     2 → "Option 1/2:". Never leaves a literal {{#system}} marker."""
     import re
     import proposal_writer as pw
-    one = [{"label": "System:   Macro Flake Single Broadcast", "texture": "Orange Peel",
-            "area": "~4,000 SF of epoxy flooring and 100 LF of epoxy base"}]
-    two = [{"label": "Option 1:   Macro Flake Single Broadcast", "texture": "Orange Peel",
-            "area": "~4,000 SF of epoxy flooring and 100 LF of epoxy base"},
-           {"label": "Option 2:   micro Flake Double Broadcast", "texture": "Orange Peel",
-            "area": "~3,000 SF of epoxy flooring"}]
+    one = [{"prefix": "System:", "name": "Macro Flake Single Broadcast", "texture": "Orange Peel",
+            "sqft": "4,000", "lf_clause": " and 100 LF of epoxy base"}]
+    two = [{"prefix": "Option 1:", "name": "Macro Flake Single Broadcast", "texture": "Orange Peel",
+            "sqft": "4,000", "lf_clause": " and 100 LF of epoxy base"},
+           {"prefix": "Option 2:", "name": "micro Flake Double Broadcast", "texture": "Orange Peel",
+            "sqft": "3,000", "lf_clause": ""}]
     t1 = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS, systems=one))
-    assert "System:   Macro Flake Single Broadcast" in t1
+    assert "System:" in t1 and "Macro Flake Single Broadcast" in t1
     assert "Option 1" not in t1 and not re.search(r"\{\{[#/]", t1)
     t2 = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS, systems=two))
-    assert "Option 1:   Macro Flake Single Broadcast" in t2
-    assert "Option 2:   micro Flake Double Broadcast" in t2
+    assert "Option 1:" in t2 and "Macro Flake Single Broadcast" in t2
+    assert "Option 2:" in t2 and "micro Flake Double Broadcast" in t2
+    assert "~3,000 SF of epoxy flooring" in t2
     assert not re.search(r"\{\{[#/]", t2)

@@ -497,6 +497,22 @@
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
 
+  // Proposal boilerplate as REAL default values (these used to be placeholders,
+  // which never made it into the generated doc — that's why Schedule came out
+  // blank). writeForm above already applied any saved / AI-autofilled values, so
+  // we only fill fields that are still blank: autofill and manual edits win, but
+  // a proposal generated without autofill still carries the standard text.
+  const PROPOSAL_DEFAULTS = {
+    scope_notes: "Demo (one layer of) existing flooring and place in a dumpster provided by the owner. Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting). Prep substrate cracks and non-moving joints (includes minor floor prep, patching of minor substrate defects, spalls and divots). Install Epoxy System. Assumes installation over: clean, sound & solid concrete substrate.",
+    schedule_notes: "Assumes all areas available at one time, approx. 1 week to complete full scope",
+    exclusions: "Multiple layers of floor to be removed (change order is necessary), Moving of Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations",
+    price_options: "Add Option: $500- Treadwell Epoxy Cleaning Demonstration (within one hour of KC). Demonstration includes a gallon of cleaner and a step by step demonstration on caring for your new floors.",
+  };
+  for (const [nm, def] of Object.entries(PROPOSAL_DEFAULTS)) {
+    const el = form.querySelector(`[name="${nm}"]`);
+    if (el && !String(el.value || "").trim()) el.value = def;
+  }
+
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
   // the project already carries one. Editable — they can change who signs.
   (function prefillEstimator() {
