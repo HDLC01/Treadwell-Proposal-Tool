@@ -142,6 +142,8 @@ _BASE_VALS = {
     "bid_date_formatted": "6/15/26", "job_name": "J", "city_state": "C",
     "area_description": "x", "disposal": "d", "site_visit_date": "6/15",
     "schedule_notes": "s", "work_description": "w",
+    # epoxy PRICE breakdown tokens
+    "base_bid_formatted": "$58,523.00", "material_tax_formatted": "$2,639.00",
 }
 
 
@@ -171,6 +173,24 @@ def test_direct_templates_render_price_lines_and_alternate():
         assert "ALTERNATE SYSTEM — Urethane" in blob, f"{wt}: alternate missing"
         assert "$96,400.00 – Total" in blob, f"{wt}: alternate total missing"
         assert not re.search(r"\{\{[#/]", blob), f"{wt}: leftover block marker"
+
+
+def test_epoxy_price_breakdown_kansas_and_remodel_toggle():
+    """Epoxy PRICE: Base Bid + Material Sales Tax always shown; Kansas Remodel Tax
+    only when a remodel row is supplied; never 'Missouri', never 'INCLUDED'."""
+    import re
+    import proposal_writer as pw
+    on = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct",
+        values=_BASE_VALS, remodel=[{"amount_formatted": "$2,639.00"}]))
+    assert "$58,523.00 – Epoxy flooring as described above" in on
+    assert "$2,639.00 – Material Sales Tax" in on
+    assert "Kansas Remodel Tax" in on
+    assert "Missouri Remodel Tax" not in on and "INCLUDED" not in on
+    assert not re.search(r"\{\{[#/]", on)
+    off = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS))
+    assert "Material Sales Tax" in off          # always shown (transparency)
+    assert "Remodel Tax" not in off             # hidden when remodel is off
+    assert not re.search(r"\{\{[#/]", off)
 
 
 def test_direct_templates_backcompat_no_blocks():

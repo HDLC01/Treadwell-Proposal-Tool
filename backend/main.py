@@ -197,6 +197,9 @@ class GenerateIn(BaseModel):
     # `alternate_full_bid` + `alternate`), and its proposal label.
     alternate_computed_bid: Dict[str, Any] | None = None
     alternate_label: str = ""
+    # Conditional {{#remodel}} line: [{"amount_formatted": "$x"}] when a remodel
+    # tax applies, [] (the default) when the remodel toggle is off.
+    remodel: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -793,6 +796,16 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     _ensure_state_name(values)
     _ensure_value_aliases(values)
 
+    # The epoxy PRICE block itemizes Base Bid + Material Sales Tax. The frontend
+    # fills these from the bid; backfill for any caller that doesn't so the
+    # template never shows a raw token (Base Bid falls back to the flooring total,
+    # Material Sales Tax to $0.00).
+    if not str(values.get("base_bid_formatted") or "").strip():
+        values["base_bid_formatted"] = (values.get("lump_sum_formatted")
+                                        or values.get("total_formatted") or "")
+    if not str(values.get("material_tax_formatted") or "").strip():
+        values["material_tax_formatted"] = "$0.00"
+
     # Sign the proposal with the logged-in estimator (the templates' old
     # hardcoded "Troy Holmes" is now the {{estimator_name}} token). The frontend
     # sets this from the signed-in user; backfill here so it's never blank or a
@@ -870,6 +883,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             price_lines=price_line_dicts,
             alternates=alternates,
             systems=systems_arg,
+            remodel=payload.remodel,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
