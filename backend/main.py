@@ -732,6 +732,43 @@ def _blank(v: Any) -> bool:
     return not str(v or "").strip()
 
 
+def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
+    """WORK-section system list for an epoxy proposal, from the picked System 1/2
+    cells (Epoxy!A22/E20/E34 and A26/E24/E37). One system → "System:   <name>"
+    (no Option label); 2+ → "Option 1: …" / "Option 2: …". Falls back to a single
+    system from the flat values so the {{#system}} block always has ≥1 row."""
+    def num(x) -> float:
+        try:
+            return float(str(x).replace(",", "").replace("$", "").strip() or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    def fmt(n: float) -> str:
+        return f"{int(round(n)):,}"
+
+    picks = []
+    for na, sa, la in (("Epoxy!A22", "Epoxy!E20", "Epoxy!E34"),
+                       ("Epoxy!A26", "Epoxy!E24", "Epoxy!E37")):
+        name = str(cells.get(na) or "").strip()
+        if name and "Options" not in name:        # skip the dropdown header placeholders
+            picks.append({"name": name, "sf": num(cells.get(sa)), "lf": num(cells.get(la))})
+    if not picks:                                  # no grid pick → single system from flat values
+        picks = [{
+            "name": str(values.get("system_name") or "").strip() or "Epoxy System",
+            "sf": num(values.get("epoxy_sf") if values.get("epoxy_sf") is not None else cells.get("Epoxy!E20")),
+            "lf": num(values.get("cove_lf") if values.get("cove_lf") is not None else cells.get("Epoxy!E34")),
+        }]
+    texture = str(values.get("texture") or "").strip()
+    multi = len(picks) > 1
+    out = []
+    for i, s in enumerate(picks, 1):
+        label = (f"Option {i}:   " if multi else "System:   ") + s["name"]
+        area = f"~{fmt(s['sf'])} SF of epoxy flooring"
+        if s["lf"] > 0:
+            area += f" and {fmt(s['lf'])} LF of epoxy base"
+        out.append({"label": label, "texture": texture, "area": area, "system_name": s["name"]})
+    return out
+
+
 def _ensure_value_aliases(values: Dict[str, Any]) -> None:
     """Backfill blank token aliases / fallbacks in-place so the proposal never
     emits a raw {{token}} (e.g. job_name <- project_name, work_description <-
@@ -820,12 +857,17 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
 
     # Fill proposal document
     try:
+        # Epoxy WORK section lists each picked system as its own row (1 system →
+        # "System: …", 2+ → "Option 1/2: …") via the template's {{#system}} block.
+        systems_arg = (_build_epoxy_systems(payload.cell_values, values)
+                       if str(payload.work_type or "").lower() == "epoxy" else None)
         docx_bytes = proposal_writer.fill_proposal(
             work_type=payload.work_type,
             audience=payload.audience,
             values=values,
             price_lines=price_line_dicts,
             alternates=alternates,
+            systems=systems_arg,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
