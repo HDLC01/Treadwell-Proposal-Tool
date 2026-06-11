@@ -759,13 +759,15 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
         }]
     texture = str(values.get("texture") or "").strip()
     multi = len(picks) > 1
+    # The template keeps the bold "System:"/"Option N:" label and a separate
+    # regular value run, so we emit them as distinct tokens (prefix + name)
+    # rather than one combined string — preserving the sheet's column alignment.
     out = []
     for i, s in enumerate(picks, 1):
-        label = (f"Option {i}:   " if multi else "System:   ") + s["name"]
-        area = f"~{fmt(s['sf'])} SF of epoxy flooring"
-        if s["lf"] > 0:
-            area += f" and {fmt(s['lf'])} LF of epoxy base"
-        out.append({"label": label, "texture": texture, "area": area, "system_name": s["name"]})
+        prefix = f"Option {i}:" if multi else "System:"
+        lf_clause = f" and {fmt(s['lf'])} LF of epoxy base" if s["lf"] > 0 else ""
+        out.append({"prefix": prefix, "name": s["name"], "texture": texture,
+                    "sqft": fmt(s["sf"]), "lf_clause": lf_clause})
     return out
 
 
