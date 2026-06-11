@@ -57,6 +57,7 @@ COMBO_VALUES = {
     "disposal": "a dumpster", "schedule_notes": "~5 days",
     "lump_sum_formatted": "$61,162.00", "tax_amount_formatted": "$2,639.00",
     "state_name": "Kansas", "total_formatted": "$63,801.00",
+    "estimator_name": "Kyle Loseke",
 }
 
 
@@ -76,3 +77,15 @@ def test_combo_proposal_has_no_unfilled_placeholders():
     assert not re.search(r"\{\{[^}]+\}\}", text), "unsubstituted {{token}} left in combo output"
     for dummy in ("$xx,xxx", "Square Feet, Lineal Feet", "xx/xx/26"):
         assert dummy not in text, f"combo dummy placeholder {dummy!r} not replaced"
+
+
+def test_estimator_name_replaces_troy():
+    """The Direct templates' old hardcoded 'Troy Holmes' signature is now the
+    {{estimator_name}} token — it fills with the estimator and never shows Troy."""
+    vals = dict(COMBO_VALUES); vals["estimator_name"] = "Kyle Loseke"
+    for wt in ("epoxy", "polish", "combo"):
+        text = _rendered_text(
+            proposal_writer.fill_proposal(work_type=wt, audience="Direct", values=vals))
+        assert "Kyle Loseke" in text, f"{wt}: estimator name not in proposal"
+        assert "Troy" not in text, f"{wt}: 'Troy' still present"
+        assert "{{estimator_name}}" not in text, f"{wt}: raw estimator token left"
