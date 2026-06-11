@@ -37,10 +37,19 @@ context loaded.
 - The image bakes in Node + the **Claude CLI** (`@anthropic-ai/claude-code`)
   and **LibreOffice** (`libreoffice-writer` + Carlito/Liberation fonts) for the
   docx→PDF export.
-- **AI Autofill** runs `claude -p` inside the container, logged in as
-  `hanz@wetreadwell.com` (Claude **Team** seat). Login persists on a Docker
-  volume (`/root/.claude`). Re-login if it expires:
-  `docker exec -it treadwell-proposal-tool claude` → OAuth URL → paste code.
+- **AI Autofill** runs `claude -p` inside the container as
+  `hanz@wetreadwell.com` (Claude **Team** seat). Auth is a **long-lived OAuth
+  token** (`CLAUDE_CODE_OAUTH_TOKEN` in `.env`, from `claude setup-token`,
+  valid ~1 year) — NOT the old interactive login, which expired ~monthly and
+  silently killed autofill. `CLAUDE_CONFIG_DIR=/root/.claude` (set in compose)
+  points the CLI's config + creds at the persistent volume so autofill also
+  survives `up -d --build` (the default `~/.claude.json` is ephemeral and was
+  wiped on every deploy). Re-mint if the token ever expires:
+  `docker exec -it treadwell-proposal-tool claude setup-token` → approve in
+  browser → paste the code → copy the printed `sk-ant-oat01-…` token into
+  `CLAUDE_CODE_OAUTH_TOKEN=` in `/opt/treadwell/.env`, then `up -d`. On a brand
+  new volume, seed the config once: `echo '{}' > /root/.claude/.claude.json`
+  (the CLI errors "config file not found" in `-p` mode if it's absent).
 
 ### What actually shipped (corrects the v1 sections below)
 - **AI Autofill IS live** (not "out of scope"). Reads the pasted lead notes,
