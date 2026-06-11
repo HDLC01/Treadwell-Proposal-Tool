@@ -339,16 +339,15 @@ def fill_proposal(
 
     d = docx.Document(str(template_path))
 
-    # Phase 1 — expand repeatable blocks. `system` only when supplied (don't
-    # strip a {{#system}} block when no systems are given); `price_line` and
-    # `alternate` always run so their markers are stripped (zero rows when
-    # empty) rather than left as literal {{#…}} text in the output.
+    # Phase 1 — expand repeatable blocks. All three always run so their markers
+    # are stripped (zero rows when empty) rather than left as literal {{#…}} text
+    # in the output. A template with no marker for a block is unaffected (no-op),
+    # so this stays byte-identical for templates that don't use a given block.
     block_lists: dict[str, list] = {
         "price_line": list(price_lines or []),
         "alternate": list(alternates or []),
+        "system": list(systems or []),
     }
-    if systems:
-        block_lists["system"] = list(systems)
     n_blocks = _expand_all_blocks(d, block_lists)
     if n_blocks:
         log.info("Expanded %d repeatable block(s)", n_blocks)
