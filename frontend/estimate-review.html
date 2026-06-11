@@ -1659,22 +1659,18 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
       updateTotalBarFromHF();
     }
   });
-  // Excel-style percent entry, applied when the user COMMITS the edit (blur).
-  // In Excel, typing "-10" into a %-formatted cell means -10% (stored -0.10);
-  // Kyle types "-10" for the hard-bid discount, not "-0.10". Rule:
-  //   "10%" / "-17%"  → /100 (explicit percent)
-  //   |n| >= 1        → /100 (Excel-style: -10 → -10%, 45 → 45%)
-  //   |n| <  1        → already a fraction, keep (-.17 → -17% — the old habit
-  //                     keeps working). Non-numeric text is left untouched.
+  // Percent entry on a %-formatted cell: the number you type IS the percent.
+  // Kyle types whole numbers like in his sheet — hard-bid "-10" → -10%, soft
+  // "10" → 10%, super "3" → 3%, "-17" → -17%. A trailing "%" is fine too
+  // ("-17%" → -17%). Applied on commit (blur). Non-numeric text is left alone.
   const isPctCell = /%/.test(cell.fmt || "");
   if (isPctCell) {
     inp.addEventListener("change", (e) => {
       const raw = String(e.target.value || "").trim();
       if (raw === "" || raw === original) return;
-      const hasPct = raw.endsWith("%");
       const n = Number(raw.replace(/%$/, "").replace(/,/g, ""));
       if (!isFinite(n)) return;                      // text — leave alone
-      const norm = (hasPct || Math.abs(n) >= 1) ? n / 100 : n;
+      const norm = n / 100;                          // typed number = that percent
       cellValues[addrKey] = norm;
       e.target.value = formatNumericValue(norm, cell.fmt);
       if (HF && HF.ready) {
