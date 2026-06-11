@@ -15,6 +15,13 @@ services:
     environment:
       # Point the SQLite drafts DB at the persistent volume below
       - DRAFTS_DB_PATH=/app/data/drafts.db
+      # AI Autofill shells out to the Claude CLI (`claude -p`). Point its config
+      # + credentials dir at the persistent /root/.claude volume so autofill
+      # survives rebuilds — the CLI's default ~/.claude.json lives in the
+      # container's ephemeral layer and is wiped on every `up -d --build`, which
+      # left autofill dead after each deploy. Auth itself is a long-lived OAuth
+      # token in .env (CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token`).
+      - CLAUDE_CONFIG_DIR=/root/.claude
       # Production output root for generated project folders.
       # Target: Hanz's real working folder "*Hanz" (the team's per-estimator
       # convention: *Hanz / *Kyle / *Liz / *Troy), inside a dedicated
@@ -30,9 +37,11 @@ services:
     env_file:
       - .env
     volumes:
-      # Persist Claude CLI login state across container restarts.
-      # After deploy, run: docker exec -it treadwell-proposal-tool claude login
-      # The browser-auth tokens land here and survive `docker compose down`.
+      # Persist the Claude CLI config + credentials (CLAUDE_CONFIG_DIR above
+      # points here) across restarts/rebuilds. Auth is the
+      # CLAUDE_CODE_OAUTH_TOKEN in .env; if it ever expires (~1yr), re-mint with
+      # `docker exec -it treadwell-proposal-tool claude setup-token` and replace
+      # CLAUDE_CODE_OAUTH_TOKEN in /opt/treadwell/.env, then `up -d`.
       - claude_credentials:/root/.claude
       # Persist the SQLite drafts DB across restarts / rebuilds.
       - draft_data:/app/data
