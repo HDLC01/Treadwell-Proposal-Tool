@@ -569,6 +569,17 @@
     input.replaceWith(sel);
   })();
 
+  // Editing the System name here marks it manual, so returning to the Estimate
+  // screen won't re-derive over the estimator's wording.
+  (function trackManualSystemName() {
+    const el = form.querySelector('[name="system_name"]');
+    if (!el) return;
+    el.addEventListener("input", () => {
+      const st = TW.getState();
+      TW.setState({ ...st, system_name: el.value, system_name_manual: el.value.trim() !== "" });
+    });
+  })();
+
   document.getElementById("doc-name").textContent =
     (state.project_name || "Untitled") + " - " +
     (state.work_type || "Epoxy").charAt(0).toUpperCase() +
