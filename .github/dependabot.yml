@@ -1,0 +1,22 @@
+# Dependabot: weekly version-update PRs + (with native security updates enabled
+# in repo settings) immediate PRs for vulnerable deps. Scheduled PRs target the
+# `staging` branch to respect the staging-first flow. NOTE: native *security*
+# update PRs always target the default branch (main) — that's a GitHub limit.
+version: 2
+updates:
+  # Python dependencies (the app's requirements live in /backend)
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    target-branch: staging
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+
+  # Keep the GitHub Actions themselves current (also clears the Node 20 nag)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: staging
+    labels: [dependencies, ci]
