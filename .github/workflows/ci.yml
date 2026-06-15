@@ -1,14 +1,14 @@
 name: CI
 
-# Run the backend test suite on every push to the long-lived branches and on
-# every PR that targets them. The suite is hermetic (auth + Supabase are
-# stubbed, LibreOffice is mocked), so it needs no secrets, network, Docker, or
-# system binaries — a plain hosted runner is enough.
+# Tests + dependency audit. Runs on every PR plus pushes to main/staging. Since
+# both are PR-protected, every change is covered by the PR run before it can
+# merge — so we don't ALSO run on arbitrary branch pushes (avoids double runs on
+# PR branches). The suite is hermetic (auth + Supabase stubbed, LibreOffice
+# mocked) — no secrets needed.
 on:
   push:
     branches: [main, staging]
   pull_request:
-    branches: [main, staging]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -36,3 +36,25 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -q
+
+  audit:
+    # pip-audit scans the PRODUCTION dependencies for known CVEs.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit production dependencies
+        # Fails on ANY known CVE in the production deps — no ignores. (The earlier
+        # starlette ignores were removed once the FastAPI 0.137 / starlette 1.3
+        # upgrade cleared them.)
+        run: pip-audit -r requirements.txt --strict --progress-spinner off

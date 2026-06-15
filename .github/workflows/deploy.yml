@@ -1,0 +1,73 @@
+name: Deploy
+
+# Continuous deployment: a hosted runner SSHes into the Bluehost VPS and runs
+# the same `git pull && docker compose up -d --build` you'd run by hand. The
+# image is built ON the VPS (no registry), so the runner only needs SSH.
+#
+#   push to `staging` -> deploys the staging stack automatically
+#   push to `main`    -> deploys prod, but the `production` environment requires
+#                        a manual approval (HDLC01) before the job runs
+#
+# Auth = the dedicated `VPS_SSH_KEY` deploy secret (revocable, separate from any
+# personal key). Host/user come from the VPS_HOST / VPS_USER secrets.
+on:
+  push:
+    branches: [staging, main]
+  workflow_dispatch:        # allow a manual re-deploy from the Actions tab
+
+concurrency:
+  # never let two deploys to the same branch overlap; let a running one finish
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    if: github.ref_name == 'staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Deploy staging over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true          # abort on the first failing command
+          script: |
+            set -euo pipefail
+            cd /opt/treadwell-staging
+            git pull --ff-only origin staging
+            docker compose -f docker-compose.staging.yml up -d --build
+            # wait until the container reports healthy, else fail the deploy
+            for i in $(seq 1 24); do
+              if curl -fsS http://localhost:8889/healthz >/dev/null; then
+                echo "staging healthy"; exit 0
+              fi
+              sleep 5
+            done
+            echo "staging post-deploy healthcheck failed"; exit 1
+
+  production:
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    environment: production          # required reviewer -> waits for approval
+    steps:
+      - name: Deploy production over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /opt/treadwell
+            git pull --ff-only
+            docker compose up -d --build
+            for i in $(seq 1 24); do
+              if curl -fsS http://localhost:8888/healthz >/dev/null; then
+                echo "prod healthy"; exit 0
+              fi
+              sleep 5
+            done
+            echo "prod post-deploy healthcheck failed"; exit 1
