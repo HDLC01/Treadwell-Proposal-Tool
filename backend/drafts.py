@@ -106,6 +106,28 @@ def restore_draft(draft_id: str, actor_email: Optional[str] = None) -> bool:
     return bool(rows)
 
 
+def set_archived(draft_id: str, archived: bool,
+                 actor_email: Optional[str] = None) -> bool:
+    """Mark a project active/inactive (Kyle's "active/inactive" Projects filter).
+
+    The flag lives INSIDE the `data` blob (`data.archived`) rather than a new
+    column — that's backend-agnostic (works the same on cloud Supabase in prod
+    and the VPS PostgREST in staging) and needs no schema migration. We
+    read-modify-write the blob and deliberately DON'T bump `updated_at`, so
+    archiving a finished project doesn't shuffle it to the top of the list.
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    data["archived"] = bool(archived)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "archived" if archived else "unarchived",
+              {"project_name": data.get("project_name"), "id": draft_id})
+    return True
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -137,6 +159,7 @@ def _list_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 "project_name:data->>project_name,"
                 "work_type:data->>work_type,"
                 "deadline:data->>deadline,"
+                "archived:data->>archived,"
                 "computed_bid:data->computed_bid")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
@@ -151,6 +174,7 @@ def _list_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "total": _bid_total({"computed_bid": r.get("computed_bid")}),
             "work_type": r.get("work_type"),
             "deadline": r.get("deadline"),
+            "archived": _truthy(r.get("archived")),
             "owner_email": r.get("owner_email"),
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
@@ -193,6 +217,14 @@ def list_events(limit: int = 100) -> List[Dict[str, Any]]:
 
 
 # ── helpers: pull display fields out of the state blob ────────────────
+def _truthy(v: Any) -> bool:
+    """Coerce a `data->>archived` value (text "true"/"false"/null, or a real
+    bool from the full-blob fallback) to a Python bool."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "t", "1", "yes")
+
+
 def _bid_total(data: Dict[str, Any]) -> Optional[float]:
     cb = (data or {}).get("computed_bid") or {}
     fb = cb.get("full_bid") or {}
@@ -219,6 +251,7 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "work_type": data.get("work_type"),
         "audience": data.get("audience"),
         "total": _bid_total(data),
+        "archived": _truthy(data.get("archived")),
         "lump_sum_display": data.get("lump_sum_display"),
         "owner_email": row.get("owner_email"),
         "created_at": row.get("created_at"),

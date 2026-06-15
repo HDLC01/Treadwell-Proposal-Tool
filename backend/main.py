@@ -1021,6 +1021,10 @@ class DraftIn(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ArchiveIn(BaseModel):
+    archived: bool = True
+
+
 @app.on_event("startup")
 def _init_drafts_db() -> None:
     try:
@@ -1092,6 +1096,19 @@ def api_restore_draft(draft_id: str, request: Request) -> Dict[str, Any]:
     """Restore a soft-deleted project from Trash back to the active list."""
     existed = drafts.restore_draft(draft_id, _user_email(request))
     return {"ok": True, "existed": existed}
+
+
+@app.post("/api/draft/{draft_id}/archive")
+def api_archive_draft(draft_id: str, payload: ArchiveIn, request: Request) -> Dict[str, Any]:
+    """Mark a project active/inactive for the Projects-tab active/inactive
+    filter. `{"archived": true}` = inactive; `false` = active. Any signed-in
+    user can manage the shared list."""
+    try:
+        existed = drafts.set_archived(draft_id, payload.archived, _user_email(request))
+        return {"ok": True, "existed": existed, "archived": payload.archived}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_archived failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
 
 
 @app.get("/api/drafts")

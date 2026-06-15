@@ -30,6 +30,19 @@
     .trash-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
+    /* active/inactive filter chips */
+    .filters { display:flex; gap:8px; margin:0 0 16px; flex-wrap:wrap; }
+    .chip { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:999px; padding:6px 14px; font:600 12.5px system-ui; cursor:pointer; transition:all .12s; }
+    .chip:hover { border-color:var(--red); color:var(--red); }
+    .chip.sel { background:var(--ink); color:#fff; border-color:var(--ink); }
+    .chip .n { opacity:.6; margin-left:5px; font-weight:500; }
+    /* clickable Active/Inactive status pill (top-right of each card) */
+    .card { position:relative; }
+    .status-toggle { position:absolute; top:12px; right:12px; border:none; border-radius:999px; padding:3px 10px; font:600 10.5px/1.4 system-ui; text-transform:uppercase; letter-spacing:.03em; cursor:pointer; transition:filter .12s; }
+    .status-toggle:hover { filter:brightness(.94); }
+    .status-toggle.is-active { background:#dcf5e3; color:#0f7b34; }
+    .status-toggle.is-inactive { background:#e9e8e7; color:#6b6b6b; }
+    .pname { padding-right:78px; }   /* leave room for the pill */
   </style>
 </head>
 <body>
@@ -39,7 +52,10 @@
     <a class="btn" id="new-project">+ New project</a>
   </div>
   <p class="hint">Open any saved project to reopen and re-edit it — your intake, estimate cells, and bid come back exactly as saved, then you can change anything and re-generate.</p>
-  <div class="wrap"><div id="list" class="loading">Loading projects…</div></div>
+  <div class="wrap">
+    <div id="filters" class="filters" hidden></div>
+    <div id="list" class="loading">Loading projects…</div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="/auth.js"></script>
@@ -73,12 +89,61 @@
     }
 
     const CACHE_KEY = "tw_projects_cache";
-    function render(projects) {
+    const FILTER_KEY = "tw_projects_filter";
+    let ALL_PROJECTS = [];
+    // Default to "active" so the working list isn't cluttered by finished jobs;
+    // existing projects have no `archived` flag → treated as active (nothing
+    // disappears). Remember the last-used filter across visits.
+    let CURRENT_FILTER = (() => {
+      try { return sessionStorage.getItem(FILTER_KEY) || "active"; } catch { return "active"; }
+    })();
+
+    function isActive(p)   { return !p.archived; }
+    function isInactive(p) { return !!p.archived; }
+    function applyFilter(list) {
+      if (CURRENT_FILTER === "inactive") return list.filter(isInactive);
+      if (CURRENT_FILTER === "all")      return list;
+      return list.filter(isActive);  // "active"
+    }
+
+    function renderChips() {
+      const f = document.getElementById("filters");
+      const nActive = ALL_PROJECTS.filter(isActive).length;
+      const nInactive = ALL_PROJECTS.filter(isInactive).length;
+      const defs = [
+        ["active",   "Active",   nActive],
+        ["inactive", "Inactive", nInactive],
+        ["all",      "All",      ALL_PROJECTS.length],
+      ];
+      f.hidden = ALL_PROJECTS.length === 0;
+      f.innerHTML = defs.map(([key,label,n]) =>
+        `<button type="button" class="chip ${key===CURRENT_FILTER?"sel":""}" data-filter="${key}">${label}<span class="n">${n}</span></button>`
+      ).join("");
+      f.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => {
+        CURRENT_FILTER = ch.dataset.filter;
+        try { sessionStorage.setItem(FILTER_KEY, CURRENT_FILTER); } catch {}
+        paint();
+      }));
+    }
+
+    // Re-draw chips + the filtered grid from ALL_PROJECTS (single source of truth).
+    function paint() {
+      renderChips();
       const el = document.getElementById("list");
-      if (!projects.length) { el.className="empty"; el.textContent="No projects yet. Click “+ New project” to start."; return; }
+      const shown = applyFilter(ALL_PROJECTS);
+      if (!shown.length) {
+        el.className = "empty";
+        el.textContent = ALL_PROJECTS.length
+          ? (CURRENT_FILTER === "inactive" ? "No inactive projects." : "No active projects.")
+          : "No projects yet. Click “+ New project” to start.";
+        return;
+      }
       el.className = "grid";
-      el.innerHTML = projects.map(p => `
+      el.innerHTML = shown.map(p => `
         <div class="card" data-id="${encodeURIComponent(p.id)}">
+          <button type="button" class="status-toggle ${p.archived?"is-inactive":"is-active"}"
+                  data-archived="${p.archived?1:0}"
+                  title="Click to mark ${p.archived?"active":"inactive"}">${p.archived?"Inactive":"Active"}</button>
           <p class="pname">${esc(p.project_name||"(untitled)")}</p>
           <div class="meta">
             ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
@@ -104,6 +169,8 @@
         if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
         const tb = c.querySelector(".trash-btn");
         if (tb) tb.addEventListener("click", (e) => { e.stopPropagation(); trashCard(c); });
+        const st = c.querySelector(".status-toggle");
+        if (st) st.addEventListener("click", (e) => { e.stopPropagation(); toggleStatus(c, st); });
         const fb = c.querySelector(".files-btn");
         if (fb) fb.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -114,6 +181,25 @@
       });
     }
 
+    function cacheProjects() { try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(ALL_PROJECTS)); } catch {} }
+
+    async function toggleStatus(c, btn) {
+      const id = decodeURIComponent(c.dataset.id);
+      const next = btn.dataset.archived !== "1";   // currently active → mark inactive
+      btn.disabled = true;
+      try {
+        const r = await fetch("/api/draft/" + encodeURIComponent(id) + "/archive", {
+          method: "POST", headers: TW.authHeaders(), body: JSON.stringify({ archived: next }),
+        });
+        const j = await r.json();
+        if (!j || j.ok === false) { alert((j&&j.error)||"Couldn't update status."); btn.disabled=false; return; }
+        const p = ALL_PROJECTS.find(x => x.id === id);
+        if (p) p.archived = next;
+        cacheProjects();
+        paint();   // re-filter: a now-inactive card leaves the Active view
+      } catch (err) { alert("Couldn't update status. " + (err.message||"")); btn.disabled=false; }
+    }
+
     async function trashCard(c) {
       const id = decodeURIComponent(c.dataset.id);
       const name = (c.querySelector(".pname")||{}).textContent || id;
@@ -122,16 +208,13 @@
         const r = await fetch("/api/draft/" + encodeURIComponent(id), { method:"DELETE", headers: TW.authHeaders() });
         const j = await r.json();
         if (!j || j.ok === false) { alert((j&&j.error)||"Couldn't move to Trash."); return; }
-        c.remove();
-        // keep the SWR cache honest so it doesn't flash back on next load
-        try {
-          const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "[]");
-          sessionStorage.setItem(CACHE_KEY, JSON.stringify(cached.filter(p => p.id !== id)));
-        } catch {}
-        const el = document.getElementById("list");
-        if (el && !el.querySelector(".card")) { el.className="empty"; el.textContent="No projects yet. Click “+ New project” to start."; }
+        ALL_PROJECTS = ALL_PROJECTS.filter(p => p.id !== id);
+        cacheProjects();
+        paint();
       } catch (err) { alert("Couldn't move to Trash. " + (err.message||"")); }
     }
+
+    function setProjects(list) { ALL_PROJECTS = Array.isArray(list) ? list : []; paint(); }
 
     async function load() {
       // Stale-while-revalidate: paint the last-known list instantly (perceived
@@ -139,7 +222,7 @@
       // so we always revalidate — the cache only removes the spinner.
       try {
         const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null");
-        if (Array.isArray(cached) && cached.length) render(cached);
+        if (Array.isArray(cached) && cached.length) setProjects(cached);
       } catch {}
       await tokenSoon();
       const el = document.getElementById("list");
@@ -147,8 +230,8 @@
         const r = await fetch("/api/drafts", { headers: TW.authHeaders() });
         const j = await r.json();
         const projects = (j && j.projects) || [];
-        try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(projects)); } catch {}
-        render(projects);
+        setProjects(projects);
+        cacheProjects();
       } catch (err) {
         if (el.className !== "grid") { el.className="empty"; el.textContent="Couldn't load projects. " + (err.message||""); }
       }
