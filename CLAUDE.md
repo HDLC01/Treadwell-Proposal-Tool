@@ -15,13 +15,14 @@ context loaded.
 **🟢 LIVE IN PRODUCTION 24/7:** https://proposals.wetreadwell.com
 
 ### Hosting
-- **Bluehost VPS** (Standard NVMe 2), Ubuntu 24.04, IP `50.6.110.215`,
-  hostname `ovn.bfk.mybluehost.me`. Account holder: Will Buchanan; Hanz has
-  Tech-contact access. Order 1891957625 (~$32 year 1).
+- **Bluehost VPS** (Standard NVMe 2), Ubuntu 24.04. The IP, hostname, SSH key
+  path, and account/order details are deliberately kept OUT of this public repo
+  — they live in the agent memory / a local ops note. Hanz has Tech-contact
+  access on the Bluehost account.
 - **Single Docker container** (`treadwell-proposal-tool`) — FastAPI serves
   BOTH the API and the static frontend on port 8888.
 - **nginx** reverse-proxies 80/443 → 8888, **Let's Encrypt** SSL (auto-renews).
-- DNS: A-record `proposals` → `50.6.110.215` in Bluehost DNS for `wetreadwell.com`.
+- DNS: A-record `proposals` → the VPS IP, in Bluehost DNS for `wetreadwell.com`.
 - App lives at `/opt/treadwell` on the VPS; `docker-compose.yml` + `Dockerfile`
   at repo root.
 - **Staging** is a parallel stack: container `treadwell-staging` on port 8889 at
@@ -99,8 +100,9 @@ context loaded.
   (`backend/railway.toml`, `backend/Procfile`) were **deleted on 2026-05-30**.
 
 ### Open items / known issues
-1. **⚠️ Rotate the VPS root password** — it was exposed in a chat transcript
-   during deploy (Bluehost → VPS → MANAGE → Reset Root Password).
+1. **VPS access is SSH-key-based** (the key never lives in the repo). Keep the
+   Bluehost root password rotated/current via the console; it is NOT used for
+   deploys. Connection specifics live in the agent memory, not this public file.
 2. **Autofill banner overlaps the Continue button** on Estimate Review — must
    dismiss (×) before clicking Continue. Small CSS fix pending.
 3. **Lead capture is still manual** — estimator pastes the lead email into the
