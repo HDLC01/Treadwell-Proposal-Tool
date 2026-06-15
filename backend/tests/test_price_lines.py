@@ -141,7 +141,7 @@ _BASE_VALS = {
     "epoxy_sf": "12,000", "polish_sf": "8,000", "cove_lf": "250",
     "bid_date_formatted": "6/15/26", "job_name": "J", "city_state": "C",
     "area_description": "x", "disposal": "d", "site_visit_date": "6/15",
-    "schedule_notes": "s", "work_description": "w",
+    "schedule_notes": "s", "work_description": "w", "scope_notes": "demo + install scope",
     # epoxy PRICE breakdown tokens
     "base_bid_formatted": "$58,523.00", "material_tax_formatted": "$2,639.00",
 }
