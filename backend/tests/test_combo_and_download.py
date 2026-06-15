@@ -62,6 +62,7 @@ COMBO_VALUES = {
     "base_bid_formatted": "$61,162.00", "material_tax_formatted": "$2,639.00",
     # combo WORK "Option 1: <real epoxy system>"
     "epoxy_system_name": "MACRO Flake Single Broadcast",
+    "scope_notes": "demo + install scope",
 }
 
 

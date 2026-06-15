@@ -1392,8 +1392,8 @@ function refreshDomFromHF(data, grid) {
 // sheets (Seal, Gyp, Leveling, etc.) are reference tabs — the Total
 // Bar shows the same bid totals regardless of which tab is active.
 const TOTAL_CELLS = {
-  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62" },
-  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55" },
+  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62", sales_tax: "D80", remodel: "D81" },
+  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75" },
 };
 
 function updateTotalBar(data, byAddr) {
@@ -2061,6 +2061,14 @@ function snapshotLumpSumsToState() {
     wt === "epoxy"  ? epoxyLump :
     wt === "polish" ? polishLump :
                       epoxyLump + polishLump;
+  // Sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the proposal's
+  // itemized breakdown matches the Total Lump Sum exactly — not the recipe
+  // engine's figures (which omit Kyle's manual sheet tweaks). Combo sums both.
+  const pick = (e, p) => wt === "epoxy" ? e : wt === "polish" ? p : e + p;
+  state.proposal_sales_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.sales_tax),
+                                  num("Polish", TOTAL_CELLS.Polish.sales_tax));
+  state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
+                                    num("Polish", TOTAL_CELLS.Polish.remodel));
 }
 
 document.getElementById("back-btn").addEventListener("click", () => {
