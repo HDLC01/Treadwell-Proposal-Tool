@@ -1,11 +1,13 @@
 name: CI
 
-# Tests + dependency audit. Runs on EVERY branch push and every PR, so nothing
-# reaches main/staging (both PR-protected) without a green check. The test suite
-# is hermetic (auth + Supabase stubbed, LibreOffice mocked) — no secrets needed.
+# Tests + dependency audit. Runs on every PR plus pushes to main/staging. Since
+# both are PR-protected, every change is covered by the PR run before it can
+# merge — so we don't ALSO run on arbitrary branch pushes (avoids double runs on
+# PR branches). The suite is hermetic (auth + Supabase stubbed, LibreOffice
+# mocked) — no secrets needed.
 on:
   push:
-    branches: ['**']
+    branches: [main, staging]
   pull_request:
 
 concurrency:
