@@ -27,7 +27,7 @@ jobs:
     environment: staging
     steps:
       - name: Deploy staging over SSH
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -53,7 +53,7 @@ jobs:
     environment: production          # required reviewer -> waits for approval
     steps:
       - name: Deploy production over SSH
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
