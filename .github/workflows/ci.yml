@@ -1,0 +1,38 @@
+name: CI
+
+# Run the backend test suite on every push to the long-lived branches and on
+# every PR that targets them. The suite is hermetic (auth + Supabase are
+# stubbed, LibreOffice is mocked), so it needs no secrets, network, Docker, or
+# system binaries — a plain hosted runner is enough.
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'          # matches the production Dockerfile
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      # requirements-dev.txt starts with "-r requirements.txt", so this one
+      # install pulls in both the runtime and the test dependencies.
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
