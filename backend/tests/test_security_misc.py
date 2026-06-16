@@ -25,8 +25,11 @@ def test_explicit_public_endpoints():
     assert main._auth_is_public("/api/public-config", "GET") is True
 
 
-def test_file_downloads_public():
-    assert main._auth_is_public("/api/file/abc123", "GET") is True
+def test_file_downloads_require_auth():
+    # AC-02/LOG-02: /api/file/* downloads are no longer public capability URLs —
+    # the Done page holds a Supabase session and sends the bearer, so a leaked
+    # link alone can't fetch a file.
+    assert main._auth_is_public("/api/file/abc123", "GET") is False
 
 
 def test_api_endpoints_are_gated():
