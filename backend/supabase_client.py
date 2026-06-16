@@ -106,15 +106,14 @@ def verify_token_claims(authorization: Optional[str]) -> dict:
     token = authorization.split(" ", 1)[1].strip()
 
     try:
-        alg = (jwt.get_unverified_header(token).get("alg") or "").upper()
-        if alg.startswith("HS"):
+        try:
+            key = _jwk_client().get_signing_key_from_jwt(token).key
+            payload = jwt.decode(token, key, algorithms=["RS256", "ES256"], audience="authenticated")
+        except Exception:
             secret = os.environ.get("SUPABASE_JWT_SECRET")
             if not secret:
                 raise AuthError(503, "SUPABASE_JWT_SECRET not set for HS256 tokens.")
             payload = jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
-        else:
-            key = _jwk_client().get_signing_key_from_jwt(token).key
-            payload = jwt.decode(token, key, algorithms=[alg], audience="authenticated")
     except AuthError:
         raise
     except Exception as exc:  # bad signature / expired / malformed
