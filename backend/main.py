@@ -22,11 +22,14 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 import uuid
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+import cachetools
 
 # Auto-load .env from this folder so the user doesn't have to source it
 # before running uvicorn. In production (Railway), the platform sets
@@ -72,7 +75,15 @@ log = logging.getLogger("proposal_tool")
 
 
 # ─── App + middleware ─────────────────────────────────────────────────
-app = FastAPI(title="Treadwell Proposal Generator")
+# Expose interactive API docs only in dev; disable in prod to avoid leaking
+# the full endpoint surface + schemas to anonymous visitors.
+_docs = os.environ.get("ENVIRONMENT", "production").lower() in {"development", "dev", "local"}
+app = FastAPI(
+    title="Treadwell Proposal Generator",
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 
 # gzip every response over ~500 bytes. The estimate-sheet grid JSON is the
 # heavy hitter (~2.1 MB raw for the Epoxy tab); gzip takes it to ~90 KB
@@ -226,7 +237,12 @@ class GenerateOut(BaseModel):
 # The docx entry also memoizes its rendered PDF (entry["_pdf"]) on first
 # /api/file/{token}/pdf request. Cache lives for the process lifetime
 # (single uvicorn worker), so a container restart invalidates old tokens.
-_FILE_CACHE: Dict[str, Dict[str, Any]] = {}
+# Bounded TTL cache (dict-like) caps memory + auto-expires stale tokens.
+_FILE_CACHE = cachetools.TTLCache(maxsize=256, ttl=3600)
+
+# Cap concurrent LibreOffice PDF renders (each spawns a heavy headless soffice
+# process); without this, public /api/file/{token}/pdf hits can fork-bomb the box.
+_PDF_RENDER_SEM = threading.Semaphore(2)
 
 
 def _cache_file(content: bytes, filename: str, content_type: str) -> str:
@@ -997,7 +1013,8 @@ def api_get_file_pdf(token: str) -> Response:
     pdf_bytes = entry.get("_pdf")
     if pdf_bytes is None:
         try:
-            pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
+            with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
+                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
         except Exception as exc:  # noqa: BLE001
             log.exception("PDF conversion failed")
             raise HTTPException(500, f"PDF conversion failed: {exc}") from exc
