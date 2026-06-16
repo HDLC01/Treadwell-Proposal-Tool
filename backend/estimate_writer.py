@@ -546,6 +546,11 @@ def _coerce(v: Any) -> Any:
                 return float(s)
             return int(s)
         except ValueError:
+            # Neutralize Excel formula/DDE injection: a string that starts with
+            # a formula trigger (= + - @) or a tab/CR gets a leading apostrophe
+            # so Excel treats the whole cell as literal text.
+            if v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+                return "'" + v
             return v
     return v
 
