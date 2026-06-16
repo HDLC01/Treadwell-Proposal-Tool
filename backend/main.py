@@ -125,10 +125,11 @@ def _template_version() -> str:
 # ─── Auth gate (Supabase Google login, @wetreadwell.com only) ──────────
 # One middleware gates EVERY /api/* route so no endpoint can be forgotten.
 # Public exceptions: /healthz (monitoring), /api/public-config (frontend needs
-# it to init the login client), /api/file/* (download links are random
-# capability tokens hit by the browser without an auth header), and OPTIONS
-# (CORS preflight). Static frontend pages are served freely — they hold no data
-# and gate themselves client-side; the protection is this API check.
+# it to init the login client), and OPTIONS (CORS preflight). Static frontend
+# pages are served freely — they hold no data and gate themselves client-side;
+# the protection is this API check. NOTE: /api/file/* downloads are NO LONGER
+# public — the Done page holds a Supabase session and now sends the bearer on
+# downloads, so a leaked capability-token URL alone can't fetch a file.
 _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config"}
 
 
@@ -138,8 +139,6 @@ def _auth_is_public(path: str, method: str) -> bool:
     if not path.startswith("/api/"):
         return True
     if path in _AUTH_PUBLIC_PATHS:
-        return True
-    if path.startswith("/api/file/"):
         return True
     return False
 

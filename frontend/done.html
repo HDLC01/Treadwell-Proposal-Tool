@@ -301,7 +301,9 @@
       button.textContent = "Downloading…";
       const latestUrl = () => TW.absoluteUrl(TW.getState().generate_result[urlKey]);
       try {
-        let resp = await fetch(latestUrl());
+        // Downloads now require the Supabase bearer (no longer a public
+        // capability URL) — TW.authHeaders() carries Authorization: Bearer.
+        let resp = await fetch(latestUrl(), { headers: TW.authHeaders() });
         // Download links live in server memory; a restart (deploy/crash/reboot)
         // expires them with a 404. Self-heal: re-generate fresh files from the
         // stashed payload, then retry — invisible to the user (no dead-end).
@@ -309,7 +311,7 @@
           button.textContent = "Refreshing…";
           const fresh = await TW.postJSON("/api/generate", state.proposal_payload);
           TW.setState({ generate_result: fresh });
-          resp = await fetch(latestUrl());
+          resp = await fetch(latestUrl(), { headers: TW.authHeaders() });
         }
         if (!resp.ok) throw new Error(resp.statusText || ("HTTP " + resp.status));
         // Force a generic type so the browser DOWNLOADS the file under our
