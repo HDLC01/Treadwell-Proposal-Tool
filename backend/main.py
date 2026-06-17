@@ -25,6 +25,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -54,6 +55,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import audit
 import drafts
 import estimate_writer
 import pdf_writer
@@ -141,6 +143,56 @@ def _auth_is_public(path: str, method: str) -> bool:
     if path in _AUTH_PUBLIC_PATHS:
         return True
     return False
+
+
+# ─── Audit middleware (who did what) ──────────────────────────────────
+# Records authenticated state-changing actions + sensitive-data reads so a later
+# "who deleted this / who viewed these contacts" question is answerable. Runs
+# INSIDE _auth_gate (registered BEFORE it → Starlette LIFO makes auth the outer
+# layer), so reading request.state.user_email AFTER call_next sees what the auth
+# gate set. Entire step is try/except — it can never alter a response or throw.
+_AUDIT_SENSITIVE = ("/admin", "/contacts", "/export", "/file", "/download")
+_AUDIT_STATE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _audit_path(path: str) -> str:
+    """Redact the capability token from /api/file/<token>[/pdf] before logging."""
+    if path.startswith("/api/file/"):
+        rest = path[len("/api/file/"):]
+        return "/api/file/<redacted>" + ("/pdf" if rest.endswith("/pdf") else "")
+    return path
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    """Client IP, honoring the first hop of X-Forwarded-For (nginx sits in front)."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+@app.middleware("http")
+async def _audit_log(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        method = request.method
+        path = request.url.path
+        if method != "OPTIONS" and path != "/healthz" and (
+            method in _AUDIT_STATE_METHODS
+            or any(s in path for s in _AUDIT_SENSITIVE)
+        ):
+            audit.audit_log({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "evt": "audit",
+                "user": getattr(request.state, "user_email", None) or "anon",
+                "method": method,
+                "path": _audit_path(path),
+                "status": response.status_code,
+                "ip": _client_ip(request),
+            })
+    except Exception:  # noqa: BLE001 — audit must never break the request
+        pass
+    return response
 
 
 @app.middleware("http")
