@@ -171,7 +171,6 @@ def _client_ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
-@app.middleware("http")
 async def _audit_log(request: Request, call_next):
     response = await call_next(request)
     try:
@@ -206,6 +205,13 @@ async def _auth_gate(request: Request, call_next):
     except supabase_client.AuthError as exc:
         return JSONResponse(status_code=exc.status, content={"ok": False, "error": exc.detail})
     return await call_next(request)
+
+
+# Register the audit middleware LAST so it is the OUTERMOST layer: it wraps
+# _auth_gate and therefore records even unauthenticated / 401 attempts too
+# (consistent with the News Feed + Roadmap audit). It still reads
+# request.state.user_email (set by _auth_gate) after call_next returns.
+app.middleware("http")(_audit_log)
 
 
 def _user_email(request: Request) -> Optional[str]:
