@@ -1,0 +1,151 @@
+// Externalized from admin.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+    let ME = null, USERS = [], PROJECTS = [];
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    async function api(path, opts){ const r = await fetch(path, Object.assign({ headers: TW.authHeaders() }, opts||{})); return r.json().catch(()=>({ok:false,error:"bad response", status:r.status})); }
+
+    async function boot(){
+      await window.TWAuth.ready;
+      ME = window.TWAuth.user() || {};
+      const root = document.getElementById("root");
+      if (ME.role !== "admin" && ME.role !== "super_admin") {
+        root.innerHTML = '<div class="denied">Admin access only. Redirecting…</div>';
+        setTimeout(()=>window.location.assign("/projects.html"), 1500); return;
+      }
+      shell();
+      await refresh();
+    }
+
+    function shell(){
+      document.getElementById("root").innerHTML = `
+        <div class="top"><div class="logo">T</div><h1>Admin</h1>
+          <span class="tag">${ME.role==="super_admin"?"SUPER ADMIN":"ADMIN"}</span></div>
+        <p class="sub">User & project management + system overview</p>
+        <div class="cards" id="cards"></div>
+        <div class="panel">
+          <div class="ph"><strong>Users</strong><span id="ucount" style="color:var(--ink-v)"></span>
+            <span class="grow"></span>
+            <input id="search" placeholder="Search email or name…" />
+            <select id="rolefilter"><option value="">All roles</option><option value="user">Users</option><option value="admin">Admins</option><option value="super_admin">Super admins</option></select>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr>
+            <th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Joined</th><th>Last change</th><th>Set role</th><th style="text-align:right">Actions</th>
+          </tr></thead><tbody id="tbody"></tbody></table></div>
+        </div>
+        <div class="panel" style="margin-top:18px;">
+          <div class="ph"><strong>Projects</strong><span id="pcount" style="color:var(--ink-v)"></span>
+            <span class="grow"></span>
+            <input id="psearch" placeholder="Search project or owner…" />
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr>
+            <th>Project</th><th>Owner</th><th>Total</th><th>Work</th><th>Updated</th><th style="text-align:right">Actions</th>
+          </tr></thead><tbody id="ptbody"></tbody></table></div>
+        </div>`;
+      document.getElementById("search").addEventListener("input", renderRows);
+      document.getElementById("rolefilter").addEventListener("change", refresh);
+      document.getElementById("psearch").addEventListener("input", renderProjects);
+    }
+
+    async function refresh(){
+      const role = document.getElementById("rolefilter").value;
+      const s = await api("/api/admin/stats");
+      if (s.ok) {
+        const st = s.stats||{};
+        document.getElementById("cards").innerHTML =
+          card("Users", st.users) + card("Admins", st.admins) + card("Projects", st.projects) + card("Proposals generated", st.proposals_generated);
+      }
+      const u = await api("/api/admin/users" + (role?`?role=${role}`:""));
+      USERS = (u && u.users) || [];
+      document.getElementById("ucount").textContent = `${USERS.length} loaded`;
+      renderRows();
+      loadProjects();
+    }
+    function card(k,v){ return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${v==null?"—":v}</div></div>`; }
+    function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : "—"; }
+
+    // ── Projects (unified list) + admin delete ──
+    async function loadProjects(){
+      const r = await api("/api/drafts");
+      PROJECTS = (r && r.projects) || [];
+      document.getElementById("pcount").textContent = `${PROJECTS.length} loaded`;
+      renderProjects();
+    }
+    function renderProjects(){
+      const q = (document.getElementById("psearch").value||"").toLowerCase();
+      const rows = PROJECTS.filter(p => !q
+        || (p.project_name||"").toLowerCase().includes(q)
+        || (p.owner_email||"").toLowerCase().includes(q));
+      document.getElementById("ptbody").innerHTML = rows.map(p => `
+        <tr data-id="${esc(p.id)}" data-name="${esc(p.project_name||"")}">
+          <td>${esc(p.project_name||"(untitled)")}</td>
+          <td>${esc(p.owner_email||"—")}</td>
+          <td>${money(p.total)}</td>
+          <td>${p.work_type?`<span class="badge b-user">${esc(p.work_type)}</span>`:"—"}</td>
+          <td>${fmtDate(p.updated_at)}</td>
+          <td style="text-align:right"><button class="act danger" data-act="delproj">🗑 Trash</button></td>
+        </tr>`).join("") || '<tr><td colspan="6" style="color:#5c403f;padding:24px">No projects.</td></tr>';
+      document.querySelectorAll("#ptbody [data-act='delproj']").forEach(el =>
+        el.addEventListener("click", () => {
+          const tr = el.closest("tr");
+          doDeleteProject(tr.dataset.id, tr.dataset.name);
+        }));
+    }
+    async function doDeleteProject(id, name){
+      if (!confirm(`Move project "${name||id}" to Trash?\n\nIt leaves the shared Projects list but stays restorable from the Trash page.`)) return;
+      const r = await api(`/api/admin/projects/${encodeURIComponent(id)}`, { method:"DELETE" });
+      if (!r || r.ok===false){ alert((r&&r.error)||"Move to Trash failed"); }
+      refresh();
+    }
+
+    function roleBadge(r){ return `<span class="badge ${r==="super_admin"?"b-super":r==="admin"?"b-admin":"b-user"}">${r==="super_admin"?"super admin":r}</span>`; }
+    function statusBadge(s){ return `<span class="badge ${s==="banned"?"b-banned":s==="paused"?"b-paused":"b-active"}">${esc(s||"active")}</span>`; }
+
+    function renderRows(){
+      const q = (document.getElementById("search").value||"").toLowerCase();
+      const isSuper = ME.role==="super_admin";
+      const rows = USERS.filter(u => !q || (u.email||"").toLowerCase().includes(q) || (u.full_name||"").toLowerCase().includes(q));
+      document.getElementById("tbody").innerHTML = rows.map(u => {
+        const isSelf = (u.email||"").toLowerCase() === (ME.email||"").toLowerCase();
+        const tSuper = u.role==="super_admin", tAdmin = u.role==="admin";
+        const canEdit = !isSelf && !tSuper && (isSuper || !tAdmin);
+        const paused = u.status==="paused", banned = u.status==="banned";
+        const opt = (val,label)=>`<option value="${val}" ${u.role===val?"selected":""} ${(val==="admin"&&!isSuper)?"disabled":""}>${label}</option>`;
+        return `<tr data-id="${esc(u.id)}">
+          <td>${esc(u.email)}${isSelf?'<span class="you">you</span>':""}</td>
+          <td>${esc(u.full_name||"—")}</td>
+          <td>${roleBadge(u.role)}</td>
+          <td>${statusBadge(u.status)}</td>
+          <td>${fmtDate(u.created_at)}</td>
+          <td>${fmtDate(u.updated_at)}</td>
+          <td><select class="role" ${canEdit?"":"disabled"} data-act="role">${opt("user","User")}${opt("admin","Admin")}${tSuper?'<option selected disabled>Super Admin</option>':""}</select></td>
+          <td style="text-align:right">
+            <button class="act" data-act="${paused?"resume":"pause"}" ${canEdit?"":"disabled"}>${paused?"Resume":"Pause"}</button>
+            <button class="act" data-act="${banned?"unban":"ban"}" ${canEdit?"":"disabled"}>${banned?"Unban":"Ban"}</button>
+            <button class="act danger" data-act="delete" ${canEdit?"":"disabled"}>Delete</button>
+          </td></tr>`;
+      }).join("") || '<tr><td colspan="8" style="color:#5c403f;padding:24px">No users.</td></tr>';
+
+      document.querySelectorAll("#tbody [data-act]").forEach(el => {
+        const act = el.dataset.act, id = el.closest("tr").dataset.id;
+        if (act==="role") el.addEventListener("change", ()=>doRole(id, el.value));
+        else el.addEventListener("click", ()=>doAction(act, id, el.closest("tr")));
+      });
+    }
+
+    async function doRole(id, role){ const r = await api(`/api/admin/users/${id}/role`,{method:"PATCH",body:JSON.stringify({role})}); after(r); }
+    async function doAction(act, id, tr){
+      const email = tr.children[0].textContent;
+      if (act==="delete" && !confirm(`Delete ${email}? This can't be undone.`)) return;
+      if (act==="ban" && !confirm(`Ban ${email}? They won't be able to sign in.`)) return;
+      let r;
+      if (act==="pause") r = await api(`/api/admin/users/${id}/status`,{method:"PUT",body:JSON.stringify({status:"paused"})});
+      else if (act==="resume") r = await api(`/api/admin/users/${id}/status`,{method:"PUT",body:JSON.stringify({status:"active"})});
+      else if (act==="ban") r = await api(`/api/admin/users/${id}/ban`,{method:"POST",body:JSON.stringify({reason:""})});
+      else if (act==="unban") r = await api(`/api/admin/users/${id}/unban`,{method:"POST",body:"{}"});
+      else if (act==="delete") r = await api(`/api/admin/users/${id}`,{method:"DELETE"});
+      after(r);
+    }
+    function after(r){ if(!r || r.ok===false){ alert((r&&r.error)||"Action failed"); } refresh(); }
+
+    boot();
+  
