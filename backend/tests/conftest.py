@@ -21,6 +21,17 @@ def _bypass_auth(monkeypatch):
                         lambda authorization: "tester@wetreadwell.com")
 
 
+@pytest.fixture(autouse=True)
+def _clear_drafts_cache():
+    """drafts.py keeps a module-level TTLCache for the project lists. Clear it
+    around every test so a cached list built from one test's fake store can't
+    leak into another's."""
+    import drafts
+    drafts._cache_clear()
+    yield
+    drafts._cache_clear()
+
+
 @pytest.fixture
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""
