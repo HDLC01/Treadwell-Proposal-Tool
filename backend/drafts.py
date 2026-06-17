@@ -22,6 +22,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import cachetools
+
 from supabase_client import get_client
 
 
@@ -52,6 +54,7 @@ def save_draft(draft_id: str, data: Dict[str, Any],
             "created_at": now, "updated_at": now,
         }).execute()
         log_event(draft_id, owner_email, "created", _summary_detail(data))
+    _cache_clear()
     return {"id": draft_id, "updated_at": now}
 
 
@@ -78,6 +81,7 @@ def delete_draft(draft_id: str) -> bool:
     True if the project existed."""
     sb = get_client()
     res = sb.table("drafts").delete().eq("id", draft_id).execute()
+    _cache_clear()
     return bool(res.data)
 
 
@@ -91,6 +95,7 @@ def trash_draft(draft_id: str, actor_email: Optional[str] = None) -> bool:
     if rows:
         name = (rows[0].get("data") or {}).get("project_name")
         log_event(draft_id, actor_email, "trashed", {"project_name": name, "id": draft_id})
+    _cache_clear()
     return bool(rows)
 
 
@@ -103,6 +108,7 @@ def restore_draft(draft_id: str, actor_email: Optional[str] = None) -> bool:
     if rows:
         name = (rows[0].get("data") or {}).get("project_name")
         log_event(draft_id, actor_email, "restored", {"project_name": name, "id": draft_id})
+    _cache_clear()
     return bool(rows)
 
 
@@ -125,6 +131,7 @@ def set_archived(draft_id: str, archived: bool,
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "archived" if archived else "unarchived",
               {"project_name": data.get("project_name"), "id": draft_id})
+    _cache_clear()
     return True
 
 
@@ -138,7 +145,36 @@ def list_trashed(limit: int = 300) -> List[Dict[str, Any]]:
     return _list_summaries(trashed=True, limit=limit)
 
 
+# ── in-memory list cache ──────────────────────────────────────────────
+# list_drafts/list_trashed hit Supabase/PostgREST on EVERY call, and the Projects
+# dashboard refetches on each load — that round-trip is the load delay the user
+# feels. Cache the computed summaries in-process (TTLCache, same lib as the
+# download-token cache) and clear on ANY write, so a save/archive/trash/restore
+# shows up immediately while idle reloads come from memory. Prod runs a single
+# uvicorn worker, so one cache is shared across requests; the TTL backstops any
+# out-of-band change. Empty/failed reads are NOT cached (so a transient blip
+# can't pin "no projects").
+_LIST_CACHE: cachetools.TTLCache = cachetools.TTLCache(maxsize=8, ttl=60)
+
+
+def _cache_clear() -> None:
+    """Drop the cached project lists — called after every write."""
+    _LIST_CACHE.clear()
+
+
 def _list_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
+    """Cached wrapper over _build_summaries (60 s TTL + clear-on-write)."""
+    key = (trashed, limit)
+    cached = _LIST_CACHE.get(key)
+    if cached is not None:
+        return cached
+    out = _build_summaries(trashed, limit)
+    if out:                                  # never cache an empty/failed read
+        _LIST_CACHE[key] = out
+    return out
+
+
+def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
     """Shared list builder; `trashed` selects deleted vs active via deleted_at.
 
     Selects only the card fields (+ the small computed_bid object) via JSON
