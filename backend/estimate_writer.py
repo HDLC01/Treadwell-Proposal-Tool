@@ -20,6 +20,7 @@ later means adding rows to the dict, not rewriting logic.
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -384,7 +385,8 @@ def fill_estimate(
     cell_values: Mapping[str, Any] | None = None,
     extras: list[Mapping[str, Any]] | None = None,
     alternate: Mapping[str, Any] | None = None,
-    rooms: list[Mapping[str, Any]] | None = None,
+    tab_copies: list[Mapping[str, Any]] | None = None,
+    tab_labels: Mapping[str, Any] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
@@ -404,10 +406,15 @@ def fill_estimate(
        Sub Total. Beyond the 6 native rows the overflow is lumped into a
        single "Misc materials" line so the .xlsx formulas stay intact.
 
-    `rooms` — per-room estimates: each {name, source} duplicates the Epoxy tab
-    into a new worksheet named after the room (created BEFORE the `cell_values`
-    pass so "<room>!<addr>" writes land). copy_worksheet keeps intra-tab formulas
+    `tab_copies` — duplicated worksheets: each {id, source} clones the `source`
+    worksheet into a new sheet titled `id` (created BEFORE the `cell_values`
+    pass so "<id>!<addr>" writes land). copy_worksheet keeps intra-tab formulas
     self-referential and `=Epoxy!` project-info mirrors intact.
+
+    `tab_labels` — {internal_id: display_label}. Worksheets keep a stable internal
+    id while edited (so the hardcoded Epoxy!/Polish! cell maps stay valid); the
+    display labels are applied to the worksheet TITLES at the very end, with all
+    cross-sheet `=id!` formula references rewritten so the .xlsx still calculates.
 
     All are applied; `cell_values` wins on conflicts.
     """
@@ -424,10 +431,10 @@ def fill_estimate(
         if field in values and values[field] not in (None, ""):
             polish[coord] = _coerce(values[field])
 
-    # 1.5 Per-room tabs: duplicate Epoxy once per room BEFORE the cell_values
-    # loop (which skips sheets not yet in wb.sheetnames), so the room's
-    # "<room>!<addr>" writes land on the freshly-created copy.
-    _create_room_tabs(wb, rooms)
+    # 1.5 Duplicated worksheets: clone each {id, source} BEFORE the cell_values
+    # loop (which skips sheets not yet in wb.sheetnames), so the copy's
+    # "<id>!<addr>" writes land on the freshly-created sheet.
+    _create_copied_tabs(wb, tab_copies)
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
     for sheet_addr, val in (cell_values or {}).items():
@@ -449,6 +456,10 @@ def fill_estimate(
     # 4. Alternate (recommended) system -> the spare "Epoxy blank" tab.
     if alternate:
         _write_alternate_tab(wb, alternate)
+
+    # 5. LAST: apply display labels to worksheet titles + rewrite cross-sheet
+    #    formula references, after every write has landed on the stable ids.
+    _apply_tab_labels(wb, tab_labels)
 
     # Stream to bytes
     buf = io.BytesIO()
@@ -493,32 +504,112 @@ def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
         pass
 
 
-def _create_room_tabs(wb, rooms: list[Mapping[str, Any]] | None) -> None:
-    """Duplicate the Epoxy tab once per room (per-room estimates).
+def _create_copied_tabs(wb, tab_copies: list[Mapping[str, Any]] | None) -> None:
+    """Duplicate worksheets the user copied in the editor (true "copy worksheet").
 
-    Each room is {name, source} (source defaults to "Epoxy"). openpyxl
-    `copy_worksheet` copies cell values + formula STRINGS verbatim, so the copy's
-    intra-tab formulas (e.g. `D88=SUM(D70,D73:D77,D82,D85)`) self-refer to the new
-    sheet (its own bid) and its `=Epoxy!B1` project-info cells keep mirroring the
-    master. The room's `"<room>!<addr>"` cell_values are written by the caller's
-    loop afterwards. Names are clamped to Excel's 31-char limit; collisions /
-    unknown sources / blanks are skipped. (The .xlsx recomputes on open, same as
-    every other tab — the proposal's per-room price comes from the UI snapshot.)
+    Each entry is {id, source}: clone the `source` worksheet into a new sheet
+    titled `id` (the stable internal name the copy's "<id>!<addr>" cell_values are
+    keyed to). openpyxl `copy_worksheet` copies cell values + formula STRINGS
+    verbatim, so the copy's intra-tab formulas (e.g. `D88=SUM(D70,D73:D77,D82,D85)`)
+    self-refer to the new sheet (its own bid) and its `=Epoxy!B1` project-info cells
+    keep mirroring the master. The copy's "<id>!<addr>" edits are written by the
+    caller's loop afterwards. Ids are clamped to Excel's 31-char limit; collisions /
+    unknown sources / blanks are skipped. Sources are resolved in order so a copy of
+    a copy works if its source was created earlier in the list.
     """
-    existing = set(wb.sheetnames)
-    for r in (rooms or []):
-        if not isinstance(r, dict):
+    for c in (tab_copies or []):
+        if not isinstance(c, dict):
             continue
-        name = str(r.get("name") or "").strip()[:31]
-        src = (str(r.get("source") or "Epoxy").strip() or "Epoxy")
-        if not name or name in existing or src not in wb.sheetnames:
+        new_id = str(c.get("id") or "").strip()[:31]
+        src = str(c.get("source") or "Epoxy").strip() or "Epoxy"
+        if not new_id or new_id in wb.sheetnames or src not in wb.sheetnames:
             continue
         try:
             ws = wb.copy_worksheet(wb[src])
-            ws.title = name
-            existing.add(name)
-        except Exception:  # noqa: BLE001 — bad title / odd char; skip this room
+            ws.title = new_id
+        except Exception:  # noqa: BLE001 — bad title / odd char; skip this copy
             pass
+
+
+# Match a sheet reference token in a formula: optional single-quoted name (with
+# '' escaping) OR a bare name, immediately followed by '!'. Used to rewrite
+# cross-sheet references when a worksheet is retitled. The '#' in the negative
+# lookbehind keeps error literals like #REF!/#NULL! from matching as a "sheet".
+_SHEET_REF_RE = re.compile(r"(?<![A-Za-z0-9_.#])('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!")
+
+
+def _needs_quoting(title: str) -> bool:
+    """A sheet name needs single quotes in a formula unless it's a simple
+    [A-Za-z_][A-Za-z0-9_]* token (and not shaped like a cell reference)."""
+    return not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", title or "")
+
+
+def _emit_ref(title: str) -> str:
+    """Render `<title>!` for a formula, quoting/escaping when required."""
+    if _needs_quoting(title):
+        return "'" + title.replace("'", "''") + "'!"
+    return title + "!"
+
+
+def _rewrite_formula_refs(formula: str, rename: Mapping[str, str]) -> str:
+    """Rewrite every `OldSheet!`/`'Old Sheet'!` reference in a formula to the
+    sheet's new title (with correct quoting). Names not in `rename` are left as-is.
+    """
+    def repl(m: "re.Match[str]") -> str:
+        tok = m.group(1)
+        name = tok[1:-1].replace("''", "'") if tok.startswith("'") else tok
+        new = rename.get(name)
+        return _emit_ref(new) if new is not None else m.group(0)
+
+    return _SHEET_REF_RE.sub(repl, formula)
+
+
+def _apply_tab_labels(wb, tab_labels: Mapping[str, Any] | None) -> None:
+    """Retitle worksheets to their display labels and rewrite cross-sheet formula
+    references so the downloaded .xlsx still calculates.
+
+    `tab_labels` maps {internal_id: display_label}. Worksheets are edited under
+    their stable ids (Epoxy/Polish/Copy1/…) so the hardcoded cell maps and the
+    `cell_values` writes all land; only here, at the very end, do we rename them.
+    openpyxl does NOT rewrite `=Epoxy!B1` formula text on `ws.title=`, so we (1)
+    rewrite every formula's sheet references via a single old->new map, then (2)
+    retitle through unique temp names to avoid transient collisions.
+    """
+    rename: dict[str, str] = {}
+    for sid, raw in (tab_labels or {}).items():
+        sid = str(sid)
+        label = str(raw or "").strip()[:31]
+        if not label or sid not in wb.sheetnames or label == sid:
+            continue
+        rename[sid] = label
+    if not rename:
+        return
+
+    # 1. Rewrite all cross-sheet references in cell formulas + defined names.
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                v = cell.value
+                if isinstance(v, str) and v.startswith("="):
+                    new_v = _rewrite_formula_refs(v, rename)
+                    if new_v != v:
+                        cell.value = new_v
+    try:
+        for dn in wb.defined_names.values():
+            if isinstance(dn.value, str) and "!" in dn.value:
+                dn.value = _rewrite_formula_refs(dn.value, rename)
+    except Exception:  # noqa: BLE001 — defined-name shapes vary; non-fatal
+        pass
+
+    # 2. Retitle via temp names first (final labels are unique, but a final name
+    #    may equal another sheet's *current* id during the sweep).
+    tmp = {}
+    for i, sid in enumerate(rename):
+        t = f"__twtmp{i}__"
+        wb[sid].title = t
+        tmp[t] = rename[sid]
+    for t, label in tmp.items():
+        wb[t].title = label
 
 
 def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:

@@ -3,7 +3,7 @@
 - proposal_writer `{{#room}}` block (heading + price + stacked notes), the
   `{{#single_bid}}` toggle, and the \\n -> <w:br/> note rendering.
 - main._build_rooms (tax phrase, auto/manual note merge, heading + total handling).
-- estimate_writer.fill_estimate(rooms=…) duplicating the Epoxy tab per room.
+- estimate_writer.fill_estimate(tab_copies=…) duplicating a worksheet.
 
 Block-engine tests run on synthetic docs (no template dependency); real-template
 rendering is covered in test_price_lines.py once the Direct templates carry the
@@ -100,24 +100,24 @@ def test_build_rooms_empty():
     assert main._build_rooms(None, {}) == []
 
 
-# ── estimate_writer.fill_estimate(rooms=…) ─────────────────────────────
-def test_fill_estimate_duplicates_room_tab():
+# ── estimate_writer.fill_estimate(tab_copies=…) — duplicated worksheets ─
+def test_fill_estimate_duplicates_tab():
     data = ew.fill_estimate({"project_name": "X"},
-                            cell_values={"Grooming!E20": 4000},
-                            rooms=[{"name": "Grooming", "source": "Epoxy"}])
+                            cell_values={"Copy1!E20": 4000},
+                            tab_copies=[{"id": "Copy1", "source": "Epoxy"}])
     wb = load_workbook(io.BytesIO(data))
-    assert "Grooming" in wb.sheetnames               # room tab created
-    assert "Epoxy" in wb.sheetnames                  # master intact
-    ws = wb["Grooming"]
-    assert ws["E20"].value == 4000                   # room's own cell write landed
+    assert "Copy1" in wb.sheetnames                   # copied worksheet created
+    assert "Epoxy" in wb.sheetnames                   # source intact
+    ws = wb["Copy1"]
+    assert ws["E20"].value == 4000                    # copy's own cell write landed
     assert str(ws["D88"].value or "").startswith("=")            # bid formula copied (self-ref)
-    assert ws["B1"].value == wb["Epoxy"]["B1"].value             # project info copied from master
+    assert ws["B1"].value == wb["Epoxy"]["B1"].value             # project info mirror copied
 
 
-def test_fill_estimate_no_rooms_unchanged():
+def test_fill_estimate_no_copies_unchanged():
     data = ew.fill_estimate({"project_name": "X"})
     wb = load_workbook(io.BytesIO(data))
-    assert "Grooming" not in wb.sheetnames
+    assert "Copy1" not in wb.sheetnames
 
 
 # ── real Direct templates (epoxy + combo) render the {{#room}} block ────

@@ -268,10 +268,17 @@ class GenerateIn(BaseModel):
     # Conditional {{#remodel}} line: [{"amount_formatted": "$x"}] when a remodel
     # tax applies, [] (the default) when the remodel toggle is off.
     remodel: list = Field(default_factory=list)
-    # Per-room priced options (per-room jobs). Each: {name, source, bid:{total,
-    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Drives the
-    # proposal {{#room}} block AND the per-room estimate tabs (copied from Epoxy).
+    # Per-room priced options (per-room jobs). Each: {id, name, role, bid:{total,
+    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Derived from the
+    # epoxy-layout estimate tabs; drives the proposal {{#room}} options block.
     rooms: list = Field(default_factory=list)
+    # Worksheets the user duplicated in the editor: [{id, source, role}]. The
+    # backend clones `source` into a sheet titled `id` so the copy's
+    # "<id>!<addr>" cell_values land.
+    tab_copies: list = Field(default_factory=list)
+    # Display labels for renamed tabs: {internal_id: label}. Applied to the .xlsx
+    # worksheet titles (with cross-sheet formula refs rewritten) at the very end.
+    tab_labels: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AutofillIn(BaseModel):
@@ -984,7 +991,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
-    # Per-room priced options -> {{#room}} proposal block + room estimate tabs.
+    # Per-tab priced options -> {{#room}} proposal block (derived from the
+    # epoxy-layout estimate tabs the user filled / copied).
     rooms_arg = _build_rooms(payload.rooms, values)
 
     # Fill estimate workbook
@@ -994,7 +1002,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             cell_values=payload.cell_values,
             extras=payload.extras,
             alternate=alternate_arg,
-            rooms=payload.rooms,
+            tab_copies=payload.tab_copies,
+            tab_labels=payload.tab_labels,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
