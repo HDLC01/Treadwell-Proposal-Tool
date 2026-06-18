@@ -860,18 +860,21 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
     return out
 
 
-def _build_rooms(rooms_in: list, values: Dict[str, Any]) -> list:
-    """Per-room priced options for the proposal PRICE section ({{#room}} block).
+def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
+    """Per-sheet priced options for the proposal PRICE section ({{#room}} block).
 
-    Each input room (from the estimate side) is
-    {name, bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
-    Builds, per room with a positive total:
+    Each input option (from the estimate side) is
+    {name, is_base, base_total, system_desc, show_system, show_diff,
+     bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
+    Builds, per option with a positive total (base bid first):
       heading:         "Grooming:"
-      price_formatted: "$8,310"  (the room tab's all-in D88 — tax-inclusive)
+      price_formatted: "$8,310"  (the sheet's all-in D88 — tax-inclusive)
       price_desc:      "Epoxy flooring as described above (<tax phrase>)"
-      notes_joined:    "Includes 6\\" Cove Base\\n…"  (auto notes first, then manual)
-    The tax phrase names the Kansas Remodel Tax only when that room's remodel
-    tax > 0. Returns [] when there are no priced rooms (block then strips)."""
+      notes_joined:    stacked lines = [system/scope if show_system] +
+                       [signed difference vs base bid if show_diff & not base] +
+                       auto notes + manual notes
+    The tax phrase names the Kansas Remodel Tax only when that option's remodel
+    tax > 0. Returns [] when there are no priced options (block then strips)."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
@@ -885,20 +888,35 @@ def _build_rooms(rooms_in: list, values: Dict[str, Any]) -> list:
             continue
         bid = r.get("bid") or {}
         total = num(bid.get("total"))
-        if total <= 0:                              # un-snapshotted / empty room
+        if total <= 0:                              # un-snapshotted / empty sheet
             continue
+        is_base = bool(r.get("is_base"))
         remodel = num(bid.get("remodel"))
         tax_phrase = (f"({state} Remodel Tax AND material sales tax INCLUDED)"
                       if remodel > 0 else "(material sales tax INCLUDED)")
         name = str(r.get("name") or "").strip().rstrip(": ").strip()
-        notes = [str(n).strip()
-                 for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
-                 if str(n).strip()]
+
+        lines: list[str] = []
+        # System / scope line (each room can carry its own system) — toggleable.
+        system_desc = str(r.get("system_desc") or "").strip()
+        if r.get("show_system", True) and system_desc:
+            lines.append(system_desc)
+        # Signed difference vs. the base bid (copies only) — toggleable.
+        if not is_base and r.get("show_diff"):
+            diff = total - num(r.get("base_total"))
+            if diff > 0:
+                lines.append(f"+{_fmt_usd(diff)} more than the base bid")
+            elif diff < 0:
+                lines.append(f"{_fmt_usd(-diff)} less than the base bid")
+        lines += [str(n).strip()
+                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
+                  if str(n).strip()]
+
         out.append({
             "heading": (name + ":") if name else "",
             "price_formatted": _fmt_usd(total),
             "price_desc": "Epoxy flooring as described above " + tax_phrase,
-            "notes_joined": "\n".join(notes),
+            "notes_joined": "\n".join(lines),
         })
     return out
 
@@ -993,9 +1011,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
-    # Per-tab priced options -> {{#room}} proposal block (derived from the
-    # epoxy-layout estimate tabs the user filled / copied).
-    rooms_arg = _build_rooms(payload.rooms, values)
+    # Per-sheet priced options -> {{#room}} proposal block (base bid + each copy,
+    # with toggleable system line + signed difference vs. the base bid).
+    rooms_arg = _build_options(payload.rooms, values)
 
     # Fill estimate workbook
     try:

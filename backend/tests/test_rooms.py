@@ -2,7 +2,7 @@
 
 - proposal_writer `{{#room}}` block (heading + price + stacked notes), the
   `{{#single_bid}}` toggle, and the \\n -> <w:br/> note rendering.
-- main._build_rooms (tax phrase, auto/manual note merge, heading + total handling).
+- main._build_options (tax phrase, system line + signed difference toggles, notes).
 - estimate_writer.fill_estimate(tab_copies=…) duplicating a worksheet.
 
 Block-engine tests run on synthetic docs (no template dependency); real-template
@@ -75,8 +75,8 @@ def test_single_bid_block_toggles():
         assert ("Base Bid" in txt) is shown
 
 
-# ── main._build_rooms ──────────────────────────────────────────────────
-def test_build_rooms_tax_phrase_and_note_merge():
+# ── main._build_options ─────────────────────────────────────────────────
+def test_build_options_tax_phrase_and_note_merge():
     rooms_in = [
         {"name": "Grooming", "bid": {"total": 8310, "remodel": 0},
          "notes_auto": ['Includes 6" Cove Base'], "notes_manual": ["separate mobilization"]},
@@ -84,7 +84,7 @@ def test_build_rooms_tax_phrase_and_note_merge():
          "notes_auto": [], "notes_manual": []},
         {"name": "Empty", "bid": {"total": 0}},          # no total -> skipped
     ]
-    out = main._build_rooms(rooms_in, {"state_name": "Kansas"})
+    out = main._build_options(rooms_in, {"state_name": "Kansas"})
     assert len(out) == 2
     g, h = out
     assert g["heading"] == "Grooming:"
@@ -95,9 +95,46 @@ def test_build_rooms_tax_phrase_and_note_merge():
     assert "Kansas Remodel Tax AND material sales tax INCLUDED" in h["price_desc"]
 
 
-def test_build_rooms_empty():
-    assert main._build_rooms([], {}) == []
-    assert main._build_rooms(None, {}) == []
+def test_build_options_empty():
+    assert main._build_options([], {}) == []
+    assert main._build_options(None, {}) == []
+
+
+# ── system line + signed difference toggles ─────────────────────────────
+_BASE = {"name": "Epoxy", "is_base": True, "base_total": 50000,
+         "bid": {"total": 50000, "remodel": 0}, "system_desc": "Treadwell MACRO Flake",
+         "show_system": True}
+
+
+def test_build_options_system_line_toggle():
+    on = main._build_options([dict(_BASE)], {})[0]
+    assert on["notes_joined"].splitlines()[0] == "Treadwell MACRO Flake"
+    off = main._build_options([{**_BASE, "show_system": False}], {})[0]
+    assert "MACRO Flake" not in off["notes_joined"]
+    # base item never shows a difference line
+    assert "base bid" not in on["notes_joined"]
+
+
+def test_build_options_signed_difference_both_ways():
+    more = {"name": "Exam", "is_base": False, "base_total": 50000,
+            "bid": {"total": 61000, "remodel": 0}, "show_system": False, "show_diff": True}
+    less = {**more, "name": "Hall", "bid": {"total": 44000, "remodel": 0}}
+    same = {**more, "name": "Same", "bid": {"total": 50000, "remodel": 0}}
+    assert "+$11,000 more than the base bid" in main._build_options([more], {})[0]["notes_joined"]
+    assert "$6,000 less than the base bid" in main._build_options([less], {})[0]["notes_joined"]
+    assert "base bid" not in main._build_options([same], {})[0]["notes_joined"]   # 0 diff -> omitted
+    # toggle off -> no difference line even when amounts differ
+    assert "base bid" not in main._build_options([{**more, "show_diff": False}], {})[0]["notes_joined"]
+
+
+def test_build_options_base_first_with_copy():
+    opts = main._build_options([
+        dict(_BASE),
+        {"name": "Exam", "is_base": False, "base_total": 50000,
+         "bid": {"total": 61000, "remodel": 0}, "show_system": False, "show_diff": True},
+    ], {})
+    assert [o["heading"] for o in opts] == ["Epoxy:", "Exam:"]
+    assert "+$11,000 more than the base bid" in opts[1]["notes_joined"]
 
 
 # ── estimate_writer.fill_estimate(tab_copies=…) — duplicated worksheets ─
