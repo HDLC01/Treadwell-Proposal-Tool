@@ -894,7 +894,7 @@ def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
         remodel = num(bid.get("remodel"))
         tax_phrase = (f"({state} Remodel Tax AND material sales tax INCLUDED)"
                       if remodel > 0 else "(material sales tax INCLUDED)")
-        name = str(r.get("name") or "").strip().rstrip(": ").strip()
+        name = "Base Bid" if is_base else str(r.get("name") or "").strip().rstrip(": ").strip()
 
         lines: list[str] = []
         # System / scope line (each room can carry its own system) — toggleable.
