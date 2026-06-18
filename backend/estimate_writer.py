@@ -384,6 +384,7 @@ def fill_estimate(
     cell_values: Mapping[str, Any] | None = None,
     extras: list[Mapping[str, Any]] | None = None,
     alternate: Mapping[str, Any] | None = None,
+    rooms: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
@@ -403,6 +404,11 @@ def fill_estimate(
        Sub Total. Beyond the 6 native rows the overflow is lumped into a
        single "Misc materials" line so the .xlsx formulas stay intact.
 
+    `rooms` — per-room estimates: each {name, source} duplicates the Epoxy tab
+    into a new worksheet named after the room (created BEFORE the `cell_values`
+    pass so "<room>!<addr>" writes land). copy_worksheet keeps intra-tab formulas
+    self-referential and `=Epoxy!` project-info mirrors intact.
+
     All are applied; `cell_values` wins on conflicts.
     """
     wb = load_workbook(TEMPLATE_PATH, keep_vba=False)
@@ -417,6 +423,11 @@ def fill_estimate(
     for field, coord in POLISH_CELL_MAP.items():
         if field in values and values[field] not in (None, ""):
             polish[coord] = _coerce(values[field])
+
+    # 1.5 Per-room tabs: duplicate Epoxy once per room BEFORE the cell_values
+    # loop (which skips sheets not yet in wb.sheetnames), so the room's
+    # "<room>!<addr>" writes land on the freshly-created copy.
+    _create_room_tabs(wb, rooms)
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
     for sheet_addr, val in (cell_values or {}).items():
@@ -480,6 +491,34 @@ def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
         ws.title = ALT_TAB_RENAME
     except Exception:  # noqa: BLE001 — duplicate name or odd char; keep original
         pass
+
+
+def _create_room_tabs(wb, rooms: list[Mapping[str, Any]] | None) -> None:
+    """Duplicate the Epoxy tab once per room (per-room estimates).
+
+    Each room is {name, source} (source defaults to "Epoxy"). openpyxl
+    `copy_worksheet` copies cell values + formula STRINGS verbatim, so the copy's
+    intra-tab formulas (e.g. `D88=SUM(D70,D73:D77,D82,D85)`) self-refer to the new
+    sheet (its own bid) and its `=Epoxy!B1` project-info cells keep mirroring the
+    master. The room's `"<room>!<addr>"` cell_values are written by the caller's
+    loop afterwards. Names are clamped to Excel's 31-char limit; collisions /
+    unknown sources / blanks are skipped. (The .xlsx recomputes on open, same as
+    every other tab — the proposal's per-room price comes from the UI snapshot.)
+    """
+    existing = set(wb.sheetnames)
+    for r in (rooms or []):
+        if not isinstance(r, dict):
+            continue
+        name = str(r.get("name") or "").strip()[:31]
+        src = (str(r.get("source") or "Epoxy").strip() or "Epoxy")
+        if not name or name in existing or src not in wb.sheetnames:
+            continue
+        try:
+            ws = wb.copy_worksheet(wb[src])
+            ws.title = name
+            existing.add(name)
+        except Exception:  # noqa: BLE001 — bad title / odd char; skip this room
+            pass
 
 
 def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:

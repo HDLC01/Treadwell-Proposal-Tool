@@ -210,6 +210,10 @@ class GenerateIn(BaseModel):
     # Conditional {{#remodel}} line: [{"amount_formatted": "$x"}] when a remodel
     # tax applies, [] (the default) when the remodel toggle is off.
     remodel: list = Field(default_factory=list)
+    # Per-room priced options (per-room jobs). Each: {name, source, bid:{total,
+    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Drives the
+    # proposal {{#room}} block AND the per-room estimate tabs (copied from Epoxy).
+    rooms: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -789,6 +793,49 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
     return out
 
 
+def _build_rooms(rooms_in: list, values: Dict[str, Any]) -> list:
+    """Per-room priced options for the proposal PRICE section ({{#room}} block).
+
+    Each input room (from the estimate side) is
+    {name, bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
+    Builds, per room with a positive total:
+      heading:         "Grooming:"
+      price_formatted: "$8,310"  (the room tab's all-in D88 — tax-inclusive)
+      price_desc:      "Epoxy flooring as described above (<tax phrase>)"
+      notes_joined:    "Includes 6\\" Cove Base\\n…"  (auto notes first, then manual)
+    The tax phrase names the Kansas Remodel Tax only when that room's remodel
+    tax > 0. Returns [] when there are no priced rooms (block then strips)."""
+    def num(x) -> float:
+        try:
+            return float(str(x).replace(",", "").replace("$", "").strip() or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    state = str(values.get("state_name") or "Kansas").strip() or "Kansas"
+    out = []
+    for r in (rooms_in or []):
+        if not isinstance(r, dict):
+            continue
+        bid = r.get("bid") or {}
+        total = num(bid.get("total"))
+        if total <= 0:                              # un-snapshotted / empty room
+            continue
+        remodel = num(bid.get("remodel"))
+        tax_phrase = (f"({state} Remodel Tax AND material sales tax INCLUDED)"
+                      if remodel > 0 else "(material sales tax INCLUDED)")
+        name = str(r.get("name") or "").strip().rstrip(": ").strip()
+        notes = [str(n).strip()
+                 for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
+                 if str(n).strip()]
+        out.append({
+            "heading": (name + ":") if name else "",
+            "price_formatted": _fmt_usd(total),
+            "price_desc": "Epoxy flooring as described above " + tax_phrase,
+            "notes_joined": "\n".join(notes),
+        })
+    return out
+
+
 def _ensure_value_aliases(values: Dict[str, Any]) -> None:
     """Backfill blank token aliases / fallbacks in-place so the proposal never
     emits a raw {{token}} (e.g. job_name <- project_name, work_description <-
@@ -879,6 +926,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
+    # Per-room priced options -> {{#room}} proposal block + room estimate tabs.
+    rooms_arg = _build_rooms(payload.rooms, values)
+
     # Fill estimate workbook
     try:
         xlsx_bytes = estimate_writer.fill_estimate(
@@ -886,6 +936,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             cell_values=payload.cell_values,
             extras=payload.extras,
             alternate=alternate_arg,
+            rooms=payload.rooms,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -905,6 +956,10 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             alternates=alternates,
             systems=systems_arg,
             remodel=payload.remodel,
+            rooms=rooms_arg,
+            # rooms present → suppress the single Base-Bid/Total layout (the room
+            # options ARE the price); absent → default (single-bid layout shown).
+            single_bid=([] if rooms_arg else None),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
