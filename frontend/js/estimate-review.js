@@ -128,6 +128,40 @@ const HF = {
   unregisterAll() {
     this.domBySheetAddr = {};
   },
+
+  /** Rebuild sheetIdByName from the engine (after add/rename/remove). */
+  syncSheetIds() {
+    if (!this.instance) return;
+    this.sheetIdByName = {};
+    for (const n of this.instance.getSheetNames()) {
+      this.sheetIdByName[n] = this.instance.getSheetId(n);
+    }
+  },
+
+  /** Add a new (empty) sheet. Returns false if the name is taken. */
+  createSheet(name) {
+    if (!this.instance || this.sheetIdByName[name] !== undefined) return false;
+    try { this.instance.addSheet(name); } catch (e) { return false; }
+    this.syncSheetIds();
+    return true;
+  },
+
+  /** Rename a sheet; cross-sheet refs (=Epoxy!…) resolve via the registry so
+   *  no formula text needs rewriting. Returns false on failure/collision. */
+  renameSheet(oldName, newName) {
+    if (!this.instance || this.sheetIdByName[oldName] === undefined) return false;
+    try { this.instance.renameSheet(this.sheetIdByName[oldName], newName); }
+    catch (e) { return false; }
+    this.syncSheetIds();
+    return true;
+  },
+
+  /** Remove a sheet (room tab delete). */
+  removeSheet(name) {
+    if (!this.instance || this.sheetIdByName[name] === undefined) return;
+    try { this.instance.removeSheet(this.sheetIdByName[name]); } catch (e) {}
+    this.syncSheetIds();
+  },
 };
 
 const state = TW.getState();
@@ -291,6 +325,121 @@ let sheets = [];
 let activeSheet = null;
 let sheetCache = {};  // name → fetched cell data
 
+// ─── Per-room estimate tabs ──────────────────────────────────────────
+// Each room is its own estimate = one priced option in the proposal. A room tab
+// is a CLIENT-SIDE copy of the Epoxy sheet (cell values + formula STRINGS):
+// intra-tab formulas (D88=SUM(…)) self-refer to the copy (its own bid) while
+// =Epoxy! cells keep mirroring the master, so project info stays shared. Rooms
+// persist in state.rooms; per-room cell edits live in cellValues keyed
+// "<room>!<addr>". The backend duplicates the Epoxy worksheet to match on generate.
+const MAX_ROOMS = 12;
+const ROOM_SOURCE = "Epoxy";
+state.rooms = Array.isArray(state.rooms) ? state.rooms : [];
+const roomNames = () => state.rooms.map(r => r.name);
+
+function reservedNames() {                       // template sheets + existing rooms (lowercased)
+  return new Set([...sheets, ...roomNames()].map(n => String(n).toLowerCase()));
+}
+function validateRoomName(name, allow) {
+  const n = String(name || "").trim();
+  if (!n) return "Enter a room name.";
+  if (n.length > 31) return "Name must be 31 characters or fewer.";
+  if (/[!:\\/?*\[\]"]/.test(n)) return 'Name can\'t contain  ! : \\ / ? * [ ] "';
+  const lower = n.toLowerCase();
+  if (lower !== String(allow || "").toLowerCase() && reservedNames().has(lower))
+    return `"${n}" is already a tab name.`;
+  return null;
+}
+
+// Create an HF sheet that's a copy of the Epoxy grid (values + formula strings).
+function materializeRoom(name) {
+  if (!HF.createSheet(name)) return false;
+  const src = sheetCache[ROOM_SOURCE];
+  if (src && src.cells) {
+    HF.loadSheet(name, src.cells);
+    sheetCache[name] = { ...src, sheet: name };   // share grid metadata read-only
+  }
+  return true;
+}
+
+function duplicateEpoxyTab() {
+  if (state.rooms.length >= MAX_ROOMS) { alert(`Limit is ${MAX_ROOMS} room tabs.`); return; }
+  const name = (prompt('New room / scope name (e.g. "Grooming"):') || "").trim();
+  if (!name) return;
+  const err = validateRoomName(name);
+  if (err) { alert(err); return; }
+  if (!materializeRoom(name)) { alert("Couldn't create that tab."); return; }
+  state.rooms.push({ name, source: ROOM_SOURCE, bid: {}, notes_auto: [], notes_manual: [] });
+  TW.setState({ ...state, rooms: state.rooms, cell_values: cellValues });
+  renderTabs();
+  showSheet(name);
+}
+
+function renameRoomTab(oldName, rawNew) {
+  const newName = String(rawNew || "").trim();
+  if (!newName || newName === oldName) { renderTabs(); return; }
+  const err = validateRoomName(newName, oldName);
+  if (err) { alert(err); renderTabs(); return; }
+  if (!HF.renameSheet(oldName, newName)) { alert("Rename failed."); renderTabs(); return; }
+  for (const key of Object.keys(cellValues)) {     // remap "<old>!.." -> "<new>!.."
+    if (key.startsWith(oldName + "!")) {
+      cellValues[newName + "!" + key.slice(oldName.length + 1)] = cellValues[key];
+      delete cellValues[key];
+    }
+  }
+  if (sheetCache[oldName]) {
+    sheetCache[newName] = { ...sheetCache[oldName], sheet: newName };
+    delete sheetCache[oldName];
+  }
+  const room = state.rooms.find(r => r.name === oldName);
+  if (room) room.name = newName;
+  if (activeSheet === oldName) activeSheet = newName;
+  TW.setState({ ...state, rooms: state.rooms, cell_values: cellValues });
+  renderTabs();
+  showSheet(newName);
+}
+
+function deleteRoomTab(name) {
+  if (!confirm(`Delete the "${name}" room tab? Its per-room estimate is removed.`)) return;
+  HF.removeSheet(name);
+  for (const key of Object.keys(cellValues)) {
+    if (key.startsWith(name + "!")) delete cellValues[key];
+  }
+  delete sheetCache[name];
+  state.rooms = state.rooms.filter(r => r.name !== name);
+  TW.setState({ ...state, rooms: state.rooms, cell_values: cellValues });
+  renderTabs();
+  if (activeSheet === name) showSheet(ROOM_SOURCE);
+}
+
+// Inline rename: double-click a room tab → editable input (Enter commits, Esc cancels).
+function startRename(btn, oldName) {
+  const input = document.createElement("input");
+  input.type = "text"; input.value = oldName; input.className = "room-rename";
+  input.maxLength = 31;
+  btn.replaceWith(input);
+  input.focus(); input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return; done = true;
+    if (commit) renameRoomTab(oldName, input.value);
+    else renderTabs();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+// Auto-derive per-room notes (cove base) from the room tab's cove LF cells.
+function deriveRoomNotes(sheetName) {
+  const n = (a) => { const v = HF.getValue(sheetName, a); return typeof v === "number" ? v : 0; };
+  const out = [];
+  if (n("E34") + n("E37") > 0) out.push('Includes 6" Cove Base');
+  return out;
+}
+
 async function init() {
   // Wait for the Supabase session/token to be ready before any /api/* call —
   // every endpoint is auth-gated, so firing before the token is set 401s and
@@ -369,6 +518,11 @@ async function init() {
       console.warn(`Failed to load ${name}:`, err);
     }
   }));
+  // 3b. Rehydrate saved room tabs (copies of Epoxy) BEFORE replaying cell edits,
+  //     so each "<room>!<addr>" setCellValue below lands on an existing sheet.
+  for (const r of (state.rooms || [])) {
+    if (r && r.name) materializeRoom(r.name);
+  }
   // Apply saved overrides
   for (const [key, val] of Object.entries(cellValues)) {
     const [sheet, addr] = key.split("!");
@@ -386,13 +540,45 @@ async function init() {
 
 function renderTabs() {
   tabBar.innerHTML = "";
+  // Template sheets (read-only).
   for (const name of sheets) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = name;
     btn.dataset.sheet = name;
+    btn.classList.toggle("active", name === activeSheet);
     btn.addEventListener("click", () => showSheet(name));
     tabBar.appendChild(btn);
+  }
+  // Per-room tabs: click = open, double-click = rename, × = delete.
+  for (const r of state.rooms) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.sheet = r.name;
+    btn.className = "room-tab" + (r.name === activeSheet ? " active" : "");
+    btn.title = "Double-click to rename";
+    const label = document.createElement("span");
+    label.textContent = r.name;
+    btn.appendChild(label);
+    const del = document.createElement("span");
+    del.className = "room-del";
+    del.textContent = "×";
+    del.title = "Delete room";
+    del.addEventListener("click", (e) => { e.stopPropagation(); deleteRoomTab(r.name); });
+    btn.appendChild(del);
+    btn.addEventListener("click", () => showSheet(r.name));
+    btn.addEventListener("dblclick", () => startRename(btn, r.name));
+    tabBar.appendChild(btn);
+  }
+  // "+ Room" — duplicate the Epoxy estimate as a new room/scope (epoxy/combo only).
+  if ((state.work_type || "epoxy").toLowerCase() !== "polish") {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "room-add";
+    add.textContent = "+ Room";
+    add.title = "Duplicate the Epoxy estimate as a new room/scope (its own bid)";
+    add.addEventListener("click", duplicateEpoxyTab);
+    tabBar.appendChild(add);
   }
 }
 
@@ -1361,15 +1547,26 @@ function snapshotLumpSumsToState() {
                                   num("Polish", TOTAL_CELLS.Polish.sales_tax));
   state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
                                     num("Polish", TOTAL_CELLS.Polish.remodel));
+  // Per-room tabs: snapshot each room's OWN bid (D88/D80/D81) + auto cove note.
+  // Rooms are priced options, NOT folded into proposal_lump_sum.
+  const tc = TOTAL_CELLS.Epoxy;
+  state.rooms = (state.rooms || []).map(r => ({
+    ...r,
+    bid: { total: num(r.name, tc.total),
+           sales_tax: num(r.name, tc.sales_tax),
+           remodel: num(r.name, tc.remodel) },
+    notes_auto: deriveRoomNotes(r.name),
+  }));
 }
 
 document.getElementById("back-btn").addEventListener("click", () => {
-  TW.setState({ ...state, cell_values: cellValues });
+  snapshotLumpSumsToState();   // persist room bids if the estimator filled rooms
+  TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms });
   window.location.assign("/");
 });
 document.getElementById("continue-btn").addEventListener("click", () => {
   snapshotLumpSumsToState();
-  TW.setState({ ...state, cell_values: cellValues });
+  TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms });
   window.location.assign("/proposal-review.html");
 });
 
