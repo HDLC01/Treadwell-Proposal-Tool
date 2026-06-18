@@ -42,6 +42,7 @@ from typing import Any, Mapping
 
 import docx
 from docx.document import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
@@ -188,6 +189,25 @@ def _p_text(p_elem) -> str:
     return "".join(t.text or "" for t in p_elem.iter(qn("w:t")))
 
 
+def _set_t_multiline(t, text: str) -> None:
+    """Write `text` into a <w:t>, rendering embedded newlines as <w:br/> line
+    breaks within the same run (so stacked per-item notes share one bullet).
+    The raw-lxml item path doesn't go through python-docx's run.text setter,
+    which would otherwise convert \\n → <w:br/> for us — so we do it here."""
+    parts = text.split("\n")
+    t.text = parts[0]
+    t.set(qn("xml:space"), "preserve")
+    anchor = t
+    for part in parts[1:]:
+        br = OxmlElement("w:br")
+        anchor.addnext(br)
+        nt = OxmlElement("w:t")
+        nt.set(qn("xml:space"), "preserve")
+        nt.text = part
+        br.addnext(nt)
+        anchor = nt
+
+
 def _substitute_item_tokens(p_elem, item: Mapping[str, Any], block_name: str) -> None:
     """Replace `{{<block>.field}}` / bare `{{field}}` in one cloned <w:p>.
 
@@ -223,8 +243,11 @@ def _substitute_item_tokens(p_elem, item: Mapping[str, Any], block_name: str) ->
         if t is None:
             continue
         if not placed:
-            t.text = new_text
-            t.set(qn("xml:space"), "preserve")
+            if "\n" in new_text:
+                _set_t_multiline(t, new_text)
+            else:
+                t.text = new_text
+                t.set(qn("xml:space"), "preserve")
             placed = True
         else:
             t.text = ""
@@ -312,6 +335,8 @@ def fill_proposal(
     price_lines: list[Mapping[str, Any]] | None = None,
     alternates: list[Mapping[str, Any]] | None = None,
     remodel: list[Mapping[str, Any]] | None = None,
+    rooms: list[Mapping[str, Any]] | None = None,
+    single_bid: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -351,6 +376,12 @@ def fill_proposal(
         # {{#remodel}} line — present (1 row) only when a remodel tax applies,
         # stripped otherwise so the proposal hides "Kansas Remodel Tax" entirely.
         "remodel": list(remodel or []),
+        # {{#room}} — per-room priced options (per-room jobs); stripped when empty.
+        "room": list(rooms or []),
+        # {{#single_bid}} — the single Base-Bid/Total layout. Shown by DEFAULT
+        # (single_bid is None → one row) so existing callers are unaffected;
+        # callers pass single_bid=[] to SUPPRESS it when room options replace it.
+        "single_bid": [{}] if single_bid is None else list(single_bid),
     }
     n_blocks = _expand_all_blocks(d, block_lists)
     if n_blocks:

@@ -155,6 +155,46 @@
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
       c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+    // (rooms) Per-room priced options (per-room jobs): preview each room's
+    // heading + all-in price + auto cove note, plus an editable manual-notes box
+    // (one note per line). state.rooms[].bid is snapshotted on Estimate Review.
+    const roomsBlock = document.getElementById("rooms-block");
+    if (roomsBlock) {
+      const rooms = Array.isArray(state.rooms) ? state.rooms : [];
+      const priced = rooms.filter(r => r && r.bid && Number(r.bid.total) > 0);
+      if (!priced.length) {
+        roomsBlock.innerHTML = "";
+      } else {
+        const stateName = ((form.querySelector("[name='state_name']") || {}).value || "Kansas").trim() || "Kansas";
+        roomsBlock.innerHTML =
+          `<p style="margin:10pt 0 4pt;font-weight:bold;">Per-room options</p>` +
+          priced.map((r, i) => {
+            const total = Number(r.bid.total) || 0;
+            const remodel = Number(r.bid.remodel) || 0;
+            const taxPhrase = remodel > 0
+              ? `(${esc(stateName)} Remodel Tax AND material sales tax INCLUDED)`
+              : "(material sales tax INCLUDED)";
+            const heading = String(r.name || "").replace(/[: ]+$/, "");
+            const autoNotes = Array.isArray(r.notes_auto) ? r.notes_auto : [];
+            const manual = (Array.isArray(r.notes_manual) ? r.notes_manual : []).join("\n");
+            return `<div style="margin:0 0 10pt;border-left:3px solid #c8102e;padding-left:8px;">` +
+              `<p style="margin:0;"><strong>${esc(heading)}:</strong></p>` +
+              `<p style="margin:0;"><strong>${fmtUSD(total)}</strong> – Epoxy flooring as described above <em>${taxPhrase}</em></p>` +
+              autoNotes.map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("") +
+              `<label style="display:block;font-size:12px;color:#777;margin-top:4px;">Notes (one per line)` +
+              `<textarea data-room-idx="${i}" class="room-notes doc-textarea" rows="2" style="width:100%;">${esc(manual)}</textarea></label>` +
+              `</div>`;
+          }).join("");
+        roomsBlock.querySelectorAll("textarea.room-notes").forEach(ta => {
+          ta.addEventListener("input", () => {
+            const idx = Number(ta.dataset.roomIdx);
+            const lines = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
+            if (priced[idx]) { priced[idx].notes_manual = lines; TW.setState({ rooms: state.rooms }); }
+          });
+        });
+      }
+    }
+
     // (a) Structured price lines (options / unit prices listed under PRICE)
     const plBlock = document.getElementById("price-lines-block");
     if (plBlock) {
@@ -376,6 +416,8 @@
         alternate_label: (state.alternate && state.alternate.label) || "",
         // Conditional Kansas Remodel Tax line — only when remodel tax applies.
         remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSD(remodelTax) }] : [],
+        // Per-room priced options (per-room jobs) -> {{#room}} block + room tabs.
+        rooms: Array.isArray(state.rooms) ? state.rooms : [],
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
