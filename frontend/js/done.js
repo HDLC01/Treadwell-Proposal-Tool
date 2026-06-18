@@ -51,6 +51,9 @@
       computed_bid: s.computed_bid || null,
       alternate_computed_bid: s.alternate_computed_bid || null,
       alternate_label: (s.alternate && s.alternate.label) || s.alternate_label || "",
+      // Mirror the user's worksheet copies + tab renames into the .xlsx.
+      tab_copies: Array.isArray(s.tab_copies) ? s.tab_copies : [],
+      tab_labels: (s.tab_labels && typeof s.tab_labels === "object") ? s.tab_labels : {},
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);

@@ -325,104 +325,138 @@ let sheets = [];
 let activeSheet = null;
 let sheetCache = {};  // name → fetched cell data
 
-// ─── Per-room estimate tabs ──────────────────────────────────────────
-// Each room is its own estimate = one priced option in the proposal. A room tab
-// is a CLIENT-SIDE copy of the Epoxy sheet (cell values + formula STRINGS):
-// intra-tab formulas (D88=SUM(…)) self-refer to the copy (its own bid) while
-// =Epoxy! cells keep mirroring the master, so project info stays shared. Rooms
-// persist in state.rooms; per-room cell edits live in cellValues keyed
-// "<room>!<addr>". The backend duplicates the Epoxy worksheet to match on generate.
-const MAX_ROOMS = 12;
-const ROOM_SOURCE = "Epoxy";
-state.rooms = Array.isArray(state.rooms) ? state.rooms : [];
-const roomNames = () => state.rooms.map(r => r.name);
+// ─── Worksheet tabs: rename + true copy ──────────────────────────────
+// The user can RENAME any worksheet tab and DUPLICATE one ("copy with all of
+// its contents"). To keep the many places that hardcode "Epoxy!"/"Polish!"
+// (cell maps, intake autofill, totals, pricing engine, =Epoxy! formulas) safe,
+// each tab has a STABLE internal id (the HF sheet name) and an editable DISPLAY
+// label. Renaming changes only the label (nothing else moves); the downloaded
+// .xlsx is retitled + its cross-sheet formulas rewritten at generate time.
+//
+//   • base tabs   → id = template name (Epoxy/Polish/Sealer/…), kind 'base'
+//   • copied tabs → id = "Copy<N>" (stable), kind 'copy', cloned from a source
+//
+// Persisted in state.tab_labels {id→label}, state.tab_copies [{id,source,role}],
+// state.tab_notes {id→[manual notes]}. Per-tab cell edits live in cellValues
+// keyed "<id>!<addr>". A copied epoxy tab is one priced option in the proposal.
+const MAX_COPIES = 12;
+const BASE_ROLE = { Epoxy: "epoxy", Polish: "polish" };
 
-function reservedNames() {                       // template sheets + existing rooms (lowercased)
-  return new Set([...sheets, ...roomNames()].map(n => String(n).toLowerCase()));
+// One-time migration of the old separate-"rooms" model → the tab model.
+if (Array.isArray(state.rooms) && state.rooms.length && !Array.isArray(state.tab_copies)) {
+  state.tab_copies = state.rooms.map(r => ({ id: String(r.name), source: r.source || "Epoxy", role: "epoxy" }));
+  state.tab_labels = state.tab_labels || {};
+  state.tab_notes  = state.tab_notes  || {};
+  for (const r of state.rooms)
+    if (Array.isArray(r.notes_manual) && r.notes_manual.length) state.tab_notes[String(r.name)] = r.notes_manual;
 }
-function validateRoomName(name, allow) {
-  const n = String(name || "").trim();
-  if (!n) return "Enter a room name.";
+state.tab_copies = Array.isArray(state.tab_copies) ? state.tab_copies : [];
+state.tab_labels = (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {};
+state.tab_notes  = (state.tab_notes  && typeof state.tab_notes  === "object") ? state.tab_notes  : {};
+
+const labelFor = (id) => state.tab_labels[id] || id;
+function roleFor(id) {
+  if (BASE_ROLE[id]) return BASE_ROLE[id];
+  const c = state.tab_copies.find(x => x.id === id);
+  return c ? (c.role || "epoxy") : "other";
+}
+
+let tabs = [];
+function buildTabs() {
+  tabs = sheets.map(id => ({ id, label: labelFor(id), role: roleFor(id), kind: "base" }));
+  for (const c of state.tab_copies)
+    tabs.push({ id: c.id, label: labelFor(c.id), role: c.role || "epoxy", kind: "copy", source: c.source });
+}
+
+function allLabels(exceptId) {
+  return new Set(tabs.filter(t => t.id !== exceptId).map(t => labelFor(t.id).toLowerCase()));
+}
+function validateLabel(label, exceptId) {
+  const n = String(label || "").trim();
+  if (!n) return "Enter a tab name.";
   if (n.length > 31) return "Name must be 31 characters or fewer.";
   if (/[!:\\/?*\[\]"]/.test(n)) return 'Name can\'t contain  ! : \\ / ? * [ ] "';
-  const lower = n.toLowerCase();
-  if (lower !== String(allow || "").toLowerCase() && reservedNames().has(lower))
-    return `"${n}" is already a tab name.`;
+  if (allLabels(exceptId).has(n.toLowerCase())) return `"${n}" is already a tab name.`;
   return null;
 }
-
-// Create an HF sheet that's a copy of the Epoxy grid (values + formula strings).
-function materializeRoom(name) {
-  if (!HF.createSheet(name)) return false;
-  const src = sheetCache[ROOM_SOURCE];
-  if (src && src.cells) {
-    HF.loadSheet(name, src.cells);
-    sheetCache[name] = { ...src, sheet: name };   // share grid metadata read-only
-  }
-  return true;
+function uniqueLabel(base) {
+  const used = allLabels(null);
+  let label = base.slice(0, 31), i = 2;
+  while (used.has(label.toLowerCase())) { label = (base + " " + i).slice(0, 31); i++; }
+  return label;
+}
+function nextCopyId() {
+  const used = new Set([...sheets, ...state.tab_copies.map(c => c.id)]);
+  let i = 1; while (used.has("Copy" + i)) i++; return "Copy" + i;
 }
 
-function duplicateEpoxyTab() {
-  if (state.rooms.length >= MAX_ROOMS) { alert(`Limit is ${MAX_ROOMS} room tabs.`); return; }
-  const name = (prompt('New room / scope name (e.g. "Grooming"):') || "").trim();
-  if (!name) return;
-  const err = validateRoomName(name);
-  if (err) { alert(err); return; }
-  if (!materializeRoom(name)) { alert("Couldn't create that tab."); return; }
-  state.rooms.push({ name, source: ROOM_SOURCE, bid: {}, notes_auto: [], notes_manual: [] });
-  TW.setState({ ...state, rooms: state.rooms, cell_values: cellValues });
-  renderTabs();
-  showSheet(name);
-}
-
-function renameRoomTab(oldName, rawNew) {
-  const newName = String(rawNew || "").trim();
-  if (!newName || newName === oldName) { renderTabs(); return; }
-  const err = validateRoomName(newName, oldName);
-  if (err) { alert(err); renderTabs(); return; }
-  if (!HF.renameSheet(oldName, newName)) { alert("Rename failed."); renderTabs(); return; }
-  for (const key of Object.keys(cellValues)) {     // remap "<old>!.." -> "<new>!.."
-    if (key.startsWith(oldName + "!")) {
-      cellValues[newName + "!" + key.slice(oldName.length + 1)] = cellValues[key];
-      delete cellValues[key];
+// True worksheet copy: clone the source's CURRENT contents (template cells +
+// the user's own edits) into a fresh HF sheet, and mirror its "<src>!.." edits
+// onto the copy's keys so the backend duplicate starts identical too.
+function copyTab(sourceId) {
+  const srcTab = tabs.find(t => t.id === sourceId);
+  if (!srcTab) return;
+  if (state.tab_copies.length >= MAX_COPIES) { alert(`Limit is ${MAX_COPIES} copied tabs.`); return; }
+  const newId = nextCopyId();
+  if (!HF.createSheet(newId)) { alert("Couldn't create a copy."); return; }
+  const src = sheetCache[sourceId] || sheetCache["Epoxy"];
+  if (src && src.cells) { HF.loadSheet(newId, src.cells); sheetCache[newId] = { ...src, sheet: newId }; }
+  for (const key of Object.keys(cellValues)) {           // replay source edits onto the copy
+    if (key.startsWith(sourceId + "!")) {
+      const addr = key.slice(sourceId.length + 1);
+      cellValues[newId + "!" + addr] = cellValues[key];
+      HF.setCellValue(newId, addr, cellValues[key]);
     }
   }
-  if (sheetCache[oldName]) {
-    sheetCache[newName] = { ...sheetCache[oldName], sheet: newName };
-    delete sheetCache[oldName];
-  }
-  const room = state.rooms.find(r => r.name === oldName);
-  if (room) room.name = newName;
-  if (activeSheet === oldName) activeSheet = newName;
-  TW.setState({ ...state, rooms: state.rooms, cell_values: cellValues });
+  const label = uniqueLabel(labelFor(sourceId) + " copy");
+  state.tab_copies = [...state.tab_copies, { id: newId, source: sourceId, role: srcTab.role }];
+  state.tab_labels = { ...state.tab_labels, [newId]: label };
+  buildTabs();
+  TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels, cell_values: cellValues });
   renderTabs();
-  showSheet(newName);
+  showSheet(newId);
 }
 
-function deleteRoomTab(name) {
-  if (!confirm(`Delete the "${name}" room tab? Its per-room estimate is removed.`)) return;
-  HF.removeSheet(name);
-  for (const key of Object.keys(cellValues)) {
-    if (key.startsWith(name + "!")) delete cellValues[key];
-  }
-  delete sheetCache[name];
-  state.rooms = state.rooms.filter(r => r.name !== name);
-  TW.setState({ ...state, rooms: state.rooms, cell_values: cellValues });
+// Rename = change the DISPLAY label only (id, cellValues, formulas untouched).
+function renameTab(id, rawNew) {
+  const newLabel = String(rawNew || "").trim();
+  if (!newLabel || newLabel === labelFor(id)) { renderTabs(); return; }
+  const err = validateLabel(newLabel, id);
+  if (err) { alert(err); renderTabs(); return; }
+  state.tab_labels = { ...state.tab_labels, [id]: newLabel };
+  buildTabs();
+  TW.setState({ ...state, tab_labels: state.tab_labels });
   renderTabs();
-  if (activeSheet === name) showSheet(ROOM_SOURCE);
+  if (activeSheet === id) badge.textContent = newLabel.toUpperCase();
 }
 
-// Inline rename: double-click a room tab → editable input (Enter commits, Esc cancels).
-function startRename(btn, oldName) {
+// Delete is offered for copied tabs only (base template tabs stay).
+function deleteTab(id) {
+  if (!confirm(`Delete the "${labelFor(id)}" tab? Its estimate is removed.`)) return;
+  HF.removeSheet(id);
+  for (const key of Object.keys(cellValues)) if (key.startsWith(id + "!")) delete cellValues[key];
+  delete sheetCache[id];
+  state.tab_copies = state.tab_copies.filter(c => c.id !== id);
+  delete state.tab_labels[id];
+  delete state.tab_notes[id];
+  buildTabs();
+  TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
+                tab_notes: state.tab_notes, cell_values: cellValues });
+  renderTabs();
+  if (activeSheet === id) showSheet("Epoxy");
+}
+
+// Inline rename: double-click a tab → editable input (Enter commits, Esc cancels).
+function startRename(btn, id) {
   const input = document.createElement("input");
-  input.type = "text"; input.value = oldName; input.className = "room-rename";
+  input.type = "text"; input.value = labelFor(id); input.className = "room-rename";
   input.maxLength = 31;
   btn.replaceWith(input);
   input.focus(); input.select();
   let done = false;
   const finish = (commit) => {
     if (done) return; done = true;
-    if (commit) renameRoomTab(oldName, input.value);
+    if (commit) renameTab(id, input.value);
     else renderTabs();
   };
   input.addEventListener("keydown", (e) => {
@@ -432,9 +466,9 @@ function startRename(btn, oldName) {
   input.addEventListener("blur", () => finish(true));
 }
 
-// Auto-derive per-room notes (cove base) from the room tab's cove LF cells.
-function deriveRoomNotes(sheetName) {
-  const n = (a) => { const v = HF.getValue(sheetName, a); return typeof v === "number" ? v : 0; };
+// Auto-derive per-tab notes (cove base) from the tab's cove LF cells.
+function deriveNotes(id) {
+  const n = (a) => { const v = HF.getValue(id, a); return typeof v === "number" ? v : 0; };
   const out = [];
   if (n("E34") + n("E37") > 0) out.push('Includes 6" Cove Base');
   return out;
@@ -454,6 +488,7 @@ async function init() {
     sheetGrid.textContent = "Could not load sheets: " + err;
     return;
   }
+  buildTabs();
   renderTabs();
 
   // 2. Initialize HyperFormula with ALL sheet names. We need the engine
@@ -518,10 +553,16 @@ async function init() {
       console.warn(`Failed to load ${name}:`, err);
     }
   }));
-  // 3b. Rehydrate saved room tabs (copies of Epoxy) BEFORE replaying cell edits,
-  //     so each "<room>!<addr>" setCellValue below lands on an existing sheet.
-  for (const r of (state.rooms || [])) {
-    if (r && r.name) materializeRoom(r.name);
+  // 3b. Rehydrate copied tabs BEFORE replaying cell edits, so each
+  //     "<copyId>!<addr>" setCellValue below lands on an existing sheet.
+  //     Load the source's template content first; the cellValues replay then
+  //     re-applies the copy's own edits (persisted at copy time).
+  for (const c of state.tab_copies) {
+    if (!c || !c.id) continue;
+    if (HF.createSheet(c.id)) {
+      const src = sheetCache[c.source] || sheetCache["Epoxy"];
+      if (src && src.cells) { HF.loadSheet(c.id, src.cells); sheetCache[c.id] = { ...src, sheet: c.id }; }
+    }
   }
   // Apply saved overrides
   for (const [key, val] of Object.entries(cellValues)) {
@@ -531,54 +572,41 @@ async function init() {
 
   // 4. Open the right starting tab
   const wt = (state.work_type || "epoxy").toLowerCase();
-  const initialSheet = wt === "polish"
-      ? "Polish"
-      : (wt === "combo" ? "Epoxy" : "Epoxy");
-  badge.textContent = wt.toUpperCase();
+  const initialSheet = wt === "polish" ? "Polish" : "Epoxy";
+  badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
 }
 
 function renderTabs() {
   tabBar.innerHTML = "";
-  // Template sheets (read-only).
-  for (const name of sheets) {
+  // Every worksheet tab: click = open, double-click = rename, ⧉ = duplicate,
+  // × = delete (copies only). Display label is decoupled from the stable id.
+  for (const t of tabs) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = name;
-    btn.dataset.sheet = name;
-    btn.classList.toggle("active", name === activeSheet);
-    btn.addEventListener("click", () => showSheet(name));
-    tabBar.appendChild(btn);
-  }
-  // Per-room tabs: click = open, double-click = rename, × = delete.
-  for (const r of state.rooms) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.dataset.sheet = r.name;
-    btn.className = "room-tab" + (r.name === activeSheet ? " active" : "");
+    btn.dataset.sheet = t.id;
+    btn.className = (t.kind === "copy" ? "room-tab" : "") + (t.id === activeSheet ? " active" : "");
     btn.title = "Double-click to rename";
     const label = document.createElement("span");
-    label.textContent = r.name;
+    label.textContent = t.label;
     btn.appendChild(label);
-    const del = document.createElement("span");
-    del.className = "room-del";
-    del.textContent = "×";
-    del.title = "Delete room";
-    del.addEventListener("click", (e) => { e.stopPropagation(); deleteRoomTab(r.name); });
-    btn.appendChild(del);
-    btn.addEventListener("click", () => showSheet(r.name));
-    btn.addEventListener("dblclick", () => startRename(btn, r.name));
+    const cp = document.createElement("span");
+    cp.className = "tab-copy";
+    cp.textContent = "⧉";
+    cp.title = "Duplicate this worksheet (with all its contents)";
+    cp.addEventListener("click", (e) => { e.stopPropagation(); copyTab(t.id); });
+    btn.appendChild(cp);
+    if (t.kind === "copy") {
+      const del = document.createElement("span");
+      del.className = "room-del";
+      del.textContent = "×";
+      del.title = "Delete tab";
+      del.addEventListener("click", (e) => { e.stopPropagation(); deleteTab(t.id); });
+      btn.appendChild(del);
+    }
+    btn.addEventListener("click", () => showSheet(t.id));
+    btn.addEventListener("dblclick", () => startRename(btn, t.id));
     tabBar.appendChild(btn);
-  }
-  // "+ Room" — duplicate the Epoxy estimate as a new room/scope (epoxy/combo only).
-  if ((state.work_type || "epoxy").toLowerCase() !== "polish") {
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "room-add";
-    add.textContent = "+ Room";
-    add.title = "Duplicate the Epoxy estimate as a new room/scope (its own bid)";
-    add.addEventListener("click", duplicateEpoxyTab);
-    tabBar.appendChild(add);
   }
 }
 
@@ -587,7 +615,7 @@ async function showSheet(name) {
   for (const btn of tabBar.querySelectorAll("button")) {
     btn.classList.toggle("active", btn.dataset.sheet === name);
   }
-  badge.textContent = name.toUpperCase();
+  badge.textContent = labelFor(name).toUpperCase();
   // Clear stale DOM registrations from the previous sheet — those input
   // elements got detached when we tore down the prior grid.
   if (HF && HF.unregisterAll) HF.unregisterAll();
@@ -1547,26 +1575,39 @@ function snapshotLumpSumsToState() {
                                   num("Polish", TOTAL_CELLS.Polish.sales_tax));
   state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
                                     num("Polish", TOTAL_CELLS.Polish.remodel));
-  // Per-room tabs: snapshot each room's OWN bid (D88/D80/D81) + auto cove note.
-  // Rooms are priced options, NOT folded into proposal_lump_sum.
-  const tc = TOTAL_CELLS.Epoxy;
-  state.rooms = (state.rooms || []).map(r => ({
-    ...r,
-    bid: { total: num(r.name, tc.total),
-           sales_tax: num(r.name, tc.sales_tax),
-           remodel: num(r.name, tc.remodel) },
-    notes_auto: deriveRoomNotes(r.name),
-  }));
+  // Copying a worksheet is a PURE estimate-side duplication — it does not, by
+  // itself, change the proposal. We keep the per-sheet option snapshot behind a
+  // flag: flip AUTO_PRICE_COPIES to surface each filled epoxy tab as its own
+  // {{#room}} priced line on the proposal (the earlier per-room screenshot).
+  const AUTO_PRICE_COPIES = false;
+  if (AUTO_PRICE_COPIES) {
+    const tcE = TOTAL_CELLS.Epoxy, tcP = TOTAL_CELLS.Polish;
+    const opts = tabs.filter(t => t.role === "epoxy").map(t => {
+      const tc = t.role === "polish" ? tcP : tcE;
+      return {
+        id: t.id, name: labelFor(t.id), role: t.role,
+        bid: { total: num(t.id, tc.total), sales_tax: num(t.id, tc.sales_tax), remodel: num(t.id, tc.remodel) },
+        notes_auto: deriveNotes(t.id),
+        notes_manual: (state.tab_notes[t.id] || []),
+      };
+    }).filter(o => o.bid.total > 0);
+    state.rooms = opts.length >= 2 ? opts : [];
+  } else {
+    state.rooms = [];
+  }
 }
 
+function persistTabState() {
+  snapshotLumpSumsToState();
+  TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms,
+                tab_copies: state.tab_copies, tab_labels: state.tab_labels, tab_notes: state.tab_notes });
+}
 document.getElementById("back-btn").addEventListener("click", () => {
-  snapshotLumpSumsToState();   // persist room bids if the estimator filled rooms
-  TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms });
+  persistTabState();
   window.location.assign("/");
 });
 document.getElementById("continue-btn").addEventListener("click", () => {
-  snapshotLumpSumsToState();
-  TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms });
+  persistTabState();
   window.location.assign("/proposal-review.html");
 });
 

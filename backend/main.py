@@ -25,6 +25,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -54,6 +55,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import audit
 import drafts
 import estimate_writer
 import pdf_writer
@@ -143,6 +145,55 @@ def _auth_is_public(path: str, method: str) -> bool:
     return False
 
 
+# ─── Audit middleware (who did what) ──────────────────────────────────
+# Records authenticated state-changing actions + sensitive-data reads so a later
+# "who deleted this / who viewed these contacts" question is answerable. Runs
+# INSIDE _auth_gate (registered BEFORE it → Starlette LIFO makes auth the outer
+# layer), so reading request.state.user_email AFTER call_next sees what the auth
+# gate set. Entire step is try/except — it can never alter a response or throw.
+_AUDIT_SENSITIVE = ("/admin", "/contacts", "/export", "/file", "/download")
+_AUDIT_STATE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _audit_path(path: str) -> str:
+    """Redact the capability token from /api/file/<token>[/pdf] before logging."""
+    if path.startswith("/api/file/"):
+        rest = path[len("/api/file/"):]
+        return "/api/file/<redacted>" + ("/pdf" if rest.endswith("/pdf") else "")
+    return path
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    """Client IP, honoring the first hop of X-Forwarded-For (nginx sits in front)."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+async def _audit_log(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        method = request.method
+        path = request.url.path
+        if method != "OPTIONS" and path != "/healthz" and (
+            method in _AUDIT_STATE_METHODS
+            or any(s in path for s in _AUDIT_SENSITIVE)
+        ):
+            audit.audit_log({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "evt": "audit",
+                "user": getattr(request.state, "user_email", None) or "anon",
+                "method": method,
+                "path": _audit_path(path),
+                "status": response.status_code,
+                "ip": _client_ip(request),
+            })
+    except Exception:  # noqa: BLE001 — audit must never break the request
+        pass
+    return response
+
+
 @app.middleware("http")
 async def _auth_gate(request: Request, call_next):
     if _auth_is_public(request.url.path, request.method):
@@ -154,6 +205,13 @@ async def _auth_gate(request: Request, call_next):
     except supabase_client.AuthError as exc:
         return JSONResponse(status_code=exc.status, content={"ok": False, "error": exc.detail})
     return await call_next(request)
+
+
+# Register the audit middleware LAST so it is the OUTERMOST layer: it wraps
+# _auth_gate and therefore records even unauthenticated / 401 attempts too
+# (consistent with the News Feed + Roadmap audit). It still reads
+# request.state.user_email (set by _auth_gate) after call_next returns.
+app.middleware("http")(_audit_log)
 
 
 def _user_email(request: Request) -> Optional[str]:
@@ -210,10 +268,17 @@ class GenerateIn(BaseModel):
     # Conditional {{#remodel}} line: [{"amount_formatted": "$x"}] when a remodel
     # tax applies, [] (the default) when the remodel toggle is off.
     remodel: list = Field(default_factory=list)
-    # Per-room priced options (per-room jobs). Each: {name, source, bid:{total,
-    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Drives the
-    # proposal {{#room}} block AND the per-room estimate tabs (copied from Epoxy).
+    # Per-room priced options (per-room jobs). Each: {id, name, role, bid:{total,
+    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Derived from the
+    # epoxy-layout estimate tabs; drives the proposal {{#room}} options block.
     rooms: list = Field(default_factory=list)
+    # Worksheets the user duplicated in the editor: [{id, source, role}]. The
+    # backend clones `source` into a sheet titled `id` so the copy's
+    # "<id>!<addr>" cell_values land.
+    tab_copies: list = Field(default_factory=list)
+    # Display labels for renamed tabs: {internal_id: label}. Applied to the .xlsx
+    # worksheet titles (with cross-sheet formula refs rewritten) at the very end.
+    tab_labels: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AutofillIn(BaseModel):
@@ -926,7 +991,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
-    # Per-room priced options -> {{#room}} proposal block + room estimate tabs.
+    # Per-tab priced options -> {{#room}} proposal block (derived from the
+    # epoxy-layout estimate tabs the user filled / copied).
     rooms_arg = _build_rooms(payload.rooms, values)
 
     # Fill estimate workbook
@@ -936,7 +1002,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             cell_values=payload.cell_values,
             extras=payload.extras,
             alternate=alternate_arg,
-            rooms=payload.rooms,
+            tab_copies=payload.tab_copies,
+            tab_labels=payload.tab_labels,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")

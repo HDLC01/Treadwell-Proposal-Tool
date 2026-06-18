@@ -352,17 +352,23 @@
     flex-shrink: 0;
     font-size: 11px;
     padding: 6px 12px;
-  }
-  /* Per-room estimate tabs */
-  .xl-tab-bar.full button.room-tab {
     display: inline-flex; align-items: center; gap: 6px;
+  }
+  /* Duplicate (⧉) control on every tab — subtle until hovered. */
+  .xl-tab-bar.full button .tab-copy {
+    font-size: 12px; line-height: 1; color: #999; padding: 0 2px; border-radius: 3px;
+    opacity: .4; transition: opacity .12s;
+  }
+  .xl-tab-bar.full button:hover .tab-copy { opacity: 1; }
+  .xl-tab-bar.full button .tab-copy:hover { color: #fff; background: var(--treadwell-red); }
+  /* Copied tabs (priced options) */
+  .xl-tab-bar.full button.room-tab {
     border-left: 3px solid var(--treadwell-red);
   }
   .xl-tab-bar.full button.room-tab .room-del {
     font-size: 13px; line-height: 1; color: #999; padding: 0 2px; border-radius: 3px;
   }
   .xl-tab-bar.full button.room-tab .room-del:hover { color: #fff; background: var(--treadwell-red); }
-  .xl-tab-bar.full button.room-add { flex-shrink: 0; font-weight: 700; color: var(--treadwell-red); }
   .xl-tab-bar.full .room-rename {
     flex-shrink: 0; font-size: 11px; padding: 5px 8px; width: 130px;
     border: 1px solid var(--treadwell-red); border-radius: 3px;
