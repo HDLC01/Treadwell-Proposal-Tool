@@ -155,74 +155,102 @@
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
       c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-    // (rooms) Per-sheet priced options: base bid first, then each copy. Each option
-    // can toggle its system/scope line and (copies only) a signed difference vs. the
-    // base bid. Manual notes editable per option. state.rooms[] is snapshotted on
+    // (rooms) Per-sheet priced options: base bid first, then each copy. The
+    // DOCUMENT (#rooms-block) shows the read-only preview; the CONTROLS (toggles +
+    // notes) live in the left #options-panel. state.rooms[] is snapshotted on
     // Estimate Review (≥2 epoxy sheets → options; else single bid).
     const roomsBlock = document.getElementById("rooms-block");
-    if (roomsBlock) {
+    const optsPanel  = document.getElementById("options-panel");
+    {
       const rooms = Array.isArray(state.rooms) ? state.rooms : [];
       const priced = rooms.filter(r => r && r.bid && Number(r.bid.total) > 0);
-      if (!priced.length) {
-        roomsBlock.innerHTML = "";
-      } else {
-        const stateName = ((form.querySelector("[name='state_name']") || {}).value || "Kansas").trim() || "Kansas";
-        roomsBlock.innerHTML =
+      const stateName = ((form.querySelector("[name='state_name']") || {}).value || "Kansas").trim() || "Kansas";
+      const meta = (r) => {
+        const total = Number(r.bid.total) || 0;
+        const remodel = Number(r.bid.remodel) || 0;
+        const isBase = !!r.is_base;
+        const diff = total - (Number(r.base_total) || 0);
+        return {
+          total, isBase,
+          taxPhrase: remodel > 0
+            ? `(${esc(stateName)} Remodel Tax AND material sales tax INCLUDED)`
+            : "(material sales tax INCLUDED)",
+          heading: isBase ? "Base Bid" : String(r.name || "").replace(/[: ]+$/, ""),
+          sysOn: r.show_system !== false,
+          diffOn: !!r.show_diff,
+          diffText: diff > 0 ? `+${fmtUSD(diff)} more than the base bid`
+                  : diff < 0 ? `${fmtUSD(-diff)} less than the base bid` : "",
+        };
+      };
+
+      // DOCUMENT preview (read-only) — re-rendered when a control changes.
+      function renderRoomsPreview() {
+        if (!roomsBlock) return;
+        roomsBlock.innerHTML = !priced.length ? "" :
           `<p style="margin:10pt 0 4pt;font-weight:bold;">Pricing options (per sheet)</p>` +
-          priced.map((r, i) => {
-            const total = Number(r.bid.total) || 0;
-            const remodel = Number(r.bid.remodel) || 0;
-            const taxPhrase = remodel > 0
-              ? `(${esc(stateName)} Remodel Tax AND material sales tax INCLUDED)`
-              : "(material sales tax INCLUDED)";
-            const isBase = !!r.is_base;
-            const heading = isBase ? "Base Bid" : String(r.name || "").replace(/[: ]+$/, "");
-            const sysOn = r.show_system !== false;
-            const diffOn = !!r.show_diff;
-            const diff = total - (Number(r.base_total) || 0);
-            const diffText = diff > 0 ? `+${fmtUSD(diff)} more than the base bid`
-                           : diff < 0 ? `${fmtUSD(-diff)} less than the base bid` : "";
+          priced.map((r) => {
+            const m = meta(r);
             const autoNotes = Array.isArray(r.notes_auto) ? r.notes_auto : [];
-            const manual = (Array.isArray(r.notes_manual) ? r.notes_manual : []).join("\n");
+            const manual = Array.isArray(r.notes_manual) ? r.notes_manual : [];
             let h = `<div style="margin:0 0 10pt;border-left:3px solid #c8102e;padding-left:8px;">`;
-            h += `<p style="margin:0;"><strong>${esc(heading)}:</strong>` +
-                 (isBase ? ` <span style="font-size:11px;color:#777;">(base bid)</span>` : "") + `</p>`;
-            h += `<p style="margin:0;"><strong>${fmtUSD(total)}</strong> – Epoxy flooring as described above <em>${taxPhrase}</em></p>`;
-            if (sysOn && r.system_desc) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(r.system_desc)}</p>`;
-            if (!isBase && diffOn && diffText) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(diffText)}</p>`;
-            h += autoNotes.map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("");
-            h += `<div style="font-size:12px;color:#777;margin-top:4px;">` +
-                 `<label style="margin-right:12px;"><input type="checkbox" class="opt-system" data-room-idx="${i}" ${sysOn ? "checked" : ""}> Show system &amp; scope</label>` +
-                 (isBase ? "" : `<label><input type="checkbox" class="opt-diff" data-room-idx="${i}" ${diffOn ? "checked" : ""}> Show difference vs. base bid</label>`) +
-                 `</div>`;
-            h += `<label style="display:block;font-size:12px;color:#777;margin-top:4px;">Notes (one per line)` +
-                 `<textarea data-room-idx="${i}" class="room-notes doc-textarea" rows="2" style="width:100%;">${esc(manual)}</textarea></label>`;
+            h += `<p style="margin:0;"><strong>${esc(m.heading)}:</strong></p>`;
+            h += `<p style="margin:0;"><strong>${fmtUSD(m.total)}</strong> – Epoxy flooring as described above <em>${m.taxPhrase}</em></p>`;
+            if (m.sysOn && r.system_desc) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(r.system_desc)}</p>`;
+            if (!m.isBase && m.diffOn && m.diffText) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(m.diffText)}</p>`;
+            h += autoNotes.concat(manual).map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("");
             h += `</div>`;
             return h;
           }).join("");
-        const persistOpt = (r) => {
-          if (!state.tab_opts || typeof state.tab_opts !== "object") state.tab_opts = {};
-          if (r.id) state.tab_opts[r.id] = { show_system: r.show_system !== false, show_diff: !!r.show_diff };
-          TW.setState({ rooms: state.rooms, tab_opts: state.tab_opts });
-        };
-        roomsBlock.querySelectorAll("textarea.room-notes").forEach(ta => {
-          ta.addEventListener("input", () => {
-            const r = priced[Number(ta.dataset.roomIdx)];
-            if (r) { r.notes_manual = ta.value.split("\n").map(s => s.trim()).filter(Boolean); TW.setState({ rooms: state.rooms }); }
+      }
+      renderRoomsPreview();
+
+      // LEFT controls panel (toggles + notes)
+      if (optsPanel) {
+        if (!priced.length) {
+          optsPanel.hidden = true;
+          optsPanel.innerHTML = "";
+        } else {
+          optsPanel.hidden = false;
+          optsPanel.innerHTML =
+            `<h3>Pricing options</h3>` +
+            `<p class="op-hint">Choose what prints for each sheet.</p>` +
+            priced.map((r, i) => {
+              const m = meta(r);
+              const manual = (Array.isArray(r.notes_manual) ? r.notes_manual : []).join("\n");
+              let h = `<div class="op-row">`;
+              h += `<div class="op-name">${esc(m.heading)} <span class="op-price">${fmtUSD(m.total)}</span></div>`;
+              h += `<label><input type="checkbox" class="opt-system" data-room-idx="${i}" ${m.sysOn ? "checked" : ""}> Show system &amp; scope</label>`;
+              if (!m.isBase) h += `<label><input type="checkbox" class="opt-diff" data-room-idx="${i}" ${m.diffOn ? "checked" : ""}> Show difference vs. base bid</label>`;
+              h += `<label class="op-notes">Notes (one per line)` +
+                   `<textarea data-room-idx="${i}" class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
+              h += `</div>`;
+              return h;
+            }).join("");
+
+          const persistOpt = (r) => {
+            if (!state.tab_opts || typeof state.tab_opts !== "object") state.tab_opts = {};
+            if (r.id) state.tab_opts[r.id] = { show_system: r.show_system !== false, show_diff: !!r.show_diff };
+            TW.setState({ rooms: state.rooms, tab_opts: state.tab_opts });
+          };
+          optsPanel.querySelectorAll("textarea.room-notes").forEach(ta => {
+            ta.addEventListener("input", () => {
+              const r = priced[Number(ta.dataset.roomIdx)];
+              if (r) { r.notes_manual = ta.value.split("\n").map(s => s.trim()).filter(Boolean); TW.setState({ rooms: state.rooms }); renderRoomsPreview(); }
+            });
           });
-        });
-        roomsBlock.querySelectorAll("input.opt-system").forEach(cb => {
-          cb.addEventListener("change", () => {
-            const r = priced[Number(cb.dataset.roomIdx)];
-            if (r) { r.show_system = cb.checked; persistOpt(r); renderProposalExtras(); }
+          optsPanel.querySelectorAll("input.opt-system").forEach(cb => {
+            cb.addEventListener("change", () => {
+              const r = priced[Number(cb.dataset.roomIdx)];
+              if (r) { r.show_system = cb.checked; persistOpt(r); renderRoomsPreview(); }
+            });
           });
-        });
-        roomsBlock.querySelectorAll("input.opt-diff").forEach(cb => {
-          cb.addEventListener("change", () => {
-            const r = priced[Number(cb.dataset.roomIdx)];
-            if (r) { r.show_diff = cb.checked; persistOpt(r); renderProposalExtras(); }
+          optsPanel.querySelectorAll("input.opt-diff").forEach(cb => {
+            cb.addEventListener("change", () => {
+              const r = priced[Number(cb.dataset.roomIdx)];
+              if (r) { r.show_diff = cb.checked; persistOpt(r); renderRoomsPreview(); }
+            });
           });
-        });
+        }
       }
     }
 
