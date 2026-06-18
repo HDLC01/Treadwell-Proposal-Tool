@@ -353,6 +353,7 @@ if (Array.isArray(state.rooms) && state.rooms.length && !Array.isArray(state.tab
 state.tab_copies = Array.isArray(state.tab_copies) ? state.tab_copies : [];
 state.tab_labels = (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {};
 state.tab_notes  = (state.tab_notes  && typeof state.tab_notes  === "object") ? state.tab_notes  : {};
+state.tab_order  = Array.isArray(state.tab_order) ? state.tab_order : [];   // drag-to-reorder
 
 const labelFor = (id) => state.tab_labels[id] || id;
 function roleFor(id) {
@@ -361,11 +362,39 @@ function roleFor(id) {
   return c ? (c.role || "epoxy") : "other";
 }
 
+// Display order of tab ids: saved order first (filtered to ones that still
+// exist), then any new/unsaved ids appended (so a fresh copy shows up at the end).
+function orderedIds() {
+  const all = [...sheets, ...state.tab_copies.map(c => c.id)];
+  const seen = new Set();
+  const ordered = [];
+  for (const id of state.tab_order) if (all.includes(id) && !seen.has(id)) { ordered.push(id); seen.add(id); }
+  for (const id of all) if (!seen.has(id)) ordered.push(id);
+  return ordered;
+}
+
 let tabs = [];
 function buildTabs() {
-  tabs = sheets.map(id => ({ id, label: labelFor(id), role: roleFor(id), kind: "base" }));
+  const byId = {};
+  for (const id of sheets) byId[id] = { id, label: labelFor(id), role: roleFor(id), kind: "base" };
   for (const c of state.tab_copies)
-    tabs.push({ id: c.id, label: labelFor(c.id), role: c.role || "epoxy", kind: "copy", source: c.source });
+    byId[c.id] = { id: c.id, label: labelFor(c.id), role: c.role || "epoxy", kind: "copy", source: c.source };
+  tabs = orderedIds().map(id => byId[id]).filter(Boolean);
+}
+
+// Drag-to-reorder (Excel-style): move draggedId to targetId's slot.
+let dragTabId = null;
+function moveTab(draggedId, targetId) {
+  if (!draggedId || draggedId === targetId) return;
+  const order = orderedIds();
+  const from = order.indexOf(draggedId), to = order.indexOf(targetId);
+  if (from < 0 || to < 0) return;
+  order.splice(from, 1);
+  order.splice(to, 0, draggedId);
+  state.tab_order = order;
+  buildTabs();
+  TW.setState({ ...state, tab_order: state.tab_order });
+  renderTabs();
 }
 
 function allLabels(exceptId) {
@@ -381,11 +410,16 @@ function validateLabel(label, exceptId) {
 }
 function uniqueLabel(base) {
   const used = allLabels(null);
-  let label = base.slice(0, 31), i = 2;
-  while (used.has(label.toLowerCase())) { label = (base + " " + i).slice(0, 31); i++; }
-  return label;
+  const root = base.slice(0, 31);
+  if (!used.has(root.toLowerCase())) return root;
+  for (let i = 2; ; i++) {                                  // reserve room for the suffix
+    const suffix = " " + i;
+    const label = base.slice(0, 31 - suffix.length) + suffix;
+    if (!used.has(label.toLowerCase())) return label;
+  }
 }
 function nextCopyId() {
+  // ids and display labels are SEPARATE namespaces — "Copy<N>" is only ever an id.
   const used = new Set([...sheets, ...state.tab_copies.map(c => c.id)]);
   let i = 1; while (used.has("Copy" + i)) i++; return "Copy" + i;
 }
@@ -397,13 +431,17 @@ function copyTab(sourceId) {
   const srcTab = tabs.find(t => t.id === sourceId);
   if (!srcTab) return;
   if (state.tab_copies.length >= MAX_COPIES) { alert(`Limit is ${MAX_COPIES} copied tabs.`); return; }
+  const src = sheetCache[sourceId];
+  if (!src || !src.cells) { alert("Open that sheet once before copying it."); return; }
   const newId = nextCopyId();
   if (!HF.createSheet(newId)) { alert("Couldn't create a copy."); return; }
-  const src = sheetCache[sourceId] || sheetCache["Epoxy"];
-  if (src && src.cells) { HF.loadSheet(newId, src.cells); sheetCache[newId] = { ...src, sheet: newId }; }
+  HF.loadSheet(newId, src.cells);
+  sheetCache[newId] = { ...src, sheet: newId };
   for (const key of Object.keys(cellValues)) {           // replay source edits onto the copy
     if (key.startsWith(sourceId + "!")) {
       const addr = key.slice(sourceId.length + 1);
+      // Project info (A1:D10) is shared via =Epoxy! mirrors — don't fork it onto the copy.
+      if (isProjectInfoCell(addr)) continue;
       cellValues[newId + "!" + addr] = cellValues[key];
       HF.setCellValue(newId, addr, cellValues[key]);
     }
@@ -432,6 +470,9 @@ function renameTab(id, rawNew) {
 
 // Delete is offered for copied tabs only (base template tabs stay).
 function deleteTab(id) {
+  // Invariant: never delete a base template tab — it would break the hardcoded
+  // Epoxy!/Polish! reads + the canonical project-info block.
+  if (BASE_ROLE[id] || sheets.includes(id) || !state.tab_copies.some(c => c.id === id)) return;
   if (!confirm(`Delete the "${labelFor(id)}" tab? Its estimate is removed.`)) return;
   HF.removeSheet(id);
   for (const key of Object.keys(cellValues)) if (key.startsWith(id + "!")) delete cellValues[key];
@@ -443,7 +484,7 @@ function deleteTab(id) {
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, cell_values: cellValues });
   renderTabs();
-  if (activeSheet === id) showSheet("Epoxy");
+  if (activeSheet === id) showSheet((state.work_type || "epoxy").toLowerCase() === "polish" ? "Polish" : "Epoxy");
 }
 
 // Inline rename: double-click a tab → editable input (Enter commits, Esc cancels).
@@ -556,13 +597,18 @@ async function init() {
   // 3b. Rehydrate copied tabs BEFORE replaying cell edits, so each
   //     "<copyId>!<addr>" setCellValue below lands on an existing sheet.
   //     Load the source's template content first; the cellValues replay then
-  //     re-applies the copy's own edits (persisted at copy time).
-  for (const c of state.tab_copies) {
-    if (!c || !c.id) continue;
-    if (HF.createSheet(c.id)) {
-      const src = sheetCache[c.source] || sheetCache["Epoxy"];
-      if (src && src.cells) { HF.loadSheet(c.id, src.cells); sheetCache[c.id] = { ...src, sheet: c.id }; }
+  //     re-applies the copy's own edits (persisted at copy time). Process so a
+  //     copy-of-a-copy comes after its source (loop until no progress).
+  let pending = state.tab_copies.filter(c => c && c.id);
+  for (let guard = 0; pending.length && guard < pending.length + 2; guard++) {
+    const next = [];
+    for (const c of pending) {
+      const src = sheetCache[c.source];                 // exact source only — no Epoxy fallback
+      if (!src || !src.cells) { next.push(c); continue; } // source not materialized yet — retry
+      if (HF.createSheet(c.id)) { HF.loadSheet(c.id, src.cells); sheetCache[c.id] = { ...src, sheet: c.id }; }
     }
+    if (next.length === pending.length) break;           // no progress (orphan source) — stop
+    pending = next;
   }
   // Apply saved overrides
   for (const [key, val] of Object.entries(cellValues)) {
@@ -579,23 +625,18 @@ async function init() {
 
 function renderTabs() {
   tabBar.innerHTML = "";
-  // Every worksheet tab: click = open, double-click = rename, ⧉ = duplicate,
+  // Each tab: click = open, double-click = rename, drag = reorder (Excel-style),
   // × = delete (copies only). Display label is decoupled from the stable id.
   for (const t of tabs) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.dataset.sheet = t.id;
     btn.className = (t.kind === "copy" ? "room-tab" : "") + (t.id === activeSheet ? " active" : "");
-    btn.title = "Double-click to rename";
+    btn.title = "Click to open · double-click to rename · drag to reorder";
+    btn.draggable = true;
     const label = document.createElement("span");
     label.textContent = t.label;
     btn.appendChild(label);
-    const cp = document.createElement("span");
-    cp.className = "tab-copy";
-    cp.textContent = "⧉";
-    cp.title = "Duplicate this worksheet (with all its contents)";
-    cp.addEventListener("click", (e) => { e.stopPropagation(); copyTab(t.id); });
-    btn.appendChild(cp);
     if (t.kind === "copy") {
       const del = document.createElement("span");
       del.className = "room-del";
@@ -604,10 +645,35 @@ function renderTabs() {
       del.addEventListener("click", (e) => { e.stopPropagation(); deleteTab(t.id); });
       btn.appendChild(del);
     }
-    btn.addEventListener("click", () => showSheet(t.id));
-    btn.addEventListener("dblclick", () => startRename(btn, t.id));
+    // Single click opens the tab; double click renames it. Disambiguate with a
+    // short timer so the double-click's preceding single-clicks don't fire
+    // showSheet (whose async grid reload would steal focus from the rename box).
+    let clickTimer = null;
+    btn.addEventListener("click", () => {
+      if (clickTimer) return;
+      clickTimer = setTimeout(() => { clickTimer = null; showSheet(t.id); }, 220);
+    });
+    btn.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      startRename(btn, t.id);
+    });
+    // Drag-to-reorder
+    btn.addEventListener("dragstart", (e) => { dragTabId = t.id; e.dataTransfer.effectAllowed = "move"; btn.classList.add("dragging"); });
+    btn.addEventListener("dragend", () => { dragTabId = null; btn.classList.remove("dragging"); });
+    btn.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; btn.classList.add("drag-over"); });
+    btn.addEventListener("dragleave", () => btn.classList.remove("drag-over"));
+    btn.addEventListener("drop", (e) => { e.preventDefault(); btn.classList.remove("drag-over"); moveTab(dragTabId, t.id); });
     tabBar.appendChild(btn);
   }
+  // Visible "Copy sheet" button — duplicates the current tab with all its contents.
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "tab-copy-btn";
+  copyBtn.textContent = "⧉ Copy sheet";
+  copyBtn.title = "Duplicate the current worksheet, with all of its contents";
+  copyBtn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
+  tabBar.appendChild(copyBtn);
 }
 
 async function showSheet(name) {
@@ -1600,7 +1666,8 @@ function snapshotLumpSumsToState() {
 function persistTabState() {
   snapshotLumpSumsToState();
   TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms,
-                tab_copies: state.tab_copies, tab_labels: state.tab_labels, tab_notes: state.tab_notes });
+                tab_copies: state.tab_copies, tab_labels: state.tab_labels,
+                tab_notes: state.tab_notes, tab_order: state.tab_order });
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();

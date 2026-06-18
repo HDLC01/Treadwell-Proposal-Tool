@@ -354,14 +354,17 @@
     padding: 6px 12px;
     display: inline-flex; align-items: center; gap: 6px;
   }
-  /* Duplicate (⧉) control on every tab — subtle until hovered. */
-  .xl-tab-bar.full button .tab-copy {
-    font-size: 12px; line-height: 1; color: #999; padding: 0 2px; border-radius: 3px;
-    opacity: .4; transition: opacity .12s;
+  /* Visible "Copy sheet" button at the end of the tab bar */
+  .xl-tab-bar.full button.tab-copy-btn {
+    flex-shrink: 0; font-weight: 700; color: #fff; background: var(--treadwell-red);
+    margin-left: 8px; border-radius: 4px;
   }
-  .xl-tab-bar.full button:hover .tab-copy { opacity: 1; }
-  .xl-tab-bar.full button .tab-copy:hover { color: #fff; background: var(--treadwell-red); }
-  /* Copied tabs (priced options) */
+  .xl-tab-bar.full button.tab-copy-btn:hover { filter: brightness(1.1); }
+  /* Drag-to-reorder affordances */
+  .xl-tab-bar.full button { cursor: grab; }
+  .xl-tab-bar.full button.dragging { opacity: .5; }
+  .xl-tab-bar.full button.drag-over { box-shadow: inset 3px 0 0 var(--treadwell-red); }
+  /* Copied tabs (duplicated worksheets) */
   .xl-tab-bar.full button.room-tab {
     border-left: 3px solid var(--treadwell-red);
   }

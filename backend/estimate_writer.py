@@ -387,6 +387,7 @@ def fill_estimate(
     alternate: Mapping[str, Any] | None = None,
     tab_copies: list[Mapping[str, Any]] | None = None,
     tab_labels: Mapping[str, Any] | None = None,
+    tab_order: list | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
@@ -457,8 +458,10 @@ def fill_estimate(
     if alternate:
         _write_alternate_tab(wb, alternate)
 
-    # 5. LAST: apply display labels to worksheet titles + rewrite cross-sheet
-    #    formula references, after every write has landed on the stable ids.
+    # 5. Reorder worksheets (by stable id) to match the user's tab order, THEN
+    #    apply display labels + rewrite cross-sheet refs, after every write has
+    #    landed on the stable ids.
+    _reorder_tabs(wb, tab_order)
     _apply_tab_labels(wb, tab_labels)
 
     # Stream to bytes
@@ -538,10 +541,23 @@ def _create_copied_tabs(wb, tab_copies: list[Mapping[str, Any]] | None) -> None:
 _SHEET_REF_RE = re.compile(r"(?<![A-Za-z0-9_.#])('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!")
 
 
+_CELL_SHAPE_RE = re.compile(r"(?i)[A-Z]{1,3}[0-9]{1,7}")      # A1, XFD1048576
+_R1C1_RE = re.compile(r"(?i)R\d*C\d*|[RC]")                   # R, C, R1C1, RC
+
+
 def _needs_quoting(title: str) -> bool:
     """A sheet name needs single quotes in a formula unless it's a simple
-    [A-Za-z_][A-Za-z0-9_]* token (and not shaped like a cell reference)."""
-    return not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", title or "")
+    [A-Za-z_][A-Za-z0-9_]* token that is NOT shaped like a cell reference (A1),
+    an R1C1 token, or a boolean literal. When unsure we quote — over-quoting a
+    name is always valid in Excel, under-quoting (e.g. =A1!B1) breaks the file."""
+    t = title or ""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t):
+        return True
+    if t.upper() in ("TRUE", "FALSE"):
+        return True
+    if _CELL_SHAPE_RE.fullmatch(t) or _R1C1_RE.fullmatch(t):
+        return True
+    return False
 
 
 def _emit_ref(title: str) -> str:
@@ -564,6 +580,16 @@ def _rewrite_formula_refs(formula: str, rename: Mapping[str, str]) -> str:
     return _SHEET_REF_RE.sub(repl, formula)
 
 
+_INVALID_TITLE_RE = re.compile(r"[\\/*?:\[\]]")
+
+
+def _sanitize_title(label: Any) -> str:
+    """Make a user label safe as an Excel worksheet title: strip illegal chars
+    (\\ / * ? : [ ]), trim surrounding apostrophes, clamp to 31 chars."""
+    t = _INVALID_TITLE_RE.sub(" ", str(label or "")).strip().strip("'").strip()
+    return t[:31].strip()
+
+
 def _apply_tab_labels(wb, tab_labels: Mapping[str, Any] | None) -> None:
     """Retitle worksheets to their display labels and rewrite cross-sheet formula
     references so the downloaded .xlsx still calculates.
@@ -571,45 +597,87 @@ def _apply_tab_labels(wb, tab_labels: Mapping[str, Any] | None) -> None:
     `tab_labels` maps {internal_id: display_label}. Worksheets are edited under
     their stable ids (Epoxy/Polish/Copy1/…) so the hardcoded cell maps and the
     `cell_values` writes all land; only here, at the very end, do we rename them.
-    openpyxl does NOT rewrite `=Epoxy!B1` formula text on `ws.title=`, so we (1)
-    rewrite every formula's sheet references via a single old->new map, then (2)
-    retitle through unique temp names to avoid transient collisions.
+    openpyxl does NOT rewrite `=Epoxy!B1` on `ws.title=`, so we resolve a
+    DETERMINISTIC, unique final title per sheet (sanitized + de-duplicated, never
+    letting openpyxl silently suffix a clamped/colliding title), rewrite every
+    formula reference to those exact titles, then retitle through collision-proof
+    temp names. This keeps formula refs and actual titles in lockstep even when a
+    direct API caller sends colliding/odd labels.
     """
-    rename: dict[str, str] = {}
+    # Requested, sanitized labels for sheets that exist and actually change.
+    requested: dict[str, str] = {}
     for sid, raw in (tab_labels or {}).items():
         sid = str(sid)
-        label = str(raw or "").strip()[:31]
-        if not label or sid not in wb.sheetnames or label == sid:
-            continue
-        rename[sid] = label
-    if not rename:
+        label = _sanitize_title(raw)
+        if label and sid in wb.sheetnames and label != sid:
+            requested[sid] = label
+    if not requested:
         return
 
-    # 1. Rewrite all cross-sheet references in cell formulas + defined names.
+    # Resolve unique final titles, reserving the suffix room; names of sheets NOT
+    # being renamed are off-limits so we never collide with a kept sheet.
+    taken = {n.lower() for n in wb.sheetnames if n not in requested}
+    final: dict[str, str] = {}
+    for sid, label in requested.items():
+        t, i = label, 2
+        while t.lower() in taken:
+            suffix = f" {i}"
+            t = label[: 31 - len(suffix)] + suffix
+            i += 1
+        if t != sid:
+            final[sid] = t
+        taken.add(t.lower())
+    if not final:
+        return
+
+    # 1. Rewrite all cross-sheet refs in cell formulas + defined names to the
+    #    deterministic final titles.
     for ws in wb.worksheets:
         for row in ws.iter_rows():
             for cell in row:
                 v = cell.value
                 if isinstance(v, str) and v.startswith("="):
-                    new_v = _rewrite_formula_refs(v, rename)
+                    new_v = _rewrite_formula_refs(v, final)
                     if new_v != v:
                         cell.value = new_v
     try:
         for dn in wb.defined_names.values():
             if isinstance(dn.value, str) and "!" in dn.value:
-                dn.value = _rewrite_formula_refs(dn.value, rename)
+                dn.value = _rewrite_formula_refs(dn.value, final)
     except Exception:  # noqa: BLE001 — defined-name shapes vary; non-fatal
         pass
 
-    # 2. Retitle via temp names first (final labels are unique, but a final name
-    #    may equal another sheet's *current* id during the sweep).
-    tmp = {}
-    for i, sid in enumerate(rename):
-        t = f"__twtmp{i}__"
+    # 2. Retitle via temp names unique vs ALL current titles, then to the finals
+    #    (each final is unique by construction, so openpyxl won't mangle it).
+    seen = {n.lower() for n in wb.sheetnames}
+    tmp, counter = {}, 0
+    for sid in final:
+        while f"__twtmp{counter}__".lower() in seen:
+            counter += 1
+        t = f"__twtmp{counter}__"
+        seen.add(t.lower())
+        counter += 1
         wb[sid].title = t
-        tmp[t] = rename[sid]
+        tmp[t] = final[sid]
     for t, label in tmp.items():
         wb[t].title = label
+
+
+def _reorder_tabs(wb, tab_order: list | None) -> None:
+    """Reorder worksheets to match the user's drag-to-reorder order (by stable id;
+    called BEFORE _apply_tab_labels while titles are still ids). Ids not present
+    are skipped; sheets not listed keep their relative order at the end."""
+    if not tab_order:
+        return
+    desired = [sid for sid in tab_order if isinstance(sid, str) and sid in wb.sheetnames]
+    if not desired:
+        return
+    rest = [s for s in wb.sheetnames if s not in desired]
+    order = desired + rest
+    try:
+        wb._sheets.sort(key=lambda ws: order.index(ws.title))
+    except Exception:  # noqa: BLE001 — never fail generation over sheet order
+        pass
 
 
 def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:
