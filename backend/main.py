@@ -279,6 +279,8 @@ class GenerateIn(BaseModel):
     # Display labels for renamed tabs: {internal_id: label}. Applied to the .xlsx
     # worksheet titles (with cross-sheet formula refs rewritten) at the very end.
     tab_labels: Dict[str, Any] = Field(default_factory=dict)
+    # Drag-to-reorder worksheet order, by internal id. Applied to the .xlsx tab order.
+    tab_order: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -1004,6 +1006,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             alternate=alternate_arg,
             tab_copies=payload.tab_copies,
             tab_labels=payload.tab_labels,
+            tab_order=payload.tab_order,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")

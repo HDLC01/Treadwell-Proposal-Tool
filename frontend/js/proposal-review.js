@@ -419,10 +419,11 @@
         // Optional per-sheet priced options -> {{#room}} block (empty unless the
         // estimate side opts in; copy/rename itself is a pure sheet operation).
         rooms: Array.isArray(state.rooms) ? state.rooms : [],
-        // Duplicated worksheets + display labels -> the downloaded .xlsx mirrors
-        // the user's copies and tab renames (cross-sheet formulas rewritten).
+        // Duplicated worksheets + display labels + drag order -> the downloaded
+        // .xlsx mirrors the user's copies, tab renames, and tab order.
         tab_copies: Array.isArray(state.tab_copies) ? state.tab_copies : [],
         tab_labels: (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {},
+        tab_order: Array.isArray(state.tab_order) ? state.tab_order : [],
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).

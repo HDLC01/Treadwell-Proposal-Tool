@@ -107,3 +107,65 @@ def test_label_equal_to_id_is_noop():
     data = ew.fill_estimate({"project_name": "P"}, tab_labels={"Epoxy": "Epoxy"})
     wb = _wb(data)
     assert "Epoxy" in wb.sheetnames
+
+
+# ── hardening: quoting, collisions, temp-name safety, reorder ───────────
+def test_emit_ref_quotes_cell_ref_and_reserved_labels():
+    assert ew._emit_ref("A1") == "'A1'!"          # cell-address shaped → must quote
+    assert ew._emit_ref("XFD1") == "'XFD1'!"
+    assert ew._emit_ref("TRUE") == "'TRUE'!"
+    assert ew._emit_ref("R") == "'R'!" and ew._emit_ref("C1") == "'C1'!"
+    assert ew._emit_ref("Lobby") == "Lobby!"      # normal name → no quotes
+    assert ew._emit_ref("Grooming Room") == "'Grooming Room'!"
+
+
+def test_cell_ref_shaped_label_is_quoted_in_xlsx():
+    # Renaming a tab to "A1" must produce ='A1'!B1 (quoted), never =A1!B1.
+    data = ew.fill_estimate({"project_name": "P"}, tab_labels={"Epoxy": "A1"})
+    wb = _wb(data)
+    assert "A1" in wb.sheetnames
+    pol = wb["Polish"]["B1"].value
+    if isinstance(pol, str) and pol.startswith("="):
+        assert "=A1!" not in pol            # never an unquoted cell-shaped ref
+    assert "Epoxy" not in _all_sheet_refs(wb)
+    assert _all_sheet_refs(wb) <= set(wb.sheetnames)
+
+
+def test_label_colliding_with_kept_sheet_is_deduped():
+    # Direct-API edge: rename Epoxy -> "Polish" (a kept sheet). Must NOT collide;
+    # both sheets keep distinct titles and every ref resolves.
+    data = ew.fill_estimate({"project_name": "P"}, tab_labels={"Epoxy": "Polish"})
+    wb = _wb(data)
+    assert len(wb.sheetnames) == len(set(wb.sheetnames))   # no duplicate titles
+    assert "Polish" in wb.sheetnames                       # the real Polish kept its name
+    assert _all_sheet_refs(wb) <= set(wb.sheetnames)       # nothing dangling
+
+
+def test_temp_name_collision_with_copy_id_is_safe():
+    # A copy whose id is literally the temp prefix must not crash the rename pass.
+    data = ew.fill_estimate(
+        {"project_name": "P"},
+        tab_copies=[{"id": "__twtmp0__", "source": "Epoxy"}],
+        tab_labels={"Epoxy": "Grooming", "__twtmp0__": "Exam"},
+    )
+    wb = _wb(data)
+    assert {"Grooming", "Exam"} <= set(wb.sheetnames)
+    assert len(wb.sheetnames) == len(set(wb.sheetnames))
+    assert _all_sheet_refs(wb) <= set(wb.sheetnames)
+
+
+def test_reorder_tabs():
+    data = ew.fill_estimate({"project_name": "P"}, tab_order=["Polish", "Epoxy"])
+    wb = _wb(data)
+    assert wb.sheetnames[:2] == ["Polish", "Epoxy"]      # requested order first
+
+
+def test_reorder_then_rename_together():
+    data = ew.fill_estimate(
+        {"project_name": "P"},
+        tab_order=["Polish", "Epoxy"],
+        tab_labels={"Epoxy": "Grooming"},
+    )
+    wb = _wb(data)
+    assert wb.sheetnames[:2] == ["Polish", "Grooming"]   # reorder by id, then retitle
+    assert _all_sheet_refs(wb) <= set(wb.sheetnames)
