@@ -1641,33 +1641,39 @@ function snapshotLumpSumsToState() {
                                   num("Polish", TOTAL_CELLS.Polish.sales_tax));
   state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
                                     num("Polish", TOTAL_CELLS.Polish.remodel));
-  // Copying a worksheet is a PURE estimate-side duplication — it does not, by
-  // itself, change the proposal. We keep the per-sheet option snapshot behind a
-  // flag: flip AUTO_PRICE_COPIES to surface each filled epoxy tab as its own
-  // {{#room}} priced line on the proposal (the earlier per-room screenshot).
-  const AUTO_PRICE_COPIES = false;
-  if (AUTO_PRICE_COPIES) {
-    const tcE = TOTAL_CELLS.Epoxy, tcP = TOTAL_CELLS.Polish;
-    const opts = tabs.filter(t => t.role === "epoxy").map(t => {
-      const tc = t.role === "polish" ? tcP : tcE;
-      return {
-        id: t.id, name: labelFor(t.id), role: t.role,
-        bid: { total: num(t.id, tc.total), sales_tax: num(t.id, tc.sales_tax), remodel: num(t.id, tc.remodel) },
-        notes_auto: deriveNotes(t.id),
-        notes_manual: (state.tab_notes[t.id] || []),
-      };
-    }).filter(o => o.bid.total > 0);
-    state.rooms = opts.length >= 2 ? opts : [];
-  } else {
-    state.rooms = [];
-  }
+  // Per-sheet priced options: when 2+ epoxy-family sheets carry a bid, the proposal
+  // lists each as an option (base bid first, then copies). Each can show its own
+  // system/scope and a signed difference vs. the base bid (estimator toggles on
+  // Proposal Review). 1 epoxy sheet → state.rooms = [] (unchanged single-bid).
+  const tc = TOTAL_CELLS.Epoxy;
+  const epoxyTabs = tabs.filter(t => t.role === "epoxy");
+  const baseTab = epoxyTabs.find(t => t.kind === "base") || epoxyTabs[0];
+  const baseTotal = baseTab ? num(baseTab.id, tc.total) : 0;
+  state.tab_opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : {};
+  const opts = epoxyTabs.map(t => {
+    const isBase = baseTab && t.id === baseTab.id;
+    const saved = state.tab_opts[t.id] || {};
+    return {
+      id: t.id, name: labelFor(t.id), is_base: !!isBase,
+      bid: { total: num(t.id, tc.total), sales_tax: num(t.id, tc.sales_tax), remodel: num(t.id, tc.remodel) },
+      base_total: baseTotal,
+      system_desc: deriveSystemNameFor(t.id),
+      show_system: saved.show_system !== undefined ? saved.show_system : true,
+      show_diff: saved.show_diff !== undefined ? saved.show_diff
+                 : (!isBase && epoxyTabs.length === 2),
+      notes_auto: deriveNotes(t.id),
+      notes_manual: (state.tab_notes[t.id] || []),
+    };
+  }).filter(o => o.bid.total > 0);
+  state.rooms = opts.length >= 2 ? opts : [];
 }
 
 function persistTabState() {
   snapshotLumpSumsToState();
   TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms,
                 tab_copies: state.tab_copies, tab_labels: state.tab_labels,
-                tab_notes: state.tab_notes, tab_order: state.tab_order });
+                tab_notes: state.tab_notes, tab_order: state.tab_order,
+                tab_opts: state.tab_opts });
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
@@ -1706,6 +1712,17 @@ function deriveSystemName() {
   });
   const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
   if (psf > 0 && !names.includes("Polished Concrete")) names.push("Polished Concrete");
+  return names.length ? "Treadwell " + names.join(" & ") : "";
+}
+// Per-tab system name — each room/copy can pick its own system. Reads the tab's
+// OWN A22/A26 dropdown picks from HF (resolves for non-active tabs too).
+function deriveSystemNameFor(id) {
+  const names = [];
+  for (const a of ["A22", "A26"]) {
+    const v = HF.getValue(id, a);
+    const s = (typeof v === "string") ? v.trim() : "";
+    if (s && _cbRealSystem(s) && !names.includes(s)) names.push(s);
+  }
   return names.length ? "Treadwell " + names.join(" & ") : "";
 }
 // Push the derived name into the field unless the user has typed their own.
