@@ -319,6 +319,30 @@
       font-size: 14px;
     }
   }
+
+  /* Left controls panel for per-sheet pricing options */
+  .options-panel {
+    position: fixed; left: 16px; top: 112px; width: 250px;
+    max-height: calc(100vh - 132px); overflow-y: auto;
+    background: #fff; border: 1px solid #ccc; border-radius: 8px;
+    padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+    z-index: 40; font-size: 13px; color: #222;
+  }
+  .options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
+  .options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
+  .options-panel .op-row { border-top: 1px solid #eee; padding: 8px 0; }
+  .options-panel .op-name { font-weight: 700; margin-bottom: 4px; }
+  .options-panel .op-price { font-weight: 400; color: #777; }
+  .options-panel label { display: block; margin: 3px 0; cursor: pointer; }
+  .options-panel .op-notes { margin-top: 4px; font-size: 11px; color: #777; cursor: default; }
+  .options-panel textarea.room-notes { width: 100%; font-size: 12px; }
+  /* Below ~1500px the centered page reaches the gutter — drop the panel inline. */
+  @media (max-width: 1500px) {
+    .options-panel {
+      position: static; width: auto; max-height: none;
+      margin: 12px 16px 0; box-shadow: none;
+    }
+  }
 </style>
 </head>
 <body class="word-app">
@@ -344,6 +368,10 @@
   <button type="button" id="back-btn" class="secondary">← Back to Estimate</button>
   <button type="submit" form="proposal-form" id="generate-btn">Continue to Done →</button>
 </div>
+
+<!-- Left controls panel: per-sheet pricing-option toggles (shown only when the
+     estimate has 2+ epoxy sheets). Floats in the left gutter beside the document. -->
+<aside id="options-panel" class="options-panel" hidden></aside>
 
 <!-- The Word canvas with the floating document page -->
 <div class="word-canvas">

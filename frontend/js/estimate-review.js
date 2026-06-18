@@ -666,15 +666,14 @@ function renderTabs() {
     btn.addEventListener("drop", (e) => { e.preventDefault(); btn.classList.remove("drag-over"); moveTab(dragTabId, t.id); });
     tabBar.appendChild(btn);
   }
-  // Visible "Copy sheet" button — duplicates the current tab with all its contents.
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "tab-copy-btn";
-  copyBtn.textContent = "⧉ Copy sheet";
-  copyBtn.title = "Duplicate the current worksheet, with all of its contents";
-  copyBtn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
-  tabBar.appendChild(copyBtn);
 }
+
+// The "⧉ Copy sheet" button lives in the header (beside Texture) so it's always
+// visible — the tab bar overflows horizontally and would hide a button at its end.
+(function wireCopySheetButton() {
+  const btn = document.getElementById("copy-sheet-btn");
+  if (btn) btn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
+})();
 
 async function showSheet(name) {
   activeSheet = name;
