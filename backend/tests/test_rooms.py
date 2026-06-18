@@ -133,7 +133,7 @@ def test_build_options_base_first_with_copy():
         {"name": "Exam", "is_base": False, "base_total": 50000,
          "bid": {"total": 61000, "remodel": 0}, "show_system": False, "show_diff": True},
     ], {})
-    assert [o["heading"] for o in opts] == ["Epoxy:", "Exam:"]
+    assert [o["heading"] for o in opts] == ["Base Bid:", "Exam:"]   # base relabeled
     assert "+$11,000 more than the base bid" in opts[1]["notes_joined"]
 
 

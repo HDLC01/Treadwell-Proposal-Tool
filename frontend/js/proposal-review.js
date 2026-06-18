@@ -175,8 +175,8 @@
             const taxPhrase = remodel > 0
               ? `(${esc(stateName)} Remodel Tax AND material sales tax INCLUDED)`
               : "(material sales tax INCLUDED)";
-            const heading = String(r.name || "").replace(/[: ]+$/, "");
             const isBase = !!r.is_base;
+            const heading = isBase ? "Base Bid" : String(r.name || "").replace(/[: ]+$/, "");
             const sysOn = r.show_system !== false;
             const diffOn = !!r.show_diff;
             const diff = total - (Number(r.base_total) || 0);
