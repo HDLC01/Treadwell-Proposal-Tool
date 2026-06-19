@@ -26,6 +26,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+# Treadwell's brand font (Zetta Serif Book) — the proposal templates are typeset
+# in it. Install so the LibreOffice PDF export renders in the real font instead of
+# substituting a fallback serif (the .docx already carries the font name).
+COPY backend/fonts/ /usr/share/fonts/truetype/treadwell/
+RUN fc-cache -f
+
 WORKDIR /app
 
 # Install Python deps first (separate layer = cache-friendly)
