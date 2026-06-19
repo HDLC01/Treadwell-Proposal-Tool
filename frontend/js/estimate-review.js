@@ -383,14 +383,70 @@ function buildTabs() {
 }
 
 // Drag-to-reorder (Excel-style): move draggedId to targetId's slot.
-let dragTabId = null;
-function moveTab(draggedId, targetId) {
-  if (!draggedId || draggedId === targetId) return;
-  const order = orderedIds();
-  const from = order.indexOf(draggedId), to = order.indexOf(targetId);
-  if (from < 0 || to < 0) return;
-  order.splice(from, 1);
-  order.splice(to, 0, draggedId);
+// Smooth pointer-based, horizontal-only drag-to-reorder. The grabbed tab follows
+// the cursor (no transition → no lag); the other tabs slide to open a gap (CSS
+// transition). On release the new order is committed and the bar re-renders.
+let _drag = null;
+let suppressNextClick = false;
+
+function beginTabDrag(e, btn) {
+  if (e.button != null && e.button !== 0) return;     // left button / primary only
+  if (e.target.closest(".room-del")) return;          // let the × delete work
+  const buttons = Array.from(tabBar.querySelectorAll("button"));
+  const fromIndex = buttons.indexOf(btn);
+  if (fromIndex < 0) return;
+  const rects = buttons.map(b => {
+    const r = b.getBoundingClientRect();
+    return { el: b, center: r.left + r.width / 2 };
+  });
+  _drag = { btn, fromIndex, buttons, rects, startX: e.clientX,
+            width: btn.getBoundingClientRect().width, toIndex: fromIndex,
+            active: false, pointerId: e.pointerId };
+  window.addEventListener("pointermove", onTabDragMove);
+  window.addEventListener("pointerup", onTabDragEnd, { once: true });
+}
+
+function onTabDragMove(e) {
+  if (!_drag) return;
+  const dx = e.clientX - _drag.startX;
+  if (!_drag.active) {
+    if (Math.abs(dx) < 5) return;                     // threshold → preserve click/dblclick
+    _drag.active = true;
+    document.body.style.userSelect = "none";
+    _drag.btn.classList.add("dragging");
+    try { _drag.btn.setPointerCapture(_drag.pointerId); } catch (_) {}
+  }
+  _drag.btn.style.transform = `translateX(${dx}px)`;  // follow cursor, horizontal only
+  const { rects, fromIndex, width } = _drag;
+  const projected = rects[fromIndex].center + dx;
+  let to = fromIndex;
+  while (to < rects.length - 1 && projected > rects[to + 1].center) to++;
+  while (to > 0 && projected < rects[to - 1].center) to--;
+  _drag.toIndex = to;
+  rects.forEach((r, i) => {                            // slide siblings to open the gap
+    if (i === fromIndex) return;
+    let shift = 0;
+    if (fromIndex < to && i > fromIndex && i <= to) shift = -width;
+    else if (fromIndex > to && i >= to && i < fromIndex) shift = width;
+    r.el.style.transition = "transform .15s ease";
+    r.el.style.transform = shift ? `translateX(${shift}px)` : "";
+  });
+}
+
+function onTabDragEnd() {
+  window.removeEventListener("pointermove", onTabDragMove);
+  const d = _drag; _drag = null;
+  if (!d) return;
+  document.body.style.userSelect = "";
+  d.rects.forEach(r => { r.el.style.transition = ""; r.el.style.transform = ""; });
+  d.btn.classList.remove("dragging");
+  if (!d.active) return;                               // never moved → it was a click
+  suppressNextClick = true;                            // don't let the drop fire a tab switch
+  setTimeout(() => { suppressNextClick = false; }, 60);
+  if (d.toIndex === d.fromIndex) return;               // dropped in place
+  const order = d.buttons.map(b => b.dataset.sheet);   // current displayed order
+  const [moved] = order.splice(d.fromIndex, 1);
+  order.splice(d.toIndex, 0, moved);
   state.tab_order = order;
   buildTabs();
   TW.setState({ ...state, tab_order: state.tab_order });
@@ -633,7 +689,6 @@ function renderTabs() {
     btn.dataset.sheet = t.id;
     btn.className = (t.kind === "copy" ? "room-tab" : "") + (t.id === activeSheet ? " active" : "");
     btn.title = "Click to open · double-click to rename · drag to reorder";
-    btn.draggable = true;
     const label = document.createElement("span");
     label.textContent = t.label;
     btn.appendChild(label);
@@ -648,8 +703,10 @@ function renderTabs() {
     // Single click opens the tab; double click renames it. Disambiguate with a
     // short timer so the double-click's preceding single-clicks don't fire
     // showSheet (whose async grid reload would steal focus from the rename box).
+    // suppressNextClick guards against a drag-release firing a tab switch.
     let clickTimer = null;
     btn.addEventListener("click", () => {
+      if (suppressNextClick) { suppressNextClick = false; return; }
       if (clickTimer) return;
       clickTimer = setTimeout(() => { clickTimer = null; showSheet(t.id); }, 220);
     });
@@ -658,12 +715,8 @@ function renderTabs() {
       if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
       startRename(btn, t.id);
     });
-    // Drag-to-reorder
-    btn.addEventListener("dragstart", (e) => { dragTabId = t.id; e.dataTransfer.effectAllowed = "move"; btn.classList.add("dragging"); });
-    btn.addEventListener("dragend", () => { dragTabId = null; btn.classList.remove("dragging"); });
-    btn.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; btn.classList.add("drag-over"); });
-    btn.addEventListener("dragleave", () => btn.classList.remove("drag-over"));
-    btn.addEventListener("drop", (e) => { e.preventDefault(); btn.classList.remove("drag-over"); moveTab(dragTabId, t.id); });
+    // Drag-to-reorder (smooth, pointer-based, horizontal only).
+    btn.addEventListener("pointerdown", (e) => beginTabDrag(e, btn));
     tabBar.appendChild(btn);
   }
 }

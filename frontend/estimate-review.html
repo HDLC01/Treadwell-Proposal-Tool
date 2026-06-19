@@ -360,10 +360,13 @@
     margin-left: 8px; border-radius: 4px;
   }
   .xl-tab-bar.full button.tab-copy-btn:hover { filter: brightness(1.1); }
-  /* Drag-to-reorder affordances */
+  /* Drag-to-reorder affordances (smooth, pointer-based) */
   .xl-tab-bar.full button { cursor: grab; }
-  .xl-tab-bar.full button.dragging { opacity: .5; }
-  .xl-tab-bar.full button.drag-over { box-shadow: inset 3px 0 0 var(--treadwell-red); }
+  .xl-tab-bar.full button.dragging {
+    cursor: grabbing; position: relative; z-index: 5; opacity: .97;
+    box-shadow: 0 4px 14px rgba(0,0,0,.28); border-radius: 4px;
+    transition: none;            /* follow the cursor with no lag */
+  }
   /* Copied tabs (duplicated worksheets) */
   .xl-tab-bar.full button.room-tab {
     border-left: 3px solid var(--treadwell-red);
