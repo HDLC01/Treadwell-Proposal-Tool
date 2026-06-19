@@ -64,6 +64,8 @@ COMBO_VALUES = {
     "epoxy_system_name": "MACRO Flake Single Broadcast",
     "scope_notes": "demo + install scope",
     "exclusions": "Standard Treadwell exclusions list",
+    "site_visit_phrase": "per site visit on 6/15/26",
+    "base_tax_phrase": "(material sales tax INCLUDED)",
 }
 
 

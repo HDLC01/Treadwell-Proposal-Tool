@@ -848,13 +848,15 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
         }]
     texture = str(values.get("texture") or "").strip()
     multi = len(picks) > 1
+    # Cove base height (Kyle: note the cove height) — default 6", configurable per job.
+    cove_h = str(values.get("cove_height") or "6").strip() or "6"
     # The template keeps the bold "System:"/"Option N:" label and a separate
     # regular value run, so we emit them as distinct tokens (prefix + name)
     # rather than one combined string — preserving the sheet's column alignment.
     out = []
     for i, s in enumerate(picks, 1):
         prefix = f"Option {i}:" if multi else "System:"
-        lf_clause = f" and {fmt(s['lf'])} LF of epoxy base" if s["lf"] > 0 else ""
+        lf_clause = f" and {fmt(s['lf'])} LF of {cove_h}\" epoxy cove base" if s["lf"] > 0 else ""
         out.append({"prefix": prefix, "name": s["name"], "texture": texture,
                     "sqft": fmt(s["sf"]), "lf_clause": lf_clause})
     return out
