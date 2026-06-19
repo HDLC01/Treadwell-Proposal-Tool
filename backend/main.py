@@ -966,6 +966,26 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     if not str(values.get("material_tax_formatted") or "").strip():
         values["material_tax_formatted"] = "$0.00"
 
+    # Site-visit phrase (epoxy template uses {{site_visit_phrase}}): "per site visit
+    # on <date>", or "per plans and specifications provided" when there was no site
+    # visit — explicit toggle, or a blank / N/A date (Kyle: no more "per site visit on N/A").
+    _sv = str(values.get("site_visit_date") or "").strip()
+    if values.get("no_site_visit") or not _sv or _sv.upper() == "N/A":
+        values["site_visit_phrase"] = "per plans and specifications provided"
+    else:
+        values["site_visit_phrase"] = f"per site visit on {_sv}"
+
+    # Single-bid tax phrase (epoxy {{base_tax_phrase}}): tax-exempt jobs read
+    # "(tax exempt)"; otherwise material sales tax (+ Remodel Tax when it applies).
+    _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
+    _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
+    if _exempt:
+        values["base_tax_phrase"] = "(tax exempt)"
+    elif payload.remodel:
+        values["base_tax_phrase"] = "(Remodel Tax AND material sales tax INCLUDED)"
+    else:
+        values["base_tax_phrase"] = "(material sales tax INCLUDED)"
+
     # Combo WORK lists the real picked epoxy system as "Option 1: <name>" (from
     # the Epoxy!A22 dropdown), falling back to the generic label.
     if not str(values.get("epoxy_system_name") or "").strip():

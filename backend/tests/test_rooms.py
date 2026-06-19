@@ -168,6 +168,9 @@ _VALS = {
     "system_name": "MACRO", "texture": "OP", "epoxy_sf": "12,000",
     "scope_notes": "demo + install", "schedule_notes": "~5 days",
     "work_description": "w", "site_visit_date": "6/19", "disposal": "d",
+    "site_visit_phrase": "per site visit on 6/19/26",
+    "base_tax_phrase": "(material sales tax INCLUDED)",
+    "exclusions": "standard exclusions",
 }
 _ROOMS = [
     {"heading": "Grooming:", "price_formatted": "$8,310",
@@ -191,6 +194,18 @@ def _rendered(docx_bytes):
         if t:
             out.append(t)
     return "\n".join(out)
+
+
+def test_site_visit_phrase_and_base_tax_tokens_render():
+    # Fix #3/#4: epoxy template uses {{site_visit_phrase}} + {{base_tax_phrase}};
+    # both must fill (never render literally) and the old hardcoded phrasing is gone.
+    vals = {**_VALS, "site_visit_phrase": "per plans and specifications provided",
+            "base_tax_phrase": "(tax exempt)"}
+    blob = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=vals))
+    assert "per plans and specifications provided" in blob
+    assert "(tax exempt)" in blob
+    assert "{{site_visit_phrase}}" not in blob and "{{base_tax_phrase}}" not in blob
+    assert "per site visit on N/A" not in blob
 
 
 def test_exclusions_token_carries_to_doc():

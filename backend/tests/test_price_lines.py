@@ -144,6 +144,8 @@ _BASE_VALS = {
     "schedule_notes": "s", "work_description": "w", "scope_notes": "demo + install scope",
     # epoxy PRICE breakdown tokens
     "base_bid_formatted": "$58,523.00", "material_tax_formatted": "$2,639.00",
+    "base_tax_phrase": "(material sales tax INCLUDED)",
+    "site_visit_phrase": "per site visit on 6/15/26", "exclusions": "standard exclusions",
 }
 
 
