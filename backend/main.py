@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import math
 import os
@@ -281,6 +282,9 @@ class GenerateIn(BaseModel):
     tab_labels: Dict[str, Any] = Field(default_factory=dict)
     # Drag-to-reorder worksheet order, by internal id. Applied to the .xlsx tab order.
     tab_order: list = Field(default_factory=list)
+    # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
+    # boilerplate is used (so the notes never vanish).
+    notes: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -926,6 +930,22 @@ def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
 # Standard exclusions list — the boilerplate that used to be hardcoded in the
 # template (now {{exclusions}}). Backfilled when the caller sends none so the
 # token never renders literally and never prints blank.
+try:
+    _DEFAULT_NOTES = json.loads((Path(__file__).parent / "default_notes.json").read_text(encoding="utf-8"))
+except Exception:  # noqa: BLE001 — missing/garbled file shouldn't crash startup
+    _DEFAULT_NOTES = {}
+
+
+def _notes_for(work_type: str, notes_in: list) -> list:
+    """{{#notes}} items: the estimator's edited notes, else the standard
+    per-work-type boilerplate (so the proposal's notes section never vanishes)."""
+    lines = [str(n).strip() for n in (notes_in or []) if str(n).strip()]
+    if not lines:
+        wt = str(work_type or "epoxy").lower()
+        lines = _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []
+    return [{"text": ln} for ln in lines]
+
+
 _DEFAULT_EXCLUSIONS = (
     "Multiple layers of floor to be removed (change order is necessary), Moving of "
     "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more "
@@ -948,6 +968,14 @@ def _ensure_value_aliases(values: Dict[str, Any]) -> None:
             )
     if _blank(values.get("exclusions")):
         values["exclusions"] = _DEFAULT_EXCLUSIONS
+
+
+@app.get("/api/default-notes")
+def api_default_notes(work_type: str = "epoxy") -> Dict[str, Any]:
+    """Standard proposal NOTES for a work type — the frontend pre-fills the
+    editable Notes box with these so the estimator can tweak them per job."""
+    wt = str(work_type or "epoxy").lower()
+    return {"work_type": wt, "notes": _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []}
 
 
 @app.post("/api/generate", response_model=GenerateOut)
@@ -1083,6 +1111,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # rooms present → suppress the single Base-Bid/Total layout (the room
             # options ARE the price); absent → default (single-bid layout shown).
             single_bid=([] if rooms_arg else None),
+            # Editable NOTES (estimator's edits, else standard boilerplate).
+            notes=_notes_for(payload.work_type, payload.notes),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc

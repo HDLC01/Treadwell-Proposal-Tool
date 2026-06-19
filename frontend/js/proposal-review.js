@@ -33,6 +33,19 @@
     if (el && !String(el.value || "").trim()) el.value = def;
   }
 
+  // Pre-fill the editable NOTES box: saved edits if any, else the standard
+  // per-work-type boilerplate (fetched) so the estimator can tweak it per job.
+  (function prefillNotes() {
+    const ta = document.getElementById("notes-text");
+    if (!ta) return;
+    if (Array.isArray(state.notes) && state.notes.length) { ta.value = state.notes.join("\n"); return; }
+    if (String(ta.value || "").trim()) return;
+    fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
+      .then(r => r.json())
+      .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) ta.value = j.notes.join("\n"); })
+      .catch(() => {});
+  })();
+
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
   // the project already carries one. Editable — they can change who signs.
   (function prefillEstimator() {
@@ -483,6 +496,8 @@
         tab_copies: Array.isArray(state.tab_copies) ? state.tab_copies : [],
         tab_labels: (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {},
         tab_order: Array.isArray(state.tab_order) ? state.tab_order : [],
+        // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
+        notes: String(mergedValues.notes_text || "").split("\n").map(s => s.trim()).filter(Boolean),
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
