@@ -505,8 +505,17 @@ function copyTab(sourceId) {
   const label = uniqueLabel(labelFor(sourceId) + " copy");
   state.tab_copies = [...state.tab_copies, { id: newId, source: sourceId, role: srcTab.role }];
   state.tab_labels = { ...state.tab_labels, [newId]: label };
+  // Place the copy immediately to the RIGHT of the sheet it was copied from
+  // (Excel behavior), not at the far end of the tab bar.
+  const order = orderedIds();              // includes newId (appended at the end)
+  const ni = order.indexOf(newId);
+  if (ni >= 0) order.splice(ni, 1);
+  const si = order.indexOf(sourceId);
+  order.splice(si >= 0 ? si + 1 : order.length, 0, newId);
+  state.tab_order = order;
   buildTabs();
-  TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels, cell_values: cellValues });
+  TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
+                tab_order: state.tab_order, cell_values: cellValues });
   renderTabs();
   showSheet(newId);
 }
