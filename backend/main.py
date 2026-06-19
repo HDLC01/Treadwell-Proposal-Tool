@@ -881,7 +881,6 @@ def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
         except (TypeError, ValueError):
             return 0.0
 
-    state = str(values.get("state_name") or "Kansas").strip() or "Kansas"
     out = []
     for r in (rooms_in or []):
         if not isinstance(r, dict):
@@ -892,7 +891,8 @@ def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
             continue
         is_base = bool(r.get("is_base"))
         remodel = num(bid.get("remodel"))
-        tax_phrase = (f"({state} Remodel Tax AND material sales tax INCLUDED)"
+        # Remodel tax is labeled "Remodel Tax" (no state name, per Kyle).
+        tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
                       if remodel > 0 else "(material sales tax INCLUDED)")
         name = "Base Bid" if is_base else str(r.get("name") or "").strip().rstrip(": ").strip()
 
@@ -921,6 +921,17 @@ def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
     return out
 
 
+# Standard exclusions list — the boilerplate that used to be hardcoded in the
+# template (now {{exclusions}}). Backfilled when the caller sends none so the
+# token never renders literally and never prints blank.
+_DEFAULT_EXCLUSIONS = (
+    "Multiple layers of floor to be removed (change order is necessary), Moving of "
+    "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more "
+    "than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing "
+    "Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations"
+)
+
+
 def _ensure_value_aliases(values: Dict[str, Any]) -> None:
     """Backfill blank token aliases / fallbacks in-place so the proposal never
     emits a raw {{token}} (e.g. job_name <- project_name, work_description <-
@@ -933,6 +944,8 @@ def _ensure_value_aliases(values: Dict[str, Any]) -> None:
             values[target] = next(
                 (values[s] for s in sources if not _blank(values.get(s))), ""
             )
+    if _blank(values.get("exclusions")):
+        values["exclusions"] = _DEFAULT_EXCLUSIONS
 
 
 @app.post("/api/generate", response_model=GenerateOut)

@@ -58,7 +58,7 @@ def test_alternate_block_renders_and_leaves_bare_state_name():
     # flat pass then resolves it
     for p in pw._iter_all_paragraphs(d):
         pw._replace_in_paragraph(p, {"state_name": "Kansas"})
-    assert "Kansas Remodel Tax" in "\n".join(_texts(d))
+    assert "Remodel Tax" in "\n".join(_texts(d))
 
 
 def test_empty_block_strips_markers_and_template():
@@ -176,7 +176,7 @@ def test_direct_templates_render_price_lines_and_alternate():
 
 
 def test_epoxy_price_breakdown_kansas_and_remodel_toggle():
-    """Epoxy PRICE: Base Bid + Material Sales Tax always shown; Kansas Remodel Tax
+    """Epoxy PRICE: Base Bid + Material Sales Tax always shown; Remodel Tax
     only when a remodel row is supplied; never 'Missouri', never 'INCLUDED'."""
     import re
     import proposal_writer as pw
@@ -185,7 +185,7 @@ def test_epoxy_price_breakdown_kansas_and_remodel_toggle():
     assert "Base Bid" in on and "Options:" in on
     assert "$58,523.00 – Epoxy flooring as described above (material sales tax INCLUDED)" in on
     assert "$2,639.00 – Material Sales Tax" in on
-    assert "Kansas Remodel Tax" in on
+    assert "Remodel Tax" in on
     assert "Missouri Remodel Tax" not in on
     assert not re.search(r"\{\{[#/]", on)
     off = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS))

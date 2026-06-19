@@ -92,7 +92,8 @@ def test_build_options_tax_phrase_and_note_merge():
     assert g["price_desc"] == "Epoxy flooring as described above (material sales tax INCLUDED)"
     assert g["notes_joined"] == 'Includes 6" Cove Base\nseparate mobilization'   # auto before manual
     assert h["heading"] == "Hallway:"                    # trailing " :" normalized
-    assert "Kansas Remodel Tax AND material sales tax INCLUDED" in h["price_desc"]
+    assert "Remodel Tax AND material sales tax INCLUDED" in h["price_desc"]
+    assert "Kansas" not in h["price_desc"]   # state name dropped from the label
 
 
 def test_build_options_empty():
@@ -170,7 +171,7 @@ _VALS = {
 }
 _ROOMS = [
     {"heading": "Grooming:", "price_formatted": "$8,310",
-     "price_desc": "Epoxy flooring as described above (Kansas Remodel Tax AND material sales tax INCLUDED)",
+     "price_desc": "Epoxy flooring as described above (Remodel Tax AND material sales tax INCLUDED)",
      "notes_joined": 'Includes 6" Cove Base'},
     {"heading": "Exam Room:", "price_formatted": "$14,717",
      "price_desc": "Epoxy flooring as described above (material sales tax INCLUDED)",
@@ -192,6 +193,25 @@ def _rendered(docx_bytes):
     return "\n".join(out)
 
 
+def test_exclusions_token_carries_to_doc():
+    # Fix #1: the Exclusions box must drive the doc (was hardcoded boilerplate).
+    for wt in ("epoxy", "combo", "polish"):
+        blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct",
+                                          values={**_VALS, "exclusions": "Existing floor demo only"}))
+        assert "Existing floor demo only" in blob, f"{wt}: edited exclusions did not carry"
+        assert "Multiple layers of floor to be removed" not in blob, f"{wt}: stale hardcoded exclusions"
+
+
+def test_remodel_tax_label_has_no_state_name():
+    # Fix #2: the remodel-tax line reads "Remodel Tax", never "Kansas/Missouri Remodel Tax".
+    import re
+    for wt in ("epoxy", "combo"):
+        blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct", values=_VALS,
+                                          remodel=[{"amount_formatted": "$1,200"}]))
+        assert "Remodel Tax" in blob, f"{wt}: remodel line missing"
+        assert not re.search(r"(Kansas|Missouri)\s+Remodel Tax", blob), f"{wt}: state name still on remodel tax"
+
+
 def test_rooms_render_options_and_hide_single_bid():
     import re
     for wt in ("epoxy", "combo"):
@@ -199,7 +219,7 @@ def test_rooms_render_options_and_hide_single_bid():
                                           values=_VALS, rooms=_ROOMS, single_bid=[]))
         assert "Grooming:" in blob and "Exam Room:" in blob, f"{wt}: room headings missing"
         assert ("$8,310 – Epoxy flooring as described above "
-                "(Kansas Remodel Tax AND material sales tax INCLUDED)") in blob, f"{wt}: room price line"
+                "(Remodel Tax AND material sales tax INCLUDED)") in blob, f"{wt}: room price line"
         assert 'Includes 6" Cove Base' in blob and "separate mobilization" in blob, f"{wt}: room notes"
         # single Base-Bid layout suppressed when rooms present
         assert "Base Bid" not in blob, f"{wt}: single-bid not hidden"
