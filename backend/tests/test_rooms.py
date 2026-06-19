@@ -196,6 +196,21 @@ def _rendered(docx_bytes):
     return "\n".join(out)
 
 
+def test_notes_block_editable_with_default_fallback():
+    # Fix #6: NOTES are an editable {{#notes}} block. Custom notes render;
+    # _notes_for falls back to the standard per-work-type boilerplate when empty.
+    blob = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_VALS,
+                                      notes=[{"text": "Custom note A"}, {"text": "Custom note B"}]))
+    assert "Custom note A" in blob and "Custom note B" in blob
+    assert "{{notes" not in blob and "{{#notes}}" not in blob
+    items = main._notes_for("epoxy", [])             # empty -> standard boilerplate
+    assert items and "Excludes saw cutting" in items[0]["text"]
+    assert main._notes_for("epoxy", ["only this"]) == [{"text": "only this"}]
+    blob2 = _rendered(pw.fill_proposal(work_type="polish", audience="Direct", values=_VALS,
+                                       notes=main._notes_for("polish", [])))
+    assert "Excludes saw cutting" in blob2
+
+
 def test_site_visit_phrase_and_base_tax_tokens_render():
     # Fix #3/#4: epoxy template uses {{site_visit_phrase}} + {{base_tax_phrase}};
     # both must fill (never render literally) and the old hardcoded phrasing is gone.
