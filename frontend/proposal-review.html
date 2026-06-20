@@ -472,16 +472,26 @@
     <div class="doc-section">
       <div class="sidebar">Price</div>
       <div class="body">
+        <p style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
         <p style="margin: 0 0 6pt;">
-          <strong id="lump-sum-display">$0</strong> – Epoxy flooring as described above
-          <em>(sales &amp; <input type="text" name="state_name" class="doc-input" style="width: 90px;"> remodel tax <input type="text" name="tax_inclusion" class="doc-input" style="width: 110px;" value="INCLUDED">)</em>
+          <strong id="base-bid-display">$0</strong> – Epoxy flooring as described above
+          <em id="base-tax-phrase-display">(material sales tax INCLUDED)</em>
         </p>
         <p id="remodel-tax-row" style="margin: 0 0 6pt; display:none;">
           <strong><mark id="tax-amount-display">$0</mark></strong> – Remodel Tax
         </p>
-        <p style="margin: 0 0 14pt;">
+        <p style="margin: 0 0 10pt;">
           <strong id="total-display">$0</strong> – Total
         </p>
+        <!-- Tax treatment drives {{base_tax_phrase}} in the .docx: "Tax exempt"
+             prints "(tax exempt)", otherwise the included-tax phrasing. -->
+        <label class="doc-tax-treatment" style="display:inline-flex; align-items:center; gap:6px; margin:0 0 14pt; font-size:12px; color:var(--ink-variant,#5c403f);">
+          Tax treatment:
+          <select name="tax_inclusion" class="doc-input" style="width: 230px;">
+            <option value="INCLUDED">Sales / Remodel tax included</option>
+            <option value="EXEMPT">Tax exempt</option>
+          </select>
+        </label>
 
         <!-- Per-room priced options (per-room jobs): preview + editable manual
              notes per room. Hidden (empty) when the job has no room tabs. -->
