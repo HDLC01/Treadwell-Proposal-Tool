@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import math
 import os
@@ -268,10 +269,22 @@ class GenerateIn(BaseModel):
     # Conditional {{#remodel}} line: [{"amount_formatted": "$x"}] when a remodel
     # tax applies, [] (the default) when the remodel toggle is off.
     remodel: list = Field(default_factory=list)
-    # Per-room priced options (per-room jobs). Each: {name, source, bid:{total,
-    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Drives the
-    # proposal {{#room}} block AND the per-room estimate tabs (copied from Epoxy).
+    # Per-room priced options (per-room jobs). Each: {id, name, role, bid:{total,
+    # sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}. Derived from the
+    # epoxy-layout estimate tabs; drives the proposal {{#room}} options block.
     rooms: list = Field(default_factory=list)
+    # Worksheets the user duplicated in the editor: [{id, source, role}]. The
+    # backend clones `source` into a sheet titled `id` so the copy's
+    # "<id>!<addr>" cell_values land.
+    tab_copies: list = Field(default_factory=list)
+    # Display labels for renamed tabs: {internal_id: label}. Applied to the .xlsx
+    # worksheet titles (with cross-sheet formula refs rewritten) at the very end.
+    tab_labels: Dict[str, Any] = Field(default_factory=dict)
+    # Drag-to-reorder worksheet order, by internal id. Applied to the .xlsx tab order.
+    tab_order: list = Field(default_factory=list)
+    # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
+    # boilerplate is used (so the notes never vanish).
+    notes: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -839,59 +852,106 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
         }]
     texture = str(values.get("texture") or "").strip()
     multi = len(picks) > 1
+    # Cove base height (Kyle: note the cove height) — default 6", configurable per job.
+    cove_h = str(values.get("cove_height") or "6").strip() or "6"
     # The template keeps the bold "System:"/"Option N:" label and a separate
     # regular value run, so we emit them as distinct tokens (prefix + name)
     # rather than one combined string — preserving the sheet's column alignment.
     out = []
     for i, s in enumerate(picks, 1):
         prefix = f"Option {i}:" if multi else "System:"
-        lf_clause = f" and {fmt(s['lf'])} LF of epoxy base" if s["lf"] > 0 else ""
+        lf_clause = f" and {fmt(s['lf'])} LF of {cove_h}\" epoxy cove base" if s["lf"] > 0 else ""
         out.append({"prefix": prefix, "name": s["name"], "texture": texture,
                     "sqft": fmt(s["sf"]), "lf_clause": lf_clause})
     return out
 
 
-def _build_rooms(rooms_in: list, values: Dict[str, Any]) -> list:
-    """Per-room priced options for the proposal PRICE section ({{#room}} block).
+def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
+    """Per-sheet priced options for the proposal PRICE section ({{#room}} block).
 
-    Each input room (from the estimate side) is
-    {name, bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
-    Builds, per room with a positive total:
+    Each input option (from the estimate side) is
+    {name, is_base, base_total, system_desc, show_system, show_diff,
+     bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
+    Builds, per option with a positive total (base bid first):
       heading:         "Grooming:"
-      price_formatted: "$8,310"  (the room tab's all-in D88 — tax-inclusive)
+      price_formatted: "$8,310"  (the sheet's all-in D88 — tax-inclusive)
       price_desc:      "Epoxy flooring as described above (<tax phrase>)"
-      notes_joined:    "Includes 6\\" Cove Base\\n…"  (auto notes first, then manual)
-    The tax phrase names the Kansas Remodel Tax only when that room's remodel
-    tax > 0. Returns [] when there are no priced rooms (block then strips)."""
+      notes_joined:    stacked lines = [system/scope if show_system] +
+                       [signed difference vs base bid if show_diff & not base] +
+                       auto notes + manual notes
+    The tax phrase names the Kansas Remodel Tax only when that option's remodel
+    tax > 0. Returns [] when there are no priced options (block then strips)."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
         except (TypeError, ValueError):
             return 0.0
 
-    state = str(values.get("state_name") or "Kansas").strip() or "Kansas"
     out = []
     for r in (rooms_in or []):
         if not isinstance(r, dict):
             continue
         bid = r.get("bid") or {}
         total = num(bid.get("total"))
-        if total <= 0:                              # un-snapshotted / empty room
+        if total <= 0:                              # un-snapshotted / empty sheet
             continue
+        is_base = bool(r.get("is_base"))
         remodel = num(bid.get("remodel"))
-        tax_phrase = (f"({state} Remodel Tax AND material sales tax INCLUDED)"
+        # Remodel tax is labeled "Remodel Tax" (no state name, per Kyle).
+        tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
                       if remodel > 0 else "(material sales tax INCLUDED)")
-        name = str(r.get("name") or "").strip().rstrip(": ").strip()
-        notes = [str(n).strip()
-                 for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
-                 if str(n).strip()]
+        name = "Base Bid" if is_base else str(r.get("name") or "").strip().rstrip(": ").strip()
+
+        lines: list[str] = []
+        # System / scope line (each room can carry its own system) — toggleable.
+        system_desc = str(r.get("system_desc") or "").strip()
+        if r.get("show_system", True) and system_desc:
+            lines.append(system_desc)
+        # Signed difference vs. the base bid (copies only) — toggleable.
+        if not is_base and r.get("show_diff"):
+            diff = total - num(r.get("base_total"))
+            if diff > 0:
+                lines.append(f"+{_fmt_usd(diff)} more than the base bid")
+            elif diff < 0:
+                lines.append(f"{_fmt_usd(-diff)} less than the base bid")
+        lines += [str(n).strip()
+                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
+                  if str(n).strip()]
+
         out.append({
             "heading": (name + ":") if name else "",
             "price_formatted": _fmt_usd(total),
             "price_desc": "Epoxy flooring as described above " + tax_phrase,
-            "notes_joined": "\n".join(notes),
+            "notes_joined": "\n".join(lines),
         })
     return out
+
+
+# Standard exclusions list — the boilerplate that used to be hardcoded in the
+# template (now {{exclusions}}). Backfilled when the caller sends none so the
+# token never renders literally and never prints blank.
+try:
+    _DEFAULT_NOTES = json.loads((Path(__file__).parent / "default_notes.json").read_text(encoding="utf-8"))
+except Exception:  # noqa: BLE001 — missing/garbled file shouldn't crash startup
+    _DEFAULT_NOTES = {}
+
+
+def _notes_for(work_type: str, notes_in: list) -> list:
+    """{{#notes}} items: the estimator's edited notes, else the standard
+    per-work-type boilerplate (so the proposal's notes section never vanishes)."""
+    lines = [str(n).strip() for n in (notes_in or []) if str(n).strip()]
+    if not lines:
+        wt = str(work_type or "epoxy").lower()
+        lines = _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []
+    return [{"text": ln} for ln in lines]
+
+
+_DEFAULT_EXCLUSIONS = (
+    "Multiple layers of floor to be removed (change order is necessary), Moving of "
+    "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more "
+    "than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing "
+    "Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations"
+)
 
 
 def _ensure_value_aliases(values: Dict[str, Any]) -> None:
@@ -906,6 +966,16 @@ def _ensure_value_aliases(values: Dict[str, Any]) -> None:
             values[target] = next(
                 (values[s] for s in sources if not _blank(values.get(s))), ""
             )
+    if _blank(values.get("exclusions")):
+        values["exclusions"] = _DEFAULT_EXCLUSIONS
+
+
+@app.get("/api/default-notes")
+def api_default_notes(work_type: str = "epoxy") -> Dict[str, Any]:
+    """Standard proposal NOTES for a work type — the frontend pre-fills the
+    editable Notes box with these so the estimator can tweak them per job."""
+    wt = str(work_type or "epoxy").lower()
+    return {"work_type": wt, "notes": _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []}
 
 
 @app.post("/api/generate", response_model=GenerateOut)
@@ -925,6 +995,26 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                                         or values.get("total_formatted") or "")
     if not str(values.get("material_tax_formatted") or "").strip():
         values["material_tax_formatted"] = "$0.00"
+
+    # Site-visit phrase (epoxy template uses {{site_visit_phrase}}): "per site visit
+    # on <date>", or "per plans and specifications provided" when there was no site
+    # visit — explicit toggle, or a blank / N/A date (Kyle: no more "per site visit on N/A").
+    _sv = str(values.get("site_visit_date") or "").strip()
+    if values.get("no_site_visit") or not _sv or _sv.upper() == "N/A":
+        values["site_visit_phrase"] = "per plans and specifications provided"
+    else:
+        values["site_visit_phrase"] = f"per site visit on {_sv}"
+
+    # Single-bid tax phrase (epoxy {{base_tax_phrase}}): tax-exempt jobs read
+    # "(tax exempt)"; otherwise material sales tax (+ Remodel Tax when it applies).
+    _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
+    _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
+    if _exempt:
+        values["base_tax_phrase"] = "(tax exempt)"
+    elif payload.remodel:
+        values["base_tax_phrase"] = "(Remodel Tax AND material sales tax INCLUDED)"
+    else:
+        values["base_tax_phrase"] = "(material sales tax INCLUDED)"
 
     # Combo WORK lists the real picked epoxy system as "Option 1: <name>" (from
     # the Epoxy!A22 dropdown), falling back to the generic label.
@@ -984,8 +1074,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
-    # Per-room priced options -> {{#room}} proposal block + room estimate tabs.
-    rooms_arg = _build_rooms(payload.rooms, values)
+    # Per-sheet priced options -> {{#room}} proposal block (base bid + each copy,
+    # with toggleable system line + signed difference vs. the base bid).
+    rooms_arg = _build_options(payload.rooms, values)
 
     # Fill estimate workbook
     try:
@@ -994,7 +1085,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             cell_values=payload.cell_values,
             extras=payload.extras,
             alternate=alternate_arg,
-            rooms=payload.rooms,
+            tab_copies=payload.tab_copies,
+            tab_labels=payload.tab_labels,
+            tab_order=payload.tab_order,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -1018,6 +1111,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # rooms present → suppress the single Base-Bid/Total layout (the room
             # options ARE the price); absent → default (single-bid layout shown).
             single_bid=([] if rooms_arg else None),
+            # Editable NOTES (estimator's edits, else standard boilerplate).
+            notes=_notes_for(payload.work_type, payload.notes),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc

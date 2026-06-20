@@ -337,6 +337,7 @@ def fill_proposal(
     remodel: list[Mapping[str, Any]] | None = None,
     rooms: list[Mapping[str, Any]] | None = None,
     single_bid: list[Mapping[str, Any]] | None = None,
+    notes: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -382,6 +383,8 @@ def fill_proposal(
         # (single_bid is None → one row) so existing callers are unaffected;
         # callers pass single_bid=[] to SUPPRESS it when room options replace it.
         "single_bid": [{}] if single_bid is None else list(single_bid),
+        # {{#notes}} — editable boilerplate notes (one bullet per item).
+        "notes": list(notes or []),
     }
     n_blocks = _expand_all_blocks(d, block_lists)
     if n_blocks:

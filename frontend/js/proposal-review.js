@@ -33,6 +33,19 @@
     if (el && !String(el.value || "").trim()) el.value = def;
   }
 
+  // Pre-fill the editable NOTES box: saved edits if any, else the standard
+  // per-work-type boilerplate (fetched) so the estimator can tweak it per job.
+  (function prefillNotes() {
+    const ta = document.getElementById("notes-text");
+    if (!ta) return;
+    if (Array.isArray(state.notes) && state.notes.length) { ta.value = state.notes.join("\n"); return; }
+    if (String(ta.value || "").trim()) return;
+    fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
+      .then(r => r.json())
+      .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) ta.value = j.notes.join("\n"); })
+      .catch(() => {});
+  })();
+
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
   // the project already carries one. Editable — they can change who signs.
   (function prefillEstimator() {
@@ -126,24 +139,39 @@
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtSF = (n) => "~" + Number(n || 0).toLocaleString() + " sf";
 
-  // Live update the inline $ amounts in the price section
+  // Live update the inline $ amounts in the price section. This preview MIRRORS
+  // the .docx single_bid block exactly (Base Bid + Remodel Tax = Total), using
+  // the same figures + tax wording the generate payload sends, so what the
+  // estimator sees on screen is what the customer gets.
   function refreshPriceDisplay() {
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const lumpSumN = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
-    // The Total Base Bid is TAX-INCLUSIVE — Kyle's sheet bakes sales tax
-    // (on materials) and KS remodel tax (on labor/service) into D88. So the
-    // customer total IS the lump sum; we must NOT add tax on top (the old
-    // code did `lump + county_rate*lump`, which double-counted tax and used
-    // the wrong base + rate). One price, tax included.
+    // The Total Base Bid is TAX-INCLUSIVE — Kyle's sheet bakes sales tax (on
+    // materials) and remodel tax (on labor/service) into D88. The .docx itemizes
+    // it as: Base Bid (flooring, sales-tax incl) + Remodel Tax = Total, so the
+    // three lines sum to the lump. Prefer the sheet's own snapshotted tax cells
+    // (same precedence as the generate payload), fall back to the engine.
     const fb = (state.computed_bid && state.computed_bid.full_bid) || {};
-    const includedTax = Number(fb.total_taxes || 0);
-    document.getElementById("lump-sum-display").textContent = fmtUSD(lumpSumN);
-    document.getElementById("tax-amount-display").textContent = fmtUSD(includedTax);
+    const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : fb.remodel_tax) || 0);
+    const salesTax   = Number((state.proposal_sales_tax   != null ? state.proposal_sales_tax   : fb.sales_tax)   || 0);
+    const baseBid    = Math.max(0, lumpSumN - salesTax - remodelTax);
+
+    // Tax phrase — same logic as backend base_tax_phrase: tax-exempt jobs read
+    // "(tax exempt)"; otherwise material sales tax (+ Remodel Tax when it applies).
+    const incl = String((form.querySelector("[name='tax_inclusion']") || {}).value || "INCLUDED").trim().toUpperCase();
+    const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
+    const phrase = exempt ? "(tax exempt)"
+                 : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+                 : "(material sales tax INCLUDED)";
+
+    document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
+    document.getElementById("base-tax-phrase-display").textContent = phrase;
+    document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
     document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
-    // Single-price presentation: remodel tax is folded into the lump sum,
-    // so keep the separate remodel-tax line hidden.
+    // Remodel Tax gets its own line only when it applies (matches the {{#remodel}}
+    // block in the .docx, which strips the line when there's no remodel tax).
     const rr = document.getElementById("remodel-tax-row");
-    if (rr) rr.style.display = "none";
+    if (rr) rr.style.display = remodelTax > 0 ? "" : "none";
     renderProposalExtras();
   }
 
@@ -155,43 +183,102 @@
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
       c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-    // (rooms) Per-room priced options (per-room jobs): preview each room's
-    // heading + all-in price + auto cove note, plus an editable manual-notes box
-    // (one note per line). state.rooms[].bid is snapshotted on Estimate Review.
+    // (rooms) Per-sheet priced options: base bid first, then each copy. The
+    // DOCUMENT (#rooms-block) shows the read-only preview; the CONTROLS (toggles +
+    // notes) live in the left #options-panel. state.rooms[] is snapshotted on
+    // Estimate Review (≥2 epoxy sheets → options; else single bid).
     const roomsBlock = document.getElementById("rooms-block");
-    if (roomsBlock) {
+    const optsPanel  = document.getElementById("options-panel");
+    {
       const rooms = Array.isArray(state.rooms) ? state.rooms : [];
       const priced = rooms.filter(r => r && r.bid && Number(r.bid.total) > 0);
-      if (!priced.length) {
-        roomsBlock.innerHTML = "";
-      } else {
-        const stateName = ((form.querySelector("[name='state_name']") || {}).value || "Kansas").trim() || "Kansas";
-        roomsBlock.innerHTML =
-          `<p style="margin:10pt 0 4pt;font-weight:bold;">Per-room options</p>` +
-          priced.map((r, i) => {
-            const total = Number(r.bid.total) || 0;
-            const remodel = Number(r.bid.remodel) || 0;
-            const taxPhrase = remodel > 0
-              ? `(${esc(stateName)} Remodel Tax AND material sales tax INCLUDED)`
-              : "(material sales tax INCLUDED)";
-            const heading = String(r.name || "").replace(/[: ]+$/, "");
+      const meta = (r) => {
+        const total = Number(r.bid.total) || 0;
+        const remodel = Number(r.bid.remodel) || 0;
+        const isBase = !!r.is_base;
+        const diff = total - (Number(r.base_total) || 0);
+        return {
+          total, isBase,
+          // Matches backend _build_options tax_phrase (no state name, per Kyle).
+          taxPhrase: remodel > 0
+            ? "(Remodel Tax AND material sales tax INCLUDED)"
+            : "(material sales tax INCLUDED)",
+          heading: isBase ? "Base Bid" : String(r.name || "").replace(/[: ]+$/, ""),
+          sysOn: r.show_system !== false,
+          diffOn: !!r.show_diff,
+          diffText: diff > 0 ? `+${fmtUSD(diff)} more than the base bid`
+                  : diff < 0 ? `${fmtUSD(-diff)} less than the base bid` : "",
+        };
+      };
+
+      // DOCUMENT preview (read-only) — re-rendered when a control changes.
+      function renderRoomsPreview() {
+        if (!roomsBlock) return;
+        roomsBlock.innerHTML = !priced.length ? "" :
+          `<p style="margin:10pt 0 4pt;font-weight:bold;">Pricing options (per sheet)</p>` +
+          priced.map((r) => {
+            const m = meta(r);
             const autoNotes = Array.isArray(r.notes_auto) ? r.notes_auto : [];
-            const manual = (Array.isArray(r.notes_manual) ? r.notes_manual : []).join("\n");
-            return `<div style="margin:0 0 10pt;border-left:3px solid #c8102e;padding-left:8px;">` +
-              `<p style="margin:0;"><strong>${esc(heading)}:</strong></p>` +
-              `<p style="margin:0;"><strong>${fmtUSD(total)}</strong> – Epoxy flooring as described above <em>${taxPhrase}</em></p>` +
-              autoNotes.map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("") +
-              `<label style="display:block;font-size:12px;color:#777;margin-top:4px;">Notes (one per line)` +
-              `<textarea data-room-idx="${i}" class="room-notes doc-textarea" rows="2" style="width:100%;">${esc(manual)}</textarea></label>` +
-              `</div>`;
+            const manual = Array.isArray(r.notes_manual) ? r.notes_manual : [];
+            let h = `<div style="margin:0 0 10pt;border-left:3px solid #c8102e;padding-left:8px;">`;
+            h += `<p style="margin:0;"><strong>${esc(m.heading)}:</strong></p>`;
+            h += `<p style="margin:0;"><strong>${fmtUSD(m.total)}</strong> – Epoxy flooring as described above <em>${m.taxPhrase}</em></p>`;
+            if (m.sysOn && r.system_desc) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(r.system_desc)}</p>`;
+            if (!m.isBase && m.diffOn && m.diffText) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(m.diffText)}</p>`;
+            h += autoNotes.concat(manual).map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("");
+            h += `</div>`;
+            return h;
           }).join("");
-        roomsBlock.querySelectorAll("textarea.room-notes").forEach(ta => {
-          ta.addEventListener("input", () => {
-            const idx = Number(ta.dataset.roomIdx);
-            const lines = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
-            if (priced[idx]) { priced[idx].notes_manual = lines; TW.setState({ rooms: state.rooms }); }
+      }
+      renderRoomsPreview();
+
+      // LEFT controls panel (toggles + notes)
+      if (optsPanel) {
+        if (!priced.length) {
+          optsPanel.hidden = true;
+          optsPanel.innerHTML = "";
+        } else {
+          optsPanel.hidden = false;
+          optsPanel.innerHTML =
+            `<h3>Pricing options</h3>` +
+            `<p class="op-hint">Choose what prints for each sheet.</p>` +
+            priced.map((r, i) => {
+              const m = meta(r);
+              const manual = (Array.isArray(r.notes_manual) ? r.notes_manual : []).join("\n");
+              let h = `<div class="op-row">`;
+              h += `<div class="op-name">${esc(m.heading)} <span class="op-price">${fmtUSD(m.total)}</span></div>`;
+              h += `<label><input type="checkbox" class="opt-system" data-room-idx="${i}" ${m.sysOn ? "checked" : ""}> Show system &amp; scope</label>`;
+              if (!m.isBase) h += `<label><input type="checkbox" class="opt-diff" data-room-idx="${i}" ${m.diffOn ? "checked" : ""}> Show difference vs. base bid</label>`;
+              h += `<label class="op-notes">Notes (one per line)` +
+                   `<textarea data-room-idx="${i}" class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
+              h += `</div>`;
+              return h;
+            }).join("");
+
+          const persistOpt = (r) => {
+            if (!state.tab_opts || typeof state.tab_opts !== "object") state.tab_opts = {};
+            if (r.id) state.tab_opts[r.id] = { show_system: r.show_system !== false, show_diff: !!r.show_diff };
+            TW.setState({ rooms: state.rooms, tab_opts: state.tab_opts });
+          };
+          optsPanel.querySelectorAll("textarea.room-notes").forEach(ta => {
+            ta.addEventListener("input", () => {
+              const r = priced[Number(ta.dataset.roomIdx)];
+              if (r) { r.notes_manual = ta.value.split("\n").map(s => s.trim()).filter(Boolean); TW.setState({ rooms: state.rooms }); renderRoomsPreview(); }
+            });
           });
-        });
+          optsPanel.querySelectorAll("input.opt-system").forEach(cb => {
+            cb.addEventListener("change", () => {
+              const r = priced[Number(cb.dataset.roomIdx)];
+              if (r) { r.show_system = cb.checked; persistOpt(r); renderRoomsPreview(); }
+            });
+          });
+          optsPanel.querySelectorAll("input.opt-diff").forEach(cb => {
+            cb.addEventListener("change", () => {
+              const r = priced[Number(cb.dataset.roomIdx)];
+              if (r) { r.show_diff = cb.checked; persistOpt(r); renderRoomsPreview(); }
+            });
+          });
+        }
       }
     }
 
@@ -218,14 +305,16 @@
     const altFloor   = altTotal - altRemodel;
     const altLabel   = (state.alternate && state.alternate.label)
                        || (acb.alternate && acb.alternate.label) || "Alternate System";
-    const stateName  = (form.querySelector("[name='state_name']") || {}).value || "Kansas";
+    // Mirrors the .docx {{#alternate}} block literally: header carries the system
+    // name, the price line reads "Flooring as described above (material sales tax
+    // INCLUDED)", and the tax line is just "Remodel Tax" (no state name).
     altBlock.innerHTML =
       `<p style="margin:14pt 0 6pt;font-weight:bold;color:#c8102e;border-top:1px solid #c8102e;padding-top:10pt;">` +
       `ALTERNATE SYSTEM — ${esc(altLabel)}</p>` +
-      `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altFloor)}</strong> – ${esc(altLabel)} ` +
-      `<em>(sales &amp; ${esc(stateName)} remodel tax INCLUDED)</em></p>` +
+      `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
+      `<em>(material sales tax INCLUDED)</em></p>` +
       (altRemodel > 0
-        ? `<p style="margin:0 0 6pt;"><strong><mark>${fmtUSD(altRemodel)}</mark></strong> – ${esc(stateName)} Remodel Tax</p>`
+        ? `<p style="margin:0 0 6pt;"><strong><mark>${fmtUSD(altRemodel)}</mark></strong> – Remodel Tax</p>`
         : "") +
       `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
@@ -284,20 +373,6 @@
       if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
     }
   });
-
-  // Resolve the proposal's state name (fills the Direct-Epoxy template's
-  // "{{state_name}} Remodel Tax" line). Priority: a trailing 2-letter code
-  // in city_state -> the intake `state` field -> default Kansas. The KS
-  // remodel tax is Kansas-specific and Treadwell is KC-based, so Kansas is
-  // the safe last resort rather than leaving the line as "– Remodel Tax".
-  const stateField = form.querySelector("[name='state_name']");
-  if (stateField && !stateField.value) {
-    const map = {"MO":"Missouri","KS":"Kansas","IA":"Iowa","NE":"Nebraska",
-                 "OK":"Oklahoma","AR":"Arkansas","IL":"Illinois"};
-    const m = String(state.city_state || "").match(/[,\s]+([A-Za-z]{2})\s*$/);
-    const code = (m ? m[1] : (state.state || "KS")).toUpperCase();
-    stateField.value = map[code] || code;
-  }
 
   // Recalc on input changes
   form.addEventListener("input", refreshPriceDisplay);
@@ -382,7 +457,6 @@
       // Epoxy PRICE breakdown (Base Bid + Material Sales Tax [+ Kansas Remodel Tax] = Total):
       base_bid_formatted:    fmtUSD(baseBid),
       material_tax_formatted: fmtUSD(salesTax),
-      state_name:         safe(mergedValues.state_name),
       scope_notes:        safe(mergedValues.scope_notes),
       schedule_notes:     safe(mergedValues.schedule_notes),
       exclusions:         safe(mergedValues.exclusions),
@@ -416,8 +490,16 @@
         alternate_label: (state.alternate && state.alternate.label) || "",
         // Conditional Kansas Remodel Tax line — only when remodel tax applies.
         remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSD(remodelTax) }] : [],
-        // Per-room priced options (per-room jobs) -> {{#room}} block + room tabs.
+        // Optional per-sheet priced options -> {{#room}} block (empty unless the
+        // estimate side opts in; copy/rename itself is a pure sheet operation).
         rooms: Array.isArray(state.rooms) ? state.rooms : [],
+        // Duplicated worksheets + display labels + drag order -> the downloaded
+        // .xlsx mirrors the user's copies, tab renames, and tab order.
+        tab_copies: Array.isArray(state.tab_copies) ? state.tab_copies : [],
+        tab_labels: (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {},
+        tab_order: Array.isArray(state.tab_order) ? state.tab_order : [],
+        // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
+        notes: String(mergedValues.notes_text || "").split("\n").map(s => s.trim()).filter(Boolean),
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
