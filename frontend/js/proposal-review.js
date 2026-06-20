@@ -139,24 +139,39 @@
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtSF = (n) => "~" + Number(n || 0).toLocaleString() + " sf";
 
-  // Live update the inline $ amounts in the price section
+  // Live update the inline $ amounts in the price section. This preview MIRRORS
+  // the .docx single_bid block exactly (Base Bid + Remodel Tax = Total), using
+  // the same figures + tax wording the generate payload sends, so what the
+  // estimator sees on screen is what the customer gets.
   function refreshPriceDisplay() {
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const lumpSumN = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
-    // The Total Base Bid is TAX-INCLUSIVE — Kyle's sheet bakes sales tax
-    // (on materials) and KS remodel tax (on labor/service) into D88. So the
-    // customer total IS the lump sum; we must NOT add tax on top (the old
-    // code did `lump + county_rate*lump`, which double-counted tax and used
-    // the wrong base + rate). One price, tax included.
+    // The Total Base Bid is TAX-INCLUSIVE — Kyle's sheet bakes sales tax (on
+    // materials) and remodel tax (on labor/service) into D88. The .docx itemizes
+    // it as: Base Bid (flooring, sales-tax incl) + Remodel Tax = Total, so the
+    // three lines sum to the lump. Prefer the sheet's own snapshotted tax cells
+    // (same precedence as the generate payload), fall back to the engine.
     const fb = (state.computed_bid && state.computed_bid.full_bid) || {};
-    const includedTax = Number(fb.total_taxes || 0);
-    document.getElementById("lump-sum-display").textContent = fmtUSD(lumpSumN);
-    document.getElementById("tax-amount-display").textContent = fmtUSD(includedTax);
+    const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : fb.remodel_tax) || 0);
+    const salesTax   = Number((state.proposal_sales_tax   != null ? state.proposal_sales_tax   : fb.sales_tax)   || 0);
+    const baseBid    = Math.max(0, lumpSumN - salesTax - remodelTax);
+
+    // Tax phrase — same logic as backend base_tax_phrase: tax-exempt jobs read
+    // "(tax exempt)"; otherwise material sales tax (+ Remodel Tax when it applies).
+    const incl = String((form.querySelector("[name='tax_inclusion']") || {}).value || "INCLUDED").trim().toUpperCase();
+    const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
+    const phrase = exempt ? "(tax exempt)"
+                 : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+                 : "(material sales tax INCLUDED)";
+
+    document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
+    document.getElementById("base-tax-phrase-display").textContent = phrase;
+    document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
     document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
-    // Single-price presentation: remodel tax is folded into the lump sum,
-    // so keep the separate remodel-tax line hidden.
+    // Remodel Tax gets its own line only when it applies (matches the {{#remodel}}
+    // block in the .docx, which strips the line when there's no remodel tax).
     const rr = document.getElementById("remodel-tax-row");
-    if (rr) rr.style.display = "none";
+    if (rr) rr.style.display = remodelTax > 0 ? "" : "none";
     renderProposalExtras();
   }
 
@@ -177,7 +192,6 @@
     {
       const rooms = Array.isArray(state.rooms) ? state.rooms : [];
       const priced = rooms.filter(r => r && r.bid && Number(r.bid.total) > 0);
-      const stateName = ((form.querySelector("[name='state_name']") || {}).value || "Kansas").trim() || "Kansas";
       const meta = (r) => {
         const total = Number(r.bid.total) || 0;
         const remodel = Number(r.bid.remodel) || 0;
@@ -185,8 +199,9 @@
         const diff = total - (Number(r.base_total) || 0);
         return {
           total, isBase,
+          // Matches backend _build_options tax_phrase (no state name, per Kyle).
           taxPhrase: remodel > 0
-            ? `(${esc(stateName)} Remodel Tax AND material sales tax INCLUDED)`
+            ? "(Remodel Tax AND material sales tax INCLUDED)"
             : "(material sales tax INCLUDED)",
           heading: isBase ? "Base Bid" : String(r.name || "").replace(/[: ]+$/, ""),
           sysOn: r.show_system !== false,
@@ -290,14 +305,16 @@
     const altFloor   = altTotal - altRemodel;
     const altLabel   = (state.alternate && state.alternate.label)
                        || (acb.alternate && acb.alternate.label) || "Alternate System";
-    const stateName  = (form.querySelector("[name='state_name']") || {}).value || "Kansas";
+    // Mirrors the .docx {{#alternate}} block literally: header carries the system
+    // name, the price line reads "Flooring as described above (material sales tax
+    // INCLUDED)", and the tax line is just "Remodel Tax" (no state name).
     altBlock.innerHTML =
       `<p style="margin:14pt 0 6pt;font-weight:bold;color:#c8102e;border-top:1px solid #c8102e;padding-top:10pt;">` +
       `ALTERNATE SYSTEM — ${esc(altLabel)}</p>` +
-      `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altFloor)}</strong> – ${esc(altLabel)} ` +
-      `<em>(sales &amp; ${esc(stateName)} remodel tax INCLUDED)</em></p>` +
+      `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
+      `<em>(material sales tax INCLUDED)</em></p>` +
       (altRemodel > 0
-        ? `<p style="margin:0 0 6pt;"><strong><mark>${fmtUSD(altRemodel)}</mark></strong> – ${esc(stateName)} Remodel Tax</p>`
+        ? `<p style="margin:0 0 6pt;"><strong><mark>${fmtUSD(altRemodel)}</mark></strong> – Remodel Tax</p>`
         : "") +
       `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
@@ -356,20 +373,6 @@
       if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
     }
   });
-
-  // Resolve the proposal's state name (fills the Direct-Epoxy template's
-  // "{{state_name}} Remodel Tax" line). Priority: a trailing 2-letter code
-  // in city_state -> the intake `state` field -> default Kansas. The KS
-  // remodel tax is Kansas-specific and Treadwell is KC-based, so Kansas is
-  // the safe last resort rather than leaving the line as "– Remodel Tax".
-  const stateField = form.querySelector("[name='state_name']");
-  if (stateField && !stateField.value) {
-    const map = {"MO":"Missouri","KS":"Kansas","IA":"Iowa","NE":"Nebraska",
-                 "OK":"Oklahoma","AR":"Arkansas","IL":"Illinois"};
-    const m = String(state.city_state || "").match(/[,\s]+([A-Za-z]{2})\s*$/);
-    const code = (m ? m[1] : (state.state || "KS")).toUpperCase();
-    stateField.value = map[code] || code;
-  }
 
   // Recalc on input changes
   form.addEventListener("input", refreshPriceDisplay);
@@ -454,7 +457,6 @@
       // Epoxy PRICE breakdown (Base Bid + Material Sales Tax [+ Kansas Remodel Tax] = Total):
       base_bid_formatted:    fmtUSD(baseBid),
       material_tax_formatted: fmtUSD(salesTax),
-      state_name:         safe(mergedValues.state_name),
       scope_notes:        safe(mergedValues.scope_notes),
       schedule_notes:     safe(mergedValues.schedule_notes),
       exclusions:         safe(mergedValues.exclusions),
