@@ -109,5 +109,21 @@
   const search = document.getElementById("search");
   if (search) search.addEventListener("input", e => { QUERY = e.target.value || ""; paint(); });
 
+  // Mouse wheel scrolls the board sideways across stage columns. If the pointer
+  // is over a column whose card list can still scroll in that direction, let the
+  // column scroll first; otherwise move the board horizontally.
+  const bd = board();
+  if (bd) bd.addEventListener("wheel", (e) => {
+    if (!e.deltaY) return;
+    const cards = e.target.closest && e.target.closest(".cards");
+    if (cards) {
+      const atTop = cards.scrollTop <= 0;
+      const atBottom = cards.scrollTop + cards.clientHeight >= cards.scrollHeight - 1;
+      if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) return;
+    }
+    bd.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
+
   load();
 })();

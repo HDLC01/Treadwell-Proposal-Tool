@@ -16,14 +16,24 @@
     .search { flex:0 0 280px; max-width:100%; border:1px solid var(--surf-dim); border-radius:9px; padding:9px 12px; font:400 13px system-ui; background:#fff; }
     .search:focus { outline:none; border-color:var(--red); }
     .count { color:var(--ink-v); font:400 12.5px system-ui; white-space:nowrap; }
-    /* read-only kanban board */
-    .board { display:flex; gap:14px; overflow-x:auto; padding-bottom:18px; align-items:flex-start; }
-    .col { flex:0 0 288px; width:288px; background:var(--surf-low); border-radius:10px; padding:12px; }
-    .col-head { display:flex; align-items:center; justify-content:space-between; margin:0 0 10px; padding:0 2px; }
+    /* read-only kanban board — fixed to the viewport so the horizontal scrollbar
+       is always visible; columns scroll their own cards vertically. */
+    .board { display:flex; gap:14px; align-items:flex-start; overflow-x:auto; overflow-y:hidden;
+             height:calc(100vh - 215px); min-height:340px; padding-bottom:10px;
+             scrollbar-color:var(--red) var(--surf-high); scrollbar-width:auto; }
+    .board::-webkit-scrollbar { height:14px; }
+    .board::-webkit-scrollbar-track { background:var(--surf-high); border-radius:10px; }
+    .board::-webkit-scrollbar-thumb { background:var(--red); border-radius:10px; border:3px solid var(--surf-high); }
+    .board::-webkit-scrollbar-thumb:hover { background:#a4232b; }
+    .col { flex:0 0 288px; width:288px; background:var(--surf-low); border-radius:10px; padding:12px;
+           max-height:100%; display:flex; flex-direction:column; }
+    .col-head { display:flex; align-items:center; justify-content:space-between; margin:0 0 10px; padding:0 2px; flex:none; }
     .col-title { display:flex; align-items:center; gap:8px; font:700 12px/1.4 system-ui; text-transform:uppercase; letter-spacing:.05em; color:var(--ink); }
     .col-dot { width:9px; height:9px; border-radius:50%; flex:none; }
     .col-count { background:var(--surf-high); color:var(--ink-v); border-radius:999px; padding:1px 8px; font:600 11px system-ui; }
-    .cards { display:flex; flex-direction:column; gap:8px; }
+    .cards { display:flex; flex-direction:column; gap:8px; overflow-y:auto; min-height:0; padding-right:3px; }
+    .cards::-webkit-scrollbar { width:8px; }
+    .cards::-webkit-scrollbar-thumb { background:#cfcccb; border-radius:8px; }
     .deal { background:#fff; border:1px solid var(--surf-dim); border-radius:6px; padding:12px; transition:border-color .12s, box-shadow .12s; }
     .deal:hover { border-color:rgba(200,16,46,.4); box-shadow:0 4px 12px rgba(0,0,0,.05); }
     .deal-title { font:600 14px/1.3 system-ui; color:var(--ink); margin:0 0 3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
