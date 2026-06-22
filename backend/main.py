@@ -788,7 +788,8 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         }
     except Exception as exc:  # noqa: BLE001
         _autofill_rate_refund(bucket)
-        return {"ok": False, "error": f"Autofill failed: {exc}"}
+        log.warning("Autofill failed: %s", exc)        # detail to server log, not the client
+        return {"ok": False, "error": "Autofill failed. Please try again."}
 
 
 def _fmt_usd(n) -> str:
@@ -1108,7 +1109,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
-        raise HTTPException(500, f"Estimate fill failed: {exc}") from exc
+        raise HTTPException(500, "Failed to generate the estimate. Please try again.") from exc
 
     # Fill proposal document
     try:
@@ -1135,7 +1136,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         log.exception("Proposal fill failed")
-        raise HTTPException(500, f"Proposal fill failed: {exc}") from exc
+        raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
 
     project_name = (values.get("project_name") or "Untitled Project").strip()
 
@@ -1241,7 +1242,7 @@ def api_get_file_pdf(token: str) -> Response:
                 pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
         except Exception as exc:  # noqa: BLE001
             log.exception("PDF conversion failed")
-            raise HTTPException(500, f"PDF conversion failed: {exc}") from exc
+            raise HTTPException(500, "Failed to render the PDF. Please try again.") from exc
         entry["_pdf"] = pdf_bytes   # memoize for repeat downloads
 
     fname = re.sub(r"\.docx$", ".pdf", str(entry["filename"]), flags=re.IGNORECASE)
