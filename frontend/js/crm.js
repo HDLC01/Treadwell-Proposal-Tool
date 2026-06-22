@@ -74,53 +74,63 @@
     b.className = "board"; b.innerHTML = html;
   }
 
+  // Stale-while-revalidate: paint the last view instantly, then refresh.
+  const CACHE_KEY = "tw_crm_cache";
+  const readCache = () => { try { return JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null"); } catch { return null; } };
+  const writeCache = (d) => { try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch {} };
+
+  function applyData(j) {
+    ALL = Array.isArray(j.projects) ? j.projects : [];
+    STAGES = Array.isArray(j.stages) ? j.stages : [];
+    const cnt = document.getElementById("count");
+    if (cnt && typeof j.total === "number") {
+      cnt.textContent = `${(j.shown ?? ALL.length).toLocaleString()} recent active bids · ${j.total.toLocaleString()} total in Basisboard`;
+    }
+    paint();
+  }
+
   async function load() {
-    await tokenSoon();
     const b = board();
+    // Instant paint from the last successful view; the fetch below revalidates.
+    const cached = readCache();
+    const hadCache = cached && Array.isArray(cached.projects) && cached.projects.length > 0;
+    if (hadCache) applyData(cached);
+
+    await tokenSoon();
     try {
       const st = await (await fetch("/api/basisboard/status", { headers: TW.authHeaders() })).json();
       if (!st || !st.configured) {
-        b.className = "empty";
-        b.textContent = "Basisboard isn't connected yet. (Add the API key to enable the pipeline.)";
+        if (!hadCache) { b.className = "empty"; b.textContent = "Basisboard isn't connected yet. (Add the API key to enable the pipeline.)"; }
         return;
       }
     } catch (err) {
-      b.className = "empty"; b.textContent = "Couldn't reach the server. " + (err.message || "");
+      if (!hadCache) { b.className = "empty"; b.textContent = "Couldn't reach the server. " + (err.message || ""); }
       return;
     }
     try {
       const j = await (await fetch("/api/basisboard/projects", { headers: TW.authHeaders() })).json();
       if (!j || j.ok === false) {
-        b.className = "empty"; b.textContent = (j && j.error) || "Couldn't load Basisboard.";
+        if (!hadCache) { b.className = "empty"; b.textContent = (j && j.error) || "Couldn't load Basisboard."; }
         return;
       }
-      ALL = Array.isArray(j.projects) ? j.projects : [];
-      STAGES = Array.isArray(j.stages) ? j.stages : [];
-      const cnt = document.getElementById("count");
-      if (cnt && typeof j.total === "number") {
-        cnt.textContent = `${(j.shown ?? ALL.length).toLocaleString()} recent active bids · ${j.total.toLocaleString()} total in Basisboard`;
-      }
-      paint();
+      applyData(j);
+      writeCache({ projects: j.projects, stages: j.stages, shown: j.shown, total: j.total });
     } catch (err) {
-      b.className = "empty"; b.textContent = "Couldn't load the pipeline. " + (err.message || "");
+      if (!hadCache) { b.className = "empty"; b.textContent = "Couldn't load the pipeline. " + (err.message || ""); }
     }
   }
 
   const search = document.getElementById("search");
   if (search) search.addEventListener("input", e => { QUERY = e.target.value || ""; paint(); });
 
-  // Mouse wheel scrolls the board sideways across stage columns. If the pointer
-  // is over a column whose card list can still scroll in that direction, let the
-  // column scroll first; otherwise move the board horizontally.
+  // Wheel behavior: over a column, the wheel scrolls THAT column's cards only and
+  // never spills into the horizontal board scroll (so a maxed-out column just
+  // stops). Over the board background (gaps/headers between columns), the wheel
+  // scrolls the board sideways across stages.
   const bd = board();
   if (bd) bd.addEventListener("wheel", (e) => {
     if (!e.deltaY) return;
-    const cards = e.target.closest && e.target.closest(".cards");
-    if (cards) {
-      const atTop = cards.scrollTop <= 0;
-      const atBottom = cards.scrollTop + cards.clientHeight >= cards.scrollHeight - 1;
-      if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) return;
-    }
+    if (e.target.closest && e.target.closest(".col")) return;   // let the column scroll natively
     bd.scrollLeft += e.deltaY;
     e.preventDefault();
   }, { passive: false });

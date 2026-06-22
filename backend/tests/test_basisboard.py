@@ -16,7 +16,7 @@ _PROJECTS = {
 }
 
 
-def _fake_get(path, params=None):
+def _fake_get(client, path, params=None):    # client arg ignored in tests
     if path == "/stages":
         return {"stages": [
             {"id": "s1", "name": "Estimating", "color": "#c8102e", "order": 1, "code": "estimating"},
@@ -88,5 +88,5 @@ def test_id_paging_respects_cap(monkeypatch):
     monkeypatch.setattr(bb, "_get", _fake_get)
     monkeypatch.setenv("BASISBOARD_MAX_PROJECTS", "2")
     _clear()
-    ids, total = bb._list_project_ids(bb._max_projects())
+    ids, total = bb._fetch_project_ids(None, bb._max_projects())   # client unused (mocked _get)
     assert ids == ["p1", "p2"] and total == 5          # capped to 2, total still reported
