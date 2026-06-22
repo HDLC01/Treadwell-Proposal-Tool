@@ -57,6 +57,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import audit
+import basisboard_client
 import drafts
 import estimate_writer
 import pdf_writer
@@ -345,6 +346,22 @@ def detect_work_type(epoxy_sf: float, polish_sf: float) -> str:
 @app.get("/healthz")
 def healthz() -> Dict[str, Any]:
     return {"ok": True}
+
+
+# ─── Basisboard read-only pipeline (CRM view) ─────────────────────────
+# Surfaces the bids/projects that already live in Basisboard. READ-ONLY — the
+# API key stays server-side (never sent to the browser), so the frontend hits
+# these JWT-gated proxy routes instead of Basisboard directly. Inert (configured
+# = false) when BASISBOARD_API_KEY isn't set, so the app behaves exactly as
+# before on a deploy without the key.
+@app.get("/api/basisboard/status")
+def api_basisboard_status() -> Dict[str, Any]:
+    return {"ok": True, "configured": basisboard_client.is_configured()}
+
+
+@app.get("/api/basisboard/projects")
+def api_basisboard_projects() -> Dict[str, Any]:
+    return basisboard_client.get_pipeline()
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
