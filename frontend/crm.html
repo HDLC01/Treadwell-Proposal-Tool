@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pipeline · Treadwell Proposal Generator</title>
+  <style>
+    :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; --surf-low:#f5f3f3; --surf-dim:#dbdad9; --surf-high:#e9e8e7; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#fbf9f8; color:var(--ink); font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 60px; }
+    .top { display:flex; align-items:center; gap:14px; margin:0 0 6px; }
+    .logo { width:34px;height:34px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    h1 { font-size:20px; margin:0; flex:1; }
+    .sub { color:var(--ink-v); font-size:13px; margin:0 0 16px; }
+    .toolbar { display:flex; align-items:center; gap:10px; margin:0 0 16px; flex-wrap:wrap; }
+    .search { flex:0 0 280px; max-width:100%; border:1px solid var(--surf-dim); border-radius:9px; padding:9px 12px; font:400 13px system-ui; background:#fff; }
+    .search:focus { outline:none; border-color:var(--red); }
+    .count { color:var(--ink-v); font:400 12.5px system-ui; white-space:nowrap; }
+    /* read-only kanban board — fixed to the viewport so the horizontal scrollbar
+       is always visible; columns scroll their own cards vertically. */
+    .board { display:flex; gap:14px; align-items:flex-start; overflow-x:auto; overflow-y:hidden;
+             height:calc(100vh - 215px); min-height:340px; padding-bottom:10px;
+             scrollbar-color:var(--red) var(--surf-high); scrollbar-width:auto; }
+    .board::-webkit-scrollbar { height:14px; }
+    .board::-webkit-scrollbar-track { background:var(--surf-high); border-radius:10px; }
+    .board::-webkit-scrollbar-thumb { background:var(--red); border-radius:10px; border:3px solid var(--surf-high); }
+    .board::-webkit-scrollbar-thumb:hover { background:#a4232b; }
+    .col { flex:0 0 288px; width:288px; background:var(--surf-low); border-radius:10px; padding:12px;
+           max-height:100%; display:flex; flex-direction:column; }
+    .col-head { display:flex; align-items:center; justify-content:space-between; margin:0 0 10px; padding:0 2px; flex:none; }
+    .col-title { display:flex; align-items:center; gap:8px; font:700 12px/1.4 system-ui; text-transform:uppercase; letter-spacing:.05em; color:var(--ink); }
+    .col-dot { width:9px; height:9px; border-radius:50%; flex:none; }
+    .col-count { background:var(--surf-high); color:var(--ink-v); border-radius:999px; padding:1px 8px; font:600 11px system-ui; }
+    .cards { display:flex; flex-direction:column; gap:8px; overflow-y:auto; min-height:0; padding-right:3px; }
+    .cards::-webkit-scrollbar { width:8px; }
+    .cards::-webkit-scrollbar-thumb { background:#cfcccb; border-radius:8px; }
+    .deal { background:#fff; border:1px solid var(--surf-dim); border-radius:6px; padding:12px; transition:border-color .12s, box-shadow .12s; }
+    .deal:hover { border-color:rgba(200,16,46,.4); box-shadow:0 4px 12px rgba(0,0,0,.05); }
+    .deal-title { font:600 14px/1.3 system-ui; color:var(--ink); margin:0 0 3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .deal-sub { font:400 11.5px/1.4 system-ui; color:var(--ink-v); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .deal-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:9px; padding-top:8px; border-top:1px solid var(--surf-dim); }
+    .deal-est { font:400 11px system-ui; color:var(--ink-v); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .deal-val { font:700 12.5px system-ui; color:#1a7f37; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .deal-won { display:inline-block; margin-left:6px; color:#0a6b2c; font-weight:700; }
+    .empty-col { color:#9a9a9a; font:400 12px system-ui; border:1px dashed var(--surf-dim); border-radius:6px; padding:14px; text-align:center; }
+    .empty, .loading { color:var(--ink-v); text-align:center; padding:48px 20px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="logo">T</div>
+    <h1>Pipeline</h1>
+  </div>
+  <p class="sub">Live, read-only view of your Basisboard projects — grouped by stage.</p>
+  <div class="toolbar">
+    <input id="search" class="search" type="search" placeholder="Search projects, location, estimator…" autocomplete="off" />
+    <span id="count" class="count"></span>
+  </div>
+  <div id="board" class="loading">Loading pipeline…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/crm.js"></script>
+</body>
+</html>
