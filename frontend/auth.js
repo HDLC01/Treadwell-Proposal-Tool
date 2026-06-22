@@ -135,6 +135,7 @@
       '<nav class="tw-nav">' +
       '<div class="tw-section">Workspace</div>' +
       navItem("/projects.html", "▣", "Projects") +
+      navItem("/crm.html", "▦", "Pipeline") +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
       (isAdmin ? '<div class="tw-section">System</div>' + navItem("/admin.html", "◇", "Admin") : "") +
