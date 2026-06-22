@@ -12,7 +12,7 @@ pydantic>=2.13.4
 anthropic>=0.109.1
 supabase>=2.4
 PyJWT[crypto]>=2.13.0
-cachetools>=5.3.0
+cachetools>=7.1.4
 # Read-only Basisboard API client (backend/basisboard_client.py). Ships
 # transitively via supabase today; pinned explicitly so it's first-class.
 httpx>=0.27.0
