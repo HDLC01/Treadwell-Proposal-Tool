@@ -46,11 +46,13 @@ def _api_base() -> str:
     return (os.environ.get("BASISBOARD_API_BASE") or _DEFAULT_BASE).rstrip("/")
 
 
-def _page_limit() -> int:
+def _max_projects() -> int:
+    """How many (most-recent) projects to pull for the board. The org has
+    thousands of all-time bids; the pipeline view shows a recent, capped window."""
     try:
-        return max(1, min(500, int(os.environ.get("BASISBOARD_PAGE_LIMIT") or 200)))
+        return max(1, min(500, int(os.environ.get("BASISBOARD_MAX_PROJECTS") or 300)))
     except (TypeError, ValueError):
-        return 200
+        return 300
 
 
 def is_configured() -> bool:
@@ -93,18 +95,31 @@ def _users_by_id() -> Dict[str, str]:
     return cached
 
 
-def _collect_project_ids() -> List[str]:
-    """Gather project ids from the Companies list (each company carries them)."""
-    limit = _page_limit()
-    companies = (_get("/companies", {"limit": limit}).get("companies") or [])
-    if len(companies) >= limit:
-        log.warning("Basisboard: company list hit the page limit (%s); pipeline may be partial", limit)
+def _list_project_ids(cap: int):
+    """Page GET /v1/projects/ids (most-recent bid deadline first) up to `cap`.
+    Returns (ids, total). Falls back to unsorted if the sort param is rejected."""
     ids: List[str] = []
-    for co in companies:
-        for pid in (co.get("projectIds") or []):
-            if pid:
-                ids.append(pid)
-    return list(dict.fromkeys(ids))           # dedupe, preserve order
+    offset, total, sort = 0, None, True
+    while len(ids) < cap:
+        params: Dict[str, Any] = {"limit": 50, "offset": offset}
+        if sort:
+            params["sort[bidDeadline]"] = "DESC"
+        try:
+            resp = _get("/projects/ids", params)
+        except Exception:                       # noqa: BLE001 — retry once without sort
+            if sort:
+                ids, offset, total, sort = [], 0, None, False
+                continue
+            raise
+        batch = resp.get("projectIds") or resp.get("ids") or []
+        if not batch:
+            break
+        ids.extend(batch)
+        offset += len(batch)
+        total = (resp.get("paging") or {}).get("total", total)
+        if total is not None and offset >= total:
+            break
+    return ids[:cap], (total if total is not None else len(ids))
 
 
 def _shape_project(p: Dict[str, Any], stages: Dict[str, Dict[str, Any]],
@@ -138,19 +153,23 @@ def get_pipeline() -> Dict[str, Any]:
     try:
         stages = _stages_by_id()
         users = _users_by_id()
-        pids = _collect_project_ids()
+        cap = _max_projects()
+        pids, total = _list_project_ids(cap)
         projects: List[Dict[str, Any]] = []
         for chunk in _chunks(pids, _PROJECT_ID_CHUNK):
             resp = _get("/projects", {"filter[projectIds][]": chunk})
             projects.extend(resp.get("projects") or [])
-        shaped = [_shape_project(p, stages, users) for p in projects if not p.get("deletedAt")]
+        # Pipeline view = active bids: drop deleted + archived.
+        shaped = [_shape_project(p, stages, users) for p in projects
+                  if not p.get("deletedAt") and not p.get("archivedAt")]
         shaped.sort(key=lambda x: (x["stage_order"], x["name"].lower()))
         stage_cols = sorted(
             ({"id": s.get("id"), "name": s.get("name"), "color": s.get("color"),
               "order": s.get("order", 9999)} for s in stages.values()),
             key=lambda s: s["order"],
         )
-        result = {"ok": True, "configured": True, "projects": shaped, "stages": stage_cols}
+        result = {"ok": True, "configured": True, "projects": shaped, "stages": stage_cols,
+                  "shown": len(shaped), "total": total}
         _pipeline_cache["pipeline"] = result
         return result
     except Exception as exc:  # noqa: BLE001 — read view must never 500 the page

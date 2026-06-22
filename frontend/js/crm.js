@@ -96,6 +96,10 @@
       }
       ALL = Array.isArray(j.projects) ? j.projects : [];
       STAGES = Array.isArray(j.stages) ? j.stages : [];
+      const cnt = document.getElementById("count");
+      if (cnt && typeof j.total === "number") {
+        cnt.textContent = `${(j.shown ?? ALL.length).toLocaleString()} recent active bids · ${j.total.toLocaleString()} total in Basisboard`;
+      }
       paint();
     } catch (err) {
       b.className = "empty"; b.textContent = "Couldn't load the pipeline. " + (err.message || "");

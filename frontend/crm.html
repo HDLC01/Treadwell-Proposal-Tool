@@ -15,6 +15,7 @@
     .toolbar { display:flex; align-items:center; gap:10px; margin:0 0 16px; flex-wrap:wrap; }
     .search { flex:0 0 280px; max-width:100%; border:1px solid var(--surf-dim); border-radius:9px; padding:9px 12px; font:400 13px system-ui; background:#fff; }
     .search:focus { outline:none; border-color:var(--red); }
+    .count { color:var(--ink-v); font:400 12.5px system-ui; white-space:nowrap; }
     /* read-only kanban board */
     .board { display:flex; gap:14px; overflow-x:auto; padding-bottom:18px; align-items:flex-start; }
     .col { flex:0 0 288px; width:288px; background:var(--surf-low); border-radius:10px; padding:12px; }
@@ -43,6 +44,7 @@
   <p class="sub">Live, read-only view of your Basisboard projects — grouped by stage.</p>
   <div class="toolbar">
     <input id="search" class="search" type="search" placeholder="Search projects, location, estimator…" autocomplete="off" />
+    <span id="count" class="count"></span>
   </div>
   <div id="board" class="loading">Loading pipeline…</div>
 

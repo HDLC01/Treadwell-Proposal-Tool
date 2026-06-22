@@ -3,6 +3,18 @@ inert-when-unconfigured contract. No network — `_get` is monkeypatched, mirror
 how test_security_misc/test_dropbox_naming avoid live calls."""
 import basisboard_client as bb
 
+ALL_IDS = ["p1", "p2", "p3", "parch", "pdel"]
+_PROJECTS = {
+    "p1": {"id": "p1", "name": "Bravo Job", "location": "Olathe, KS", "quote": 50000,
+           "stageId": "s1", "estimatorIds": ["u1"], "awardedAt": None, "archivedAt": None, "deletedAt": None},
+    "p2": {"id": "p2", "name": "Alpha Job", "location": "N/A", "quote": None,
+           "stageId": "s2", "estimatorIds": [], "awardedAt": "2026-01-01", "archivedAt": None, "deletedAt": None},
+    "p3": {"id": "p3", "name": "Zeta Job", "location": "KC, MO", "quote": 12000,
+           "stageId": "sX", "estimatorIds": ["u1"], "awardedAt": None, "archivedAt": None, "deletedAt": None},
+    "parch": {"id": "parch", "name": "Archived Job", "stageId": "s1", "archivedAt": "2026-02-02"},
+    "pdel": {"id": "pdel", "name": "Deleted Job", "stageId": "s1", "deletedAt": "2026-02-02"},
+}
+
 
 def _fake_get(path, params=None):
     if path == "/stages":
@@ -13,23 +25,13 @@ def _fake_get(path, params=None):
     if path == "/users":
         return {"users": [{"id": "u1", "firstName": "Kyle", "lastName": "Loseke",
                            "email": "kyle@wetreadwell.com"}]}
-    if path == "/companies":
-        return {"companies": [
-            {"id": "c1", "name": "Acme", "projectIds": ["p1", "p2"]},
-            {"id": "c2", "name": "Beta", "projectIds": ["p3", "pdel"]},
-        ]}
+    if path == "/projects/ids":
+        off = int((params or {}).get("offset", 0))
+        lim = int((params or {}).get("limit", 50))
+        return {"projectIds": ALL_IDS[off:off + lim], "paging": {"total": len(ALL_IDS)}}
     if path == "/projects":
-        ids = params["filter[projectIds][]"]
-        allp = {
-            "p1": {"id": "p1", "name": "Bravo Job", "location": "Olathe, KS", "quote": 50000,
-                   "stageId": "s1", "estimatorIds": ["u1"], "awardedAt": None, "archivedAt": None, "deletedAt": None},
-            "p2": {"id": "p2", "name": "Alpha Job", "location": "N/A", "quote": None,
-                   "stageId": "s2", "estimatorIds": [], "awardedAt": "2026-01-01", "archivedAt": None, "deletedAt": None},
-            "p3": {"id": "p3", "name": "Zeta Job", "location": "KC, MO", "quote": 12000,
-                   "stageId": "sX", "estimatorIds": ["u1"], "awardedAt": None, "archivedAt": None, "deletedAt": None},
-            "pdel": {"id": "pdel", "name": "Deleted", "quote": 1, "stageId": "s1", "deletedAt": "2026-02-02"},
-        }
-        return {"projects": [allp[i] for i in ids if i in allp]}
+        ids = (params or {}).get("filter[projectIds][]", [])
+        return {"projects": [_PROJECTS[i] for i in ids if i in _PROJECTS]}
     raise AssertionError("unexpected path " + path)
 
 
@@ -61,9 +63,10 @@ def test_pipeline_shapes_filters_and_sorts(monkeypatch):
     _clear()
     r = bb.get_pipeline()
     assert r["ok"] is True and r["configured"] is True
+    assert r["total"] == 5 and r["shown"] == 3      # 5 ids, archived + deleted dropped
 
     names = [p["name"] for p in r["projects"]]
-    assert "Deleted" not in names                       # soft-deleted excluded
+    assert "Deleted Job" not in names and "Archived Job" not in names
     # sorted by (stage_order, name): s1=1 -> Bravo, s2=2 -> Alpha, unknown=9999 -> Zeta
     assert names == ["Bravo Job", "Alpha Job", "Zeta Job"]
 
@@ -78,3 +81,12 @@ def test_pipeline_shapes_filters_and_sorts(monkeypatch):
     assert p3["stage_name"] == "Unstaged"               # unknown stage id
 
     assert [s["name"] for s in r["stages"]] == ["Estimating", "Won"]   # ordered columns
+
+
+def test_id_paging_respects_cap(monkeypatch):
+    monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(bb, "_get", _fake_get)
+    monkeypatch.setenv("BASISBOARD_MAX_PROJECTS", "2")
+    _clear()
+    ids, total = bb._list_project_ids(bb._max_projects())
+    assert ids == ["p1", "p2"] and total == 5          # capped to 2, total still reported
