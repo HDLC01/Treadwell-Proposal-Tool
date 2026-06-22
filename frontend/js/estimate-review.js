@@ -1435,6 +1435,14 @@ async function loadCounties() {
   }
 }
 
+// HTML-escape a value before embedding it in innerHTML (XSS guard for the
+// county picker + autofill banner, which build markup from search input,
+// reference data, and server error text).
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function renderCountyResults(query) {
   const q = query.trim().toLowerCase();
   if (!q) { countyResults.classList.remove("open"); return; }
@@ -1447,7 +1455,7 @@ function renderCountyResults(query) {
         || `${c.name} county, ${c.state}`.toLowerCase().includes(q);
   }).slice(0, 30);
   if (!matches.length) {
-    countyResults.innerHTML = `<div class="county-row" style="cursor:default;color:var(--ink-variant);">No counties match "${q}"</div>`;
+    countyResults.innerHTML = `<div class="county-row" style="cursor:default;color:var(--ink-variant);">No counties match "${escHtml(q)}"</div>`;
     countyResults.classList.add("open");
     return;
   }
@@ -1455,12 +1463,12 @@ function renderCountyResults(query) {
   countyResults.innerHTML = matches.map((c, i) => `
     <div class="county-row" data-idx="${i}">
       <div>
-        <span class="county-name">${c.name} County</span>
-        <span class="county-meta">${c.state}${c.remodel_rate != null
+        <span class="county-name">${escHtml(c.name)} County</span>
+        <span class="county-meta">${escHtml(c.state)}${c.remodel_rate != null
           ? ` · Remodel ${(c.remodel_rate * 100).toFixed(3)}%`
           : ` · ${(c.rate * 100).toFixed(3)}%`}</span>
       </div>
-      ${c.notes ? `<div class="county-notes">${c.notes}</div>` : ""}
+      ${c.notes ? `<div class="county-notes">${escHtml(c.notes)}</div>` : ""}
     </div>
   `).join("");
   countyResults._matches = matches;
@@ -1478,7 +1486,7 @@ function pickCounty(c) {
     ? ` — KS remodel tax <b>${(c.remodel_rate * 100).toFixed(3)}%</b> (enter in K81)`
     : "";
   countySelected.innerHTML = `
-    <span class="county-pill">${c.name} County, ${c.state}${remodelNote}
+    <span class="county-pill">${escHtml(c.name)} County, ${escHtml(c.state)}${remodelNote}
       <span class="x" id="county-clear">×</span>
     </span>
   `;
@@ -1661,11 +1669,11 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
       }
     } else {
       btn.textContent = "Unavailable";
-      showAutofillBanner(`<b>Autofill unavailable.</b><br>${j.error || "Check that the backend's claude CLI is reachable."}`, "error");
+      showAutofillBanner(`<b>Autofill unavailable.</b><br>${escHtml(j.error) || "Check that the backend's claude CLI is reachable."}`, "error");
     }
   } catch (err) {
     btn.textContent = "Failed";
-    showAutofillBanner(`<b>Autofill failed.</b><br>${err.message || err}`, "error");
+    showAutofillBanner(`<b>Autofill failed.</b><br>${escHtml(err.message || err)}`, "error");
   } finally {
     setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 3000);
   }

@@ -20,9 +20,12 @@ later means adding rows to the dict, not rewriting logic.
 from __future__ import annotations
 
 import io
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, Mapping
+
+log = logging.getLogger("proposal_tool.estimate_writer")
 
 from openpyxl import load_workbook
 from openpyxl.workbook import Workbook
@@ -446,10 +449,16 @@ def fill_estimate(
         sheet_name, addr = sheet_addr.split("!", 1)
         if sheet_name not in wb.sheetnames:
             continue
+        addr = addr.strip()
+        # Only write single-cell coordinates (A1 .. XFD1048576). Rejects ranges,
+        # defined names, and malformed input before handing them to openpyxl.
+        if not _CELL_SHAPE_RE.fullmatch(addr):
+            log.warning("estimate_writer: skipping non-cell address %r", sheet_addr)
+            continue
         try:
             wb[sheet_name][addr] = _coerce(val)
-        except Exception:
-            pass  # bad coordinate — skip silently
+        except Exception as exc:  # noqa: BLE001 — log the skip instead of swallowing it
+            log.warning("estimate_writer: failed to write %s: %s", sheet_addr, exc)
 
     # 3. Extra material lines -> spare "=B*C" rows on the Epoxy tab.
     _write_extra_materials(epoxy, extras)
