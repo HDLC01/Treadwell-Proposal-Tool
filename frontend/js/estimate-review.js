@@ -759,6 +759,13 @@ async function showSheet(name) {
   for (const btn of tabBar.querySelectorAll("button")) {
     btn.classList.toggle("active", btn.dataset.sheet === name);
   }
+  // Bulk discount is now a PER-TAB value (D41) — reflect THIS sheet's setting in
+  // the toggle so it shows the active tab's state, not a stale global one.
+  const _bulkCb = document.getElementById("cb-bulk");
+  if (_bulkCb) {
+    _bulkCb.checked = String(cellValues[name + "!D41"] || "") === "BULK Discount ON";
+    state.cb_bulk = _bulkCb.checked;
+  }
   badge.textContent = labelFor(name).toUpperCase();
   // Clear stale DOM registrations from the previous sheet — those input
   // elements got detached when we tore down the prior grid.
@@ -2034,9 +2041,14 @@ function wireAlt() {
 }
 
 document.getElementById("cb-bulk").addEventListener("change", e => {
-  // mirror Kyle's D41 toggle into the grid so it flows to the generated sheet
-  cellValues["Epoxy!D41"] = e.target.checked ? "BULK Discount ON" : "Bulk Discount OFF";
+  // Bulk discount = the sheet's D41 toggle. Store it PER-TAB (keyed to the
+  // ACTIVE sheet), not a hardcoded "Epoxy!D41", so each copied tab keeps its OWN
+  // value and Copy-sheet carries it (Kyle: "bulk discount didn't carry to the
+  // copied sheet"). Persist so it survives a reload + reaches the generated .xlsx.
+  const key = (activeSheet || "Epoxy") + "!D41";
+  cellValues[key] = e.target.checked ? "BULK Discount ON" : "Bulk Discount OFF";
   state.cb_bulk = e.target.checked;
+  TW.setState({ ...state, cell_values: cellValues });
   computeBid();
 });
 // recompute when any grid selection / SF changes (debounced)
@@ -2046,7 +2058,7 @@ document.getElementById("sheet-grid").addEventListener("change", () => {
 });
 
 init();
-if (state.cb_bulk) document.getElementById("cb-bulk").checked = true;
+// (bulk-discount checkbox is synced per-tab inside showSheet now)
 
 // Collapsible Computed Bid → the worksheet gets the rest of the window.
 // Default collapsed (headline totals stay in the total-bar); choice is remembered.
