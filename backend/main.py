@@ -390,9 +390,22 @@ def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = Non
     return resp.json()
 
 
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _safe_id(value: str) -> str:
+    """Constrain an id that's interpolated into an outbound URL path to a safe
+    charset (no slashes / dots / query chars) — prevents the proxy request from
+    being redirected to another path or host (partial SSRF) via a crafted id."""
+    if not value or not _SAFE_ID.match(value):
+        raise HTTPException(400, "Invalid id.")
+    return value
+
+
 @app.post("/api/portal/publish")
 def api_portal_publish(draft_id: str, request: Request) -> Dict[str, Any]:
     """Send a proposal (draft) to the customer portal — mints a link + emails it."""
+    draft_id = _safe_id(draft_id)
     if not drafts.load_draft(draft_id):
         raise HTTPException(404, "Draft not found")
     return _portal("/api/admin/publish", "POST", {"draft_id": draft_id, "by": _user_email(request)})
@@ -405,11 +418,12 @@ def api_portal_pipeline() -> Dict[str, Any]:
 
 @app.get("/api/portal/proposal/{proposal_id}")
 def api_portal_proposal(proposal_id: str) -> Dict[str, Any]:
-    return _portal(f"/api/admin/proposal/{proposal_id}", "GET")
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}", "GET")
 
 
 @app.post("/api/portal/proposal/{proposal_id}/reply")
 async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]:
+    proposal_id = _safe_id(proposal_id)
     body = await request.json()
     return _portal(f"/api/admin/proposal/{proposal_id}/reply", "POST",
                    {"body": (body or {}).get("body") or "", "by": _user_email(request)})
@@ -417,12 +431,12 @@ async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]
 
 @app.post("/api/portal/proposal/{proposal_id}/deposit-received")
 def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
-    return _portal(f"/api/admin/proposal/{proposal_id}/deposit-received", "POST", {})
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})
 
 
 @app.post("/api/portal/proposal/{proposal_id}/scheduled")
 def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
-    return _portal(f"/api/admin/proposal/{proposal_id}/scheduled", "POST", {})
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
 
 
 @app.get("/api/admin/proposal-pdf")
