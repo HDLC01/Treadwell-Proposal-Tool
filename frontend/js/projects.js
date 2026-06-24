@@ -36,22 +36,38 @@
       try { return sessionStorage.getItem(FILTER_KEY) || "active"; } catch { return "active"; }
     })();
 
+    // Test/demo projects are segregated into their OWN "Test" tab and kept OUT
+    // of Active / Inactive / All, so the working list only shows real customer
+    // bids. Classified by name: anything containing sample/test/verify/demo/qa/
+    // bugtest, "delete me", or starting with "zz". Rename a project to move it
+    // in or out of the Test bucket.
+    function isTest(p) {
+      const n = String((p && p.project_name) || "");
+      return /\b(sample|test|verify|demo|qa|bugtest)\b/i.test(n)
+          || /delete me/i.test(n)
+          || /^\s*zz/i.test(n);
+    }
     function isActive(p)   { return !p.archived; }
     function isInactive(p) { return !!p.archived; }
     function applyFilter(list) {
-      if (CURRENT_FILTER === "inactive") return list.filter(isInactive);
-      if (CURRENT_FILTER === "all")      return list;
-      return list.filter(isActive);  // "active"
+      if (CURRENT_FILTER === "test") return list.filter(isTest);
+      const real = list.filter(p => !isTest(p));   // test projects never show in active/inactive/all
+      if (CURRENT_FILTER === "inactive") return real.filter(isInactive);
+      if (CURRENT_FILTER === "all")      return real;
+      return real.filter(isActive);  // "active"
     }
 
     function renderChips() {
       const f = document.getElementById("filters");
-      const nActive = ALL_PROJECTS.filter(isActive).length;
-      const nInactive = ALL_PROJECTS.filter(isInactive).length;
+      const real = ALL_PROJECTS.filter(p => !isTest(p));   // Active/Inactive/All count real bids only
+      const nActive = real.filter(isActive).length;
+      const nInactive = real.filter(isInactive).length;
+      const nTest = ALL_PROJECTS.filter(isTest).length;
       const defs = [
         ["active",   "Active",   nActive],
         ["inactive", "Inactive", nInactive],
-        ["all",      "All",      ALL_PROJECTS.length],
+        ["all",      "All",      real.length],
+        ["test",     "Test",     nTest],
       ];
       f.hidden = ALL_PROJECTS.length === 0;
       f.innerHTML = defs.map(([key,label,n]) =>
@@ -72,7 +88,9 @@
       if (!shown.length) {
         el.className = "empty";
         el.textContent = ALL_PROJECTS.length
-          ? (CURRENT_FILTER === "inactive" ? "No inactive projects." : "No active projects.")
+          ? (CURRENT_FILTER === "inactive" ? "No inactive projects."
+             : CURRENT_FILTER === "test"   ? "No test projects."
+             : "No active projects.")
           : "No projects yet. Click “+ New project” to start.";
         return;
       }
