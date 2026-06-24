@@ -61,6 +61,9 @@ TEMPLATE_PICKER: dict[tuple[str, str | None], str] = {
     ("polish",  "Direct"): "Direct/xx.xx TREADWELL POLISH PROPOSAL - NewDirect.docx",
     ("polish",  "GC"):     "GC/xx TREADWELL POLISH PROPOSAL - xx.docx",
     ("combo",   "Direct"): "Direct/xx.xx.xx TREADWELL COMBO PROPOSAL - CUSTMOER NAME.docx",
+    # No dedicated GC combo template — use the GC Resinous (covers the
+    # epoxy/resinous side in GC format) instead of falling back to a Direct doc.
+    ("combo",   "GC"):     "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx",
     ("sealer",  "GC"):     "GC/xx TREADWELL SEALER PROPOSAL - xx.docx",
     ("gyp",     None):     "Gyp/xx TREADWELL UNDERLAYMENT PROPOSAL - xx.docx",
     ("budget",  "Direct"): "Direct/xx.xx TREADWELL BUDGET PRICING.docx",
