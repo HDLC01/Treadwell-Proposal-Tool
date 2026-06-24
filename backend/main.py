@@ -134,7 +134,10 @@ def _template_version() -> str:
 # the protection is this API check. NOTE: /api/file/* downloads are NO LONGER
 # public — the Done page holds a Supabase session and now sends the bearer on
 # downloads, so a leaked capability-token URL alone can't fetch a file.
-_AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config"}
+_AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
+                      # server-to-server (the customer portal renders the proposal
+                      # PDF on demand); gated by SERVICE_TOKEN inside the handler.
+                      "/api/admin/proposal-pdf"}
 
 
 def _auth_is_public(path: str, method: str) -> bool:
@@ -420,6 +423,42 @@ def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
 @app.post("/api/portal/proposal/{proposal_id}/scheduled")
 def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{proposal_id}/scheduled", "POST", {})
+
+
+@app.get("/api/admin/proposal-pdf")
+def api_admin_proposal_pdf(draft_id: str, request: Request) -> Response:
+    """Render a draft's proposal to its real Treadwell PDF, on demand. Called
+    server-to-server by the customer portal (SERVICE_TOKEN-gated; this path is in
+    _AUTH_PUBLIC_PATHS so it skips the Google gate). Reuses the full /api/generate
+    pipeline + LibreOffice render, so the customer sees the exact branded document."""
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+    row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        raise HTTPException(422, "This proposal hasn't been generated yet.")
+    out = api_generate(GenerateIn(**pp), request)         # reuse the full generate logic
+    tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
+    entry = _FILE_CACHE.get(tok)
+    if not entry:
+        raise HTTPException(500, "Could not build the proposal document.")
+    pdf_bytes = entry.get("_pdf")
+    if pdf_bytes is None:
+        try:
+            with _PDF_RENDER_SEM:
+                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
+            entry["_pdf"] = pdf_bytes
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Portal PDF render failed")
+            raise HTTPException(500, "Failed to render the proposal PDF.") from exc
+    proj = re.sub(r"[^\x20-\x7e]", "_", str((row.get("data") or {}).get("project_name") or "Treadwell Proposal"))
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{proj} - Proposal.pdf"'})
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
