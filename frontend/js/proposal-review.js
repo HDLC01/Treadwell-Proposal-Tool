@@ -33,6 +33,15 @@
     if (el && !String(el.value || "").trim()) el.value = def;
   }
 
+  // Cove base height: intake/estimate capture cove LENGTH only, never height, so
+  // a saved empty-string can blank the inline 6" default (writeForm overwrites
+  // any non-null state value). Keep the standard 6" visible when nothing real was
+  // saved (Kyle: "can't see cove base height value on Proposal sheet").
+  (function guardCoveHeight() {
+    const ch = form.querySelector('[name="cove_height"]');
+    if (ch && !String(ch.value).trim()) ch.value = "6";
+  })();
+
   // Pre-fill the editable NOTES box: saved edits if any, else the standard
   // per-work-type boilerplate (fetched) so the estimator can tweak it per job.
   (function prefillNotes() {
@@ -376,6 +385,21 @@
 
   // Recalc on input changes
   form.addEventListener("input", refreshPriceDisplay);
+
+  // Persist EVERY edit as it's typed (debounced). Previously the narrative
+  // textareas (Scope/Schedule/Exclusions) + cove height were committed to state
+  // only on Back/Submit — so any mid-flow re-hydration (draft-sync reload, manual
+  // refresh, Back/Forward) re-ran init, writeForm restored the blank value, and
+  // the PROPOSAL_DEFAULTS loop re-seated the boilerplate. That stale default then
+  // got submitted instead of the estimator's edit — Kyle's "my updates on the
+  // proposal tab aren't carrying over to the final proposal". setState merges, so
+  // this only overwrites the scalar form fields and leaves rooms/price_lines/etc.
+  // intact; it also schedules the debounced server save so the draft round-trips.
+  let _persistTimer = null;
+  form.addEventListener("input", () => {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(() => { try { TW.setState(TW.readForm(form)); } catch {} }, 300);
+  });
 
   document.getElementById("back-btn").addEventListener("click", () => {
     TW.setState(TW.readForm(form));

@@ -698,9 +698,27 @@ function renderTabs() {
     btn.dataset.sheet = t.id;
     btn.className = (t.kind === "copy" ? "room-tab" : "") + (t.id === activeSheet ? " active" : "");
     btn.title = "Click to open · double-click to rename · drag to reorder";
+    // Declared early so the rename pencil's handler (below) can cancel a pending
+    // single-click before opening the inline editor.
+    let clickTimer = null;
+    const cancelClick = () => { if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; } };
+
     const label = document.createElement("span");
     label.textContent = t.label;
     btn.appendChild(label);
+
+    // Visible ✎ rename affordance on EVERY tab. Double-click still renames, but
+    // Kyle couldn't discover that ("Not sure how to rename the tabs"), so expose
+    // a button beside the name. stopPropagation so it neither opens nor drags the
+    // tab; cancelClick so the pending single-click doesn't steal focus.
+    const ren = document.createElement("span");
+    ren.className = "tab-rename-btn";
+    ren.textContent = "✎";
+    ren.title = "Rename tab";
+    ren.addEventListener("pointerdown", (e) => e.stopPropagation());
+    ren.addEventListener("click", (e) => { e.stopPropagation(); cancelClick(); startRename(btn, t.id); });
+    btn.appendChild(ren);
+
     if (t.kind === "copy") {
       const del = document.createElement("span");
       del.className = "room-del";
@@ -713,7 +731,6 @@ function renderTabs() {
     // short timer so the double-click's preceding single-clicks don't fire
     // showSheet (whose async grid reload would steal focus from the rename box).
     // suppressNextClick guards against a drag-release firing a tab switch.
-    let clickTimer = null;
     btn.addEventListener("click", () => {
       if (suppressNextClick) { suppressNextClick = false; return; }
       if (clickTimer) return;
