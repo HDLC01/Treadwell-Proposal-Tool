@@ -379,6 +379,15 @@
     flex-shrink: 0; font-size: 11px; padding: 5px 8px; width: 130px;
     border: 1px solid var(--treadwell-red); border-radius: 3px;
   }
+  /* Visible rename (✎) affordance on every tab — discoverable alternative to
+     double-click (Kyle: "add a little button/icon beside the sheetname"). */
+  .xl-tab-bar.full button .tab-rename-btn {
+    font-size: 11px; line-height: 1; color: #b9b3b1; margin-left: 2px;
+    padding: 0 3px; border-radius: 3px; opacity: .7; cursor: pointer;
+  }
+  .xl-tab-bar.full button .tab-rename-btn:hover {
+    color: #fff; background: var(--treadwell-red); opacity: 1;
+  }
 
   /* Autofill banner */
   .ai-bar {
