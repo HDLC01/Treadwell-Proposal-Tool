@@ -72,6 +72,10 @@ POLISH_DIRECT_RULES: list[tuple[str, str]] = [
     ("Standard Sheen with Salt & Pepper Aggregate Exposure",     "{{system_name}}"),
     ("~1,600 sf of polished concrete flooring",                  "{{area_description}}"),
     ("dumpster provided by owner",                               "{{disposal}}"),
+    # Schedule line shipped as STATIC boilerplate (no token) — so estimator edits
+    # to Schedule never reached the polish proposal. Tokenize it like Epoxy does.
+    ("Assumes all areas available at one time, approx. 1 week to complete full scope",
+                                                                 "{{schedule_notes}}"),
     # Job header — left sidebar
     ("xxx, KS",                                                  "{{city_state}}"),
     # Header date (hardcoded by Kyle as 1/1/26)
@@ -94,6 +98,10 @@ COMBO_DIRECT_RULES: list[tuple[str, str]] = [
     ("Treadwell Epoxy Flooring System ",                      "{{system_name_epoxy}}"),
     ("Treadwell Epoxy Flooring System",                       "{{system_name_epoxy}}"),
     ("dumpster provided by owner",                            "{{disposal}}"),
+    # Schedule line shipped as STATIC boilerplate (split across 7 runs, no token)
+    # — estimator edits to Schedule never reached the combo proposal. Tokenize it.
+    ("Assumes all areas available at one time, approx. 1 week to complete full scope",
+                                                              "{{schedule_notes}}"),
     ("xxx, KS",                                               "{{city_state}}"),
     ("01/1/26",                                               "{{bid_date_formatted}}"),
     ("1/1/26",                                                "{{bid_date_formatted}}"),

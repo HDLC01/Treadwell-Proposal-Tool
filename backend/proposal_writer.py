@@ -95,33 +95,22 @@ TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 
 def _replace_in_paragraph(p: Paragraph, values: Mapping[str, Any]) -> int:
-    """Replace `{{token}}` in a paragraph, preserving run-level formatting.
+    """Replace `{{token}}` in a paragraph, preserving EACH run's formatting.
 
-    Word splits text across multiple <w:r> runs whenever formatting
-    changes mid-word, which breaks naive .text replacement. We rebuild
-    the paragraph's full text, do the substitution on the joined string,
-    and write the result back into the first run while zeroing the rest.
-    Formatting on the first run is preserved; mid-token formatting
-    differences are lost (acceptable — tokens shouldn't have mid-token
-    bold/italic).
+    Word splits text across multiple <w:r> runs whenever formatting changes —
+    e.g. a BOLD "Scope:" label run followed by a NORMAL-weight
+    "{{scope_notes}}" value run. The substituted value must keep its OWN run's
+    formatting (font, size, bold), not inherit the leading run's. The old code
+    collapsed the whole paragraph into run[0], which made every value bold like
+    its label. We now rewrite the token's text in place across only the runs it
+    actually spans (see `_sub_runs_preserving`).
     """
     if "{{" not in p.text:
         return 0
-
-    full_text = p.text
-    new_text, n_subs = TOKEN_RE.subn(
-        lambda m: str(values.get(m.group(1), m.group(0))),
-        full_text,
+    return _sub_runs_preserving(
+        p._p, TOKEN_RE,
+        lambda m: str(values[m.group(1)]) if m.group(1) in values else None,
     )
-    if n_subs == 0:
-        return 0
-
-    # Collapse all runs into the first one with the substituted text.
-    if p.runs:
-        p.runs[0].text = new_text
-        for run in p.runs[1:]:
-            run.text = ""
-    return n_subs
 
 
 def _iter_all_paragraphs(d: Document):
@@ -211,49 +200,97 @@ def _set_t_multiline(t, text: str) -> None:
         anchor = nt
 
 
-def _substitute_item_tokens(p_elem, item: Mapping[str, Any], block_name: str) -> None:
-    """Replace `{{<block>.field}}` / bare `{{field}}` in one cloned <w:p>.
+def _write_t_text(t, text: str) -> None:
+    """Set a <w:t>'s text, preserving whitespace and rendering \\n as <w:br/>."""
+    if "\n" in text:
+        _set_t_multiline(t, text)
+    else:
+        t.text = text
+        t.set(qn("xml:space"), "preserve")
 
-    Mirrors `_replace_in_paragraph`'s run-collapsing strategy but works on a raw
-    lxml element (cloned block paragraphs aren't attached to a python-docx
-    parent). `{{<block>.field}}` always resolves against `item`; bare
-    `{{field}}` resolves against `item` ONLY when the key exists there — any
-    other `{{token}}` (e.g. {{state_name}}) is left for the flat pass.
+
+def _sub_runs_preserving(p_elem, pattern, repl) -> int:
+    """Substitute `pattern` matches across a paragraph's runs WITHOUT collapsing
+    run formatting.
+
+    The replacement text lands in the run where the match STARTS, and any text
+    before/after the match stays in its own run — so a normal-weight value run
+    keeps its weight even when an earlier label run is bold (the fix for values
+    inheriting the bold "Scope:" label). `repl(match) -> str | None`; returning
+    None leaves that match untouched (e.g. a token not in this scope's values),
+    so later/known tokens still resolve.
+
+    Works on any element with <w:t> descendants (a python-docx paragraph's `_p`
+    or a raw cloned block <w:p>), so both substitution phases share one engine.
     """
-    full = _p_text(p_elem)
-    if "{{" not in full:
-        return
-
-    dotted = _dotted_token_re(block_name)
-    new_text = dotted.sub(lambda m: str(item.get(m.group(1), m.group(0))), full)
-
-    # Bare `{{field}}` resolves against `item` ONLY when the key exists there —
-    # otherwise it's left for the flat pass against `values`.
-    def repl_bare(m: re.Match) -> str:
-        key = m.group(1)
-        return str(item[key]) if key in item else m.group(0)
-
-    new_text = TOKEN_RE.sub(repl_bare, new_text)
-
-    if new_text == full:
-        return
-
-    runs = [r for r in p_elem.iter(qn("w:r"))]
-    # Write the whole new text into the first run's first <w:t>; clear rest.
-    placed = False
-    for r in runs:
-        t = r.find(qn("w:t"))
-        if t is None:
-            continue
-        if not placed:
-            if "\n" in new_text:
-                _set_t_multiline(t, new_text)
-            else:
-                t.text = new_text
-                t.set(qn("xml:space"), "preserve")
-            placed = True
+    n = 0
+    guard = 0
+    while guard < 2000:
+        guard += 1
+        tnodes = list(p_elem.iter(qn("w:t")))
+        if not tnodes:
+            break
+        texts = [(t.text or "") for t in tnodes]
+        joined = "".join(texts)
+        if "{{" not in joined:
+            break
+        chosen = None
+        for m in pattern.finditer(joined):
+            r = repl(m)
+            if r is not None:
+                chosen = (m, r)
+                break
+        if chosen is None:
+            break
+        m, value = chosen
+        s, e = m.start(), m.end()
+        spans = []
+        pos = 0
+        for txt in texts:
+            spans.append((pos, pos + len(txt)))
+            pos += len(txt)
+        si = so = ei = eo = None
+        for i, (a, b) in enumerate(spans):
+            if si is None and a <= s < b:
+                si, so = i, s - a
+            if a < e <= b:
+                ei, eo = i, e - a
+        if si is None:
+            break
+        if ei is None:                      # match runs to the very end
+            ei, eo = len(tnodes) - 1, len(texts[-1])
+        before, after = texts[si][:so], texts[ei][eo:]
+        if si == ei:
+            _write_t_text(tnodes[si], before + value + after)
         else:
-            t.text = ""
+            _write_t_text(tnodes[si], before + value)   # value keeps si's format
+            for j in range(si + 1, ei):
+                tnodes[j].text = ""
+            tnodes[ei].text = after                      # 'after' keeps ei's format
+            tnodes[ei].set(qn("xml:space"), "preserve")
+        n += 1
+    return n
+
+
+def _substitute_item_tokens(p_elem, item: Mapping[str, Any], block_name: str) -> None:
+    """Replace `{{<block>.field}}` / bare `{{field}}` in one cloned <w:p>,
+    preserving each run's formatting (see `_sub_runs_preserving`).
+
+    `{{<block>.field}}` always resolves against `item`; bare `{{field}}`
+    resolves against `item` ONLY when the key exists there — any other
+    `{{token}}` (e.g. {{state_name}}) is left for the flat pass.
+    """
+    if "{{" not in _p_text(p_elem):
+        return
+    dotted = _dotted_token_re(block_name)
+    _sub_runs_preserving(
+        p_elem, dotted,
+        lambda m: str(item[m.group(1)]) if m.group(1) in item else None,
+    )
+    _sub_runs_preserving(
+        p_elem, TOKEN_RE,
+        lambda m: str(item[m.group(1)]) if m.group(1) in item else None,
+    )
 
 
 def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]]) -> int:
