@@ -134,7 +134,10 @@ def _template_version() -> str:
 # the protection is this API check. NOTE: /api/file/* downloads are NO LONGER
 # public — the Done page holds a Supabase session and now sends the bearer on
 # downloads, so a leaked capability-token URL alone can't fetch a file.
-_AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config"}
+_AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
+                      # server-to-server (the customer portal renders the proposal
+                      # PDF on demand); gated by SERVICE_TOKEN inside the handler.
+                      "/api/admin/proposal-pdf"}
 
 
 def _auth_is_public(path: str, method: str) -> bool:
@@ -362,6 +365,114 @@ def api_basisboard_status() -> Dict[str, Any]:
 @app.get("/api/basisboard/projects")
 def api_basisboard_projects() -> Dict[str, Any]:
     return basisboard_client.get_pipeline()
+
+
+# ─── Customer Portal integration (server-side proxy to the portal admin API) ───
+# The portal owns the portal_* tables; here we just call its SERVICE_TOKEN-gated
+# admin API. PORTAL_ADMIN_URL + SERVICE_TOKEN live in the env (not committed).
+def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    import httpx
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        raise HTTPException(503, "Customer portal isn't configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).")
+    try:
+        with httpx.Client(timeout=20.0, headers={"X-Service-Token": token}) as c:
+            resp = c.request(method, base + path, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Could not reach the customer portal.") from exc
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("error")
+        except Exception:  # noqa: BLE001
+            detail = None
+        raise HTTPException(resp.status_code if resp.status_code < 500 else 502, detail or "Portal error.")
+    return resp.json()
+
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _safe_id(value: str) -> str:
+    """Constrain an id that's interpolated into an outbound URL path to a safe
+    charset (no slashes / dots / query chars) — prevents the proxy request from
+    being redirected to another path or host (partial SSRF) via a crafted id."""
+    if not value or not _SAFE_ID.match(value):
+        raise HTTPException(400, "Invalid id.")
+    return value
+
+
+@app.post("/api/portal/publish")
+def api_portal_publish(draft_id: str, request: Request) -> Dict[str, Any]:
+    """Send a proposal (draft) to the customer portal — mints a link + emails it."""
+    draft_id = _safe_id(draft_id)
+    if not drafts.load_draft(draft_id):
+        raise HTTPException(404, "Draft not found")
+    return _portal("/api/admin/publish", "POST", {"draft_id": draft_id, "by": _user_email(request)})
+
+
+@app.get("/api/portal/pipeline")
+def api_portal_pipeline() -> Dict[str, Any]:
+    return _portal("/api/admin/pipeline", "GET")
+
+
+@app.get("/api/portal/proposal/{proposal_id}")
+def api_portal_proposal(proposal_id: str) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}", "GET")
+
+
+@app.post("/api/portal/proposal/{proposal_id}/reply")
+async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]:
+    proposal_id = _safe_id(proposal_id)
+    body = await request.json()
+    return _portal(f"/api/admin/proposal/{proposal_id}/reply", "POST",
+                   {"body": (body or {}).get("body") or "", "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/deposit-received")
+def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/scheduled")
+def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
+
+
+@app.get("/api/admin/proposal-pdf")
+def api_admin_proposal_pdf(draft_id: str, request: Request) -> Response:
+    """Render a draft's proposal to its real Treadwell PDF, on demand. Called
+    server-to-server by the customer portal (SERVICE_TOKEN-gated; this path is in
+    _AUTH_PUBLIC_PATHS so it skips the Google gate). Reuses the full /api/generate
+    pipeline + LibreOffice render, so the customer sees the exact branded document."""
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+    row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        raise HTTPException(422, "This proposal hasn't been generated yet.")
+    out = api_generate(GenerateIn(**pp), request)         # reuse the full generate logic
+    tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
+    entry = _FILE_CACHE.get(tok)
+    if not entry:
+        raise HTTPException(500, "Could not build the proposal document.")
+    pdf_bytes = entry.get("_pdf")
+    if pdf_bytes is None:
+        try:
+            with _PDF_RENDER_SEM:
+                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
+            entry["_pdf"] = pdf_bytes
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Portal PDF render failed")
+            raise HTTPException(500, "Failed to render the proposal PDF.") from exc
+    proj = re.sub(r"[^\x20-\x7e]", "_", str((row.get("data") or {}).get("project_name") or "Treadwell Proposal"))
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{proj} - Proposal.pdf"'})
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
