@@ -1082,6 +1082,26 @@ _DEFAULT_EXCLUSIONS = (
     "Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations"
 )
 
+# Standard narrative fallbacks — mirror the frontend's PROPOSAL_DEFAULTS
+# (frontend/js/proposal-review.js). Backfilled ONLY when the caller sends a blank
+# value so the proposal never renders a raw {{scope_notes}}/{{schedule_notes}}
+# token (e.g. the "View files" rebuild path that posts raw state). The frontend
+# normally fills these, so this is purely defensive.
+_DEFAULT_SCHEDULE = "Assumes all areas available at one time, approx. 1 week to complete full scope"
+_DEFAULT_SCOPE_EPOXY = (
+    "Demo (one layer of) existing flooring and place in a dumpster provided by the owner. "
+    "Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting). "
+    "Prep substrate cracks and non-moving joints (includes minor floor prep, patching of minor "
+    "substrate defects, spalls and divots). Install Epoxy System. Assumes installation over: "
+    "clean, sound & solid concrete substrate."
+)
+_DEFAULT_SCOPE_POLISH = (
+    "Demo existing flooring and place in a dumpster. Fill concrete joints with backer rod and "
+    "polyurea caulking. Patch minor divots. Grind and polish concrete with successive passes "
+    "using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform "
+    "high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate."
+)
+
 
 def _ensure_value_aliases(values: Dict[str, Any]) -> None:
     """Backfill blank token aliases / fallbacks in-place so the proposal never
@@ -1097,6 +1117,19 @@ def _ensure_value_aliases(values: Dict[str, Any]) -> None:
             )
     if _blank(values.get("exclusions")):
         values["exclusions"] = _DEFAULT_EXCLUSIONS
+    if _blank(values.get("schedule_notes")):
+        values["schedule_notes"] = _DEFAULT_SCHEDULE
+    if _blank(values.get("scope_notes")):
+        _wt = str(values.get("work_type") or "epoxy").lower()
+        values["scope_notes"] = _DEFAULT_SCOPE_POLISH if _wt == "polish" else _DEFAULT_SCOPE_EPOXY
+    # Header date token: M/D/YY from the ISO bid_date — backfilled so a caller that
+    # omits the pre-formatted value (e.g. the "View files" rebuild path) can't leak
+    # a raw {{bid_date_formatted}} into the customer-facing proposal.
+    if _blank(values.get("bid_date_formatted")):
+        _bd = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(values.get("bid_date") or "").strip())
+        if _bd:
+            _y, _mo, _d = _bd.groups()
+            values["bid_date_formatted"] = f"{int(_mo)}/{int(_d)}/{_y[2:]}"
 
 
 @app.get("/api/default-notes")
