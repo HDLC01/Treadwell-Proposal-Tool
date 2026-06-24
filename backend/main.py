@@ -364,6 +364,64 @@ def api_basisboard_projects() -> Dict[str, Any]:
     return basisboard_client.get_pipeline()
 
 
+# ─── Customer Portal integration (server-side proxy to the portal admin API) ───
+# The portal owns the portal_* tables; here we just call its SERVICE_TOKEN-gated
+# admin API. PORTAL_ADMIN_URL + SERVICE_TOKEN live in the env (not committed).
+def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    import httpx
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        raise HTTPException(503, "Customer portal isn't configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).")
+    try:
+        with httpx.Client(timeout=20.0, headers={"X-Service-Token": token}) as c:
+            resp = c.request(method, base + path, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Could not reach the customer portal.") from exc
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("error")
+        except Exception:  # noqa: BLE001
+            detail = None
+        raise HTTPException(resp.status_code if resp.status_code < 500 else 502, detail or "Portal error.")
+    return resp.json()
+
+
+@app.post("/api/portal/publish")
+def api_portal_publish(draft_id: str, request: Request) -> Dict[str, Any]:
+    """Send a proposal (draft) to the customer portal — mints a link + emails it."""
+    if not drafts.load_draft(draft_id):
+        raise HTTPException(404, "Draft not found")
+    return _portal("/api/admin/publish", "POST", {"draft_id": draft_id, "by": _user_email(request)})
+
+
+@app.get("/api/portal/pipeline")
+def api_portal_pipeline() -> Dict[str, Any]:
+    return _portal("/api/admin/pipeline", "GET")
+
+
+@app.get("/api/portal/proposal/{proposal_id}")
+def api_portal_proposal(proposal_id: str) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{proposal_id}", "GET")
+
+
+@app.post("/api/portal/proposal/{proposal_id}/reply")
+async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]:
+    body = await request.json()
+    return _portal(f"/api/admin/proposal/{proposal_id}/reply", "POST",
+                   {"body": (body or {}).get("body") or "", "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/deposit-received")
+def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{proposal_id}/deposit-received", "POST", {})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/scheduled")
+def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{proposal_id}/scheduled", "POST", {})
+
+
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
 def api_detect_work_type(payload: DetectWorkTypeIn) -> DetectWorkTypeOut:
     """Called between Screen 1 and Screen 2 to pick the right tab."""

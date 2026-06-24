@@ -179,6 +179,38 @@
       pdfBtn.style.display = "none";
     }
 
+    // Send to customer portal — mints a secure link + emails the customer.
+    const portalBtn = document.getElementById("portal-btn");
+    if (portalBtn) {
+      portalBtn.addEventListener("click", async () => {
+        const draftId = TW.getDraftId();
+        if (!draftId) { alert("Save the project first (open it from Projects), then send."); return; }
+        const orig = portalBtn.textContent;
+        portalBtn.disabled = true; portalBtn.textContent = "Sending…";
+        try {
+          const resp = await fetch(TW.resolveApiBase() + "/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
+            { method: "POST", headers: TW.authHeaders() });
+          const j = await resp.json().catch(() => ({}));
+          if (!resp.ok || j.ok === false) {
+            const e = j.error || j.detail || ("HTTP " + resp.status);
+            throw new Error(e === "no_contact_email"
+              ? "This proposal has no customer email — add one on the Intake screen first."
+              : e);
+          }
+          portalBtn.textContent = "✓ Sent to customer portal";
+          const r = document.getElementById("portal-result");
+          if (r) {
+            r.style.display = "";
+            r.innerHTML = "Customer link: <a href='" + j.url + "' target='_blank' rel='noopener'>" + j.url +
+              "</a><br>Emailed to <strong>" + (j.customer_email || "the customer") + "</strong>.";
+          }
+        } catch (err) {
+          portalBtn.textContent = "Failed — " + (err.message || "try again");
+          setTimeout(() => { portalBtn.textContent = orig; portalBtn.disabled = false; }, 3000);
+        }
+      });
+    }
+
     document.getElementById("restart-btn").addEventListener("click", () => {
       TW.clearState();
       window.location.assign("/");
