@@ -7,6 +7,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: treadwell-proposal-tool:latest   # pinned so prod can `up -d` a prebuilt image (no on-box build)
     container_name: treadwell-proposal-tool
     restart: unless-stopped
     ports:
