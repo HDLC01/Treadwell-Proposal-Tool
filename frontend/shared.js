@@ -329,6 +329,40 @@
     });
   }
 
+  // ─── Dates (business timezone) ────────────────────────────────────
+  // Treadwell operates in the Kansas City metro, which is Central Time. Format
+  // every project/server timestamp in this fixed business timezone — NOT the
+  // viewer's local timezone — so Kyle & Troy in Kansas, and anyone testing from
+  // elsewhere, all see the SAME date for a project (e.g. a job saved late on the
+  // 30th UTC reads "6/30" for everyone, not "7/1" for a viewer in +UTC).
+  const BIZ_TZ = "America/Chicago";
+  function fmtBizDate(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return isNaN(d) ? "—" : d.toLocaleDateString("en-US", { timeZone: BIZ_TZ });
+  }
+  function fmtBizDateTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return isNaN(d) ? "" : d.toLocaleString("en-US", { timeZone: BIZ_TZ, timeZoneName: "short" });
+  }
+  // "YYYY-MM" in the business timezone — matches the month fmtBizDate() shows, so
+  // the Projects month filter buckets each job under the month on its card.
+  function bizYM(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: BIZ_TZ, year: "numeric", month: "2-digit" }).formatToParts(d);
+    const y = (parts.find(p => p.type === "year") || {}).value;
+    const m = (parts.find(p => p.type === "month") || {}).value;
+    return (y && m) ? y + "-" + m : "";
+  }
+  // "2026-07" → "July 2026" (rendered in the business timezone; noon-UTC anchor
+  // avoids any date rollover when shifting to Central).
+  function bizMonthLabel(ym) {
+    try { return new Date(ym + "-01T12:00:00Z").toLocaleString("en-US", { timeZone: BIZ_TZ, month: "long", year: "numeric" }); }
+    catch { return ym; }
+  }
+
   // ─── Number formatting ────────────────────────────────────────────
   function fmtUsd(n) {
     if (n == null || isNaN(Number(n))) return "$—";
@@ -354,6 +388,10 @@
     postJSON,
     authHeaders,
     confirmDanger,
+    fmtBizDate,
+    fmtBizDateTime,
+    bizYM,
+    bizMonthLabel,
     fmtUsd,
     absoluteUrl,
     resolveApiBase,
