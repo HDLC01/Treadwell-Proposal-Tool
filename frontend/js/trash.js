@@ -1,5 +1,5 @@
 // Externalized from trash.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
-    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    const fmtDate = (iso) => TW.fmtBizDate(iso);   // business timezone (Central), see shared.js
     function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
@@ -59,13 +59,21 @@
 
     async function purge(c) {
       const id = decodeURIComponent(c.dataset.id);
-      if (!confirm(`Permanently delete “${_name(c)}”?\n\nThis can't be undone.`)) return;
+      const ok = await TW.confirmDanger({
+        title: "Delete forever?",
+        name: _name(c), after: " will be permanently deleted.",
+        detail: "This removes the project and its files for everyone — it can't be undone.",
+        confirmText: "Delete forever",
+        tone: "danger",
+      });
+      if (!ok) return;
+      const btn = c.querySelector(".purge-btn"); if (btn) { btn.disabled = true; btn.textContent = "Deleting…"; }
       try {
         const r = await fetch("/api/draft/" + encodeURIComponent(id) + "?permanent=true", { method:"DELETE", headers: TW.authHeaders() });
         const j = await r.json();
-        if (!j || j.ok === false) { alert((j&&j.error)||"Delete failed."); return; }
+        if (!j || j.ok === false) { alert((j&&j.error)||"Delete failed."); if (btn) { btn.disabled=false; btn.textContent="Delete forever"; } return; }
         c.remove(); _emptyIfNone();
-      } catch (err) { alert("Delete failed. " + (err.message||"")); }
+      } catch (err) { alert("Delete failed. " + (err.message||"")); if (btn) { btn.disabled=false; btn.textContent="Delete forever"; } }
     }
 
     async function load() {

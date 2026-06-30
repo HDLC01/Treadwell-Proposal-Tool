@@ -4,7 +4,7 @@
       deleted_project:"deleted project" };
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function money(n){ return (typeof n==="number") ? " — $"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : ""; }
-    function when(iso){ if(!iso) return ""; const d=new Date(iso); return isNaN(d)?"":d.toLocaleString(); }
+    const when = (iso) => TW.fmtBizDateTime(iso);   // business timezone (Central), see shared.js
 
     async function load(){
       await window.TWAuth.ready;
