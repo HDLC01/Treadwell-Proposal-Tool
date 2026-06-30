@@ -227,6 +227,108 @@
     return res.json();
   }
 
+  // ─── Confirm modal ────────────────────────────────────────────────
+  // A styled in-app replacement for the browser's native confirm() — used for
+  // destructive actions (delete forever, move to trash). Returns a Promise that
+  // resolves true (confirmed) / false (cancelled). CSP allows inline <style>
+  // (every page ships one) but NOT inline scripts, so the CSS is injected here
+  // once and all behaviour is wired with addEventListener.
+  let _modalCssDone = false;
+  function injectModalCss() {
+    if (_modalCssDone) return; _modalCssDone = true;
+    const s = document.createElement("style");
+    s.textContent = [
+      ".tw-ov{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;",
+      "background:rgba(20,18,18,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);opacity:0;transition:opacity .16s ease;}",
+      ".tw-ov.tw-in{opacity:1;}",
+      ".tw-dlg{background:#fff;color:#1b1c1c;width:100%;max-width:420px;border-radius:16px;padding:26px 24px 20px;",
+      "box-shadow:0 24px 60px rgba(0,0,0,.30);text-align:center;transform:translateY(10px) scale(.97);transition:transform .16s ease;",
+      "font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}",
+      ".tw-ov.tw-in .tw-dlg{transform:none;}",
+      ".tw-dlg-ic{width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:25px;margin:0 auto 14px;}",
+      ".tw-dlg--danger .tw-dlg-ic{background:rgba(200,16,46,.10);}",
+      ".tw-dlg--warn .tw-dlg-ic{background:rgba(245,158,11,.14);}",
+      ".tw-dlg-h{font-size:18px;font-weight:800;margin:0 0 7px;letter-spacing:-.01em;}",
+      ".tw-dlg-m{color:#5c403f;margin:0;}",
+      ".tw-dlg-m b{color:#1b1c1c;}",
+      ".tw-dlg-d{color:#9e001f;font-weight:600;font-size:12.5px;margin:9px 0 0;}",
+      ".tw-dlg-act{display:flex;gap:10px;margin-top:22px;}",
+      ".tw-dlg-act button{flex:1;border-radius:10px;padding:11px 16px;font:700 14px system-ui;cursor:pointer;border:1px solid transparent;transition:background .12s,filter .12s;}",
+      ".tw-dlg-no{background:#f1f0ef;color:#1b1c1c;border-color:rgba(27,28,28,.12);}",
+      ".tw-dlg-no:hover{background:#e7e6e4;}",
+      ".tw-dlg--danger .tw-dlg-go{background:#c8102e;color:#fff;}",
+      ".tw-dlg--warn .tw-dlg-go{background:#b45309;color:#fff;}",
+      ".tw-dlg-go:hover{filter:brightness(.93);}",
+      ".tw-dlg-go:focus-visible,.tw-dlg-no:focus-visible{outline:2px solid #1b1c1c;outline-offset:2px;}",
+      "@media (max-width:430px){.tw-dlg-act{flex-direction:column-reverse;}}",
+    ].join("");
+    document.head.appendChild(s);
+  }
+
+  function confirmDanger(opts) {
+    opts = opts || {};
+    const tone = opts.tone === "warn" ? "warn" : "danger";
+    return new Promise((resolve) => {
+      injectModalCss();
+      const prevFocus = document.activeElement;
+      const ov = document.createElement("div");
+      ov.className = "tw-ov";
+      ov.setAttribute("role", "dialog");
+      ov.setAttribute("aria-modal", "true");
+      ov.setAttribute("aria-labelledby", "tw-dlg-h");
+      const dlg = document.createElement("div");
+      dlg.className = "tw-dlg tw-dlg--" + tone;
+      dlg.innerHTML =
+        '<div class="tw-dlg-ic"></div>' +
+        '<h2 class="tw-dlg-h" id="tw-dlg-h"></h2>' +
+        '<p class="tw-dlg-m"></p>' +
+        '<p class="tw-dlg-d" hidden></p>' +
+        '<div class="tw-dlg-act"><button type="button" class="tw-dlg-no"></button>' +
+        '<button type="button" class="tw-dlg-go"></button></div>';
+      // textContent everywhere → no HTML injection from project names.
+      dlg.querySelector(".tw-dlg-ic").textContent = opts.icon || (tone === "warn" ? "🗑" : "⚠️");
+      dlg.querySelector(".tw-dlg-h").textContent = opts.title || "Are you sure?";
+      const mEl = dlg.querySelector(".tw-dlg-m");
+      // message may carry an emphasised name → support {name} highlight
+      if (opts.name) {
+        mEl.append(document.createTextNode((opts.before || "") + "“"));
+        const b = document.createElement("b"); b.textContent = opts.name; mEl.append(b);
+        mEl.append(document.createTextNode("”" + (opts.after || "")));
+      } else {
+        mEl.textContent = opts.message || "";
+      }
+      if (opts.detail) { const d = dlg.querySelector(".tw-dlg-d"); d.textContent = opts.detail; d.hidden = false; }
+      const noBtn = dlg.querySelector(".tw-dlg-no");
+      const goBtn = dlg.querySelector(".tw-dlg-go");
+      noBtn.textContent = opts.cancelText || "Cancel";
+      goBtn.textContent = opts.confirmText || "Delete";
+      ov.appendChild(dlg);
+
+      let settled = false;
+      function close(val) {
+        if (settled) return; settled = true;
+        document.removeEventListener("keydown", onKey, true);
+        ov.classList.remove("tw-in");
+        setTimeout(() => { ov.remove(); try { prevFocus && prevFocus.focus && prevFocus.focus(); } catch {} }, 170);
+        resolve(val);
+      }
+      function onKey(e) {
+        if (e.key === "Escape") { e.preventDefault(); close(false); }
+        else if (e.key === "Tab") {                       // trap focus between the 2 buttons
+          const f = [noBtn, goBtn]; let i = f.indexOf(document.activeElement); if (i < 0) i = 0;
+          e.preventDefault();
+          f[(i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus();
+        }
+      }
+      noBtn.addEventListener("click", () => close(false));
+      goBtn.addEventListener("click", () => close(true));
+      ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(false); });  // click backdrop = cancel
+      document.addEventListener("keydown", onKey, true);
+      document.body.appendChild(ov);
+      requestAnimationFrame(() => { ov.classList.add("tw-in"); noBtn.focus(); });  // focus Cancel (safe default)
+    });
+  }
+
   // ─── Number formatting ────────────────────────────────────────────
   function fmtUsd(n) {
     if (n == null || isNaN(Number(n))) return "$—";
@@ -251,6 +353,7 @@
     writeForm,
     postJSON,
     authHeaders,
+    confirmDanger,
     fmtUsd,
     absoluteUrl,
     resolveApiBase,
