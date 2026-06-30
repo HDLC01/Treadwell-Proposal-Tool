@@ -28,6 +28,15 @@
 
     const CACHE_KEY = "tw_projects_cache";
     const FILTER_KEY = "tw_projects_filter";
+    // Search / month / sort state — persisted (parallel to FILTER_KEY) so a scan
+    // survives opening a project and coming back.
+    const QUERY_KEY = "tw_projects_q";
+    const MONTH_KEY = "tw_projects_month";
+    const SORT_KEY  = "tw_projects_sort";
+    const _ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
+    let SEARCH = _ss(QUERY_KEY, "");
+    let MONTH  = _ss(MONTH_KEY, "");
+    let SORT   = _ss(SORT_KEY, "newest");
     let ALL_PROJECTS = [];
     // Default to "active" so the working list isn't cluttered by finished jobs;
     // existing projects have no `archived` flag → treated as active (nothing
@@ -57,6 +66,65 @@
       return real.filter(isActive);  // "active"
     }
 
+    // Search / month / sort run ON TOP of the chip filter (applyFilter), so they
+    // operate WITHIN the selected tab ("search within Active"). Pure functions,
+    // composed in paint(). Search matches the fields the /api/drafts projection
+    // reliably returns: name, work type, owner (city_state only on the fallback).
+    function applySearch(list) {
+      const q = SEARCH.trim().toLowerCase();
+      if (!q) return list;
+      const tokens = q.split(/\s+/);
+      return list.filter(p => {
+        const hay = [p.project_name, p.work_type, p.owner_email, p.city_state]
+          .filter(Boolean).join(" ").toLowerCase();
+        return tokens.every(t => hay.includes(t));   // AND the words
+      });
+    }
+    function applyMonth(list) {
+      if (!MONTH) return list;
+      // updated_at is a full ISO timestamp; slice "YYYY-MM" (never new Date()) to
+      // avoid UTC-midnight off-by-one near month boundaries.
+      return list.filter(p => String(p.updated_at || "").slice(0, 7) === MONTH);
+    }
+    function applySort(list) {
+      const a = list.slice();
+      const s = (v) => String(v == null ? "" : v);
+      if (SORT === "oldest")      a.sort((x, y) => s(x.updated_at).localeCompare(s(y.updated_at)));
+      else if (SORT === "name")   a.sort((x, y) => s(x.project_name).localeCompare(s(y.project_name)));
+      else if (SORT === "deadline") a.sort((x, y) => {        // soonest first, nulls last
+        if (!x.deadline && !y.deadline) return 0;
+        if (!x.deadline) return 1; if (!y.deadline) return -1;
+        return s(x.deadline).localeCompare(s(y.deadline));
+      });
+      else if (SORT === "total") a.sort((x, y) => {           // high → low, nulls last
+        const tx = typeof x.total === "number" ? x.total : null;
+        const ty = typeof y.total === "number" ? y.total : null;
+        if (tx == null && ty == null) return 0;
+        if (tx == null) return 1; if (ty == null) return -1;
+        return ty - tx;
+      });
+      else a.sort((x, y) => s(y.updated_at).localeCompare(s(x.updated_at))); // newest (default)
+      return a;
+    }
+    // Build the month <select> from the months that actually exist in the current
+    // tab (post-chip), newest first, with counts. Reset a stale selection so the
+    // grid never goes blank when switching tabs.
+    function populateMonths(postChip) {
+      const sel = document.getElementById("month");
+      if (!sel) return;
+      const counts = {};
+      for (const p of postChip) {
+        const ym = String(p.updated_at || "").slice(0, 7);
+        if (ym) counts[ym] = (counts[ym] || 0) + 1;
+      }
+      if (MONTH && !counts[MONTH]) { MONTH = ""; try { sessionStorage.removeItem(MONTH_KEY); } catch {} }
+      const label = (ym) => { try { return new Date(ym + "-01T00:00:00").toLocaleString(undefined, { month: "long", year: "numeric" }); } catch { return ym; } };
+      const months = Object.keys(counts).sort().reverse();
+      sel.innerHTML = `<option value="">Any month</option>` +
+        months.map(ym => `<option value="${ym}">${label(ym)} (${counts[ym]})</option>`).join("");
+      sel.value = MONTH;
+    }
+
     function renderChips() {
       const f = document.getElementById("filters");
       const real = ALL_PROJECTS.filter(p => !isTest(p));   // Active/Inactive/All count real bids only
@@ -83,15 +151,26 @@
     // Re-draw chips + the filtered grid from ALL_PROJECTS (single source of truth).
     function paint() {
       renderChips();
+      const tb = document.getElementById("toolbar");
+      if (tb) tb.hidden = ALL_PROJECTS.length === 0;
       const el = document.getElementById("list");
-      const shown = applyFilter(ALL_PROJECTS);
+      const chipSet = applyFilter(ALL_PROJECTS);           // chip stage (tab)
+      populateMonths(chipSet);                             // months track the tab
+      const shown = applySort(applyMonth(applySearch(chipSet)));   // search + date + sort
+      // Live "N of M" count (M = current tab size) + Clear visibility.
+      const countEl = document.getElementById("count");
+      if (countEl) countEl.textContent = ALL_PROJECTS.length ? (shown.length + " of " + chipSet.length) : "";
+      const clearBtn = document.getElementById("clear");
+      if (clearBtn) clearBtn.hidden = !(SEARCH || MONTH || SORT !== "newest");
       if (!shown.length) {
         el.className = "empty";
-        el.textContent = ALL_PROJECTS.length
-          ? (CURRENT_FILTER === "inactive" ? "No inactive projects."
-             : CURRENT_FILTER === "test"   ? "No test projects."
-             : "No active projects.")
-          : "No projects yet. Click “+ New project” to start.";
+        el.textContent = !ALL_PROJECTS.length
+          ? "No projects yet. Click “+ New project” to start."
+          : !chipSet.length
+            ? (CURRENT_FILTER === "inactive" ? "No inactive projects."
+               : CURRENT_FILTER === "test"   ? "No test projects."
+               : "No active projects.")
+            : "No projects match your search.";   // tab has rows, but search/month filtered them out
         return;
       }
       el.className = "grid";
@@ -193,5 +272,38 @@
       }
     }
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+    // Wire the toolbar ONCE (it lives in static HTML, not paint(), so the search
+    // box keeps focus/value while the grid re-renders). Each control updates state,
+    // persists it, then repaints.
+    (function wireToolbar(){
+      const q = document.getElementById("q");
+      const month = document.getElementById("month");
+      const sort = document.getElementById("sort");
+      const clearBtn = document.getElementById("clear");
+      if (q) {
+        q.value = SEARCH;
+        let _t;
+        q.addEventListener("input", () => {
+          clearTimeout(_t);
+          _t = setTimeout(() => { SEARCH = q.value; try { sessionStorage.setItem(QUERY_KEY, SEARCH); } catch {} paint(); }, 200);
+        });
+        q.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") { q.value = ""; SEARCH = ""; try { sessionStorage.removeItem(QUERY_KEY); } catch {} paint(); }
+        });
+      }
+      if (sort) { sort.value = SORT; sort.addEventListener("change", () => { SORT = sort.value; try { sessionStorage.setItem(SORT_KEY, SORT); } catch {} paint(); }); }
+      if (month) month.addEventListener("change", () => {
+        MONTH = month.value;
+        try { MONTH ? sessionStorage.setItem(MONTH_KEY, MONTH) : sessionStorage.removeItem(MONTH_KEY); } catch {}
+        paint();
+      });
+      if (clearBtn) clearBtn.addEventListener("click", () => {
+        SEARCH = ""; MONTH = ""; SORT = "newest";
+        try { sessionStorage.removeItem(QUERY_KEY); sessionStorage.removeItem(MONTH_KEY); sessionStorage.removeItem(SORT_KEY); } catch {}
+        if (q) q.value = ""; if (sort) sort.value = "newest"; if (month) month.value = "";
+        paint();   // leaves the chip (tab) selection intact
+      });
+    })();
     load();
   
