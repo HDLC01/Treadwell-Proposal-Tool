@@ -10,6 +10,11 @@
     });
 
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    // Local "YYYY-MM" that MATCHES the date fmtDate() prints on the card. Bucket
+    // the month filter by this, not by slicing the raw UTC ISO: a project saved
+    // 2026-06-30T19:00Z shows "7/1/2026" in UTC+8 but slices to "2026-06", which
+    // would file it under June and hide July from the dropdown entirely.
+    function localYM(iso){ const d=new Date(iso); return isNaN(d)?"":d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); }
     function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
 
     // Resolve as soon as auth.js sets the token (right after getSession) so the
@@ -100,9 +105,7 @@
     }
     function applyMonth(list) {
       if (!MONTH) return list;
-      // updated_at is a full ISO timestamp; slice "YYYY-MM" (never new Date()) to
-      // avoid UTC-midnight off-by-one near month boundaries.
-      return list.filter(p => String(p.updated_at || "").slice(0, 7) === MONTH);
+      return list.filter(p => localYM(p.updated_at) === MONTH);   // local month, matches the card
     }
     function applySort(list) {
       const a = list.slice();
@@ -141,7 +144,7 @@
       if (!sel) return;
       const counts = {};
       for (const p of postChip) {
-        const ym = String(p.updated_at || "").slice(0, 7);
+        const ym = localYM(p.updated_at);
         if (ym) counts[ym] = (counts[ym] || 0) + 1;
       }
       if (MONTH && !counts[MONTH]) { MONTH = ""; try { sessionStorage.removeItem(MONTH_KEY); } catch {} }
@@ -266,7 +269,14 @@
     async function trashCard(c) {
       const id = decodeURIComponent(c.dataset.id);
       const name = (c.querySelector(".pname")||{}).textContent || id;
-      if (!confirm(`Move “${name}” to Trash?\n\nIt leaves the active list but stays restorable from the Trash page.`)) return;
+      const ok = await TW.confirmDanger({
+        title: "Move to Trash?",
+        name: name, after: " will leave the active list.",
+        detail: "It stays restorable from the Trash page.",
+        confirmText: "Move to Trash",
+        tone: "warn",
+      });
+      if (!ok) return;
       try {
         const r = await fetch("/api/draft/" + encodeURIComponent(id), { method:"DELETE", headers: TW.authHeaders() });
         const j = await r.json();
