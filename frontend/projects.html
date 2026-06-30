@@ -40,6 +40,8 @@
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 16px; }
     .tw-search { flex:1; min-width:180px; max-width:320px; background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 12px; font:600 12.5px system-ui; }
     .tw-select { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 10px; font:600 12.5px system-ui; cursor:pointer; }
+    .tw-dir { min-width:74px; text-align:center; font-variant-numeric:tabular-nums; }
+    .tw-dir[aria-pressed="true"] { color:var(--red); border-color:var(--red); }
     .tw-search:hover,.tw-select:hover,.tw-search:focus,.tw-select:focus { border-color:var(--red); outline:none; }
     .tw-count { color:var(--ink-v); font:600 12.5px system-ui; font-variant-numeric:tabular-nums; margin-left:auto; }
     @media (max-width:520px){ .tw-search{ flex:1 0 100%; max-width:none; } .tw-count{ margin-left:0; } }
@@ -66,13 +68,13 @@
       <select id="month" class="tw-select" aria-label="Filter by month">
         <option value="">Any month</option>
       </select>
-      <select id="sort" class="tw-select" aria-label="Sort projects">
-        <option value="newest">Newest</option>
-        <option value="oldest">Oldest</option>
-        <option value="name">Name A–Z</option>
-        <option value="deadline">Deadline (soonest)</option>
-        <option value="total">Total (high→low)</option>
+      <select id="sort" class="tw-select" aria-label="Sort projects by">
+        <option value="updated">Date updated</option>
+        <option value="name">Name</option>
+        <option value="deadline">Deadline</option>
+        <option value="total">Total</option>
       </select>
+      <button type="button" id="dir" class="tw-select tw-dir" aria-label="Toggle sort direction">↓ Desc</button>
       <span id="count" class="tw-count" aria-live="polite"></span>
       <button type="button" id="clear" class="chip" hidden>✕ Clear</button>
     </div>
