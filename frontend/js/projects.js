@@ -126,7 +126,11 @@
         if (tx == null) return 1; if (ty == null) return -1;
         return dir * (tx - ty);
       });
-      else a.sort((x, y) => dir * s(x.updated_at).localeCompare(s(y.updated_at))); // updated (default)
+      else a.sort((x, y) => {                                // updated (default): newest⇄oldest, blanks last
+        if (!x.updated_at && !y.updated_at) return 0;
+        if (!x.updated_at) return 1; if (!y.updated_at) return -1;
+        return dir * s(x.updated_at).localeCompare(s(y.updated_at));
+      });
       return a;
     }
     // Build the month <select> from the months that actually exist in the current
