@@ -260,7 +260,10 @@ def test_rooms_render_options_and_hide_single_bid():
 def test_no_rooms_keeps_single_bid():
     import re
     for wt in ("epoxy", "combo"):
-        blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct", values=_VALS))
+        # tax_breakout=True so the itemized Total line renders (the point here is
+        # that single-bid is NOT suppressed when there are no room copies).
+        blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct", values=_VALS,
+                                          tax_breakout=True))
         assert "Base Bid" in blob, f"{wt}: single-bid Base Bid missing"
         assert "$63,801.00 – Total" in blob, f"{wt}: single-bid Total missing"
         assert "Grooming:" not in blob, f"{wt}: room content leaked with no rooms"

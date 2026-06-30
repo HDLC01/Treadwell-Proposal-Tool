@@ -1056,16 +1056,30 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     else:
         values["site_visit_phrase"] = f"per site visit on {_sv}"
 
-    # Single-bid tax phrase (epoxy {{base_tax_phrase}}): tax-exempt jobs read
-    # "(tax exempt)"; otherwise material sales tax (+ Remodel Tax when it applies).
+    # PRICE layout. Default ("INCLUDED") = a single all-in line:
+    #   "$Total – … (material sales tax INCLUDED)"  (remodel folded into the total)
+    # "Sales tax broken out" itemizes Base + Material Sales Tax + Remodel + Total
+    # and drops the "(… INCLUDED)" label. "Tax exempt" = one line, "(tax exempt)".
     _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
     _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
-    if _exempt:
-        values["base_tax_phrase"] = "(tax exempt)"
-    elif payload.remodel:
-        values["base_tax_phrase"] = "(Remodel Tax AND material sales tax INCLUDED)"
+    _broken = _incl in ("BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT")
+    if _broken:
+        # Itemized: keep the frontend's pre-tax base + Material Sales Tax + Total;
+        # remodel shows as its own line; no "INCLUDED" label on the base line.
+        values["base_tax_phrase"] = ""
+        _tax_breakout = True
+        _remodel_lines = list(payload.remodel or [])
     else:
-        values["base_tax_phrase"] = "(material sales tax INCLUDED)"
+        # One all-in line: the base line carries the FULL total; remodel folds in.
+        if str(values.get("total_formatted") or "").strip():
+            values["base_bid_formatted"] = values["total_formatted"]
+        _tax_breakout = False
+        _remodel_lines = []
+        values["base_tax_phrase"] = (
+            "(tax exempt)" if _exempt
+            else "(Remodel Tax AND material sales tax INCLUDED)" if payload.remodel
+            else "(material sales tax INCLUDED)"
+        )
 
     # Combo WORK lists the real picked epoxy system as "Option 1: <name>" (from
     # the Epoxy!A22 dropdown), falling back to the generic label.
@@ -1129,6 +1143,10 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # with toggleable system line + signed difference vs. the base bid).
     rooms_arg = _build_options(payload.rooms, values)
 
+    # "Options:" label only prints when there ARE options (structured price lines
+    # or a recommended alternate); otherwise it's stripped (Kyle: no empty Options).
+    _has_options = bool(price_line_dicts or alternates)
+
     # Fill estimate workbook
     try:
         xlsx_bytes = estimate_writer.fill_estimate(
@@ -1157,13 +1175,17 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             price_lines=price_line_dicts,
             alternates=alternates,
             systems=systems_arg,
-            remodel=payload.remodel,
+            remodel=_remodel_lines,
             rooms=rooms_arg,
             # rooms present → suppress the single Base-Bid/Total layout (the room
             # options ARE the price); absent → default (single-bid layout shown).
             single_bid=([] if rooms_arg else None),
             # Editable NOTES (estimator's edits, else standard boilerplate).
             notes=_notes_for(payload.work_type, payload.notes),
+            # PRICE layout: itemize tax lines only when "broken out"; show the
+            # "Options:" label only when options exist.
+            tax_breakout=_tax_breakout,
+            has_options=_has_options,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc

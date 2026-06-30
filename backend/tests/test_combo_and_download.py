@@ -71,7 +71,7 @@ COMBO_VALUES = {
 
 def test_combo_proposal_fills_price_and_areas():
     data = proposal_writer.fill_proposal(work_type="combo", audience="Direct",
-                                         values=COMBO_VALUES,
+                                         values=COMBO_VALUES, tax_breakout=True,
                                          remodel=[{"amount_formatted": "$2,639.00"}])
     text = _rendered_text(data)
     for needle in ["Base Bid", "$61,162.00", "Material Sales Tax", "$63,801.00",

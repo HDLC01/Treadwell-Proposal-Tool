@@ -169,41 +169,58 @@ def test_direct_templates_render_price_lines_and_alternate():
              "remodel_tax": "$3,900.00", "total_formatted": "$96,400.00"}]
     for wt in ("epoxy", "combo", "polish"):
         blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct",
-                                          values=_BASE_VALS, price_lines=pls, alternates=alts))
+                                          values=_BASE_VALS, price_lines=pls, alternates=alts,
+                                          tax_breakout=True, has_options=True))
         assert "$63,801" in blob, f"{wt}: base total missing"
+        assert "Options" in blob, f"{wt}: Options label missing when options present"
         assert "$4,200 – Onsite mockup" in blob, f"{wt}: price line missing"
         assert "ALTERNATE SYSTEM — Urethane" in blob, f"{wt}: alternate missing"
         assert "$96,400.00 – Total" in blob, f"{wt}: alternate total missing"
         assert not re.search(r"\{\{[#/]", blob), f"{wt}: leftover block marker"
 
 
-def test_epoxy_price_breakdown_kansas_and_remodel_toggle():
-    """Epoxy PRICE: Base Bid + Material Sales Tax always shown; Remodel Tax
-    only when a remodel row is supplied; never 'Missouri', never 'INCLUDED'."""
+def test_epoxy_price_breakdown_oneline_default_and_breakout():
+    """Epoxy PRICE: DEFAULT = one all-in line ('… (material sales tax INCLUDED)',
+    no Material Sales Tax / Total lines, no empty Options). 'Broken out'
+    (tax_breakout=True) itemizes Base + Material Sales Tax + Remodel + Total with
+    NO 'INCLUDED' label. Never 'Missouri'."""
     import re
     import proposal_writer as pw
+    # DEFAULT one-line: base line + INCLUDED phrase, nothing itemized, no Options
+    one = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS))
+    assert "Base Bid" in one
+    assert "(material sales tax INCLUDED)" in one
+    assert "Material Sales Tax" not in one      # folded into the single line
+    assert "– Total" not in one                 # no separate Total line
+    assert "Options:" not in one                # no options passed -> no label
+    assert not re.search(r"\{\{[#/]", one)
+    # BROKEN OUT (remodel on): itemized, no INCLUDED label
+    broken = dict(_BASE_VALS, base_tax_phrase="")
     on = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct",
-        values=_BASE_VALS, remodel=[{"amount_formatted": "$2,639.00"}]))
-    assert "Base Bid" in on and "Options:" in on
-    assert "$58,523.00 – Epoxy flooring as described above (material sales tax INCLUDED)" in on
+        values=broken, tax_breakout=True, remodel=[{"amount_formatted": "$2,639.00"}]))
+    assert "$58,523.00 – Epoxy flooring as described above" in on
     assert "$2,639.00 – Material Sales Tax" in on
-    assert "Remodel Tax" in on
+    assert "Remodel Tax" in on and "$63,801.00 – Total" in on
     assert "Missouri Remodel Tax" not in on
     assert not re.search(r"\{\{[#/]", on)
-    off = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS))
-    assert "Material Sales Tax" in off          # always shown (transparency)
-    assert "Remodel Tax" not in off             # hidden when remodel is off
+    # BROKEN OUT (remodel off): Material Sales Tax + Total stay, Remodel hidden
+    off = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct",
+        values=broken, tax_breakout=True))
+    assert "Material Sales Tax" in off
+    assert "Remodel Tax" not in off
     assert not re.search(r"\{\{[#/]", off)
 
 
 def test_direct_templates_backcompat_no_blocks():
-    """No price_lines / alternates -> markers stripped, base intact, no stray text."""
+    """No price_lines / alternates -> Options label + all block markers stripped,
+    the base line intact (one-line default), no stray option text."""
     import re
     import proposal_writer as pw
     for wt in ("epoxy", "combo", "polish"):
         blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct", values=_BASE_VALS))
-        assert "$63,801" in blob
+        assert "$58,523" in blob                # base line present (one-line default)
         assert "Onsite mockup" not in blob and "ALTERNATE SYSTEM" not in blob
+        assert "Options:" not in blob           # no options -> label stripped
         assert not re.search(r"\{\{[#/]", blob)
 
 
