@@ -165,22 +165,37 @@
     const salesTax   = Number((state.proposal_sales_tax   != null ? state.proposal_sales_tax   : fb.sales_tax)   || 0);
     const baseBid    = Math.max(0, lumpSumN - salesTax - remodelTax);
 
-    // Tax phrase — same logic as backend base_tax_phrase: tax-exempt jobs read
-    // "(tax exempt)"; otherwise material sales tax (+ Remodel Tax when it applies).
+    // PRICE layout — mirror the .docx. Default (INCLUDED): ONE all-in line, the
+    // flooring price = the full total + "(material sales tax INCLUDED)", with the
+    // Material Sales Tax / Remodel / Total lines hidden. "Sales tax broken out":
+    // base (pre-tax) + Material Sales Tax + Remodel + Total, no INCLUDED label.
     const incl = String((form.querySelector("[name='tax_inclusion']") || {}).value || "INCLUDED").trim().toUpperCase();
     const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
-    const phrase = exempt ? "(tax exempt)"
-                 : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
-                 : "(material sales tax INCLUDED)";
+    const broken = ["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(incl);
 
-    document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
-    document.getElementById("base-tax-phrase-display").textContent = phrase;
-    document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
-    document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
-    // Remodel Tax gets its own line only when it applies (matches the {{#remodel}}
-    // block in the .docx, which strips the line when there's no remodel tax).
-    const rr = document.getElementById("remodel-tax-row");
-    if (rr) rr.style.display = remodelTax > 0 ? "" : "none";
+    const salesRow   = document.getElementById("sales-tax-row");
+    const remodelRow = document.getElementById("remodel-tax-row");
+    const totalRow   = document.getElementById("total-row");
+    const phraseEl   = document.getElementById("base-tax-phrase-display");
+
+    if (broken) {
+      document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
+      phraseEl.textContent = "";
+      document.getElementById("sales-tax-display").textContent = fmtUSD(salesTax);
+      if (salesRow)   salesRow.style.display = "";
+      if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
+      document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
+      if (totalRow)   totalRow.style.display = "";
+      document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
+    } else {
+      document.getElementById("base-bid-display").textContent = fmtUSD(lumpSumN);
+      phraseEl.textContent = exempt ? "(tax exempt)"
+        : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+        : "(material sales tax INCLUDED)";
+      if (salesRow)   salesRow.style.display = "none";
+      if (remodelRow) remodelRow.style.display = "none";
+      if (totalRow)   totalRow.style.display = "none";
+    }
     renderProposalExtras();
   }
 

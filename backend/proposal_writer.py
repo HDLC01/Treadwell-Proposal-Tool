@@ -378,6 +378,8 @@ def fill_proposal(
     rooms: list[Mapping[str, Any]] | None = None,
     single_bid: list[Mapping[str, Any]] | None = None,
     notes: list[Mapping[str, Any]] | None = None,
+    tax_breakout: bool = False,
+    has_options: bool = False,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -417,6 +419,15 @@ def fill_proposal(
         # {{#remodel}} line — present (1 row) only when a remodel tax applies,
         # stripped otherwise so the proposal hides "Kansas Remodel Tax" entirely.
         "remodel": list(remodel or []),
+        # {{#tax_breakout}} — the itemized Material Sales Tax + Total lines. Shown
+        # (1 row) only when the estimator chooses "sales tax broken out"; stripped
+        # by DEFAULT so the price collapses to a single all-in line
+        # ("$Total – … (material sales tax INCLUDED)") per Kyle's preferred layout.
+        "tax_breakout": [{}] if tax_breakout else [],
+        # {{#has_options}} — the "Options:" label. Shown only when there are
+        # actual options (price lines or a recommended alternate); stripped
+        # otherwise so an empty "Options:" never prints.
+        "has_options": [{}] if has_options else [],
         # {{#room}} — per-room priced options (per-room jobs); stripped when empty.
         "room": list(rooms or []),
         # {{#single_bid}} — the single Base-Bid/Total layout. Shown by DEFAULT
