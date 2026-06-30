@@ -32,11 +32,29 @@
     // survives opening a project and coming back.
     const QUERY_KEY = "tw_projects_q";
     const MONTH_KEY = "tw_projects_month";
-    const SORT_KEY  = "tw_projects_sort";
+    const SORT_KEY  = "tw_projects_sort";          // legacy single-key (migrated below)
+    const SORTFIELD_KEY = "tw_projects_sortfield";
+    const SORTDIR_KEY   = "tw_projects_sortdir";
     const _ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
     let SEARCH = _ss(QUERY_KEY, "");
     let MONTH  = _ss(MONTH_KEY, "");
-    let SORT   = _ss(SORT_KEY, "newest");
+    // Sort is now a FIELD + a DIRECTION (so every field flips asc/desc). Each
+    // field opens in its natural order: dates newest-first, names A→Z, deadlines
+    // soonest, totals high→low. The toggle reverses whichever field is picked.
+    const SORT_FIELDS = ["updated", "name", "deadline", "total"];
+    const NATURAL_DIR = { updated: "desc", name: "asc", deadline: "asc", total: "desc" };
+    let SORTFIELD, SORTDIR;
+    (function initSort(){
+      let f = _ss(SORTFIELD_KEY, null), d = _ss(SORTDIR_KEY, null);
+      if (f == null) {   // migrate the old "newest/oldest/name/deadline/total" value once
+        const map = { newest:["updated","desc"], oldest:["updated","asc"], name:["name","asc"], deadline:["deadline","asc"], total:["total","desc"] };
+        const pair = map[_ss(SORT_KEY, "newest")] || ["updated","desc"];
+        f = pair[0]; d = pair[1];
+      }
+      if (!SORT_FIELDS.includes(f)) f = "updated";
+      if (d !== "asc" && d !== "desc") d = NATURAL_DIR[f];
+      SORTFIELD = f; SORTDIR = d;
+    })();
     let ALL_PROJECTS = [];
     // Default to "active" so the working list isn't cluttered by finished jobs;
     // existing projects have no `archived` flag → treated as active (nothing
@@ -89,21 +107,30 @@
     function applySort(list) {
       const a = list.slice();
       const s = (v) => String(v == null ? "" : v);
-      if (SORT === "oldest")      a.sort((x, y) => s(x.updated_at).localeCompare(s(y.updated_at)));
-      else if (SORT === "name")   a.sort((x, y) => s(x.project_name).localeCompare(s(y.project_name)));
-      else if (SORT === "deadline") a.sort((x, y) => {        // soonest first, nulls last
+      const dir = SORTDIR === "asc" ? 1 : -1;   // multiplier flips the comparator
+      if (SORTFIELD === "name") a.sort((x, y) => {
+        const nx = s(x.project_name).trim().toLowerCase();
+        const ny = s(y.project_name).trim().toLowerCase();
+        if (!nx && !ny) return 0; if (!nx) return 1; if (!ny) return -1;   // blanks last, both dirs
+        return dir * nx.localeCompare(ny);
+      });
+      else if (SORTFIELD === "deadline") a.sort((x, y) => {   // soonest⇄latest, nulls always last
         if (!x.deadline && !y.deadline) return 0;
         if (!x.deadline) return 1; if (!y.deadline) return -1;
-        return s(x.deadline).localeCompare(s(y.deadline));
+        return dir * s(x.deadline).localeCompare(s(y.deadline));
       });
-      else if (SORT === "total") a.sort((x, y) => {           // high → low, nulls last
+      else if (SORTFIELD === "total") a.sort((x, y) => {      // high⇄low, nulls always last
         const tx = typeof x.total === "number" ? x.total : null;
         const ty = typeof y.total === "number" ? y.total : null;
         if (tx == null && ty == null) return 0;
         if (tx == null) return 1; if (ty == null) return -1;
-        return ty - tx;
+        return dir * (tx - ty);
       });
-      else a.sort((x, y) => s(y.updated_at).localeCompare(s(x.updated_at))); // newest (default)
+      else a.sort((x, y) => {                                // updated (default): newest⇄oldest, blanks last
+        if (!x.updated_at && !y.updated_at) return 0;
+        if (!x.updated_at) return 1; if (!y.updated_at) return -1;
+        return dir * s(x.updated_at).localeCompare(s(y.updated_at));
+      });
       return a;
     }
     // Build the month <select> from the months that actually exist in the current
@@ -161,7 +188,8 @@
       const countEl = document.getElementById("count");
       if (countEl) countEl.textContent = ALL_PROJECTS.length ? (shown.length + " of " + chipSet.length) : "";
       const clearBtn = document.getElementById("clear");
-      if (clearBtn) clearBtn.hidden = !(SEARCH || MONTH || SORT !== "newest");
+      const _sortDefault = (SORTFIELD === "updated" && SORTDIR === "desc");
+      if (clearBtn) clearBtn.hidden = !(SEARCH || MONTH || !_sortDefault);
       if (!shown.length) {
         el.className = "empty";
         el.textContent = !ALL_PROJECTS.length
@@ -280,7 +308,16 @@
       const q = document.getElementById("q");
       const month = document.getElementById("month");
       const sort = document.getElementById("sort");
+      const dir = document.getElementById("dir");
       const clearBtn = document.getElementById("clear");
+      const syncDir = () => {
+        if (!dir) return;
+        dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+        dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
+        dir.title = SORTDIR === "asc"
+          ? "Ascending (A→Z · oldest · soonest · low→high) — click for descending"
+          : "Descending (Z→A · newest · latest · high→low) — click for ascending";
+      };
       if (q) {
         q.value = SEARCH;
         let _t;
@@ -292,16 +329,33 @@
           if (e.key === "Escape") { q.value = ""; SEARCH = ""; try { sessionStorage.removeItem(QUERY_KEY); } catch {} paint(); }
         });
       }
-      if (sort) { sort.value = SORT; sort.addEventListener("change", () => { SORT = sort.value; try { sessionStorage.setItem(SORT_KEY, SORT); } catch {} paint(); }); }
+      if (sort) {
+        sort.value = SORTFIELD;
+        sort.addEventListener("change", () => {
+          SORTFIELD = sort.value;
+          SORTDIR = NATURAL_DIR[SORTFIELD] || "desc";   // open each field in its natural order
+          try { sessionStorage.setItem(SORTFIELD_KEY, SORTFIELD); sessionStorage.setItem(SORTDIR_KEY, SORTDIR); } catch {}
+          syncDir(); paint();
+        });
+      }
+      if (dir) {
+        syncDir();
+        dir.addEventListener("click", () => {
+          SORTDIR = SORTDIR === "asc" ? "desc" : "asc";
+          try { sessionStorage.setItem(SORTDIR_KEY, SORTDIR); } catch {}
+          syncDir(); paint();
+        });
+      }
       if (month) month.addEventListener("change", () => {
         MONTH = month.value;
         try { MONTH ? sessionStorage.setItem(MONTH_KEY, MONTH) : sessionStorage.removeItem(MONTH_KEY); } catch {}
         paint();
       });
       if (clearBtn) clearBtn.addEventListener("click", () => {
-        SEARCH = ""; MONTH = ""; SORT = "newest";
-        try { sessionStorage.removeItem(QUERY_KEY); sessionStorage.removeItem(MONTH_KEY); sessionStorage.removeItem(SORT_KEY); } catch {}
-        if (q) q.value = ""; if (sort) sort.value = "newest"; if (month) month.value = "";
+        SEARCH = ""; MONTH = ""; SORTFIELD = "updated"; SORTDIR = "desc";
+        try { sessionStorage.removeItem(QUERY_KEY); sessionStorage.removeItem(MONTH_KEY); sessionStorage.removeItem(SORTFIELD_KEY); sessionStorage.removeItem(SORTDIR_KEY); } catch {}
+        if (q) q.value = ""; if (sort) sort.value = "updated"; if (month) month.value = "";
+        syncDir();
         paint();   // leaves the chip (tab) selection intact
       });
     })();
