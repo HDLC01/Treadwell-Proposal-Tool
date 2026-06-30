@@ -1,5 +1,5 @@
 // Externalized from trash.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
-    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    const fmtDate = (iso) => TW.fmtBizDate(iso);   // business timezone (Central), see shared.js
     function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
