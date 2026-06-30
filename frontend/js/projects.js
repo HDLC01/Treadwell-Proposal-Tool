@@ -9,12 +9,10 @@
       window.location.assign("/");
     });
 
-    function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
-    // Local "YYYY-MM" that MATCHES the date fmtDate() prints on the card. Bucket
-    // the month filter by this, not by slicing the raw UTC ISO: a project saved
-    // 2026-06-30T19:00Z shows "7/1/2026" in UTC+8 but slices to "2026-06", which
-    // would file it under June and hide July from the dropdown entirely.
-    function localYM(iso){ const d=new Date(iso); return isNaN(d)?"":d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); }
+    // Dates render in Treadwell's business timezone (Central), not the viewer's,
+    // so the card date + the month bucket agree for every user. See shared.js.
+    const fmtDate = (iso) => TW.fmtBizDate(iso);
+    const localYM = (iso) => TW.bizYM(iso);
     function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
 
     // Resolve as soon as auth.js sets the token (right after getSession) so the
@@ -148,7 +146,7 @@
         if (ym) counts[ym] = (counts[ym] || 0) + 1;
       }
       if (MONTH && !counts[MONTH]) { MONTH = ""; try { sessionStorage.removeItem(MONTH_KEY); } catch {} }
-      const label = (ym) => { try { return new Date(ym + "-01T00:00:00").toLocaleString(undefined, { month: "long", year: "numeric" }); } catch { return ym; } };
+      const label = (ym) => TW.bizMonthLabel(ym);
       const months = Object.keys(counts).sort().reverse();
       sel.innerHTML = `<option value="">Any month</option>` +
         months.map(ym => `<option value="${ym}">${label(ym)} (${counts[ym]})</option>`).join("");
