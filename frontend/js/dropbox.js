@@ -24,6 +24,34 @@
     const go = document.getElementById("dbx-go");
     const result = document.getElementById("dbx-result");
 
+    function renderResult(j) {
+      const link = (url, label) => url
+        ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + label + '</a>' : "";
+      const links = [
+        link(j.folder_url, "📁 Open the Dropbox folder"),
+        link(j.xlsx_url, "Estimate (.xlsx)"),
+        link(j.docx_url, "Proposal (.docx)"),
+        link(j.pdf_url, "Proposal (PDF)"),
+      ].filter(Boolean);
+      result.style.display = "";
+      result.innerHTML = '<div class="ok">✓ Filed to ' + esc(j.folder_path || "the project folder") + '</div>'
+        + '<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">' + links.join("") + '</div>';
+    }
+    function showUploaded() {
+      go.textContent = "✓ Uploaded — click to re-upload";
+      go.classList.add("dbx-ok");   // green
+      go.disabled = false;          // allow re-upload (idempotent — overwrites the folder)
+    }
+
+    // Restore the "already filed" (green) state if this project was uploaded
+    // before — persisted on the draft, so it survives leaving + returning.
+    const prev = state.dropbox_result;
+    if (prev && prev.folder_url) {
+      if (prev.destination) dest.value = prev.destination;
+      renderResult(prev);
+      showUploaded();
+    }
+
     dest.addEventListener("change", () => { go.disabled = !dest.value; });
 
     go.addEventListener("click", async () => {
@@ -41,20 +69,15 @@
         });
         const j = await resp.json().catch(() => ({}));
         if (!resp.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + resp.status));
-        go.textContent = "✓ Uploaded — click to re-upload";
-        go.classList.add("dbx-ok");                // turn the button green
-        go.disabled = false;                       // allow re-upload (idempotent — overwrites the folder)
-        const link = (url, label) => url
-          ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + label + '</a>' : "";
-        const links = [
-          link(j.folder_url, "📁 Open the Dropbox folder"),
-          link(j.xlsx_url, "Estimate (.xlsx)"),
-          link(j.docx_url, "Proposal (.docx)"),
-          link(j.pdf_url, "Proposal (PDF)"),
-        ].filter(Boolean);
-        result.style.display = "";
-        result.innerHTML = '<div class="ok">✓ Filed to ' + esc(j.folder_path || "the project folder") + '</div>'
-          + '<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">' + links.join("") + '</div>';
+        showUploaded();
+        renderResult(j);
+        // Remember it locally too, so returning to this page shows the green
+        // state immediately (the backend also persisted it on the draft).
+        try {
+          TW.setState({ dropbox_result: {
+            destination: dest.value, folder_path: j.folder_path, folder_url: j.folder_url,
+            xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url } });
+        } catch {}
       } catch (err) {
         result.style.display = "";
         result.innerHTML = '<div class="dbx-err">' + esc(err.message || "Upload failed — please try again.") + '</div>';
