@@ -59,6 +59,7 @@ from pydantic import BaseModel, Field
 import audit
 import basisboard_client
 import drafts
+import dropbox_client
 import estimate_writer
 import notifications
 import pdf_writer
@@ -1570,6 +1571,66 @@ def api_notifications_seen(request: Request) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("notifications seen failed: %s", exc)
         return {"ok": False, "error": str(exc)}
+
+
+class ToDropboxIn(BaseModel):
+    draft_id: str
+    destination: str   # "gyp" | "plans_specs" | "commercial"
+
+
+@app.post("/api/to-dropbox")
+def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
+    """Step 5 'To Dropbox': create the project folder in the chosen Treadwell
+    Estimating folder and upload the estimate .xlsx + proposal .docx + PDF.
+
+    Regenerates the files from the saved proposal_payload (same pipeline as the
+    portal PDF path) so the Dropbox copy always matches the latest estimate +
+    proposal. Best-effort — never raises to the user; degrades to a message."""
+    base_path = dropbox_client.ESTIMATING_DESTINATIONS.get(payload.destination)
+    if not base_path:
+        return {"ok": False, "error": "Unknown destination folder."}
+    row = drafts.load_draft(payload.draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        return {"ok": False, "error": "Generate the files first — there's no proposal to upload yet."}
+    try:
+        gi = GenerateIn(**pp)
+        out = api_generate(gi, request)                    # reuse the full generate pipeline
+        xlsx_entry = _FILE_CACHE.get((out.xlsx_download_url or "").rsplit("/", 1)[-1])
+        docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
+        if not xlsx_entry or not docx_entry:
+            return {"ok": False, "error": "Couldn't build the files to upload — please try again."}
+        pdf_bytes = docx_entry.get("_pdf")
+        if pdf_bytes is None:                              # render + memoize like the portal path
+            with _PDF_RENDER_SEM:
+                pdf_bytes = pdf_writer.docx_to_pdf(docx_entry["content"])
+            docx_entry["_pdf"] = pdf_bytes
+        vals = gi.values or {}
+        result = dropbox_client.upload_project_files(
+            project_name=vals.get("project_name") or vals.get("job_name") or "Untitled Project",
+            xlsx_bytes=xlsx_entry["content"],
+            docx_bytes=docx_entry["content"],
+            pdf_bytes=pdf_bytes,
+            deadline=vals.get("deadline"),
+            bid_date=vals.get("bid_date"),
+            work_type=gi.work_type,
+            audience=gi.audience,
+            base_path=base_path,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("to-dropbox failed: %s", exc)
+        return {"ok": False, "error": "Upload failed — please try again."}
+    if result.get("configured"):
+        drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
+                         {"destination": payload.destination,
+                          "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
+                          "folder": result.get("folder_path")})
+        return {"ok": True, **result}
+    return {"ok": False, "error": result.get("error") or "Dropbox isn't configured."}
 
 
 # ─── Identity + admin (Supabase profiles / roles) ─────────────────────

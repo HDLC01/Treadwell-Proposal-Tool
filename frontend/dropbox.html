@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — To Dropbox</title>
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .dbx-card { background: var(--surface-lowest); border: 1px solid var(--surface-dim);
+    border-radius: 10px; padding: 28px 32px; max-width: 640px; margin: 0 auto; }
+  .dbx-card h1 { margin-top: 0; }
+  .dbx-field { margin: 22px 0 8px; }
+  .dbx-field label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    font-weight:700; color:var(--ink-variant); margin-bottom:6px; }
+  #dbx-dest { width:100%; padding:12px 14px; font-size:14px; border:1px solid var(--surface-dim);
+    border-radius:6px; background:var(--surface-lowest); color:var(--ink); cursor:pointer; }
+  #dbx-go { margin-top:20px; width:100%; padding:14px 22px; font-size:14px; font-weight:700;
+    border-radius:6px; cursor:pointer; background:var(--treadwell-red); color:#fff;
+    border:1px solid var(--treadwell-red-dark); }
+  #dbx-go:hover:not(:disabled){ background:var(--treadwell-red-dark); }
+  #dbx-go:disabled{ opacity:.5; cursor:not-allowed; }
+  .dbx-result { margin-top:22px; padding-top:18px; border-top:1px dashed var(--surface-dim);
+    font-size:13px; display:none; }
+  .dbx-result a { color:var(--treadwell-red-dark); display:inline-block; }
+  .dbx-result .ok { color: var(--success); font-weight:700; }
+  .dbx-err { color: var(--danger); font-weight:600; }
+  .dbx-callout { background: var(--surface-low); border-left:4px solid var(--treadwell-red);
+    padding:12px 16px; margin:22px 0 0; border-radius:0 6px 6px 0; font-size:12px; color:var(--ink-variant); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">T</span>
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+  <div class="progress">
+    <a class="step" href="/?edit=1">1 · Intake</a>
+    <a class="step" href="/estimate-review.html">2 · Estimate</a>
+    <a class="step" href="/proposal-review.html">3 · Proposal</a>
+    <a class="step" href="/done.html">4 · Files</a>
+    <span class="step active">5 · To Dropbox</span>
+  </div>
+</header>
+
+<main class="container">
+  <!-- Upload card (shown when a proposal has been built) -->
+  <div class="dbx-card" id="dbx-main" style="display:none;">
+    <h1>Send to the Treadwell Dropbox</h1>
+    <p class="lede" id="dbx-project">—</p>
+    <p class="lede">Choose which Estimating folder to file this project into. A folder named
+      <strong>YY.MM.DD Project name</strong> is created there with the estimate (.xlsx),
+      the proposal (.docx), and the proposal PDF.</p>
+
+    <div class="dbx-field">
+      <label for="dbx-dest">Destination folder</label>
+      <select id="dbx-dest">
+        <option value="">Choose a folder…</option>
+        <option value="gyp">Gyp Estimates</option>
+        <option value="plans_specs">Plans &amp; Specs Estimates</option>
+        <option value="commercial">Commercial Sales Estimates</option>
+      </select>
+    </div>
+
+    <button id="dbx-go" type="button" disabled>Create folder &amp; upload</button>
+
+    <div class="dbx-result" id="dbx-result"></div>
+
+    <div class="dbx-callout">Files go to the live Treadwell Dropbox. Re-uploading overwrites the
+      files in the same project folder (it won't create duplicates).</div>
+  </div>
+
+  <!-- Shown when nothing has been generated yet -->
+  <div class="dbx-card" id="dbx-empty" style="display:none;">
+    <h1 style="color:var(--ink-variant);">Generate the files first</h1>
+    <p class="lede">There's no generated proposal to send yet. Finish the <strong>Files</strong>
+      step (generate the documents), then come back here.</p>
+    <div class="actions" style="justify-content:center;margin-top:24px;">
+      <a href="/done.html" class="btn-primary" style="text-decoration:none;padding:12px 20px;">← Back to Files</a>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script src="/auth.js"></script>
+<script src="/shared.js"></script>
+<script src="/js/dropbox.js"></script>
+</body>
+</html>
