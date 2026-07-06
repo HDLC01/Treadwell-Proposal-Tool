@@ -24,6 +24,23 @@ from typing import Optional
 log = logging.getLogger("proposal_tool.dropbox_client")
 
 
+# Treadwell's Estimating category folders (the "To Dropbox" step-5 destinations).
+# Paths are within the Team root namespace (the client rebinds to it in
+# _build_client) and were verified against the live Dropbox via a read-only
+# files_list_folder — including the `$` prefixes, spacing, and the `*Kyle`
+# sub-folder under Commercial Sales (asterisk, not underscore).
+ESTIMATING_DESTINATIONS: dict[str, str] = {
+    "gyp":         "/2023 Treadwell Team Folder/Estimating/$Gyp Estimates",
+    "plans_specs": "/2023 Treadwell Team Folder/Estimating/$Plans Specs Estimates",
+    "commercial":  "/2023 Treadwell Team Folder/Estimating/$Commercial Sales Estimates/*Kyle",
+}
+DESTINATION_LABELS: dict[str, str] = {
+    "gyp":         "Gyp Estimates",
+    "plans_specs": "Plans & Specs Estimates",
+    "commercial":  "Commercial Sales Estimates",
+}
+
+
 class DropboxNotConfigured(RuntimeError):
     """Raised when DROPBOX_ACCESS_TOKEN isn't set."""
 
@@ -163,6 +180,14 @@ def _build_folder_path(
     return f"{root}/{prefix} {name}{suffix}"
 
 
+def _simple_folder_path(base_path: str, project_name: str, deadline: str | None) -> str:
+    """`{base}/{YY.MM.DD deadline} {Project Name}` — the Estimating-folder
+    convention used by the step-5 "To Dropbox" destinations: date + name only,
+    with NO status marker and NO (Polish)/(Combo) suffix (differs from
+    _build_folder_path). `base_path` is the chosen destination category folder."""
+    return f"{base_path.rstrip('/')}/{_deadline_prefix(deadline)} {_sanitize_folder_name(project_name)}"
+
+
 def _proposal_date(value: str | None) -> str:
     """MM.DD for the proposal filename (from bid date / deadline / today)."""
     if value:
@@ -200,8 +225,14 @@ def upload_project_files(
     status_marker: str | None = "!",
     bid_date: str | None = None,
     audience: str | None = None,
+    base_path: str | None = None,
+    pdf_bytes: bytes | None = None,
 ) -> dict:
-    """Create a project folder + upload both files. Returns links.
+    """Create a project folder + upload the files. Returns links.
+
+    When `base_path` is given (the step-5 "To Dropbox" flow), the project folder
+    is created UNDER that destination with the simple `YY.MM.DD Project Name`
+    convention, and `pdf_bytes` (if provided) is uploaded alongside the .docx.
 
     Result shape:
         {
@@ -231,12 +262,25 @@ def upload_project_files(
         # otherwise fall back to the legacy single-token constructor.
         dbx = _build_client()
 
-        folder_path = _build_folder_path(
-            project_name,
-            deadline=deadline,
-            work_type=work_type,
-            status_marker=status_marker,
-        )
+        if base_path:
+            # Estimating flow: confirm the destination exists FIRST (read-only)
+            # so a mistyped base can never create a stray folder tree in the
+            # live Treadwell Dropbox.
+            try:
+                dbx.files_get_metadata(base_path)
+            except Exception:
+                return {
+                    "configured": False,
+                    "error": "Couldn't find that Estimating destination folder in Dropbox.",
+                }
+            folder_path = _simple_folder_path(base_path, project_name, deadline)
+        else:
+            folder_path = _build_folder_path(
+                project_name,
+                deadline=deadline,
+                work_type=work_type,
+                status_marker=status_marker,
+            )
         try:
             dbx.files_create_folder_v2(folder_path)
         except ApiError as exc:
@@ -267,13 +311,22 @@ def upload_project_files(
                 links = dbx.sharing_list_shared_links(path=path).links
                 return links[0].url if links else ""
 
-        return {
+        result = {
             "configured": True,
             "folder_path": folder_path,
             "folder_url":  _share(folder_path),
             "xlsx_url":    _share(xlsx_path),
             "docx_url":    _share(docx_path),
         }
+
+        # Optionally upload the proposal PDF alongside the .docx (same base name).
+        if pdf_bytes:
+            pdf_name = (prop_name[:-5] if prop_name.lower().endswith(".docx") else prop_name) + ".pdf"
+            pdf_path = f"{folder_path}/{pdf_name}"
+            dbx.files_upload(pdf_bytes, pdf_path, mode=dropbox.files.WriteMode("overwrite"))
+            result["pdf_url"] = _share(pdf_path)
+
+        return result
 
     except Exception as exc:  # noqa: BLE001 — translate to graceful degradation
         log.warning("Dropbox upload failed: %s", exc)   # full detail server-side only
