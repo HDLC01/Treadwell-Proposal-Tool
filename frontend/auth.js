@@ -131,6 +131,8 @@
       '<div class="tw-brand"><div class="tw-logo">T</div>' +
       '<div class="tw-brandtext"><div class="tw-brandname">Treadwell</div>' +
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
+      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">🔔' +
+      '<span class="tw-bell-badge" id="tw-bell-badge" hidden></span></button>' +
       '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
       '<nav class="tw-nav">' +
       '<div class="tw-section">Workspace</div>' +
@@ -166,6 +168,95 @@
     backdrop.addEventListener("click", () => setOpen(false));
     document.getElementById("tw-collapse").addEventListener("click", () => setOpen(false));
     document.getElementById("tw-signout").addEventListener("click", signOut);
+
+    mountNotifications();
+  }
+
+  // ── Notification bell ──
+  // Polls /api/notifications (proposal deadlines + Basisboard pipeline changes),
+  // shows an unread count on the bell, and a dropdown panel. Unread is global
+  // (shared across the team); opening the panel marks everything seen. All wiring
+  // is here (CSP: no inline handlers); dynamic values go through esc().
+  function mountNotifications() {
+    const bell = document.getElementById("tw-bell");
+    if (!bell || document.getElementById("tw-notif-panel")) return;
+
+    const panel = document.createElement("div");
+    panel.id = "tw-notif-panel"; panel.hidden = true;
+    panel.innerHTML =
+      '<div class="tw-notif-head"><span>Notifications</span>' +
+      '<button class="tw-notif-close" id="tw-notif-close" title="Close">×</button></div>' +
+      '<div class="tw-notif-list" id="tw-notif-list">' +
+      '<div class="tw-notif-empty">Loading…</div></div>';
+    document.body.appendChild(panel);
+    const back = document.createElement("div");
+    back.id = "tw-notif-backdrop"; back.hidden = true;
+    document.body.appendChild(back);
+
+    let items = [], unread = 0, open = false;
+
+    function setBadge(n) {
+      const b = document.getElementById("tw-bell-badge");
+      if (!b) return;
+      if (n > 0) { b.textContent = n > 99 ? "99+" : String(n); b.hidden = false; }
+      else b.hidden = true;
+    }
+    function relTime(iso) {
+      const t = Date.parse(iso); if (isNaN(t)) return "";
+      let s = Math.floor((Date.now() - t) / 1000); if (s < 0) s = 0;
+      if (s < 60) return "just now";
+      const m = Math.floor(s / 60); if (m < 60) return m + "m ago";
+      const h = Math.floor(m / 60); if (h < 24) return h + "h ago";
+      const d = Math.floor(h / 24); if (d < 30) return d + "d ago";
+      return Math.floor(d / 30) + "mo ago";
+    }
+    function renderList() {
+      const list = document.getElementById("tw-notif-list");
+      if (!list) return;
+      if (!items.length) {
+        list.innerHTML = '<div class="tw-notif-empty">You’re all caught up 🎉</div>';
+        return;
+      }
+      list.innerHTML = items.map(n =>
+        '<a class="tw-notif-item sev-' + esc(n.severity || "info") + '" href="' + esc(n.link || "#") + '">' +
+        '<span class="tw-notif-ico">' + esc(n.icon || "•") + '</span>' +
+        '<span class="tw-notif-main"><span class="tw-notif-title">' + esc(n.title || "") + '</span>' +
+        '<span class="tw-notif-body">' + esc(n.body || "") + '</span></span>' +
+        '<span class="tw-notif-time">' + esc(relTime(n.ts)) + '</span></a>'
+      ).join("");
+    }
+    async function poll() {
+      try {
+        const r = await fetch(apiBase() + "/api/notifications",
+          { headers: { Authorization: "Bearer " + (window.__TW_TOKEN || "") } });
+        const j = await r.json();
+        if (j && j.ok) {
+          items = j.notifications || []; unread = j.unread || 0;
+          if (!open) setBadge(unread);
+          if (open) renderList();
+        }
+      } catch { /* offline — keep the last view */ }
+    }
+    async function markSeen() {
+      try {
+        await fetch(apiBase() + "/api/notifications/seen",
+          { method: "POST", headers: { Authorization: "Bearer " + (window.__TW_TOKEN || "") } });
+      } catch { /* best-effort */ }
+    }
+    function openP() {
+      open = true; panel.hidden = false; back.hidden = false;
+      renderList();
+      if (unread > 0) { markSeen(); unread = 0; setBadge(0); }   // opening = mark all seen
+    }
+    function closeP() { open = false; panel.hidden = true; back.hidden = true; }
+
+    bell.addEventListener("click", (e) => { e.stopPropagation(); open ? closeP() : openP(); });
+    document.getElementById("tw-notif-close").addEventListener("click", closeP);
+    back.addEventListener("click", closeP);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && open) closeP(); });
+
+    poll();
+    setInterval(poll, 60000);   // refresh the badge every minute
   }
 
   function injectSidebarStyles() {
@@ -221,7 +312,32 @@ html.tw-nav-open #tw-burger{display:none;}
 }
 @media (max-width:767px){
   html.tw-nav-open #tw-backdrop{display:block;}
-}`;
+}
+/* notification bell + dropdown */
+.tw-bell{position:relative;margin-left:auto;border:none;background:none;color:var(--tw-ink-v);
+font-size:16px;cursor:pointer;padding:4px 5px;border-radius:6px;line-height:1;}
+.tw-bell:hover{background:var(--tw-surf-low);color:var(--tw-red-dark);}
+.tw-bell-badge{position:absolute;top:-3px;right:-4px;min-width:15px;height:15px;padding:0 3px;
+border-radius:8px;background:var(--tw-red);color:#fff;font:700 9px/15px system-ui;text-align:center;box-sizing:border-box;}
+#tw-notif-backdrop{position:fixed;inset:0;z-index:10000;background:transparent;}
+#tw-notif-panel{position:fixed;top:54px;left:14px;width:min(330px,calc(100vw - 28px));max-height:72vh;
+overflow-y:auto;background:#fff;border:1px solid rgba(27,28,28,.12);border-radius:12px;
+box-shadow:0 16px 44px rgba(0,0,0,.22);z-index:10001;color:var(--tw-ink);
+font:400 13px/1.45 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+.tw-notif-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;
+font-weight:700;font-size:14px;border-bottom:1px solid rgba(27,28,28,.08);position:sticky;top:0;background:#fff;}
+.tw-notif-close{border:none;background:none;font-size:18px;line-height:1;cursor:pointer;color:var(--tw-ink-v);padding:0 4px;border-radius:6px;}
+.tw-notif-close:hover{background:var(--tw-surf-low);}
+.tw-notif-list{padding:6px;}
+.tw-notif-empty{padding:26px 14px;text-align:center;color:var(--tw-ink-v);}
+.tw-notif-item{display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:9px;text-decoration:none;color:var(--tw-ink);}
+.tw-notif-item:hover{background:var(--tw-surf-low);}
+.tw-notif-ico{font-size:15px;line-height:1.3;flex:none;width:18px;text-align:center;}
+.tw-notif-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.tw-notif-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tw-notif-body{color:var(--tw-ink-v);font-size:12px;}
+.tw-notif-time{color:var(--tw-ink-v);font-size:11px;flex:none;white-space:nowrap;padding-top:1px;}
+.tw-notif-item.sev-high .tw-notif-title{color:var(--tw-red-dark);}`;
     const style = document.createElement("style");
     style.id = "tw-sidebar-css"; style.textContent = css;
     document.head.appendChild(style);
