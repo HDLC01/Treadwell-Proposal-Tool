@@ -170,7 +170,7 @@ if (!state.project_name) {
     <div style="padding:60px;text-align:center;">
       <h1 style="color: var(--ink-variant);">No project started</h1>
       <p>Start an intake first to enable the Estimate step.</p>
-      <a href="/" class="btn-primary" style="text-decoration:none;padding:12px 20px;">← Go to Intake</a>
+      <a href="/?edit=1" class="btn-primary" style="text-decoration:none;padding:12px 20px;">← Go to Intake</a>
     </div>
   `;
   throw new Error("estimate-review: no project in state");
@@ -1770,7 +1770,7 @@ function persistTabState() {
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign("/");
+  window.location.assign("/?edit=1");   // back to intake for the current draft (home is Projects)
 });
 document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();

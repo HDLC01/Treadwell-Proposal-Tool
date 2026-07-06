@@ -6,7 +6,7 @@
       try { localStorage.removeItem("treadwell.proposal_tool.state"); } catch {}
       try { localStorage.removeItem("treadwell.proposal_tool.draft_id"); } catch {}
       try { sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once"); } catch {}
-      window.location.assign("/");
+      window.location.assign("/?new=1");   // ?new = explicit intent to open the intake form (home is Projects)
     });
 
     // Dates render in Treadwell's business timezone (Central), not the viewer's,
@@ -226,7 +226,7 @@
             </div>
           </div>
         </div>`).join("");
-      const open = (c) => window.location.assign("/?d=" + c.dataset.id);
+      const open = (c) => window.location.assign("/?d=" + c.dataset.id + "&edit=1");   // ?edit = open intake for this project
       el.querySelectorAll(".card").forEach(c => {
         c.addEventListener("click", () => open(c));
         const btn = c.querySelector(".open-btn");

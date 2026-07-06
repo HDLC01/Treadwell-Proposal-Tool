@@ -52,14 +52,16 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import audit
 import basisboard_client
 import drafts
+import dropbox_client
 import estimate_writer
+import notifications
 import pdf_writer
 import pricing
 import profiles
@@ -1235,7 +1237,12 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     draft_id = (request.headers.get("x-project-id") or "").strip()
     if draft_id and draft_id != "no-draft":
         try:
-            proj_data = dict(values)
+            # MERGE onto the existing draft data — never DROP fields the payload
+            # doesn't carry. Critically preserves proposal_payload / generate_result
+            # (the step-5 "To Dropbox" re-upload + the portal PDF read them back);
+            # a plain replace here wiped them, breaking re-generation server-side.
+            existing = (drafts.load_draft(draft_id) or {}).get("data") or {}
+            proj_data = {**existing, **dict(values)}
             proj_data["work_type"] = payload.work_type
             proj_data.setdefault("project_name", project_name)
             if payload.computed_bid:
@@ -1438,6 +1445,128 @@ def api_history() -> Dict[str, Any]:
         return {"ok": False, "error": str(exc), "events": []}
 
 
+@app.get("/api/notifications")
+def api_notifications() -> Dict[str, Any]:
+    """Notification-bell feed: proposal deadlines (overdue / due today / due soon /
+    no deadline) + Basisboard pipeline changes, with a global unread count."""
+    try:
+        return {"ok": True, **notifications.get_notifications()}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notifications failed: %s", exc)
+        return {"ok": False, "error": str(exc), "notifications": [], "unread": 0}
+
+
+@app.post("/api/notifications/seen")
+def api_notifications_seen(request: Request) -> Dict[str, Any]:
+    """Mark the whole feed as seen (global/shared last-seen) — clears the badge."""
+    try:
+        notifications.mark_seen(_user_email(request))
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notifications seen failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+class ToDropboxIn(BaseModel):
+    draft_id: str
+    destination: str   # "gyp" | "plans_specs" | "commercial"
+
+
+@app.post("/api/to-dropbox")
+def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
+    """Step 5 'To Dropbox': create the project folder in the chosen Treadwell
+    Estimating folder and upload the estimate .xlsx + proposal .docx + PDF.
+
+    Regenerates the files from the saved proposal_payload (same pipeline as the
+    portal PDF path) so the Dropbox copy always matches the latest estimate +
+    proposal. Best-effort — never raises to the user; degrades to a message."""
+    base_path = dropbox_client.ESTIMATING_DESTINATIONS.get(payload.destination)
+    if not base_path:
+        return {"ok": False, "error": "Unknown destination folder."}
+    row = drafts.load_draft(payload.draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    data = row.get("data") or {}
+    pp = data.get("proposal_payload")
+    if isinstance(pp, dict) and pp.get("values"):
+        gi = GenerateIn(**pp)
+    else:
+        # Existing/older projects may not carry a stored proposal_payload (never
+        # generated through Screen 3, or a prior save dropped it). Reconstruct the
+        # generate payload from the draft's saved intake/estimate data so
+        # "To Dropbox" still works for them (this is the common existing-project case).
+        _list = lambda x: x if isinstance(x, list) else []
+        _dict = lambda x: x if isinstance(x, dict) else {}
+        vals = {k: v for k, v in data.items() if k not in ("proposal_payload", "generate_result")}
+        if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")):
+            return {"ok": False, "error": "This project has no estimate yet — open it and generate first."}
+        gi = GenerateIn(
+            work_type=data.get("work_type") or "epoxy",
+            audience=data.get("audience") or "Direct",
+            values=vals,
+            cell_values=_dict(data.get("cell_values")),
+            extras=_list(data.get("extras")),
+            computed_bid=(data.get("computed_bid") if isinstance(data.get("computed_bid"), dict) else None),
+            rooms=_list(data.get("rooms")),
+            tab_copies=_list(data.get("tab_copies")),
+            tab_labels=_dict(data.get("tab_labels")),
+            tab_order=_list(data.get("tab_order")),
+        )
+    try:
+        out = api_generate(gi, request)                    # reuse the full generate pipeline
+        xlsx_entry = _FILE_CACHE.get((out.xlsx_download_url or "").rsplit("/", 1)[-1])
+        docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
+        if not xlsx_entry or not docx_entry:
+            return {"ok": False, "error": "Couldn't build the files to upload — please try again."}
+        pdf_bytes = docx_entry.get("_pdf")
+        if pdf_bytes is None:                              # render + memoize like the portal path
+            with _PDF_RENDER_SEM:
+                pdf_bytes = pdf_writer.docx_to_pdf(docx_entry["content"])
+            docx_entry["_pdf"] = pdf_bytes
+        vals = gi.values or {}
+        result = dropbox_client.upload_project_files(
+            project_name=vals.get("project_name") or vals.get("job_name") or "Untitled Project",
+            xlsx_bytes=xlsx_entry["content"],
+            docx_bytes=docx_entry["content"],
+            pdf_bytes=pdf_bytes,
+            deadline=vals.get("deadline"),
+            bid_date=vals.get("bid_date"),
+            work_type=gi.work_type,
+            audience=gi.audience,
+            base_path=base_path,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("to-dropbox failed: %s", exc)
+        return {"ok": False, "error": "Upload failed — please try again."}
+    if result.get("configured"):
+        _vals = gi.values or {}
+        drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
+                         {"destination": payload.destination,
+                          "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
+                          "project_name": _vals.get("project_name") or _vals.get("job_name"),
+                          "folder": result.get("folder_path"),
+                          "folder_url": result.get("folder_url")})
+        # Persist the upload result on the draft so the To-Dropbox page shows the
+        # "already filed" (green) state whenever the user comes back to it.
+        try:
+            cur = (drafts.load_draft(payload.draft_id) or {}).get("data") or {}
+            cur["dropbox_result"] = {
+                "destination": payload.destination,
+                "folder_path": result.get("folder_path"),
+                "folder_url": result.get("folder_url"),
+                "xlsx_url": result.get("xlsx_url"),
+                "docx_url": result.get("docx_url"),
+                "pdf_url": result.get("pdf_url"),
+            }
+            drafts.save_draft(payload.draft_id, cur, owner_email=_user_email(request))
+        except Exception as exc:  # noqa: BLE001 — never block the response
+            log.warning("to-dropbox: result save failed: %s", exc)
+        return {"ok": True, **result}
+    return {"ok": False, "error": result.get("error") or "Dropbox isn't configured."}
+
+
 # ─── Identity + admin (Supabase profiles / roles) ─────────────────────
 @app.get("/api/me")
 def api_me(request: Request) -> Dict[str, Any]:
@@ -1598,6 +1727,23 @@ class NoCacheStaticFiles(StaticFiles):
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
         return resp
+
+
+@app.get("/", include_in_schema=False)
+def _root(request: Request) -> Response:
+    """Home is the Projects dashboard. The intake ("New Project") screen is served
+    only when a project is explicitly being created (?new) or edited (?edit) — so
+    hitting the bare domain, or an old ?d=… link left in browser history, lands on
+    Projects instead of a blank intake form. Must be declared BEFORE the "/" static
+    mount so it wins for the exact root path (the mount still serves /index.html and
+    every other asset)."""
+    q = request.query_params
+    if "new" in q or "edit" in q:
+        return FileResponse(
+            str(FRONTEND_DIR / "index.html"),
+            headers={"Cache-Control": "no-store, must-revalidate, max-age=0"},
+        )
+    return RedirectResponse(url="/projects.html", status_code=307)
 
 
 if FRONTEND_DIR.exists():
