@@ -5,7 +5,7 @@
       <div style="background:white;padding:40pt 30pt;border-radius:4px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.15);">
         <h1 style="color:#605e5c;">No project started</h1>
         <p>Start an intake first to enable the Proposal step.</p>
-        <a href="/" style="background:#2b579a;color:white;text-decoration:none;padding:8px 16px;border-radius:2px;">← Go to Intake</a>
+        <a href="/?edit=1" style="background:#2b579a;color:white;text-decoration:none;padding:8px 16px;border-radius:2px;">← Go to Intake</a>
       </div>
     `;
     throw new Error("proposal-review: no project in state");

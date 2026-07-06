@@ -52,7 +52,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -1709,6 +1709,23 @@ class NoCacheStaticFiles(StaticFiles):
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
         return resp
+
+
+@app.get("/", include_in_schema=False)
+def _root(request: Request) -> Response:
+    """Home is the Projects dashboard. The intake ("New Project") screen is served
+    only when a project is explicitly being created (?new) or edited (?edit) — so
+    hitting the bare domain, or an old ?d=… link left in browser history, lands on
+    Projects instead of a blank intake form. Must be declared BEFORE the "/" static
+    mount so it wins for the exact root path (the mount still serves /index.html and
+    every other asset)."""
+    q = request.query_params
+    if "new" in q or "edit" in q:
+        return FileResponse(
+            str(FRONTEND_DIR / "index.html"),
+            headers={"Cache-Control": "no-store, must-revalidate, max-age=0"},
+        )
+    return RedirectResponse(url="/projects.html", status_code=307)
 
 
 if FRONTEND_DIR.exists():
