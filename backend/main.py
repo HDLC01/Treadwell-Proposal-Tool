@@ -60,6 +60,7 @@ import audit
 import basisboard_client
 import drafts
 import estimate_writer
+import notifications
 import pdf_writer
 import pricing
 import profiles
@@ -1547,6 +1548,28 @@ def api_history() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("list_events failed: %s", exc)
         return {"ok": False, "error": str(exc), "events": []}
+
+
+@app.get("/api/notifications")
+def api_notifications() -> Dict[str, Any]:
+    """Notification-bell feed: proposal deadlines (overdue / due today / due soon /
+    no deadline) + Basisboard pipeline changes, with a global unread count."""
+    try:
+        return {"ok": True, **notifications.get_notifications()}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notifications failed: %s", exc)
+        return {"ok": False, "error": str(exc), "notifications": [], "unread": 0}
+
+
+@app.post("/api/notifications/seen")
+def api_notifications_seen(request: Request) -> Dict[str, Any]:
+    """Mark the whole feed as seen (global/shared last-seen) — clears the badge."""
+    try:
+        notifications.mark_seen(_user_email(request))
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notifications seen failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
 
 
 # ─── Identity + admin (Supabase profiles / roles) ─────────────────────
