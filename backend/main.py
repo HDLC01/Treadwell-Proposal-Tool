@@ -1514,10 +1514,13 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         log.warning("to-dropbox failed: %s", exc)
         return {"ok": False, "error": "Upload failed — please try again."}
     if result.get("configured"):
+        _vals = gi.values or {}
         drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
                          {"destination": payload.destination,
                           "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
-                          "folder": result.get("folder_path")})
+                          "project_name": _vals.get("project_name") or _vals.get("job_name"),
+                          "folder": result.get("folder_path"),
+                          "folder_url": result.get("folder_url")})
         return {"ok": True, **result}
     return {"ok": False, "error": result.get("error") or "Dropbox isn't configured."}
 

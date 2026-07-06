@@ -238,6 +238,35 @@ def _deadline_notifications(projects: List[Dict[str, Any]], today) -> List[Dict[
     return out
 
 
+def _dropbox_notifications() -> List[Dict[str, Any]]:
+    """Recent 'filed to Dropbox' events (logged by /api/to-dropbox) as bell items,
+    newest-first. Clicking one opens the created Dropbox folder."""
+    out: List[Dict[str, Any]] = []
+    try:
+        events = drafts_mod.list_events(limit=100)
+    except Exception as exc:               # noqa: BLE001
+        log.warning("list_events for dropbox notifications failed: %s", exc)
+        return out
+    for e in events:
+        if e.get("action") != "to_dropbox":
+            continue
+        d = e.get("detail") or {}
+        proj = d.get("project_name") or "A project"
+        label = d.get("label")
+        out.append({
+            "id": f"dbx:{e.get('id')}",
+            "kind": "to_dropbox", "icon": "📁", "severity": "info", "sort": 3,
+            "ts": e.get("created_at") or _EPOCH,
+            "title": proj,
+            "body": "Filed to Dropbox" + (f" · {label}" if label else ""),
+            "link": d.get("folder_url")
+                    or (f"/?d={e.get('project_id')}&edit=1" if e.get("project_id") else "/projects.html"),
+        })
+        if len(out) >= 25:
+            break
+    return out
+
+
 # ── public API ─────────────────────────────────────────────────────────
 def get_notifications() -> Dict[str, Any]:
     """Assemble the feed: deadline items (live) + recent pipeline changes, sorted
@@ -261,6 +290,7 @@ def get_notifications() -> Dict[str, Any]:
     items = _deadline_notifications(projects, _biz_today())
     for e in (state.get("pipeline_events") or []):
         items.append(e)
+    items.extend(_dropbox_notifications())
 
     # Section order (overdue→today→soon→pipeline→no-deadline), newest-first within.
     items.sort(key=lambda x: x.get("ts") or "", reverse=True)

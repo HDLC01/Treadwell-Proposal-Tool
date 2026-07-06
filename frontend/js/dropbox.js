@@ -25,7 +25,7 @@
       const draftId = TW.getDraftId();
       if (!draftId) { alert("Open this project from Projects first, then send."); return; }
       if (!dest.value) return;
-      const orig = go.textContent;
+      go.classList.remove("dbx-ok");             // reset from a prior success
       go.disabled = true; go.textContent = "Uploading to Dropbox…";
       result.style.display = "none";
       try {
@@ -36,7 +36,9 @@
         });
         const j = await resp.json().catch(() => ({}));
         if (!resp.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + resp.status));
-        go.textContent = "✓ Uploaded";
+        go.textContent = "✓ Uploaded — click to re-upload";
+        go.classList.add("dbx-ok");                // turn the button green
+        go.disabled = false;                       // allow re-upload (idempotent — overwrites the folder)
         const link = (url, label) => url
           ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + label + '</a>' : "";
         const links = [
@@ -51,7 +53,7 @@
       } catch (err) {
         result.style.display = "";
         result.innerHTML = '<div class="dbx-err">' + esc(err.message || "Upload failed — please try again.") + '</div>';
-        go.disabled = false; go.textContent = orig;
+        go.disabled = false; go.textContent = "Create folder & upload";
       }
     });
   }

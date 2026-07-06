@@ -63,3 +63,22 @@ def test_proposal_name_type_word_and_project_name():
     assert "TREADWELL COMBO PROPOSAL" in dc._project_proposal_name("X", "combo", None, None)
     # unknown/blank work type falls back to EPOXY
     assert "TREADWELL EPOXY PROPOSAL" in dc._project_proposal_name("X", "", "2026-01-02", None)
+
+
+def test_dropbox_events_become_bell_notifications(monkeypatch):
+    import notifications as n
+    monkeypatch.setattr(n.drafts_mod, "list_events", lambda limit=100: [
+        {"id": 9, "action": "to_dropbox", "project_id": "p1",
+         "created_at": "2026-07-06T12:00:00+00:00",
+         "detail": {"project_name": "Acme Plant", "label": "Gyp Estimates",
+                    "folder_url": "https://www.dropbox.com/xyz"}},
+        {"id": 8, "action": "created", "project_id": "p1", "created_at": "x", "detail": {}},
+    ])
+    items = n._dropbox_notifications()
+    assert len(items) == 1                       # only the to_dropbox event
+    it = items[0]
+    assert it["kind"] == "to_dropbox" and it["icon"] == "📁"
+    assert it["title"] == "Acme Plant"
+    assert "Gyp Estimates" in it["body"]
+    assert it["link"] == "https://www.dropbox.com/xyz"   # opens the Dropbox folder
+    assert it["ts"] == "2026-07-06T12:00:00+00:00"       # drives unread
