@@ -1237,7 +1237,12 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     draft_id = (request.headers.get("x-project-id") or "").strip()
     if draft_id and draft_id != "no-draft":
         try:
-            proj_data = dict(values)
+            # MERGE onto the existing draft data — never DROP fields the payload
+            # doesn't carry. Critically preserves proposal_payload / generate_result
+            # (the step-5 "To Dropbox" re-upload + the portal PDF read them back);
+            # a plain replace here wiped them, breaking re-generation server-side.
+            existing = (drafts.load_draft(draft_id) or {}).get("data") or {}
+            proj_data = {**existing, **dict(values)}
             proj_data["work_type"] = payload.work_type
             proj_data.setdefault("project_name", project_name)
             if payload.computed_bid:
