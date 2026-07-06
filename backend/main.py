@@ -1659,6 +1659,21 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
                           "project_name": _vals.get("project_name") or _vals.get("job_name"),
                           "folder": result.get("folder_path"),
                           "folder_url": result.get("folder_url")})
+        # Persist the upload result on the draft so the To-Dropbox page shows the
+        # "already filed" (green) state whenever the user comes back to it.
+        try:
+            cur = (drafts.load_draft(payload.draft_id) or {}).get("data") or {}
+            cur["dropbox_result"] = {
+                "destination": payload.destination,
+                "folder_path": result.get("folder_path"),
+                "folder_url": result.get("folder_url"),
+                "xlsx_url": result.get("xlsx_url"),
+                "docx_url": result.get("docx_url"),
+                "pdf_url": result.get("pdf_url"),
+            }
+            drafts.save_draft(payload.draft_id, cur, owner_email=_user_email(request))
+        except Exception as exc:  # noqa: BLE001 — never block the response
+            log.warning("to-dropbox: result save failed: %s", exc)
         return {"ok": True, **result}
     return {"ok": False, "error": result.get("error") or "Dropbox isn't configured."}
 
