@@ -181,6 +181,6 @@
 
     document.getElementById("restart-btn").addEventListener("click", () => {
       TW.clearState();
-      window.location.assign("/");
+      window.location.assign("/?new=1");   // start a fresh project (home is Projects)
     });
   }
