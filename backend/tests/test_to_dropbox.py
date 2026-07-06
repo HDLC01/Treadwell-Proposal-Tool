@@ -45,3 +45,21 @@ def test_upload_unconfigured_degrades_gracefully(monkeypatch):
     )
     assert res["configured"] is False
     assert "download" in res["error"].lower()
+
+
+def test_bid_template_constants():
+    assert dc.BID_TEMPLATE_PATH.endswith("/$$ Bid Template")
+    assert dc.NUMBERS_SUBFOLDER.lower().startswith("numbers")
+    assert "estimate sheet" in dc.TEMPLATE_ESTIMATE_NAME.lower()
+
+
+def test_proposal_name_type_word_and_project_name():
+    # MM.DD.YY + Treadwell TYPE word + the PROJECT NAME after the dash
+    assert dc._project_proposal_name("Niagara Bottling", "epoxy", "2026-06-30", None) == \
+        "06.30.26 TREADWELL EPOXY PROPOSAL - Niagara Bottling"
+    assert dc._project_proposal_name("Maplewood Village", "gyp", "2025-11-21", None) == \
+        "11.21.25 TREADWELL GYP UNDERLAYMENT PROPOSAL - Maplewood Village"
+    assert "TREADWELL POLISH PROPOSAL" in dc._project_proposal_name("X", "polish", None, None)
+    assert "TREADWELL COMBO PROPOSAL" in dc._project_proposal_name("X", "combo", None, None)
+    # unknown/blank work type falls back to EPOXY
+    assert "TREADWELL EPOXY PROPOSAL" in dc._project_proposal_name("X", "", "2026-01-02", None)
