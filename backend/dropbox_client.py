@@ -40,6 +40,14 @@ DESTINATION_LABELS: dict[str, str] = {
     "commercial":  "Commercial Sales Estimates",
 }
 
+# Every project folder is a COPY of this bid template (Docs/ + Numbers 5.7.26/
+# with the blank estimate sheet, proposal templates, disclaimer, terms + daf
+# tool). The step-5 flow copies it, then files the filled estimate + proposal
+# into the Numbers sub-folder. Paths verified via a read-only files_list_folder.
+BID_TEMPLATE_PATH = "/2023 Treadwell Team Folder/Estimating/$$ Bid Template"
+NUMBERS_SUBFOLDER = "Numbers 5.7.26"
+TEMPLATE_ESTIMATE_NAME = "$ estimate sheet - 5.7.xlsx"   # blank; replaced per project
+
 
 class DropboxNotConfigured(RuntimeError):
     """Raised when DROPBOX_ACCESS_TOKEN isn't set."""
@@ -215,6 +223,118 @@ def _output_filenames(project_name: str, work_type: str | None,
     return est, prop
 
 
+# ── step-5 (copy $$ Bid Template + file into Numbers) helpers ──────────
+# Proposal TYPE word by work type — the tool's words for epoxy/polish/combo, and
+# "GYP UNDERLAYMENT" for gyp (per Kyle + the team's folders).
+_PROPOSAL_TYPE_WORDS = {
+    "epoxy":  "EPOXY",
+    "polish": "POLISH",
+    "combo":  "COMBO",
+    "gyp":    "GYP UNDERLAYMENT",
+}
+
+
+def _share_link(dbx, ApiError, path: str) -> str:
+    """Create (or re-fetch on conflict) a shared link for a Dropbox path."""
+    try:
+        return dbx.sharing_create_shared_link_with_settings(path).url
+    except ApiError:
+        links = dbx.sharing_list_shared_links(path=path).links
+        return links[0].url if links else ""
+
+
+def _proposal_date_yy(deadline: str | None, bid_date: str | None) -> str:
+    """MM.DD.YY for the proposal filename — prefer the deadline (matches the
+    project folder's date prefix), then the bid date, then today."""
+    for value in (deadline, bid_date):
+        if value:
+            s = str(value).strip()
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%y.%m.%d", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(s, fmt).strftime("%m.%d.%y")
+                except ValueError:
+                    continue
+    return datetime.now().strftime("%m.%d.%y")
+
+
+def _project_proposal_name(project_name: str, work_type: str | None,
+                           deadline: str | None, bid_date: str | None) -> str:
+    """Treadwell project-folder proposal name, NO extension:
+        MM.DD.YY TREADWELL <TYPE> PROPOSAL - <Project Name>
+    TYPE per _PROPOSAL_TYPE_WORDS; the part after the dash is the project name."""
+    typ = _PROPOSAL_TYPE_WORDS.get((work_type or "").strip().lower(), "EPOXY")
+    return _sanitize_folder_name(
+        f"{_proposal_date_yy(deadline, bid_date)} TREADWELL {typ} PROPOSAL - {project_name}"
+    )
+
+
+def _find_numbers_subfolder(dbx, FolderMetadata, target: str) -> str:
+    """The estimate/proposal live in a 'Numbers X.Y.Z' subfolder whose version
+    tracks the bid template (1.20.26 / 2.14.25 / 5.7.26 …). Locate it in the
+    freshly-copied tree; fall back to the current template's name."""
+    try:
+        for e in dbx.files_list_folder(target).entries:
+            if isinstance(e, FolderMetadata) and e.name.lower().startswith("numbers"):
+                return f"{target}/{e.name}"
+    except Exception:  # noqa: BLE001
+        pass
+    return f"{target}/{NUMBERS_SUBFOLDER}"
+
+
+def _file_into_bid_template(dbx, dropbox, ApiError, FolderMetadata, *, base_path,
+                            project_name, xlsx_bytes, docx_bytes, pdf_bytes,
+                            deadline, bid_date, work_type) -> dict:
+    """Copy the $$ Bid Template into <base>/YY.MM.DD <Project Name>, then file the
+    filled estimate + proposal (+ PDF) into its Numbers sub-folder, replacing the
+    template's blank estimate sheet. Idempotent on re-run (overwrites the files)."""
+    # Destination category must exist (read-only guard) so a bad path can't
+    # create a stray tree in the live Treadwell Dropbox.
+    try:
+        dbx.files_get_metadata(base_path)
+    except Exception:  # noqa: BLE001
+        return {"configured": False,
+                "error": "Couldn't find that Estimating destination folder in Dropbox."}
+
+    target = _simple_folder_path(base_path, project_name, deadline)   # <base>/YY.MM.DD Name
+
+    # Copy the whole template tree (Docs/ + Numbers X.Y.Z/ + contents). On a
+    # re-run the target already exists → skip the copy, just refresh the files.
+    try:
+        dbx.files_copy_v2(BID_TEMPLATE_PATH, target, autorename=False)
+    except ApiError as exc:
+        if "conflict" not in str(exc):
+            raise
+
+    numbers = _find_numbers_subfolder(dbx, FolderMetadata, target)
+    name = _sanitize_folder_name(project_name)
+    est_path = f"{numbers}/$ estimate sheet - {name}.xlsx"
+    prop_base = _project_proposal_name(project_name, work_type, deadline, bid_date)
+    docx_path = f"{numbers}/{prop_base}.docx"
+
+    dbx.files_upload(xlsx_bytes, est_path, mode=dropbox.files.WriteMode("overwrite"))
+    dbx.files_upload(docx_bytes, docx_path, mode=dropbox.files.WriteMode("overwrite"))
+
+    result = {
+        "configured": True,
+        "folder_path": target,
+        "folder_url":  _share_link(dbx, ApiError, target),
+        "xlsx_url":    _share_link(dbx, ApiError, est_path),
+        "docx_url":    _share_link(dbx, ApiError, docx_path),
+    }
+    if pdf_bytes:
+        pdf_path = f"{numbers}/{prop_base}.pdf"
+        dbx.files_upload(pdf_bytes, pdf_path, mode=dropbox.files.WriteMode("overwrite"))
+        result["pdf_url"] = _share_link(dbx, ApiError, pdf_path)
+
+    # Remove the template's blank estimate sheet (replaced by the named one).
+    try:
+        dbx.files_delete_v2(f"{numbers}/{TEMPLATE_ESTIMATE_NAME}")
+    except ApiError:
+        pass   # already gone on a re-run, or a differently-versioned template
+
+    return result
+
+
 def upload_project_files(
     *,
     project_name: str,
@@ -257,74 +377,49 @@ def upload_project_files(
         # Import here so the module loads even when dropbox isn't installed.
         import dropbox
         from dropbox.exceptions import ApiError
+        from dropbox.files import FolderMetadata
 
         # Pick the right auth flow — refresh-token if all 3 vars are set,
         # otherwise fall back to the legacy single-token constructor.
         dbx = _build_client()
 
+        # Step-5 flow: copy the $$ Bid Template into the chosen Estimating folder
+        # and file the estimate + proposal (+ PDF) into its Numbers sub-folder.
         if base_path:
-            # Estimating flow: confirm the destination exists FIRST (read-only)
-            # so a mistyped base can never create a stray folder tree in the
-            # live Treadwell Dropbox.
-            try:
-                dbx.files_get_metadata(base_path)
-            except Exception:
-                return {
-                    "configured": False,
-                    "error": "Couldn't find that Estimating destination folder in Dropbox.",
-                }
-            folder_path = _simple_folder_path(base_path, project_name, deadline)
-        else:
-            folder_path = _build_folder_path(
-                project_name,
-                deadline=deadline,
-                work_type=work_type,
-                status_marker=status_marker,
+            return _file_into_bid_template(
+                dbx, dropbox, ApiError, FolderMetadata,
+                base_path=base_path, project_name=project_name,
+                xlsx_bytes=xlsx_bytes, docx_bytes=docx_bytes, pdf_bytes=pdf_bytes,
+                deadline=deadline, bid_date=bid_date, work_type=work_type,
             )
+
+        # ── Legacy flat-folder flow (no base_path) — kept for compatibility ──
+        folder_path = _build_folder_path(
+            project_name, deadline=deadline, work_type=work_type, status_marker=status_marker,
+        )
         try:
             dbx.files_create_folder_v2(folder_path)
         except ApiError as exc:
-            # If folder already exists, Dropbox returns a conflict — keep going.
             if "path/conflict/folder" not in str(exc):
                 raise
-
-        # Upload both files — team naming convention.
         est_name, prop_name = _output_filenames(project_name, work_type, audience, bid_date)
         xlsx_path = f"{folder_path}/{est_name}"
         docx_path = f"{folder_path}/{prop_name}"
-        dbx.files_upload(
-            xlsx_bytes, xlsx_path,
-            mode=dropbox.files.WriteMode("overwrite"),
-        )
-        dbx.files_upload(
-            docx_bytes, docx_path,
-            mode=dropbox.files.WriteMode("overwrite"),
-        )
-
-        # Generate share links (one-time creation; reuse on conflict).
-        def _share(path: str) -> str:
-            try:
-                link = dbx.sharing_create_shared_link_with_settings(path)
-                return link.url
-            except ApiError:
-                # Link already exists — fetch it.
-                links = dbx.sharing_list_shared_links(path=path).links
-                return links[0].url if links else ""
+        dbx.files_upload(xlsx_bytes, xlsx_path, mode=dropbox.files.WriteMode("overwrite"))
+        dbx.files_upload(docx_bytes, docx_path, mode=dropbox.files.WriteMode("overwrite"))
 
         result = {
             "configured": True,
             "folder_path": folder_path,
-            "folder_url":  _share(folder_path),
-            "xlsx_url":    _share(xlsx_path),
-            "docx_url":    _share(docx_path),
+            "folder_url":  _share_link(dbx, ApiError, folder_path),
+            "xlsx_url":    _share_link(dbx, ApiError, xlsx_path),
+            "docx_url":    _share_link(dbx, ApiError, docx_path),
         }
-
-        # Optionally upload the proposal PDF alongside the .docx (same base name).
         if pdf_bytes:
             pdf_name = (prop_name[:-5] if prop_name.lower().endswith(".docx") else prop_name) + ".pdf"
             pdf_path = f"{folder_path}/{pdf_name}"
             dbx.files_upload(pdf_bytes, pdf_path, mode=dropbox.files.WriteMode("overwrite"))
-            result["pdf_url"] = _share(pdf_path)
+            result["pdf_url"] = _share_link(dbx, ApiError, pdf_path)
 
         return result
 
