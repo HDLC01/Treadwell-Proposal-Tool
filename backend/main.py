@@ -1486,11 +1486,33 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     row = drafts.load_draft(payload.draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
-    pp = (row.get("data") or {}).get("proposal_payload")
-    if not (isinstance(pp, dict) and pp.get("values")):
-        return {"ok": False, "error": "Generate the files first — there's no proposal to upload yet."}
-    try:
+    data = row.get("data") or {}
+    pp = data.get("proposal_payload")
+    if isinstance(pp, dict) and pp.get("values"):
         gi = GenerateIn(**pp)
+    else:
+        # Existing/older projects may not carry a stored proposal_payload (never
+        # generated through Screen 3, or a prior save dropped it). Reconstruct the
+        # generate payload from the draft's saved intake/estimate data so
+        # "To Dropbox" still works for them (this is the common existing-project case).
+        _list = lambda x: x if isinstance(x, list) else []
+        _dict = lambda x: x if isinstance(x, dict) else {}
+        vals = {k: v for k, v in data.items() if k not in ("proposal_payload", "generate_result")}
+        if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")):
+            return {"ok": False, "error": "This project has no estimate yet — open it and generate first."}
+        gi = GenerateIn(
+            work_type=data.get("work_type") or "epoxy",
+            audience=data.get("audience") or "Direct",
+            values=vals,
+            cell_values=_dict(data.get("cell_values")),
+            extras=_list(data.get("extras")),
+            computed_bid=(data.get("computed_bid") if isinstance(data.get("computed_bid"), dict) else None),
+            rooms=_list(data.get("rooms")),
+            tab_copies=_list(data.get("tab_copies")),
+            tab_labels=_dict(data.get("tab_labels")),
+            tab_order=_list(data.get("tab_order")),
+        )
+    try:
         out = api_generate(gi, request)                    # reuse the full generate pipeline
         xlsx_entry = _FILE_CACHE.get((out.xlsx_download_url or "").rsplit("/", 1)[-1])
         docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])

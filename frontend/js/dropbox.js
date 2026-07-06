@@ -1,8 +1,13 @@
 // Externalized from dropbox.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
   const state = TW.getState();
-  // A proposal must have been generated (proposal_payload built on Screen 3, or a
-  // prior generate_result) before there's anything to file into Dropbox.
-  const hasProposal = !!(state && ((state.proposal_payload && state.proposal_payload.values) || state.generate_result));
+  // Something must have been estimated/generated before there's anything to file:
+  // a Screen-3 proposal_payload, a prior generate_result, OR estimate cell_values
+  // (existing/older projects — the backend reconstructs the payload from them).
+  const hasProposal = !!(state && (
+    (state.proposal_payload && state.proposal_payload.values) ||
+    state.generate_result ||
+    (state.cell_values && Object.keys(state.cell_values).length)
+  ));
 
   const main = document.getElementById("dbx-main");
   const empty = document.getElementById("dbx-empty");
