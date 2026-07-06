@@ -131,8 +131,6 @@
       '<div class="tw-brand"><div class="tw-logo">T</div>' +
       '<div class="tw-brandtext"><div class="tw-brandname">Treadwell</div>' +
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
-      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">🔔' +
-      '<span class="tw-bell-badge" id="tw-bell-badge" hidden></span></button>' +
       '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
       '<nav class="tw-nav">' +
       '<div class="tw-section">Workspace</div>' +
@@ -168,6 +166,21 @@
     backdrop.addEventListener("click", () => setOpen(false));
     document.getElementById("tw-collapse").addEventListener("click", () => setOpen(false));
     document.getElementById("tw-signout").addEventListener("click", signOut);
+
+    // Fixed top bar (upper-right), on every page — hosts the notification bell.
+    const topbar = document.createElement("header");
+    topbar.id = "tw-topbar";
+    topbar.innerHTML =
+      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">🔔' +
+      '<span class="tw-bell-badge" id="tw-bell-badge" hidden></span></button>';
+    document.body.appendChild(topbar);
+    // Reserve the bar's height so it never covers page content — preserve each
+    // page's own top padding and just add the 52px bar on top.
+    if (!document.body.dataset.twTopbarPad) {
+      const pt = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+      document.body.style.paddingTop = (pt + 52) + "px";
+      document.body.dataset.twTopbarPad = "1";
+    }
 
     mountNotifications();
   }
@@ -313,14 +326,20 @@ html.tw-nav-open #tw-burger{display:none;}
 @media (max-width:767px){
   html.tw-nav-open #tw-backdrop{display:block;}
 }
+/* fixed top bar (hosts the notification bell, right-aligned) */
+#tw-topbar{position:fixed;top:0;left:0;right:0;height:52px;z-index:9995;background:#fff;
+border-bottom:1px solid rgba(27,28,28,.1);display:flex;align-items:center;justify-content:flex-end;
+padding:0 18px;box-sizing:border-box;}
+@media (min-width:768px){ html.tw-nav-open #tw-topbar{left:var(--tw-w);} }
+@media (max-width:767px){ #tw-topbar{padding-left:60px;} }   /* clear the burger */
 /* notification bell + dropdown */
-.tw-bell{position:relative;margin-left:auto;border:none;background:none;color:var(--tw-ink-v);
-font-size:16px;cursor:pointer;padding:4px 5px;border-radius:6px;line-height:1;}
+.tw-bell{position:relative;border:none;background:none;color:var(--tw-ink-v);
+font-size:18px;cursor:pointer;padding:5px 6px;border-radius:8px;line-height:1;}
 .tw-bell:hover{background:var(--tw-surf-low);color:var(--tw-red-dark);}
-.tw-bell-badge{position:absolute;top:-3px;right:-4px;min-width:15px;height:15px;padding:0 3px;
-border-radius:8px;background:var(--tw-red);color:#fff;font:700 9px/15px system-ui;text-align:center;box-sizing:border-box;}
+.tw-bell-badge{position:absolute;top:-1px;right:-1px;min-width:16px;height:16px;padding:0 3px;
+border-radius:8px;background:var(--tw-red);color:#fff;font:700 9px/16px system-ui;text-align:center;box-sizing:border-box;}
 #tw-notif-backdrop{position:fixed;inset:0;z-index:10000;background:transparent;}
-#tw-notif-panel{position:fixed;top:54px;left:14px;width:min(330px,calc(100vw - 28px));max-height:72vh;
+#tw-notif-panel{position:fixed;top:58px;right:16px;left:auto;width:min(340px,calc(100vw - 28px));max-height:72vh;
 overflow-y:auto;background:#fff;border:1px solid rgba(27,28,28,.12);border-radius:12px;
 box-shadow:0 16px 44px rgba(0,0,0,.22);z-index:10001;color:var(--tw-ink);
 font:400 13px/1.45 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
