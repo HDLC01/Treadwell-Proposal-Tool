@@ -48,6 +48,8 @@ try:
 except ImportError:
     pass
 
+import docx
+from docx.text.paragraph import Paragraph
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -301,6 +303,12 @@ class GenerateIn(BaseModel):
     # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
     # boilerplate is used (so the notes never vanish).
     notes: list = Field(default_factory=list)
+    # Proposal Review's document editor: free-text edits to template paragraphs
+    # OUTSIDE the priced/repeatable regions (see /api/proposal-template).
+    # [{"id": <int, from that endpoint>, "text": "<resolved plain text>"}].
+    # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
+    # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
+    paragraph_overrides: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -1096,6 +1104,35 @@ def _notes_for(work_type: str, notes_in: list) -> list:
     return [{"text": ln} for ln in lines]
 
 
+# Cap + coerce the document editor's paragraph_overrides before they reach
+# proposal_writer.fill_proposal. Mirrors the combo_options sanitization above
+# (str()-coerce before validating, cap the list) — a stale draft or hand-built
+# request can send anything here, and this must never 500 /api/generate.
+# proposal_writer._apply_paragraph_overrides re-validates independently (it's
+# called directly by tests, bypassing this layer), so this is defense in depth,
+# not the only guard.
+_PARAGRAPH_OVERRIDES_MAX = 500
+
+
+def _sanitize_paragraph_overrides(overrides_in: list) -> list:
+    out = []
+    for o in (overrides_in or [])[:_PARAGRAPH_OVERRIDES_MAX]:
+        if not isinstance(o, dict):
+            continue
+        pid = o.get("id")
+        if isinstance(pid, bool):   # bool is an int subclass — True would target id 1
+            continue
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            continue
+        text = o.get("text")
+        if text is None:
+            continue
+        out.append({"id": pid, "text": str(text)})
+    return out
+
+
 _DEFAULT_EXCLUSIONS = (
     "Multiple layers of floor to be removed (change order is necessary), Moving of "
     "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more "
@@ -1159,6 +1196,128 @@ def api_default_notes(work_type: str = "epoxy") -> Dict[str, Any]:
     editable Notes box with these so the estimator can tweak them per job."""
     wt = str(work_type or "epoxy").lower()
     return {"work_type": wt, "notes": _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []}
+
+
+@app.get("/api/proposal-template")
+def api_proposal_template(request: Request, work_type: str = "epoxy", audience: str = "Direct") -> Response:
+    """The REAL proposal template, as an ordered list of editable blocks, for
+    Proposal Review's document editor (replaces the old hand-built HTML
+    approximation — the estimator now edits the actual .docx text/layout).
+
+    `id` is that paragraph's index in `proposal_writer.iter_editable_blocks` —
+    the SAME walk `/api/generate` uses (via `_apply_paragraph_overrides`) to
+    resolve `paragraph_overrides` back onto the pristine template, so an id
+    from this response always lands on the exact right paragraph as long as
+    the template file itself hasn't changed (see `_template_version`, echoed
+    here as `template_version` so the frontend can detect a stale cached id
+    set after a deploy).
+
+    `in_block` marks paragraphs inside a repeatable/priced region
+    (price_line, single_bid, remodel, tax_breakout, has_options, system,
+    room, alternate, notes) — the frontend renders those read-only (driven by
+    the pricing sidebar + engine), never as freely-editable text.
+
+    Fidelity metadata (so the editor looks like the Word file, not an
+    approximation): per-block `align`/`list` flags + `runs` (formatted
+    segments — bold lead-ins, Zetta Serif sizes/colors; tokens isolated per
+    segment, see proposal_writer._block_runs), per-block `txbx` (which
+    floating text box it lives in), and a top-level `geometry` payload (page
+    size/margins, each box's page position, and the anchored letterhead
+    artwork — served by /api/proposal-template/media).
+    """
+    template_path = proposal_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+
+    d = docx.Document(str(template_path))
+    blocks = []
+    for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
+        p = Paragraph(p_elem, d)
+        style_name = None
+        try:
+            style_name = p.style.name if p.style is not None else None
+        except Exception:  # noqa: BLE001 — a style lookup failure is cosmetic only
+            style_name = None
+        bold = any(r.bold for r in p.runs if r.bold is not None)
+        blocks.append({
+            "id": idx,
+            "kind": kind,
+            "text": text,
+            "style": {"name": style_name, "bold": bold},
+            "in_block": in_block,
+            # Floating-text-box membership: True/False kept for callers that
+            # only care front-page-vs-body; `txbx` pairs the block with its
+            # box's geometry. Display placement only — ids are unaffected.
+            "in_txbx": txbx_idx is not None,
+            "txbx": txbx_idx,
+            "align": proposal_writer._para_align(p),
+            "list": proposal_writer._para_is_list(p_elem),
+            "runs": proposal_writer._block_runs(p_elem, p),
+        })
+
+    payload = {
+        "work_type": work_type,
+        "audience": audience,
+        "template_name": template_path.name,
+        "template_version": _template_proposal_version(template_path),
+        "geometry": proposal_writer.template_geometry(d),
+        "blocks": blocks,
+    }
+    return _versioned_json(request, payload, version=f"{work_type}:{audience}:{payload['template_version']}")
+
+
+# Media (letterhead artwork) served straight out of the template package.
+# Kyle's templates bake the entire page design — buffalo logo, DATE:/JOB
+# NAME: labels, the red PROPOSAL stamp, the bordered WORK/PRICE/NOTES/
+# ACCEPTANCE frame with its rotated labels — into full-page PNGs under
+# word/media/, so rendering these behind the text gives the editor the exact
+# printed look with no hand-drawn approximation.
+_MEDIA_CONTENT_TYPES = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "bmp": "image/bmp", "tiff": "image/tiff",
+    "emf": "image/emf", "wmf": "image/wmf", "svg": "image/svg+xml",
+}
+
+
+@app.get("/api/proposal-template/media")
+def api_proposal_template_media(request: Request, work_type: str = "epoxy",
+                                audience: str = "Direct", name: str = "") -> Response:
+    """One media part (by basename) from the picked template's package.
+    Whitelisted against the package's own word/media/ listing — a crafted
+    `name` can't reach any other part (no separators survive the basename
+    match), and unknown names 404."""
+    import zipfile
+    template_path = proposal_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+    try:
+        with zipfile.ZipFile(str(template_path)) as z:
+            allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
+                       if n.startswith("word/media/") and "/" not in n[len("word/media/"):]}
+            part = allowed.get(name)
+            if not part:
+                raise HTTPException(404, "No such media in this template")
+            data = z.read(part)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(500, "Template package is unreadable.") from exc
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
+    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
+
+
+def _template_proposal_version(path: Path) -> str:
+    """Cache-busting token for a proposal template file (mtime) — a deploy
+    that changes the .docx changes this, matching `_template_version`'s
+    pattern for the estimate sheet."""
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return "0"
 
 
 @app.post("/api/generate", response_model=GenerateOut)
@@ -1389,6 +1548,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # "Options:" label only when options exist.
             tax_breakout=_tax_breakout,
             has_options=_has_options,
+            # Proposal Review's document editor: free-text paragraph edits
+            # outside the priced/repeatable regions (see /api/proposal-template).
+            paragraph_overrides=_sanitize_paragraph_overrides(payload.paragraph_overrides),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc

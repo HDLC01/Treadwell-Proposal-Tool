@@ -726,3 +726,152 @@ button {
 }
 .ctx-menu .ctx-item:hover { background: var(--surface-dim, #f0f0f0); }
 .ctx-menu .ctx-item.danger { color: var(--treadwell-red, #c0392b); }
+
+/* ─── Proposal Review: real-document editor ──────────────────────────────
+   Proposal Review renders the ACTUAL .docx template (fetched from
+   /api/proposal-template) as ONE continuous Word-faithful document: the
+   template's own letterhead artwork (a full-page PNG inside the .docx
+   package — buffalo logo, DATE:/JOB NAME: labels, the red PROPOSAL stamp,
+   the bordered WORK/PRICE/NOTES frame with its rotated labels) painted
+   behind the floating text boxes positioned where Word anchors them, with
+   real run formatting (Zetta Serif, true point sizes, bold lead-ins) and
+   real bullets — everything contenteditable. Values pulled from the
+   estimate sheet / intake are highlighted on-screen only (.tw-fill) — the
+   highlight and any editor chrome never reach the generated .docx
+   (proposal_writer.py only ever writes plain run text). See
+   frontend/js/proposal-review.js. */
+
+/* A value auto-filled from intake/estimate data, inline in the document
+   text. Screen-only cue — never present in the generated file. */
+.tw-fill {
+  background: #ffe975;
+  padding: 0 1px;
+  border-radius: 1px;
+  cursor: default;
+}
+
+/* The zoom rig: the page renders at TRUE point sizes (the template runs
+   8-9pt Zetta Serif) and the whole surface scales up to read comfortably —
+   the Word-zoom effect. #doc-zoom carries the transform; #doc-zoom-outer is
+   sized by JS to the scaled bounds so the canvas scrolls correctly. */
+#doc-zoom { transform-origin: top left; }
+
+/* One rendered page (or page-flow surface) of the real document. */
+.tw-page {
+  position: relative;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.16), 0 4px 14px rgba(0,0,0,0.10);
+  margin: 0 0 14px;
+  font-family: "Zetta Serif Book", "Zetta Serif", Georgia, "Times New Roman", serif;
+  font-size: 9pt;
+  color: #404040;
+  line-height: 1.32;
+}
+/* The letterhead artwork layer (word/media PNG) — behind the text. */
+.tw-page-art {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+}
+/* A floating text box placed at its Word anchor position. */
+.tw-txbx { position: absolute; z-index: 1; }
+
+/* One template paragraph, editable in place. Reads as plain page text;
+   hover/focus reveal the editability; a hand-edited paragraph carries a
+   thin red inset bar. */
+.tw-block {
+  outline: none;
+  min-height: 1.3em;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.tw-block:hover { background: rgba(200, 16, 46, 0.05); }
+.tw-block:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.5); }
+.tw-block.tw-empty { min-height: 1.05em; }
+.tw-block.tw-bold { font-weight: 700; }
+.tw-block.tw-list { margin-left: 14pt; }
+.tw-block.tw-dirty { box-shadow: inset 2px 0 0 rgba(158, 0, 31, 0.45); }
+
+/* Real Word bullets (paragraphs carrying numbering) — hanging indent with a
+   round bullet, matching the template's list rows. Shared by the read-only
+   price/notes previews (they mirror bulleted docx rows). */
+.tw-li {
+  position: relative;
+  margin-left: 14pt;
+  padding-left: 9pt;
+}
+.tw-li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* Flow-fallback caption above a bare-token block (job name, date …): only
+   in flow mode, where the letterhead artwork — which carries the real
+   labels — isn't being rendered (template gave no usable geometry). */
+.tw-flow { padding: 72pt 90pt; }
+.tw-flow .tw-block[data-hint]::before {
+  content: attr(data-hint);
+  display: block;
+  font-size: 7.5pt;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--treadwell-red, #9e001f);
+  opacity: 0.65;
+}
+
+/* A repeatable/priced block region ({{#single_bid}}, {{#price_line}},
+   {{#system}}, {{#notes}}, …) — read-only, engine-driven content rendered
+   INLINE in the document flow (no card chrome: the page must read as one
+   continuous document). Hover hints where to edit it; the engine-driven
+   amounts inside carry the yellow .tw-fill treatment. */
+.tw-priced-region { position: relative; cursor: default; }
+.tw-priced-region .tw-region-badge { display: none; }
+.tw-priced-region:hover { background: rgba(255, 233, 117, 0.22); }
+
+/* Left "Proposal fields" rail — the structured inputs that FEED the
+   highlighted .tw-fill values (system/texture/scope/schedule/etc). The
+   pricing options rail (#options-panel) already owns the right side. */
+.fields-panel {
+  position: fixed; left: 16px; top: 112px; width: 260px;
+  max-height: calc(100vh - 132px); overflow-y: auto;
+  background: #fff; border: 1px solid #ccc; border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  z-index: 40; font-size: 13px; color: #222;
+  transition: left .2s ease;
+}
+/* The portal chrome (auth.js) opens a fixed 240px workspace nav and shifts
+   the page body right with margin-left — but margin can't move a fixed
+   element, so without this the nav sits ON TOP of the panel. Track it. */
+html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
+.fields-panel h3 { margin: 0 0 2px; font-size: 13px; color: #9e001f; }
+.fields-panel .op-hint { margin: 0 0 10px; font-size: 11px; color: #777; }
+.fields-panel label.fp-label {
+  display: block; font-size: 11px; font-weight: 700; color: #555;
+  margin: 10px 0 3px; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.fields-panel input[type="text"],
+.fields-panel input[type="number"],
+.fields-panel input[type="date"],
+.fields-panel select,
+.fields-panel textarea {
+  width: 100%; font: inherit; font-size: 12px; padding: 5px 6px;
+  border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;
+}
+.fields-panel textarea { resize: vertical; }
+.fields-panel .fp-row { display: flex; gap: 6px; }
+.fields-panel .fp-row > * { flex: 1; min-width: 0; }
+.fields-panel .fp-check { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 6px; }
+.fields-panel .fp-check input { width: auto; }
+/* Below ~1400px there isn't room for BOTH side rails + an 8.5in page —
+   drop the fields panel inline above the document (matches the
+   pricing-options-panel breakpoint in proposal-review.html). */
+@media (max-width: 1400px) {
+  .fields-panel {
+    position: static; width: auto; max-height: none;
+    margin: 0 16px 12px; box-shadow: none;
+  }
+}

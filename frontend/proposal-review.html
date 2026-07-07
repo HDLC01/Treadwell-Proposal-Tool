@@ -320,9 +320,10 @@
     }
   }
 
-  /* Pricing-options controls — a RIGHT-side rail (the left side holds the app
-     sidebar). The canvas gets a matching right padding so the centered document
-     shifts left and never sits under the rail. */
+  /* Pricing-options controls — a RIGHT-side rail; the LEFT side holds the new
+     "Proposal fields" rail (#fields-panel, styled in styles.css). The canvas
+     gets matching left+right padding so the centered document never sits
+     under either rail. */
   .options-panel {
     position: fixed; right: 16px; top: 112px; width: 240px;
     max-height: calc(100vh - 132px); overflow-y: auto;
@@ -332,6 +333,7 @@
   }
   /* Keep the centered proposal page clear of the right rail when the rail is shown. */
   body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 272px; }
+  .word-canvas { padding-left: 292px; }
   .options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
   .options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
   .options-panel .op-row { border-top: 1px solid #eee; padding: 8px 0; }
@@ -343,14 +345,38 @@
   .options-panel select { width: 100%; font-size: 12px; margin-top: 2px; padding: 3px 4px; }
   .options-panel .pr-baserow { display: block; font-weight: 700; margin: 8px 0 2px; cursor: pointer; }
   .options-panel .pr-optsub { margin: 2px 0 0 18px; padding-left: 8px; border-left: 2px solid #eee; }
-  /* Below ~1280px the page is too narrow for a floating rail — drop it inline. */
-  @media (max-width: 1280px) {
+  /* Below ~1400px the page is too narrow for both floating rails — drop them
+     inline above the document (matches #fields-panel's own breakpoint). */
+  @media (max-width: 1400px) {
     .options-panel {
       position: static; width: auto; max-height: none;
       margin: 12px 16px 0; box-shadow: none;
     }
     body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 0; }
+    .word-canvas { padding-left: 0; }
   }
+
+  /* The old doc-style inputs (dotted underline, meant to look like inline
+     document text) are reused inside #fields-panel for the structured
+     fields that feed the document's highlighted values — restyled as plain
+     boxed sidebar fields there instead of imitating page text. */
+  .fields-panel .doc-bullet-row { display: block; margin-bottom: 10px; }
+  .fields-panel .doc-bullet-row .key {
+    position: static; padding-left: 0; font-weight: 700;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
+    color: #555; margin-bottom: 3px; display: block;
+  }
+  .fields-panel .doc-bullet-row .key::before { content: none; }
+  .fields-panel .doc-input, .fields-panel .doc-textarea {
+    border: 1px solid #ccc; border-radius: 4px; padding: 5px 6px;
+    background: #fff; width: 100%; box-sizing: border-box;
+  }
+  .fields-panel .doc-input:hover, .fields-panel .doc-textarea:hover { border-color: #999; }
+  .fields-panel .doc-input:focus, .fields-panel .doc-textarea:focus {
+    background: #fffef2; border-color: var(--treadwell-red, #9e001f); outline: none;
+  }
+  .fields-panel .doc-input.short { width: 70px; display: inline-block; }
+  .fields-panel select.doc-input { width: 100%; }
 </style>
 </head>
 <body class="word-app">
@@ -378,179 +404,171 @@
   <button type="submit" form="proposal-form" id="generate-btn">Continue to Done →</button>
 </div>
 
-<!-- Left controls panel: per-sheet pricing-option toggles (shown only when the
-     estimate has 2+ epoxy sheets). Floats in the left gutter beside the document. -->
-<aside id="options-panel" class="options-panel" hidden></aside>
+<!-- LEFT rail: the structured "Proposal fields" that feed the document's
+     highlighted values. Same form + field names as before (state round-trips
+     unchanged); only the placement moved — the document surface on the right
+     now renders the REAL .docx template with these values substituted in. -->
+<aside id="fields-panel" class="fields-panel">
+  <h3>Proposal fields</h3>
+  <p class="op-hint">These feed the <span class="tw-fill">highlighted</span> values in the document.
+     You can also click any paragraph on the page and edit it directly.</p>
+  <form id="proposal-form">
 
-<!-- The Word canvas with the floating document page -->
-<div class="word-canvas">
-  <form id="proposal-form" class="doc-page">
-
-    <!-- Treadwell logo (top right) -->
-    <div class="doc-logo">
-      <span class="logo-mark">T</span>
-      <span class="logo-text">TREADWELL</span>
-    </div>
-
-    <!-- PROPOSAL vertical sidebar stamp -->
-    <div class="doc-proposal-stamp">PROPOSAL</div>
-
-    <!-- DATE / JOB NAME header -->
-    <div class="doc-header" style="margin-top: 50pt;">
-      <div class="label">Date:</div>
+    <div class="doc-bullet-row">
+      <div class="key">Date</div>
       <div><input type="date" name="bid_date" class="doc-input med"></div>
-      <div></div>
-
-      <div class="label">Job Name:</div>
-      <div style="grid-column: span 2;">
-        <input type="text" name="project_name" class="doc-input wide">
-      </div>
-
-      <div class="label"></div>
-      <div style="grid-column: span 2;">
-        <input type="text" name="city_state" class="doc-input wide">
-      </div>
+    </div>
+    <div class="doc-bullet-row">
+      <div class="key">Job Name</div>
+      <div><input type="text" name="project_name" class="doc-input wide"></div>
+    </div>
+    <div class="doc-bullet-row">
+      <div class="key">City / State</div>
+      <div><input type="text" name="city_state" class="doc-input wide"></div>
     </div>
 
-    <!-- WORK section -->
-    <div class="doc-section">
-      <div class="sidebar">Work</div>
-      <div class="body">
-        <p style="margin: 0 0 8pt;">
-          <span style="font-weight:700;text-decoration:underline;">
-            <input type="text" name="work_type_label" id="work-type-label" class="doc-input" style="width: 220px;" value="Epoxy Flooring">:</span>
-          per site visit on
-          <input type="text" name="site_visit_date_display" class="doc-input" style="width: 75px;">
-          <label style="font-size:11px;color:var(--ink-variant,#5c403f);margin-left:10px;white-space:nowrap;">
-            <input type="checkbox" name="no_site_visit"> No site visit — bidding per plans &amp; specs
-          </label>
-        </p>
-
-        <div class="doc-bullet-row">
-          <div class="key">System:</div>
-          <div><input type="text" name="system_name" class="doc-input wide"></div>
-        </div>
-        <div class="doc-bullet-row" id="texture-row">
-          <div class="key">Texture:</div>
-          <div><input type="text" name="texture" class="doc-input med"></div>
-        </div>
-        <div class="doc-bullet-row" id="area-row-epoxy">
-          <div class="key">Epoxy Area:</div>
-          <div>
-            ~<input type="number" name="system_1_sf" class="doc-input short" min="0"> SF of epoxy flooring and
-            <input type="number" name="cove_1_lf" class="doc-input short" min="0"> LF of
-            <input type="number" name="cove_height" class="doc-input" style="width:40px;" min="0" step="0.5" value="6">&quot; epoxy cove base
-          </div>
-        </div>
-        <div class="doc-bullet-row" id="area-row-polish">
-          <div class="key">Polish Area:</div>
-          <div>
-            ~<input type="number" name="polish_sf" class="doc-input short" min="0"> SF of polished concrete flooring
-          </div>
-        </div>
-        <div class="doc-bullet-row">
-          <div class="key">Scope:</div>
-          <div>
-            <textarea name="scope_notes" class="doc-textarea" rows="4"
-></textarea>
-          </div>
-        </div>
-        <div class="doc-bullet-row">
-          <div class="key">Schedule:</div>
-          <div>
-            <textarea name="schedule_notes" class="doc-textarea" rows="2"
-></textarea>
-          </div>
-        </div>
-        <div class="doc-bullet-row">
-          <div class="key">Exclusions:</div>
-          <div>
-            <textarea name="exclusions" class="doc-textarea" rows="3"
-></textarea>
-          </div>
-        </div>
-      </div>
+    <div class="doc-bullet-row">
+      <div class="key">Work heading</div>
+      <div><input type="text" name="work_type_label" id="work-type-label" class="doc-input" value="Epoxy Flooring"></div>
     </div>
-
-    <!-- PRICE section -->
-    <div class="doc-section">
-      <div class="sidebar">Price</div>
-      <div class="body">
-        <p id="base-bid-heading" style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
-        <!-- Combo per-option breakout (Option 1 Epoxy / Option 2 Polish); shown
-             instead of the single base line when work_type=combo (combined). The
-             Direct combo template keeps "Base Bid" INSIDE {{#single_bid}}, so the
-             generated doc has no heading here either — refreshPriceDisplay hides
-             #base-bid-heading to match (see proposal-review.js). -->
-        <div id="combo-price-block" style="display:none;"></div>
-        <p id="base-bid-row" style="margin: 0 0 6pt;">
-          <strong id="base-bid-display">$0</strong> – Epoxy flooring as described above
-          <em id="base-tax-phrase-display">(material sales tax INCLUDED)</em>
-        </p>
-        <p id="sales-tax-row" style="margin: 0 0 6pt; display:none;">
-          <strong id="sales-tax-display">$0</strong> – Material Sales Tax
-        </p>
-        <p id="remodel-tax-row" style="margin: 0 0 6pt; display:none;">
-          <strong><mark id="tax-amount-display">$0</mark></strong> – Remodel Tax
-        </p>
-        <p id="total-row" style="margin: 0 0 10pt;">
-          <strong id="total-display">$0</strong> – Total
-        </p>
-        <!-- Tax treatment drives {{base_tax_phrase}} in the .docx: "Tax exempt"
-             prints "(tax exempt)", otherwise the included-tax phrasing. -->
-        <label class="doc-tax-treatment" style="display:inline-flex; align-items:center; gap:6px; margin:0 0 14pt; font-size:12px; color:var(--ink-variant,#5c403f);">
-          Tax treatment:
-          <select name="tax_inclusion" class="doc-input" style="width: 230px;">
-            <option value="INCLUDED">Sales / Remodel tax included (one line)</option>
-            <option value="BROKEN_OUT">Sales tax broken out (itemized)</option>
-            <option value="EXEMPT">Tax exempt</option>
-          </select>
+    <div class="doc-bullet-row">
+      <div class="key">Site visit</div>
+      <div>
+        <input type="text" name="site_visit_date_display" class="doc-input" placeholder="M/D/YY">
+        <label class="fp-check">
+          <input type="checkbox" name="no_site_visit"> No site visit — per plans &amp; specs
         </label>
-
-        <!-- Per-room priced options (per-room jobs): preview + editable manual
-             notes per room. Hidden (empty) when the job has no room tabs. -->
-        <div id="rooms-block"></div>
-        <!-- Structured proposal price lines (options) + recommended alternate
-             system. Populated by renderProposalExtras() from state so the live
-             preview matches what the generated .docx will contain. -->
-        <div id="price-lines-block"></div>
-        <div id="alternate-block"></div>
-
-        <p style="margin: 0;">
-          <textarea name="price_options" class="doc-textarea" rows="3"
-></textarea>
-        </p>
       </div>
     </div>
 
-    <!-- NOTES section — the standard boilerplate notes, now editable per job -->
-    <div class="doc-section">
-      <div class="sidebar">Notes</div>
-      <div class="body">
-        <p class="hint" style="margin:0 0 6pt;font-size:11px;color:var(--ink-variant,#5c403f);">
-          One note per line. Pre-filled with Treadwell's standard notes — edit, add, or remove as needed.
-        </p>
-        <textarea name="notes_text" id="notes-text" class="doc-textarea" rows="11" style="width:100%;"></textarea>
+    <div class="doc-bullet-row">
+      <div class="key">System</div>
+      <div><input type="text" name="system_name" class="doc-input wide"></div>
+    </div>
+    <div class="doc-bullet-row" id="texture-row">
+      <div class="key">Texture</div>
+      <div><input type="text" name="texture" class="doc-input med"></div>
+    </div>
+    <div class="doc-bullet-row" id="area-row-epoxy">
+      <div class="key">Epoxy Area:</div>
+      <div>
+        ~<input type="number" name="system_1_sf" class="doc-input short" min="0"> SF epoxy,
+        <input type="number" name="cove_1_lf" class="doc-input short" min="0"> LF of
+        <input type="number" name="cove_height" class="doc-input short" style="width:52px;" min="0" step="0.5" value="6">&quot; cove
+      </div>
+    </div>
+    <div class="doc-bullet-row" id="area-row-polish">
+      <div class="key">Polish Area:</div>
+      <div>
+        ~<input type="number" name="polish_sf" class="doc-input short" min="0"> SF polished concrete
+      </div>
+    </div>
+    <div class="doc-bullet-row">
+      <div class="key">Scope</div>
+      <div><textarea name="scope_notes" class="doc-textarea" rows="5"></textarea></div>
+    </div>
+    <div class="doc-bullet-row">
+      <div class="key">Schedule</div>
+      <div><textarea name="schedule_notes" class="doc-textarea" rows="2"></textarea></div>
+    </div>
+    <div class="doc-bullet-row">
+      <div class="key">Exclusions</div>
+      <div><textarea name="exclusions" class="doc-textarea" rows="4"></textarea></div>
+    </div>
+
+    <!-- Tax treatment drives {{base_tax_phrase}} + the PRICE layout in the
+         .docx: "Tax exempt" prints "(tax exempt)", "broken out" itemizes. -->
+    <div class="doc-bullet-row">
+      <div class="key">Tax treatment</div>
+      <div>
+        <select name="tax_inclusion" class="doc-input">
+          <option value="INCLUDED">Sales / Remodel tax included (one line)</option>
+          <option value="BROKEN_OUT">Sales tax broken out (itemized)</option>
+          <option value="EXEMPT">Tax exempt</option>
+        </select>
       </div>
     </div>
 
-    <!-- SIGNATURE section — the name that signs the proposal -->
-    <div class="doc-section">
-      <div class="sidebar">Sign</div>
-      <div class="body">
-        <div class="doc-bullet-row">
-          <div class="key">Estimator:</div>
-          <div><input type="text" name="estimator_name" id="estimator-name" class="doc-input wide"></div>
-        </div>
-        <p class="hint" style="margin:4pt 0 0;font-size:11px;color:var(--ink-variant,#5c403f);">
-          Signs the proposal. Defaults to your signed-in name — edit if someone else should sign.
-        </p>
-      </div>
+    <!-- NOTES boilerplate, one bullet per line -> the {{#notes}} block -->
+    <div class="doc-bullet-row">
+      <div class="key">Notes (one per line)</div>
+      <div><textarea name="notes_text" id="notes-text" class="doc-textarea" rows="8"></textarea></div>
+    </div>
+
+    <!-- Signs the proposal; defaults to the signed-in user's name. -->
+    <div class="doc-bullet-row">
+      <div class="key">Estimator (signs)</div>
+      <div><input type="text" name="estimator_name" id="estimator-name" class="doc-input wide"></div>
+    </div>
+
+    <!-- Legacy free-text kept so older drafts' saved value round-trips. -->
+    <div class="doc-bullet-row">
+      <div class="key">Extra price text</div>
+      <div><textarea name="price_options" class="doc-textarea" rows="2"></textarea></div>
     </div>
 
     <!-- Tax handling (kept as a form field for backend) -->
     <input type="hidden" name="sales_tax_handling" value="INCLUDED">
   </form>
+</aside>
+
+<!-- RIGHT rail: per-sheet pricing-option toggles (shown only when the
+     estimate snapshotted 2+ priced sheets). -->
+<aside id="options-panel" class="options-panel" hidden></aside>
+
+<!-- The Word canvas. The editor renders the REAL template as ONE continuous
+     document (GET /api/proposal-template): page 1 is the template's own
+     letterhead artwork (buffalo logo, DATE:/JOB NAME: labels, the bordered
+     WORK/PRICE/NOTES frame — a full-page PNG served from the .docx package)
+     with the floating text boxes positioned on it exactly as Word lays them
+     out; the Terms & Conditions pages flow underneath. Every paragraph is
+     contenteditable; values pulled from intake/estimate show highlighted
+     (.tw-fill) — screen-only, never in the generated .docx. The whole
+     surface scales to fit (Word-zoom style; real 8pt Zetta Serif sizes). -->
+<div class="word-canvas">
+  <div id="doc-zoom-outer">
+    <div id="doc-zoom">
+      <div id="doc-surface">
+        <div id="doc-loading" class="tw-page" style="padding:72pt 90pt;">Loading the proposal template…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Staging for the live price-preview elements. proposal-review.js keeps
+     these OUTSIDE the editable flow (they mirror the {{#single_bid}} /
+     {{#price_line}} / {{#alternate}} / {{#room}} docx blocks and are driven
+     by the pricing engine + sidebar, not free-typed). Once the template
+     loads they're MOVED into the matching read-only region of the document;
+     if the template fetch fails they're shown as a fallback preview. -->
+<div id="price-preview-staging" hidden>
+  <p id="base-bid-heading" style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
+  <!-- Combo per-option breakout (Option 1 Epoxy / Option 2 Polish); shown
+       instead of the single base line when work_type=combo (combined). The
+       Direct combo template keeps "Base Bid" INSIDE {{#single_bid}}, so the
+       generated doc has no heading here either — refreshPriceDisplay hides
+       #base-bid-heading to match (see proposal-review.js). -->
+  <div id="combo-price-block" style="display:none;"></div>
+  <p id="base-bid-row" class="tw-li" style="margin: 0 0 2pt;">
+    <strong class="tw-fill" id="base-bid-display">$0</strong> – Epoxy flooring as described above
+    <em id="base-tax-phrase-display">(material sales tax INCLUDED)</em>
+  </p>
+  <p id="sales-tax-row" class="tw-li" style="margin: 0 0 2pt; display:none;">
+    <strong class="tw-fill" id="sales-tax-display">$0</strong> – Material Sales Tax
+  </p>
+  <p id="remodel-tax-row" class="tw-li" style="margin: 0 0 2pt; display:none;">
+    <strong class="tw-fill" id="tax-amount-display">$0</strong> – Remodel Tax
+  </p>
+  <p id="total-row" class="tw-li" style="margin: 0 0 4pt;">
+    <strong class="tw-fill" id="total-display">$0</strong> – Total
+  </p>
+  <!-- Per-room priced options (per-room jobs): read-only preview; manual
+       notes are edited in the pricing-options rail. -->
+  <div id="rooms-block"></div>
+  <!-- Structured price lines (options) + recommended alternate system,
+       populated by renderProposalExtras() so the preview matches the .docx. -->
+  <div id="price-lines-block"></div>
+  <div id="alternate-block"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
