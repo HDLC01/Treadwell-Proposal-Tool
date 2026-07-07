@@ -167,19 +167,36 @@
     document.getElementById("tw-collapse").addEventListener("click", () => setOpen(false));
     document.getElementById("tw-signout").addEventListener("click", signOut);
 
-    // Fixed top bar (upper-right), on every page — hosts the notification bell.
-    const topbar = document.createElement("header");
-    topbar.id = "tw-topbar";
-    topbar.innerHTML =
+    // Notification bell. When the page has a brand/step header (the wizard pages),
+    // fold the burger + bell INTO that one row — no separate bar — so the content
+    // viewport (e.g. the estimate worksheet) gets a full bar of height back.
+    // Otherwise fall back to a fixed 52px top bar (pages without a header).
+    const bellHTML =
       '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">🔔' +
       '<span class="tw-bell-badge" id="tw-bell-badge" hidden></span></button>';
-    document.body.appendChild(topbar);
-    // Reserve the bar's height so it never covers page content — preserve each
-    // page's own top padding and just add the 52px bar on top.
-    if (!document.body.dataset.twTopbarPad) {
-      const pt = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
-      document.body.style.paddingTop = (pt + 52) + "px";
-      document.body.dataset.twTopbarPad = "1";
+    const pageHeader = document.querySelector("header.topbar");
+    if (pageHeader) {
+      const brand = pageHeader.querySelector(".brand");
+      const progress = pageHeader.querySelector(".progress");
+      const left = document.createElement("div"); left.className = "tw-hdr-left";
+      const right = document.createElement("div"); right.className = "tw-hdr-right";
+      burger.classList.add("tw-burger-inline");   // static, in-row (not the fixed corner burger)
+      left.appendChild(burger);
+      if (brand) left.appendChild(brand);
+      if (progress) right.appendChild(progress);
+      right.insertAdjacentHTML("beforeend", bellHTML);
+      pageHeader.replaceChildren(left, right);
+    } else {
+      const topbar = document.createElement("header");
+      topbar.id = "tw-topbar";
+      topbar.innerHTML = bellHTML;
+      document.body.appendChild(topbar);
+      // Reserve the bar's height so it never covers page content.
+      if (!document.body.dataset.twTopbarPad) {
+        const pt = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+        document.body.style.paddingTop = (pt + 52) + "px";
+        document.body.dataset.twTopbarPad = "1";
+      }
     }
 
     mountNotifications();
@@ -318,6 +335,10 @@ font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:c
 border:1px solid rgba(27,28,28,.12);background:#fff;color:var(--tw-ink);font-size:18px;cursor:pointer;
 display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.08);}
 html.tw-nav-open #tw-burger{display:none;}
+/* one-line header: [burger + brand] ......... [progress + bell] */
+#tw-burger.tw-burger-inline{position:static;top:auto;left:auto;box-shadow:none;width:34px;height:34px;flex:none;}
+.tw-hdr-left{display:flex;align-items:center;gap:12px;min-width:0;}
+.tw-hdr-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;}
 #tw-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9997;}
 @media (min-width:768px){
   html.tw-nav-open body{margin-left:var(--tw-w);}
