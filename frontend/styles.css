@@ -542,3 +542,158 @@ button {
 }
 
 /* Polish has a slightly different layout but reuses same grid */
+
+/* ─── Formula bar (estimate review) ───────────────────────────────── */
+/* Excel-style strip directly above the worksheet grid:
+   [ Name Box | fx | cell contents ]. The two inputs must undo the global
+   input[type="text"] form styling (36px min-height, margins, borders), so
+   everything is scoped under .formula-bar to outrank it. */
+.formula-bar {
+  flex: 0 0 auto;              /* stays thin inside .estimate-app's flex column */
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  background: var(--xl-header-bg);
+  border: 1px solid var(--xl-border);
+  border-bottom: 1px solid var(--surface-dim);
+  font-family: "Calibri", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+}
+.formula-bar .fbar-name {
+  flex: 0 0 90px;
+  width: 90px;
+  margin: 0;
+  padding: 0 6px;
+  min-height: 0;
+  border: none;
+  border-right: 1px solid var(--xl-border);
+  border-radius: 0;
+  background: var(--surface-lowest);
+  color: var(--ink);
+  text-align: center;
+  font-family: Consolas, "SF Mono", "Roboto Mono", monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.formula-bar .fbar-name:focus {
+  outline: none;               /* readOnly name box — no edit affordance */
+}
+.formula-bar .fbar-fx {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--ink-variant);
+  opacity: 0.75;
+  user-select: none;
+}
+.formula-bar .fbar-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0 8px;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;     /* blends into the bar */
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.formula-bar .fbar-input:focus {
+  outline: 2px solid var(--treadwell-red);   /* same edit cue as grid cells */
+  outline-offset: -2px;
+  background: var(--surface-lowest);
+}
+.formula-bar .fbar-input[readonly] {
+  color: var(--ink-variant);   /* locked cell — visible but not editable */
+  cursor: default;
+}
+.formula-bar .fbar-input[readonly]:focus {
+  outline-color: var(--surface-dim);         /* muted ring, not the red edit cue */
+  background: transparent;
+}
+.formula-bar .fbar-input:disabled {
+  color: var(--ink-variant);
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ─── Cell locking — rate/markup/tax cells (estimate review) ──────── */
+/* Locked cells keep their inline sheet fill and may also be
+   .editable/.formula-cell, so the locked look is an ::after OVERLAY +
+   dimmed input, never a background override. position:relative is added
+   ONLY to lock-bearing cells (.locked/.unlocked always accompany the
+   .cell-lock span) so grid layout and sticky headers stay untouched.
+   NOTE: the page's own <style> block loads after this file, so ties in
+   specificity lose — hence the .locked.locked / :has() bumps below. */
+.xl-grid .gridcell.locked,
+.xl-grid .gridcell.unlocked {
+  position: relative;
+}
+.xl-grid .gridcell.locked { cursor: not-allowed; }
+.xl-grid .gridcell.locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(120, 120, 120, 0.06);
+  background-image: repeating-linear-gradient(45deg,
+      rgba(90, 90, 90, 0.07) 0px, rgba(90, 90, 90, 0.07) 3px,
+      transparent 3px, transparent 7px);
+  pointer-events: none;        /* never blocks the 🔒 or the input */
+}
+/* Doubled .locked outranks the page's cursor:text / cursor:cell rules */
+.xl-grid .gridcell.locked.locked input,
+.xl-grid .gridcell.locked.locked select {
+  cursor: not-allowed;
+  opacity: 0.6;                /* dimmed value; inline fills untouched */
+}
+/* Temporarily unlocked (🔓) — warm "edit me now" ring; re-lock-on-blur
+   is obvious when it disappears. The 999px inset shadow is a tint that
+   layers over the cell's inline background without overwriting it. */
+.xl-grid .gridcell.unlocked {
+  box-shadow: inset 0 0 0 2px var(--warning),
+              inset 0 0 0 999px rgba(245, 158, 11, 0.10);
+  z-index: 1;
+}
+/* Focused while unlocked: keep the warm ring instead of the default red
+   (this :has() outranks the page's focus rule) */
+.xl-grid .gridcell.unlocked:has(input:focus),
+.xl-grid .gridcell.unlocked:has(select:focus) {
+  outline-color: var(--warning);
+}
+/* The 🔒/🔓 toggle pinned to the cell's top-right (same spot/scale as the
+   .canonical-mirror ⟲ glyph) — small enough not to cover the value */
+.xl-grid .gridcell .cell-lock {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  z-index: 2;                  /* above the ::after overlay */
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px;
+  cursor: pointer;
+  opacity: 0.45;
+  user-select: none;
+  transition: opacity 0.12s;
+}
+.xl-grid .gridcell:hover .cell-lock,
+.xl-grid .gridcell.unlocked .cell-lock {
+  opacity: 1;
+}
+
+/* ─── Formula reference highlights (Excel-style) ─────────────────────────
+   While a formula is edited (cell or bar), estimate-review.js outlines each
+   referenced cell/range with a color-cycled inset ring (ref-hl-0…5), like
+   Excel's colored reference borders. Rings layer over the cell's own fill
+   via box-shadow so no background is disturbed; cleared on commit/blur. */
+.xl-grid .gridcell.ref-hl-0 { box-shadow: inset 0 0 0 2px #4285f4; }
+.xl-grid .gridcell.ref-hl-1 { box-shadow: inset 0 0 0 2px #ea4335; }
+.xl-grid .gridcell.ref-hl-2 { box-shadow: inset 0 0 0 2px #34a853; }
+.xl-grid .gridcell.ref-hl-3 { box-shadow: inset 0 0 0 2px #9334e6; }
+.xl-grid .gridcell.ref-hl-4 { box-shadow: inset 0 0 0 2px #f29900; }
+.xl-grid .gridcell.ref-hl-5 { box-shadow: inset 0 0 0 2px #12857a; }

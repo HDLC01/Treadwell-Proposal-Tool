@@ -407,7 +407,14 @@ function renderBidOptions() {
   if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
   const baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
-  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)"
+  // The combined chip names the ACTUAL base sheets — renamed tabs read as
+  // "Grooming Room + Lobby (combined)", not a hardcoded "Epoxy + Polish".
+  const comboLabel = () => {
+    const bases = priced.filter(t => t.kind === "base");
+    const names = bases.length ? bases.map(t => labelFor(t.id)) : ["Epoxy", "Polish"];
+    return names.join(" + ") + " (combined)";
+  };
+  const autoLabel = wt === "combo" ? comboLabel()
                                    : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
   const isPartOfAutoBase = (t) => !baseId && t.kind === "base";
   const baseRadio = (val, checked, label) =>
@@ -885,6 +892,10 @@ async function showSheet(name) {
   // Clear stale DOM registrations from the previous sheet — those input
   // elements got detached when we tore down the prior grid.
   if (HF && HF.unregisterAll) HF.unregisterAll();
+  // Same for the formula bar — its active cell is about to be detached
+  // with the old grid, so drop the reference and blank the bar.
+  _activeCellInput = null;
+  syncFormulaBar();
   sheetGrid.className = "sheet-loading";
   sheetGrid.textContent = "Loading " + name + "…";
 
@@ -1084,7 +1095,11 @@ function refreshDomFromHF(data, grid) {
   if (!HF || !HF.ready) return;
   const sheet = data.sheet;
   for (const cell of data.cells) {
-    if (!cell.isFormula) continue;
+    // Template formula cells AND cells where the user TYPED a formula ("=…"
+    // in cellValues) both display their computed value at rest.
+    const uVal = cellValues[canonicalKey(sheet, cell.addr)];
+    const userFormula = typeof uVal === "string" && uVal.trim().startsWith("=");
+    if (!cell.isFormula && !userFormula) continue;
     // Look up the cell's DOM input via HF's registration map — avoids
     // having to CSS-escape sheet names that contain special chars like
     // 'Gyp (USG 1-8")'.
@@ -1337,6 +1352,43 @@ function makeCell(kind, text, pos) {
   return d;
 }
 
+// ─── Locked cells ────────────────────────────────────────────────────
+// The rate/markup/tax cells are LOCKED by default (read-only) so they can't be
+// fat-fingered. A 🔒 on the cell unlocks it for a single edit (re-locks on blur).
+// Keyed by the sheet's template LAYOUT; copies inherit their source's set; the
+// generated .xlsx protects the same cells (backend/estimate_writer.py). Full set
+// incl. the formula % cells (GP / Sales Tax / Remodel) — overwriting those breaks
+// the calc, so they're worth locking most.
+const LOCKED_CELLS = {
+  "Epoxy":        ["B73", "B74", "B75", "B76", "D77", "B80", "B81", "B84"],
+  "Polish":       ["B67", "B68", "B69", "B70", "D71", "B74", "B75", "B78"],
+  "Seal":         ["B67", "B68", "B69", "B70", "D71", "B74", "B75", "B78"],
+  "Seal (+Jnts)": ["B67", "B68", "B69", "B70", "D71", "B74", "B75"],
+  "Leveling":     ["B69", "B70", "B71", "B72", "D73", "B76", "B77", "B80"],
+  "Epoxy blank":  ["B70", "B71", "B72", "B73", "D74", "B77", "B78", "B81"],
+};
+const GYP_LOCKED = ["B72", "B74", "B75", "E76", "B79", "B80", "B83"];
+// Resolve a sheet id to its layout's locked-cell Set (copies → their source).
+function lockedCellsFor(sheetId) {
+  let id = sheetId, guard = 0;
+  while (guard++ < 20) {
+    const c = state.tab_copies.find(x => x.id === id);
+    if (!c) break;
+    // A copy's source can be blank on an odd/old draft; the backend defaults
+    // that to "Epoxy" too (estimate_writer.py) — mirror it instead of falling
+    // through to an unlocked grid that doesn't match the generated .xlsx.
+    id = c.source || "Epoxy";
+  }
+  return new Set(/^Gyp/i.test(id) ? GYP_LOCKED : (LOCKED_CELLS[id] || []));
+}
+
+// The grid cell the formula bar is currently pointed at (Excel-style).
+let _activeCellInput = null;
+// True once the bar has written a keystroke through to the active cell this
+// edit session. Blur is the only reliable commit point for a click-away (no
+// Enter) — see the bar's `blur` listener in the ─── Formula bar ─── section.
+let _fbarDirty = false;
+
 function makeDataCell(cell, sheet, r, c, dropdowns) {
   const d = document.createElement("div");
   d.className = "gridcell";
@@ -1427,6 +1479,9 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     }
   }
   inp.dataset.cellAddr = addrKey;
+  // The formula bar's Name Box shows the cell's OWN address — cellAddr holds
+  // the canonical key, which points at Epoxy for mirrored Project-Info cells.
+  inp.dataset.displayAddr = cell.addr;
   // Register this input with HF using the CANONICAL key — that way
   // refreshDomFromHF and propagateChangesToDom can both find it whether
   // the cell is on its source sheet or mirrored from another.
@@ -1478,9 +1533,290 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
       }
     });
   }
+  // Rate/markup/tax cells LOCK by default — read-only until the estimator clicks
+  // the 🔒 to unlock a single edit (auto re-locks on blur). A readonly input
+  // never fires "input", so the edit writers above stay dormant while locked.
+  // The generated .xlsx protects these same cells (backend/estimate_writer.py).
+  if (lockedCellsFor(sheet).has(cell.addr)) {
+    inp.readOnly = true;
+    d.classList.add("locked");
+    const lk = document.createElement("span");
+    lk.className = "cell-lock";
+    lk.textContent = "🔒";
+    lk.title = "Locked — click to unlock for editing";
+    const setLocked = (lock) => {
+      inp.readOnly = lock;
+      d.classList.toggle("locked", lock);
+      d.classList.toggle("unlocked", !lock);
+      lk.textContent = lock ? "🔒" : "🔓";
+      lk.title = lock ? "Locked — click to unlock for editing" : "Unlocked — click to re-lock";
+      // The formula bar mirrors this cell's lock — keep its readOnly in step
+      // so the bar can't sidestep a 🔒 (or stay stuck locked after a 🔓).
+      if (_activeCellInput === inp) syncFormulaBar();
+    };
+    // Exposed so the formula bar's blur handler can re-lock after ITS edit
+    // session ends — the bar edits this cell by remote control, so the
+    // re-lock decision has to live wherever that session actually finishes.
+    inp._setLocked = setLocked;
+    lk.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const willUnlock = inp.readOnly;
+      setLocked(!willUnlock);
+      if (willUnlock) { inp.focus(); inp.select(); }
+    });
+    // Don't re-lock when focus is moving INTO the formula bar to keep editing
+    // this same cell — that would re-lock it before the bar ever got to use
+    // the unlock. The bar's own blur listener re-locks once ITS session ends.
+    inp.addEventListener("blur", (e) => { if (!inp.readOnly && e.relatedTarget !== fbarInput) setLocked(true); });
+    d.appendChild(lk);
+  }
+
+  // ── Google-Sheets-style formula views ──
+  // Resting view = the COMPUTED value; edit view (focus) = the formula text.
+  // Covers user-typed formulas (a "=…" string in cellValues) and the
+  // template's own formula cells alike, so clicking any calculated cell shows
+  // the formula for editing — and blurring shows the number again. The
+  // formula bar mirrors whichever view the cell is in.
+  const _userFormula = () => {
+    const v = cellValues[addrKey];
+    return (typeof v === "string" && v.trim().startsWith("=")) ? v : null;
+  };
+  inp._editView = () => {
+    if (inp.tagName === "SELECT") return;
+    const f = _userFormula();
+    if (f) inp.value = f;
+    // Template formula cells carry the formula TEXT in cell.formula; cell.value
+    // is the cached computed number the sheet was saved with.
+    else if (cellValues[addrKey] == null && cell.isFormula) {
+      inp.value = String(cell.formula != null ? cell.formula : cell.value);
+    }
+  };
+  inp._restingView = () => {
+    if (inp.tagName === "SELECT") return;
+    if (!(_userFormula() || (cellValues[addrKey] == null && cell.isFormula))) return;
+    if (!HF || !HF.ready) return;                 // initial render — refreshDomFromHF covers it
+    const tgt = canonicalTarget(sheet, cell.addr);
+    const v = HF.getValue(tgt.sheet, tgt.addr);
+    if (v === null || v === undefined) { inp.value = ""; return; }
+    inp.value = (v && typeof v === "object" && "value" in v) ? String(v.value)
+      : (typeof v === "number" ? formatNumericValue(v, cell.fmt) : String(v));
+  };
+  // Skip the swap-back when focus moves INTO the formula bar — the bar is
+  // still editing this cell and needs its raw text left alone.
+  inp.addEventListener("blur", (e) => {
+    if (e.relatedTarget !== fbarInput) { inp._restingView(); updateRefHighlights(); }
+  });
+  // A user formula re-rendered after a tab switch shows its raw "=…" text —
+  // swap in the computed value right away (no-op before HF is ready).
+  if (_userFormula()) inp._restingView();
+
+  // Formula bar: reflect this cell in the top bar when it gets focus (Excel-style).
+  inp.addEventListener("focus", () => { inp._editView(); _activeCellInput = inp; syncFormulaBar(); });
+
   d.appendChild(inp);
   return d;
 }
+
+// ─── Formula bar ─────────────────────────────────────────────────────
+// Excel-style strip above the worksheet: a Name Box showing the focused
+// cell's address plus a value input bound two-way to that cell. The bar
+// never talks to HyperFormula itself — it writes by dispatching REAL
+// input/change events on the cell input, so the edit handlers wired in
+// makeDataCell (cellValues, HF push, % normalization) run unchanged.
+const fbarName  = document.getElementById("fbar-name");
+const fbarInput = document.getElementById("fbar-input");
+// Tracks which cell input the bar last mirrored, so syncFormulaBar() can tell
+// a genuine cell change (snapshot a fresh Escape target) apart from a repeat
+// sync of the SAME cell (every keystroke, every HF recompute) — the latter
+// must not clobber the snapshot mid-edit.
+let _fbarSyncedInput = null;
+// The active cell's value when the CURRENT bar session started — what Escape
+// restores. Keystrokes typed in the bar write through live (see the "input"
+// listener below), so re-syncing on Escape would just redisplay the
+// already-edited value; only this snapshot lets Escape actually undo it.
+let _fbarOrig = "";
+
+function syncFormulaBar() {
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected) {
+    // No active cell (or it was detached by a grid re-render) — blank out.
+    fbarName.value = "";
+    fbarInput.value = "";
+    fbarInput.readOnly = false;
+    fbarInput.disabled = true;
+    _fbarSyncedInput = null;
+    clearRefHighlights();
+    return;
+  }
+  if (_fbarSyncedInput !== inp) {
+    // New cell under the bar — start a fresh Escape snapshot.
+    _fbarOrig = inp.value;
+    _fbarSyncedInput = inp;
+  }
+  fbarName.value = inp.dataset.displayAddr || "";
+  fbarInput.disabled = false;
+  // Dropdown cells only accept their listed options, and locked rate cells
+  // must not be editable through the back door — mirror both as read-only.
+  fbarInput.readOnly = inp.tagName === "SELECT" || inp.readOnly;
+  fbarInput.value = inp.value;
+  updateRefHighlights();   // outline the cells this formula references
+}
+
+// ─── Formula reference highlights (Excel-style) ─────────────────────
+// While a formula is being edited (in the cell or the bar), outline the
+// cells it references — color-cycled per reference, like Excel. Only refs
+// on the CURRENT sheet get outlines (bare refs, or a sheet-qualified ref
+// naming the active sheet); cross-sheet refs have no DOM to point at.
+const _REF_HL_MAX = 6;                 // color classes ref-hl-0 … ref-hl-5
+const _REF_HL_CELL_CAP = 400;          // don't outline a giant range cell-by-cell
+let _refHlEls = [];
+const _REF_TOKEN_RE = /(?:('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?(\$?[A-Z]{1,3}\$?[0-9]{1,7})(?::(\$?[A-Z]{1,3}\$?[0-9]{1,7}))?/gi;
+
+function _colToNum(letters) {
+  return letters.toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+}
+function _numToCol(n) {
+  let s = "";
+  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+
+function clearRefHighlights() {
+  for (const el of _refHlEls) {
+    for (let i = 0; i < _REF_HL_MAX; i++) el.classList.remove("ref-hl-" + i);
+  }
+  _refHlEls = [];
+}
+
+function updateRefHighlights() {
+  clearRefHighlights();
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected) return;
+  const v = inp.value;
+  if (typeof v !== "string" || !v.trim().startsWith("=")) return;
+
+  // displayAddr -> .gridcell div, current sheet only (the grid IS the sheet)
+  const byAddr = {};
+  document.querySelectorAll("#sheet-grid .gridcell > input, #sheet-grid .gridcell > select").forEach(el => {
+    if (el.dataset.displayAddr) byAddr[el.dataset.displayAddr] = el.parentElement;
+  });
+
+  let m, colorIdx = 0;
+  _REF_TOKEN_RE.lastIndex = 0;
+  while ((m = _REF_TOKEN_RE.exec(v)) !== null) {
+    const [, sheetTok, a1, a2] = m;
+    if (sheetTok) {
+      const name = (sheetTok.startsWith("'") ? sheetTok.slice(1, -1).replace(/''/g, "'") : sheetTok);
+      if (activeSheet && name.toLowerCase() !== String(activeSheet).toLowerCase()) continue;
+    }
+    const cls = "ref-hl-" + (colorIdx % _REF_HL_MAX);
+    colorIdx++;
+    const parse = (t) => {
+      const mm = t.replace(/\$/g, "").match(/^([A-Z]+)([0-9]+)$/i);
+      return mm ? { c: _colToNum(mm[1]), r: parseInt(mm[2], 10) } : null;
+    };
+    const p1 = parse(a1), p2 = a2 ? parse(a2) : p1;
+    if (!p1 || !p2) continue;
+    const cLo = Math.min(p1.c, p2.c), cHi = Math.max(p1.c, p2.c);
+    const rLo = Math.min(p1.r, p2.r), rHi = Math.max(p1.r, p2.r);
+    if ((cHi - cLo + 1) * (rHi - rLo + 1) > _REF_HL_CELL_CAP) continue;
+    for (let c = cLo; c <= cHi; c++) {
+      for (let r = rLo; r <= rHi; r++) {
+        const el = byAddr[_numToCol(c) + r];
+        if (el) { el.classList.add(cls); _refHlEls.push(el); }
+      }
+    }
+  }
+}
+
+// Cell → bar: while the user types in a grid cell, the bar follows along.
+// Delegated on the grid container so makeDataCell's handlers stay untouched;
+// skipped while the bar itself has focus so the write-back echo (the bar's
+// own dispatched input event bubbling back up) can't fight the user's caret.
+sheetGrid.addEventListener("input", (e) => {
+  if (e.target === _activeCellInput && document.activeElement !== fbarInput) {
+    fbarInput.value = e.target.value;
+    updateRefHighlights();   // live re-outline as the formula is typed
+  }
+});
+// Commit-time rewrites too — the %-cell normalizer reformats on change
+// ("3" → "3%"), and the bar should show what the cell now shows.
+sheetGrid.addEventListener("change", (e) => {
+  if (e.target === _activeCellInput && document.activeElement !== fbarInput) {
+    fbarInput.value = e.target.value;
+  }
+});
+
+// Bar → cell: typing in the bar writes the active cell and fires a real
+// "input" event, so cellValues + HyperFormula update exactly as if the
+// user had typed in the cell itself. Locked cells never get written.
+fbarInput.addEventListener("input", () => {
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected || inp.readOnly || inp.tagName === "SELECT") return;
+  inp.value = fbarInput.value;
+  inp.dispatchEvent(new Event("input", { bubbles: true }));
+  // Mark the session dirty — a plain click-away never fires a native
+  // "change" on its own, so the blur listener below has to commit for us.
+  _fbarDirty = true;
+  updateRefHighlights();   // live re-outline as the formula is typed in the bar
+});
+fbarInput.addEventListener("keydown", (e) => {
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected) return;
+  if (e.key === "Enter") {
+    // Commit like blurring the cell would: "change" runs the %-cell
+    // normalization, then re-read the (possibly reformatted) value and
+    // hand focus back to the cell.
+    e.preventDefault();
+    if (!inp.readOnly && inp.tagName !== "SELECT") {
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    // Already committed above — clear dirty so the blur this inp.focus()
+    // triggers doesn't dispatch a second "change" (the normalizer is
+    // idempotent, but don't rely on that).
+    _fbarDirty = false;
+    syncFormulaBar();
+    inp.focus();
+  } else if (e.key === "Escape") {
+    // Abandon the bar edit for real: keystrokes already wrote through live
+    // (see the "input" listener above), so restore the value snapshotted
+    // when this bar session started instead of just re-syncing — re-syncing
+    // would only redisplay the already-edited value, undoing nothing.
+    e.preventDefault();
+    inp.value = _fbarOrig;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    _fbarDirty = false;
+    syncFormulaBar();
+    inp.focus();
+  }
+});
+// The single commit choke point: blur fires whether the user tabs away,
+// clicks another cell, or clicks Continue — none of which fire a native
+// "change" on #fbar-input the way Enter's explicit dispatch above does.
+// Blur also fires BEFORE the next element's focus, so _activeCellInput
+// still points at the cell the bar was editing even when the user clicks
+// straight into another cell.
+fbarInput.addEventListener("blur", (e) => {
+  const inp = _activeCellInput;
+  if (_fbarDirty && inp && inp.isConnected && !inp.readOnly) {
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  _fbarDirty = false;
+  // The unlock this bar session used covered exactly one edit — re-lock
+  // unless focus is heading straight back into the same cell (the user is
+  // still mid-edit, just bouncing focus between the cell and the bar).
+  if (inp && inp._setLocked && !inp.readOnly && e.relatedTarget !== inp) {
+    inp._setLocked(true);
+  }
+  // The cell blurred BEFORE this bar session started, so nothing else will
+  // swap a just-committed formula back to its computed value — do it here
+  // (unless focus is returning to the cell, i.e. the edit continues).
+  if (inp && inp.isConnected && e.relatedTarget !== inp && inp._restingView) {
+    inp._restingView();
+  }
+  syncFormulaBar();   // mirror whatever the commit/re-lock above left behind
+});
 
 function propagateChangesToDom(changes) {
   // changes is an array of {sheet, addr, value} from HF.setCellValue.
@@ -1493,6 +1829,11 @@ function propagateChangesToDom(changes) {
     if (!inputEl) continue;
     // Skip the cell the user is actively typing in
     if (document.activeElement === inputEl) continue;
+    // Same skip one hop removed: while the FORMULA BAR is editing this cell,
+    // focus sits in the bar, not the cell — overwriting here would feed HF's
+    // formatted echo ("10" → "1000%") back into the blur-commit normalizer,
+    // committing 100x the typed percent.
+    if (inputEl === _activeCellInput && document.activeElement === fbarInput) continue;
     // Find the original cell from cache to get fmt
     const sourceCells = (sheetCache[ch.sheet] || {}).cells || [];
     const sourceCell = sourceCells.find(c => c.addr === ch.addr);

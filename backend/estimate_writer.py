@@ -28,6 +28,7 @@ from typing import Any, Dict, Mapping
 log = logging.getLogger("proposal_tool.estimate_writer")
 
 from openpyxl import load_workbook
+from openpyxl.styles import Protection
 from openpyxl.workbook import Workbook
 
 
@@ -364,6 +365,32 @@ POLISH_TOTALS: Dict[str, str] = {
 }
 
 
+# ─── Rate / markup / tax cell-lock map ─────────────────────────────────
+# Cells that get Excel sheet-protection LOCKED in the generated .xlsx so the
+# GP %, Hard Bid Discount %, Superintendent, Soft Costs, Contingency,
+# Sales Tax %, Kansas Remodel Tax %, and Bond inputs can't be fat-fingered
+# when Troy/Kyle open the file. Every OTHER cell stays editable.
+#
+# Keyed by the worksheet's TEMPLATE LAYOUT (its stable base id / source), not
+# its final display title — sheet titles change during fill (the alternate tab
+# is renamed, copies get user ids, display labels are applied at the end), so we
+# resolve each worksheet to its layout while ids are still stable and apply the
+# protection at the very end (see _resolve_ws_layouts / _apply_cell_protection).
+#
+# Contingency is col D on most layouts but col E on the Gyp sheets — reflected
+# below. No password is set, so the sheet can still be unprotected in Excel
+# (Review ▸ Unprotect Sheet) if Troy/Kyle need to.
+LOCK_MAP: Dict[str, list[str]] = {
+    "Epoxy":        ["B73", "B74", "B75", "B76", "D77", "B80", "B81", "B84"],
+    "Polish":       ["B67", "B68", "B69", "B70", "D71", "B74", "B75", "B78"],
+    "Seal":         ["B67", "B68", "B69", "B70", "D71", "B74", "B75", "B78"],
+    "Seal (+Jnts)": ["B67", "B68", "B69", "B70", "D71", "B74", "B75"],
+    "Leveling":     ["B69", "B70", "B71", "B72", "D73", "B76", "B77", "B80"],
+    "Epoxy blank":  ["B70", "B71", "B72", "B73", "D74", "B77", "B78", "B81"],
+    "Gyp":          ["B72", "B74", "B75", "E76", "B79", "B80", "B83"],
+}
+
+
 # ─── Public API ────────────────────────────────────────────────────────
 # Epoxy material section spare manual rows — the "=B*C" lines that fall
 # inside D40's SUM(D18:D39) range (Super Stick / Floor Graphic live here).
@@ -440,6 +467,13 @@ def fill_estimate(
     # "<id>!<addr>" writes land on the freshly-created sheet.
     _create_copied_tabs(wb, tab_copies)
 
+    # 1.6 Resolve each worksheet OBJECT to its rate-cell lock layout NOW, while
+    # every sheet still carries its stable id (before the alternate-rename and
+    # display-label passes change titles). Worksheet objects survive those
+    # renames, so we hold these references and apply the actual protection at the
+    # very end, just before saving.
+    ws_layouts = _resolve_ws_layouts(wb, tab_copies)
+
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
     for sheet_addr, val in (cell_values or {}).items():
         if val in (None, ""):
@@ -472,6 +506,12 @@ def fill_estimate(
     #    landed on the stable ids.
     _reorder_tabs(wb, tab_order)
     _apply_tab_labels(wb, tab_labels)
+
+    # 6. Excel sheet-protection: lock the rate/markup/tax cells so they can't be
+    #    fat-fingered in Excel. Done LAST — after every write, extra, alternate
+    #    tab, copy, reorder and rename — using the ws→layout map captured while
+    #    titles were still stable ids.
+    _apply_cell_protection(ws_layouts)
 
     # Stream to bytes
     buf = io.BytesIO()
@@ -541,6 +581,100 @@ def _create_copied_tabs(wb, tab_copies: list[Mapping[str, Any]] | None) -> None:
             ws.title = new_id
         except Exception:  # noqa: BLE001 — bad title / odd char; skip this copy
             pass
+
+
+def _lock_layout_for(base_id: str) -> list[str] | None:
+    """LOCK_MAP addresses for a stable base sheet id, or None when the layout
+    has no locked cells. All Gyp variants share the one "Gyp" set (their rate
+    rows sit at identical coordinates); every other layout matches by exact id."""
+    addrs = LOCK_MAP.get(base_id)
+    if addrs is None and base_id.lower().startswith("gyp"):
+        addrs = LOCK_MAP["Gyp"]
+    return addrs
+
+
+def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None) -> list[tuple[Any, list[str]]]:
+    """Map each worksheet OBJECT to its rate-cell lock addresses.
+
+    Called while every sheet still carries its stable id (after _create_copied_tabs,
+    before the alternate-rename and tab-label passes), so titles resolve reliably:
+    copies follow their {id, source} chain back to a template layout, Gyp variants
+    share the Gyp set, and sheets with no locked cells (Takeoff, validation, …) are
+    left out entirely — they get no protection. The worksheet objects survive the
+    later retitles, so the returned pairs stay valid until save."""
+    src_by_id: dict[str, str] = {}
+    for c in (tab_copies or []):
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or "").strip()[:31]
+        if cid:
+            src_by_id[cid] = str(c.get("source") or "Epoxy").strip() or "Epoxy"
+
+    out: list[tuple[Any, list[str]]] = []
+    for ws in wb.worksheets:
+        base, guard = ws.title, 0
+        while base in src_by_id and guard < 20:      # copy-of-a-copy chains
+            base = src_by_id[base]
+            guard += 1
+        addrs = _lock_layout_for(base)
+        if addrs:
+            out.append((ws, addrs))
+    return out
+
+
+def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
+    """Enable Excel sheet-protection so only the rate/markup/tax cells are locked.
+
+    Excel's default is every cell locked once protection turns on, so everything
+    else must be explicitly marked editable — in TWO tiers, because iterating the
+    full dimension window would MATERIALIZE ~76k empty cells per sheet (measured:
+    5x generate latency, 3x file size). Instead:
+
+    1. cells that exist get locked=False directly (their styling is untouched —
+       protection is one facet of the style, not a replacement);
+    2. virgin cells (never created, so nothing to stamp) inherit the workbook's
+       "Normal" named style — flipping ITS locked flag to False keeps blank rows
+       and columns typeable under protection without serializing a single extra
+       cell. Same trick as unchecking Format Cells ▸ Protection ▸ Locked on the
+       Normal style in Excel.
+
+    Then the LOCK_MAP addresses are re-locked and protection enabled with NO
+    password — Troy/Kyle can still Review ▸ Unprotect Sheet when they genuinely
+    need to change a rate. Formatting stays allowed (cell/column/row) so
+    column-width tweaks aren't blocked; structural edits (insert/delete rows)
+    stay protected. Failures are logged and skipped — protection is a guard
+    rail, never worth failing a generation over."""
+    if not ws_layouts:
+        return
+    unlocked = Protection(locked=False)
+    locked = Protection(locked=True)
+
+    # Tier 2 first (workbook-wide, once): Normal style → unlocked, so virgin
+    # cells on the protected sheets stay editable. Harmless on unprotected
+    # sheets — the flag only matters when a sheet's protection is on.
+    try:
+        wb = ws_layouts[0][0].parent
+        for style in wb._named_styles:
+            if style.name == "Normal":
+                style.protection = Protection(locked=False)
+    except Exception as exc:  # noqa: BLE001 — guard rail, not worth failing generation
+        log.warning("estimate_writer: Normal-style unlock skipped: %s", exc)
+
+    for ws, addrs in ws_layouts:
+        try:
+            # Tier 1: only cells that already exist — list() because assigning
+            # a style can grow the dict via style interning side effects.
+            for cell in list(ws._cells.values()):
+                cell.protection = unlocked
+            for addr in addrs:
+                ws[addr].protection = locked
+            ws.protection.sheet = True
+            ws.protection.formatCells = False
+            ws.protection.formatColumns = False
+            ws.protection.formatRows = False
+            ws.protection.enable()
+        except Exception as exc:  # noqa: BLE001 — guard rail, not worth failing generation
+            log.warning("estimate_writer: cell protection skipped on %r: %s", ws.title, exc)
 
 
 # Match a sheet reference token in a formula: optional single-quoted name (with
@@ -640,15 +774,16 @@ def _apply_tab_labels(wb, tab_labels: Mapping[str, Any] | None) -> None:
         return
 
     # 1. Rewrite all cross-sheet refs in cell formulas + defined names to the
-    #    deterministic final titles.
+    #    deterministic final titles. Only EXISTING cells — formulas can't live in
+    #    virgin cells, and iter_rows() would materialize the full dimension window
+    #    (~76k empty cells per sheet; measured as the main generate slowdown).
     for ws in wb.worksheets:
-        for row in ws.iter_rows():
-            for cell in row:
-                v = cell.value
-                if isinstance(v, str) and v.startswith("="):
-                    new_v = _rewrite_formula_refs(v, final)
-                    if new_v != v:
-                        cell.value = new_v
+        for cell in list(ws._cells.values()):
+            v = cell.value
+            if isinstance(v, str) and v.startswith("="):
+                new_v = _rewrite_formula_refs(v, final)
+                if new_v != v:
+                    cell.value = new_v
     try:
         for dn in wb.defined_names.values():
             if isinstance(dn.value, str) and "!" in dn.value:
@@ -741,6 +876,40 @@ def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> Non
         # D{r} stays as the template's =B{r}*C{r} formula.
 
 
+# ── Typed-formula validator (Google-Sheets-style live formulas) ─────────
+# The estimator can TYPE a formula into any grid cell ("=C60+C59") and it
+# must persist to the downloaded .xlsx as a real formula. Cell text arrives
+# over the API though, so "=…" strings are only let through when they look
+# like a plain spreadsheet calculation: a conservative charset (cell refs,
+# ranges, numbers, operators, comparisons, text literals, quoted sheet
+# refs) plus a function-name whitelist. Exfiltration/DDE shapes fail one or
+# the other — =WEBSERVICE/=HYPERLINK/=IMPORTXML aren't whitelisted, =cmd|…
+# has "|" outside the charset, external [Book1] refs have "[" — and keep
+# the apostrophe-escape below, exactly as before.
+# Bounded quantifiers everywhere + a hard input cap in _is_safe_formula:
+# this regex runs on API-supplied text, and an unbounded name class made it
+# polynomial (CodeQL ReDoS: a megabyte of "AAA…" costs O(n^2) backtracking).
+# Excel function names max out well under 31 chars.
+_FORMULA_MAX_LEN = 512
+_FORMULA_FUNC_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]{0,30})[ \t]{0,4}\(")
+_FORMULA_CHARSET_RE = re.compile(r'^=[A-Za-z0-9_ .,:;!$"\'()+\-*/^%&<>=]+$')
+_SAFE_FORMULA_FUNCS = {
+    "SUM", "IF", "MIN", "MAX", "ROUND", "ROUNDUP", "ROUNDDOWN", "AVERAGE",
+    "COUNT", "COUNTA", "COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "SUMPRODUCT",
+    "ABS", "AND", "OR", "NOT", "IFERROR", "VLOOKUP", "HLOOKUP", "INDEX",
+    "MATCH", "CONCATENATE", "TEXT", "CEILING", "FLOOR", "MOD", "POWER",
+    "SQRT", "PI", "AVERAGEIF", "PRODUCT", "TRUNC",
+}
+
+
+def _is_safe_formula(s: str) -> bool:
+    if len(s) > _FORMULA_MAX_LEN:      # nobody hand-types a 512+ char formula
+        return False
+    if not _FORMULA_CHARSET_RE.fullmatch(s):
+        return False
+    return all(f.upper() in _SAFE_FORMULA_FUNCS for f in _FORMULA_FUNC_RE.findall(s))
+
+
 def _coerce(v: Any) -> Any:
     """Cast strings to numbers where the user typed a number, leave
     everything else alone. Keeps the workbook's number-format intact."""
@@ -753,6 +922,10 @@ def _coerce(v: Any) -> Any:
                 return float(s)
             return int(s)
         except ValueError:
+            # A genuine typed formula persists as a formula (Excel recomputes
+            # it on open, same as the template's own formulas).
+            if s.startswith("=") and _is_safe_formula(s):
+                return s
             # Neutralize Excel formula/DDE injection: a string that starts with
             # a formula trigger (= + - @) or a tab/CR gets a leading apostrophe
             # so Excel treats the whole cell as literal text.

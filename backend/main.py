@@ -268,6 +268,12 @@ class GenerateIn(BaseModel):
     # Structured proposal price lines (options / unit prices): [{"label","amount"}].
     # Rendered as repeatable {{#price_line}} rows under PRICE; NOT priced into the bid.
     price_lines: list = Field(default_factory=list)
+    # Combo per-option price breakout (pre-formatted): [{"amount_formatted","label"}]
+    # e.g. "$28,400" / "Option 1: Epoxy flooring as described above (…INCLUDED)",
+    # "$1,200" / "Kansas Remodel Tax", "$29,600" / "Total", then Option 2 (Polish).
+    # When present, these render FIRST under PRICE and the combined single-bid line
+    # is suppressed (the two option totals ARE the price).
+    combo_options: list = Field(default_factory=list)
     # Recommended ALTERNATE system bid (the full /api/price response with an
     # `alternate_full_bid` + `alternate`), and its proposal label.
     alternate_computed_bid: Dict[str, Any] | None = None
@@ -1296,8 +1302,45 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # Options first, then the estimator's manual "Add for" price lines.
     price_line_dicts = _option_lines + price_line_dicts
 
+    # Combo per-option breakout (pre-formatted on the frontend): Option 1 (Epoxy) +
+    # Option 2 (Polish), each with its own flooring / Kansas Remodel Tax / Total.
+    # When present these LEAD the PRICE section and the combined single-bid line is
+    # suppressed — the two option totals ARE the base price (per Treadwell's combo
+    # proposal format).
+    # Coerce with str() BEFORE stripping — a caller can send {"label": 123} or
+    # {"label": {"a": 1}} (bad client state, a stale draft, a hand-built request);
+    # calling .strip() on the raw value first raised AttributeError and 500'd the
+    # whole endpoint. Cap the list too: it drives one deep-copied paragraph set
+    # per entry in the docx, and nothing legitimate ever sends more than a handful.
+    _combo_lines = []
+    for c in (payload.combo_options or [])[:50]:
+        if not isinstance(c, dict):
+            continue
+        label = str(c.get("label") or "").strip()
+        amount_formatted = str(c.get("amount_formatted") or "").strip()
+        if label or amount_formatted:
+            _combo_lines.append({"label": label, "amount_formatted": amount_formatted})
+    if _combo_lines:
+        # The combined single-bid line is suppressed below (single_bid=[]), but
+        # the template's "Options:" heading is a {{#has_options}} block that
+        # lives NESTED INSIDE {{#single_bid}} — suppressing single_bid also
+        # deletes it. If there are extra option/manual price lines after the
+        # combo breakout, restore the heading as a label-only price_line row
+        # (empty amount_formatted, stripped of its dash separator in
+        # proposal_writer._strip_leading_separator) so those lines aren't
+        # visually indistinguishable from the combo base price. Skip it when
+        # there's nothing after the breakout — an empty "Options:" would have
+        # nothing to introduce.
+        if price_line_dicts:
+            _combo_lines = _combo_lines + [{"label": "Options:", "amount_formatted": ""}]
+        price_line_dicts = _combo_lines + price_line_dicts
+
     # The {{#room}} block is unused now (options ride the price_line block) — strip it.
     rooms_arg = []
+
+    # Base bid shows via {{#single_bid}} — EXCEPT when the combo breakout supplies its
+    # own Option 1/Option 2 base lines, in which case suppress the combined line.
+    _single_bid = [] if _combo_lines else None
 
     # "Options:" label prints when there ARE option lines; else it's stripped.
     _has_options = bool(price_line_dicts)
@@ -1332,9 +1375,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             systems=systems_arg,
             remodel=_remodel_lines,
             rooms=rooms_arg,
-            # Base bid ALWAYS shows via {{#single_bid}}; the {{#room}} options render
-            # below it (as totals or deducts). No suppression.
-            single_bid=None,
+            # Base shows via {{#single_bid}} normally; suppressed for the combo
+            # breakout (its Option 1/Option 2 lines are the base price).
+            single_bid=_single_bid,
             # Editable NOTES (estimator's edits, else standard boilerplate).
             notes=_notes_for(payload.work_type, payload.notes),
             # PRICE layout: itemize tax lines only when "broken out"; show the
