@@ -299,8 +299,8 @@
           } else {
             h += `<p style="margin:0;"><strong>${fmtUSD(r.bid.total)}</strong> – ${esc(desc)} as described above <em>${taxPhrase(r)}</em></p>`;
           }
-          if (!isDeduct && !r.is_base && r.show_system !== false && r.system_desc)
-            h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(r.system_desc)}</p>`;
+          // (No separate system bullet: the price line above already names the
+          // system via option_desc, and the generated .docx doesn't add one either.)
           h += autoNotes.concat(manual).map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("");
           h += `</div>`;
           return h;
