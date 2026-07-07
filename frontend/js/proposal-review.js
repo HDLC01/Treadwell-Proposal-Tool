@@ -720,6 +720,9 @@
         tab_copies: Array.isArray(state.tab_copies) ? state.tab_copies : [],
         tab_labels: (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {},
         tab_order: Array.isArray(state.tab_order) ? state.tab_order : [],
+        // Structural edits (insert/delete rows & columns) -> replayed onto the
+        // downloaded .xlsx with formula/merge/lock translation.
+        tab_structs: Array.isArray(state.tab_structs) ? state.tab_structs : [],
         // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
         notes: String(mergedValues.notes_text || "").split("\n").map(s => s.trim()).filter(Boolean),
       },

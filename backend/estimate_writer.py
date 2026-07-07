@@ -410,6 +410,231 @@ ALT_SF_CELL = "E20"
 ALT_MATERIAL_ROW = 29          # first "MATERIAL - Extras" =B*C row on the blank tab
 
 
+# ─── Structural edits: insert/delete rows & columns (tab_structs) ──────
+# The grid lets the estimator insert/delete rows and columns Excel-style.
+# Each edit is recorded as an op {sheet, kind, at, count} in the order it
+# happened, with `at` 1-based in the coordinates CURRENT at op time — so
+# replaying the list from the pristine template reproduces the user's sheet.
+#
+# openpyxl's insert_rows/delete_rows MOVE cells but never rewrite formulas,
+# which would silently corrupt the bid (a SUM range that no longer spans its
+# rows). So after each op we rewrite every formula in the workbook with
+# Excel's own shift semantics: refs at/after the boundary shift, ranges
+# spanning the boundary grow/shrink, refs INTO a deleted span become #REF!
+# (single cells) or clamp (range endpoints). $-absolute refs shift exactly
+# like relative ones (the $ only matters for copy/paste). Cross-sheet refs
+# shift only when they target the edited sheet. Defined names get the same
+# pass; merged ranges are moved/grown manually. Whole-column (D:D) and
+# whole-row (18:20) refs and conditional-formatting ranges are left alone —
+# none exist in the bid template's calculation paths.
+#
+# Everything downstream that thinks in TEMPLATE coordinates (LOCK_MAP,
+# EPOXY_EXTRA_ROWS, the alternate-tab cells) is translated through the same
+# op list via _translate_addr before writing.
+
+_STRUCT_KINDS = {"insert_rows", "delete_rows", "insert_cols", "delete_cols"}
+
+# A1 reference (optionally sheet-qualified, optionally a range) inside a
+# formula. Lookbehind keeps us off the tail of longer tokens; the lookahead
+# rejects function names shaped like refs (LOG10(, ATAN2() and named ranges
+# (A1_rate).
+_STRUCT_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_$.!])"
+    r"(?:('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?"
+    r"(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7})"
+    r"(?::(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7}))?"
+    r"(?![A-Za-z0-9_(])"
+)
+
+
+def _norm_structs(tab_structs: list[Mapping[str, Any]] | None) -> list[dict]:
+    """Validate + normalize the op list; junk entries are dropped, order kept."""
+    out: list[dict] = []
+    for s in (tab_structs or []):
+        if not isinstance(s, dict):
+            continue
+        kind = str(s.get("kind") or "")
+        sheet = str(s.get("sheet") or "")
+        try:
+            at = int(s.get("at"))
+            count = int(s.get("count") or 1)
+        except (TypeError, ValueError):
+            continue
+        if kind in _STRUCT_KINDS and sheet and at >= 1 and 1 <= count <= 500:
+            out.append({"sheet": sheet, "kind": kind, "at": at, "count": count})
+    return out
+
+
+def _shift_index(idx: int, at: int, count: int, insert: bool) -> int | None:
+    """One index through one op: shifted index, or None when deleted."""
+    if insert:
+        return idx + count if idx >= at else idx
+    if at <= idx < at + count:
+        return None
+    return idx - count if idx >= at + count else idx
+
+
+def _translate_addr(addr: str, ops: list[dict]) -> str | None:
+    """Template-coordinate cell address -> its CURRENT address after `ops`
+    (the ops for that sheet, in recorded order), or None if an op deleted it."""
+    from openpyxl.utils import column_index_from_string, get_column_letter
+
+    m = re.fullmatch(r"([A-Za-z]{1,3})([0-9]{1,7})", addr)
+    if not m:
+        return addr
+    col, row = column_index_from_string(m.group(1)), int(m.group(2))
+    for op in ops:
+        rows = op["kind"].endswith("_rows")
+        insert = op["kind"].startswith("insert")
+        if rows:
+            row = _shift_index(row, op["at"], op["count"], insert)
+        else:
+            col = _shift_index(col, op["at"], op["count"], insert)
+        if row is None or col is None:
+            return None
+    return f"{get_column_letter(col)}{row}"
+
+
+def _shift_refs_in_formula(formula: str, own_sheet: str, op: dict) -> str:
+    """Rewrite every reference in `formula` for one structural op, matching
+    Excel's semantics. `own_sheet` is the sheet the formula lives on — bare
+    refs target it. String literals ("…") are left untouched."""
+    from openpyxl.utils import column_index_from_string, get_column_letter
+
+    rows = op["kind"].endswith("_rows")
+    insert = op["kind"].startswith("insert")
+    at, count = op["at"], op["count"]
+
+    def shift_pair(c: int, r: int):
+        if rows:
+            return c, _shift_index(r, at, count, insert)
+        return _shift_index(c, at, count, insert), r
+
+    def clamp_endpoints(v1, v2):
+        # Range endpoints where one side fell inside the deleted span: Excel
+        # clamps the range to what survives; both gone -> #REF!.
+        lo = v1 if v1 is not None else at
+        hi = v2 if v2 is not None else at - 1
+        return (lo, hi) if lo <= hi else None
+
+    def repl(m: "re.Match[str]") -> str:
+        sheet_tok = m.group(1)
+        if sheet_tok:
+            name = sheet_tok[1:-1].replace("''", "'") if sheet_tok.startswith("'") else sheet_tok
+        else:
+            name = own_sheet
+        if name.lower() != op["sheet"].lower():
+            return m.group(0)
+        prefix = (sheet_tok + "!") if sheet_tok else ""
+
+        d1c, c1, d1r, r1 = m.group(2), column_index_from_string(m.group(3)), m.group(4), int(m.group(5))
+        nc1, nr1 = shift_pair(c1, r1)
+        if m.group(7) is None:                          # single cell
+            if nc1 is None or nr1 is None:
+                return "#REF!"
+            return f"{prefix}{d1c}{get_column_letter(nc1)}{d1r}{nr1}"
+
+        d2c, c2, d2r, r2 = m.group(6), column_index_from_string(m.group(7)), m.group(8), int(m.group(9))
+        nc2, nr2 = shift_pair(c2, r2)
+        if rows:
+            span = clamp_endpoints(nr1, nr2)
+            if span is None:
+                return "#REF!"
+            nr1, nr2 = span
+            nc1, nc2 = c1, c2
+        else:
+            span = clamp_endpoints(nc1, nc2)
+            if span is None:
+                return "#REF!"
+            nc1, nc2 = span
+            nr1, nr2 = r1, r2
+        return (f"{prefix}{d1c}{get_column_letter(nc1)}{d1r}{nr1}"
+                f":{d2c}{get_column_letter(nc2)}{d2r}{nr2}")
+
+    # Transform only OUTSIDE double-quoted string literals.
+    parts = re.split(r'("(?:[^"]|"")*")', formula)
+    for i in range(0, len(parts), 2):
+        parts[i] = _STRUCT_REF_RE.sub(repl, parts[i])
+    return "".join(parts)
+
+
+def _shift_merged_ranges(ws, op: dict) -> None:
+    """Move/grow/shrink merged ranges for one op (openpyxl doesn't)."""
+    rows = op["kind"].endswith("_rows")
+    insert = op["kind"].startswith("insert")
+    at, count = op["at"], op["count"]
+    old = list(ws.merged_cells.ranges)
+    for rng in old:
+        lo = rng.min_row if rows else rng.min_col
+        hi = rng.max_row if rows else rng.max_col
+        if insert:
+            new_lo = lo + count if lo >= at else lo
+            new_hi = hi + count if hi >= at else hi
+        else:
+            new_lo = _shift_index(lo, at, count, False)
+            new_hi = _shift_index(hi, at, count, False)
+            if new_lo is None and new_hi is None:
+                ws.merged_cells.ranges.remove(rng)      # merge fully deleted
+                continue
+            if new_lo is None:
+                new_lo = at
+            if new_hi is None:
+                new_hi = at - 1
+            if new_lo > new_hi:
+                ws.merged_cells.ranges.remove(rng)
+                continue
+        if (new_lo, new_hi) != (lo, hi):
+            if rows:
+                rng.min_row, rng.max_row = new_lo, new_hi
+            else:
+                rng.min_col, rng.max_col = new_lo, new_hi
+
+
+def _apply_tab_structs(wb, structs: list[dict]) -> None:
+    """Replay the user's insert/delete row/column ops onto the workbook,
+    keeping every formula, defined name and merged range calculating."""
+    for op in structs:
+        if op["sheet"] not in wb.sheetnames:
+            continue
+        ws = wb[op["sheet"]]
+        try:
+            if op["kind"] == "insert_rows":
+                ws.insert_rows(op["at"], op["count"])
+            elif op["kind"] == "delete_rows":
+                ws.delete_rows(op["at"], op["count"])
+            elif op["kind"] == "insert_cols":
+                ws.insert_cols(op["at"], op["count"])
+            else:
+                ws.delete_cols(op["at"], op["count"])
+        except Exception as exc:  # noqa: BLE001 — a bad op must not kill the fill
+            log.warning("estimate_writer: struct op %r skipped: %s", op, exc)
+            continue
+        _shift_merged_ranges(ws, op)
+        # Formula pass over the WHOLE workbook — the edited sheet's own
+        # formulas moved without being rewritten, and any other sheet may
+        # reference the edited one.
+        for wsx in wb.worksheets:
+            for cell in list(wsx._cells.values()):
+                v = cell.value
+                if isinstance(v, str) and v.startswith("="):
+                    nv = _shift_refs_in_formula(v, wsx.title, op)
+                    if nv != v:
+                        cell.value = nv
+        try:
+            for dn in wb.defined_names.values():
+                if isinstance(dn.value, str) and "!" in dn.value:
+                    dn.value = _shift_refs_in_formula(dn.value, "", op)
+        except Exception:  # noqa: BLE001 — defined-name shapes vary; non-fatal
+            pass
+
+
+def _ops_by_sheet(structs: list[dict]) -> Dict[str, list[dict]]:
+    by: Dict[str, list[dict]] = {}
+    for op in structs:
+        by.setdefault(op["sheet"], []).append(op)
+    return by
+
+
 def fill_estimate(
     values: Mapping[str, Any],
     cell_values: Mapping[str, Any] | None = None,
@@ -418,6 +643,7 @@ def fill_estimate(
     tab_copies: list[Mapping[str, Any]] | None = None,
     tab_labels: Mapping[str, Any] | None = None,
     tab_order: list | None = None,
+    tab_structs: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
@@ -467,12 +693,22 @@ def fill_estimate(
     # "<id>!<addr>" writes land on the freshly-created sheet.
     _create_copied_tabs(wb, tab_copies)
 
+    # 1.55 Structural edits (insert/delete rows & columns), replayed in the
+    # order the user made them — AFTER the named-field writes (template
+    # coordinates, they ride the shift) and the copies (ops recorded against a
+    # copy's id need its sheet to exist), but BEFORE cell_values (which arrive
+    # in the user's CURRENT coordinates). Every template-coordinate consumer
+    # below translates through the same op list.
+    structs = _norm_structs(tab_structs)
+    _apply_tab_structs(wb, structs)
+    ops_by = _ops_by_sheet(structs)
+
     # 1.6 Resolve each worksheet OBJECT to its rate-cell lock layout NOW, while
     # every sheet still carries its stable id (before the alternate-rename and
     # display-label passes change titles). Worksheet objects survive those
     # renames, so we hold these references and apply the actual protection at the
     # very end, just before saving.
-    ws_layouts = _resolve_ws_layouts(wb, tab_copies)
+    ws_layouts = _resolve_ws_layouts(wb, tab_copies, ops_by)
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
     for sheet_addr, val in (cell_values or {}).items():
@@ -495,11 +731,11 @@ def fill_estimate(
             log.warning("estimate_writer: failed to write %s: %s", sheet_addr, exc)
 
     # 3. Extra material lines -> spare "=B*C" rows on the Epoxy tab.
-    _write_extra_materials(epoxy, extras)
+    _write_extra_materials(epoxy, extras, ops_by.get("Epoxy"))
 
     # 4. Alternate (recommended) system -> the spare "Epoxy blank" tab.
     if alternate:
-        _write_alternate_tab(wb, alternate)
+        _write_alternate_tab(wb, alternate, ops_by.get(ALT_TAB_NAME))
 
     # 5. Reorder worksheets (by stable id) to match the user's tab order, THEN
     #    apply display labels + rewrite cross-sheet refs, after every write has
@@ -520,14 +756,17 @@ def fill_estimate(
     return buf.read()
 
 
-def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
+def _write_alternate_tab(wb, alternate: Mapping[str, Any],
+                         ops: list[dict] | None = None) -> None:
     """Populate the spare 'Epoxy blank' tab as the recommended alternate.
 
     `alternate` = {"sf", "material_sub", "label"}. We set the SF input and drop
     the engine's alternate material subtotal into a "MATERIAL - Extras" =B*C row
     so it flows D37 -> D40 -> ... -> D85 (the tab recomputes its own Total Base
     Bid on open). The PROPOSAL uses the engine's alternate total as authoritative;
-    this tab is the supporting worksheet.
+    this tab is the supporting worksheet. `ops` are the tab's structural edits —
+    the hardcoded template coordinates translate through them (a deleted target
+    cell means that write is skipped).
     """
     if ALT_TAB_NAME not in wb.sheetnames:
         return
@@ -538,16 +777,22 @@ def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
         except (TypeError, ValueError):
             return 0.0
 
+    def _tx(addr):
+        return _translate_addr(addr, ops) if ops else addr
+
     ws = wb[ALT_TAB_NAME]
     sf = _f(alternate.get("sf"))
-    if sf:
-        ws[ALT_SF_CELL] = sf
+    sf_cell = _tx(ALT_SF_CELL)
+    if sf and sf_cell:
+        ws[sf_cell] = sf
     material_sub = _f(alternate.get("material_sub"))
     if material_sub:
         r = ALT_MATERIAL_ROW
-        ws[f"A{r}"] = (alternate.get("label") or "Alternate system").strip()
-        ws[f"B{r}"] = 1
-        ws[f"C{r}"] = material_sub      # D{r} stays =B{r}*C{r} -> flows into D37/D40/D85
+        a, b, c = _tx(f"A{r}"), _tx(f"B{r}"), _tx(f"C{r}")
+        if a and b and c:
+            ws[a] = (alternate.get("label") or "Alternate system").strip()
+            ws[b] = 1
+            ws[c] = material_sub    # D{r} stays =B{r}*C{r} -> flows into D37/D40/D85
     # Rename so the tab reads as the alternate (safe: its formulas reference
     # `Epoxy!`, not its own title, and no other tab references it by name).
     try:
@@ -593,15 +838,19 @@ def _lock_layout_for(base_id: str) -> list[str] | None:
     return addrs
 
 
-def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None) -> list[tuple[Any, list[str]]]:
+def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None,
+                        ops_by: Dict[str, list[dict]] | None = None) -> list[tuple[Any, list[str]]]:
     """Map each worksheet OBJECT to its rate-cell lock addresses.
 
-    Called while every sheet still carries its stable id (after _create_copied_tabs,
-    before the alternate-rename and tab-label passes), so titles resolve reliably:
-    copies follow their {id, source} chain back to a template layout, Gyp variants
-    share the Gyp set, and sheets with no locked cells (Takeoff, validation, …) are
-    left out entirely — they get no protection. The worksheet objects survive the
-    later retitles, so the returned pairs stay valid until save."""
+    Called while every sheet still carries its stable id (after _create_copied_tabs
+    and the structural-edit replay, before the alternate-rename and tab-label
+    passes), so titles resolve reliably: copies follow their {id, source} chain
+    back to a template layout, Gyp variants share the Gyp set, and sheets with no
+    locked cells (Takeoff, validation, …) are left out entirely — they get no
+    protection. LOCK_MAP holds TEMPLATE coordinates, so each address translates
+    through the sheet's own structural ops (a deleted rate cell simply drops out
+    of the lock set). The worksheet objects survive the later retitles, so the
+    returned pairs stay valid until save."""
     src_by_id: dict[str, str] = {}
     for c in (tab_copies or []):
         if not isinstance(c, dict):
@@ -618,7 +867,11 @@ def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None) -> list[
             guard += 1
         addrs = _lock_layout_for(base)
         if addrs:
-            out.append((ws, addrs))
+            ops = (ops_by or {}).get(ws.title) or []
+            if ops:
+                addrs = [t for t in (_translate_addr(a, ops) for a in addrs) if t]
+            if addrs:
+                out.append((ws, addrs))
     return out
 
 
@@ -824,7 +1077,8 @@ def _reorder_tabs(wb, tab_order: list | None) -> None:
         pass
 
 
-def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:
+def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None,
+                           ops: list[dict] | None = None) -> None:
     """Write custom material lines into the Epoxy spare rows.
 
     Each spare row's D is a `=B*C` formula, so we only set A/B/C and let
@@ -832,6 +1086,9 @@ def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> Non
     more, the first 5 are itemized and the rest are summed into a single
     "Misc materials" line in the last spare row — keeping every formula
     below (D40 SUM, the bid chain) valid without inserting rows.
+
+    `ops` are Epoxy's structural edits — the spare-row template coordinates
+    translate through them; a spare row the user deleted is skipped.
     """
     items = []
     for e in (extras or []):
@@ -870,9 +1127,14 @@ def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> Non
         }))
 
     for r, it in placed:
-        epoxy[f"A{r}"] = it["label"]
-        epoxy[f"B{r}"] = _coerce(it["qty"])
-        epoxy[f"C{r}"] = _coerce(it["up"])
+        a, b, c = f"A{r}", f"B{r}", f"C{r}"
+        if ops:
+            a, b, c = _translate_addr(a, ops), _translate_addr(b, ops), _translate_addr(c, ops)
+            if not (a and b and c):
+                continue                    # spare row deleted by a structural edit
+        epoxy[a] = it["label"]
+        epoxy[b] = _coerce(it["qty"])
+        epoxy[c] = _coerce(it["up"])
         # D{r} stays as the template's =B{r}*C{r} formula.
 
 

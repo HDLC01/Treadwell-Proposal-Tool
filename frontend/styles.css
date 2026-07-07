@@ -697,3 +697,32 @@ button {
 .xl-grid .gridcell.ref-hl-3 { box-shadow: inset 0 0 0 2px #9334e6; }
 .xl-grid .gridcell.ref-hl-4 { box-shadow: inset 0 0 0 2px #f29900; }
 .xl-grid .gridcell.ref-hl-5 { box-shadow: inset 0 0 0 2px #12857a; }
+
+/* ─── Structural-edit context menu (insert/delete rows & columns) ────────
+   Small right-click menu anchored to the row/column header the user hit;
+   estimate-review.js positions it at the cursor and removes it on any
+   click/Escape. */
+.ctx-menu {
+  position: absolute;
+  z-index: 1000;
+  min-width: 190px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--xl-border, #c9c9c9);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.ctx-menu .ctx-item {
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: inherit;
+}
+.ctx-menu .ctx-item:hover { background: var(--surface-dim, #f0f0f0); }
+.ctx-menu .ctx-item.danger { color: var(--treadwell-red, #c0392b); }

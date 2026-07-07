@@ -356,6 +356,42 @@ state.tab_notes  = (state.tab_notes  && typeof state.tab_notes  === "object") ? 
 state.tab_order  = Array.isArray(state.tab_order) ? state.tab_order : [];   // drag-to-reorder
 state.tab_opts   = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : {};
 state.base_tab_id = (typeof state.base_tab_id === "string") ? state.base_tab_id : null;
+// Structural edits (insert/delete rows & columns), in the order made:
+// [{sheet, kind: insert_rows|delete_rows|insert_cols|delete_cols, at, count}].
+// The backend replays these onto the .xlsx; here they drive HF, the cached
+// sheet data, and the coordinate translation below.
+state.tab_structs = Array.isArray(state.tab_structs) ? state.tab_structs : [];
+
+// ─── Structural-edit coordinate translation ──────────────────────────
+// Hardcoded TEMPLATE coordinates (lock cells, totals cells, derive reads)
+// must follow the user's inserts/deletes. Mirrors _translate_addr in
+// backend/estimate_writer.py exactly.
+function structOpsFor(sheetId) { return state.tab_structs.filter(o => o.sheet === sheetId); }
+function _shiftIdx(idx, at, count, insert) {
+  if (insert) return idx >= at ? idx + count : idx;
+  if (idx >= at && idx < at + count) return null;          // deleted
+  return idx >= at + count ? idx - count : idx;
+}
+// Template-coordinate addr -> CURRENT addr for `sheetId` (null if deleted).
+function txAddr(sheetId, addr) {
+  const ops = structOpsFor(sheetId);
+  if (!ops.length) return addr;
+  const m = /^([A-Z]{1,3})([0-9]{1,7})$/i.exec(addr);
+  if (!m) return addr;
+  let col = m[1].toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+  let row = parseInt(m[2], 10);
+  for (const op of ops) {
+    const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+    if (rows) row = _shiftIdx(row, op.at, op.count, insert);
+    else col = _shiftIdx(col, op.at, op.count, insert);
+    if (row === null || col === null) return null;
+  }
+  let s = "";
+  while (col > 0) { col--; s = String.fromCharCode(65 + (col % 26)) + s; col = Math.floor(col / 26); }
+  return s + row;
+}
+// HF read at a template coordinate, translated (0 / "" when the cell is gone).
+const hfNumTx = (id, addr) => { const t = txAddr(id, addr); return t ? hfNum(id, t) : 0; };
 
 const labelFor = (id) => state.tab_labels[id] || id;
 function roleFor(id) {
@@ -372,8 +408,18 @@ function roleFor(id) {
 // sidebar — both edit state.base_tab_id + state.tab_opts[id].
 const PRICED_ROLES = new Set(["epoxy", "polish"]);
 const isPricedRole = (r) => PRICED_ROLES.has(r);
-// role-aware total cells (fixes reading a polish tab at D88 instead of D82)
-function totalCellsFor(id) { return roleFor(id) === "polish" ? TOTAL_CELLS.Polish : TOTAL_CELLS.Epoxy; }
+// role-aware total cells (fixes reading a polish tab at D88 instead of D82).
+// TEMPLATE coordinates translated through the sheet's structural edits, so a
+// tab with inserted/deleted rows still reads ITS actual totals. A deleted
+// totals cell keeps the template addr (deletion of totals rows is blocked in
+// the UI; direct API abuse just reads a stale cell, never a wrong-money one).
+function totalCellsFor(id) {
+  const base = roleFor(id) === "polish" ? TOTAL_CELLS.Polish : TOTAL_CELLS.Epoxy;
+  if (!structOpsFor(id).length) return base;
+  const out = {};
+  for (const k in base) out[k] = txAddr(id, base[k]) || base[k];
+  return out;
+}
 function pricedTabs() { return tabs.filter(t => isPricedRole(t.role)); }
 const hfNum = (id, addr) => { const v = HF.getValue(id, addr); return typeof v === "number" ? v : 0; };
 function resolveBaseTab() {
@@ -614,6 +660,12 @@ function copyTab(sourceId) {
   }
   const label = uniqueLabel(labelFor(sourceId) + " copy");
   state.tab_copies = [...state.tab_copies, { id: newId, source: sourceId, role: srcTab.role }];
+  // The copy starts from the source's CURRENT layout (transformed cache), so
+  // it inherits the source's structural edits under its own id — that keeps
+  // txAddr/lockedCellsFor right on the copy AND tells the backend to replay
+  // the same inserts/deletes on the cloned worksheet.
+  const srcOps = structOpsFor(sourceId);
+  if (srcOps.length) state.tab_structs = [...state.tab_structs, ...srcOps.map(o => ({ ...o, sheet: newId }))];
   state.tab_labels = { ...state.tab_labels, [newId]: label };
   // Place the copy immediately to the RIGHT of the sheet it was copied from
   // (Excel behavior), not at the far end of the tab bar.
@@ -687,9 +739,9 @@ function startRename(btn, id) {
 
 // Auto-derive per-tab notes (cove base) from the tab's cove LF cells.
 function deriveNotes(id) {
-  const n = (a) => { const v = HF.getValue(id, a); return typeof v === "number" ? v : 0; };
+  // Template coords translated through the tab's structural edits.
   const out = [];
-  if (n("E34") + n("E37") > 0) out.push('Includes 6" Cove Base');
+  if (hfNumTx(id, "E34") + hfNumTx(id, "E37") > 0) out.push('Includes 6" Cove Base');
   return out;
 }
 
@@ -1030,6 +1082,7 @@ function renderSheet(data) {
   // Column letter headers — with draggable right-edge resize handle
   for (let c = 1; c <= maxCol; c++) {
     const header = makeCell("col-header", colLetter(c), { row: 1, col: c + 1 });
+    header.dataset.colIndex = String(c);      // right-click insert/delete target
     const handle = document.createElement("div");
     handle.className = "resize-h";
     handle.dataset.colIndex = String(c);
@@ -1039,6 +1092,7 @@ function renderSheet(data) {
   // Row number headers — with draggable bottom-edge resize handle
   for (let r = 1; r <= maxRow; r++) {
     const header = makeCell("row-header", String(r), { row: r + 1, col: 1 });
+    header.dataset.rowIndex = String(r);      // right-click insert/delete target
     const handle = document.createElement("div");
     handle.className = "resize-v";
     handle.dataset.rowIndex = String(r);
@@ -1179,7 +1233,7 @@ const TOTAL_CELLS = {
 };
 
 function updateTotalBar(data, byAddr) {
-  const map = TOTAL_CELLS[data.sheet] || {};
+  const map = TOTAL_CELLS[data.sheet] ? totalCellsFor(data.sheet) : {};
   const cellVal = (addr) => {
     if (!addr) return null;
     const c = byAddr.get(addr);
@@ -1379,7 +1433,12 @@ function lockedCellsFor(sheetId) {
     // through to an unlocked grid that doesn't match the generated .xlsx.
     id = c.source || "Epoxy";
   }
-  return new Set(/^Gyp/i.test(id) ? GYP_LOCKED : (LOCKED_CELLS[id] || []));
+  const base = /^Gyp/i.test(id) ? GYP_LOCKED : (LOCKED_CELLS[id] || []);
+  // LOCK addresses are TEMPLATE coordinates — follow the sheet's own
+  // structural edits (a deleted rate cell drops out of the lock set, same
+  // as the generated .xlsx side in estimate_writer._resolve_ws_layouts).
+  if (!structOpsFor(sheetId).length) return new Set(base);
+  return new Set(base.map(a => txAddr(sheetId, a)).filter(Boolean));
 }
 
 // The grid cell the formula bar is currently pointed at (Excel-style).
@@ -1818,6 +1877,185 @@ fbarInput.addEventListener("blur", (e) => {
   syncFormulaBar();   // mirror whatever the commit/re-lock above left behind
 });
 
+// ─── Insert/delete rows & columns (Excel-style structural edits) ─────
+// Right-click a row number / column letter for insert/delete. Each edit is
+// recorded in state.tab_structs, pushed into HyperFormula (which rewrites
+// its own formulas), and the cached sheet data + cellValues keys shift to
+// the new coordinates before a full re-render. The backend replays the same
+// op list onto the real .xlsx at generate time (estimate_writer.py).
+const STRUCT_HEADER_GUARD_ROW = 10;   // rows 1-10 = project-info block, canonical across tabs
+
+function _transformCacheForOp(data, op) {
+  const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+  const sh = (idx) => _shiftIdx(idx, op.at, op.count, insert);
+
+  const cells = [];
+  for (const c of data.cells) {
+    const nr = rows ? sh(c.row) : c.row;
+    const nc = rows ? c.col : sh(c.col);
+    if (nr === null || nc === null) continue;          // deleted with its row/col
+    c.row = nr; c.col = nc; c.addr = colLetter(nc) + nr;
+    cells.push(c);
+  }
+  data.cells = cells;
+
+  const merged = [];
+  for (const m of (data.merged || [])) {
+    let lo = rows ? m.minRow : m.minCol, hi = rows ? m.maxRow : m.maxCol;
+    if (insert) {
+      if (lo >= op.at) lo += op.count;
+      if (hi >= op.at) hi += op.count;
+    } else {
+      const nlo = sh(lo), nhi = sh(hi);
+      lo = nlo === null ? op.at : nlo;
+      hi = nhi === null ? op.at - 1 : nhi;
+      if (lo > hi) continue;                           // merge fully deleted
+    }
+    if (rows) { m.minRow = lo; m.maxRow = hi; } else { m.minCol = lo; m.maxCol = hi; }
+    m.rowSpan = m.maxRow - m.minRow + 1;
+    m.colSpan = m.maxCol - m.minCol + 1;
+    m.anchor = colLetter(m.minCol) + m.minRow;
+    merged.push(m);
+  }
+  data.merged = merged;
+
+  if (rows) {
+    const rh = {};
+    for (const [r, h] of Object.entries(data.row_heights || {})) {
+      const n = sh(parseInt(r, 10));
+      if (n !== null) rh[n] = h;
+    }
+    data.row_heights = rh;
+    data.max_row = Math.max(1, (data.max_row || 1) + (insert ? op.count : -op.count));
+  } else {
+    const cw = {};
+    for (const [letter, w] of Object.entries(data.col_widths || {})) {
+      const idx = letter.split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+      const n = sh(idx);
+      if (n !== null) cw[colLetter(n)] = w;
+    }
+    data.col_widths = cw;
+    data.max_col = Math.max(1, (data.max_col || 1) + (insert ? op.count : -op.count));
+  }
+
+  const dd = {};
+  for (const [addr, opts] of Object.entries(data.dropdowns || {})) {
+    const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(addr);
+    if (!m) continue;
+    let col = m[1].toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    let row = parseInt(m[2], 10);
+    if (rows) row = sh(row); else col = sh(col);
+    if (row !== null && col !== null) dd[colLetter(col) + row] = opts;
+  }
+  data.dropdowns = dd;
+}
+
+function _rekeyCellValuesForOp(sheet, op) {
+  const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+  const moves = [], drops = [];
+  for (const key of Object.keys(cellValues)) {
+    if (!key.startsWith(sheet + "!")) continue;
+    const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(key.slice(sheet.length + 1));
+    if (!m) continue;
+    let col = m[1].toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    let row = parseInt(m[2], 10);
+    if (rows) row = _shiftIdx(row, op.at, op.count, insert);
+    else col = _shiftIdx(col, op.at, op.count, insert);
+    if (row === null || col === null) { drops.push(key); continue; }
+    const nkey = sheet + "!" + colLetter(col) + row;
+    if (nkey !== key) moves.push([key, nkey]);
+  }
+  for (const k of drops) delete cellValues[k];
+  const vals = moves.map(([k]) => cellValues[k]);
+  for (const [k] of moves) delete cellValues[k];          // two-phase: avoid clobbering
+  moves.forEach(([, nk], i) => { cellValues[nk] = vals[i]; });
+}
+
+function applyStructOp(sheet, kind, at, count = 1) {
+  const rows = kind.endsWith("_rows");
+  // The project-info block (rows 1-10) is canonical across every tab and the
+  // intake pre-fill's anchor — structural edits start below it.
+  if (rows && at <= STRUCT_HEADER_GUARD_ROW) {
+    alert(`Rows 1–${STRUCT_HEADER_GUARD_ROW} are the project header — insert or delete below row ${STRUCT_HEADER_GUARD_ROW}.`);
+    return;
+  }
+  // Never let a delete take out the sheet's own totals cells — the bid and
+  // the proposal snapshot read them.
+  if (kind.startsWith("delete") && TOTAL_CELLS[roleFor(sheet) === "polish" ? "Polish" : "Epoxy"]) {
+    const totals = Object.values(totalCellsFor(sheet));
+    for (const a of totals) {
+      const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(a || "");
+      if (!m) continue;
+      const idx = rows ? parseInt(m[2], 10)
+                       : m[1].toUpperCase().split("").reduce((x, ch) => x * 26 + (ch.charCodeAt(0) - 64), 0);
+      if (idx >= at && idx < at + count) {
+        alert("That would delete the sheet's bid totals — blocked.");
+        return;
+      }
+    }
+  }
+  const sid = HF.sheetIdByName[sheet];
+  if (sid === undefined || !HF.instance) return;
+  try {
+    if (kind === "insert_rows")      HF.instance.addRows(sid, [at - 1, count]);
+    else if (kind === "delete_rows") HF.instance.removeRows(sid, [at - 1, count]);
+    else if (kind === "insert_cols") HF.instance.addColumns(sid, [at - 1, count]);
+    else                             HF.instance.removeColumns(sid, [at - 1, count]);
+  } catch (e) {
+    console.warn("structural op failed in HF:", e);
+    alert("Couldn't apply that change.");
+    return;
+  }
+  state.tab_structs = [...state.tab_structs, { sheet, kind, at, count }];
+  const op = { sheet, kind, at, count };
+  if (sheetCache[sheet]) _transformCacheForOp(sheetCache[sheet], op);
+  _rekeyCellValuesForOp(sheet, op);
+  _activeCellInput = null;
+  syncFormulaBar();
+  showSheet(sheet);                       // full re-render from the shifted cache
+  persistTabState();
+}
+
+// Right-click menu on the row/column headers.
+let _ctxMenuEl = null;
+function _closeCtxMenu() { if (_ctxMenuEl) { _ctxMenuEl.remove(); _ctxMenuEl = null; } }
+document.addEventListener("click", _closeCtxMenu);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") _closeCtxMenu(); });
+
+sheetGrid.addEventListener("contextmenu", (e) => {
+  const head = e.target.closest(".row-header, .col-header");
+  if (!head || !activeSheet) return;
+  const isRow = head.classList.contains("row-header");
+  const idx = parseInt(head.dataset[isRow ? "rowIndex" : "colIndex"] || "0", 10);
+  if (!idx) return;
+  e.preventDefault();
+  _closeCtxMenu();
+  const label = isRow ? `row ${idx}` : `column ${colLetter(idx)}`;
+  const items = isRow ? [
+    [`Insert row above ${idx}`,  () => applyStructOp(activeSheet, "insert_rows", idx)],
+    [`Insert row below ${idx}`,  () => applyStructOp(activeSheet, "insert_rows", idx + 1)],
+    [`Delete ${label}`,          () => applyStructOp(activeSheet, "delete_rows", idx)],
+  ] : [
+    [`Insert column left of ${colLetter(idx)}`,  () => applyStructOp(activeSheet, "insert_cols", idx)],
+    [`Insert column right of ${colLetter(idx)}`, () => applyStructOp(activeSheet, "insert_cols", idx + 1)],
+    [`Delete ${label}`,                          () => applyStructOp(activeSheet, "delete_cols", idx)],
+  ];
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu";
+  for (const [text, fn] of items) {
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "ctx-item" + (text.startsWith("Delete") ? " danger" : "");
+    it.textContent = text;
+    it.addEventListener("click", () => { _closeCtxMenu(); fn(); });
+    menu.appendChild(it);
+  }
+  menu.style.left = e.pageX + "px";
+  menu.style.top = e.pageY + "px";
+  document.body.appendChild(menu);
+  _ctxMenuEl = menu;
+});
+
 function propagateChangesToDom(changes) {
   // changes is an array of {sheet, addr, value} from HF.setCellValue.
   // Walk each, find its DOM input on the *current* sheet, and update the
@@ -1868,8 +2106,8 @@ function updateTotalBarFromHF() {
   }, 0);
   const cellsFor = (key) => {
     const out = [];
-    if (workType !== "polish") out.push({ sheet: "Epoxy",  addr: TOTAL_CELLS.Epoxy[key]  });
-    if (workType !== "epoxy")  out.push({ sheet: "Polish", addr: TOTAL_CELLS.Polish[key] });
+    if (workType !== "polish") out.push({ sheet: "Epoxy",  addr: totalCellsFor("Epoxy")[key]  });
+    if (workType !== "epoxy")  out.push({ sheet: "Polish", addr: totalCellsFor("Polish")[key] });
     return out;
   };
 
@@ -1890,7 +2128,7 @@ function updateTotalBarFromHF() {
       : "—";
   } else {
     const srcSheet = workType === "polish" ? "Polish" : "Epoxy";
-    const v = HF.getValue(srcSheet, TOTAL_CELLS[srcSheet].psf);
+    const v = HF.getValue(srcSheet, totalCellsFor(srcSheet).psf);
     const isErr = v && typeof v === "object" && "value" in v;
     document.getElementById("tb-psf").textContent =
       isErr ? String(v.value) : (typeof v === "number" ? fmtMoney(v) : "—");
@@ -2170,8 +2408,8 @@ function snapshotLumpSumsToState() {
     const v = HF.getValue(s, a);
     return typeof v === "number" ? v : 0;
   };
-  const epoxyLump  = num("Epoxy",  TOTAL_CELLS.Epoxy.total);   // D88
-  const polishLump = num("Polish", TOTAL_CELLS.Polish.total);  // D82
+  const epoxyLump  = num("Epoxy",  totalCellsFor("Epoxy").total);   // D88
+  const polishLump = num("Polish", totalCellsFor("Polish").total);  // D82
   state.hf_lump_sums = {
     epoxy:    epoxyLump,
     polish:   polishLump,
@@ -2198,10 +2436,10 @@ function snapshotLumpSumsToState() {
       wt === "polish" ? polishLump :
                         epoxyLump + polishLump;
     const pick = (e, p) => wt === "epoxy" ? e : wt === "polish" ? p : e + p;
-    state.proposal_sales_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.sales_tax),
-                                    num("Polish", TOTAL_CELLS.Polish.sales_tax));
-    state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
-                                      num("Polish", TOTAL_CELLS.Polish.remodel));
+    state.proposal_sales_tax = pick(num("Epoxy", totalCellsFor("Epoxy").sales_tax),
+                                    num("Polish", totalCellsFor("Polish").sales_tax));
+    state.proposal_remodel_tax = pick(num("Epoxy", totalCellsFor("Epoxy").remodel),
+                                      num("Polish", totalCellsFor("Polish").remodel));
   }
 
   // Priced options: the estimator EXPLICITLY marks OTHER priced tabs as options
@@ -2308,7 +2546,9 @@ function deriveSystemName() {
 // OWN A22/A26 dropdown picks from HF (resolves for non-active tabs too).
 function deriveSystemNameFor(id) {
   const names = [];
-  for (const a of ["A22", "A26"]) {
+  for (const a0 of ["A22", "A26"]) {
+    const a = txAddr(id, a0);            // template coords follow row/col edits
+    if (!a) continue;
     const v = HF.getValue(id, a);
     const s = (typeof v === "string") ? v.trim() : "";
     if (s && _cbRealSystem(s) && !names.includes(s)) names.push(s);
