@@ -203,6 +203,69 @@
       proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax });
   }
 
+  // Tax-treatment mode, read from the PRICE section's dropdown. Shared by the
+  // single-bid layout (refreshPriceDisplay) and the combo per-option breakout
+  // (comboSystemLines) so BOTH branches honor the same estimator choice — the
+  // combo branch used to hardcode "INCLUDED" wording and ignore this entirely.
+  function taxTreatmentMode() {
+    const incl = String((form.querySelector("[name='tax_inclusion']") || {}).value || "INCLUDED").trim().toUpperCase();
+    const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
+    const broken = ["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(incl);
+    return { incl, exempt, broken };
+  }
+
+  // Combo per-option price breakout: Option 1 (Epoxy) + Option 2 (Polish), each
+  // with its own flooring / tax line(s) / Total — from the per-tab totals
+  // snapshotted on the Estimate screen. Only for the combined-combo default (no
+  // single base picked). Options are numbered by RENDER ORDER (not a fixed
+  // epoxy=1/polish=2) so a zeroed-out epoxy tab doesn't leave a doc that jumps
+  // straight to "Option 2" with no "Option 1" anywhere. Returns pre-formatted
+  // {amount_formatted, label} lines.
+  function comboSystemLines() {
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    if (wt !== "combo" || state.base_tab_id) return [];
+    const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
+    const eB = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy");
+    const pB = all.find(t => t.role === "polish" && t.kind === "base") || all.find(t => t.role === "polish");
+    const N = (v) => Number(v) || 0;
+    const { exempt, broken } = taxTreatmentMode();
+    const lines = [];
+    let optionNum = 0;
+    const pushSys = (sys, noun) => {
+      if (!sys) return;
+      const total = N(sys.total); if (total <= 0) return;
+      const remodel = N(sys.remodel);
+      const salesTax = N(sys.sales_tax);
+      optionNum += 1;
+      const optLabel = `Option ${optionNum}`;
+      if (broken) {
+        // Broken out: base (pre-tax) + Material Sales Tax + Remodel Tax = Total —
+        // mirrors the non-combo broken-out layout, no "(…INCLUDED)" phrase.
+        const flooring = total - remodel - salesTax;
+        lines.push({ amount_formatted: fmtUSD(flooring), label: `${optLabel}: ${noun} as described above` });
+        if (salesTax > 0) lines.push({ amount_formatted: fmtUSD(salesTax), label: "Material Sales Tax" });
+        if (remodel > 0) lines.push({ amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+      } else if (exempt) {
+        // Tax exempt: the full total carries the "(tax exempt)" phrase — no sales
+        // tax is baked in to strip out. Remodel line only if the snapshot actually
+        // has one (normally zero on an exempt job).
+        lines.push({ amount_formatted: fmtUSD(total), label: `${optLabel}: ${noun} as described above (tax exempt)` });
+        if (remodel > 0) lines.push({ amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+      } else {
+        // Included (default): one all-in flooring line + a separate remodel line
+        // when it applies — this is the pre-existing combo wording.
+        const flooring = total - remodel;
+        lines.push({ amount_formatted: fmtUSD(flooring),
+          label: `${optLabel}: ${noun} as described above (material sales tax INCLUDED)` });
+        if (remodel > 0) lines.push({ amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+      }
+      lines.push({ amount_formatted: fmtUSD(total), label: "Total" });
+    };
+    pushSys(eB, "Epoxy flooring");
+    pushSys(pB, "Polished Concrete flooring");
+    return lines;
+  }
+
   // Live update the inline $ amounts in the price section. This preview MIRRORS
   // the .docx single_bid block exactly (Base Bid + Remodel Tax = Total), using
   // the same figures + tax wording the generate payload sends, so what the
@@ -224,32 +287,55 @@
     // flooring price = the full total + "(material sales tax INCLUDED)", with the
     // Material Sales Tax / Remodel / Total lines hidden. "Sales tax broken out":
     // base (pre-tax) + Material Sales Tax + Remodel + Total, no INCLUDED label.
-    const incl = String((form.querySelector("[name='tax_inclusion']") || {}).value || "INCLUDED").trim().toUpperCase();
-    const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
-    const broken = ["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(incl);
+    const { exempt, broken } = taxTreatmentMode();
 
     const salesRow   = document.getElementById("sales-tax-row");
     const remodelRow = document.getElementById("remodel-tax-row");
     const totalRow   = document.getElementById("total-row");
     const phraseEl   = document.getElementById("base-tax-phrase-display");
+    const comboBlock = document.getElementById("combo-price-block");
+    const baseBidRow = document.getElementById("base-bid-row");
+    const baseBidHeading = document.getElementById("base-bid-heading");
+    const comboLines = comboSystemLines();
 
-    if (broken) {
-      document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
-      phraseEl.textContent = "";
-      document.getElementById("sales-tax-display").textContent = fmtUSD(salesTax);
-      if (salesRow)   salesRow.style.display = "";
-      if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-      document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
-      if (totalRow)   totalRow.style.display = "";
-      document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
-    } else {
-      document.getElementById("base-bid-display").textContent = fmtUSD(lumpSumN);
-      phraseEl.textContent = exempt ? "(tax exempt)"
-        : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
-        : "(material sales tax INCLUDED)";
+    if (comboLines.length && comboBlock) {
+      // Combo: show Option 1 (Epoxy) + Option 2 (Polish), each with its own
+      // flooring / tax line(s) / Total; hide the single combined base line AND
+      // the static "Base Bid" heading above it — the Direct combo template keeps
+      // that heading INSIDE {{#single_bid}}, so a generated combo doc starts
+      // straight at "$X – Option 1: …" with no heading at all.
+      const escP = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
+        c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      comboBlock.style.display = "";
+      comboBlock.innerHTML = comboLines.map(l =>
+        `<p style="margin:0 0 6pt;"><strong>${escP(l.amount_formatted)}</strong> – ${escP(l.label)}</p>`).join("");
+      if (baseBidHeading) baseBidHeading.style.display = "none";
+      if (baseBidRow) baseBidRow.style.display = "none";
       if (salesRow)   salesRow.style.display = "none";
       if (remodelRow) remodelRow.style.display = "none";
       if (totalRow)   totalRow.style.display = "none";
+    } else {
+      if (comboBlock) comboBlock.style.display = "none";
+      if (baseBidHeading) baseBidHeading.style.display = "";
+      if (baseBidRow) baseBidRow.style.display = "";
+      if (broken) {
+        document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
+        phraseEl.textContent = "";
+        document.getElementById("sales-tax-display").textContent = fmtUSD(salesTax);
+        if (salesRow)   salesRow.style.display = "";
+        if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
+        document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
+        if (totalRow)   totalRow.style.display = "";
+        document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
+      } else {
+        document.getElementById("base-bid-display").textContent = fmtUSD(lumpSumN);
+        phraseEl.textContent = exempt ? "(tax exempt)"
+          : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+          : "(material sales tax INCLUDED)";
+        if (salesRow)   salesRow.style.display = "none";
+        if (remodelRow) remodelRow.style.display = "none";
+        if (totalRow)   totalRow.style.display = "none";
+      }
     }
     renderProposalExtras();
   }
@@ -282,7 +368,15 @@
       // the .docx {{#room}} block. Re-reads state.rooms fresh on each call.
       function renderRoomsPreview() {
         if (!roomsBlock) return;
-        const rooms = (Array.isArray(state.rooms) ? state.rooms : []).filter(r => r && r.bid && N(r.bid.total) > 0);
+        // Combo breakout leads PRICE with its own Option 1/Option 2 total lines —
+        // there's no "combined base" concept in the docx (rooms_arg is always []
+        // and _build_options excludes is_base rows), so the synthetic combined
+        // "Base Bid: $<epoxy+polish>" room built by rebuildPricing() for the combo
+        // fallback must be dropped here too, or the preview shows a line the
+        // generated .docx never prints.
+        const comboBreakoutActive = comboSystemLines().length > 0;
+        const rooms = (Array.isArray(state.rooms) ? state.rooms : [])
+          .filter(r => r && r.bid && N(r.bid.total) > 0 && !(comboBreakoutActive && r.is_base));
         if (!rooms.length) { roomsBlock.innerHTML = ""; return; }
         let html = `<p style="margin:10pt 0 4pt;font-weight:bold;">Pricing options</p>`;
         html += rooms.map((r) => {
@@ -607,6 +701,9 @@
         extras: Array.isArray(state.extras) ? state.extras : [],
         // Structured proposal price lines (options / unit prices) -> {{#price_line}} rows
         price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
+        // Combo per-option breakout (Option 1 Epoxy / Option 2 Polish, each w/ tax +
+        // total) -> leads the PRICE section, suppresses the combined single-bid line.
+        combo_options: comboSystemLines(),
         // Authoritative bid from the 5.7-recipe engine — the generate
         // response echoes this so nothing downstream shows a stale total.
         computed_bid: state.computed_bid || null,

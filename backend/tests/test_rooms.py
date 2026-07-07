@@ -13,11 +13,14 @@ import io
 
 from docx import Document
 from docx.oxml.ns import qn
+from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 import estimate_writer as ew
 import main
 import proposal_writer as pw
+
+client = TestClient(main.app)
 
 
 def _doc(lines):
@@ -271,3 +274,133 @@ def test_no_options_keeps_single_bid_clean():
         assert "$63,801.00 – Total" in blob, f"{wt}: single-bid Total missing"
         assert "Deduct VE" not in blob, f"{wt}: stray option content"
         assert not re.search(r"\{\{[#/]", blob), f"{wt}: leftover block marker"
+
+
+def test_combo_per_option_breakout_render():
+    # Combo: Option 1 (Epoxy) + Option 2 (Polish), each with its own flooring /
+    # Kansas Remodel Tax / Total, lead the PRICE section (via {{#price_line}}); the
+    # combined single-bid line is suppressed (single_bid=[]).
+    import re
+    combo_lines = [
+        {"amount_formatted": "$28,400", "label": "Option 1: Epoxy flooring as described above (material sales tax INCLUDED)"},
+        {"amount_formatted": "$1,200",  "label": "Kansas Remodel Tax"},
+        {"amount_formatted": "$29,600", "label": "Total"},
+        {"amount_formatted": "$17,200", "label": "Option 2: Polished Concrete flooring as described above (material sales tax INCLUDED)"},
+        {"amount_formatted": "$17,200", "label": "Total"},
+    ]
+    blob = _rendered(pw.fill_proposal(work_type="combo", audience="Direct", values=_VALS,
+                                      price_lines=combo_lines, has_options=True, single_bid=[]))
+    assert "$28,400 – Option 1: Epoxy flooring as described above (material sales tax INCLUDED)" in blob
+    assert "$17,200 – Option 2: Polished Concrete flooring as described above (material sales tax INCLUDED)" in blob
+    assert "$1,200 – Kansas Remodel Tax" in blob
+    assert "Epoxy & Polished Concrete flooring" not in blob   # combined single-bid line suppressed
+    assert not re.search(r"\{\{[#/]", blob)
+
+
+# ── main.api_generate — combo_options sanitization (malformed shapes) ──────
+def test_combo_options_malformed_shapes_do_not_500():
+    # A client sending {"label": 123} (or a dict/list/bool value for label /
+    # amount_formatted) used to blow up main.api_generate: the old filter called
+    # `.strip()` on the raw value BEFORE coercing to str(), and .strip() doesn't
+    # exist on int/dict/list/bool -> unhandled AttributeError -> 500. Each shape
+    # below IS a dict (so it wasn't caught by the old isinstance(c, dict) guard);
+    # only the field VALUE is the wrong type. Drives the real /api/generate route
+    # (no X-Project-Id => no DB write) so this proves the sanitization landed on
+    # the actual request path, not just in isolation.
+    malformed = [
+        {"label": 123},
+        {"label": {"a": 1}},
+        {"amount_formatted": ["$1"]},
+        {"label": True},
+    ]
+    body = {"work_type": "combo", "audience": "Direct", "values": dict(_VALS),
+            "combo_options": malformed}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+
+
+def test_combo_options_list_is_capped():
+    # No accepted-list cap meant N client-supplied entries -> N deep-copied
+    # paragraph sets in the generated docx. 200 fake entries must not all render;
+    # only the first 50 are honored. Unique "CapLabelN" tokens so the assertion
+    # can't collide with unrelated doc text. (Note: _rendered's raw text repeats
+    # each real paragraph a fixed number of times because of how the Direct
+    # templates duplicate the price/textbox content — that's a pre-existing
+    # quirk of the fixture, not this fix — so this checks presence/absence of
+    # specific labels rather than counting occurrences.)
+    many = [{"label": f"CapLabel{i}", "amount_formatted": f"${i}"} for i in range(200)]
+    body = {"work_type": "combo", "audience": "Direct", "values": dict(_VALS),
+            "combo_options": many}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    f = client.get(r.json()["docx_download_url"])
+    assert f.status_code == 200, f.text
+    text = _rendered(f.content)
+    assert "CapLabel0" in text and "CapLabel49" in text
+    assert "CapLabel50" not in text and "CapLabel199" not in text
+
+
+# ── Combo breakout + trailing options: restored "Options:" separator ──────
+# Bug: the template's {{#has_options}}Options:{{/has_options}} label is
+# nested INSIDE {{#single_bid}}. The combo breakout suppresses single_bid
+# (single_bid=[]) so its own Option 1/2 totals stand in for the base price —
+# but that also deletes the nested "Options:" heading, so a trailing manual
+# "Add for …" price line rendered right after the combo block with no visual
+# separator from the base price. Fixed in two places: main.py restores the
+# heading as a label-only price_line row between the combo lines and any
+# trailing price lines; proposal_writer.py strips the template's hardcoded
+# " – " separator off that row since its amount is empty.
+_COMBO_LINES = [
+    {"amount_formatted": "$28,400",
+     "label": "Option 1: Epoxy flooring as described above (material sales tax INCLUDED)"},
+    {"amount_formatted": "$1,200", "label": "Kansas Remodel Tax"},
+    {"amount_formatted": "$29,600", "label": "Total"},
+    {"amount_formatted": "$17,200",
+     "label": "Option 2: Polished Concrete flooring as described above (material sales tax INCLUDED)"},
+    {"amount_formatted": "$17,200", "label": "Total"},
+]
+
+
+def test_combo_breakout_with_trailing_line_restores_options_separator():
+    body = {"work_type": "combo", "audience": "Direct", "values": dict(_VALS),
+            "combo_options": _COMBO_LINES,
+            "price_lines": [{"label": "Add for moisture mitigation", "amount": 500}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    f = client.get(r.json()["docx_download_url"])
+    text = _rendered(f.content)
+    # Clean label-only heading, no leading dash/en-dash slop.
+    assert "Options:" in text
+    assert "– Options:" not in text and "-Options:" not in text
+    # Sits right after the LAST combo "Total" line and right before the
+    # trailing manual price line — not floating loose, not merged with either.
+    assert ("$17,200 – Total\nOptions:\n$500 – Add for moisture mitigation") in text
+    # The suppressed combined single-bid line never reappears.
+    assert "Epoxy & Polished Concrete flooring" not in text
+
+
+def test_combo_breakout_alone_has_no_options_label():
+    # No trailing option/manual price lines after the combo breakout -> nothing
+    # for a separator to introduce, so "Options:" must not appear at all.
+    body = {"work_type": "combo", "audience": "Direct", "values": dict(_VALS),
+            "combo_options": _COMBO_LINES}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    f = client.get(r.json()["docx_download_url"])
+    text = _rendered(f.content)
+    assert "Options:" not in text
+    assert "$17,200 – Total" in text                      # combo lines still render
+
+
+def test_non_combo_options_label_unaffected_by_separator_fix():
+    # Non-combo path: "Options:" comes from the {{#has_options}} block (a
+    # plain-text label paragraph), NOT from a price_line row — the
+    # proposal_writer dash-strip only fires for a price_line row with an
+    # empty amount_formatted, so this path is untouched by either fix.
+    price_lines = [{"amount_formatted": "$8,310",
+                    "label": "Treadwell MACRO Flake as described above (material sales tax INCLUDED)"}]
+    blob = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct", values=_VALS,
+                                      price_lines=price_lines, has_options=True,
+                                      single_bid=None, tax_breakout=True))
+    assert "Options:" in blob
+    assert "– Options:" not in blob and "-Options:" not in blob

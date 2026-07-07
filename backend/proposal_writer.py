@@ -293,6 +293,49 @@ def _substitute_item_tokens(p_elem, item: Mapping[str, Any], block_name: str) ->
     )
 
 
+# A `{{#price_line}}` row whose amount is empty is a label-only heading row
+# (e.g. the combo breakout's restored "Options:" separator — see main.py's
+# `_combo_lines` handling). The template paragraph hardcodes the separator as
+# literal text between the two tokens —
+# `{{price_line.amount_formatted}} – {{price_line.label}}` — not a token
+# itself, so once `amount_formatted` substitutes to "" the rendered text
+# starts with a bare "– " before the label. Match hyphen, en dash, or em
+# dash so this isn't brittle to which one a given template uses.
+_LEADING_SEP_RE = re.compile(r"^\s*[-–—]\s*")
+
+
+def _strip_leading_separator(p_elem) -> None:
+    """Strip a leading `<amount> <dash> ` separator off an already-substituted
+    price_line paragraph whose amount was empty.
+
+    Operates on the rendered text across all of the paragraph's `<w:t>` runs
+    (the separator may land in the same run as the tokens, as it currently
+    does, or in a run of its own if a template is authored differently) and
+    trims exactly the matched leading characters off the front run(s), so any
+    remaining text keeps its own run/formatting untouched. No-op if the
+    paragraph doesn't start with a separator (e.g. a normal priced row).
+    """
+    tnodes = list(p_elem.iter(qn("w:t")))
+    if not tnodes:
+        return
+    joined = "".join(t.text or "" for t in tnodes)
+    m = _LEADING_SEP_RE.match(joined)
+    if not m or m.end() == 0:
+        return
+    remaining = m.end()
+    for t in tnodes:
+        if remaining <= 0:
+            break
+        cur = t.text or ""
+        if len(cur) <= remaining:
+            remaining -= len(cur)
+            t.text = ""
+        else:
+            t.text = cur[remaining:]
+            t.set(qn("xml:space"), "preserve")
+            remaining = 0
+
+
 def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]]) -> int:
     """Expand EVERY `{{#<block_name>}}…{{/<block_name>}}` block in `container`.
 
@@ -336,6 +379,12 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
             for tmpl in template_elems:
                 clone = copy.deepcopy(tmpl)
                 _substitute_item_tokens(clone, item, block_name)
+                # Label-only price_line row (empty amount) — drop the now-bare
+                # leading "– " separator so it reads as just the label. Scoped
+                # to price_line/empty-amount only; every other row/block is
+                # untouched.
+                if block_name == "price_line" and not str(item.get("amount_formatted") or "").strip():
+                    _strip_leading_separator(clone)
                 new_elems.append(clone)
 
         for clone in new_elems:

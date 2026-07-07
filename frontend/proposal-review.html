@@ -476,8 +476,14 @@
     <div class="doc-section">
       <div class="sidebar">Price</div>
       <div class="body">
-        <p style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
-        <p style="margin: 0 0 6pt;">
+        <p id="base-bid-heading" style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
+        <!-- Combo per-option breakout (Option 1 Epoxy / Option 2 Polish); shown
+             instead of the single base line when work_type=combo (combined). The
+             Direct combo template keeps "Base Bid" INSIDE {{#single_bid}}, so the
+             generated doc has no heading here either — refreshPriceDisplay hides
+             #base-bid-heading to match (see proposal-review.js). -->
+        <div id="combo-price-block" style="display:none;"></div>
+        <p id="base-bid-row" style="margin: 0 0 6pt;">
           <strong id="base-bid-display">$0</strong> – Epoxy flooring as described above
           <em id="base-tax-phrase-display">(material sales tax INCLUDED)</em>
         </p>
