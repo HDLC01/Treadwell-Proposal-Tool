@@ -75,67 +75,73 @@ def test_single_bid_block_toggles():
         assert ("Base Bid" in txt) is shown
 
 
-# ── main._build_options ─────────────────────────────────────────────────
-def test_build_options_tax_phrase_and_note_merge():
+# ── main._build_options (total / deduct modes, show gate, base excluded) ──
+def test_build_options_total_mode():
     rooms_in = [
-        {"name": "Grooming", "bid": {"total": 8310, "remodel": 0},
+        {"is_base": True, "bid": {"total": 50000}},                # base -> single_bid, excluded here
+        {"name": "Epoxy copy", "is_base": False, "base_total": 50000,
+         "price_mode": "total", "option_desc": "Treadwell MACRO Flake",
+         "bid": {"total": 8310, "remodel": 0},
          "notes_auto": ['Includes 6" Cove Base'], "notes_manual": ["separate mobilization"]},
-        {"name": "Hallway :", "bid": {"total": 15035, "remodel": 120},
-         "notes_auto": [], "notes_manual": []},
-        {"name": "Empty", "bid": {"total": 0}},          # no total -> skipped
+        {"name": "Remodel opt", "is_base": False, "base_total": 50000,
+         "price_mode": "total", "bid": {"total": 15035, "remodel": 120}},
+        {"name": "Empty", "is_base": False, "bid": {"total": 0}},  # no total -> skipped
     ]
-    out = main._build_options(rooms_in, {"state_name": "Kansas"})
-    assert len(out) == 2
-    g, h = out
-    assert g["heading"] == "Grooming:"
-    assert g["price_formatted"] == "$8,310"
-    assert g["price_desc"] == "Epoxy flooring as described above (material sales tax INCLUDED)"
-    assert g["notes_joined"] == 'Includes 6" Cove Base\nseparate mobilization'   # auto before manual
-    assert h["heading"] == "Hallway:"                    # trailing " :" normalized
-    assert "Remodel Tax AND material sales tax INCLUDED" in h["price_desc"]
-    assert "Kansas" not in h["price_desc"]   # state name dropped from the label
+    out = main._build_options(rooms_in, {"state_name": "Kansas"}, "epoxy")
+    assert len(out) == 2                                           # base + empty excluded
+    a, b = out
+    assert a["heading"] == ""                                      # no per-option heading now
+    assert a["price_formatted"] == "$8,310"
+    assert a["price_desc"] == "Treadwell MACRO Flake as described above (material sales tax INCLUDED)"
+    assert a["notes_joined"] == 'Includes 6" Cove Base\nseparate mobilization'   # auto before manual
+    assert "Remodel Tax AND material sales tax INCLUDED" in b["price_desc"]
+    assert "Kansas" not in b["price_desc"]                         # state name dropped
+
+
+def test_build_options_deduct_mode():
+    opt = {"name": "Grind & Seal", "is_base": False, "base_total": 50000,
+           "price_mode": "deduct", "option_desc": "Grind & Seal", "base_desc": "Polished Concrete",
+           "bid": {"total": 44000, "remodel": 0}}
+    o = main._build_options([opt], {}, "polish")[0]
+    assert o["price_formatted"] == "($6,000)"                      # savings = 50000 - 44000
+    assert o["price_desc"] == "Deduct VE for Grind & Seal, in lieu of Polished Concrete."
+
+
+def test_build_options_deduct_nonpositive_falls_back_to_total():
+    # Option costs MORE than the base -> savings <= 0 -> render as its own total.
+    opt = {"name": "Premium", "is_base": False, "base_total": 50000,
+           "price_mode": "deduct", "option_desc": "Premium System",
+           "bid": {"total": 61000, "remodel": 0}}
+    o = main._build_options([opt], {}, "epoxy")[0]
+    assert o["price_formatted"] == "$61,000"
+    assert "Deduct" not in o["price_desc"] and "as described above" in o["price_desc"]
+
+
+def test_build_options_show_gate_and_base_excluded():
+    rooms = [
+        {"is_base": True, "bid": {"total": 50000}},
+        {"name": "Hidden", "is_base": False, "base_total": 50000, "show": False,
+         "price_mode": "total", "bid": {"total": 8000}},
+        {"name": "Shown", "is_base": False, "base_total": 50000, "show": True,
+         "price_mode": "total", "bid": {"total": 9000}},
+    ]
+    out = main._build_options(rooms, {}, "epoxy")
+    assert len(out) == 1                                           # base + hidden excluded
+    assert out[0]["price_formatted"] == "$9,000"
 
 
 def test_build_options_empty():
-    assert main._build_options([], {}) == []
-    assert main._build_options(None, {}) == []
+    assert main._build_options([], {}, "epoxy") == []
+    assert main._build_options(None, {}, "epoxy") == []
 
 
-# ── system line + signed difference toggles ─────────────────────────────
-_BASE = {"name": "Epoxy", "is_base": True, "base_total": 50000,
-         "bid": {"total": 50000, "remodel": 0}, "system_desc": "Treadwell MACRO Flake",
-         "show_system": True}
-
-
-def test_build_options_system_line_toggle():
-    on = main._build_options([dict(_BASE)], {})[0]
-    assert on["notes_joined"].splitlines()[0] == "Treadwell MACRO Flake"
-    off = main._build_options([{**_BASE, "show_system": False}], {})[0]
-    assert "MACRO Flake" not in off["notes_joined"]
-    # base item never shows a difference line
-    assert "base bid" not in on["notes_joined"]
-
-
-def test_build_options_signed_difference_both_ways():
-    more = {"name": "Exam", "is_base": False, "base_total": 50000,
-            "bid": {"total": 61000, "remodel": 0}, "show_system": False, "show_diff": True}
-    less = {**more, "name": "Hall", "bid": {"total": 44000, "remodel": 0}}
-    same = {**more, "name": "Same", "bid": {"total": 50000, "remodel": 0}}
-    assert "+$11,000 more than the base bid" in main._build_options([more], {})[0]["notes_joined"]
-    assert "$6,000 less than the base bid" in main._build_options([less], {})[0]["notes_joined"]
-    assert "base bid" not in main._build_options([same], {})[0]["notes_joined"]   # 0 diff -> omitted
-    # toggle off -> no difference line even when amounts differ
-    assert "base bid" not in main._build_options([{**more, "show_diff": False}], {})[0]["notes_joined"]
-
-
-def test_build_options_base_first_with_copy():
-    opts = main._build_options([
-        dict(_BASE),
-        {"name": "Exam", "is_base": False, "base_total": 50000,
-         "bid": {"total": 61000, "remodel": 0}, "show_system": False, "show_diff": True},
-    ], {})
-    assert [o["heading"] for o in opts] == ["Base Bid:", "Exam:"]   # base relabeled
-    assert "+$11,000 more than the base bid" in opts[1]["notes_joined"]
+def test_flooring_noun_and_fmt_usd_parens():
+    assert main._flooring_noun("epoxy") == "Epoxy flooring"
+    assert main._flooring_noun("combo") == "Epoxy flooring"
+    assert main._flooring_noun("polish") == "Polished Concrete Flooring"
+    assert main._fmt_usd(6000, parens=True) == "($6,000)"
+    assert main._fmt_usd(6000.5, parens=True) == "($6,000.50)"
+    assert main._fmt_usd(6000) == "$6,000"
 
 
 # ── estimate_writer.fill_estimate(tab_copies=…) — duplicated worksheets ─
@@ -172,16 +178,6 @@ _VALS = {
     "base_tax_phrase": "(material sales tax INCLUDED)",
     "exclusions": "standard exclusions",
 }
-_ROOMS = [
-    {"heading": "Grooming:", "price_formatted": "$8,310",
-     "price_desc": "Epoxy flooring as described above (Remodel Tax AND material sales tax INCLUDED)",
-     "notes_joined": 'Includes 6" Cove Base'},
-    {"heading": "Exam Room:", "price_formatted": "$14,717",
-     "price_desc": "Epoxy flooring as described above (material sales tax INCLUDED)",
-     "notes_joined": 'Includes 6" Cove Base\nTo be completed in separate mobilization'},
-]
-
-
 def _rendered(docx_bytes):
     """Text of paragraphs Word actually renders (mc:Choice copy), excluding the
     legacy mc:Fallback duplicate — same helper as test_price_lines.py."""
@@ -242,29 +238,36 @@ def test_remodel_tax_label_has_no_state_name():
         assert not re.search(r"(Kansas|Missouri)\s+Remodel Tax", blob), f"{wt}: state name still on remodel tax"
 
 
-def test_rooms_render_options_and_hide_single_bid():
+def test_options_render_via_price_lines():
+    # Options now ride the {{#price_line}} block (under the "Options:" heading, after
+    # the base bid); the base itself shows via {{#single_bid}}. Total + deduct lines
+    # render with Treadwell's "$x – …" / "($x) – Deduct VE …" phrasing.
     import re
+    price_lines = [
+        {"amount_formatted": "$8,310",
+         "label": "Treadwell MACRO Flake as described above (material sales tax INCLUDED)"},
+        {"amount_formatted": "($6,000)",
+         "label": "Deduct VE for Grind & Seal, in lieu of Epoxy flooring."},
+    ]
     for wt in ("epoxy", "combo"):
-        blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct",
-                                          values=_VALS, rooms=_ROOMS, single_bid=[]))
-        assert "Grooming:" in blob and "Exam Room:" in blob, f"{wt}: room headings missing"
-        assert ("$8,310 – Epoxy flooring as described above "
-                "(Remodel Tax AND material sales tax INCLUDED)") in blob, f"{wt}: room price line"
-        assert 'Includes 6" Cove Base' in blob and "separate mobilization" in blob, f"{wt}: room notes"
-        # single Base-Bid layout suppressed when rooms present
-        assert "Base Bid" not in blob, f"{wt}: single-bid not hidden"
-        assert "$63,801.00 – Total" not in blob, f"{wt}: single-bid Total not hidden"
+        blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct", values=_VALS,
+                                          price_lines=price_lines, has_options=True,
+                                          single_bid=None, tax_breakout=True))
+        assert "Base Bid" in blob, f"{wt}: base bid missing"
+        assert "$63,801.00 – Total" in blob, f"{wt}: base total missing"
+        assert ("$8,310 – Treadwell MACRO Flake as described above "
+                "(material sales tax INCLUDED)") in blob, f"{wt}: option total line"
+        assert "($6,000) – Deduct VE for Grind & Seal, in lieu of Epoxy flooring." in blob, f"{wt}: deduct line"
         assert not re.search(r"\{\{[#/]", blob), f"{wt}: leftover block marker"
 
 
-def test_no_rooms_keeps_single_bid():
+def test_no_options_keeps_single_bid_clean():
     import re
     for wt in ("epoxy", "combo"):
-        # tax_breakout=True so the itemized Total line renders (the point here is
-        # that single-bid is NOT suppressed when there are no room copies).
+        # tax_breakout=True so the itemized Total line renders; base always shows.
         blob = _rendered(pw.fill_proposal(work_type=wt, audience="Direct", values=_VALS,
                                           tax_breakout=True))
         assert "Base Bid" in blob, f"{wt}: single-bid Base Bid missing"
         assert "$63,801.00 – Total" in blob, f"{wt}: single-bid Total missing"
-        assert "Grooming:" not in blob, f"{wt}: room content leaked with no rooms"
+        assert "Deduct VE" not in blob, f"{wt}: stray option content"
         assert not re.search(r"\{\{[#/]", blob), f"{wt}: leftover block marker"

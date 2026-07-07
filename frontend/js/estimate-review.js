@@ -354,12 +354,115 @@ state.tab_copies = Array.isArray(state.tab_copies) ? state.tab_copies : [];
 state.tab_labels = (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {};
 state.tab_notes  = (state.tab_notes  && typeof state.tab_notes  === "object") ? state.tab_notes  : {};
 state.tab_order  = Array.isArray(state.tab_order) ? state.tab_order : [];   // drag-to-reorder
+state.tab_opts   = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : {};
+state.base_tab_id = (typeof state.base_tab_id === "string") ? state.base_tab_id : null;
 
 const labelFor = (id) => state.tab_labels[id] || id;
 function roleFor(id) {
   if (BASE_ROLE[id]) return BASE_ROLE[id];
   const c = state.tab_copies.find(x => x.id === id);
   return c ? (c.role || "epoxy") : "other";
+}
+
+// ─── Base bid + priced options ───────────────────────────────────────
+// One tab is the Base bid (state.base_tab_id); the estimator marks OTHER
+// priced tabs as proposal options, each shown/hidden and priced as a
+// "total" (its own price) or a "deduct" (savings vs. the base). These
+// controls live in #bid-bar here AND mirror onto the Proposal Review
+// sidebar — both edit state.base_tab_id + state.tab_opts[id].
+const PRICED_ROLES = new Set(["epoxy", "polish"]);
+const isPricedRole = (r) => PRICED_ROLES.has(r);
+// role-aware total cells (fixes reading a polish tab at D88 instead of D82)
+function totalCellsFor(id) { return roleFor(id) === "polish" ? TOTAL_CELLS.Polish : TOTAL_CELLS.Epoxy; }
+function pricedTabs() { return tabs.filter(t => isPricedRole(t.role)); }
+const hfNum = (id, addr) => { const v = HF.getValue(id, addr); return typeof v === "number" ? v : 0; };
+function resolveBaseTab() {
+  const byId = tabs.find(t => t.id === state.base_tab_id && isPricedRole(t.role));
+  if (byId) return byId;
+  const ep = tabs.filter(t => t.role === "epoxy");           // today's fallback derivation
+  return ep.find(t => t.kind === "base") || ep[0] || pricedTabs()[0] || null;
+}
+function ensureOpt(id) {
+  if (!state.tab_opts[id]) state.tab_opts[id] =
+    { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" };
+  return state.tab_opts[id];
+}
+function persistBidOptions() {
+  TW.setState({ ...state, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts });
+}
+const _escBB = (s) => String(s).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+// Render the Base-bid dropdown + per-tab option chips into #bid-bar.
+function renderBidOptions() {
+  const sel = document.getElementById("base-bid-select");
+  const list = document.getElementById("bid-options-list");
+  if (!sel || !list) return;
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  const priced = pricedTabs();
+  // Only clear an explicit base that no longer points to a priced tab (deletions
+  // are handled in deleteTab; this just guards a stale id from an old draft).
+  // Never overwrite base_tab_id with the auto-derived default — a null base means
+  // "auto", which for combo is Epoxy + Polish combined (not epoxy-only).
+  if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
+  const base = resolveBaseTab();   // for display + option exclusion
+  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)"
+                                   : "Auto — " + (base ? labelFor(base.id) : "—");
+  sel.innerHTML = `<option value=""${!state.base_tab_id ? " selected" : ""}>${_escBB(autoLabel)}</option>` +
+    priced.map(t => {
+      const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
+      return `<option value="${_escBB(t.id)}"${state.base_tab_id === t.id ? " selected" : ""}>` +
+             `${_escBB(labelFor(t.id))}${tot ? " — " + _moneyBB(tot) : ""}</option>`;
+    }).join("");
+  // Option candidates = priced tabs that aren't the base. In combined (combo,
+  // no explicit base) mode the base-kind Epoxy + Polish tabs are both part of
+  // the base, so only copies/extra tabs can be options.
+  const others = priced.filter(t => {
+    if (base && t.id === base.id) return false;
+    if (!state.base_tab_id && wt === "combo" && t.kind === "base") return false;
+    return true;
+  });
+  const hint = document.getElementById("bid-options-hint");
+  if (hint) hint.style.display = others.length ? "none" : "";
+  list.innerHTML = others.map(t => {
+    const o = state.tab_opts[t.id] || {};
+    const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
+    const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
+    return `<span class="bb-opt${isOpt ? "" : " bb-off"}" data-id="${_escBB(t.id)}">
+      <label><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> <span class="bb-name">${_escBB(labelFor(t.id))}</span></label>
+      <span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>
+      <span class="bb-sub">
+        <label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show</label>
+        <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select>
+      </span></span>`;
+  }).join("");
+}
+
+// Delegated listeners on #bid-bar (static elements — attach once).
+function wireBidBar() {
+  const sel = document.getElementById("base-bid-select");
+  const list = document.getElementById("bid-options-list");
+  if (sel) sel.addEventListener("change", () => {
+    state.base_tab_id = sel.value || null;
+    if (state.tab_opts[sel.value]) state.tab_opts[sel.value].is_option = false;  // base can't also be an option
+    renderBidOptions();
+    persistBidOptions();
+  });
+  if (list) list.addEventListener("change", (e) => {
+    const wrap = e.target.closest(".bb-opt"); if (!wrap) return;
+    const o = ensureOpt(wrap.dataset.id);
+    if (e.target.classList.contains("bb-isopt")) {
+      o.is_option = e.target.checked;
+      if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+      wrap.classList.toggle("bb-off", !o.is_option);
+    } else if (e.target.classList.contains("bb-show")) {
+      o.show = e.target.checked;
+    } else if (e.target.classList.contains("bb-mode")) {
+      o.price_mode = e.target.value === "deduct" ? "deduct" : "total";
+    }
+    persistBidOptions();
+  });
 }
 
 // Display order of tab ids: saved order first (filtered to ones that still
@@ -545,9 +648,12 @@ function deleteTab(id) {
   state.tab_copies = state.tab_copies.filter(c => c.id !== id);
   delete state.tab_labels[id];
   delete state.tab_notes[id];
+  delete state.tab_opts[id];
+  if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
-                tab_notes: state.tab_notes, cell_values: cellValues });
+                tab_notes: state.tab_notes, tab_opts: state.tab_opts,
+                base_tab_id: state.base_tab_id, cell_values: cellValues });
   renderTabs();
   if (activeSheet === id) showSheet((state.work_type || "epoxy").toLowerCase() === "polish" ? "Polish" : "Epoxy");
 }
@@ -745,6 +851,7 @@ function renderTabs() {
     btn.addEventListener("pointerdown", (e) => beginTabDrag(e, btn));
     tabBar.appendChild(btn);
   }
+  renderBidOptions();   // keep the base-bid picker + option chips in sync with the tabs
 }
 
 // The "⧉ Copy sheet" button lives in the header (beside Texture) so it's always
@@ -753,18 +860,12 @@ function renderTabs() {
   const btn = document.getElementById("copy-sheet-btn");
   if (btn) btn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
 })();
+wireBidBar();   // base-bid dropdown + per-tab option controls (delegated, once)
 
 async function showSheet(name) {
   activeSheet = name;
   for (const btn of tabBar.querySelectorAll("button")) {
     btn.classList.toggle("active", btn.dataset.sheet === name);
-  }
-  // Bulk discount is now a PER-TAB value (D41) — reflect THIS sheet's setting in
-  // the toggle so it shows the active tab's state, not a stale global one.
-  const _bulkCb = document.getElementById("cb-bulk");
-  if (_bulkCb) {
-    _bulkCb.checked = String(cellValues[name + "!D41"] || "") === "BULK Discount ON";
-    state.cb_bulk = _bulkCb.checked;
   }
   badge.textContent = labelFor(name).toUpperCase();
   // Clear stale DOM registrations from the previous sheet — those input
@@ -1721,44 +1822,85 @@ function snapshotLumpSumsToState() {
     polish:   polishLump,
     combined: epoxyLump + polishLump,
   };
-  // The single number the proposal should show, given work_type.
-  state.proposal_lump_sum =
-    wt === "epoxy"  ? epoxyLump :
-    wt === "polish" ? polishLump :
-                      epoxyLump + polishLump;
-  // Sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the proposal's
-  // itemized breakdown matches the Total Lump Sum exactly — not the recipe
-  // engine's figures (which omit Kyle's manual sheet tweaks). Combo sums both.
-  const pick = (e, p) => wt === "epoxy" ? e : wt === "polish" ? p : e + p;
-  state.proposal_sales_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.sales_tax),
-                                  num("Polish", TOTAL_CELLS.Polish.sales_tax));
-  state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
-                                    num("Polish", TOTAL_CELLS.Polish.remodel));
-  // Per-sheet priced options: when 2+ epoxy-family sheets carry a bid, the proposal
-  // lists each as an option (base bid first, then copies). Each can show its own
-  // system/scope and a signed difference vs. the base bid (estimator toggles on
-  // Proposal Review). 1 epoxy sheet → state.rooms = [] (unchanged single-bid).
-  const tc = TOTAL_CELLS.Epoxy;
-  const epoxyTabs = tabs.filter(t => t.role === "epoxy");
-  const baseTab = epoxyTabs.find(t => t.kind === "base") || epoxyTabs[0];
-  const baseTotal = baseTab ? num(baseTab.id, tc.total) : 0;
-  state.tab_opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : {};
-  const opts = epoxyTabs.map(t => {
-    const isBase = baseTab && t.id === baseTab.id;
-    const saved = state.tab_opts[t.id] || {};
+
+  // Base bid = the estimator's designated tab (state.base_tab_id) or, when unset,
+  // today's derivation (base-kind epoxy tab). A designated base drives the
+  // proposal's Total Lump Sum + itemized taxes from THAT tab's cells; with no
+  // designation we keep the work_type behavior (combo = Epoxy + Polish sum).
+  const baseTab   = resolveBaseTab();
+  const baseCells = baseTab ? totalCellsFor(baseTab.id) : TOTAL_CELLS.Epoxy;
+  const baseTotal = baseTab ? num(baseTab.id, baseCells.total) : 0;
+  if (state.base_tab_id && baseTab) {
+    state.proposal_lump_sum    = baseTotal;
+    state.proposal_sales_tax   = num(baseTab.id, baseCells.sales_tax);
+    state.proposal_remodel_tax = num(baseTab.id, baseCells.remodel);
+  } else {
+    // Fallback (no explicit base): the single number the proposal shows, given
+    // work_type; sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the
+    // itemized breakdown matches the Total Lump Sum. Combo sums both.
+    state.proposal_lump_sum =
+      wt === "epoxy"  ? epoxyLump :
+      wt === "polish" ? polishLump :
+                        epoxyLump + polishLump;
+    const pick = (e, p) => wt === "epoxy" ? e : wt === "polish" ? p : e + p;
+    state.proposal_sales_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.sales_tax),
+                                    num("Polish", TOTAL_CELLS.Polish.sales_tax));
+    state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
+                                      num("Polish", TOTAL_CELLS.Polish.remodel));
+  }
+
+  // Priced options: the estimator EXPLICITLY marks OTHER priced tabs as options
+  // (state.tab_opts[id].is_option) and toggles show + price_mode ("total" | "deduct").
+  // state.rooms = base first, then each SHOWN option; the proposal renders the base
+  // via {{#single_bid}} and each option as a "$total – … as described above" line or
+  // a "($savings) – Deduct VE for … in lieu of <base>" line. No shown option ⇒ [].
+  const baseDesc = baseTab ? deriveSystemNameFor(baseTab.id) : "";
+  const shownBase = state.proposal_lump_sum;   // the base bid the proposal actually displays
+  const mkRoom = (t, isBase) => {
+    const c = totalCellsFor(t.id);
+    const total = isBase ? shownBase : num(t.id, c.total);
+    const o = state.tab_opts[t.id] || {};
+    const desc = deriveSystemNameFor(t.id) || labelFor(t.id);
     return {
       id: t.id, name: labelFor(t.id), is_base: !!isBase,
-      bid: { total: num(t.id, tc.total), sales_tax: num(t.id, tc.sales_tax), remodel: num(t.id, tc.remodel) },
-      base_total: baseTotal,
-      system_desc: deriveSystemNameFor(t.id),
-      show_system: saved.show_system !== undefined ? saved.show_system : true,
-      show_diff: saved.show_diff !== undefined ? saved.show_diff
-                 : (!isBase && epoxyTabs.length === 2),
+      bid: { total, sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel) },
+      base_total: shownBase,
+      deduct_amount: shownBase - total,       // savings vs the shown base; <=0 ⇒ backend falls back to total
+      price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
+      show: isBase ? true : (o.show !== false),
+      system_desc: desc,
+      option_desc: desc,
+      base_desc: baseDesc,
+      show_system: o.show_system !== undefined ? o.show_system : true,
+      show_diff:   o.show_diff   !== undefined ? o.show_diff   : false,
       notes_auto: deriveNotes(t.id),
       notes_manual: (state.tab_notes[t.id] || []),
     };
-  }).filter(o => o.bid.total > 0);
-  state.rooms = opts.length >= 2 ? opts : [];
+  };
+  const optionTabs = pricedTabs().filter(t =>
+    (!baseTab || t.id !== baseTab.id) &&
+    state.tab_opts[t.id] && state.tab_opts[t.id].is_option &&
+    state.tab_opts[t.id].show !== false);
+  const shownOptions = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
+  state.rooms = (shownOptions.length && baseTab) ? [mkRoom(baseTab, true), ...shownOptions] : [];
+
+  // Full per-tab pricing snapshot so the Proposal Review sidebar can switch the
+  // base / toggle options WITHOUT the sheet engine (proposal-review's rebuildPricing
+  // mirrors this). Every priced tab, not just the shown options.
+  state.priced_tabs = pricedTabs().map(t => {
+    const c = totalCellsFor(t.id);
+    return {
+      id: t.id, name: labelFor(t.id), role: t.role, kind: t.kind,
+      total: num(t.id, c.total), sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel),
+      system_desc: deriveSystemNameFor(t.id), notes_auto: deriveNotes(t.id),
+    };
+  });
+
+  // The Reference Bid engine + Alternate system were removed; the proposal now
+  // uses the sheet totals above. Null the engine/alternate results so a resumed
+  // older draft can't leak a stale figure into the options doc (config kept).
+  state.computed_bid = null;
+  state.alternate_computed_bid = null;
 }
 
 function persistTabState() {
@@ -1777,7 +1919,7 @@ document.getElementById("continue-btn").addEventListener("click", () => {
   window.location.assign("/proposal-review.html");
 });
 
-// ── Computed Bid panel (tool's 5.7-recipe pricing: multi-system, bulk, full bid) ──
+// ── System-name helpers (live reads off the grid / HF for the auto System Name) ──
 const _cbNum = x => { const n = parseFloat(String(x).replace(/[$,]/g, "")); return isNaN(n) ? 0 : n; };
 const _cbFmt = n => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 let _cbTimer = null;
@@ -1827,156 +1969,6 @@ function refreshSystemName() {
   pushSysTextureToState();
 }
 
-async function computeBid() {
-  const systems = [], coves = [];
-  [["Epoxy!A22", "Epoxy!E20"], ["Epoxy!A26", "Epoxy!E24"]].forEach(([na, sa]) => {
-    const name = _cbCell(na), sf = _cbNum(_cbCell(sa));
-    if (_cbRealSystem(name) && sf > 0) systems.push({ name, sf });
-  });
-  [["Epoxy!A35", "Epoxy!E34"], ["Epoxy!A37", "Epoxy!E37"]].forEach(([oa, la]) => {
-    const option = _cbCell(oa), lf = _cbNum(_cbCell(la));
-    if (_cbRealCove(option) && lf > 0) coves.push({ option, lf });
-  });
-  const payload = {
-    systems, coves,
-    extras: getExtras(),
-    bulk_discount: document.getElementById("cb-bulk").checked,
-    taxable: String(_cbCell("Epoxy!B6") || "yes").toLowerCase() !== "no",
-    remodel: String(_cbCell("Epoxy!D6") || "").toLowerCase() === "yes",
-    remodel_rate: state.county_remodel_rate || 0,
-    sales_tax_rate: 0.09475,
-    full_bid: true,
-  };
-  const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
-  if (psf > 0) payload.polish_sf = psf;
-  // Alternate (recommended) system — priced with the SAME tax/labor as the base.
-  if (typeof altActive === "function" && altActive()) {
-    payload.alternate_systems = [{ name: ALT.system, sf: _cbNum(ALT.sf) }];
-    payload.alternate_label = (ALT.label || "").trim();
-  }
-  const grid = document.getElementById("cb-grid"), st = document.getElementById("cb-status");
-  if (!systems.length && !payload.polish_sf) {
-    grid.innerHTML = '<div style="color:var(--ink-variant,#888)">Select a system and enter SF to compute the bid.</div>';
-    return;
-  }
-  st.textContent = "computing…";
-  try {
-    const r = await TW.postJSON("/api/price", payload);
-    renderBid(r); st.textContent = "";
-    // The full response carries `alternate_full_bid` + `alternate` when an
-    // alternate was priced — stash it so the proposal step can render it.
-    state.computed_bid = r;
-    state.alternate_computed_bid = r.alternate_full_bid ? r : null;
-    TW.setState({ ...state, computed_bid: r, alternate_computed_bid: state.alternate_computed_bid });
-  } catch (e) { st.textContent = "error"; }
-}
-
-function renderBid(r) {
-  const fb = r.full_bid, rows = [];
-  r.systems.forEach((s, i) => rows.push([`System ${i + 1}: ${s.system}`, s.material]));
-  if (r.coves && r.coves.length) rows.push(["Cove", r.coves.reduce((a, c) => a + c.material, 0)]);
-  if (r.polish) rows.push(["Polish", r.polish.material]);
-  if (r.patch) rows.push(["Patch", r.patch]);
-  if (r.extras_total) rows.push([`Extra materials (${(r.extras || []).length})`, r.extras_total]);
-  rows.push([`Shipping + escalation (${Math.round((r.shipping_pct || 0) * 100)}%)`, r.shipping_escalation]);
-  rows.push(["Material Total", r.material_total, true]);
-  if (fb) {
-    rows.push(["Install labor + burden", fb.install_labor + fb.labor_burden]);
-    rows.push(["Tooling", fb.tooling]);
-    rows.push([`GP markup (${Math.round(fb.gp_pct * 100)}%)`, fb.gp_markup]);
-    rows.push(["Super/PTO + Soft costs", fb.superintendent_pto + fb.soft_costs]);
-    rows.push(["Sales tax", fb.sales_tax]);
-    rows.push(["KS remodel tax", fb.remodel_tax]);
-    rows.push(["ENGINE REFERENCE TOTAL (proposal uses the sheet's Total Lump Sum)", fb.total_base_bid, true]);
-  }
-  // Alternate (recommended) system — a second priced option beside the base.
-  const altRes = document.getElementById("alt-result");
-  if (r.alternate_full_bid && r.alternate_full_bid.total_base_bid) {
-    const albl = (r.alternate && r.alternate.label) || "Alternate system";
-    rows.push([`ALTERNATE — ${albl}`, r.alternate_full_bid.total_base_bid, true]);
-    if (altRes) altRes.textContent = `Alternate Total Base Bid: ${_cbFmt(r.alternate_full_bid.total_base_bid)}`;
-  } else if (altRes) {
-    altRes.textContent = "";
-  }
-  document.getElementById("cb-grid").innerHTML = rows.map(([l, v, bold]) =>
-    `<div style="display:flex;justify-content:space-between;padding:3px 0;${bold ? 'font-weight:700;border-top:2px solid var(--treadwell-red,#c0392b);margin-top:3px;padding-top:5px' : ''}"><span>${l}</span><span>${_cbFmt(v)}</span></div>`
-  ).join("");
-}
-
-// ── Extra materials (appendable manual qty × unit-price lines) ──────────
-// Mirrors the sheet's spare "=B*C" rows (rows 23,27,28,32,33,39 → 6 native
-// slots). Unlimited in the tool/proposal; on generate the first 6 fill the
-// native rows and any overflow lumps into one line + a note.
-const SHEET_SPARE_ROWS = 6;
-let EXTRAS = Array.isArray(state.extras) ? state.extras.slice() : [];
-
-function getExtras() {
-  // Only lines with a label and a non-zero amount count.
-  return EXTRAS
-    .map(e => ({ label: (e.label || "").trim(), qty: _cbNum(e.qty), unit_price: _cbNum(e.unit_price) }))
-    .filter(e => e.label && e.qty * e.unit_price !== 0);
-}
-
-function persistExtras() { state.extras = EXTRAS; TW.setState({ ...state, extras: EXTRAS }); }
-
-function renderExtras() {
-  const wrap = document.getElementById("cb-extras");
-  document.getElementById("cb-extras-head").style.display = EXTRAS.length ? "grid" : "none";
-  wrap.innerHTML = "";
-  EXTRAS.forEach((e, i) => {
-    const amt = _cbNum(e.qty) * _cbNum(e.unit_price);
-    const row = document.createElement("div");
-    row.style.cssText = "display:grid;grid-template-columns:1fr 70px 90px 90px 28px;gap:6px;align-items:center;margin-bottom:4px;";
-    row.innerHTML =
-      `<input type="text" data-k="label" placeholder="Material name" value="${(e.label || "").replace(/"/g, "&quot;")}" style="font-size:12.5px;padding:3px 6px;">
-       <input type="number" data-k="qty" placeholder="0" value="${e.qty ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
-       <input type="number" step="0.01" data-k="unit_price" placeholder="0.00" value="${e.unit_price ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
-       <span style="text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;">${_cbFmt(amt)}</span>
-       <button type="button" data-act="rm" title="Remove" style="cursor:pointer;border:none;background:none;color:var(--treadwell-red,#c0392b);font-size:15px;">×</button>`;
-    row.querySelectorAll("input").forEach(inp => {
-      inp.addEventListener("input", () => {
-        EXTRAS[i][inp.dataset.k] = inp.value;
-        // live-update just this row's amount, persist, recompute (debounced)
-        row.children[3].textContent = _cbFmt(_cbNum(EXTRAS[i].qty) * _cbNum(EXTRAS[i].unit_price));
-        persistExtras();
-        clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
-      });
-    });
-    row.querySelector('[data-act="rm"]').addEventListener("click", () => {
-      EXTRAS.splice(i, 1); persistExtras(); renderExtras(); computeBid();
-    });
-    wrap.appendChild(row);
-  });
-  const note = document.getElementById("cb-extras-note");
-  if (EXTRAS.length > SHEET_SPARE_ROWS) {
-    note.style.display = "block";
-    note.textContent = `⚠ ${EXTRAS.length} lines — the estimate sheet has ${SHEET_SPARE_ROWS} spare material rows; extras beyond that are lumped into one "Misc materials" line in the .xlsx (all lines still itemized in the proposal).`;
-  } else {
-    note.style.display = "none";
-  }
-}
-
-// Seed from the sheet's spare rows if the estimator already typed materials
-// there (e.g. an imported draft) — read label/qty/price straight off the grid.
-function seedExtrasFromSheet() {
-  if (EXTRAS.length) return;   // user/draft data wins
-  const SPARE = [23, 27, 28, 32, 33, 39];
-  for (const r of SPARE) {
-    const label = _cbCell(`Epoxy!A${r}`);
-    if (!label || /^=/.test(label) || /^MATERIAL|Options|Sub Total|Discount/i.test(label)) continue;
-    const qty = _cbNum(_cbCell(`Epoxy!B${r}`)), up = _cbNum(_cbCell(`Epoxy!C${r}`));
-    if (label.trim() && (qty || up)) EXTRAS.push({ label: label.trim(), qty, unit_price: up });
-  }
-}
-
-document.getElementById("cb-add-extra").addEventListener("click", () => {
-  EXTRAS.push({ label: "", qty: "", unit_price: "" });
-  persistExtras(); renderExtras();
-  // focus the new row's name field
-  const inputs = document.querySelectorAll("#cb-extras input[data-k='label']");
-  if (inputs.length) inputs[inputs.length - 1].focus();
-});
-
 // ── Proposal price lines (options / unit prices; display-only) ──────────
 let PRICE_LINES = Array.isArray(state.price_lines) ? state.price_lines.slice() : [];
 function getPriceLines() {
@@ -2013,148 +2005,27 @@ document.getElementById("cb-add-priceline").addEventListener("click", () => {
   if (inputs.length) inputs[inputs.length - 1].focus();
 });
 
-// ── Alternate (recommended) system selector ─────────────────────────────
-let ALT = Object.assign({ system: "", sf: "", label: "" }, state.alternate || {});
-function altActive() { return _cbRealSystem(ALT.system) && _cbNum(ALT.sf) > 0; }
-function persistAlt() { state.alternate = ALT; TW.setState({ ...state, alternate: ALT }); }
-function populateAltSystems(list) {
-  const sys = document.getElementById("alt-system");
-  if (!sys) return;
-  const cur = ALT.system || "";
-  sys.innerHTML = '<option value="">— none —</option>' +
-    (list || []).map(n => `<option value="${String(n).replace(/"/g, "&quot;")}"${n === cur ? " selected" : ""}>${n}</option>`).join("");
-}
-function wireAlt() {
-  const sys = document.getElementById("alt-system"),
-        sf = document.getElementById("alt-sf"),
-        lab = document.getElementById("alt-label");
-  if (!sys) return;
-  if (ALT.sf) sf.value = ALT.sf;
-  if (ALT.label) lab.value = ALT.label;
-  const recompute = () => {
-    ALT.system = sys.value; ALT.sf = sf.value; ALT.label = lab.value; persistAlt();
-    clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
-  };
-  sys.addEventListener("change", recompute);
-  sf.addEventListener("input", recompute);
-  lab.addEventListener("input", () => { ALT.label = lab.value; persistAlt(); });
-}
-
-document.getElementById("cb-bulk").addEventListener("change", e => {
-  // Bulk discount = the sheet's D41 toggle. Store it PER-TAB (keyed to the
-  // ACTIVE sheet), not a hardcoded "Epoxy!D41", so each copied tab keeps its OWN
-  // value and Copy-sheet carries it (Kyle: "bulk discount didn't carry to the
-  // copied sheet"). Persist so it survives a reload + reaches the generated .xlsx.
-  const key = (activeSheet || "Epoxy") + "!D41";
-  cellValues[key] = e.target.checked ? "BULK Discount ON" : "Bulk Discount OFF";
-  state.cb_bulk = e.target.checked;
-  TW.setState({ ...state, cell_values: cellValues });
-  computeBid();
-});
-// recompute when any grid selection / SF changes (debounced)
+// Recompute the System Name + refresh the base-bid picker / option totals when
+// any grid selection or SF changes (debounced). No engine round-trip anymore —
+// the proposal uses the sheet's own Total Lump Sum.
 document.getElementById("sheet-grid").addEventListener("change", () => {
   refreshSystemName();
-  clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
+  clearTimeout(_cbTimer); _cbTimer = setTimeout(renderBidOptions, 300);
 });
 
 init();
-// (bulk-discount checkbox is synced per-tab inside showSheet now)
 
-// Collapsible Computed Bid → the worksheet gets the rest of the window.
-// Default collapsed (headline totals stay in the total-bar); choice is remembered.
-(function initCbCollapse(){
-  const panel  = document.getElementById("computed-bid");
-  const header = document.getElementById("cb-header");
-  const caret  = document.getElementById("cb-caret");
-  if (!panel || !header) return;
-  let collapsed = true;
-  try { const v = localStorage.getItem("tw_cb_collapsed"); if (v !== null) collapsed = v === "1"; } catch {}
-  const apply = () => {
-    panel.classList.toggle("cb-collapsed", collapsed);
-    if (caret) caret.textContent = collapsed ? "▸ Show breakdown" : "▾ Hide";
-    if (window.__twCbApplySaved) window.__twCbApplySaved();   // re-apply dragged height / hide resizer
-  };
-  apply();
-  header.addEventListener("click", (e) => {
-    // Clicks inside the bulk-discount label toggle the checkbox, not the panel
-    // (replaces the element's former inline onclick="event.stopPropagation()").
-    if (e.target.closest && e.target.closest("#cb-bulk-label")) return;
-    collapsed = !collapsed;
-    try { localStorage.setItem("tw_cb_collapsed", collapsed ? "1" : "0"); } catch {}
-    apply();
-  });
-})();
-
-// Drag the #cb-resizer to resize the WORKSHEET; the Computed Bid panel flexes to
-// fill whatever's left (and its body scrolls), so nothing runs off-screen. We
-// size the worksheet (not the panel) because the panel's content is unbounded.
-(function initCbResize(){
-  const panel = document.getElementById("computed-bid");
-  const vp = document.querySelector(".xl-viewport");
-  const rez = document.getElementById("cb-resizer");
-  if (!panel || !vp || !rez) return;
-  const KEY = "tw_ws_height";   // persisted WORKSHEET height (expanded mode)
-  const tbEl = document.getElementById("total-bar");
-  // Cap the worksheet at the actual space available between it and the bottom of
-  // the window, reserving room for the total-bar, the handle, and a >=90px panel —
-  // so dragging the worksheet bigger can never push the bid panel off-screen.
-  function maxWs(){
-    const vpTop = vp.getBoundingClientRect().top;
-    const tbH = tbEl ? tbEl.getBoundingClientRect().height : 0;
-    const rezH = rez.getBoundingClientRect().height || 10;
-    return Math.max(160, Math.floor(window.innerHeight - vpTop - tbH - rezH - 90));
-  }
-  const clamp = h => Math.max(120, Math.min(h, maxWs()));
-  function applySaved(){
-    if (panel.classList.contains("cb-collapsed")) {
-      // Collapsed: worksheet fills the window (back to flex:1), no resizer.
-      vp.style.height = ""; vp.style.flex = ""; rez.style.display = "none"; return;
-    }
-    rez.style.display = "";
-    // Expanded: fix the worksheet height (default ≈ half the window); the panel
-    // flexes into the remainder and scrolls.
-    const saved = parseInt(localStorage.getItem(KEY) || "", 10);
-    vp.style.flex = "0 0 auto";
-    vp.style.height = clamp(saved || Math.round(window.innerHeight * 0.50)) + "px";
-  }
-  window.__twCbApplySaved = applySaved;
-  let startY = 0, startH = 0, dragging = false;
-  function onMove(e){
-    if (!dragging) return;
-    // Drag DOWN (clientY increases) => bigger worksheet / smaller bid panel.
-    vp.style.height = clamp(startH + (e.clientY - startY)) + "px";
-    e.preventDefault();
-  }
-  function onUp(){
-    if (!dragging) return;
-    dragging = false; document.body.style.userSelect = "";
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onUp);
-    try { localStorage.setItem(KEY, String(Math.round(vp.getBoundingClientRect().height))); } catch {}
-  }
-  rez.addEventListener("pointerdown", e => {
-    if (panel.classList.contains("cb-collapsed")) return;
-    dragging = true; startY = e.clientY; startH = vp.getBoundingClientRect().height;
-    document.body.style.userSelect = "none"; e.preventDefault();
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-  });
-  applySaved();
-})();
-// Load the recipe-known system names so the panel only counts real picks,
-// then compute once the grid + cellValues have hydrated. Wait for the auth
-// token first (gated endpoint) + send it, else it 401s and VALID_SYSTEMS is empty.
+// Load the recipe-known system names so the base-bid picker + System Name only
+// count real picks. Wait for the auth token first (gated endpoint) + send it,
+// else it 401s and VALID_SYSTEMS stays empty.
 (window.TWAuth && window.TWAuth.ready ? window.TWAuth.ready : Promise.resolve())
   .then(() => fetch(TW.absoluteUrl("/api/pricing/systems"), { headers: TW.authHeaders() }))
   .then(r => r.json())
-  .then(d => { const list = (d.systems || d.epoxy || []); list.forEach(n => VALID_SYSTEMS.add(n)); populateAltSystems(list); })
+  .then(d => { const list = (d.systems || d.epoxy || []); list.forEach(n => VALID_SYSTEMS.add(n)); })
   .catch(() => {})
   .finally(() => setTimeout(() => {
-    seedExtrasFromSheet(); renderExtras();
-    renderPriceLines(); wireAlt();
+    renderPriceLines();
     refreshSystemName();
-    computeBid();
+    renderBidOptions();
   }, 1200));
 
