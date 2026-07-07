@@ -319,43 +319,51 @@
         else {
           const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
           const baseId = state.base_tab_id;
-          const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto";
-          const others = allTabs.filter(t => t.id !== baseId &&
-            !(!baseId && wt === "combo" && t.kind === "base"));
+          const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
+          const isPartOfAutoBase = (t) => !baseId && t.kind === "base";   // Auto base = the base-kind tab(s)
           optsPanel.hidden = false;
+          // A "Base bid" radio toggle per sheet (plus an Auto/combined row). The base
+          // row hides its option controls; the others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
-            `<p class="op-hint">Pick the Base bid; mark other sheets as options (show + total / deduct).</p>` +
-            `<label class="op-notes">Base bid<select id="pr-base-select">` +
-            `<option value=""${!baseId ? " selected" : ""}>${esc(autoLabel)}</option>` +
-            allTabs.map(t => `<option value="${esc(t.id)}"${baseId === t.id ? " selected" : ""}>${esc(t.name)} — ${fmtUSD(N(t.total))}</option>`).join("") +
-            `</select></label>`;
-          h += others.map(t => {
+            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / deduct).</p>` +
+            `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>`;
+          h += allTabs.map(t => {
             const o = opts[t.id] || {};
+            const isBase = baseId === t.id;
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
             const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
-            r += `<div class="op-name">${esc(t.name)} <span class="op-price">${fmtUSD(N(t.total))}</span></div>`;
-            r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
-            r += `<div class="pr-sub"${isOpt ? "" : ' style="display:none"'}>`;
-            r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
-            r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct (VE)</option></select></label>`;
-            r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
-            r += `</div></div>`;
+            r += `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}> ` +
+                 `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSD(N(t.total))}</span></span></label>`;
+            if (isBase) {
+              r += `<div class="pr-optsub"><span class="op-hint">This sheet is the Base bid.</span></div>`;
+            } else if (isPartOfAutoBase(t)) {
+              r += `<div class="pr-optsub"><span class="op-hint">Part of the combined base bid.</span></div>`;
+            } else {
+              r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
+              r += `<div class="pr-optsub"${isOpt ? "" : ' style="display:none"'}>`;
+              r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
+              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct (VE)</option></select></label>`;
+              r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
+              r += `</div>`;
+            }
+            r += `</div>`;
             return r;
           }).join("");
           optsPanel.innerHTML = h;
 
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };
-          const baseSel = document.getElementById("pr-base-select");
-          if (baseSel) baseSel.addEventListener("change", () => {
-            state.base_tab_id = baseSel.value || null;
-            if (baseSel.value && opts[baseSel.value]) opts[baseSel.value].is_option = false;
+          // Base-bid radios (Auto + one per sheet) — turning one on sets the base.
+          optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
+            if (!rb.checked) return;
+            state.base_tab_id = rb.value || null;
+            if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
             applyAndRefresh();
-          });
+          }));
           optsPanel.querySelectorAll(".op-row").forEach(row => {
             const id = row.dataset.id;
-            const sub = row.querySelector(".pr-sub");
+            const sub = row.querySelector(".pr-optsub");
             const iso = row.querySelector(".pr-isopt");
             if (iso) iso.addEventListener("change", () => {
               const o = ensureOpt(id); o.is_option = iso.checked;
