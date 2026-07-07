@@ -249,6 +249,7 @@ def test_sanitize_paragraph_overrides_coerces_and_drops_bad_entries():
         {"id": "5", "text": "ok, string id coerces"},
         {"id": 6, "text": 42},            # non-str text coerces via str()
         {"id": None, "text": "bad id"},
+        {"id": True, "text": "bool id"},   # bool would coerce to 1 — dropped
         "not-a-dict",
         {"id": 7},                          # missing text
     ])

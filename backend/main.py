@@ -1119,8 +1119,11 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
     for o in (overrides_in or [])[:_PARAGRAPH_OVERRIDES_MAX]:
         if not isinstance(o, dict):
             continue
+        pid = o.get("id")
+        if isinstance(pid, bool):   # bool is an int subclass — True would target id 1
+            continue
         try:
-            pid = int(o.get("id"))
+            pid = int(pid)
         except (TypeError, ValueError):
             continue
         text = o.get("text")
