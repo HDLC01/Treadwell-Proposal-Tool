@@ -40,6 +40,15 @@ def test_dangerous_formulas_escaped():
         assert ew._coerce(f) == "'" + f, f
 
 
+def test_oversized_formula_rejected():
+    # ReDoS guard: the validator hard-caps input length before any regex runs.
+    big = "=" + "A" * 600 + "1"
+    assert not ew._is_safe_formula(big)
+    assert ew._coerce(big) == "'" + big
+    # …and a space before the paren still resolves the function name.
+    assert ew._is_safe_formula("=SUM (D18:D39)")
+
+
 def test_non_formula_coercion_unchanged():
     assert ew._coerce("12000") == 12000
     assert ew._coerce("0.07") == 0.07

@@ -886,7 +886,12 @@ def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> Non
 # the other — =WEBSERVICE/=HYPERLINK/=IMPORTXML aren't whitelisted, =cmd|…
 # has "|" outside the charset, external [Book1] refs have "[" — and keep
 # the apostrophe-escape below, exactly as before.
-_FORMULA_FUNC_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
+# Bounded quantifiers everywhere + a hard input cap in _is_safe_formula:
+# this regex runs on API-supplied text, and an unbounded name class made it
+# polynomial (CodeQL ReDoS: a megabyte of "AAA…" costs O(n^2) backtracking).
+# Excel function names max out well under 31 chars.
+_FORMULA_MAX_LEN = 512
+_FORMULA_FUNC_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]{0,30})[ \t]{0,4}\(")
 _FORMULA_CHARSET_RE = re.compile(r'^=[A-Za-z0-9_ .,:;!$"\'()+\-*/^%&<>=]+$')
 _SAFE_FORMULA_FUNCS = {
     "SUM", "IF", "MIN", "MAX", "ROUND", "ROUNDUP", "ROUNDDOWN", "AVERAGE",
@@ -898,6 +903,8 @@ _SAFE_FORMULA_FUNCS = {
 
 
 def _is_safe_formula(s: str) -> bool:
+    if len(s) > _FORMULA_MAX_LEN:      # nobody hand-types a 512+ char formula
+        return False
     if not _FORMULA_CHARSET_RE.fullmatch(s):
         return False
     return all(f.upper() in _SAFE_FORMULA_FUNCS for f in _FORMULA_FUNC_RE.findall(s))
