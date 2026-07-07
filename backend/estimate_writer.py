@@ -693,12 +693,22 @@ def fill_estimate(
     # "<id>!<addr>" writes land on the freshly-created sheet.
     _create_copied_tabs(wb, tab_copies)
 
+    # 1.55 Structural edits (insert/delete rows & columns), replayed in the
+    # order the user made them — AFTER the named-field writes (template
+    # coordinates, they ride the shift) and the copies (ops recorded against a
+    # copy's id need its sheet to exist), but BEFORE cell_values (which arrive
+    # in the user's CURRENT coordinates). Every template-coordinate consumer
+    # below translates through the same op list.
+    structs = _norm_structs(tab_structs)
+    _apply_tab_structs(wb, structs)
+    ops_by = _ops_by_sheet(structs)
+
     # 1.6 Resolve each worksheet OBJECT to its rate-cell lock layout NOW, while
     # every sheet still carries its stable id (before the alternate-rename and
     # display-label passes change titles). Worksheet objects survive those
     # renames, so we hold these references and apply the actual protection at the
     # very end, just before saving.
-    ws_layouts = _resolve_ws_layouts(wb, tab_copies)
+    ws_layouts = _resolve_ws_layouts(wb, tab_copies, ops_by)
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
     for sheet_addr, val in (cell_values or {}).items():
@@ -721,11 +731,11 @@ def fill_estimate(
             log.warning("estimate_writer: failed to write %s: %s", sheet_addr, exc)
 
     # 3. Extra material lines -> spare "=B*C" rows on the Epoxy tab.
-    _write_extra_materials(epoxy, extras)
+    _write_extra_materials(epoxy, extras, ops_by.get("Epoxy"))
 
     # 4. Alternate (recommended) system -> the spare "Epoxy blank" tab.
     if alternate:
-        _write_alternate_tab(wb, alternate)
+        _write_alternate_tab(wb, alternate, ops_by.get(ALT_TAB_NAME))
 
     # 5. Reorder worksheets (by stable id) to match the user's tab order, THEN
     #    apply display labels + rewrite cross-sheet refs, after every write has
@@ -746,14 +756,17 @@ def fill_estimate(
     return buf.read()
 
 
-def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
+def _write_alternate_tab(wb, alternate: Mapping[str, Any],
+                         ops: list[dict] | None = None) -> None:
     """Populate the spare 'Epoxy blank' tab as the recommended alternate.
 
     `alternate` = {"sf", "material_sub", "label"}. We set the SF input and drop
     the engine's alternate material subtotal into a "MATERIAL - Extras" =B*C row
     so it flows D37 -> D40 -> ... -> D85 (the tab recomputes its own Total Base
     Bid on open). The PROPOSAL uses the engine's alternate total as authoritative;
-    this tab is the supporting worksheet.
+    this tab is the supporting worksheet. `ops` are the tab's structural edits —
+    the hardcoded template coordinates translate through them (a deleted target
+    cell means that write is skipped).
     """
     if ALT_TAB_NAME not in wb.sheetnames:
         return
@@ -764,16 +777,22 @@ def _write_alternate_tab(wb, alternate: Mapping[str, Any]) -> None:
         except (TypeError, ValueError):
             return 0.0
 
+    def _tx(addr):
+        return _translate_addr(addr, ops) if ops else addr
+
     ws = wb[ALT_TAB_NAME]
     sf = _f(alternate.get("sf"))
-    if sf:
-        ws[ALT_SF_CELL] = sf
+    sf_cell = _tx(ALT_SF_CELL)
+    if sf and sf_cell:
+        ws[sf_cell] = sf
     material_sub = _f(alternate.get("material_sub"))
     if material_sub:
         r = ALT_MATERIAL_ROW
-        ws[f"A{r}"] = (alternate.get("label") or "Alternate system").strip()
-        ws[f"B{r}"] = 1
-        ws[f"C{r}"] = material_sub      # D{r} stays =B{r}*C{r} -> flows into D37/D40/D85
+        a, b, c = _tx(f"A{r}"), _tx(f"B{r}"), _tx(f"C{r}")
+        if a and b and c:
+            ws[a] = (alternate.get("label") or "Alternate system").strip()
+            ws[b] = 1
+            ws[c] = material_sub    # D{r} stays =B{r}*C{r} -> flows into D37/D40/D85
     # Rename so the tab reads as the alternate (safe: its formulas reference
     # `Epoxy!`, not its own title, and no other tab references it by name).
     try:
@@ -819,15 +838,19 @@ def _lock_layout_for(base_id: str) -> list[str] | None:
     return addrs
 
 
-def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None) -> list[tuple[Any, list[str]]]:
+def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None,
+                        ops_by: Dict[str, list[dict]] | None = None) -> list[tuple[Any, list[str]]]:
     """Map each worksheet OBJECT to its rate-cell lock addresses.
 
-    Called while every sheet still carries its stable id (after _create_copied_tabs,
-    before the alternate-rename and tab-label passes), so titles resolve reliably:
-    copies follow their {id, source} chain back to a template layout, Gyp variants
-    share the Gyp set, and sheets with no locked cells (Takeoff, validation, …) are
-    left out entirely — they get no protection. The worksheet objects survive the
-    later retitles, so the returned pairs stay valid until save."""
+    Called while every sheet still carries its stable id (after _create_copied_tabs
+    and the structural-edit replay, before the alternate-rename and tab-label
+    passes), so titles resolve reliably: copies follow their {id, source} chain
+    back to a template layout, Gyp variants share the Gyp set, and sheets with no
+    locked cells (Takeoff, validation, …) are left out entirely — they get no
+    protection. LOCK_MAP holds TEMPLATE coordinates, so each address translates
+    through the sheet's own structural ops (a deleted rate cell simply drops out
+    of the lock set). The worksheet objects survive the later retitles, so the
+    returned pairs stay valid until save."""
     src_by_id: dict[str, str] = {}
     for c in (tab_copies or []):
         if not isinstance(c, dict):
@@ -844,7 +867,11 @@ def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None) -> list[
             guard += 1
         addrs = _lock_layout_for(base)
         if addrs:
-            out.append((ws, addrs))
+            ops = (ops_by or {}).get(ws.title) or []
+            if ops:
+                addrs = [t for t in (_translate_addr(a, ops) for a in addrs) if t]
+            if addrs:
+                out.append((ws, addrs))
     return out
 
 
@@ -1050,7 +1077,8 @@ def _reorder_tabs(wb, tab_order: list | None) -> None:
         pass
 
 
-def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> None:
+def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None,
+                           ops: list[dict] | None = None) -> None:
     """Write custom material lines into the Epoxy spare rows.
 
     Each spare row's D is a `=B*C` formula, so we only set A/B/C and let
@@ -1058,6 +1086,9 @@ def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> Non
     more, the first 5 are itemized and the rest are summed into a single
     "Misc materials" line in the last spare row — keeping every formula
     below (D40 SUM, the bid chain) valid without inserting rows.
+
+    `ops` are Epoxy's structural edits — the spare-row template coordinates
+    translate through them; a spare row the user deleted is skipped.
     """
     items = []
     for e in (extras or []):
@@ -1096,9 +1127,14 @@ def _write_extra_materials(epoxy, extras: list[Mapping[str, Any]] | None) -> Non
         }))
 
     for r, it in placed:
-        epoxy[f"A{r}"] = it["label"]
-        epoxy[f"B{r}"] = _coerce(it["qty"])
-        epoxy[f"C{r}"] = _coerce(it["up"])
+        a, b, c = f"A{r}", f"B{r}", f"C{r}"
+        if ops:
+            a, b, c = _translate_addr(a, ops), _translate_addr(b, ops), _translate_addr(c, ops)
+            if not (a and b and c):
+                continue                    # spare row deleted by a structural edit
+        epoxy[a] = it["label"]
+        epoxy[b] = _coerce(it["qty"])
+        epoxy[c] = _coerce(it["up"])
         # D{r} stays as the template's =B{r}*C{r} formula.
 
 

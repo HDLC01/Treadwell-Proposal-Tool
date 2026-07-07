@@ -294,6 +294,10 @@ class GenerateIn(BaseModel):
     tab_labels: Dict[str, Any] = Field(default_factory=dict)
     # Drag-to-reorder worksheet order, by internal id. Applied to the .xlsx tab order.
     tab_order: list = Field(default_factory=list)
+    # Structural edits (insert/delete rows & columns), in the order made:
+    # [{sheet, kind: insert_rows|delete_rows|insert_cols|delete_cols, at, count}].
+    # Replayed onto the workbook with formula/merge/lock-map translation.
+    tab_structs: list = Field(default_factory=list)
     # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
     # boilerplate is used (so the notes never vanish).
     notes: list = Field(default_factory=list)
@@ -1355,6 +1359,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             tab_copies=payload.tab_copies,
             tab_labels=payload.tab_labels,
             tab_order=payload.tab_order,
+            tab_structs=payload.tab_structs,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -1707,6 +1712,7 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             tab_copies=_list(data.get("tab_copies")),
             tab_labels=_dict(data.get("tab_labels")),
             tab_order=_list(data.get("tab_order")),
+            tab_structs=_list(data.get("tab_structs")),
         )
     try:
         out = api_generate(gi, request)                    # reuse the full generate pipeline
