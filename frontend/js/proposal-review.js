@@ -148,6 +148,61 @@
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtSF = (n) => "~" + Number(n || 0).toLocaleString() + " sf";
 
+  // Recompute the base bid + priced options from the per-tab totals snapshotted on
+  // the Estimate screen (state.priced_tabs). This lets the base-bid picker + the
+  // per-option total/deduct toggles work HERE too, without the sheet engine. It
+  // MIRRORS estimate-review.js:snapshotLumpSumsToState — keep the two in sync.
+  function rebuildPricing() {
+    const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
+    if (!all.length) return;   // older draft w/o the snapshot — leave state.rooms as-is
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
+    const N = (v) => Number(v) || 0;
+    const byId = (id) => all.find(t => t.id === id);
+    let baseTab = state.base_tab_id ? byId(state.base_tab_id) : null;
+    let shownBase, salesTax, remodelTax;
+    if (baseTab) {
+      shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
+    } else {
+      // No explicit base: work_type fallback (combo = Epoxy + Polish base tabs).
+      const eB = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy");
+      const pB = all.find(t => t.role === "polish" && t.kind === "base") || all.find(t => t.role === "polish");
+      if (wt === "polish") { baseTab = pB || null; shownBase = N(pB && pB.total); salesTax = N(pB && pB.sales_tax); remodelTax = N(pB && pB.remodel); }
+      else if (wt === "combo") { baseTab = eB || null; shownBase = N(eB && eB.total) + N(pB && pB.total); salesTax = N(eB && eB.sales_tax) + N(pB && pB.sales_tax); remodelTax = N(eB && eB.remodel) + N(pB && pB.remodel); }
+      else { baseTab = eB || null; shownBase = N(eB && eB.total); salesTax = N(eB && eB.sales_tax); remodelTax = N(eB && eB.remodel); }
+    }
+    state.proposal_lump_sum = shownBase;
+    state.proposal_sales_tax = salesTax;
+    state.proposal_remodel_tax = remodelTax;
+    const baseDesc = baseTab ? (baseTab.system_desc || "") : "";
+    const mkRoom = (t, isBase) => {
+      const total = isBase ? shownBase : N(t.total);
+      const o = opts[t.id] || {};
+      const desc = t.system_desc || t.name;
+      return {
+        id: t.id, name: t.name, is_base: !!isBase,
+        bid: { total, sales_tax: N(t.sales_tax), remodel: N(t.remodel) },
+        base_total: shownBase, deduct_amount: shownBase - total,
+        price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
+        show: isBase ? true : (o.show !== false),
+        system_desc: desc, option_desc: desc, base_desc: baseDesc,
+        show_system: o.show_system !== undefined ? o.show_system : true,
+        show_diff: o.show_diff !== undefined ? o.show_diff : false,
+        notes_auto: Array.isArray(t.notes_auto) ? t.notes_auto : [],
+        notes_manual: (state.tab_notes && state.tab_notes[t.id]) || [],
+      };
+    };
+    const optionTabs = all.filter(t => (!baseTab || t.id !== baseTab.id) &&
+      opts[t.id] && opts[t.id].is_option && opts[t.id].show !== false &&
+      !(!state.base_tab_id && wt === "combo" && t.kind === "base"));
+    const shown = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
+    state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
+    const el = document.querySelector("#tb-total");
+    if (el) el.textContent = fmtUSD(shownBase);
+    TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
+      proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax });
+  }
+
   // Live update the inline $ amounts in the price section. This preview MIRRORS
   // the .docx single_bid block exactly (Base Bid + Remodel Tax = Total), using
   // the same figures + tax wording the generate payload sends, so what the
@@ -214,92 +269,111 @@
     const roomsBlock = document.getElementById("rooms-block");
     const optsPanel  = document.getElementById("options-panel");
     {
-      const rooms = Array.isArray(state.rooms) ? state.rooms : [];
-      const priced = rooms.filter(r => r && r.bid && Number(r.bid.total) > 0);
-      const meta = (r) => {
-        const total = Number(r.bid.total) || 0;
-        const remodel = Number(r.bid.remodel) || 0;
-        const isBase = !!r.is_base;
-        const diff = total - (Number(r.base_total) || 0);
-        return {
-          total, isBase,
-          // Matches backend _build_options tax_phrase (no state name, per Kyle).
-          taxPhrase: remodel > 0
-            ? "(Remodel Tax AND material sales tax INCLUDED)"
-            : "(material sales tax INCLUDED)",
-          heading: isBase ? "Base Bid" : String(r.name || "").replace(/[: ]+$/, ""),
-          sysOn: r.show_system !== false,
-          diffOn: !!r.show_diff,
-          diffText: diff > 0 ? `+${fmtUSD(diff)} more than the base bid`
-                  : diff < 0 ? `${fmtUSD(-diff)} less than the base bid` : "",
-        };
-      };
+      const wt = (state.work_type || "epoxy").toLowerCase();
+      const N = (v) => Number(v) || 0;
+      const floorNoun = wt === "polish" ? "Polished Concrete Flooring"
+                      : wt === "sealer" ? "Sealed Concrete" : "Epoxy flooring";
+      const taxPhrase = (r) => N(r.bid && r.bid.remodel) > 0
+        ? "(Remodel Tax AND material sales tax INCLUDED)"
+        : "(material sales tax INCLUDED)";
 
-      // DOCUMENT preview (read-only) — re-rendered when a control changes.
+      // DOCUMENT preview (read-only) — base as a total line; each option as a total
+      // line or a "($savings) – Deduct VE for … in lieu of <base>" line, mirroring
+      // the .docx {{#room}} block. Re-reads state.rooms fresh on each call.
       function renderRoomsPreview() {
         if (!roomsBlock) return;
-        roomsBlock.innerHTML = !priced.length ? "" :
-          `<p style="margin:10pt 0 4pt;font-weight:bold;">Pricing options (per sheet)</p>` +
-          priced.map((r) => {
-            const m = meta(r);
-            const autoNotes = Array.isArray(r.notes_auto) ? r.notes_auto : [];
-            const manual = Array.isArray(r.notes_manual) ? r.notes_manual : [];
-            let h = `<div style="margin:0 0 10pt;border-left:3px solid #c8102e;padding-left:8px;">`;
-            h += `<p style="margin:0;"><strong>${esc(m.heading)}:</strong></p>`;
-            h += `<p style="margin:0;"><strong>${fmtUSD(m.total)}</strong> – Epoxy flooring as described above <em>${m.taxPhrase}</em></p>`;
-            if (m.sysOn && r.system_desc) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(r.system_desc)}</p>`;
-            if (!m.isBase && m.diffOn && m.diffText) h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(m.diffText)}</p>`;
-            h += autoNotes.concat(manual).map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("");
-            h += `</div>`;
-            return h;
-          }).join("");
+        const rooms = (Array.isArray(state.rooms) ? state.rooms : []).filter(r => r && r.bid && N(r.bid.total) > 0);
+        if (!rooms.length) { roomsBlock.innerHTML = ""; return; }
+        let html = `<p style="margin:10pt 0 4pt;font-weight:bold;">Pricing options</p>`;
+        html += rooms.map((r) => {
+          const desc = r.system_desc || r.option_desc || floorNoun;
+          const autoNotes = Array.isArray(r.notes_auto) ? r.notes_auto : [];
+          const manual = Array.isArray(r.notes_manual) ? r.notes_manual : [];
+          const isDeduct = !r.is_base && r.price_mode === "deduct" && N(r.deduct_amount) > 0;
+          let h = `<div style="margin:0 0 10pt;border-left:3px solid #c8102e;padding-left:8px;">`;
+          if (r.is_base) {
+            h += `<p style="margin:0;"><strong>Base Bid:</strong></p>`;
+            h += `<p style="margin:0;"><strong>${fmtUSD(r.bid.total)}</strong> – ${esc(desc)} as described above <em>${taxPhrase(r)}</em></p>`;
+          } else if (isDeduct) {
+            h += `<p style="margin:0;"><strong>(${fmtUSD(r.deduct_amount)})</strong> – Deduct VE for ${esc(r.option_desc || r.name)}, in lieu of ${esc(r.base_desc || "the base bid")}.</p>`;
+          } else {
+            h += `<p style="margin:0;"><strong>${fmtUSD(r.bid.total)}</strong> – ${esc(desc)} as described above <em>${taxPhrase(r)}</em></p>`;
+          }
+          if (!isDeduct && !r.is_base && r.show_system !== false && r.system_desc)
+            h += `<p style="margin:0 0 0 14px;color:#555;">• ${esc(r.system_desc)}</p>`;
+          h += autoNotes.concat(manual).map(n => `<p style="margin:0 0 0 14px;color:#555;">• ${esc(n)}</p>`).join("");
+          h += `</div>`;
+          return h;
+        }).join("");
+        roomsBlock.innerHTML = html;
       }
       renderRoomsPreview();
 
-      // LEFT controls panel (toggles + notes)
+      // LEFT controls panel: base-bid picker + per-tab option toggles — mirrors the
+      // Estimate screen's #bid-bar (both edit state.base_tab_id + state.tab_opts).
+      // Interactive when we have the per-tab snapshot (state.priced_tabs); otherwise
+      // the panel hides and the preview above stays read-only.
+      const allTabs = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
       if (optsPanel) {
-        if (!priced.length) {
-          optsPanel.hidden = true;
-          optsPanel.innerHTML = "";
-        } else {
+        if (!allTabs.length) { optsPanel.hidden = true; optsPanel.innerHTML = ""; }
+        else {
+          const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
+          const baseId = state.base_tab_id;
+          const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto";
+          const others = allTabs.filter(t => t.id !== baseId &&
+            !(!baseId && wt === "combo" && t.kind === "base"));
           optsPanel.hidden = false;
-          optsPanel.innerHTML =
-            `<h3>Pricing options</h3>` +
-            `<p class="op-hint">Choose what prints for each sheet.</p>` +
-            priced.map((r, i) => {
-              const m = meta(r);
-              const manual = (Array.isArray(r.notes_manual) ? r.notes_manual : []).join("\n");
-              let h = `<div class="op-row">`;
-              h += `<div class="op-name">${esc(m.heading)} <span class="op-price">${fmtUSD(m.total)}</span></div>`;
-              h += `<label><input type="checkbox" class="opt-system" data-room-idx="${i}" ${m.sysOn ? "checked" : ""}> Show system &amp; scope</label>`;
-              if (!m.isBase) h += `<label><input type="checkbox" class="opt-diff" data-room-idx="${i}" ${m.diffOn ? "checked" : ""}> Show difference vs. base bid</label>`;
-              h += `<label class="op-notes">Notes (one per line)` +
-                   `<textarea data-room-idx="${i}" class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
-              h += `</div>`;
-              return h;
-            }).join("");
+          let h = `<h3>Pricing options</h3>` +
+            `<p class="op-hint">Pick the Base bid; mark other sheets as options (show + total / deduct).</p>` +
+            `<label class="op-notes">Base bid<select id="pr-base-select">` +
+            `<option value=""${!baseId ? " selected" : ""}>${esc(autoLabel)}</option>` +
+            allTabs.map(t => `<option value="${esc(t.id)}"${baseId === t.id ? " selected" : ""}>${esc(t.name)} — ${fmtUSD(N(t.total))}</option>`).join("") +
+            `</select></label>`;
+          h += others.map(t => {
+            const o = opts[t.id] || {};
+            const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
+            const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
+            let r = `<div class="op-row" data-id="${esc(t.id)}">`;
+            r += `<div class="op-name">${esc(t.name)} <span class="op-price">${fmtUSD(N(t.total))}</span></div>`;
+            r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
+            r += `<div class="pr-sub"${isOpt ? "" : ' style="display:none"'}>`;
+            r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
+            r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct (VE)</option></select></label>`;
+            r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
+            r += `</div></div>`;
+            return r;
+          }).join("");
+          optsPanel.innerHTML = h;
 
-          const persistOpt = (r) => {
-            if (!state.tab_opts || typeof state.tab_opts !== "object") state.tab_opts = {};
-            if (r.id) state.tab_opts[r.id] = { show_system: r.show_system !== false, show_diff: !!r.show_diff };
-            TW.setState({ rooms: state.rooms, tab_opts: state.tab_opts });
-          };
-          optsPanel.querySelectorAll("textarea.room-notes").forEach(ta => {
-            ta.addEventListener("input", () => {
-              const r = priced[Number(ta.dataset.roomIdx)];
-              if (r) { r.notes_manual = ta.value.split("\n").map(s => s.trim()).filter(Boolean); TW.setState({ rooms: state.rooms }); renderRoomsPreview(); }
-            });
+          const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
+          const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };
+          const baseSel = document.getElementById("pr-base-select");
+          if (baseSel) baseSel.addEventListener("change", () => {
+            state.base_tab_id = baseSel.value || null;
+            if (baseSel.value && opts[baseSel.value]) opts[baseSel.value].is_option = false;
+            applyAndRefresh();
           });
-          optsPanel.querySelectorAll("input.opt-system").forEach(cb => {
-            cb.addEventListener("change", () => {
-              const r = priced[Number(cb.dataset.roomIdx)];
-              if (r) { r.show_system = cb.checked; persistOpt(r); renderRoomsPreview(); }
+          optsPanel.querySelectorAll(".op-row").forEach(row => {
+            const id = row.dataset.id;
+            const sub = row.querySelector(".pr-sub");
+            const iso = row.querySelector(".pr-isopt");
+            if (iso) iso.addEventListener("change", () => {
+              const o = ensureOpt(id); o.is_option = iso.checked;
+              if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+              if (sub) sub.style.display = iso.checked ? "" : "none";
+              applyAndRefresh();
             });
-          });
-          optsPanel.querySelectorAll("input.opt-diff").forEach(cb => {
-            cb.addEventListener("change", () => {
-              const r = priced[Number(cb.dataset.roomIdx)];
-              if (r) { r.show_diff = cb.checked; persistOpt(r); renderRoomsPreview(); }
+            const sh = row.querySelector(".pr-show");
+            if (sh) sh.addEventListener("change", () => { ensureOpt(id).show = sh.checked; applyAndRefresh(); });
+            const md = row.querySelector(".pr-mode");
+            if (md) md.addEventListener("change", () => { ensureOpt(id).price_mode = md.value === "deduct" ? "deduct" : "total"; applyAndRefresh(); });
+            const ta = row.querySelector(".room-notes");
+            if (ta) ta.addEventListener("input", () => {
+              if (!state.tab_notes) state.tab_notes = {};
+              state.tab_notes[id] = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
+              rebuildPricing();       // refresh state.rooms (notes) …
+              renderRoomsPreview();   // … then update ONLY the preview (keep textarea focus)
+              TW.setState({ tab_notes: state.tab_notes });
             });
           });
         }
@@ -342,6 +416,10 @@
         : "") +
       `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
+
+  // Recompute base + options from the per-tab snapshot first (no-op for older
+  // drafts without it), so the price display below reflects the current base.
+  rebuildPricing();
 
   // Lump sum = the estimate sheet's own TOTAL LUMP SUM (D88/D82, snapshotted
   // into state.proposal_lump_sum when leaving the Estimate screen). That cell

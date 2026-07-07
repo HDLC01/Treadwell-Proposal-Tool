@@ -905,15 +905,18 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         return {"ok": False, "error": "Autofill failed. Please try again."}
 
 
-def _fmt_usd(n) -> str:
+def _fmt_usd(n, parens: bool = False) -> str:
     """Currency for proposal price lines: "$4,200" (drop trailing .00), "$4,200.50".
-    Matches the frontend fmtUSD style so price-line/alternate text reads consistently."""
+    Matches the frontend fmtUSD style so price-line/alternate text reads consistently.
+    parens=True wraps the magnitude as a deduct/credit, e.g. "($4,200)" — Treadwell's
+    "($x) – Deduct VE …" convention."""
     try:
         v = float(n)
     except (TypeError, ValueError):
         return ""
-    s = f"${v:,.2f}"
-    return s[:-3] if s.endswith(".00") else s
+    s = f"${abs(v):,.2f}" if parens else f"${v:,.2f}"
+    s = s[:-3] if s.endswith(".00") else s
+    return f"({s})" if parens else s
 
 
 def _ensure_state_name(values: Dict[str, Any]) -> None:
@@ -997,62 +1000,68 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
     return out
 
 
-def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
-    """Per-sheet priced options for the proposal PRICE section ({{#room}} block).
+def _flooring_noun(work_type: str) -> str:
+    """The generic flooring phrase for an option's PRICE line, by work type."""
+    return {
+        "epoxy":  "Epoxy flooring",
+        "combo":  "Epoxy flooring",
+        "polish": "Polished Concrete Flooring",
+        "sealer": "Sealed Concrete",
+        "gyp":    "Gypsum Underlayment System",
+    }.get(str(work_type or "").lower(), "Flooring")
 
-    Each input option (from the estimate side) is
-    {name, is_base, base_total, system_desc, show_system, show_diff,
-     bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
-    Builds, per option with a positive total (base bid first):
-      heading:         "Grooming:"
-      price_formatted: "$8,310"  (the sheet's all-in D88 — tax-inclusive)
-      price_desc:      "Epoxy flooring as described above (<tax phrase>)"
-      notes_joined:    stacked lines = [system/scope if show_system] +
-                       [signed difference vs base bid if show_diff & not base] +
-                       auto notes + manual notes
-    The tax phrase names the Kansas Remodel Tax only when that option's remodel
-    tax > 0. Returns [] when there are no priced options (block then strips)."""
+
+def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epoxy") -> list:
+    """NON-base priced options for the proposal PRICE section ({{#room}} block).
+
+    The base bid is rendered by {{#single_bid}}, so it is EXCLUDED here. Each input
+    option (from the estimate/proposal side) is
+    {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
+     base_desc, system_desc, bid:{total, sales_tax, remodel}, notes_auto, notes_manual}.
+    A shown option (show != False, positive total) renders in one of two modes:
+      • total  → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
+      • deduct → price_formatted "($3,200)"; desc "Deduct VE for <option>, in lieu of
+                 <base>." where savings = base_total − option_total (both tax-inclusive).
+                 A non-positive deduct falls back to total mode.
+    Returns [] when there are no shown options (the block then strips)."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
         except (TypeError, ValueError):
             return 0.0
 
+    noun = _flooring_noun(work_type)
     out = []
     for r in (rooms_in or []):
-        if not isinstance(r, dict):
-            continue
+        if not isinstance(r, dict) or r.get("is_base"):
+            continue                                  # base is rendered by single_bid
+        if not r.get("show", True):
+            continue                                  # estimator hid this option
         bid = r.get("bid") or {}
         total = num(bid.get("total"))
-        if total <= 0:                              # un-snapshotted / empty sheet
+        if total <= 0:                                # un-snapshotted / empty sheet
             continue
-        is_base = bool(r.get("is_base"))
-        remodel = num(bid.get("remodel"))
-        # Remodel tax is labeled "Remodel Tax" (no state name, per Kyle).
-        tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
-                      if remodel > 0 else "(material sales tax INCLUDED)")
-        name = "Base Bid" if is_base else str(r.get("name") or "").strip().rstrip(": ").strip()
+        option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
+        savings = num(r.get("base_total")) - total
 
-        lines: list[str] = []
-        # System / scope line (each room can carry its own system) — toggleable.
-        system_desc = str(r.get("system_desc") or "").strip()
-        if r.get("show_system", True) and system_desc:
-            lines.append(system_desc)
-        # Signed difference vs. the base bid (copies only) — toggleable.
-        if not is_base and r.get("show_diff"):
-            diff = total - num(r.get("base_total"))
-            if diff > 0:
-                lines.append(f"+{_fmt_usd(diff)} more than the base bid")
-            elif diff < 0:
-                lines.append(f"{_fmt_usd(-diff)} less than the base bid")
-        lines += [str(n).strip()
-                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
-                  if str(n).strip()]
+        if str(r.get("price_mode")) == "deduct" and savings > 0:
+            base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
+            price_formatted = _fmt_usd(savings, parens=True)
+            price_desc = f"Deduct VE for {option_desc or noun}, in lieu of {base_desc}."
+        else:                                         # total mode (also the deduct fallback)
+            remodel = num(bid.get("remodel"))
+            tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
+                          if remodel > 0 else "(material sales tax INCLUDED)")
+            price_formatted = _fmt_usd(total)
+            price_desc = f"{option_desc or noun} as described above {tax_phrase}"
 
+        lines = [str(n).strip()
+                 for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
+                 if str(n).strip()]
         out.append({
-            "heading": (name + ":") if name else "",
-            "price_formatted": _fmt_usd(total),
-            "price_desc": "Epoxy flooring as described above " + tax_phrase,
+            "heading": "",
+            "price_formatted": price_formatted,
+            "price_desc": price_desc,
             "notes_joined": "\n".join(lines),
         })
     return out
@@ -1169,6 +1178,25 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     else:
         values["site_visit_phrase"] = f"per site visit on {_sv}"
 
+    # When the estimator marked ≥1 shown option, the proposal shows the base via
+    # {{#single_bid}} and each option relative to it. Force the displayed base total
+    # from the base room so the printed base EQUALS the deduct denominator
+    # (savings = base_total − option_total). Runs before the PRICE layout so the
+    # tax block below derives base_bid_formatted from the corrected total.
+    _base_room = next((r for r in (payload.rooms or [])
+                       if isinstance(r, dict) and r.get("is_base")), None)
+    _has_shown_options = any(
+        isinstance(r, dict) and not r.get("is_base") and r.get("show", True)
+        and float((r.get("bid") or {}).get("total") or 0) > 0
+        for r in (payload.rooms or []))
+    if _base_room and _has_shown_options:
+        try:
+            _btf = _fmt_usd(float((_base_room.get("bid") or {}).get("total")))
+            if _btf:
+                values["total_formatted"] = _btf
+        except (TypeError, ValueError):
+            pass
+
     # PRICE layout. Default ("INCLUDED") = a single all-in line:
     #   "$Total – … (material sales tax INCLUDED)"  (remodel folded into the total)
     # "Sales tax broken out" itemizes Base + Material Sales Tax + Remodel + Total
@@ -1252,13 +1280,27 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
-    # Per-sheet priced options -> {{#room}} proposal block (base bid + each copy,
-    # with toggleable system line + signed difference vs. the base bid).
-    rooms_arg = _build_options(payload.rooms, values)
+    # Non-base priced options. Render them through the existing {{#price_line}}
+    # block (which sits under the "Options:" heading, right after the base bid),
+    # so the Direct templates need NO structural change: each option is
+    # "$8,310 – <system> as described above (…)" or "($6,000) – Deduct VE … in
+    # lieu of <base>". Any per-option notes fold inline. The base bid itself shows
+    # via {{#single_bid}}. (GC/Gyp templates lack {{#price_line}} — Phase 2.)
+    _options = _build_options(payload.rooms, values, payload.work_type)
+    _option_lines = []
+    for _o in _options:
+        _label = _o["price_desc"]
+        if _o.get("notes_joined"):
+            _label += " — " + _o["notes_joined"].replace("\n", "; ")
+        _option_lines.append({"label": _label, "amount_formatted": _o["price_formatted"]})
+    # Options first, then the estimator's manual "Add for" price lines.
+    price_line_dicts = _option_lines + price_line_dicts
 
-    # "Options:" label only prints when there ARE options (structured price lines
-    # or a recommended alternate); otherwise it's stripped (Kyle: no empty Options).
-    _has_options = bool(price_line_dicts or alternates)
+    # The {{#room}} block is unused now (options ride the price_line block) — strip it.
+    rooms_arg = []
+
+    # "Options:" label prints when there ARE option lines; else it's stripped.
+    _has_options = bool(price_line_dicts)
 
     # Fill estimate workbook
     try:
@@ -1290,9 +1332,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             systems=systems_arg,
             remodel=_remodel_lines,
             rooms=rooms_arg,
-            # rooms present → suppress the single Base-Bid/Total layout (the room
-            # options ARE the price); absent → default (single-bid layout shown).
-            single_bid=([] if rooms_arg else None),
+            # Base bid ALWAYS shows via {{#single_bid}}; the {{#room}} options render
+            # below it (as totals or deducts). No suppression.
+            single_bid=None,
             # Editable NOTES (estimator's edits, else standard boilerplate).
             notes=_notes_for(payload.work_type, payload.notes),
             # PRICE layout: itemize tax lines only when "broken out"; show the

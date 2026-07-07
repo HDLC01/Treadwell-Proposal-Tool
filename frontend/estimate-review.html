@@ -149,29 +149,28 @@
   .xl-viewport::-webkit-scrollbar-thumb:hover { background: #9c9c9c; }
   .xl-viewport::-webkit-scrollbar-corner  { background: #f3f3f3; }
 
-  /* Collapsible Computed Bid panel — keeps the worksheet viewport large.
-     When collapsed only the red header shows; the headline numbers (Total
-     Lump Sum, Material, Labor, Tooling) stay visible in the total-bar above. */
-  /* Computed Bid is a flex column (header + scrollable body) with a USER-
-     DRAGGABLE height via the #cb-resizer handle — drag up = bigger bid / smaller
-     worksheet, drag down = the reverse. The body scrolls so nothing runs off. */
-  /* Collapsed: panel is just its header (flex:0 0 auto) and the worksheet fills
-     the window. Expanded: the panel FLEXES to fill whatever's left after the
-     user-sized worksheet, and its body scrolls — so the panel can never run
-     off-screen no matter how much content it holds. The resizer sizes the
-     WORKSHEET (JS sets .xl-viewport height); the panel takes the remainder. */
-  #computed-bid { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
-  #computed-bid:not(.cb-collapsed) { flex: 1 1 auto; }
-  #cb-header { flex: 0 0 auto; user-select: none; }
-  #cb-header:hover { filter: brightness(1.07); }
-  #cb-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
-  #computed-bid.cb-collapsed #cb-body { display: none; }
-  /* Drag handle between the worksheet and the Computed Bid panel */
-  #cb-resizer { flex: 0 0 auto; height: 10px; cursor: row-resize; position: relative; touch-action: none;
-    background: var(--surface-dim, #e9e8e7); border-top: 1px solid rgba(0,0,0,.12); }
-  #cb-resizer::before { content: ""; position: absolute; left: 50%; top: 3px;
-    width: 46px; height: 4px; transform: translateX(-50%); border-radius: 3px; background: rgba(0,0,0,.30); }
-  #cb-resizer:hover::before { background: var(--treadwell-red, #c0392b); }
+  /* ─── Bid options bar: Base-bid picker + per-tab options + price lines ───
+     Sits just above the worksheet. The estimator picks which tab is the Base
+     bid, marks the other tabs as proposal options (show/hide + total-or-deduct),
+     and lists proposal price lines. Bounded height so it never buries the sheet. */
+  .bid-bar { flex: 0 0 auto; background: var(--surface-low, #f3f2f1);
+    border: 1px solid var(--surface-dim); border-top: none;
+    padding: 7px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 7px;
+    max-height: 30vh; overflow-y: auto; }
+  .bid-bar .bb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .bid-bar .bb-lbl { font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    font-size: 11px; color: var(--ink-variant); }
+  .bid-bar select, .bid-bar input { font-size: 12.5px; padding: 4px 6px;
+    border: 1px solid var(--surface-dim); border-radius: 4px; }
+  .bid-bar #base-bid-select { min-width: 220px; }
+  .bid-bar .bb-hint { font-size: 11.5px; color: var(--ink-variant, #888); }
+  .bb-opt { display: inline-flex; align-items: center; gap: 8px; padding: 3px 9px;
+    border: 1px solid var(--surface-dim); border-radius: 6px; background: var(--surface-lowest, #fff); }
+  .bb-opt .bb-name { font-weight: 600; }
+  .bb-opt .bb-price { color: var(--ink-variant); font-variant-numeric: tabular-nums; }
+  .bb-opt .bb-sub { display: inline-flex; align-items: center; gap: 8px; }
+  .bb-opt.bb-off .bb-sub { display: none; }
+  .bb-section-title { font-weight: 700; font-size: 12.5px; }
 
   /* Tab bar — always show horizontal scrollbar */
   .xl-tab-bar.full {
@@ -637,6 +636,30 @@
   </div>
 
   <div class="xl-tab-bar full" id="tab-bar"></div>
+
+  <!-- Bid options: pick the Base bid, mark other tabs as proposal options
+       (show/hide + total-or-deduct), and list proposal price lines. -->
+  <div class="bid-bar" id="bid-bar">
+    <div class="bb-row">
+      <label class="bb-lbl" for="base-bid-select">Base bid</label>
+      <select id="base-bid-select"></select>
+      <span class="bb-hint" id="bid-options-hint">Mark other tabs as options below.</span>
+    </div>
+    <div class="bb-row" id="bid-options-list"></div>
+
+    <!-- Proposal price lines: options / unit prices shown UNDER PRICE on the
+         proposal (e.g. "$4,200 – Onsite mockup"). Display-only. -->
+    <div class="bb-row" style="justify-content:space-between;">
+      <span class="bb-section-title">Proposal price lines
+        <span class="bb-hint">options &amp; unit prices listed under Price on the proposal</span></span>
+      <button type="button" id="cb-add-priceline" style="font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
+    </div>
+    <div id="cb-pricelines-head" style="display:none;grid-template-columns:1fr 120px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
+      <span>Label</span><span style="text-align:right;">Amount&nbsp;$</span><span></span>
+    </div>
+    <div id="cb-pricelines"></div>
+  </div>
+
   <div class="xl-viewport">
     <div id="sheet-grid" class="sheet-loading">Loading sheet…</div>
   </div>
@@ -674,73 +697,6 @@
       <span class="tb-label">Total Lump Sum</span>
       <span class="tb-value" id="tb-total">$—</span>
     </div>
-  </div>
-
-  <!-- Drag handle: resize the worksheet vs the Computed Bid panel -->
-  <div id="cb-resizer" title="Drag to resize the worksheet / bid panel"></div>
-
-  <!-- Tool-computed bid from the extracted 5.7 recipes: multi-system,
-       bulk-aware, full Total Base Bid — computed server-side so it never
-       shows #NAME? the way the in-browser sheet engine does. -->
-  <div id="computed-bid" style="margin:6px 0 0;border:2px solid var(--treadwell-red,#c0392b);border-radius:8px;overflow:hidden;">
-    <div id="cb-header" style="display:flex;align-items:center;gap:18px;background:var(--treadwell-red,#c0392b);color:#fff;padding:8px 14px;cursor:pointer;" title="Show / hide the bid breakdown">
-      <strong style="font-size:14px;">Reference Bid — pricing engine</strong>
-      <span style="font-size:11.5px;opacity:.85;">cross-check only — the proposal uses the sheet's Total Lump Sum above</span>
-      <label style="font-size:13px;cursor:pointer;display:flex;gap:5px;align-items:center;" id="cb-bulk-label">
-        <input type="checkbox" id="cb-bulk"> Bulk discount
-      </label>
-      <span id="cb-status" style="font-size:12px;opacity:.85;"></span>
-      <span id="cb-caret" style="margin-left:auto;font-size:12px;font-weight:700;opacity:.95;">▾ Hide</span>
-    </div>
-    <div id="cb-body">
-    <div id="cb-grid" style="padding:6px 14px 12px;font-size:13px;"></div>
-
-    <!-- Extra materials: manual qty x unit-price lines (the sheet's spare
-         "=B*C" rows like Super Stick / Floor Graphic), appendable for
-         edge-case materials. These flow into Material Total -> bid. -->
-    <div style="border-top:1px solid rgba(0,0,0,.1);padding:8px 14px 12px;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-        <strong style="font-size:12.5px;">Extra materials</strong>
-        <span style="font-size:11.5px;color:var(--ink-variant,#888);">manual qty × unit price — Super Stick, Floor Graphic, edge-case adds</span>
-        <button type="button" id="cb-add-extra" style="margin-left:auto;font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
-      </div>
-      <div id="cb-extras-head" style="display:none;grid-template-columns:1fr 70px 90px 90px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
-        <span>Material</span><span style="text-align:right;">Qty</span><span style="text-align:right;">Unit $</span><span style="text-align:right;">Amount</span><span></span>
-      </div>
-      <div id="cb-extras"></div>
-      <div id="cb-extras-note" style="font-size:11.5px;color:var(--treadwell-red,#c0392b);margin-top:5px;display:none;"></div>
-    </div>
-
-    <!-- Proposal price lines: options / unit prices shown UNDER PRICE on the
-         proposal (e.g. "$4,200 – Onsite mockup"). Display-only — these do NOT
-         change the computed bid. -->
-    <div style="border-top:1px solid rgba(0,0,0,.1);padding:8px 14px 12px;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
-        <strong style="font-size:12.5px;">Proposal price lines</strong>
-        <span style="font-size:11.5px;color:var(--ink-variant,#888);">options &amp; unit prices listed under Price on the proposal</span>
-        <button type="button" id="cb-add-priceline" style="margin-left:auto;font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
-      </div>
-      <div id="cb-pricelines-head" style="display:none;grid-template-columns:1fr 120px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
-        <span>Label</span><span style="text-align:right;">Amount&nbsp;$</span><span></span>
-      </div>
-      <div id="cb-pricelines"></div>
-    </div>
-
-    <!-- Alternate (recommended) system: a second, independent bid priced with
-         the same tax/labor as the base, shown beside the Base Bid on the proposal. -->
-    <div style="border-top:1px solid rgba(0,0,0,.1);padding:8px 14px 12px;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
-        <strong style="font-size:12.5px;">Alternate (recommended) system</strong>
-        <span style="font-size:11.5px;color:var(--ink-variant,#888);">optional — adds a 2nd priced option to the proposal</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 90px;gap:8px;align-items:center;">
-        <select id="alt-system" style="font-size:12.5px;padding:4px 6px;"><option value="">— none —</option></select>
-        <input type="number" id="alt-sf" placeholder="SF" style="font-size:12.5px;padding:4px 6px;text-align:right;">
-      </div>
-      <input type="text" id="alt-label" placeholder="Proposal label (e.g. 3/16&quot; Urethane Cement)" style="width:100%;font-size:12.5px;padding:4px 6px;margin-top:6px;box-sizing:border-box;">
-      <div id="alt-result" style="font-size:12.5px;margin-top:6px;color:var(--ink-variant,#888);"></div>
-    </div>
-    </div><!-- /#cb-body -->
   </div>
 
   <form id="estimate-form" style="display:none;"></form>
