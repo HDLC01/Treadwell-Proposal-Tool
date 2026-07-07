@@ -394,72 +394,67 @@ const _escBB = (s) => String(s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
-// Render the Base-bid dropdown + per-tab option chips into #bid-bar.
+// Render the per-sheet Base-bid toggles + option chips into #bid-bar. Every priced
+// tab is a chip with a "Base bid" radio; non-base chips carry the option (show +
+// total/deduct) controls. Plus an Auto/combined chip.
 function renderBidOptions() {
-  const sel = document.getElementById("base-bid-select");
   const list = document.getElementById("bid-options-list");
-  if (!sel || !list) return;
+  if (!list) return;
   const wt = (state.work_type || "epoxy").toLowerCase();
   const priced = pricedTabs();
-  // Only clear an explicit base that no longer points to a priced tab (deletions
-  // are handled in deleteTab; this just guards a stale id from an old draft).
-  // Never overwrite base_tab_id with the auto-derived default — a null base means
-  // "auto", which for combo is Epoxy + Polish combined (not epoxy-only).
+  // Guard a stale explicit base from an old draft; never overwrite base_tab_id with
+  // the auto-derived default (null base = auto; for combo that's Epoxy + Polish).
   if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
-  const base = resolveBaseTab();   // for display + option exclusion
-  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)"
-                                   : "Auto — " + (base ? labelFor(base.id) : "—");
-  sel.innerHTML = `<option value=""${!state.base_tab_id ? " selected" : ""}>${_escBB(autoLabel)}</option>` +
-    priced.map(t => {
-      const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
-      return `<option value="${_escBB(t.id)}"${state.base_tab_id === t.id ? " selected" : ""}>` +
-             `${_escBB(labelFor(t.id))}${tot ? " — " + _moneyBB(tot) : ""}</option>`;
-    }).join("");
-  // Option candidates = priced tabs that aren't the base. In combined (combo,
-  // no explicit base) mode the base-kind Epoxy + Polish tabs are both part of
-  // the base, so only copies/extra tabs can be options.
-  const others = priced.filter(t => {
-    if (base && t.id === base.id) return false;
-    if (!state.base_tab_id && wt === "combo" && t.kind === "base") return false;
-    return true;
-  });
-  const hint = document.getElementById("bid-options-hint");
-  if (hint) hint.style.display = others.length ? "none" : "";
-  list.innerHTML = others.map(t => {
+  const baseId = state.base_tab_id;
+  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
+  const isPartOfAutoBase = (t) => !baseId && t.kind === "base";
+  let html = `<span class="bb-opt"><label class="bb-baselbl"><input type="radio" name="bb-base" class="bb-base" value=""${!baseId ? " checked" : ""}> <span class="bb-name">${_escBB(autoLabel)}</span></label></span>`;
+  html += priced.map(t => {
     const o = state.tab_opts[t.id] || {};
+    const isBase = baseId === t.id;
     const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
     const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
-    return `<span class="bb-opt${isOpt ? "" : " bb-off"}" data-id="${_escBB(t.id)}">
-      <label><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> <span class="bb-name">${_escBB(labelFor(t.id))}</span></label>
-      <span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>
-      <span class="bb-sub">
-        <label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show</label>
-        <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select>
-      </span></span>`;
+    let inner = `<label class="bb-baselbl"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(t.id)}"${isBase ? " checked" : ""}> <span class="bb-name">${_escBB(labelFor(t.id))}</span></label>` +
+                `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
+    if (!isBase && !isPartOfAutoBase(t)) {
+      inner += `<span class="bb-sub">` +
+        `<label><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> option</label>` +
+        `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
+        `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show</label>` +
+        `<select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select>` +
+        `</span></span>`;
+    }
+    return `<span class="bb-opt" data-id="${_escBB(t.id)}">${inner}</span>`;
   }).join("");
+  list.innerHTML = html;
+  const hint = document.getElementById("bid-options-hint");
+  if (hint) hint.style.display = priced.length > 1 ? "none" : "";
 }
 
-// Delegated listeners on #bid-bar (static elements — attach once).
+// Delegated listeners on #bid-bar (static container — attach once).
 function wireBidBar() {
-  const sel = document.getElementById("base-bid-select");
   const list = document.getElementById("bid-options-list");
-  if (sel) sel.addEventListener("change", () => {
-    state.base_tab_id = sel.value || null;
-    if (state.tab_opts[sel.value]) state.tab_opts[sel.value].is_option = false;  // base can't also be an option
-    renderBidOptions();
-    persistBidOptions();
-  });
-  if (list) list.addEventListener("change", (e) => {
-    const wrap = e.target.closest(".bb-opt"); if (!wrap) return;
+  if (!list) return;
+  list.addEventListener("change", (e) => {
+    const el = e.target;
+    if (el.classList.contains("bb-base")) {          // Base-bid radio toggled
+      if (!el.checked) return;
+      state.base_tab_id = el.value || null;
+      if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
+      renderBidOptions();
+      persistBidOptions();
+      return;
+    }
+    const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;
     const o = ensureOpt(wrap.dataset.id);
-    if (e.target.classList.contains("bb-isopt")) {
-      o.is_option = e.target.checked;
+    if (el.classList.contains("bb-isopt")) {
+      o.is_option = el.checked;
       if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
-      wrap.classList.toggle("bb-off", !o.is_option);
-    } else if (e.target.classList.contains("bb-show")) {
-      o.show = e.target.checked;
-    } else if (e.target.classList.contains("bb-mode")) {
-      o.price_mode = e.target.value === "deduct" ? "deduct" : "total";
+      const sub = wrap.querySelector(".bb-optsub"); if (sub) sub.style.display = el.checked ? "" : "none";
+    } else if (el.classList.contains("bb-show")) {
+      o.show = el.checked;
+    } else if (el.classList.contains("bb-mode")) {
+      o.price_mode = el.value === "deduct" ? "deduct" : "total";
     }
     persistBidOptions();
   });

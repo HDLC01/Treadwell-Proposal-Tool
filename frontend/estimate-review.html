@@ -162,14 +162,14 @@
     font-size: 11px; color: var(--ink-variant); }
   .bid-bar select, .bid-bar input { font-size: 12.5px; padding: 4px 6px;
     border: 1px solid var(--surface-dim); border-radius: 4px; }
-  .bid-bar #base-bid-select { min-width: 220px; }
   .bid-bar .bb-hint { font-size: 11.5px; color: var(--ink-variant, #888); }
   .bb-opt { display: inline-flex; align-items: center; gap: 8px; padding: 3px 9px;
     border: 1px solid var(--surface-dim); border-radius: 6px; background: var(--surface-lowest, #fff); }
   .bb-opt .bb-name { font-weight: 600; }
+  .bb-opt .bb-baselbl { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
   .bb-opt .bb-price { color: var(--ink-variant); font-variant-numeric: tabular-nums; }
-  .bb-opt .bb-sub { display: inline-flex; align-items: center; gap: 8px; }
-  .bb-opt.bb-off .bb-sub { display: none; }
+  .bb-opt .bb-sub, .bb-opt .bb-optsub { display: inline-flex; align-items: center; gap: 8px; }
+  .bb-opt label { margin: 0; }
   .bb-section-title { font-weight: 700; font-size: 12.5px; }
 
   /* Tab bar — always show horizontal scrollbar */
@@ -641,9 +641,8 @@
        (show/hide + total-or-deduct), and list proposal price lines. -->
   <div class="bid-bar" id="bid-bar">
     <div class="bb-row">
-      <label class="bb-lbl" for="base-bid-select">Base bid</label>
-      <select id="base-bid-select"></select>
-      <span class="bb-hint" id="bid-options-hint">Mark other tabs as options below.</span>
+      <span class="bb-lbl">Base bid &amp; options</span>
+      <span class="bb-hint" id="bid-options-hint">Turn on which sheet is the base; mark the others as options.</span>
     </div>
     <div class="bb-row" id="bid-options-list"></div>
 
