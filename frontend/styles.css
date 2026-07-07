@@ -841,7 +841,12 @@ button {
   background: #fff; border: 1px solid #ccc; border-radius: 8px;
   padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
   z-index: 40; font-size: 13px; color: #222;
+  transition: left .2s ease;
 }
+/* The portal chrome (auth.js) opens a fixed 240px workspace nav and shifts
+   the page body right with margin-left — but margin can't move a fixed
+   element, so without this the nav sits ON TOP of the panel. Track it. */
+html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .fields-panel h3 { margin: 0 0 2px; font-size: 13px; color: #9e001f; }
 .fields-panel .op-hint { margin: 0 0 10px; font-size: 11px; color: #777; }
 .fields-panel label.fp-label {
