@@ -407,7 +407,14 @@ function renderBidOptions() {
   if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
   const baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
-  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)"
+  // The combined chip names the ACTUAL base sheets — renamed tabs read as
+  // "Grooming Room + Lobby (combined)", not a hardcoded "Epoxy + Polish".
+  const comboLabel = () => {
+    const bases = priced.filter(t => t.kind === "base");
+    const names = bases.length ? bases.map(t => labelFor(t.id)) : ["Epoxy", "Polish"];
+    return names.join(" + ") + " (combined)";
+  };
+  const autoLabel = wt === "combo" ? comboLabel()
                                    : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
   const isPartOfAutoBase = (t) => !baseId && t.kind === "base";
   const baseRadio = (val, checked, label) =>
