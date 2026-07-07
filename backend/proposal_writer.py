@@ -181,6 +181,33 @@ def _p_text(p_elem) -> str:
     return "".join(t.text or "" for t in p_elem.iter(qn("w:t")))
 
 
+def _own_text(p_elem) -> str:
+    """Like `_p_text`, but STOPS at a nested `<w:txbxContent>` — a paragraph
+    that merely anchors a floating text box (the drawing lives in one of its
+    runs) must not report that box's entire contents as its own text, since
+    the box's inner paragraphs are walked and reported independently (see
+    `_iter_body_editable`). Without this, a top-level anchor paragraph's
+    `_p_text` would recurse into every nested `<w:t>` — including the whole
+    text box's worth of paragraphs concatenated into one string — corrupting
+    both the editor's `text` field for that paragraph and any block-marker
+    detection run against it. A paragraph with no nested text box behaves
+    identically to `_p_text`.
+    """
+    out = []
+    txbx_tag = qn("w:txbxContent")
+    for t in p_elem.iter(qn("w:t")):
+        nested = False
+        anc = t.getparent()
+        while anc is not None and anc is not p_elem:
+            if anc.tag == txbx_tag:
+                nested = True
+                break
+            anc = anc.getparent()
+        if not nested:
+            out.append(t.text or "")
+    return "".join(out)
+
+
 def _set_t_multiline(t, text: str) -> None:
     """Write `text` into a <w:t>, rendering embedded newlines as <w:br/> line
     breaks within the same run (so stacked per-item notes share one bullet).
@@ -415,6 +442,195 @@ def _expand_all_blocks(d: Document, block_lists: Mapping[str, list]) -> int:
     return total
 
 
+# ─── Paragraph-editor id mapping (Proposal Review's document editor) ──────
+# The web editor shows the estimator the REAL template — every paragraph, in
+# document order, as an editable block — instead of the old hand-built HTML
+# approximation. `iter_editable_blocks` is the ONE walk shared by:
+#   1. `GET /api/proposal-template` (main.py)      — builds the JSON the
+#      editor renders.
+#   2. `_apply_paragraph_overrides` (below)         — maps an edited block's
+#      `id` back to its paragraph when generating.
+# Both MUST see the exact same ids for the exact same document, or an edit
+# could silently land on the wrong paragraph. That's only guaranteed if both
+# walk the PRISTINE template (before Phase 1's block expansion inserts/
+# removes paragraphs and shifts every id after it) — see the call site in
+# `fill_proposal` for where overrides are applied for that reason.
+_MC_FALLBACK_TAG = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+def _is_fallback_paragraph(p_elem) -> bool:
+    """True for a <w:p> living inside the legacy VML `mc:Fallback` branch of a
+    floating text box/shape — a byte-for-byte duplicate of the modern
+    DrawingML version that `_iter_all_paragraphs` also visits (so old-Word/
+    VML readers get filled tokens too). The editor must show ONE copy of each
+    paragraph, not two, so every id-based walk below skips these."""
+    return any(True for _ in p_elem.iterancestors(_MC_FALLBACK_TAG))
+
+
+def _iter_body_editable(d: Document):
+    """Yield `(p_elem, kind, in_txbx)` for every REAL (non-Fallback) paragraph
+    in the document BODY — top-level paragraphs (`kind="p"`), table-cell
+    paragraphs (`kind="cell"`, recursing into nested tables), and floating
+    text-box paragraphs (`kind="p"`, `in_txbx=True`). Headers/footers are
+    intentionally excluded (the editor is scoped to the body; none of Kyle's
+    templates put tokens there today — see `_iter_all_paragraphs`, which
+    still covers them for the flat fill pass).
+
+    Text boxes carry almost all of the customer-facing proposal copy (job
+    name, WORK, PRICE, NOTES, SIGN) — Kyle's templates lay the whole front
+    page out as floating shapes over blank body paragraphs — so skipping them
+    would leave the editor showing nothing but the Terms & Conditions
+    boilerplate at the bottom of the document. `in_txbx` lets the editor
+    show that front-page content FIRST on screen (how the printed page
+    reads) even though this walk — which defines the ids and therefore can
+    never be reordered — visits body paragraphs before text boxes.
+    """
+    for p in d.paragraphs:
+        if not _is_fallback_paragraph(p._p):
+            yield p._p, "p", False
+
+    def walk_table(t):
+        for row in t.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    if not _is_fallback_paragraph(p._p):
+                        yield p._p, "cell", False
+                for nested in cell.tables:
+                    yield from walk_table(nested)
+
+    for table in d.tables:
+        yield from walk_table(table)
+
+    body = d.element.body
+    for txbx in body.iter(qn("w:txbxContent")):
+        if _is_fallback_paragraph(txbx):
+            continue
+        for p_elem in txbx.iter(qn("w:p")):
+            if not _is_fallback_paragraph(p_elem):
+                yield p_elem, "p", True
+
+
+def iter_editable_blocks(d: Document):
+    """THE shared id-mapping walk (see module note above). Yields
+    `(id, kind, p_elem, in_block, text, in_txbx)` for every editable
+    paragraph in `d`:
+
+      - `id`       — 0-based index in THIS walk's order (stable as long as
+                     the document hasn't been mutated by block expansion).
+      - `kind`     — "p" or "cell" (see `_iter_body_editable`).
+      - `p_elem`   — the raw `<w:p>` lxml element.
+      - `in_block` — the name of the innermost `{{#name}}…{{/name}}` region
+                     this paragraph currently sits in (the start/end marker
+                     paragraphs themselves count as "in" that block), else
+                     `None`. Blocks nest lexically as flat marker pairs among
+                     SIBLING paragraphs within one container (see the block-
+                     engine docstring above `_expand_named_block`) — e.g.
+                     `{{#tax_breakout}}`/`{{#remodel}}` sit inside
+                     `{{#single_bid}}` — so a simple stack reproduces it.
+      - `text`     — this paragraph's OWN text (`_own_text`, NOT `_p_text` —
+                     see that helper for why a naive recursive join would
+                     duplicate a nested text box's content onto its anchor
+                     paragraph). Block-marker detection uses this same value,
+                     so it's computed once and handed to the caller instead
+                     of making every caller re-derive it (and risk using the
+                     wrong helper).
+      - `in_txbx`  — True for floating-text-box paragraphs (the front page);
+                     display ordering only, never id math.
+    """
+    stack: list[str] = []
+    idx = 0
+    for p_elem, kind, in_txbx in _iter_body_editable(d):
+        txt = _own_text(p_elem)
+        start_m = BLOCK_START_RE.search(txt)
+        if start_m:
+            stack.append(start_m.group(1))
+        in_block = stack[-1] if stack else None
+        end_m = BLOCK_END_RE.search(txt)
+        if end_m and stack and stack[-1] == end_m.group(1):
+            stack.pop()
+        yield idx, kind, p_elem, in_block, txt, in_txbx
+        idx += 1
+
+
+def _set_paragraph_text(p_elem, text: str) -> None:
+    """Replace a paragraph's visible text with `text` IN PLACE, preserving the
+    paragraph's formatting by keeping its FIRST run (and that run's `<w:rPr>`
+    — font/bold/size/color) and writing the new text into it; every other run
+    is dropped. Embedded newlines render as `<w:br/>` (via `_write_t_text`,
+    the same helper the block engine uses for multi-line item notes).
+
+    A paragraph with no runs at all (a blank spacer line) gets a fresh run
+    created for it so non-empty override text still renders. An override that
+    blanks a paragraph (`text == ""`) is honored — the paragraph keeps its
+    (now textless) first run so its formatting/paragraph-mark survives.
+    """
+    runs = p_elem.findall(qn("w:r"))
+    if not runs:
+        r = OxmlElement("w:r")
+        p_elem.append(r)
+        runs = [r]
+    first = runs[0]
+    for extra in runs[1:]:
+        p_elem.remove(extra)
+    # A run can hold several <w:t>/<w:br>/<w:tab> children (e.g. a value we
+    # previously wrote with embedded line breaks) — collapse to a single
+    # fresh <w:t> so re-overriding a multi-line paragraph doesn't leave stale
+    # break/text nodes behind.
+    for child in list(first):
+        if child.tag in (qn("w:t"), qn("w:br"), qn("w:tab")):
+            first.remove(child)
+    t = OxmlElement("w:t")
+    first.append(t)
+    _write_t_text(t, text)
+
+
+def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
+    """Apply the web editor's `paragraph_overrides` to the PRISTINE template —
+    i.e. this MUST run before Phase 1 (block expansion) in `fill_proposal`,
+    because block expansion inserts/removes paragraphs and would shift every
+    id after the touched block, desyncing them from what the editor showed.
+
+    Each override's `text` is whatever the estimator left in that block on
+    the page — already-resolved values, not `{{tokens}}` — EXCEPT any
+    `{{token}}` they deliberately left in place, which still gets filled by
+    the normal flat substitution pass that runs after this (Phase 2), since
+    that pass re-scans every paragraph regardless of whether it was just
+    overridden.
+
+    Defensive by design — never raises on bad input, so a malformed payload
+    can't 500 `/api/generate`:
+      - non-dict entries, non-int ids, or non-str text are skipped;
+      - an id that doesn't exist in this document is skipped (no-op);
+      - an id whose paragraph is inside a repeatable block (`in_block` is not
+        None) is skipped — that content is pricing-engine/template owned and
+        is never user-overridable, regardless of what the client sends.
+
+    Returns the number of overrides actually applied.
+    """
+    by_id: dict[int, str] = {}
+    for o in overrides or []:
+        if not isinstance(o, dict):
+            continue
+        pid = o.get("id")
+        if isinstance(pid, bool) or not isinstance(pid, int):
+            continue
+        text = o.get("text")
+        if not isinstance(text, str):
+            continue
+        by_id[pid] = text   # last one wins on a duplicate id
+
+    if not by_id:
+        return 0
+
+    applied = 0
+    for idx, _kind, p_elem, in_block, _text, _txbx in iter_editable_blocks(d):
+        if idx not in by_id or in_block is not None:
+            continue
+        _set_paragraph_text(p_elem, by_id[idx])
+        applied += 1
+    return applied
+
+
 def fill_proposal(
     *,
     work_type: str,
@@ -429,6 +645,7 @@ def fill_proposal(
     notes: list[Mapping[str, Any]] | None = None,
     tax_breakout: bool = False,
     has_options: bool = False,
+    paragraph_overrides: list[Mapping[str, Any]] | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -444,6 +661,10 @@ def fill_proposal(
     `price_line`/`alternate` always run so their markers are stripped (zero
     rows) when empty — never left as literal text. A template with no marker,
     and the default args, is 100% backward-compatible with v1 fills.
+
+    `paragraph_overrides` — free-text edits from the Proposal Review document
+    editor (Phase 0, runs BEFORE block expansion — see `_apply_paragraph_overrides`
+    for why ids must be resolved against the pristine template).
     """
     template_path = pick_template(work_type, audience)
     log.info("Filling proposal: work_type=%s audience=%s template=%s systems=%d price_lines=%d alt=%d",
@@ -456,6 +677,17 @@ def fill_proposal(
         raise FileNotFoundError(f"Proposal template not found: {template_path}")
 
     d = docx.Document(str(template_path))
+
+    # Phase 0 — apply the document editor's paragraph overrides FIRST, against
+    # the pristine (just-opened, unexpanded) template — the same document
+    # `iter_editable_blocks` walked to hand the editor its ids. Doing this
+    # before Phase 1 is load-bearing: block expansion inserts/removes
+    # paragraphs, which would shift ids computed afterward out from under the
+    # editor's.
+    if paragraph_overrides:
+        n_over = _apply_paragraph_overrides(d, paragraph_overrides)
+        if n_over:
+            log.info("Applied %d paragraph override(s)", n_over)
 
     # Phase 1 — expand repeatable blocks. All three always run so their markers
     # are stripped (zero rows when empty) rather than left as literal {{#…}} text

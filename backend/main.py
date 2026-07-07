@@ -48,6 +48,8 @@ try:
 except ImportError:
     pass
 
+import docx
+from docx.text.paragraph import Paragraph
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -301,6 +303,12 @@ class GenerateIn(BaseModel):
     # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
     # boilerplate is used (so the notes never vanish).
     notes: list = Field(default_factory=list)
+    # Proposal Review's document editor: free-text edits to template paragraphs
+    # OUTSIDE the priced/repeatable regions (see /api/proposal-template).
+    # [{"id": <int, from that endpoint>, "text": "<resolved plain text>"}].
+    # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
+    # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
+    paragraph_overrides: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -1096,6 +1104,32 @@ def _notes_for(work_type: str, notes_in: list) -> list:
     return [{"text": ln} for ln in lines]
 
 
+# Cap + coerce the document editor's paragraph_overrides before they reach
+# proposal_writer.fill_proposal. Mirrors the combo_options sanitization above
+# (str()-coerce before validating, cap the list) — a stale draft or hand-built
+# request can send anything here, and this must never 500 /api/generate.
+# proposal_writer._apply_paragraph_overrides re-validates independently (it's
+# called directly by tests, bypassing this layer), so this is defense in depth,
+# not the only guard.
+_PARAGRAPH_OVERRIDES_MAX = 500
+
+
+def _sanitize_paragraph_overrides(overrides_in: list) -> list:
+    out = []
+    for o in (overrides_in or [])[:_PARAGRAPH_OVERRIDES_MAX]:
+        if not isinstance(o, dict):
+            continue
+        try:
+            pid = int(o.get("id"))
+        except (TypeError, ValueError):
+            continue
+        text = o.get("text")
+        if text is None:
+            continue
+        out.append({"id": pid, "text": str(text)})
+    return out
+
+
 _DEFAULT_EXCLUSIONS = (
     "Multiple layers of floor to be removed (change order is necessary), Moving of "
     "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more "
@@ -1159,6 +1193,71 @@ def api_default_notes(work_type: str = "epoxy") -> Dict[str, Any]:
     editable Notes box with these so the estimator can tweak them per job."""
     wt = str(work_type or "epoxy").lower()
     return {"work_type": wt, "notes": _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []}
+
+
+@app.get("/api/proposal-template")
+def api_proposal_template(request: Request, work_type: str = "epoxy", audience: str = "Direct") -> Response:
+    """The REAL proposal template, as an ordered list of editable blocks, for
+    Proposal Review's document editor (replaces the old hand-built HTML
+    approximation — the estimator now edits the actual .docx text/layout).
+
+    `id` is that paragraph's index in `proposal_writer.iter_editable_blocks` —
+    the SAME walk `/api/generate` uses (via `_apply_paragraph_overrides`) to
+    resolve `paragraph_overrides` back onto the pristine template, so an id
+    from this response always lands on the exact right paragraph as long as
+    the template file itself hasn't changed (see `_template_version`, echoed
+    here as `template_version` so the frontend can detect a stale cached id
+    set after a deploy).
+
+    `in_block` marks paragraphs inside a repeatable/priced region
+    (price_line, single_bid, remodel, tax_breakout, has_options, system,
+    room, alternate, notes) — the frontend renders those read-only (driven by
+    the pricing sidebar + engine), never as freely-editable text.
+    """
+    template_path = proposal_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+
+    d = docx.Document(str(template_path))
+    blocks = []
+    for idx, kind, p_elem, in_block, text, in_txbx in proposal_writer.iter_editable_blocks(d):
+        p = Paragraph(p_elem, d)
+        style_name = None
+        try:
+            style_name = p.style.name if p.style is not None else None
+        except Exception:  # noqa: BLE001 — a style lookup failure is cosmetic only
+            style_name = None
+        bold = any(r.bold for r in p.runs if r.bold is not None)
+        blocks.append({
+            "id": idx,
+            "kind": kind,
+            "text": text,
+            "style": {"name": style_name, "bold": bold},
+            "in_block": in_block,
+            # Front-page (floating text box) vs plain-body paragraph. Display
+            # ordering only — the editor shows the front page first and tucks
+            # the Terms & Conditions body behind a collapse; ids are unaffected.
+            "in_txbx": in_txbx,
+        })
+
+    payload = {
+        "work_type": work_type,
+        "audience": audience,
+        "template_name": template_path.name,
+        "template_version": _template_proposal_version(template_path),
+        "blocks": blocks,
+    }
+    return _versioned_json(request, payload, version=f"{work_type}:{audience}:{payload['template_version']}")
+
+
+def _template_proposal_version(path: Path) -> str:
+    """Cache-busting token for a proposal template file (mtime) — a deploy
+    that changes the .docx changes this, matching `_template_version`'s
+    pattern for the estimate sheet."""
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return "0"
 
 
 @app.post("/api/generate", response_model=GenerateOut)
@@ -1389,6 +1488,9 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # "Options:" label only when options exist.
             tax_breakout=_tax_breakout,
             has_options=_has_options,
+            # Proposal Review's document editor: free-text paragraph edits
+            # outside the priced/repeatable regions (see /api/proposal-template).
+            paragraph_overrides=_sanitize_paragraph_overrides(payload.paragraph_overrides),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
