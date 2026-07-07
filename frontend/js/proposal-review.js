@@ -44,14 +44,18 @@
 
   // Pre-fill the editable NOTES box: saved edits if any, else the standard
   // per-work-type boilerplate (fetched) so the estimator can tweak it per job.
+  // (The try{} around renderNotesPreview: during the synchronous init path the
+  // editor's consts below aren't initialized yet — initDocumentEditor repaints
+  // the notes preview itself, so a skipped early paint costs nothing.)
   (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
-    if (Array.isArray(state.notes) && state.notes.length) { ta.value = state.notes.join("\n"); return; }
+    const applyAndPreview = (text) => { ta.value = text; try { renderNotesPreview(); } catch {} };
+    if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) return;
     fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
       .then(r => r.json())
-      .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) ta.value = j.notes.join("\n"); })
+      .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) applyAndPreview(j.notes.join("\n")); })
       .catch(() => {});
   })();
 
@@ -67,14 +71,14 @@
       if (!name && u && u.email) {
         name = u.email.split("@")[0].replace(/[._]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
       }
-      if (name) el.value = name;
+      if (name) { el.value = name; try { refreshDocumentFills(); } catch {} }
     };
     apply();
     try { if (window.TWAuth && window.TWAuth.ready) window.TWAuth.ready.then(apply); } catch {}
   })();
 
   // ─── Work-type-aware UI ────────────────────────────────────────
-  // The proposal layout differs per work_type:
+  // The proposal fields differ per work_type:
   //   epoxy  → "Epoxy Flooring" + Epoxy area row + texture row
   //   polish → "Polished Concrete Flooring" + Polish area row, no texture
   //   combo  → "Epoxy + Polished Concrete Flooring" + BOTH area rows + texture
@@ -203,7 +207,7 @@
       proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax });
   }
 
-  // Tax-treatment mode, read from the PRICE section's dropdown. Shared by the
+  // Tax-treatment mode, read from the sidebar's dropdown. Shared by the
   // single-bid layout (refreshPriceDisplay) and the combo per-option breakout
   // (comboSystemLines) so BOTH branches honor the same estimator choice — the
   // combo branch used to hardcode "INCLUDED" wording and ignore this entirely.
@@ -266,10 +270,12 @@
     return lines;
   }
 
-  // Live update the inline $ amounts in the price section. This preview MIRRORS
+  // Live update the inline $ amounts in the price preview. This preview MIRRORS
   // the .docx single_bid block exactly (Base Bid + Remodel Tax = Total), using
   // the same figures + tax wording the generate payload sends, so what the
-  // estimator sees on screen is what the customer gets.
+  // estimator sees on screen is what the customer gets. The preview elements
+  // live inside the document's read-only priced region once the template loads
+  // (see initDocumentEditor); until then they sit in the hidden staging div.
   function refreshPriceDisplay() {
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const lumpSumN = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
@@ -341,7 +347,7 @@
   }
 
   // Render the structured price lines + the recommended ALTERNATE system into
-  // the visible PRICE section, mirroring the {{#price_line}} / {{#alternate}}
+  // the visible PRICE preview, mirroring the {{#price_line}} / {{#alternate}}
   // blocks the backend writes into the .docx. Driven by state (set on the
   // Estimate screen), so the estimator sees the alternate BEFORE generating.
   function renderProposalExtras() {
@@ -350,7 +356,7 @@
 
     // (rooms) Per-sheet priced options: base bid first, then each copy. The
     // DOCUMENT (#rooms-block) shows the read-only preview; the CONTROLS (toggles +
-    // notes) live in the left #options-panel. state.rooms[] is snapshotted on
+    // notes) live in the right #options-panel. state.rooms[] is snapshotted on
     // Estimate Review (≥2 epoxy sheets → options; else single bid).
     const roomsBlock = document.getElementById("rooms-block");
     const optsPanel  = document.getElementById("options-panel");
@@ -403,7 +409,7 @@
       }
       renderRoomsPreview();
 
-      // LEFT controls panel: base-bid picker + per-tab option toggles — mirrors the
+      // RIGHT controls panel: base-bid picker + per-tab option toggles — mirrors the
       // Estimate screen's #bid-bar (both edit state.base_tab_id + state.tab_opts).
       // Interactive when we have the per-tab snapshot (state.priced_tabs); otherwise
       // the panel hides and the preview above stays read-only.
@@ -519,95 +525,12 @@
       `<p style="margin:0 0 6pt;"><strong>${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
 
-  // Recompute base + options from the per-tab snapshot first (no-op for older
-  // drafts without it), so the price display below reflects the current base.
-  rebuildPricing();
-
-  // Lump sum = the estimate sheet's own TOTAL LUMP SUM (D88/D82, snapshotted
-  // into state.proposal_lump_sum when leaving the Estimate screen). That cell
-  // already reflects EVERYTHING the estimator entered in the grid — crew/days,
-  // demo, and hand-typed markup overrides like a -17% hard-bid discount — so
-  // the proposal price always matches the sheet the estimator is looking at.
-  // The Computed Bid engine is the FALLBACK only (e.g. older drafts saved
-  // before the sheet total computed reliably in the browser).
-  (() => {
-    const cb = state.computed_bid;
-    let lump = null;
-    if (typeof state.proposal_lump_sum === "number" && state.proposal_lump_sum > 0) {
-      lump = state.proposal_lump_sum;              // sheet's Total Lump Sum (D88/D82)
-    } else if (cb && cb.full_bid && typeof cb.full_bid.total_base_bid === "number") {
-      lump = cb.full_bid.total_base_bid;           // engine Total Base Bid
-    } else if (cb && typeof cb.grand_total === "number") {
-      lump = cb.grand_total;                       // material-only mode
-    } else {
-      lump = 0;
-    }
-    // Stash into a hidden "tb-total" so refreshPriceDisplay finds it
-    let el = document.querySelector("#tb-total");
-    if (!el) {
-      el = document.createElement("span");
-      el.id = "tb-total";
-      el.style.display = "none";
-      document.body.appendChild(el);
-    }
-    el.textContent = fmtUSD(lump);
-    refreshPriceDisplay();
-  })();
-
-  // Default the bid date to today if intake didn't carry one through.
-  // Use the local timezone so the displayed date matches what the user
-  // sees in their calendar (UTC-based ISO strings drift by ±1 day).
-  const bidInput = form.querySelector("[name='bid_date']");
-  const visitInput = form.querySelector("[name='site_visit_date_display']");
-  if (bidInput && !bidInput.value) {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, "0");
-    const d = String(now.getDate()).padStart(2, "0");
-    bidInput.value = `${y}-${m}-${d}`;
-    state.bid_date = bidInput.value;
-  }
-  if (bidInput && bidInput.value && !visitInput.value) {
-    const d = new Date(bidInput.value + "T00:00:00");
-    if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
-  }
-  bidInput?.addEventListener("change", () => {
-    if (bidInput.value && !visitInput.value) {
-      const d = new Date(bidInput.value);
-      if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
-    }
-  });
-
-  // Recalc on input changes
-  form.addEventListener("input", refreshPriceDisplay);
-
-  // Persist EVERY edit as it's typed (debounced). Previously the narrative
-  // textareas (Scope/Schedule/Exclusions) + cove height were committed to state
-  // only on Back/Submit — so any mid-flow re-hydration (draft-sync reload, manual
-  // refresh, Back/Forward) re-ran init, writeForm restored the blank value, and
-  // the PROPOSAL_DEFAULTS loop re-seated the boilerplate. That stale default then
-  // got submitted instead of the estimator's edit — Kyle's "my updates on the
-  // proposal tab aren't carrying over to the final proposal". setState merges, so
-  // this only overwrites the scalar form fields and leaves rooms/price_lines/etc.
-  // intact; it also schedules the debounced server save so the draft round-trips.
-  let _persistTimer = null;
-  form.addEventListener("input", () => {
-    if (_persistTimer) clearTimeout(_persistTimer);
-    _persistTimer = setTimeout(() => { try { TW.setState(TW.readForm(form)); } catch {} }, 300);
-  });
-
-  document.getElementById("back-btn").addEventListener("click", () => {
-    TW.setState(TW.readForm(form));
-    window.location.assign("/estimate-review.html");
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById("generate-btn");
-    btn.disabled = true;
-    btn.textContent = "Generating…";
-
-    const mergedValues = Object.assign({}, state, TW.readForm(form));
+  // ─── Token values (shared by the document fills + the generate payload) ──
+  // One assembly of the {{token}} vocabulary (see proposal_writer.py's notes),
+  // used BOTH to substitute values into the on-page document (highlighted
+  // .tw-fill spans) and to build the generate payload — so the page shows the
+  // exact strings the .docx will carry.
+  function computeTokenValues(mergedValues) {
     const workType = (state.work_type || "epoxy").toLowerCase();
     const polishSF = Number(mergedValues.polish_sf || mergedValues.system_1_sf || 0);
     const epoxySF  = Number(mergedValues.system_1_sf || 0);
@@ -686,12 +609,492 @@
       ...mergedValues,
     };
 
+    // Editor-only extras the backend derives inside api_generate — resolved
+    // here with the SAME rules so the on-page fills match the generated doc
+    // (the backend recomputes site_visit_phrase itself on generate, so parity
+    // is by construction, not by trusting this echo).
+    const _sv = String(tokenValues.site_visit_date || "").trim();
+    tokenValues.site_visit_phrase = (mergedValues.no_site_visit || !_sv || _sv.toUpperCase() === "N/A")
+      ? "per plans and specifications provided"
+      : `per site visit on ${_sv}`;
+    if (!String(tokenValues.epoxy_system_name || "").trim()) {
+      const a22 = String((state.cell_values || {})["Epoxy!A22"] || "").trim();
+      tokenValues.epoxy_system_name = (a22 && !a22.includes("Options")) ? a22 : "Epoxy System";
+    }
+    if (!String(tokenValues.state_name || "").trim()) tokenValues.state_name = "Kansas";
+    return tokenValues;
+  }
+
+  // ─── Document editor: the REAL template, paragraph by paragraph ──────────
+  // GET /api/proposal-template returns the picked .docx's paragraphs in the
+  // backend's id order (proposal_writer.iter_editable_blocks — the SAME walk
+  // /api/generate later uses to apply overrides, so ids can't drift). Each
+  // paragraph outside a {{#block}} region renders as a contenteditable
+  // .tw-block; every {{token}} in it becomes a highlighted .tw-fill span
+  // holding the resolved value (screen-only — serialization emits plain text,
+  // and the backend writes plain run text, so no highlight/HTML can reach the
+  // .docx). A block whose serialized text differs from its pristine rendering
+  // ships as an {id, text} paragraph_override on generate.
+  const docSurface   = document.getElementById("doc-surface");
+  const docFront     = document.getElementById("doc-front");
+  const docBody      = document.getElementById("doc-body");
+  const docLoading   = document.getElementById("doc-loading");
+  const termsToggle  = document.getElementById("terms-toggle");
+  const stagingPanel = document.getElementById("price-preview-staging");
+
+  let templateBlocks  = null;   // blocks from the endpoint (null until loaded)
+  let templateVersion = "";
+  const blockById     = new Map();   // id -> block record
+  const pristineById  = new Map();   // id -> plain-text pristine rendering
+
+  const escHtml = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // Flat tokens only — dotted per-item tokens ({{price_line.label}}) live in
+  // read-only regions and are never substituted here.
+  const DOC_TOKEN_RE = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+
+  // Captions for front-page blocks that are a bare token — the real template
+  // labels these in its letterhead graphic, which the text walk can't carry.
+  const TOKEN_HINTS = {
+    job_name: "Job name", work_description: "Work description",
+    city_state: "City / State", bid_date_formatted: "Date",
+    estimator_name: "Estimator",
+  };
+
+  // Region badge wording by the region's leading block name.
+  const REGION_LABELS = {
+    system: "Systems — from the estimate & the fields sidebar",
+    notes:  "Notes — edit in the fields sidebar (one per line)",
+  };
+  const REGION_LABEL_DEFAULT = "Priced content — edit via the Pricing options & fields sidebars";
+
+  // Read-only preview elements mounted into each region, by block name. The
+  // single_bid mount carries the whole base-bid group (incl. the combo
+  // breakout + the nested tax_breakout/remodel/has_options rows).
+  const systemPreviewEl = document.createElement("div");
+  systemPreviewEl.id = "system-preview-block";
+  const notesPreviewEl = document.createElement("div");
+  notesPreviewEl.id = "notes-preview-block";
+  const REGION_MOUNTS = {
+    system:     () => [systemPreviewEl],
+    notes:      () => [notesPreviewEl],
+    room:       () => [document.getElementById("rooms-block")],
+    single_bid: () => ["base-bid-heading", "combo-price-block", "base-bid-row",
+                       "sales-tax-row", "remodel-tax-row", "total-row"]
+                       .map(id => document.getElementById(id)),
+    price_line: () => [document.getElementById("price-lines-block")],
+    alternate:  () => [document.getElementById("alternate-block")],
+  };
+
+  // Substituted HTML for one template paragraph: text escaped, each known
+  // {{token}} replaced by a highlighted span. Unknown tokens keep their
+  // literal {{token}} text (still inside a span so the estimator sees what
+  // wasn't auto-filled); the backend's flat pass resolves or leaves them the
+  // exact same way, so pristine tracking stays consistent.
+  function fillHtml(templText, tokens) {
+    DOC_TOKEN_RE.lastIndex = 0;
+    let html = "", last = 0, m;
+    while ((m = DOC_TOKEN_RE.exec(templText))) {
+      html += escHtml(templText.slice(last, m.index));
+      const name = m[1];
+      const known = Object.prototype.hasOwnProperty.call(tokens, name);
+      html += `<span class="tw-fill" data-token="${escHtml(name)}">` +
+              escHtml(known ? String(tokens[name]) : m[0]) + `</span>`;
+      last = m.index + m[0].length;
+    }
+    return html + escHtml(templText.slice(last));
+  }
+
+  // The same substitution as plain text — the block's PRISTINE rendering, the
+  // baseline an edit is detected against.
+  function fillPlain(templText, tokens) {
+    DOC_TOKEN_RE.lastIndex = 0;
+    return String(templText).replace(DOC_TOKEN_RE, (m0, name) =>
+      Object.prototype.hasOwnProperty.call(tokens, name) ? String(tokens[name]) : m0);
+  }
+
+  // Serialize a contenteditable block back to plain text: .tw-fill spans
+  // contribute their TEXT VALUE (never the token), <br>/nested divs become
+  // newlines, NBSPs normalize to spaces.
+  function serializeBlock(el) {
+    const walk = (node) => {
+      let out = "";
+      node.childNodes.forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE) { out += n.nodeValue; return; }
+        if (n.nodeType !== Node.ELEMENT_NODE) return;
+        if (n.tagName === "BR") { out += "\n"; return; }
+        if (/^(DIV|P)$/.test(n.tagName) && out && !out.endsWith("\n")) out += "\n";
+        out += walk(n);
+      });
+      return out;
+    };
+    return walk(el).replace(/\u00a0/g, " ");
+  }
+
+  function singleTokenHint(templText) {
+    const m = String(templText).trim().match(/^\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}$/);
+    return m ? (TOKEN_HINTS[m[1]] || null) : null;
+  }
+
+  // Fill a block element from its template text + current token values, and
+  // record the pristine rendering. Only ever called on non-dirty blocks (a
+  // hand-edited paragraph belongs to the estimator until they revert it).
+  function setBlockContent(el, templText, tokens) {
+    el.innerHTML = fillHtml(templText, tokens);
+    const plain = fillPlain(templText, tokens);
+    pristineById.set(Number(el.dataset.id), plain);
+    el.classList.toggle("tw-empty", !plain.trim());
+  }
+
+  function renderBlock(b, tokens) {
+    const el = document.createElement("div");
+    el.className = "tw-block";
+    el.dataset.id = String(b.id);
+    el.contentEditable = "true";
+    el.spellcheck = false;
+    if (b.style && b.style.bold) el.classList.add("tw-bold");
+    if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
+    const hint = singleTokenHint(b.text);
+    if (hint) el.dataset.hint = hint;
+    setBlockContent(el, b.text, tokens);
+    return el;
+  }
+
+  // Tag each block with its TOP-LEVEL region name (client-side mirror of the
+  // backend's marker stack — in_block reports the innermost block, but the
+  // previews mount per outermost region: e.g. the tax_breakout rows belong to
+  // the single_bid group).
+  function annotateRegions(blocks) {
+    const stack = [];
+    for (const b of blocks) {
+      const t = String(b.text || "");
+      const sm = t.match(/\{\{\s*#\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/);
+      if (sm) stack.push(sm[1]);
+      b._region = stack.length ? stack[0] : null;
+      const em = t.match(/\{\{\s*\/\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/);
+      if (em && stack.length && stack[stack.length - 1] === em[1]) stack.pop();
+    }
+  }
+
+  function mountRegionPreviews(wrap, names) {
+    const first = names.values().next().value;
+    const badge = wrap.querySelector(".tw-region-badge");
+    if (badge) {
+      badge.textContent = REGION_LABELS[first] ? REGION_LABELS[first].split(" — ")[0] : "Priced content";
+      badge.title = REGION_LABELS[first] || REGION_LABEL_DEFAULT;
+    }
+    for (const name of names) {
+      const mount = REGION_MOUNTS[name];
+      if (mount) mount().forEach(el => { if (el) wrap.appendChild(el); });
+    }
+  }
+
+  // Render one ordered slice of blocks into `container`: editable .tw-blocks
+  // for free paragraphs; contiguous {{#block}} regions collapse into ONE
+  // read-only .tw-priced-region carrying the matching live previews.
+  function renderBlockList(container, list, tokens) {
+    let regionWrap = null, regionNames = null;
+    const flush = () => {
+      if (regionWrap) { mountRegionPreviews(regionWrap, regionNames); regionWrap = null; regionNames = null; }
+    };
+    for (const b of list) {
+      if (b._region) {
+        if (!regionWrap) {
+          regionWrap = document.createElement("div");
+          regionWrap.className = "tw-priced-region";
+          const badge = document.createElement("span");
+          badge.className = "tw-region-badge";
+          regionWrap.appendChild(badge);
+          container.appendChild(regionWrap);
+          regionNames = new Set();
+        }
+        regionNames.add(b._region);
+      } else {
+        flush();
+        container.appendChild(renderBlock(b, tokens));
+      }
+    }
+    flush();
+  }
+
+  // Saved document edits (persisted in state as they're typed, so a reload /
+  // device switch keeps them) — reapplied only when they were made against
+  // THIS template file (version + type/audience), otherwise the ids could
+  // point at the wrong paragraphs.
+  function restoreSavedOverrides(wt, audience) {
+    const meta = state.paragraph_overrides_meta || {};
+    if (String(meta.template_version || "") !== templateVersion ||
+        meta.work_type !== wt || meta.audience !== audience) return;
+    for (const o of (Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [])) {
+      if (!o || typeof o.text !== "string") continue;
+      const el = docSurface.querySelector(`.tw-block[data-id="${Number(o.id)}"]`);
+      if (!el) continue;
+      el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
+      el.classList.add("tw-dirty");
+      el.classList.toggle("tw-empty", !o.text.trim());
+    }
+  }
+
+  // Every hand-edited paragraph, as the generate payload's paragraph_overrides.
+  // Falls back to the state-persisted list when the editor never loaded (e.g.
+  // template fetch failed) so earlier edits still reach the docx.
+  function collectOverrides() {
+    if (!templateBlocks) {
+      return Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [];
+    }
+    const out = [];
+    docSurface.querySelectorAll(".tw-block").forEach(el => {
+      const id = Number(el.dataset.id);
+      const cur = serializeBlock(el);
+      if (cur !== pristineById.get(id)) out.push({ id, text: cur });
+    });
+    return out;
+  }
+
+  let _overridesTimer = null;
+  function schedulePersistOverrides() {
+    if (_overridesTimer) clearTimeout(_overridesTimer);
+    _overridesTimer = setTimeout(() => {
+      try {
+        TW.setState({
+          paragraph_overrides: collectOverrides(),
+          paragraph_overrides_meta: {
+            template_version: templateVersion,
+            work_type: (state.work_type || "epoxy").toLowerCase(),
+            audience: state.audience || "Direct",
+          },
+        });
+      } catch {}
+    }, 800);
+  }
+
+  // Re-substitute the highlighted values in every UNTOUCHED block after a
+  // sidebar field changes (hand-edited blocks keep the estimator's text).
+  let _fillsTimer = null;
+  function refreshDocumentFills() {
+    if (!templateBlocks) return;
+    if (_fillsTimer) clearTimeout(_fillsTimer);
+    _fillsTimer = setTimeout(() => {
+      const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      docSurface.querySelectorAll(".tw-block").forEach(el => {
+        if (el.classList.contains("tw-dirty")) return;
+        const b = blockById.get(Number(el.dataset.id));
+        if (b) setBlockContent(el, b.text, tokens);
+      });
+      renderSystemPreview();
+      renderNotesPreview();
+    }, 150);
+  }
+
+  // WORK systems preview — mirrors main._build_epoxy_systems + the template's
+  // {{#system}} rows (grid picks from Epoxy!A22/A26, else the flat fields).
+  function renderSystemPreview() {
+    const merged = Object.assign({}, state, TW.readForm(form));
+    const cells = state.cell_values || {};
+    const num = (v) => Number(String(v == null ? "" : v).replace(/[$,]/g, "")) || 0;
+    const fmt = (n) => Math.round(n).toLocaleString("en-US");
+    const picks = [];
+    [["Epoxy!A22", "Epoxy!E20", "Epoxy!E34"], ["Epoxy!A26", "Epoxy!E24", "Epoxy!E37"]].forEach(([na, sa, la]) => {
+      const name = String(cells[na] || "").trim();
+      if (name && !name.includes("Options")) picks.push({ name, sf: num(cells[sa]), lf: num(cells[la]) });
+    });
+    if (!picks.length) {
+      picks.push({ name: String(merged.system_name || "").trim() || "Epoxy System",
+                   sf: num(merged.system_1_sf), lf: num(merged.cove_1_lf) });
+    }
+    const texture = String(merged.texture || "").trim();
+    const coveH = String(merged.cove_height || "6").trim() || "6";
+    const multi = picks.length > 1;
+    systemPreviewEl.innerHTML = picks.map((s, i) => {
+      const prefix = multi ? `Option ${i + 1}:` : "System:";
+      const lf = s.lf > 0 ? ` and ${fmt(s.lf)} LF of ${coveH}" epoxy cove base` : "";
+      return `<p style="margin:0 0 2pt;"><strong>${escHtml(prefix)}</strong>   <span class="tw-fill">${escHtml(s.name)}</span></p>` +
+             `<p style="margin:0 0 2pt;"><strong>Texture:</strong>  <span class="tw-fill">${escHtml(texture)}</span></p>` +
+             `<p style="margin:0 0 6pt;"><strong>Area:</strong> ~<span class="tw-fill">${escHtml(fmt(s.sf))}</span> SF of epoxy flooring${escHtml(lf)}</p>`;
+    }).join("");
+  }
+
+  // NOTES preview — one line per non-blank sidebar bullet ({{#notes}} block).
+  function renderNotesPreview() {
+    const ta = document.getElementById("notes-text");
+    const lines = String((ta && ta.value) || "").split("\n").map(s => s.trim()).filter(Boolean);
+    notesPreviewEl.innerHTML = lines.map(l => `<p style="margin:0 0 2pt;">${escHtml(l)}</p>`).join("");
+  }
+
+  async function initDocumentEditor() {
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    const audience = state.audience || "Direct";
+    // The endpoint is auth-gated; wait for the Supabase token like the other
+    // pull-on-load fetches do, so a slow login doesn't 401 the template.
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+    try {
+      const res = await fetch(
+        `/api/proposal-template?work_type=${encodeURIComponent(wt)}&audience=${encodeURIComponent(audience)}`,
+        { headers: TW.authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      templateBlocks = Array.isArray(j.blocks) ? j.blocks : [];
+      templateVersion = String(j.template_version || "");
+      annotateRegions(templateBlocks);
+      blockById.clear();
+      templateBlocks.forEach(b => blockById.set(b.id, b));
+
+      const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      docFront.innerHTML = "";
+      docBody.innerHTML = "";
+      // Front page (floating-text-box content) first — that's how the printed
+      // page reads; the body boilerplate (Terms & Conditions) collapses below.
+      renderBlockList(docFront, templateBlocks.filter(b => b.in_txbx), tokens);
+      renderBlockList(docBody, templateBlocks.filter(b => !b.in_txbx), tokens);
+      docLoading.hidden = true;
+      termsToggle.hidden = !docBody.childElementCount;
+
+      restoreSavedOverrides(wt, audience);
+      renderSystemPreview();
+      renderNotesPreview();
+      refreshPriceDisplay();   // repaint now that the preview els live in the page
+    } catch (err) {
+      // Degraded fallback: surface the price preview alone so the estimator
+      // can still verify pricing and continue; previously saved document
+      // edits still ship via collectOverrides()'s state fallback.
+      docLoading.textContent = "Couldn't load the document preview — showing the price summary instead. You can still continue.";
+      stagingPanel.hidden = false;
+      docFront.appendChild(stagingPanel);
+      refreshPriceDisplay();
+    }
+  }
+
+  // Mark blocks dirty as they're edited (delegated — blocks re-render freely).
+  docSurface.addEventListener("input", (e) => {
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (!el) return;
+    const cur = serializeBlock(el);
+    el.classList.toggle("tw-dirty", cur !== pristineById.get(Number(el.dataset.id)));
+    el.classList.toggle("tw-empty", !cur.trim());
+    schedulePersistOverrides();
+  });
+
+  termsToggle.addEventListener("click", () => {
+    const open = docBody.hidden;
+    docBody.hidden = !open;
+    document.getElementById("terms-caret").textContent = open ? "▾" : "▸";
+  });
+
+  initDocumentEditor();
+
+  // Recompute base + options from the per-tab snapshot first (no-op for older
+  // drafts without it), so the price display below reflects the current base.
+  rebuildPricing();
+
+  // Lump sum = the estimate sheet's own TOTAL LUMP SUM (D88/D82, snapshotted
+  // into state.proposal_lump_sum when leaving the Estimate screen). That cell
+  // already reflects EVERYTHING the estimator entered in the grid — crew/days,
+  // demo, and hand-typed markup overrides like a -17% hard-bid discount — so
+  // the proposal price always matches the sheet the estimator is looking at.
+  // The Computed Bid engine is the FALLBACK only (e.g. older drafts saved
+  // before the sheet total computed reliably in the browser).
+  (() => {
+    const cb = state.computed_bid;
+    let lump = null;
+    if (typeof state.proposal_lump_sum === "number" && state.proposal_lump_sum > 0) {
+      lump = state.proposal_lump_sum;              // sheet's Total Lump Sum (D88/D82)
+    } else if (cb && cb.full_bid && typeof cb.full_bid.total_base_bid === "number") {
+      lump = cb.full_bid.total_base_bid;           // engine Total Base Bid
+    } else if (cb && typeof cb.grand_total === "number") {
+      lump = cb.grand_total;                       // material-only mode
+    } else {
+      lump = 0;
+    }
+    // Stash into a hidden "tb-total" so refreshPriceDisplay finds it
+    let el = document.querySelector("#tb-total");
+    if (!el) {
+      el = document.createElement("span");
+      el.id = "tb-total";
+      el.style.display = "none";
+      document.body.appendChild(el);
+    }
+    el.textContent = fmtUSD(lump);
+    refreshPriceDisplay();
+  })();
+
+  // Default the bid date to today if intake didn't carry one through.
+  // Use the local timezone so the displayed date matches what the user
+  // sees in their calendar (UTC-based ISO strings drift by ±1 day).
+  const bidInput = form.querySelector("[name='bid_date']");
+  const visitInput = form.querySelector("[name='site_visit_date_display']");
+  if (bidInput && !bidInput.value) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    bidInput.value = `${y}-${m}-${d}`;
+    state.bid_date = bidInput.value;
+  }
+  if (bidInput && bidInput.value && !visitInput.value) {
+    const d = new Date(bidInput.value + "T00:00:00");
+    if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
+  }
+  bidInput?.addEventListener("change", () => {
+    if (bidInput.value && !visitInput.value) {
+      const d = new Date(bidInput.value);
+      if (!isNaN(d)) visitInput.value = `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
+    }
+  });
+
+  // Recalc the price preview AND the document's highlighted values on any
+  // sidebar field change (hand-edited paragraphs are left alone).
+  form.addEventListener("input", () => { refreshPriceDisplay(); refreshDocumentFills(); });
+
+  // Persist EVERY edit as it's typed (debounced). Previously the narrative
+  // textareas (Scope/Schedule/Exclusions) + cove height were committed to state
+  // only on Back/Submit — so any mid-flow re-hydration (draft-sync reload, manual
+  // refresh, Back/Forward) re-ran init, writeForm restored the blank value, and
+  // the PROPOSAL_DEFAULTS loop re-seated the boilerplate. That stale default then
+  // got submitted instead of the estimator's edit — Kyle's "my updates on the
+  // proposal tab aren't carrying over to the final proposal". setState merges, so
+  // this only overwrites the scalar form fields and leaves rooms/price_lines/etc.
+  // intact; it also schedules the debounced server save so the draft round-trips.
+  let _persistTimer = null;
+  form.addEventListener("input", () => {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(() => { try { TW.setState(TW.readForm(form)); } catch {} }, 300);
+  });
+
+  document.getElementById("back-btn").addEventListener("click", () => {
+    TW.setState(TW.readForm(form));
+    window.location.assign("/estimate-review.html");
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("generate-btn");
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+
+    const mergedValues = Object.assign({}, state, TW.readForm(form));
+    const tokenValues = computeTokenValues(mergedValues);
+    const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
+    const _fb = (state.computed_bid && state.computed_bid.full_bid) || {};
+    const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : _fb.remodel_tax) || 0);
+
+    // Document edits: every paragraph whose text differs from its pristine
+    // rendering, as {id, text} against the pristine template's ids. Persisted
+    // too so re-opening this screen restores the edits.
+    const paragraphOverrides = collectOverrides();
+
     // We no longer call /api/generate here. The actual file generation
     // moved to the Done page so the user has one final review screen before
     // anything customer-facing happens. Stash the payload that Done.html
     // will POST when the user clicks Generate.
     TW.setState({
       ...mergedValues,
+      paragraph_overrides: paragraphOverrides,
+      paragraph_overrides_meta: {
+        template_version: templateVersion,
+        work_type: (state.work_type || "epoxy").toLowerCase(),
+        audience: state.audience || "Direct",
+      },
       proposal_payload: {
         work_type: state.work_type || "epoxy",
         audience:  state.audience  || "Direct",
@@ -725,6 +1128,9 @@
         tab_structs: Array.isArray(state.tab_structs) ? state.tab_structs : [],
         // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
         notes: String(mergedValues.notes_text || "").split("\n").map(s => s.trim()).filter(Boolean),
+        // Document-editor edits -> proposal_writer paragraph overrides,
+        // applied to the pristine template BEFORE block expansion (id-safe).
+        paragraph_overrides: paragraphOverrides,
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).

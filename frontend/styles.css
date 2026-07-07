@@ -726,3 +726,147 @@ button {
 }
 .ctx-menu .ctx-item:hover { background: var(--surface-dim, #f0f0f0); }
 .ctx-menu .ctx-item.danger { color: var(--treadwell-red, #c0392b); }
+
+/* ─── Proposal Review: real-document editor ──────────────────────────────
+   Proposal Review renders the ACTUAL .docx template (fetched from
+   /api/proposal-template) as an ordered list of editable blocks, instead of
+   a hand-built HTML approximation. Values pulled from the estimate sheet /
+   intake are highlighted on-screen only (.tw-fill) — the highlight and any
+   editor chrome never reach the generated .docx (proposal_writer.py only
+   ever writes plain run text). See frontend/js/proposal-review.js. */
+
+/* A value auto-filled from intake/estimate data, inline in the document
+   text. Screen-only cue — never present in the generated file. */
+.tw-fill {
+  background: #ffe975;
+  padding: 0 2px;
+  border-radius: 2px;
+  cursor: default;
+}
+
+/* One template paragraph, editable in place. Kept visually inline with the
+   surrounding document (no card/border) so it reads like real page text;
+   only on focus/hover does it reveal itself as an editable field. */
+.tw-block {
+  outline: none;
+  min-height: 1.35em;
+  padding: 1px 3px;
+  margin: 0 -3px;
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.tw-block:hover { background: rgba(200, 16, 46, 0.06); }
+.tw-block:focus { background: #fffef2; box-shadow: 0 0 0 1px var(--treadwell-red, #9e001f); }
+.tw-block.tw-empty { min-height: 0.9em; }
+.tw-block.tw-bold { font-weight: 700; }
+.tw-block.tw-list { margin-left: 18pt; }
+.tw-block.tw-dirty::after {
+  content: "edited";
+  float: right;
+  font-size: 8pt;
+  font-weight: 600;
+  color: var(--treadwell-red, #9e001f);
+  opacity: 0.55;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+/* Faint caption above a block whose entire text is a single well-known
+   token (job name, date, etc.) — the real template's label for these lives
+   in a graphic/letterhead, not in editable text, so without this the value
+   would float with no visual anchor. */
+.tw-block[data-hint]::before {
+  content: attr(data-hint);
+  display: block;
+  font-size: 7.5pt;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--treadwell-red, #9e001f);
+  opacity: 0.65;
+}
+
+/* A repeatable/priced block region ({{#single_bid}}, {{#price_line}},
+   {{#system}}, {{#notes}}, …) — rendered read-only with the SAME preview
+   logic the page already used, never per-paragraph editable. Pricing math
+   and wording stay driven by the pricing sidebar + engine. */
+.tw-priced-region {
+  position: relative;
+  margin: 6pt 0;
+  padding: 8pt 10pt 8pt 12pt;
+  border-left: 3px solid var(--treadwell-red, #9e001f);
+  background: #fff8f6;
+  border-radius: 0 4px 4px 0;
+}
+.tw-priced-region .tw-region-badge {
+  display: inline-block;
+  font-size: 8pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--treadwell-red, #9e001f);
+  opacity: 0.7;
+  margin-bottom: 4pt;
+  cursor: help;
+}
+
+/* Collapsible Terms & Conditions boilerplate — reordered to the end of the
+   document surface (it's boilerplate that types AFTER the priced page in
+   Kyle's templates' raw paragraph order, since it's authored as top-level
+   body text while the front page lives in floating text boxes) but is
+   still fully editable, per-paragraph, like everything else. */
+.tw-terms-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid #d2d0ce;
+  border-radius: 99px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--ink-variant, #5c403f);
+  cursor: pointer;
+  margin: 18pt 0 6pt;
+}
+.tw-terms-toggle:hover { background: var(--surface-low, #f3eeed); }
+.tw-terms-body[hidden] { display: none; }
+
+/* Left "Proposal fields" rail — the structured inputs that FEED the
+   highlighted .tw-fill values (system/texture/scope/schedule/etc). The
+   pricing options rail (#options-panel) already owns the right side. */
+.fields-panel {
+  position: fixed; left: 16px; top: 112px; width: 260px;
+  max-height: calc(100vh - 132px); overflow-y: auto;
+  background: #fff; border: 1px solid #ccc; border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  z-index: 40; font-size: 13px; color: #222;
+}
+.fields-panel h3 { margin: 0 0 2px; font-size: 13px; color: #9e001f; }
+.fields-panel .op-hint { margin: 0 0 10px; font-size: 11px; color: #777; }
+.fields-panel label.fp-label {
+  display: block; font-size: 11px; font-weight: 700; color: #555;
+  margin: 10px 0 3px; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.fields-panel input[type="text"],
+.fields-panel input[type="number"],
+.fields-panel input[type="date"],
+.fields-panel select,
+.fields-panel textarea {
+  width: 100%; font: inherit; font-size: 12px; padding: 5px 6px;
+  border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;
+}
+.fields-panel textarea { resize: vertical; }
+.fields-panel .fp-row { display: flex; gap: 6px; }
+.fields-panel .fp-row > * { flex: 1; min-width: 0; }
+.fields-panel .fp-check { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 6px; }
+.fields-panel .fp-check input { width: auto; }
+/* Below ~1400px there isn't room for BOTH side rails + an 8.5in page —
+   drop the fields panel inline above the document (matches the
+   pricing-options-panel breakpoint in proposal-review.html). */
+@media (max-width: 1400px) {
+  .fields-panel {
+    position: static; width: auto; max-height: none;
+    margin: 0 16px 12px; box-shadow: none;
+  }
+}
