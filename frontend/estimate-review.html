@@ -671,6 +671,15 @@
     </div>
   </div>
 
+  <!-- Excel-style formula bar: Name Box (active cell address) + fx + value
+       input, two-way bound to the focused grid cell by syncFormulaBar() in
+       js/estimate-review.js. Starts disabled until a cell gets focus. -->
+  <div id="formula-bar" class="formula-bar">
+    <input id="fbar-name" class="fbar-name" type="text" readonly aria-label="Cell address" />
+    <span class="fbar-fx">fx</span>
+    <input id="fbar-input" class="fbar-input" type="text" aria-label="Cell value or formula" disabled />
+  </div>
+
   <div class="xl-viewport">
     <div id="sheet-grid" class="sheet-loading">Loading sheet…</div>
   </div>
