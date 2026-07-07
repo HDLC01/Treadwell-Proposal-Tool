@@ -406,29 +406,34 @@ function renderBidOptions() {
   // the auto-derived default (null base = auto; for combo that's Epoxy + Polish).
   if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
   const baseId = state.base_tab_id;
-  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
+  const autoBase = resolveBaseTab();
+  const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)"
+                                   : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
   const isPartOfAutoBase = (t) => !baseId && t.kind === "base";
-  let html = `<span class="bb-opt"><label class="bb-baselbl"><input type="radio" name="bb-base" class="bb-base" value=""${!baseId ? " checked" : ""}> <span class="bb-name">${_escBB(autoLabel)}</span></label></span>`;
+  const baseRadio = (val, checked, label) =>
+    `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
+  let html = `<span class="bb-opt">${baseRadio("", !baseId, autoLabel)}</span>`;
   html += priced.map(t => {
     const o = state.tab_opts[t.id] || {};
     const isBase = baseId === t.id;
     const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
     const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
-    let inner = `<label class="bb-baselbl"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(t.id)}"${isBase ? " checked" : ""}> <span class="bb-name">${_escBB(labelFor(t.id))}</span></label>` +
+    let inner = baseRadio(t.id, isBase, labelFor(t.id)) +
                 `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
-    if (!isBase && !isPartOfAutoBase(t)) {
+    if (isBase) {
+      inner += `<span class="bb-tag">base bid</span>`;
+    } else if (!isPartOfAutoBase(t)) {
       inner += `<span class="bb-sub">` +
-        `<label><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> option</label>` +
+        `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
         `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
-        `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show</label>` +
-        `<select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select>` +
+        `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
+        `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select></span>` +
         `</span></span>`;
     }
     return `<span class="bb-opt" data-id="${_escBB(t.id)}">${inner}</span>`;
   }).join("");
   list.innerHTML = html;
-  const hint = document.getElementById("bid-options-hint");
-  if (hint) hint.style.display = priced.length > 1 ? "none" : "";
+  // The legend (#bid-options-hint) stays visible — it explains base vs. option.
 }
 
 // Delegated listeners on #bid-bar (static container — attach once).
@@ -855,7 +860,21 @@ function renderTabs() {
   const btn = document.getElementById("copy-sheet-btn");
   if (btn) btn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
 })();
-wireBidBar();   // base-bid dropdown + per-tab option controls (delegated, once)
+wireBidBar();   // base-bid toggles + per-tab option controls (delegated, once)
+// Collapse the bid bar to hand its height back to the worksheet (remembered).
+(function wireBidCollapse() {
+  const bar = document.getElementById("bid-bar");
+  const btn = document.getElementById("bid-collapse");
+  if (!bar || !btn) return;
+  const apply = (c) => { bar.classList.toggle("collapsed", c); btn.textContent = c ? "▸ Show" : "▾ Hide"; };
+  let c = false; try { c = localStorage.getItem("tw_bidbar_collapsed") === "1"; } catch {}
+  apply(c);
+  btn.addEventListener("click", () => {
+    c = !c;
+    try { localStorage.setItem("tw_bidbar_collapsed", c ? "1" : "0"); } catch {}
+    apply(c);
+  });
+})();
 
 async function showSheet(name) {
   activeSheet = name;

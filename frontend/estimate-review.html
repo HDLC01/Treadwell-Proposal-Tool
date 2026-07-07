@@ -170,7 +170,16 @@
   .bb-opt .bb-price { color: var(--ink-variant); font-variant-numeric: tabular-nums; }
   .bb-opt .bb-sub, .bb-opt .bb-optsub { display: inline-flex; align-items: center; gap: 8px; }
   .bb-opt label { margin: 0; }
+  .bb-opt .bb-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--treadwell-red, #c0392b); }
+  .bb-opt .bb-modewrap { display: inline-flex; align-items: center; gap: 4px; }
   .bb-section-title { font-weight: 700; font-size: 12.5px; }
+  .bid-bar .bb-head { justify-content: space-between; flex-wrap: nowrap; }
+  .bid-bar .bb-head .bb-hint { flex: 1 1 auto; min-width: 0; }
+  .bid-bar .bb-collapse { margin-left: auto; flex: 0 0 auto; font-size: 11px; padding: 2px 9px;
+    cursor: pointer; border: 1px solid var(--surface-dim); border-radius: 5px;
+    background: var(--surface-lowest, #fff); color: var(--ink-variant); white-space: nowrap; }
+  .bid-bar.collapsed { max-height: none; }
+  .bid-bar.collapsed #bid-bar-body { display: none; }
 
   /* Tab bar — always show horizontal scrollbar */
   .xl-tab-bar.full {
@@ -640,23 +649,26 @@
   <!-- Bid options: pick the Base bid, mark other tabs as proposal options
        (show/hide + total-or-deduct), and list proposal price lines. -->
   <div class="bid-bar" id="bid-bar">
-    <div class="bb-row">
+    <div class="bb-row bb-head">
       <span class="bb-lbl">Base bid &amp; options</span>
-      <span class="bb-hint" id="bid-options-hint">Turn on which sheet is the base; mark the others as options.</span>
+      <span class="bb-hint" id="bid-options-hint">Pick which sheet is the <b>Base&nbsp;bid</b> (round button). Tick another sheet to <b>add&nbsp;it&nbsp;as&nbsp;an&nbsp;option</b> — shown on the proposal as its own total, or as a deduct off the base.</span>
+      <button type="button" id="bid-collapse" class="bb-collapse" title="Collapse this bar to give the worksheet more room">▾ Hide</button>
     </div>
-    <div class="bb-row" id="bid-options-list"></div>
+    <div id="bid-bar-body">
+      <div class="bb-row" id="bid-options-list"></div>
 
-    <!-- Proposal price lines: options / unit prices shown UNDER PRICE on the
-         proposal (e.g. "$4,200 – Onsite mockup"). Display-only. -->
-    <div class="bb-row" style="justify-content:space-between;">
-      <span class="bb-section-title">Proposal price lines
-        <span class="bb-hint">options &amp; unit prices listed under Price on the proposal</span></span>
-      <button type="button" id="cb-add-priceline" style="font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
+      <!-- Proposal price lines: options / unit prices shown UNDER PRICE on the
+           proposal (e.g. "$4,200 – Onsite mockup"). Display-only. -->
+      <div class="bb-row" style="justify-content:space-between;">
+        <span class="bb-section-title">Proposal price lines
+          <span class="bb-hint">extra add / unit-price lines listed under Price on the proposal</span></span>
+        <button type="button" id="cb-add-priceline" style="font-size:12px;padding:2px 10px;cursor:pointer;">+ Add line</button>
+      </div>
+      <div id="cb-pricelines-head" style="display:none;grid-template-columns:1fr 120px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
+        <span>Label</span><span style="text-align:right;">Amount&nbsp;$</span><span></span>
+      </div>
+      <div id="cb-pricelines"></div>
     </div>
-    <div id="cb-pricelines-head" style="display:none;grid-template-columns:1fr 120px 28px;gap:6px;font-size:11px;color:var(--ink-variant,#888);padding:0 2px 3px;">
-      <span>Label</span><span style="text-align:right;">Amount&nbsp;$</span><span></span>
-    </div>
-    <div id="cb-pricelines"></div>
   </div>
 
   <div class="xl-viewport">
