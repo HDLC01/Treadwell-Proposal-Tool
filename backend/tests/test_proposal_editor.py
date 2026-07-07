@@ -257,3 +257,109 @@ def test_sanitize_paragraph_overrides_coerces_and_drops_bad_entries():
         {"id": 5, "text": "ok, string id coerces"},
         {"id": 6, "text": "42"},
     ]
+
+
+# ── fidelity metadata: runs / list flags / geometry ─────────────────────
+def test_template_endpoint_run_formatting_and_list_flags():
+    r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
+    blocks = r.json()["blocks"]
+
+    # Every block's run segments must re-join to exactly its text (the
+    # frontend falls back to flat rendering when this doesn't hold — for
+    # Kyle's templates it always must).
+    for b in blocks:
+        if b["runs"]:
+            assert "".join(s["text"] for s in b["runs"]) == b["text"], f"run join broke on id {b['id']}"
+
+    # Scope row: bold "Scope:" lead-in, then the token isolated as its own
+    # segment carrying the value run's (non-bold) formatting — the same
+    # attribution the docx fill uses (_sub_runs_preserving start-run rule).
+    scope = _find(blocks, lambda t: t.strip().startswith("Scope:"))
+    segs = scope["runs"]
+    assert segs[0]["text"] == "Scope:" and segs[0]["bold"] is True
+    token_seg = next(s for s in segs if s["text"] == "{{scope_notes}}")
+    assert token_seg["bold"] is not True
+    assert token_seg["font"] == "Zetta Serif Book"    # real template face
+    assert token_seg["size_pt"] == 8.0                # true point size
+    assert token_seg["color"] == "404040"
+
+    # Real Word numbering drives the bullet flag; "Base Bid" is an indent-only
+    # List Paragraph heading and must NOT read as a bullet.
+    assert scope["list"] is True
+    base_bid = _find(blocks, lambda t: t.strip() == "Base Bid")
+    assert base_bid["list"] is False
+
+    # Box membership pairs blocks with page geometry.
+    assert scope["txbx"] is not None
+    terms = _find(blocks, lambda t: t.strip() == "TERMS AND CONDITIONS")
+    assert terms["txbx"] is None
+
+
+def test_template_endpoint_geometry_page_boxes_artwork():
+    r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
+    j = r.json()
+    geo = j["geometry"]
+
+    # Letter page, the template's real margins.
+    assert geo["page"]["w_pt"] == 612.0 and geo["page"]["h_pt"] == 792.0
+    assert geo["page"]["margin"]["left"] == 90.0 and geo["page"]["margin"]["top"] == 72.0
+
+    # One geometry entry per text box, ids aligned with the blocks' txbx.
+    box_ids = {b["id"] for b in geo["boxes"]}
+    used = {b["txbx"] for b in j["blocks"] if b["txbx"] is not None}
+    assert used <= box_ids
+    for box in geo["boxes"]:
+        assert all(isinstance(box[k], (int, float)) for k in ("x_pt", "y_pt", "w_pt", "h_pt"))
+
+    # The WORK content box lands where the letterhead artwork draws its frame
+    # (calibrated anchoring — allow a loose tolerance, the spec accepts
+    # approximate placement).
+    work_box = next(b for b in geo["boxes"] if b["w_pt"] > 400 and 100 < b["y_pt"] < 220)
+    assert 140 <= work_box.get("x_pt") <= 180
+
+    # The full-page letterhead artwork is listed and covers the page.
+    art = [im for im in geo["images"] if im["w_pt"] > 600]
+    assert art, "letterhead artwork missing from geometry"
+    assert art[0]["para_index"] == 0                      # page-1 background
+    assert any(im["para_index"] > 0 for im in art)        # terms-page background(s)
+
+
+# ── media endpoint (letterhead artwork) ─────────────────────────────────
+def test_media_endpoint_serves_whitelisted_artwork():
+    r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
+    art_name = r.json()["geometry"]["images"][0]["name"]
+    m = client.get(f"/api/proposal-template/media?work_type=epoxy&audience=Direct&name={art_name}")
+    assert m.status_code == 200
+    assert m.headers["content-type"].startswith("image/")
+    assert m.content[:8] == b"\x89PNG\r\n\x1a\n"          # real PNG bytes
+
+
+def test_media_endpoint_rejects_unknown_and_traversal_names():
+    for bad in ("nope.png", "../document.xml", "word/media/image1.png", "..%2Fdocument.xml", ""):
+        m = client.get("/api/proposal-template/media",
+                       params={"work_type": "epoxy", "audience": "Direct", "name": bad})
+        assert m.status_code == 404, f"{bad!r} should 404, got {m.status_code}"
+
+
+# ── overrides must never delete anchored artwork / text boxes ───────────
+def test_override_on_anchor_paragraph_keeps_drawings():
+    """Kyle's templates anchor the letterhead art + every floating text box in
+    runs of blank body paragraphs. An override targeting such a paragraph
+    must write its text WITHOUT dropping the drawing run — losing it would
+    delete the letterhead (or a whole text box) from the customer docx."""
+    d0 = docx.Document(str(pw.TEMPLATES_ROOT / _EPOXY_TEMPLATE))
+    anchor_id = next(
+        i for i, k, p, ib, t, tb in pw.iter_editable_blocks(d0)
+        if tb is None and ib is None
+        and p.find(".//" + "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing") is not None
+    )
+    n_drawings_before = len(d0.element.body.findall(
+        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"))
+
+    out = pw.fill_proposal(work_type="epoxy", audience="Direct", values=_BASE_VALS,
+                           paragraph_overrides=[{"id": anchor_id, "text": "note above the letterhead"}])
+    d1 = docx.Document(io.BytesIO(out))
+    n_drawings_after = len(d1.element.body.findall(
+        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"))
+    assert n_drawings_after == n_drawings_before, "override dropped an anchored drawing"
+    assert "note above the letterhead" in _rendered(out)

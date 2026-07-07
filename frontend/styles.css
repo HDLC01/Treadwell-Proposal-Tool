@@ -729,54 +729,90 @@ button {
 
 /* ─── Proposal Review: real-document editor ──────────────────────────────
    Proposal Review renders the ACTUAL .docx template (fetched from
-   /api/proposal-template) as an ordered list of editable blocks, instead of
-   a hand-built HTML approximation. Values pulled from the estimate sheet /
-   intake are highlighted on-screen only (.tw-fill) — the highlight and any
-   editor chrome never reach the generated .docx (proposal_writer.py only
-   ever writes plain run text). See frontend/js/proposal-review.js. */
+   /api/proposal-template) as ONE continuous Word-faithful document: the
+   template's own letterhead artwork (a full-page PNG inside the .docx
+   package — buffalo logo, DATE:/JOB NAME: labels, the red PROPOSAL stamp,
+   the bordered WORK/PRICE/NOTES frame with its rotated labels) painted
+   behind the floating text boxes positioned where Word anchors them, with
+   real run formatting (Zetta Serif, true point sizes, bold lead-ins) and
+   real bullets — everything contenteditable. Values pulled from the
+   estimate sheet / intake are highlighted on-screen only (.tw-fill) — the
+   highlight and any editor chrome never reach the generated .docx
+   (proposal_writer.py only ever writes plain run text). See
+   frontend/js/proposal-review.js. */
 
 /* A value auto-filled from intake/estimate data, inline in the document
    text. Screen-only cue — never present in the generated file. */
 .tw-fill {
   background: #ffe975;
-  padding: 0 2px;
-  border-radius: 2px;
+  padding: 0 1px;
+  border-radius: 1px;
   cursor: default;
 }
 
-/* One template paragraph, editable in place. Kept visually inline with the
-   surrounding document (no card/border) so it reads like real page text;
-   only on focus/hover does it reveal itself as an editable field. */
+/* The zoom rig: the page renders at TRUE point sizes (the template runs
+   8-9pt Zetta Serif) and the whole surface scales up to read comfortably —
+   the Word-zoom effect. #doc-zoom carries the transform; #doc-zoom-outer is
+   sized by JS to the scaled bounds so the canvas scrolls correctly. */
+#doc-zoom { transform-origin: top left; }
+
+/* One rendered page (or page-flow surface) of the real document. */
+.tw-page {
+  position: relative;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.16), 0 4px 14px rgba(0,0,0,0.10);
+  margin: 0 0 14px;
+  font-family: "Zetta Serif Book", "Zetta Serif", Georgia, "Times New Roman", serif;
+  font-size: 9pt;
+  color: #404040;
+  line-height: 1.32;
+}
+/* The letterhead artwork layer (word/media PNG) — behind the text. */
+.tw-page-art {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+}
+/* A floating text box placed at its Word anchor position. */
+.tw-txbx { position: absolute; z-index: 1; }
+
+/* One template paragraph, editable in place. Reads as plain page text;
+   hover/focus reveal the editability; a hand-edited paragraph carries a
+   thin red inset bar. */
 .tw-block {
   outline: none;
-  min-height: 1.35em;
-  padding: 1px 3px;
-  margin: 0 -3px;
-  border-radius: 3px;
+  min-height: 1.3em;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
-.tw-block:hover { background: rgba(200, 16, 46, 0.06); }
-.tw-block:focus { background: #fffef2; box-shadow: 0 0 0 1px var(--treadwell-red, #9e001f); }
-.tw-block.tw-empty { min-height: 0.9em; }
+.tw-block:hover { background: rgba(200, 16, 46, 0.05); }
+.tw-block:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.5); }
+.tw-block.tw-empty { min-height: 1.05em; }
 .tw-block.tw-bold { font-weight: 700; }
-.tw-block.tw-list { margin-left: 18pt; }
-.tw-block.tw-dirty::after {
-  content: "edited";
-  float: right;
-  font-size: 8pt;
-  font-weight: 600;
-  color: var(--treadwell-red, #9e001f);
-  opacity: 0.55;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  pointer-events: none;
+.tw-block.tw-list { margin-left: 14pt; }
+.tw-block.tw-dirty { box-shadow: inset 2px 0 0 rgba(158, 0, 31, 0.45); }
+
+/* Real Word bullets (paragraphs carrying numbering) — hanging indent with a
+   round bullet, matching the template's list rows. Shared by the read-only
+   price/notes previews (they mirror bulleted docx rows). */
+.tw-li {
+  position: relative;
+  margin-left: 14pt;
+  padding-left: 9pt;
 }
-/* Faint caption above a block whose entire text is a single well-known
-   token (job name, date, etc.) — the real template's label for these lives
-   in a graphic/letterhead, not in editable text, so without this the value
-   would float with no visual anchor. */
-.tw-block[data-hint]::before {
+.tw-li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* Flow-fallback caption above a bare-token block (job name, date …): only
+   in flow mode, where the letterhead artwork — which carries the real
+   labels — isn't being rendered (template gave no usable geometry). */
+.tw-flow { padding: 72pt 90pt; }
+.tw-flow .tw-block[data-hint]::before {
   content: attr(data-hint);
   display: block;
   font-size: 7.5pt;
@@ -788,49 +824,13 @@ button {
 }
 
 /* A repeatable/priced block region ({{#single_bid}}, {{#price_line}},
-   {{#system}}, {{#notes}}, …) — rendered read-only with the SAME preview
-   logic the page already used, never per-paragraph editable. Pricing math
-   and wording stay driven by the pricing sidebar + engine. */
-.tw-priced-region {
-  position: relative;
-  margin: 6pt 0;
-  padding: 8pt 10pt 8pt 12pt;
-  border-left: 3px solid var(--treadwell-red, #9e001f);
-  background: #fff8f6;
-  border-radius: 0 4px 4px 0;
-}
-.tw-priced-region .tw-region-badge {
-  display: inline-block;
-  font-size: 8pt;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--treadwell-red, #9e001f);
-  opacity: 0.7;
-  margin-bottom: 4pt;
-  cursor: help;
-}
-
-/* Collapsible Terms & Conditions boilerplate — reordered to the end of the
-   document surface (it's boilerplate that types AFTER the priced page in
-   Kyle's templates' raw paragraph order, since it's authored as top-level
-   body text while the front page lives in floating text boxes) but is
-   still fully editable, per-paragraph, like everything else. */
-.tw-terms-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: 1px solid #d2d0ce;
-  border-radius: 99px;
-  padding: 4px 12px;
-  font-size: 11px;
-  color: var(--ink-variant, #5c403f);
-  cursor: pointer;
-  margin: 18pt 0 6pt;
-}
-.tw-terms-toggle:hover { background: var(--surface-low, #f3eeed); }
-.tw-terms-body[hidden] { display: none; }
+   {{#system}}, {{#notes}}, …) — read-only, engine-driven content rendered
+   INLINE in the document flow (no card chrome: the page must read as one
+   continuous document). Hover hints where to edit it; the engine-driven
+   amounts inside carry the yellow .tw-fill treatment. */
+.tw-priced-region { position: relative; cursor: default; }
+.tw-priced-region .tw-region-badge { display: none; }
+.tw-priced-region:hover { background: rgba(255, 233, 117, 0.22); }
 
 /* Left "Proposal fields" rail — the structured inputs that FEED the
    highlighted .tw-fill values (system/texture/scope/schedule/etc). The

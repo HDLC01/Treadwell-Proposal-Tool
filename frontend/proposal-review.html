@@ -516,35 +516,22 @@
      estimate snapshotted 2+ priced sheets). -->
 <aside id="options-panel" class="options-panel" hidden></aside>
 
-<!-- The Word canvas with the floating document page. The page renders the
-     REAL template's paragraphs (GET /api/proposal-template) as editable
-     blocks: front page (text-box content) first, then the Terms & Conditions
-     body behind a collapse. Values pulled from intake/estimate show
-     highlighted (.tw-fill) — screen-only, never in the generated .docx. -->
+<!-- The Word canvas. The editor renders the REAL template as ONE continuous
+     document (GET /api/proposal-template): page 1 is the template's own
+     letterhead artwork (buffalo logo, DATE:/JOB NAME: labels, the bordered
+     WORK/PRICE/NOTES frame — a full-page PNG served from the .docx package)
+     with the floating text boxes positioned on it exactly as Word lays them
+     out; the Terms & Conditions pages flow underneath. Every paragraph is
+     contenteditable; values pulled from intake/estimate show highlighted
+     (.tw-fill) — screen-only, never in the generated .docx. The whole
+     surface scales to fit (Word-zoom style; real 8pt Zetta Serif sizes). -->
 <div class="word-canvas">
-  <div class="doc-page" id="doc-surface">
-
-    <!-- Treadwell logo (top right) — the real template's letterhead is a
-         graphic the block walk can't carry over; approximated as before. -->
-    <div class="doc-logo">
-      <span class="logo-mark">T</span>
-      <span class="logo-text">TREADWELL</span>
+  <div id="doc-zoom-outer">
+    <div id="doc-zoom">
+      <div id="doc-surface">
+        <div id="doc-loading" class="tw-page" style="padding:72pt 90pt;">Loading the proposal template…</div>
+      </div>
     </div>
-
-    <!-- PROPOSAL vertical sidebar stamp -->
-    <div class="doc-proposal-stamp">PROPOSAL</div>
-
-    <div id="doc-loading" style="margin-top:50pt;color:var(--ink-variant,#5c403f);">Loading the proposal template…</div>
-
-    <!-- Front page: floating-text-box paragraphs (in_txbx), in id order. -->
-    <div id="doc-front" style="margin-top:50pt;"></div>
-
-    <!-- Body boilerplate (Terms & Conditions etc.) — still editable, tucked
-         behind a toggle so the priced page stays front and center. -->
-    <button type="button" id="terms-toggle" class="tw-terms-toggle" hidden>
-      <span id="terms-caret">▸</span>&nbsp;Terms &amp; Conditions (boilerplate — click to review / edit)
-    </button>
-    <div id="doc-body" class="tw-terms-body" hidden></div>
   </div>
 </div>
 
@@ -562,18 +549,18 @@
        generated doc has no heading here either — refreshPriceDisplay hides
        #base-bid-heading to match (see proposal-review.js). -->
   <div id="combo-price-block" style="display:none;"></div>
-  <p id="base-bid-row" style="margin: 0 0 6pt;">
-    <strong id="base-bid-display">$0</strong> – Epoxy flooring as described above
+  <p id="base-bid-row" class="tw-li" style="margin: 0 0 2pt;">
+    <strong class="tw-fill" id="base-bid-display">$0</strong> – Epoxy flooring as described above
     <em id="base-tax-phrase-display">(material sales tax INCLUDED)</em>
   </p>
-  <p id="sales-tax-row" style="margin: 0 0 6pt; display:none;">
-    <strong id="sales-tax-display">$0</strong> – Material Sales Tax
+  <p id="sales-tax-row" class="tw-li" style="margin: 0 0 2pt; display:none;">
+    <strong class="tw-fill" id="sales-tax-display">$0</strong> – Material Sales Tax
   </p>
-  <p id="remodel-tax-row" style="margin: 0 0 6pt; display:none;">
-    <strong><mark id="tax-amount-display">$0</mark></strong> – Remodel Tax
+  <p id="remodel-tax-row" class="tw-li" style="margin: 0 0 2pt; display:none;">
+    <strong class="tw-fill" id="tax-amount-display">$0</strong> – Remodel Tax
   </p>
-  <p id="total-row" style="margin: 0 0 10pt;">
-    <strong id="total-display">$0</strong> – Total
+  <p id="total-row" class="tw-li" style="margin: 0 0 4pt;">
+    <strong class="tw-fill" id="total-display">$0</strong> – Total
   </p>
   <!-- Per-room priced options (per-room jobs): read-only preview; manual
        notes are edited in the pricing-options rail. -->

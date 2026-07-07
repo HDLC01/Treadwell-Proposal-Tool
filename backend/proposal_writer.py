@@ -45,6 +45,7 @@ from docx.document import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 
 log = logging.getLogger("proposal_tool.proposal_writer")
@@ -468,46 +469,55 @@ def _is_fallback_paragraph(p_elem) -> bool:
 
 
 def _iter_body_editable(d: Document):
-    """Yield `(p_elem, kind, in_txbx)` for every REAL (non-Fallback) paragraph
-    in the document BODY — top-level paragraphs (`kind="p"`), table-cell
-    paragraphs (`kind="cell"`, recursing into nested tables), and floating
-    text-box paragraphs (`kind="p"`, `in_txbx=True`). Headers/footers are
-    intentionally excluded (the editor is scoped to the body; none of Kyle's
-    templates put tokens there today — see `_iter_all_paragraphs`, which
-    still covers them for the flat fill pass).
+    """Yield `(p_elem, kind, txbx_idx)` for every REAL (non-Fallback)
+    paragraph in the document BODY — top-level paragraphs (`kind="p"`),
+    table-cell paragraphs (`kind="cell"`, recursing into nested tables), and
+    floating text-box paragraphs (`kind="p"`, `txbx_idx` = the 0-based index
+    of the enclosing text box in this walk's box order; `None` outside a
+    box). Headers/footers are intentionally excluded (the editor is scoped
+    to the body; none of Kyle's templates put tokens there today — see
+    `_iter_all_paragraphs`, which still covers them for the flat fill pass).
 
     Text boxes carry almost all of the customer-facing proposal copy (job
     name, WORK, PRICE, NOTES, SIGN) — Kyle's templates lay the whole front
-    page out as floating shapes over blank body paragraphs — so skipping them
-    would leave the editor showing nothing but the Terms & Conditions
-    boilerplate at the bottom of the document. `in_txbx` lets the editor
-    show that front-page content FIRST on screen (how the printed page
-    reads) even though this walk — which defines the ids and therefore can
-    never be reordered — visits body paragraphs before text boxes.
+    page out as floating shapes over blank body paragraphs — so skipping
+    them would leave the editor showing nothing but the Terms & Conditions
+    boilerplate at the bottom of the document. `txbx_idx` pairs each block
+    with its box's page geometry (`template_geometry` enumerates the SAME
+    non-Fallback boxes in the SAME order), so the editor can place the
+    content exactly where the printed page puts it — even though this walk,
+    which defines the ids and therefore can never be reordered, visits body
+    paragraphs before text boxes.
     """
     for p in d.paragraphs:
         if not _is_fallback_paragraph(p._p):
-            yield p._p, "p", False
+            yield p._p, "p", None
 
     def walk_table(t):
         for row in t.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
                     if not _is_fallback_paragraph(p._p):
-                        yield p._p, "cell", False
+                        yield p._p, "cell", None
                 for nested in cell.tables:
                     yield from walk_table(nested)
 
     for table in d.tables:
         yield from walk_table(table)
 
-    body = d.element.body
-    for txbx in body.iter(qn("w:txbxContent")):
-        if _is_fallback_paragraph(txbx):
-            continue
+    for bi, txbx in enumerate(_iter_txbx(d)):
         for p_elem in txbx.iter(qn("w:p")):
             if not _is_fallback_paragraph(p_elem):
-                yield p_elem, "p", True
+                yield p_elem, "p", bi
+
+
+def _iter_txbx(d: Document):
+    """The document body's REAL (non-Fallback) text boxes, in the one
+    canonical order shared by `_iter_body_editable` (block → box pairing)
+    and `template_geometry` (box → page position)."""
+    for txbx in d.element.body.iter(qn("w:txbxContent")):
+        if not _is_fallback_paragraph(txbx):
+            yield txbx
 
 
 def iter_editable_blocks(d: Document):
@@ -534,12 +544,14 @@ def iter_editable_blocks(d: Document):
                      so it's computed once and handed to the caller instead
                      of making every caller re-derive it (and risk using the
                      wrong helper).
-      - `in_txbx`  — True for floating-text-box paragraphs (the front page);
-                     display ordering only, never id math.
+      - `txbx_idx` — index of the enclosing floating text box (pairs the
+                     block with `template_geometry`'s box positions), `None`
+                     for plain-body/table paragraphs. Display placement
+                     only, never id math.
     """
     stack: list[str] = []
     idx = 0
-    for p_elem, kind, in_txbx in _iter_body_editable(d):
+    for p_elem, kind, txbx_idx in _iter_body_editable(d):
         txt = _own_text(p_elem)
         start_m = BLOCK_START_RE.search(txt)
         if start_m:
@@ -548,29 +560,310 @@ def iter_editable_blocks(d: Document):
         end_m = BLOCK_END_RE.search(txt)
         if end_m and stack and stack[-1] == end_m.group(1):
             stack.pop()
-        yield idx, kind, p_elem, in_block, txt, in_txbx
+        yield idx, kind, p_elem, in_block, txt, txbx_idx
         idx += 1
+
+
+# ─── Formatting + page-geometry extraction (fidelity rendering) ──────────
+# The editor renders the REAL page: run-level formatting (bold lead-ins,
+# Zetta Serif sizes/colors), true bullet flags, and the floating text boxes
+# placed on the page over the template's baked-in letterhead artwork (Kyle's
+# templates draw the DATE:/JOB NAME: labels, the buffalo logo, the red
+# PROPOSAL stamp and the bordered WORK/PRICE/NOTES/ACCEPTANCE frame as
+# full-page background PNGs — word/media/image1.png etc.).
+
+# Empty body paragraphs are the vertical ruler Word hangs the floating
+# anchors off ('paragraph'-relative positionV). Their rendered line height
+# isn't in the XML (it's a layout result), so we use a constant calibrated
+# against the Direct Epoxy artwork: with 14pt/line the WORK box lands at
+# y≈153pt (art: ≈152pt), PRICE at ≈321pt (art: ≈318pt), NOTES at ≈495pt
+# (art: ≈490pt). The spec accepts approximate anchoring.
+_ANCHOR_LINE_H_PT = 14.0
+_EMU_PER_PT = 12700.0
+
+
+def _fmt_of_run(run: Run, para: Paragraph) -> dict:
+    """Resolved character formatting for one run: the run's own font first,
+    then up the paragraph-style chain (style.font → base_style.font …, max 4
+    hops — cheap, no full Word style resolution). `None` = unresolved; the
+    frontend falls back to the page default (Zetta Serif 9pt #404040)."""
+    fonts = [run.font]
+    st = para.style
+    hops = 0
+    while st is not None and hops < 4:
+        try:
+            fonts.append(st.font)
+        except Exception:  # noqa: BLE001
+            break
+        st = getattr(st, "base_style", None)
+        hops += 1
+
+    def resolve(attr):
+        for f in fonts:
+            try:
+                v = getattr(f, attr)
+            except Exception:  # noqa: BLE001
+                v = None
+            if v is not None:
+                return v
+        return None
+
+    color = None
+    for f in fonts:
+        try:
+            c = f.color
+            if c is not None and c.type is not None and c.rgb is not None:
+                color = str(c.rgb)
+                break
+        except Exception:  # noqa: BLE001
+            pass
+
+    bold, italic, under = resolve("bold"), resolve("italic"), resolve("underline")
+    size = resolve("size")
+    return {
+        "bold": bool(bold) if bold is not None else None,
+        "italic": bool(italic) if italic is not None else None,
+        "underline": bool(under) if under is not None else None,
+        "size_pt": size.pt if size is not None else None,
+        "font": resolve("name"),
+        "color": color,
+    }
+
+
+def _block_runs(p_elem, para: Paragraph) -> list:
+    """The paragraph's own text as formatted segments
+    `[{text, bold, italic, underline, size_pt, font, color}]`, with two
+    invariants the editor depends on:
+
+      1. `"".join(seg.text) == _own_text(p_elem)` — the frontend verifies
+         this and falls back to flat rendering if it ever doesn't hold
+         (e.g. hyperlink runs, which aren't direct <w:r> children).
+      2. No flat `{{token}}` straddles a segment boundary: each token is its
+         own segment carrying the formatting of the run where the match
+         STARTS — the same rule `_sub_runs_preserving` applies when actually
+         filling the docx, so the preview shows a value with the exact
+         formatting the generated document will give it.
+    """
+    txbx_tag = qn("w:txbxContent")
+
+    def own_run_text(r_elem):
+        out = []
+        for t in r_elem.iter(qn("w:t")):
+            anc, nested = t.getparent(), False
+            while anc is not None and anc is not r_elem:
+                if anc.tag == txbx_tag:
+                    nested = True
+                    break
+                anc = anc.getparent()
+            if not nested:
+                out.append(t.text or "")
+        return "".join(out)
+
+    raw = []
+    for r_elem in p_elem.findall(qn("w:r")):
+        txt = own_run_text(r_elem)
+        if txt:
+            raw.append({"text": txt, **_fmt_of_run(Run(r_elem, para), para)})
+    if not raw:
+        return []
+
+    joined = "".join(s["text"] for s in raw)
+    spans = []
+    pos = 0
+    for s in raw:
+        spans.append((pos, pos + len(s["text"]), s))
+        pos += len(s["text"])
+
+    def fmt_at(i):
+        for a, b, s in spans:
+            if a <= i < b:
+                return s
+        return spans[-1][2]
+
+    fmt_keys = ("bold", "italic", "underline", "size_pt", "font", "color")
+
+    def seg(a, b, src):
+        return {"text": joined[a:b], **{k: src.get(k) for k in fmt_keys}}
+
+    out = []
+    cursor = 0
+    for m in TOKEN_RE.finditer(joined):
+        # non-token stretch before the match: split at run boundaries so a
+        # bold lead-in ("Scope:") keeps its weight next to a normal value run
+        for a, b, s in spans:
+            lo, hi = max(a, cursor), min(b, m.start())
+            if lo < hi:
+                out.append(seg(lo, hi, s))
+        out.append(seg(m.start(), m.end(), fmt_at(m.start())))
+        cursor = m.end()
+    for a, b, s in spans:
+        lo, hi = max(a, cursor), min(b, len(joined))
+        if lo < hi:
+            out.append(seg(lo, hi, s))
+    return out
+
+
+_ALIGN_NAMES = {0: "left", 1: "center", 2: "right", 3: "justify"}
+
+
+def _para_align(para: Paragraph):
+    """Paragraph alignment as a CSS-friendly name, or None (inherit/left)."""
+    try:
+        a = para.alignment
+        return _ALIGN_NAMES.get(int(a)) if a is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _para_is_list(p_elem) -> bool:
+    """True when the paragraph carries real Word numbering (<w:numPr>) — the
+    template's bullet rows. Style name alone ("List Paragraph") is NOT enough:
+    Kyle uses it for indent-only headings like "Base Bid" too."""
+    ppr = p_elem.find(qn("w:pPr"))
+    return ppr is not None and ppr.find(qn("w:numPr")) is not None
+
+
+def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
+    """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
+
+    Word stores positionH/positionV relative to page/margin/column/paragraph;
+    the paragraph-relative vertical (what these templates use) is resolved
+    against the anchor's enclosing top-level paragraph index at the
+    calibrated `_ANCHOR_LINE_H_PT` per empty line (see the constant's note).
+    """
+    ext = anchor.find(qn("wp:extent"))
+    w = int(ext.get("cx")) / _EMU_PER_PT if ext is not None else 0.0
+    h = int(ext.get("cy")) / _EMU_PER_PT if ext is not None else 0.0
+
+    def offset(tag):
+        p = anchor.find(qn("wp:" + tag))
+        if p is None:
+            return 0.0, "page"
+        o = p.find(qn("wp:posOffset"))
+        return (int(o.text) / _EMU_PER_PT if o is not None and o.text else 0.0,
+                p.get("relativeFrom") or "page")
+
+    ox, rfx = offset("positionH")
+    oy, rfy = offset("positionV")
+
+    x = ox + (page["margin"]["left"] if rfx in ("column", "margin") else 0.0)
+
+    anc = anchor
+    while anc is not None and anc.getparent() is not body:
+        anc = anc.getparent()
+    try:
+        pidx = top_ps.index(anc)
+    except ValueError:
+        pidx = 0
+    if rfy in ("paragraph", "line"):
+        y = page["margin"]["top"] + pidx * _ANCHOR_LINE_H_PT + oy
+    elif rfy == "margin":
+        y = page["margin"]["top"] + oy
+    else:                                     # "page" and anything unmapped
+        y = oy
+    return x, y, w, h
+
+
+def template_geometry(d: Document) -> dict:
+    """Page metrics + floating-object placement for the editor's page view:
+
+      page   — {w_pt, h_pt, margin:{top,left,right,bottom}} from sectPr.
+      boxes  — one {id, x_pt, y_pt, w_pt, h_pt} per REAL text box, in the
+               SAME order `_iter_body_editable` numbers them (`txbx_idx`).
+      images — the anchored artwork {name, x_pt, y_pt, w_pt, h_pt,
+               para_index}; `name` is served by /api/proposal-template/media.
+               For Kyle's templates these are the full-page letterhead PNGs
+               (page 1's labeled/bordered art, then the plain terms-page
+               letterhead — `para_index` orders them by where they anchor).
+    """
+    sec = d.sections[0]
+    page = {
+        "w_pt": sec.page_width.pt, "h_pt": sec.page_height.pt,
+        "margin": {"top": sec.top_margin.pt, "left": sec.left_margin.pt,
+                   "right": sec.right_margin.pt, "bottom": sec.bottom_margin.pt},
+    }
+    body = d.element.body
+    top_ps = [c for c in body if c.tag == qn("w:p")]
+
+    def enclosing_anchor(el):
+        anc = el.getparent()
+        want = (qn("wp:anchor"), qn("wp:inline"))
+        while anc is not None and anc.tag not in want:
+            anc = anc.getparent()
+        return anc
+
+    boxes = []
+    for bi, txbx in enumerate(_iter_txbx(d)):
+        anchor = enclosing_anchor(txbx)
+        if anchor is not None:
+            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body)
+        else:
+            x = y = w = h = None
+        boxes.append({"id": bi, "x_pt": x, "y_pt": y, "w_pt": w, "h_pt": h})
+
+    images = []
+    for anchor in body.iter(qn("wp:anchor"), qn("wp:inline")):
+        if _is_fallback_paragraph(anchor):
+            continue
+        blip = anchor.find(".//" + qn("a:blip"))
+        if blip is None:
+            continue
+        rid = blip.get(qn("r:embed"))
+        try:
+            target = d.part.rels[rid].target_ref
+        except (KeyError, AttributeError):
+            continue
+        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body)
+        anc = anchor
+        while anc is not None and anc.getparent() is not body:
+            anc = anc.getparent()
+        try:
+            pidx = top_ps.index(anc)
+        except ValueError:
+            pidx = 0
+        images.append({"name": target.rsplit("/", 1)[-1],
+                       "x_pt": x, "y_pt": y, "w_pt": w, "h_pt": h,
+                       "para_index": pidx})
+    return {"page": page, "boxes": boxes, "images": images}
 
 
 def _set_paragraph_text(p_elem, text: str) -> None:
     """Replace a paragraph's visible text with `text` IN PLACE, preserving the
-    paragraph's formatting by keeping its FIRST run (and that run's `<w:rPr>`
-    — font/bold/size/color) and writing the new text into it; every other run
-    is dropped. Embedded newlines render as `<w:br/>` (via `_write_t_text`,
-    the same helper the block engine uses for multi-line item notes).
+    paragraph's formatting by keeping its FIRST text run (and that run's
+    `<w:rPr>` — font/bold/size/color) and writing the new text into it; every
+    other text run is dropped. Embedded newlines render as `<w:br/>` (via
+    `_write_t_text`, the same helper the block engine uses for multi-line
+    item notes).
 
-    A paragraph with no runs at all (a blank spacer line) gets a fresh run
-    created for it so non-empty override text still renders. An override that
-    blanks a paragraph (`text == ""`) is honored — the paragraph keeps its
-    (now textless) first run so its formatting/paragraph-mark survives.
+    Runs that carry a drawing/picture/object are NEVER removed — Kyle's
+    templates anchor the page letterhead artwork AND every floating text box
+    in runs of otherwise-blank body paragraphs, so dropping those runs on an
+    override would silently delete the letterhead (or an entire text box)
+    from the customer document.
+
+    A paragraph with no text runs (a blank spacer line, or one holding only
+    a drawing) gets a fresh run appended so non-empty override text still
+    renders. An override that blanks a paragraph (`text == ""`) is honored —
+    the paragraph keeps its (now textless) run so its formatting/paragraph-
+    mark survives.
     """
+    # Descendant (not direct-child) search: Word wraps floating drawings in
+    # mc:AlternateContent inside the run, so w:drawing is a grandchild.
+    _MEDIA_TAGS = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
     runs = p_elem.findall(qn("w:r"))
-    if not runs:
+    text_runs = [r for r in runs
+                 if not any(next(r.iter(tag), None) is not None for tag in _MEDIA_TAGS)]
+    if not text_runs:
         r = OxmlElement("w:r")
+        # Match the paragraph's look: clone rPr off an existing (media) run.
+        if runs:
+            rpr = runs[0].find(qn("w:rPr"))
+            if rpr is not None:
+                r.append(copy.deepcopy(rpr))
         p_elem.append(r)
-        runs = [r]
-    first = runs[0]
-    for extra in runs[1:]:
+        text_runs = [r]
+    first = text_runs[0]
+    for extra in text_runs[1:]:
         p_elem.remove(extra)
     # A run can hold several <w:t>/<w:br>/<w:tab> children (e.g. a value we
     # previously wrote with embedded line breaks) — collapse to a single

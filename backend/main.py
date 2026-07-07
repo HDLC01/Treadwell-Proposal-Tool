@@ -1216,6 +1216,14 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     (price_line, single_bid, remodel, tax_breakout, has_options, system,
     room, alternate, notes) — the frontend renders those read-only (driven by
     the pricing sidebar + engine), never as freely-editable text.
+
+    Fidelity metadata (so the editor looks like the Word file, not an
+    approximation): per-block `align`/`list` flags + `runs` (formatted
+    segments — bold lead-ins, Zetta Serif sizes/colors; tokens isolated per
+    segment, see proposal_writer._block_runs), per-block `txbx` (which
+    floating text box it lives in), and a top-level `geometry` payload (page
+    size/margins, each box's page position, and the anchored letterhead
+    artwork — served by /api/proposal-template/media).
     """
     template_path = proposal_writer.pick_template(work_type, audience or None)
     if not template_path.exists():
@@ -1223,7 +1231,7 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
 
     d = docx.Document(str(template_path))
     blocks = []
-    for idx, kind, p_elem, in_block, text, in_txbx in proposal_writer.iter_editable_blocks(d):
+    for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
         p = Paragraph(p_elem, d)
         style_name = None
         try:
@@ -1237,10 +1245,14 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             "text": text,
             "style": {"name": style_name, "bold": bold},
             "in_block": in_block,
-            # Front-page (floating text box) vs plain-body paragraph. Display
-            # ordering only — the editor shows the front page first and tucks
-            # the Terms & Conditions body behind a collapse; ids are unaffected.
-            "in_txbx": in_txbx,
+            # Floating-text-box membership: True/False kept for callers that
+            # only care front-page-vs-body; `txbx` pairs the block with its
+            # box's geometry. Display placement only — ids are unaffected.
+            "in_txbx": txbx_idx is not None,
+            "txbx": txbx_idx,
+            "align": proposal_writer._para_align(p),
+            "list": proposal_writer._para_is_list(p_elem),
+            "runs": proposal_writer._block_runs(p_elem, p),
         })
 
     payload = {
@@ -1248,9 +1260,54 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         "audience": audience,
         "template_name": template_path.name,
         "template_version": _template_proposal_version(template_path),
+        "geometry": proposal_writer.template_geometry(d),
         "blocks": blocks,
     }
     return _versioned_json(request, payload, version=f"{work_type}:{audience}:{payload['template_version']}")
+
+
+# Media (letterhead artwork) served straight out of the template package.
+# Kyle's templates bake the entire page design — buffalo logo, DATE:/JOB
+# NAME: labels, the red PROPOSAL stamp, the bordered WORK/PRICE/NOTES/
+# ACCEPTANCE frame with its rotated labels — into full-page PNGs under
+# word/media/, so rendering these behind the text gives the editor the exact
+# printed look with no hand-drawn approximation.
+_MEDIA_CONTENT_TYPES = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "bmp": "image/bmp", "tiff": "image/tiff",
+    "emf": "image/emf", "wmf": "image/wmf", "svg": "image/svg+xml",
+}
+
+
+@app.get("/api/proposal-template/media")
+def api_proposal_template_media(request: Request, work_type: str = "epoxy",
+                                audience: str = "Direct", name: str = "") -> Response:
+    """One media part (by basename) from the picked template's package.
+    Whitelisted against the package's own word/media/ listing — a crafted
+    `name` can't reach any other part (no separators survive the basename
+    match), and unknown names 404."""
+    import zipfile
+    template_path = proposal_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+    try:
+        with zipfile.ZipFile(str(template_path)) as z:
+            allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
+                       if n.startswith("word/media/") and "/" not in n[len("word/media/"):]}
+            part = allowed.get(name)
+            if not part:
+                raise HTTPException(404, "No such media in this template")
+            data = z.read(part)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(500, "Template package is unreadable.") from exc
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
+    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
 
 
 def _template_proposal_version(path: Path) -> str:
