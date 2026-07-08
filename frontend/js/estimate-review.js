@@ -361,6 +361,12 @@ state.base_tab_id = (typeof state.base_tab_id === "string") ? state.base_tab_id 
 // The backend replays these onto the .xlsx; here they drive HF, the cached
 // sheet data, and the coordinate translation below.
 state.tab_structs = Array.isArray(state.tab_structs) ? state.tab_structs : [];
+// Per-sheet cell-lock overrides from the "Lock cell" toolbar button:
+// { sheetId: { lock: [addr...], unlock: [addr...] } }, addresses in CURRENT
+// grid coordinates. Merged over the preset locks by lockedCellsFor / the
+// backend. Rekeyed on structural edits like cellValues.
+state.lock_overrides = (state.lock_overrides && typeof state.lock_overrides === "object" &&
+                        !Array.isArray(state.lock_overrides)) ? state.lock_overrides : {};
 
 // ─── Structural-edit coordinate translation ──────────────────────────
 // Hardcoded TEMPLATE coordinates (lock cells, totals cells, derive reads)
@@ -666,6 +672,10 @@ function copyTab(sourceId) {
   // the same inserts/deletes on the cloned worksheet.
   const srcOps = structOpsFor(sourceId);
   if (srcOps.length) state.tab_structs = [...state.tab_structs, ...srcOps.map(o => ({ ...o, sheet: newId }))];
+  // The copy inherits the source's per-cell lock overrides under its own id —
+  // coordinate spaces match (same op prefix on both), so a deep copy is valid.
+  const srcOv = state.lock_overrides[sourceId];
+  if (srcOv) state.lock_overrides[newId] = { lock: [...(srcOv.lock || [])], unlock: [...(srcOv.unlock || [])] };
   state.tab_labels = { ...state.tab_labels, [newId]: label };
   // Place the copy immediately to the RIGHT of the sheet it was copied from
   // (Excel behavior), not at the far end of the tab bar.
@@ -708,6 +718,7 @@ function deleteTab(id) {
   delete state.tab_labels[id];
   delete state.tab_notes[id];
   delete state.tab_opts[id];
+  delete state.lock_overrides[id];   // freed copy ids get reused — don't leak locks
   if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
@@ -919,6 +930,59 @@ function renderTabs() {
   const btn = document.getElementById("copy-sheet-btn");
   if (btn) btn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
 })();
+
+// ─── "Lock cell" toolbar button (Excel ribbon model) ────────────────────
+// Toggles the PERMANENT lock of the active cell — extends the preset
+// rate/markup/tax locks to ANY cell. The per-cell 🔒 (temporary unlock-for-
+// one-edit) is unchanged. Label + enabled-state track the active cell via
+// syncFormulaBar(); the toggle writes state.lock_overrides then re-renders.
+const lockCellBtn = document.getElementById("lock-cell-btn");
+// The addr the active cell reports as its OWN (data-display-addr) — the same
+// key lockedCellsFor()/the backend merge use. null when no cell is selected.
+function _activeCellAddr() {
+  const inp = _activeCellInput;
+  return (inp && inp.isConnected && inp.dataset && inp.dataset.displayAddr) ? inp.dataset.displayAddr : null;
+}
+function refreshLockButton() {
+  if (!lockCellBtn) return;
+  const addr = _activeCellAddr();
+  if (!addr || !activeSheet) {
+    lockCellBtn.disabled = true;
+    lockCellBtn.textContent = "🔒 Lock cell";
+    lockCellBtn.title = "Select a cell, then lock or unlock it (locked cells can't be edited in Excel)";
+    return;
+  }
+  lockCellBtn.disabled = false;
+  // Label reflects the PERMANENT (merged) lock state, NOT inp.readOnly — a
+  // per-cell temporary unlock leaves readOnly=false while still permanently locked.
+  const locked = lockedCellsFor(activeSheet).has(addr);
+  lockCellBtn.textContent = locked ? `🔓 Unlock ${addr}` : `🔒 Lock ${addr}`;
+  lockCellBtn.title = locked
+    ? `Unlock ${addr} so it can be edited in Excel`
+    : `Lock ${addr} so it can't be fat-fingered in Excel`;
+}
+if (lockCellBtn) {
+  lockCellBtn.addEventListener("click", async () => {
+    const addr = _activeCellAddr();
+    if (!addr || !activeSheet) return;
+    const wasLocked = lockedCellsFor(activeSheet).has(addr);
+    const ov = state.lock_overrides[activeSheet] || { lock: [], unlock: [] };
+    ov.lock = (ov.lock || []).filter(a => a !== addr);
+    ov.unlock = (ov.unlock || []).filter(a => a !== addr);
+    if (wasLocked) ov.unlock.push(addr);   // toggle -> unlocked (unlock wins over any preset)
+    else ov.lock.push(addr);               // toggle -> locked
+    if (ov.lock.length || ov.unlock.length) state.lock_overrides[activeSheet] = ov;
+    else delete state.lock_overrides[activeSheet];
+    const sheet = activeSheet;
+    persistTabState();
+    await showSheet(sheet);                 // re-render so the 🔒 icon / readonly follow
+    // showSheet nulls _activeCellInput — re-focus the same cell so the button
+    // keeps its target (and the label flips) instead of dead-ending.
+    const again = sheetGrid.querySelector(`[data-display-addr="${addr}"]`);
+    if (again) again.focus();
+    refreshLockButton();
+  });
+}
 wireBidBar();   // base-bid toggles + per-tab option controls (delegated, once)
 // Collapse the bid bar to hand its height back to the worksheet (remembered).
 (function wireBidCollapse() {
@@ -1422,7 +1486,12 @@ const LOCKED_CELLS = {
   "Epoxy blank":  ["B70", "B71", "B72", "B73", "D74", "B77", "B78", "B81"],
 };
 const GYP_LOCKED = ["B72", "B74", "B75", "E76", "B79", "B80", "B83"];
-// Resolve a sheet id to its layout's locked-cell Set (copies → their source).
+// Resolve a sheet id to its layout's EFFECTIVE locked-cell Set:
+// (preset rate/markup/tax cells, translated through the sheet's structural
+// edits) ∪ user `lock` − user `unlock`. Presets resolve by the copy's SOURCE
+// layout; user overrides are keyed by the sheet's OWN id and are already in
+// current coordinates (rekeyed live on structural edits), matching the backend
+// merge in estimate_writer._resolve_ws_layouts.
 function lockedCellsFor(sheetId) {
   let id = sheetId, guard = 0;
   while (guard++ < 20) {
@@ -1434,11 +1503,18 @@ function lockedCellsFor(sheetId) {
     id = c.source || "Epoxy";
   }
   const base = /^Gyp/i.test(id) ? GYP_LOCKED : (LOCKED_CELLS[id] || []);
-  // LOCK addresses are TEMPLATE coordinates — follow the sheet's own
-  // structural edits (a deleted rate cell drops out of the lock set, same
-  // as the generated .xlsx side in estimate_writer._resolve_ws_layouts).
-  if (!structOpsFor(sheetId).length) return new Set(base);
-  return new Set(base.map(a => txAddr(sheetId, a)).filter(Boolean));
+  // Preset addresses are TEMPLATE coordinates — follow the sheet's own
+  // structural edits (a deleted rate cell drops out of the set).
+  const preset = structOpsFor(sheetId).length
+    ? base.map(a => txAddr(sheetId, a)).filter(Boolean)
+    : base;
+  const ov = (state.lock_overrides && state.lock_overrides[sheetId]) || null;
+  const set = new Set(preset);
+  if (ov) {
+    (ov.lock || []).forEach(a => set.add(a));
+    (ov.unlock || []).forEach(a => set.delete(a));
+  }
+  return set;
 }
 
 // The grid cell the formula bar is currently pointed at (Excel-style).
@@ -1617,11 +1693,20 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     // session ends — the bar edits this cell by remote control, so the
     // re-lock decision has to live wherever that session actually finishes.
     inp._setLocked = setLocked;
+    // `readOnly` is INERT on a <select> — block interaction ourselves while
+    // locked, but still allow programmatic focus (mousedown re-focuses) so the
+    // toolbar Lock/Unlock button can target a locked dropdown to unlock it.
+    if (inp.tagName === "SELECT") {
+      inp.addEventListener("mousedown", (e) => { if (inp.readOnly) { e.preventDefault(); inp.focus(); } });
+      inp.addEventListener("keydown", (e) => { if (inp.readOnly) e.preventDefault(); });
+    }
     lk.addEventListener("click", (e) => {
       e.stopPropagation();
       const willUnlock = inp.readOnly;
       setLocked(!willUnlock);
-      if (willUnlock) { inp.focus(); inp.select(); }
+      // .select() exists on <input>, not <select> — guard so locking a
+      // dropdown cell (now possible via the toolbar) doesn't throw.
+      if (willUnlock) { inp.focus(); if (typeof inp.select === "function") inp.select(); }
     });
     // Don't re-lock when focus is moving INTO the formula bar to keep editing
     // this same cell — that would re-lock it before the bar ever got to use
@@ -1705,6 +1790,7 @@ function syncFormulaBar() {
     fbarInput.disabled = true;
     _fbarSyncedInput = null;
     clearRefHighlights();
+    refreshLockButton();
     return;
   }
   if (_fbarSyncedInput !== inp) {
@@ -1719,6 +1805,7 @@ function syncFormulaBar() {
   fbarInput.readOnly = inp.tagName === "SELECT" || inp.readOnly;
   fbarInput.value = inp.value;
   updateRefHighlights();   // outline the cells this formula references
+  refreshLockButton();     // keep the toolbar Lock/Unlock label on the active cell
 }
 
 // ─── Formula reference highlights (Excel-style) ─────────────────────
@@ -1971,6 +2058,31 @@ function _rekeyCellValuesForOp(sheet, op) {
   moves.forEach(([, nk], i) => { cellValues[nk] = vals[i]; });
 }
 
+// Shift a sheet's user lock/unlock addresses through one structural op, the
+// same way cellValues keys move — a deleted cell drops out of both lists.
+function _rekeyLockOverridesForOp(sheet, op) {
+  const ov = state.lock_overrides && state.lock_overrides[sheet];
+  if (!ov) return;
+  const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+  const shiftList = (arr) => {
+    const out = [];
+    for (const a of (arr || [])) {
+      const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(String(a));
+      if (!m) continue;
+      let col = m[1].toUpperCase().split("").reduce((x, ch) => x * 26 + (ch.charCodeAt(0) - 64), 0);
+      let row = parseInt(m[2], 10);
+      if (rows) row = _shiftIdx(row, op.at, op.count, insert);
+      else col = _shiftIdx(col, op.at, op.count, insert);
+      if (row === null || col === null) continue;           // deleted -> drop
+      out.push(colLetter(col) + row);
+    }
+    return out;
+  };
+  ov.lock = shiftList(ov.lock);
+  ov.unlock = shiftList(ov.unlock);
+  if (!ov.lock.length && !ov.unlock.length) delete state.lock_overrides[sheet];
+}
+
 function applyStructOp(sheet, kind, at, count = 1) {
   const rows = kind.endsWith("_rows");
   // The project-info block (rows 1-10) is canonical across every tab and the
@@ -2010,6 +2122,7 @@ function applyStructOp(sheet, kind, at, count = 1) {
   const op = { sheet, kind, at, count };
   if (sheetCache[sheet]) _transformCacheForOp(sheetCache[sheet], op);
   _rekeyCellValuesForOp(sheet, op);
+  _rekeyLockOverridesForOp(sheet, op);
   _activeCellInput = null;
   syncFormulaBar();
   showSheet(sheet);                       // full re-render from the shifted cache
@@ -2501,7 +2614,7 @@ function persistTabState() {
   TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms,
                 tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, tab_order: state.tab_order,
-                tab_opts: state.tab_opts });
+                tab_opts: state.tab_opts, lock_overrides: state.lock_overrides });
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();

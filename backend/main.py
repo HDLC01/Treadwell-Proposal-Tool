@@ -300,6 +300,12 @@ class GenerateIn(BaseModel):
     # [{sheet, kind: insert_rows|delete_rows|insert_cols|delete_cols, at, count}].
     # Replayed onto the workbook with formula/merge/lock-map translation.
     tab_structs: list = Field(default_factory=list)
+    # Per-sheet cell-lock overrides from the grid's "Lock cell" toolbar button:
+    # {sheetId: {"lock": [addr...], "unlock": [addr...]}}, addresses in CURRENT
+    # grid coordinates. Merged over the default rate/markup/tax locks in the
+    # generated .xlsx (estimate_writer._resolve_ws_layouts). Normalized there
+    # (_norm_lock_overrides) — never trusted raw.
+    lock_overrides: Dict[str, Any] = Field(default_factory=dict)
     # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
     # boilerplate is used (so the notes never vanish).
     notes: list = Field(default_factory=list)
@@ -1555,6 +1561,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             tab_labels=payload.tab_labels,
             tab_order=payload.tab_order,
             tab_structs=payload.tab_structs,
+            lock_overrides=payload.lock_overrides,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -1920,6 +1927,7 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             tab_labels=_dict(data.get("tab_labels")),
             tab_order=_list(data.get("tab_order")),
             tab_structs=_list(data.get("tab_structs")),
+            lock_overrides=_dict(data.get("lock_overrides")),
         )
     try:
         out = api_generate(gi, request)                    # reuse the full generate pipeline
