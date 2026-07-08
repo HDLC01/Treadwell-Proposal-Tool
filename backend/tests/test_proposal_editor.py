@@ -363,3 +363,103 @@ def test_override_on_anchor_paragraph_keeps_drawings():
         ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"))
     assert n_drawings_after == n_drawings_before, "override dropped an anchored drawing"
     assert "note above the letterhead" in _rendered(out)
+
+
+# ── system_overrides: per-option WORK-row DISPLAY edits (epoxy only) ─────
+def _epoxy_cells(**over):
+    """cell_values that make _build_epoxy_systems pick one named system."""
+    cells = {"Epoxy!A22": "Zeta Broadcast System", "Epoxy!E20": 12000, "Epoxy!E34": 0}
+    cells.update(over)
+    return cells
+
+
+def test_system_override_applied_to_epoxy_docx():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_BASE_VALS),
+            "cell_values": _epoxy_cells(),
+            "system_overrides": [{"name": "Custom Display Name", "sqft": "9,999"}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    txt = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Custom Display Name" in txt
+    assert "Zeta Broadcast System" not in txt        # computed name replaced
+    assert "9,999" in txt
+
+
+def test_system_override_second_row_index_alignment():
+    """A null hole in the list must NOT shift row 1's override onto row 0 —
+    the sanitizer coerces it to {} in place, keeping option indices aligned."""
+    cells = _epoxy_cells(**{"Epoxy!A26": "Beta Polish System", "Epoxy!E24": 8000, "Epoxy!E37": 0})
+    cells["Epoxy!A22"] = "Alpha Epoxy System"
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_BASE_VALS),
+            "cell_values": cells,
+            "system_overrides": [None, {"name": "Second Sys Renamed"}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    txt = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Alpha Epoxy System" in txt                # option 1 keeps its computed name
+    assert "Second Sys Renamed" in txt                # option 2 renamed
+    assert "Beta Polish System" not in txt
+
+
+def test_system_override_empty_string_reverts_to_computed():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_BASE_VALS),
+            "cell_values": _epoxy_cells(),
+            "system_overrides": [{"name": "", "texture": "   "}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    txt = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Zeta Broadcast System" in txt             # blank override -> computed name shows
+
+
+def test_system_override_ignored_for_non_epoxy():
+    body = {"work_type": "polish", "audience": "Direct", "values": dict(_BASE_VALS),
+            "system_overrides": [{"name": "ShouldNotAppearInPolish"}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    txt = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "ShouldNotAppearInPolish" not in txt
+
+
+def test_generate_survives_malformed_system_overrides():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_BASE_VALS),
+            "cell_values": _epoxy_cells(),
+            "system_overrides": ["junk", 42, None, {"name": {"nested": 1}},
+                                 {"sqft": ["x"]}, {"name": "ok-row"}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+
+
+def test_sanitize_system_overrides_index_preserving_cap_and_coercion():
+    out = main._sanitize_system_overrides([
+        {"name": 42, "texture": "T", "sqft": "  1,000  "},   # int coerces, sqft strips
+        "not-a-dict",                                         # -> {} placeholder, NOT dropped
+        {"name": {"nested": 1}, "sqft": ["x"]},               # nested containers dropped
+        {"name": "", "bogus": "ignored"},                     # blank dropped, unknown key ignored
+        {"name": True},                                       # bool dropped
+    ])
+    assert out == [
+        {"name": "42", "texture": "T", "sqft": "1,000"},
+        {},                                                   # index preserved
+        {},
+        {},
+        {},
+    ]
+    # length cap
+    assert len(main._sanitize_system_overrides([{"name": "x"}] * 50)) == main._SYSTEM_OVERRIDES_MAX
+    # per-field length cap
+    long_one = main._sanitize_system_overrides([{"name": "z" * 999}])
+    assert len(long_one[0]["name"]) == main._SYSTEM_OVERRIDE_FIELD_MAXLEN
+
+
+def test_system_override_does_not_touch_estimate_cells():
+    """Doc-editor system overrides are DISPLAY-only: the generated .xlsx must
+    still carry the original estimate value in Epoxy!A22, unaffected by an
+    override that renames the system in the proposal .docx."""
+    from openpyxl import load_workbook
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_BASE_VALS),
+            "cell_values": _epoxy_cells(),
+            "system_overrides": [{"name": "Renamed In Proposal Only"}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    wb = load_workbook(io.BytesIO(client.get(r.json()["xlsx_download_url"]).content))
+    assert wb["Epoxy"]["A22"].value == "Zeta Broadcast System"
