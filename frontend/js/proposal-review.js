@@ -651,6 +651,19 @@
   const pristineById  = new Map();   // id -> plain-text pristine rendering
   const artUrlCache   = new Map();   // media name -> object-URL promise
 
+  // Terms & Conditions pagination state (Feature C): the ordered terms block
+  // elements (identity preserved across repaginations), the page geometry to
+  // paginate against, and the resolved terms-letterhead art URL.
+  let _termsUnits  = null;
+  let _termsGeom   = null;
+  let _termsArtUrl = null;
+
+  // True when the keyboard focus is inside `el` — used to skip any re-render
+  // that would rebuild `el`'s innerHTML (and destroy the caret) while the
+  // estimator is typing in one of its editable islands. Skipped repaints
+  // self-heal on the next focusout re-render / refreshDocumentFills.
+  const focusInside = (el) => !!(el && document.activeElement && el.contains(document.activeElement));
+
   const escHtml = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -927,17 +940,23 @@
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
       docSurface.querySelectorAll(".tw-block").forEach(el => {
         if (el.classList.contains("tw-dirty")) return;
+        // Don't re-fill the block the caret is currently in (a sidebar edit
+        // landing within the 150ms window would otherwise clobber it).
+        if (el.contains(document.activeElement)) return;
         const b = blockById.get(Number(el.dataset.id));
         if (b) setBlockContent(el, b, tokens);
       });
       renderSystemPreview();
       renderNotesPreview();
+      scheduleRepaginate();
     }, 150);
   }
 
   // WORK systems preview — mirrors main._build_epoxy_systems + the template's
   // {{#system}} rows (grid picks from Epoxy!A22/A26, else the flat fields).
   function renderSystemPreview() {
+    // Don't rebuild while the estimator is editing one of the fill islands.
+    if (focusInside(systemPreviewEl)) return;
     const merged = Object.assign({}, state, TW.readForm(form));
     const cells = state.cell_values || {};
     const num = (v) => Number(String(v == null ? "" : v).replace(/[$,]/g, "")) || 0;
@@ -954,23 +973,45 @@
     const texture = String(merged.texture || "").trim();
     const coveH = String(merged.cove_height || "6").trim() || "6";
     const multi = picks.length > 1;
+    const ovs = Array.isArray(state.system_overrides) ? state.system_overrides : [];
+    // An estimate-sourced value rendered as an editable, highlighted island.
+    // The yellow .tw-fill stays as a provenance cue; the text is freely
+    // editable in place. `data-computed` is the value the estimate/fields
+    // produce, so the input handler can revert an override that's been
+    // emptied or re-typed back to the computed value. Display-only — never
+    // written to cell_values / pricing (see the systemPreviewEl input handler
+    // and backend system_overrides).
+    const editSpan = (i, field, computed) => {
+      const ov = ovs[i] || {};
+      const v = (typeof ov[field] === "string" && ov[field].trim()) ? ov[field] : computed;
+      return `<span class="tw-fill tw-fill-edit" contenteditable="true" spellcheck="false"` +
+             ` data-sys-index="${i}" data-sys-field="${field}"` +
+             ` data-computed="${escHtml(computed)}">${escHtml(v)}</span>`;
+    };
     systemPreviewEl.innerHTML = picks.map((s, i) => {
       const prefix = multi ? `Option ${i + 1}:` : "System:";
       const lf = s.lf > 0 ? ` and ${fmt(s.lf)} LF of ${coveH}" epoxy cove base` : "";
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
-      return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${escHtml(prefix)}</strong>   <span class="tw-fill">${escHtml(s.name)}</span></p>` +
-             `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">Texture:  <span class="tw-fill">${escHtml(texture)}</span></p>` +
-             `<p class="tw-li" style="margin:0 0 4pt;"><strong>Area: ~<span class="tw-fill">${escHtml(fmt(s.sf))}</span> SF of epoxy flooring${escHtml(lf)}</strong></p>`;
+      return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${escHtml(prefix)}</strong>   ${editSpan(i, "name", s.name)}</p>` +
+             `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">Texture:  ${editSpan(i, "texture", texture)}</p>` +
+             `<p class="tw-li" style="margin:0 0 4pt;"><strong>Area: ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lf)}</strong></p>`;
     }).join("");
   }
 
   // NOTES preview — one bullet per non-blank sidebar line ({{#notes}} block;
   // the template's notes rows are real Word bullets).
   function renderNotesPreview() {
+    // Don't rebuild the bullets while the estimator is typing in one.
+    if (focusInside(notesPreviewEl)) return;
     const ta = document.getElementById("notes-text");
     const lines = String((ta && ta.value) || "").split("\n").map(s => s.trim()).filter(Boolean);
-    notesPreviewEl.innerHTML = lines.map(l => `<p class="tw-li" style="margin:0 0 1pt;">${escHtml(l)}</p>`).join("");
+    // Bullets are editable in place and two-way bound to the sidebar
+    // #notes-text textarea (the single source of truth — no separate payload
+    // field; the generate payload's `notes` still derives from the textarea).
+    notesPreviewEl.innerHTML = lines.map((l, i) =>
+      `<p class="tw-li tw-note-edit" contenteditable="true" spellcheck="false"` +
+      ` data-note-index="${i}" style="margin:0 0 1pt;">${escHtml(l)}</p>`).join("");
   }
 
   // Letterhead artwork, fetched WITH the auth header (a plain <img src>
@@ -1102,29 +1143,105 @@
     // paragraphs BEFORE the first real one are page 1's invisible anchor
     // lines behind the artwork — not meaningful content, so they aren't
     // rendered (and therefore can't be overridden; they stay untouched in
-    // the generated file).
+    // the generated file). The terms are PAGINATED into fixed-height pages
+    // (see repaginateTerms) rather than one continuous div, so text never
+    // flows across the letterhead's red band / next-page logo.
     const bodyBlocks = templateBlocks.filter(b => b.txbx == null);
     const firstReal = bodyBlocks.findIndex(b => String(b.text).trim());
     const flowBlocks = firstReal >= 0 ? bodyBlocks.slice(firstReal) : [];
     if (flowBlocks.length) {
-      const cont = document.createElement("div");
-      cont.className = "tw-page";
-      cont.style.width = pageWpt + "pt";
-      cont.style.minHeight = pageH + "pt";
-      cont.style.padding = `${margin.top}pt ${margin.right}pt ${margin.bottom}pt ${margin.left}pt`;
+      // Render the units ONCE into a detached div so their element identity
+      // (dataset.id, tw-dirty, pristine tracking, collectOverrides) is created
+      // a single time; repaginateTerms only ever MOVES them between pages.
+      const flow = document.createElement("div");
+      renderBlockList(flow, flowBlocks, tokens);
+      _termsUnits = Array.from(flow.children);
+      _termsGeom  = { pageH, margin };
+      repaginateTerms();
       const contArt = arts.find(a => (a.para_index || 0) > 0) || arts[0];
       if (contArt) {
         artUrl(contArt.name).then(u => {
           if (!u) return;
-          cont.style.backgroundImage = `url("${u}")`;
-          cont.style.backgroundSize = `${pageWpt}pt ${pageH}pt`;
-          cont.style.backgroundRepeat = "repeat-y";
+          _termsArtUrl = u;
+          docSurface.querySelectorAll(".tw-terms-page").forEach(applyTermsArt);
         });
       }
-      renderBlockList(cont, flowBlocks, tokens);
-      docSurface.appendChild(cont);
+    } else {
+      _termsUnits = null; _termsGeom = null;
     }
   }
+
+  // Paint the terms-page letterhead onto one page div: the SAME art, sized to
+  // exactly one page and NOT repeated (each page is its own sheet), so no page
+  // shows a second page's logo / red band bleeding in.
+  function applyTermsArt(pg) {
+    if (!_termsArtUrl || !_termsGeom) return;
+    pg.style.backgroundImage = `url("${_termsArtUrl}")`;
+    pg.style.backgroundSize = `${pageWpt}pt ${_termsGeom.pageH}pt`;
+    pg.style.backgroundRepeat = "no-repeat";
+  }
+
+  // Pack the terms blocks into fixed-height page sheets by MEASURED height, so
+  // content never crosses a page boundary (where the letterhead's red band and
+  // next-page logo live). Uses layout metrics (offsetTop/offsetHeight/
+  // clientHeight) which are immune to the #doc-zoom CSS transform — never
+  // getBoundingClientRect, which the transform scales. Blocks are MOVED
+  // (appendChild), never recreated, so their identity/dataset/dirty state and
+  // collectOverrides() all keep working.
+  function repaginateTerms() {
+    if (flowMode || !_termsUnits || !_termsUnits.length || !_termsGeom) return;
+    const { pageH, margin } = _termsGeom;
+    docSurface.querySelectorAll(".tw-terms-page").forEach(p => p.remove());  // units survive via _termsUnits
+    let page = null;
+    const newPage = () => {
+      page = document.createElement("div");
+      page.className = "tw-page tw-terms-page";
+      page.style.width = pageWpt + "pt";
+      page.style.height = pageH + "pt";     // border-box: padding lives inside the page
+      page.style.overflow = "hidden";
+      page.style.padding = `${margin.top}pt ${margin.right}pt ${margin.bottom}pt ${margin.left}pt`;
+      applyTermsArt(page);
+      docSurface.appendChild(page);
+    };
+    newPage();
+    const roomBottom = () => page.clientHeight - parseFloat(getComputedStyle(page).paddingBottom || "0");
+    for (const el of _termsUnits) {
+      page.appendChild(el);                                     // MOVE — identity preserved
+      if (el.offsetTop + el.offsetHeight > roomBottom()) {
+        if (page.children.length > 1) { newPage(); page.appendChild(el); }
+        // A single block taller than a page: let THIS page grow rather than
+        // clip contract text (overflow:hidden would silently hide it).
+        if (el.offsetTop + el.offsetHeight > roomBottom()) {
+          page.style.height = "auto";
+          page.style.minHeight = pageH + "pt";
+        }
+      }
+    }
+    applyZoom();                                                // total height changed
+  }
+
+  // Repaginate off the critical path, but NEVER while the caret is inside a
+  // terms page (it would destroy the selection). If deferred, a docSurface
+  // focusout that leaves the terms flow runs it.
+  let _repagTimer = null, _repagPending = false;
+  const focusInTerms = () => {
+    const a = document.activeElement;
+    return !!(a && a.closest && a.closest(".tw-terms-page"));
+  };
+  function scheduleRepaginate(delay = 600) {
+    if (_repagTimer) clearTimeout(_repagTimer);
+    _repagTimer = setTimeout(() => {
+      if (focusInTerms()) { _repagPending = true; return; }
+      repaginateTerms();
+    }, delay);
+  }
+  docSurface.addEventListener("focusout", (e) => {
+    if (!_repagPending) return;
+    const to = e.relatedTarget;
+    if (to && to.closest && to.closest(".tw-terms-page")) return;   // still in terms — wait
+    _repagPending = false;
+    repaginateTerms();
+  });
 
   // Geometry-less fallback (a template with no floating boxes, or older
   // cached payloads): the same continuous flow — text boxes' content first,
@@ -1170,8 +1287,14 @@
       restoreSavedOverrides(wt, audience);
       renderSystemPreview();
       renderNotesPreview();
+      // restoreSavedOverrides changed some terms blocks' text (heights), so
+      // repaginate once more against the edited content.
+      repaginateTerms();
       refreshPriceDisplay();   // repaint now that the preview els live in the page
       applyZoom();
+      // Cheap insurance: if a locally-installed proposal font activates late,
+      // re-measure once fonts settle.
+      try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => scheduleRepaginate(0)); } catch {}
     } catch (err) {
       // Degraded fallback: surface the price preview alone so the estimator
       // can still verify pricing and continue; previously saved document
@@ -1195,6 +1318,53 @@
     el.classList.toggle("tw-dirty", cur !== pristineById.get(Number(el.dataset.id)));
     el.classList.toggle("tw-empty", !cur.trim());
     schedulePersistOverrides();
+    // A terms-page block can change height as it's edited; repaginate once
+    // the caret leaves the terms flow (scheduleRepaginate defers on focus).
+    if (el.closest(".tw-terms-page")) scheduleRepaginate();
+  });
+
+  // ── Editable estimate-sourced fills: WORK systems ──────────────────────
+  // systemPreviewEl is a stable element (its children are rewritten, but it
+  // itself is never replaced), so one delegated listener survives every
+  // rebuild. Edits write display-only overrides into state.system_overrides
+  // (dense, by option index); they never touch cell_values or pricing.
+  let _sysOvTimer = null;
+  systemPreviewEl.addEventListener("input", (e) => {
+    const sp = e.target && e.target.closest ? e.target.closest("[data-sys-field]") : null;
+    if (!sp) return;
+    const i = Number(sp.dataset.sysIndex);
+    const field = sp.dataset.sysField;
+    if (!Number.isInteger(i) || i < 0 || !field) return;
+    const ovs = Array.isArray(state.system_overrides) ? state.system_overrides : (state.system_overrides = []);
+    while (ovs.length <= i) ovs.push({});          // keep dense — no sparse nulls in JSON
+    if (!ovs[i] || typeof ovs[i] !== "object") ovs[i] = {};
+    const v = serializeBlock(sp).replace(/\s*\n+\s*/g, " ").trim();
+    if (!v || v === (sp.dataset.computed || "")) delete ovs[i][field];   // empty / back-to-computed -> revert
+    else ovs[i][field] = v;
+    if (_sysOvTimer) clearTimeout(_sysOvTimer);
+    _sysOvTimer = setTimeout(() => { try { TW.setState({ system_overrides: state.system_overrides }); } catch {} }, 500);
+  });
+  systemPreviewEl.addEventListener("focusout", (e) => {
+    if (!systemPreviewEl.contains(e.relatedTarget)) renderSystemPreview();   // normalize + apply reverts
+  });
+
+  // ── Editable estimate-sourced fills: NOTES bullets ─────────────────────
+  // Two-way bound to the sidebar #notes-text textarea (single source of
+  // truth). Writing textarea.value programmatically fires NO form 'input'
+  // event, so this never loops back through refreshDocumentFills.
+  let _notesOvTimer = null;
+  notesPreviewEl.addEventListener("input", () => {
+    const ta = document.getElementById("notes-text");
+    if (!ta) return;
+    const lines = [];
+    notesPreviewEl.querySelectorAll("[data-note-index]").forEach(p =>
+      serializeBlock(p).split("\n").forEach(s => lines.push(s.trim())));
+    ta.value = lines.filter(Boolean).join("\n");
+    if (_notesOvTimer) clearTimeout(_notesOvTimer);
+    _notesOvTimer = setTimeout(() => { try { TW.setState({ notes_text: ta.value }); } catch {} }, 300);
+  });
+  notesPreviewEl.addEventListener("focusout", (e) => {
+    if (!notesPreviewEl.contains(e.relatedTarget)) renderNotesPreview();   // re-split Enter'd lines
   });
 
   initDocumentEditor();
@@ -1347,6 +1517,10 @@
         // Document-editor edits -> proposal_writer paragraph overrides,
         // applied to the pristine template BEFORE block expansion (id-safe).
         paragraph_overrides: paragraphOverrides,
+        // Doc-editor per-option DISPLAY overrides for the WORK {{#system}}
+        // rows (epoxy only) — edit the shown system name/texture/area without
+        // touching cell_values or the price.
+        system_overrides: Array.isArray(state.system_overrides) ? state.system_overrides : [],
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).

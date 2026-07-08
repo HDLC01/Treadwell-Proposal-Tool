@@ -309,6 +309,13 @@ class GenerateIn(BaseModel):
     # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
     # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
     paragraph_overrides: list = Field(default_factory=list)
+    # Proposal Review doc editor: per-option DISPLAY overrides for the WORK
+    # {{#system}} rows — [{name?, texture?, sqft?}] positionally aligned with
+    # _build_epoxy_systems() output (index i -> systems[i]). These edit only the
+    # proposal's displayed text; they are NEVER written back to cell_values and
+    # NEVER affect pricing. Applied for epoxy only (other work types pass
+    # systems=None). Sanitized index-preserving — see _sanitize_system_overrides.
+    system_overrides: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -1133,6 +1140,35 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
     return out
 
 
+# Cap + coerce the doc editor's per-option system_overrides. UNLIKE
+# _sanitize_paragraph_overrides, this is INDEX-PRESERVING: a malformed entry
+# coerces to {} in place rather than being dropped, because the list is
+# positional (index i -> _build_epoxy_systems()[i]) and dropping an entry would
+# shift every later override onto the wrong system. Values are str()-coerced,
+# stripped, blanks dropped (a blank field = "revert this field to the computed
+# value"), and length-capped. Never raises — a stale draft or hand-built request
+# must not 500 /api/generate.
+_SYSTEM_OVERRIDES_MAX = 12
+_SYSTEM_OVERRIDE_FIELDS = ("name", "texture", "sqft")
+_SYSTEM_OVERRIDE_FIELD_MAXLEN = 300
+
+
+def _sanitize_system_overrides(overrides_in: list) -> list:
+    out = []
+    for o in (overrides_in or [])[:_SYSTEM_OVERRIDES_MAX]:
+        entry: Dict[str, str] = {}
+        if isinstance(o, dict):
+            for k in _SYSTEM_OVERRIDE_FIELDS:
+                v = o.get(k)
+                if v is None or isinstance(v, (dict, list, bool)):
+                    continue
+                s = str(v).strip()
+                if s:
+                    entry[k] = s[:_SYSTEM_OVERRIDE_FIELD_MAXLEN]
+        out.append(entry)
+    return out
+
+
 _DEFAULT_EXCLUSIONS = (
     "Multiple layers of floor to be removed (change order is necessary), Moving of "
     "Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more "
@@ -1530,6 +1566,15 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         # "System: …", 2+ → "Option 1/2: …") via the template's {{#system}} block.
         systems_arg = (_build_epoxy_systems(payload.cell_values, values)
                        if str(payload.work_type or "").lower() == "epoxy" else None)
+        # Doc-editor DISPLAY overrides for the WORK rows, applied by option index
+        # over the computed systems. `prefix`/`lf_clause` stay computed; nothing
+        # here touches cell_values or the price — display text only. Ignored for
+        # non-epoxy (systems_arg is None there).
+        if systems_arg:
+            for i, ov in enumerate(_sanitize_system_overrides(payload.system_overrides)):
+                if i >= len(systems_arg):
+                    break
+                systems_arg[i].update(ov)
         docx_bytes = proposal_writer.fill_proposal(
             work_type=payload.work_type,
             audience=payload.audience,

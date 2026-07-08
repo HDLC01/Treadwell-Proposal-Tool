@@ -1,6 +1,11 @@
 /* Treadwell Proposal Generator — minimal styling.
    Single file so the 4 screens share visual language without a build step. */
 
+/* Every screen is a light "paper" UI; opt out of Chromium/Brave auto-dark so
+   the pages + letterhead artwork aren't inverted. (Per-page <meta
+   color-scheme> covers first paint before this file loads.) */
+:root { color-scheme: only light; }
+
 :root {
   --treadwell-red:       #9e001f;
   --treadwell-red-dark:  #6c0015;
@@ -749,6 +754,18 @@ button {
   border-radius: 1px;
   cursor: default;
 }
+/* An estimate-sourced fill that is ALSO editable in place (system name /
+   texture / area). Keeps the yellow provenance cue; the caret + focus ring
+   signal it can be typed into. :empty keeps an emptied span clickable so the
+   estimator can re-type after clearing it. */
+.tw-fill.tw-fill-edit { cursor: text; outline: none; }
+.tw-fill.tw-fill-edit:hover { background: #ffe04d; }
+.tw-fill.tw-fill-edit:focus { background: #ffe975; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.55); }
+.tw-fill.tw-fill-edit:empty { display: inline-block; min-width: 1.2em; }
+/* Editable NOTES bullet — a real bullet that also takes the caret. */
+.tw-note-edit { outline: none; cursor: text; }
+.tw-note-edit:hover { background: rgba(200, 16, 46, 0.05); }
+.tw-note-edit:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.4); }
 
 /* The zoom rig: the page renders at TRUE point sizes (the template runs
    8-9pt Zetta Serif) and the whole surface scales up to read comfortably —
