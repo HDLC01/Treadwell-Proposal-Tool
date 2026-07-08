@@ -974,20 +974,47 @@
   }
 
   // Letterhead artwork, fetched WITH the auth header (a plain <img src>
-  // can't carry the bearer token through the /api/* gate) and cached as an
-  // object URL per media name.
+  // can't carry the bearer token through the /api/* gate) and cached as a
+  // data: URI per media name.
+  //
+  // A data: URI (not a blob: object URL) is deliberate: the production/staging
+  // nginx sends `Content-Security-Policy: … img-src 'self' data:` — blob: is
+  // NOT allowed, so an <img src="blob:…"> is silently blocked and the whole
+  // letterhead disappears (only visible behind the CSP, i.e. never in local
+  // dev). data: is on the allowlist, so it renders without any server change.
+  //
+  // A failed fetch is NOT cached: we delete the cache entry before resolving
+  // null so a transient failure (e.g. the page-load auth race) retries on the
+  // next render instead of blanking the letterhead for the whole session.
   function artUrl(name) {
     if (!artUrlCache.has(name)) {
       const wt = (state.work_type || "epoxy").toLowerCase();
       const audience = state.audience || "Direct";
       const url = `/api/proposal-template/media?work_type=${encodeURIComponent(wt)}` +
                   `&audience=${encodeURIComponent(audience)}&name=${encodeURIComponent(name)}`;
-      artUrlCache.set(name, fetch(url, { headers: TW.authHeaders() })
+      const p = fetch(url, { headers: TW.authHeaders() })
         .then(r => (r.ok ? r.blob() : null))
-        .then(b => (b ? URL.createObjectURL(b) : null))
-        .catch(() => null));
+        .then(b => (b ? blobToDataUrl(b) : null))
+        .catch(() => null)
+        .then(u => {
+          if (!u) artUrlCache.delete(name);   // don't cache a failure — allow retry
+          return u;
+        });
+      artUrlCache.set(name, p);
     }
     return artUrlCache.get(name);
+  }
+
+  // Blob -> data: URI. Used for letterhead artwork so the <img> passes the
+  // CSP img-src allowlist (data:, not blob:). ~33% base64 overhead on ~130KB
+  // of PNGs fetched once per template per session — negligible.
+  function blobToDataUrl(blob) {
+    return new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => resolve(null);
+      fr.readAsDataURL(blob);
+    });
   }
 
   // Word-zoom: the page renders at TRUE point sizes (8-9pt Zetta Serif), and
