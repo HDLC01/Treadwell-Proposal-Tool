@@ -1512,6 +1512,9 @@
         // Structural edits (insert/delete rows & columns) -> replayed onto the
         // downloaded .xlsx with formula/merge/lock translation.
         tab_structs: Array.isArray(state.tab_structs) ? state.tab_structs : [],
+        // Per-sheet cell-lock overrides ("Lock cell" toolbar) -> merged over the
+        // default rate/markup/tax locks in the generated .xlsx sheet protection.
+        lock_overrides: (state.lock_overrides && typeof state.lock_overrides === "object") ? state.lock_overrides : {},
         // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
         notes: String(mergedValues.notes_text || "").split("\n").map(s => s.trim()).filter(Boolean),
         // Document-editor edits -> proposal_writer paragraph overrides,

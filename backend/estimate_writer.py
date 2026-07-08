@@ -465,6 +465,52 @@ def _norm_structs(tab_structs: list[Mapping[str, Any]] | None) -> list[dict]:
     return out
 
 
+# A single-cell A1 address (no $, no range, no sheet prefix) — user lock/unlock
+# addresses arrive already in the sheet's CURRENT coordinates.
+_LOCK_ADDR_RE = re.compile(r"^[A-Z]{1,3}[0-9]{1,7}$")
+_LOCK_OVERRIDES_MAX_SHEETS = 64
+_LOCK_OVERRIDES_MAX_ADDRS = 500
+
+
+def _norm_lock_overrides(lock_overrides: Mapping[str, Any] | None) -> dict[str, dict[str, list[str]]]:
+    """Validate + normalize the doc/grid editor's per-sheet lock overrides:
+    `{sheetId: {"lock": [addr...], "unlock": [addr...]}}`. Sheet ids are clamped
+    to 31 chars (matching _create_copied_tabs); addresses are upper-cased,
+    stripped, de-duped, and must be single-cell A1 refs (ranges / sheet-prefixed
+    / malformed entries are dropped). An address in BOTH lists resolves as
+    unlocked (unlock wins — mirrors the effective-set formula), so it is removed
+    from `lock` here. Junk never raises — this must not 500 /api/generate."""
+    if not isinstance(lock_overrides, Mapping):
+        return {}
+    out: dict[str, dict[str, list[str]]] = {}
+    for raw_sheet, entry in list(lock_overrides.items())[:_LOCK_OVERRIDES_MAX_SHEETS]:
+        sheet = str(raw_sheet or "").strip()[:31]
+        if not sheet or not isinstance(entry, Mapping):
+            continue
+
+        def _addrs(key):
+            seen, acc = set(), []
+            raw = entry.get(key)
+            if not isinstance(raw, list):   # a non-list value (dict/int/…) isn't sliceable — treat as empty
+                return acc
+            for a in raw[:_LOCK_OVERRIDES_MAX_ADDRS]:
+                if isinstance(a, (dict, list, bool)):
+                    continue
+                s = str(a).strip().upper()
+                if _LOCK_ADDR_RE.match(s) and s not in seen:
+                    seen.add(s)
+                    acc.append(s)
+            return acc
+
+        lock = _addrs("lock")
+        unlock = _addrs("unlock")
+        unlock_set = set(unlock)
+        lock = [a for a in lock if a not in unlock_set]   # unlock wins
+        if lock or unlock:
+            out[sheet] = {"lock": lock, "unlock": unlock}
+    return out
+
+
 def _shift_index(idx: int, at: int, count: int, insert: bool) -> int | None:
     """One index through one op: shifted index, or None when deleted."""
     if insert:
@@ -644,6 +690,7 @@ def fill_estimate(
     tab_labels: Mapping[str, Any] | None = None,
     tab_order: list | None = None,
     tab_structs: list[Mapping[str, Any]] | None = None,
+    lock_overrides: Mapping[str, Any] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
 
@@ -707,8 +754,9 @@ def fill_estimate(
     # every sheet still carries its stable id (before the alternate-rename and
     # display-label passes change titles). Worksheet objects survive those
     # renames, so we hold these references and apply the actual protection at the
-    # very end, just before saving.
-    ws_layouts = _resolve_ws_layouts(wb, tab_copies, ops_by)
+    # very end, just before saving. User lock/unlock overrides (in CURRENT grid
+    # coordinates, like cell_values) merge over the translated presets here.
+    ws_layouts = _resolve_ws_layouts(wb, tab_copies, ops_by, _norm_lock_overrides(lock_overrides))
 
     # 2. Direct-cell writes (verbatim cell-for-cell editor path)
     for sheet_addr, val in (cell_values or {}).items():
@@ -839,18 +887,31 @@ def _lock_layout_for(base_id: str) -> list[str] | None:
 
 
 def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None,
-                        ops_by: Dict[str, list[dict]] | None = None) -> list[tuple[Any, list[str]]]:
-    """Map each worksheet OBJECT to its rate-cell lock addresses.
+                        ops_by: Dict[str, list[dict]] | None = None,
+                        lock_overrides: Mapping[str, dict] | None = None,
+                        ) -> list[tuple[Any, list[str]]]:
+    """Map each worksheet OBJECT to its EFFECTIVE locked-cell addresses.
 
     Called while every sheet still carries its stable id (after _create_copied_tabs
     and the structural-edit replay, before the alternate-rename and tab-label
     passes), so titles resolve reliably: copies follow their {id, source} chain
-    back to a template layout, Gyp variants share the Gyp set, and sheets with no
-    locked cells (Takeoff, validation, …) are left out entirely — they get no
-    protection. LOCK_MAP holds TEMPLATE coordinates, so each address translates
-    through the sheet's own structural ops (a deleted rate cell simply drops out
-    of the lock set). The worksheet objects survive the later retitles, so the
-    returned pairs stay valid until save."""
+    back to a template layout, Gyp variants share the Gyp set. LOCK_MAP holds
+    TEMPLATE coordinates, so each preset address translates through the sheet's
+    own structural ops (a deleted rate cell simply drops out of the lock set).
+
+    Effective set per sheet = (translated presets) ∪ user `lock` − user `unlock`.
+    User addresses are in CURRENT (post-structural-edit) coordinates — the same
+    convention cell_values use — so they are applied AS-IS, never translated.
+
+    A sheet is returned (and thus protection-MANAGED by _apply_cell_protection)
+    when its effective set is non-empty OR it ships protected in the template
+    (Epoxy/Polish are pre-protected). An empty effective list means "unprotect
+    this sheet" — so a user who unlocks every locked cell gets a fully editable
+    sheet instead of one silently frozen with all cells locked-by-default. A
+    sheet that is neither template-protected nor has any effective lock is left
+    out entirely (Takeoff/validation/…), exactly as before. The worksheet
+    objects survive the later retitles, so the returned pairs stay valid until
+    save."""
     src_by_id: dict[str, str] = {}
     for c in (tab_copies or []):
         if not isinstance(c, dict):
@@ -859,19 +920,31 @@ def _resolve_ws_layouts(wb, tab_copies: list[Mapping[str, Any]] | None,
         if cid:
             src_by_id[cid] = str(c.get("source") or "Epoxy").strip() or "Epoxy"
 
+    overrides = lock_overrides or {}
     out: list[tuple[Any, list[str]]] = []
     for ws in wb.worksheets:
         base, guard = ws.title, 0
         while base in src_by_id and guard < 20:      # copy-of-a-copy chains
             base = src_by_id[base]
             guard += 1
-        addrs = _lock_layout_for(base)
-        if addrs:
-            ops = (ops_by or {}).get(ws.title) or []
-            if ops:
-                addrs = [t for t in (_translate_addr(a, ops) for a in addrs) if t]
-            if addrs:
-                out.append((ws, addrs))
+        # Presets (template coords) translated through this sheet's own ops.
+        preset = _lock_layout_for(base) or []
+        ops = (ops_by or {}).get(ws.title) or []
+        if preset and ops:
+            preset = [t for t in (_translate_addr(a, ops) for a in preset) if t]
+        # User overrides are keyed by the sheet's OWN id and already in current
+        # coordinates — merge them in (dedup, preserving order: presets first).
+        ov = overrides.get(ws.title) or {}
+        unlock = set(ov.get("unlock") or [])
+        effective, seen = [], set()
+        for a in list(preset) + list(ov.get("lock") or []):
+            if a and a not in unlock and a not in seen:
+                seen.add(a)
+                effective.append(a)
+        # Manage the sheet if it needs locks OR if it ships protected (so an
+        # "unlock everything" can actually turn protection off).
+        if effective or ws.protection.sheet:
+            out.append((ws, effective))
     return out
 
 
@@ -915,6 +988,13 @@ def _apply_cell_protection(ws_layouts: list[tuple[Any, list[str]]]) -> None:
 
     for ws, addrs in ws_layouts:
         try:
+            # An empty address list means "unprotect this sheet" — the user
+            # unlocked every locked cell (a template-protected sheet like Epoxy
+            # would otherwise stay frozen with all cells locked-by-default).
+            if not addrs:
+                ws.protection.sheet = False
+                ws.protection.disable()
+                continue
             # Tier 1: only cells that already exist — list() because assigning
             # a style can grow the dict via style interning side effects.
             for cell in list(ws._cells.values()):
