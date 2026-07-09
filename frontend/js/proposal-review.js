@@ -151,6 +151,45 @@
   const fmtUSD = (n) => "$" + Number(n || 0).toLocaleString(undefined,
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtSF = (n) => "~" + Number(n || 0).toLocaleString() + " sf";
+  // Like fmtUSD but strips a trailing ".00" so preview PRICE amounts byte-match
+  // the backend's _fmt_usd (e.g. "$36,763" not "$36,763.00"); fractional cents
+  // keep their decimals ("$36,763.50").
+  const fmtUSDdoc = (n) => { const s = fmtUSD(n); return s.endsWith(".00") ? s.slice(0, -3) : s; };
+
+  // ─── Editable PRICE-line DISPLAY overrides (state.price_overrides) ──────
+  // The base bid line, each priced option line, and each manual price line
+  // render their amount + label as editable islands. An edit is stored as a
+  // DISPLAY override (never touches cell_values / pricing — see backend
+  // _sanitize_price_overrides); an emptied / back-to-computed island reverts.
+  // Shape mirrors the backend: { options:{<id>:{label?,amount?}},
+  // manual:[{label?,amount?}...], single_bid:{amount?,tax_phrase?} }.
+  function poOverride(kind, key) {
+    const pov = (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : null;
+    if (!pov) return null;
+    if (kind === "option")     return (pov.options && typeof pov.options === "object") ? pov.options[key] : null;
+    if (kind === "manual")     return Array.isArray(pov.manual) ? pov.manual[key] : null;
+    if (kind === "single_bid") return (pov.single_bid && typeof pov.single_bid === "object") ? pov.single_bid : null;
+    return null;
+  }
+  // Current shown value for an override field: the saved override text if present
+  // and non-blank, else the computed value (same resolution as renderSystemPreview).
+  function poValue(kind, key, field, computed) {
+    const ov = poOverride(kind, key);
+    return (ov && typeof ov[field] === "string" && ov[field].trim()) ? ov[field] : computed;
+  }
+  // A contenteditable .tw-fill-edit island for a PRICE line's amount/label. The
+  // data-po-* attrs carry the addressing the delegated input handler uses;
+  // data-computed is the engine value an emptied island reverts to (see poValue).
+  function poIsland(kind, key, field, computed, opts) {
+    const e = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const tag = (opts && opts.strong) ? "strong" : "span";
+    const keyAttr = kind === "option" ? ` data-po-id="${e(String(key))}"`
+                  : kind === "manual" ? ` data-po-index="${key}"` : "";
+    return `<${tag} class="tw-fill tw-fill-edit" contenteditable="true" spellcheck="false"` +
+           ` data-po-kind="${kind}"${keyAttr} data-po-field="${field}"` +
+           ` data-computed="${e(computed)}">${e(poValue(kind, key, field, computed))}</${tag}>`;
+  }
 
   // Recompute the base bid + priced options from the per-tab totals snapshotted on
   // the Estimate screen (state.priced_tabs). This lets the base-bid picker + the
@@ -324,9 +363,22 @@
       if (comboBlock) comboBlock.style.display = "none";
       if (baseBidHeading) baseBidHeading.style.display = "";
       if (baseBidRow) baseBidRow.style.display = "";
+      // The base amount + tax phrase are editable override islands. Don't repaint
+      // them while the caret is inside #base-bid-row (it would be destroyed) —
+      // self-heals on focusout (which re-runs refreshPriceDisplay). The Total /
+      // Material Sales Tax / Remodel rows stay engine-owned (plain, read-only).
+      const editingBase = focusInside(baseBidRow);
+      const baseDisp = document.getElementById("base-bid-display");
       if (broken) {
-        document.getElementById("base-bid-display").textContent = fmtUSD(baseBid);
-        phraseEl.textContent = "";
+        if (!editingBase) {
+          // Base line keeps cents (fmtUSD): the docx fills it from
+          // base_bid_formatted / total_formatted, both produced by fmtUSD (.00),
+          // NOT through _fmt_usd. Only the option/manual lines (which DO go
+          // through _fmt_usd) use fmtUSDdoc's trailing-.00 strip.
+          const computedBase = fmtUSD(baseBid);
+          if (baseDisp) { baseDisp.dataset.computed = computedBase; baseDisp.textContent = poValue("single_bid", null, "amount", computedBase); }
+          if (phraseEl) { phraseEl.dataset.computed = ""; phraseEl.textContent = poValue("single_bid", null, "tax_phrase", ""); }
+        }
         document.getElementById("sales-tax-display").textContent = fmtUSD(salesTax);
         if (salesRow)   salesRow.style.display = "";
         if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
@@ -334,10 +386,15 @@
         if (totalRow)   totalRow.style.display = "";
         document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
       } else {
-        document.getElementById("base-bid-display").textContent = fmtUSD(lumpSumN);
-        phraseEl.textContent = exempt ? "(tax exempt)"
+        const computedPhrase = exempt ? "(tax exempt)"
           : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
           : "(material sales tax INCLUDED)";
+        if (!editingBase) {
+          // Base line keeps cents (fmtUSD) to match the docx (total_formatted).
+          const computedBase = fmtUSD(lumpSumN);
+          if (baseDisp) { baseDisp.dataset.computed = computedBase; baseDisp.textContent = poValue("single_bid", null, "amount", computedBase); }
+          if (phraseEl) { phraseEl.dataset.computed = computedPhrase; phraseEl.textContent = poValue("single_bid", null, "tax_phrase", computedPhrase); }
+        }
         if (salesRow)   salesRow.style.display = "none";
         if (remodelRow) remodelRow.style.display = "none";
         if (totalRow)   totalRow.style.display = "none";
@@ -369,47 +426,65 @@
         ? "(Remodel Tax AND material sales tax INCLUDED)"
         : "(material sales tax INCLUDED)";
 
-      // DOCUMENT preview (read-only) — base as a total line; each option as a total
-      // line or a "($savings) – Deduct VE for … in lieu of <base>" line, mirroring
-      // the .docx {{#room}} block. Re-reads state.rooms fresh on each call.
-      function renderRoomsPreview() {
-        if (!roomsBlock) return;
-        // Combo breakout leads PRICE with its own Option 1/Option 2 total lines —
-        // there's no "combined base" concept in the docx (rooms_arg is always []
-        // and _build_options excludes is_base rows), so the synthetic combined
-        // "Base Bid: $<epoxy+polish>" room built by rebuildPricing() for the combo
-        // fallback must be dropped here too, or the preview shows a line the
-        // generated .docx never prints.
+      // DOCUMENT preview — mirrors backend api_generate EXACTLY: the base bid is
+      // shown ONLY by the single_bid group (#base-bid-row), so #rooms-block renders
+      // NOTHING; the priced OPTION lines (from _build_options) + the manual
+      // {{#price_line}} rows both render into #price-lines-block, in that order,
+      // under the "Options:" heading. (The old renderRoomsPreview painted a
+      // duplicate "Base Bid:" + the options into #rooms-block, which mounts BEFORE
+      // single_bid — showing the base twice and never showing "Options:".)
+      // Amounts/labels are editable .tw-fill-edit override islands (display-only).
+      function renderOptionLinesPreview() {
+        if (roomsBlock) roomsBlock.innerHTML = "";      // base shows via single_bid only
+        const plBlock = document.getElementById("price-lines-block");
+        if (!plBlock) return;
+        // Bail while the caret is inside — a repaint would destroy the edit;
+        // self-heals on the container's focusout re-render.
+        if (focusInside(plBlock)) return;
+        // Combo breakout leads PRICE with its own Option 1/Option 2 total lines,
+        // so the synthetic combined base room is dropped (kept guard) — plus all
+        // is_base rows (base shows via single_bid), hidden rows, and empty totals.
         const comboBreakoutActive = comboSystemLines().length > 0;
         const rooms = (Array.isArray(state.rooms) ? state.rooms : [])
-          .filter(r => r && r.bid && N(r.bid.total) > 0 && !(comboBreakoutActive && r.is_base));
-        if (!rooms.length) { roomsBlock.innerHTML = ""; return; }
-        // Flows like the docx rows themselves — bulleted lines, engine-driven
-        // amounts highlighted — so the page reads as one continuous document.
-        let html = "";
-        html += rooms.map((r) => {
-          const desc = r.system_desc || r.option_desc || floorNoun;
-          const autoNotes = Array.isArray(r.notes_auto) ? r.notes_auto : [];
-          const manual = Array.isArray(r.notes_manual) ? r.notes_manual : [];
-          const isDeduct = !r.is_base && r.price_mode === "deduct" && N(r.deduct_amount) > 0;
-          let h = "";
-          if (r.is_base) {
-            h += `<p style="margin:0 0 1pt;font-weight:bold;">Base Bid:</p>`;
-            h += `<p class="tw-li" style="margin:0 0 1pt;"><strong class="tw-fill">${fmtUSD(r.bid.total)}</strong> – ${esc(desc)} as described above ${taxPhrase(r)}</p>`;
-          } else if (isDeduct) {
-            h += `<p class="tw-li" style="margin:0 0 1pt;"><strong class="tw-fill">(${fmtUSD(r.deduct_amount)})</strong> – Deduct VE for ${esc(r.option_desc || r.name)}, in lieu of ${esc(r.base_desc || "the base bid")}.</p>`;
+          .filter(r => r && r.bid && N(r.bid.total) > 0 && !r.is_base
+                       && r.show !== false && !(comboBreakoutActive && r.is_base));
+        // OPTION lines — same mode/label rules as main._build_options.
+        let html = rooms.map((r) => {
+          const isDeduct = r.price_mode === "deduct" && N(r.deduct_amount) > 0;
+          let label, amount;
+          if (isDeduct) {
+            label = `Deduct VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
+            amount = `(${fmtUSDdoc(r.deduct_amount)})`;
           } else {
-            h += `<p class="tw-li" style="margin:0 0 1pt;"><strong class="tw-fill">${fmtUSD(r.bid.total)}</strong> – ${esc(desc)} as described above ${taxPhrase(r)}</p>`;
+            const desc = r.system_desc || r.option_desc || floorNoun;
+            const notes = (Array.isArray(r.notes_auto) ? r.notes_auto : [])
+              .concat(Array.isArray(r.notes_manual) ? r.notes_manual : []);
+            label = `${desc} as described above ${taxPhrase(r)}`;
+            if (notes.length) label += " — " + notes.join("; ");   // inline, matches main.py
+            amount = fmtUSDdoc(r.bid.total);
           }
-          // (No separate system bullet: the price line above already names the
-          // system via option_desc, and the generated .docx doesn't add one either.)
-          h += autoNotes.concat(manual).map(n => `<p class="tw-li" style="margin:0 0 1pt;padding-left:18pt;">${esc(n)}</p>`).join("");
-          h += `<p style="margin:0 0 3pt;"></p>`;
-          return h;
+          return `<p class="tw-li" style="margin:0 0 2pt;">` +
+                 poIsland("option", r.id, "amount", amount, { strong: true }) + ` – ` +
+                 poIsland("option", r.id, "label", label) + `</p>`;
         }).join("");
-        roomsBlock.innerHTML = html;
+        // Manual {{#price_line}} rows AFTER the options. data-po-index is the
+        // ORIGINAL price_lines index (not the filtered one) so a skipped/blank row
+        // can't shift a later override — matches the backend's positional apply.
+        const pls = Array.isArray(state.price_lines) ? state.price_lines : [];
+        html += pls.map((l, i) => {
+          const amt = Number(l.amount || 0);
+          const label = (l.label || "").trim();
+          if (!amt || !label) return "";
+          return `<p class="tw-li" style="margin:0 0 2pt;">` +
+                 poIsland("manual", i, "amount", fmtUSDdoc(amt), { strong: true }) + ` – ` +
+                 poIsland("manual", i, "label", label) + `</p>`;
+        }).join("");
+        plBlock.innerHTML = html;
+        // "Options:" heading visible iff there's ≥1 option or manual price line.
+        const oh = document.getElementById("options-heading");
+        if (oh) oh.style.display = html.trim() ? "" : "none";
       }
-      renderRoomsPreview();
+      renderOptionLinesPreview();
 
       // RIGHT controls panel: base-bid picker + per-tab option toggles — mirrors the
       // Estimate screen's #bid-bar (both edit state.base_tab_id + state.tab_opts).
@@ -446,6 +521,11 @@
               r += `<div class="pr-optsub"${isOpt ? "" : ' style="display:none"'}>`;
               r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
               r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct (VE)</option></select></label>`;
+              // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
+              // vs the base; when the option costs as much or more the doc falls back
+              // to its own total line — flag that so the estimator isn't surprised.
+              const savings = N(state.proposal_lump_sum) - N(t.total);
+              r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as its own total.</span>`;
               r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
               r += `</div>`;
             }
@@ -476,13 +556,22 @@
             const sh = row.querySelector(".pr-show");
             if (sh) sh.addEventListener("change", () => { ensureOpt(id).show = sh.checked; applyAndRefresh(); });
             const md = row.querySelector(".pr-mode");
-            if (md) md.addEventListener("change", () => { ensureOpt(id).price_mode = md.value === "deduct" ? "deduct" : "total"; applyAndRefresh(); });
+            if (md) md.addEventListener("change", () => {
+              ensureOpt(id).price_mode = md.value === "deduct" ? "deduct" : "total";
+              const hint = row.querySelector(".pr-deduct-hint");
+              if (hint) {
+                const t = allTabs.find(x => x.id === id);
+                const savings = N(state.proposal_lump_sum) - N(t ? t.total : 0);
+                hint.style.display = (md.value === "deduct" && savings <= 0) ? "" : "none";
+              }
+              applyAndRefresh();
+            });
             const ta = row.querySelector(".room-notes");
             if (ta) ta.addEventListener("input", () => {
               if (!state.tab_notes) state.tab_notes = {};
               state.tab_notes[id] = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
-              rebuildPricing();       // refresh state.rooms (notes) …
-              renderRoomsPreview();   // … then update ONLY the preview (keep textarea focus)
+              rebuildPricing();             // refresh state.rooms (notes) …
+              renderOptionLinesPreview();   // … then update ONLY the preview (keep textarea focus)
               TW.setState({ tab_notes: state.tab_notes });
             });
           });
@@ -490,17 +579,9 @@
       }
     }
 
-    // (a) Structured price lines (options / unit prices listed under PRICE)
-    const plBlock = document.getElementById("price-lines-block");
-    if (plBlock) {
-      const pls = Array.isArray(state.price_lines) ? state.price_lines : [];
-      plBlock.innerHTML = pls.map(l => {
-        const amt = Number(l.amount || 0);
-        const label = (l.label || "").trim();
-        if (!amt || !label) return "";
-        return `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(amt)}</strong> – ${esc(label)}</p>`;
-      }).join("");
-    }
+    // (a) The priced OPTION lines + manual price lines now render into
+    // #price-lines-block via renderOptionLinesPreview() (above) so the option
+    // lines can precede the manual lines and share the editable-island path.
 
     // (b) Recommended alternate system — a 2nd, independent priced bid.
     const altBlock = document.getElementById("alternate-block");
@@ -698,7 +779,7 @@
     notes:      () => [notesPreviewEl],
     room:       () => [document.getElementById("rooms-block")],
     single_bid: () => ["base-bid-heading", "combo-price-block", "base-bid-row",
-                       "sales-tax-row", "remodel-tax-row", "total-row"]
+                       "sales-tax-row", "remodel-tax-row", "total-row", "options-heading"]
                        .map(id => document.getElementById(id)),
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
@@ -1367,6 +1448,62 @@
     if (!notesPreviewEl.contains(e.relatedTarget)) renderNotesPreview();   // re-split Enter'd lines
   });
 
+  // ── Editable PRICE-line DISPLAY overrides (state.price_overrides) ───────
+  // Delegated on the STABLE containers: #price-lines-block (option + manual
+  // line islands) and #base-bid-row (the single_bid base amount / tax phrase).
+  // An emptied / back-to-computed island reverts; otherwise it's stored. These
+  // are display-only — the .xlsx, totals, and the math rows (Total / Material
+  // Sales Tax / Remodel) are never touched (see backend _sanitize_price_overrides).
+  let _povTimer = null;
+  function _ensurePov() {
+    let pov = state.price_overrides;
+    if (!pov || typeof pov !== "object" || Array.isArray(pov)) pov = state.price_overrides = {};
+    if (!pov.options || typeof pov.options !== "object" || Array.isArray(pov.options)) pov.options = {};
+    if (!Array.isArray(pov.manual)) pov.manual = [];
+    if (!pov.single_bid || typeof pov.single_bid !== "object" || Array.isArray(pov.single_bid)) pov.single_bid = {};
+    return pov;
+  }
+  function _handlePoInput(e) {
+    const sp = e.target && e.target.closest ? e.target.closest("[data-po-field]") : null;
+    if (!sp) return;
+    const kind = sp.dataset.poKind, field = sp.dataset.poField;
+    if (!kind || !field) return;
+    const v = serializeBlock(sp).replace(/\s*\n+\s*/g, " ").trim();
+    const revert = !v || v === (sp.dataset.computed || "");   // empty / back-to-computed
+    const pov = _ensurePov();
+    if (kind === "option") {
+      const id = sp.dataset.poId || "";
+      if (!id) return;
+      if (revert) {
+        if (pov.options[id]) { delete pov.options[id][field]; if (!Object.keys(pov.options[id]).length) delete pov.options[id]; }
+      } else { (pov.options[id] = pov.options[id] || {})[field] = v; }
+    } else if (kind === "manual") {
+      const idx = Number(sp.dataset.poIndex);
+      if (!Number.isInteger(idx) || idx < 0) return;
+      while (pov.manual.length <= idx) pov.manual.push({});    // keep dense — index-preserving
+      if (!pov.manual[idx] || typeof pov.manual[idx] !== "object") pov.manual[idx] = {};
+      if (revert) delete pov.manual[idx][field]; else pov.manual[idx][field] = v;
+    } else if (kind === "single_bid") {
+      if (revert) delete pov.single_bid[field]; else pov.single_bid[field] = v;
+    } else { return; }
+    if (_povTimer) clearTimeout(_povTimer);
+    _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
+  }
+  const _plBlockEl = document.getElementById("price-lines-block");
+  const _baseBidRowEl = document.getElementById("base-bid-row");
+  if (_plBlockEl) {
+    _plBlockEl.addEventListener("input", _handlePoInput);
+    _plBlockEl.addEventListener("focusout", (e) => {
+      if (!_plBlockEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
+    });
+  }
+  if (_baseBidRowEl) {
+    _baseBidRowEl.addEventListener("input", _handlePoInput);
+    _baseBidRowEl.addEventListener("focusout", (e) => {
+      if (!_baseBidRowEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
+    });
+  }
+
   initDocumentEditor();
 
   // Recompute base + options from the per-tab snapshot first (no-op for older
@@ -1524,6 +1661,10 @@
         // rows (epoxy only) — edit the shown system name/texture/area without
         // touching cell_values or the price.
         system_overrides: Array.isArray(state.system_overrides) ? state.system_overrides : [],
+        // Doc-editor per-line DISPLAY overrides for the PRICE section (base bid
+        // amount / tax phrase, option + manual line label/amount). Display-only —
+        // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
+        price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
