@@ -2716,9 +2716,19 @@ document.getElementById("cb-add-priceline").addEventListener("click", () => {
 // Recompute the System Name + refresh the base-bid picker / option totals when
 // any grid selection or SF changes (debounced). No engine round-trip anymore —
 // the proposal uses the sheet's own Total Lump Sum.
+//
+// persistTabState() re-snapshots the sheet's live totals into state.priced_tabs /
+// proposal_lump_sum — the ONLY source the Proposal screen reads for the Base Bid.
+// Without this, a cell edit updated the grid + picker but NOT that snapshot, so
+// the base bid only refreshed when the estimator clicked Back/Continue (or a
+// lock/structural edit fired persistTabState). Navigating to the proposal any
+// other way (step nav, browser back/forward) showed a stale base bid until a
+// manual page refresh. Re-snapshotting on every settled edit keeps the proposal's
+// base bid in lockstep with the sheet across every navigation path.
 document.getElementById("sheet-grid").addEventListener("change", () => {
   refreshSystemName();
-  clearTimeout(_cbTimer); _cbTimer = setTimeout(renderBidOptions, 300);
+  clearTimeout(_cbTimer);
+  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
 });
 
 init();

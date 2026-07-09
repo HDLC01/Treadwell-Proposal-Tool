@@ -322,6 +322,13 @@ class GenerateIn(BaseModel):
     # NEVER affect pricing. Applied for epoxy only (other work types pass
     # systems=None). Sanitized index-preserving — see _sanitize_system_overrides.
     system_overrides: list = Field(default_factory=list)
+    # Proposal Review doc editor: per-line DISPLAY overrides for the PRICE
+    # section — {"options": {<option id>: {label?, amount?}}, "manual":
+    # [{label?, amount?}...] (index-aligned with `price_lines`), "single_bid":
+    # {amount?, tax_phrase?}}. DISPLAY-ONLY: these override the shown label/amount
+    # text on the proposal's PRICE lines; they NEVER touch cell_values, the .xlsx,
+    # or GenerateOut totals. Sanitized in api_generate — see _sanitize_price_overrides.
+    price_overrides: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AutofillIn(BaseModel):
@@ -1090,6 +1097,10 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
                  if str(n).strip()]
         out.append({
+            # Inert passthrough of the source room/tab id — lets api_generate map
+            # a per-option price_overrides entry back to this line. Never affects
+            # pricing or the option's rendered content on its own.
+            "id": str(r.get("id") or ""),
             "heading": "",
             "price_formatted": price_formatted,
             "price_desc": price_desc,
@@ -1172,6 +1183,56 @@ def _sanitize_system_overrides(overrides_in: list) -> list:
                 if s:
                     entry[k] = s[:_SYSTEM_OVERRIDE_FIELD_MAXLEN]
         out.append(entry)
+    return out
+
+
+# Cap + coerce the doc editor's price_overrides. DISPLAY-ONLY: these override the
+# TEXT shown on the proposal's PRICE lines (base bid, priced options, manual price
+# lines) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals. Mirrors
+# _sanitize_system_overrides (str()-coerce, .strip(), drop a blank field = "revert
+# to computed", per-field maxlen, never raises). Normalized shape:
+#   {"options":    {<option id>: {label?, amount?}},
+#    "manual":     [{label?, amount?}, ...],   # index-preserving, {} placeholders
+#    "single_bid": {amount?, tax_phrase?}}
+# `manual` is index-preserving (a malformed/blank entry -> {} in place) so a
+# filtered-out price line can't shift a later override onto the wrong row — same
+# rationale as _sanitize_system_overrides. An option entry that cleans to {} is
+# dropped (a blank override = revert). Never raises: a stale draft or hand-built
+# request must not 500 /api/generate.
+_PRICE_OVERRIDES_MAX = 100
+_PRICE_OVERRIDE_FIELD_MAXLEN = 500
+
+
+def _sanitize_price_overrides(pov_in) -> dict:
+    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}}
+    if not isinstance(pov_in, dict):
+        return out
+
+    def clean(o, fields) -> Dict[str, str]:
+        entry: Dict[str, str] = {}
+        if isinstance(o, dict):
+            for k in fields:
+                v = o.get(k)
+                if v is None or isinstance(v, (dict, list, bool)):
+                    continue
+                s = str(v).strip()
+                if s:
+                    entry[k] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
+        return entry
+
+    opts_in = pov_in.get("options")
+    if isinstance(opts_in, dict):
+        for oid, ov in list(opts_in.items())[:_PRICE_OVERRIDES_MAX]:
+            entry = clean(ov, ("label", "amount"))
+            if entry:                                 # blank/garbage entry = revert -> drop
+                out["options"][str(oid)] = entry
+
+    manual_in = pov_in.get("manual")
+    if isinstance(manual_in, list):
+        for m in manual_in[:_PRICE_OVERRIDES_MAX]:
+            out["manual"].append(clean(m, ("label", "amount")))   # keep {} holes in place
+
+    out["single_bid"] = clean(pov_in.get("single_bid"), ("amount", "tax_phrase"))
     return out
 
 
@@ -1458,16 +1519,32 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         if nm:
             values["estimator_name"] = nm
 
+    # Doc-editor per-line DISPLAY overrides for the PRICE section (display TEXT
+    # only — never touches cell_values, the .xlsx, or the totals; see
+    # _sanitize_price_overrides). Applied to the manual price lines + option lines
+    # below, and to the single_bid base amount/tax phrase after the tax layout.
+    _pov = _sanitize_price_overrides(payload.price_overrides)
+
     # Structured PRICE option lines -> repeatable {{#price_line}} rows.
     price_line_dicts = []
-    for pl in (payload.price_lines or []):
+    for _i, pl in enumerate(payload.price_lines or []):
         label = str((pl or {}).get("label") or "").strip()
         try:
             amt = float((pl or {}).get("amount") or 0)
         except (TypeError, ValueError):
             amt = 0.0
         if label and amt:
-            price_line_dicts.append({"label": label, "amount_formatted": _fmt_usd(amt)})
+            row = {"label": label, "amount_formatted": _fmt_usd(amt)}
+            # DISPLAY override for this manual line, positional by the ORIGINAL
+            # price_lines index (_i) so a filtered-out row can't shift it onto the
+            # wrong line — the frontend stores overrides at that same raw index.
+            _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
+            if _mov:
+                if _mov.get("label"):
+                    row["label"] = _mov["label"]
+                if _mov.get("amount"):
+                    row["amount_formatted"] = _mov["amount"]
+            price_line_dicts.append(row)
 
     # Recommended ALTERNATE system -> a 0/1-item {{#alternate}} block + a second
     # estimate tab. Tax-inclusive total; flooring = total − remodel tax.
@@ -1503,7 +1580,16 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         _label = _o["price_desc"]
         if _o.get("notes_joined"):
             _label += " — " + _o["notes_joined"].replace("\n", "; ")
-        _option_lines.append({"label": _label, "amount_formatted": _o["price_formatted"]})
+        _amount = _o["price_formatted"]
+        # DISPLAY override for this option line, keyed by the option's id.
+        _oid = str(_o.get("id") or "")
+        _oov = _pov["options"].get(_oid) if _oid else None
+        if _oov:
+            if _oov.get("label"):
+                _label = _oov["label"]
+            if _oov.get("amount"):
+                _amount = _oov["amount"]
+        _option_lines.append({"label": _label, "amount_formatted": _amount})
     # Options first, then the estimator's manual "Add for" price lines.
     price_line_dicts = _option_lines + price_line_dicts
 
@@ -1549,6 +1635,16 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
 
     # "Options:" label prints when there ARE option lines; else it's stripped.
     _has_options = bool(price_line_dicts)
+
+    # Doc-editor DISPLAY overrides for the base bid line (single_bid): the shown
+    # base AMOUNT and the tax phrase. Applied last so they win over the tax-layout
+    # defaults set above. The Total / Material Sales Tax / Remodel rows stay
+    # engine-computed — only the base line's own display text is overridable.
+    # (Combo suppresses single_bid, so these no-op there — combo stays read-only.)
+    if _pov["single_bid"].get("amount"):
+        values["base_bid_formatted"] = _pov["single_bid"]["amount"]
+    if _pov["single_bid"].get("tax_phrase"):
+        values["base_tax_phrase"] = _pov["single_bid"]["tax_phrase"]
 
     # Fill estimate workbook
     try:

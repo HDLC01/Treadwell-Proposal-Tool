@@ -68,6 +68,9 @@
       // rooms — pre-existing lossiness, tracked separately; the primary path
       // (proposal_payload above) carries them all.
       system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
+      // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
+      // option + manual line label/amount). Display-only — never affects pricing.
+      price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);

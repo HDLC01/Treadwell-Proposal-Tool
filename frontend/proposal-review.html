@@ -552,9 +552,14 @@
        generated doc has no heading here either — refreshPriceDisplay hides
        #base-bid-heading to match (see proposal-review.js). -->
   <div id="combo-price-block" style="display:none;"></div>
+  <!-- The base AMOUNT + tax phrase are editable display-override islands
+       (.tw-fill-edit) — see proposal-review.js price_overrides. The Material
+       Sales Tax / Remodel / Total rows below stay PLAIN (engine-owned math). -->
   <p id="base-bid-row" class="tw-li" style="margin: 0 0 2pt;">
-    <strong class="tw-fill" id="base-bid-display">$0</strong> – Epoxy flooring as described above
-    <em id="base-tax-phrase-display">(material sales tax INCLUDED)</em>
+    <strong class="tw-fill tw-fill-edit" id="base-bid-display" contenteditable="true" spellcheck="false"
+            data-po-kind="single_bid" data-po-field="amount" data-computed="">$0</strong> – Epoxy flooring as described above
+    <em class="tw-fill tw-fill-edit" id="base-tax-phrase-display" contenteditable="true" spellcheck="false"
+        data-po-kind="single_bid" data-po-field="tax_phrase" data-computed="">(material sales tax INCLUDED)</em>
   </p>
   <p id="sales-tax-row" class="tw-li" style="margin: 0 0 2pt; display:none;">
     <strong class="tw-fill" id="sales-tax-display">$0</strong> – Material Sales Tax
@@ -565,6 +570,11 @@
   <p id="total-row" class="tw-li" style="margin: 0 0 4pt;">
     <strong class="tw-fill" id="total-display">$0</strong> – Total
   </p>
+  <!-- "Options:" heading — mirrors the {{#has_options}}Options:{{/has_options}}
+       label nested at the END of the .docx {{#single_bid}} group. Mounted LAST
+       in the single_bid region; shown iff there's ≥1 option or manual price
+       line (toggled by renderOptionLinesPreview). -->
+  <p id="options-heading" style="font-weight:bold;display:none;margin:0 0 1pt;">Options:</p>
   <!-- Per-room priced options (per-room jobs): read-only preview; manual
        notes are edited in the pricing-options rail. -->
   <div id="rooms-block"></div>
