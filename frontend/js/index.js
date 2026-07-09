@@ -164,5 +164,5 @@
       deadline: values.bid_date || values.deadline || "",
       num_systems: 2,
     });
-    window.location.assign("/estimate-review.html");
+    window.location.assign(TW.withDraft("/estimate-review.html"));
   });

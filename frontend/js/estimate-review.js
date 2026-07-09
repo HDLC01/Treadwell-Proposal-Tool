@@ -2618,11 +2618,11 @@ function persistTabState() {
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign("/?edit=1");   // back to intake for the current draft (home is Projects)
+  window.location.assign(TW.withDraft("/?edit=1"));   // back to intake for the current draft (home is Projects)
 });
 document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign("/proposal-review.html");
+  window.location.assign(TW.withDraft("/proposal-review.html"));
 });
 
 // ── System-name helpers (live reads off the grid / HF for the auto System Name) ──

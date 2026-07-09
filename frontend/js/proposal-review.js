@@ -1449,7 +1449,7 @@
 
   document.getElementById("back-btn").addEventListener("click", () => {
     TW.setState(TW.readForm(form));
-    window.location.assign("/estimate-review.html");
+    window.location.assign(TW.withDraft("/estimate-review.html"));
   });
 
   form.addEventListener("submit", async (e) => {
@@ -1529,5 +1529,5 @@
       // re-reading from HF (which lives on the Estimate Review page).
       lump_sum_display: lumpSumText,
     });
-    window.location.assign("/done.html");
+    window.location.assign(TW.withDraft("/done.html"));
   });
