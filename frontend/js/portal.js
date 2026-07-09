@@ -59,9 +59,10 @@
     }
   }
 
-  // ── detail drawer ───────────────────────────────────────────────────────────
+  // ── detail modal pop-up ─────────────────────────────────────────────────────
   function closeDrawer() { $("drawer").classList.remove("open"); $("scrim").style.display = "none"; }
-  $("scrim").addEventListener("click", closeDrawer);
+  $("scrim").addEventListener("click", closeDrawer);           // click the backdrop to close
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });  // Esc to close
 
   async function openDetail(pid) {
     $("scrim").style.display = "block";
