@@ -13,6 +13,11 @@
   const STATE_KEY = "treadwell.proposal_tool.state";
   const DRAFT_ID_KEY = "treadwell.proposal_tool.draft_id";
   const RELOAD_GUARD = "treadwell.proposal_tool.hydrated_once";
+  // Ownership stamp stored INSIDE the state blob so we can tell which draft it
+  // belongs to. Without it, one global blob + a URL-keyed server save let a
+  // stale (e.g. bfcache-restored) page write draft A's data under draft B's id.
+  const STAMP = "__draft_id";
+  const GUARD_WINDOW_MS = 15000;   // reload-loop guard: only blocks a re-hydrate of the SAME id within this window
 
   /**
    * API base URL resolution (in priority order):
@@ -44,11 +49,25 @@
     }
   }
 
+  function writeBlob(obj) {
+    try { localStorage.setItem(STATE_KEY, JSON.stringify(obj)); return true; }
+    catch { return false; /* quota / private mode */ }
+  }
+
   function setState(partial) {
-    const merged = Object.assign(getState(), partial || {});
-    try { localStorage.setItem(STATE_KEY, JSON.stringify(merged)); }
-    catch {/* quota / private mode */}
-    scheduleServerSave(merged);   // debounced push to SQLite
+    const id = getDraftId();
+    const cur = getState();
+    // Refuse a write when the blob belongs to a DIFFERENT draft than the page
+    // is on (both truthy + differ). Stops a stale/bfcache-restored page from
+    // clobbering another draft's state locally AND on the server.
+    if (cur[STAMP] && id && cur[STAMP] !== id) {
+      console.warn("[TW] refused state write: blob owned by draft", cur[STAMP], "but page is on", id);
+      return cur;
+    }
+    const merged = Object.assign(cur, partial || {});
+    if (id) merged[STAMP] = id;   // force-stamp AFTER the merge (partials can carry a stale stamp)
+    writeBlob(merged);
+    scheduleServerSave(merged);   // debounced push to the server draft
     return merged;
   }
 
@@ -99,72 +118,151 @@
     } catch {}
   }
 
+  // One place that actually PUTs a blob to a draft id. Callers guarantee the
+  // blob belongs to `id`; this never picks the id itself.
+  function putDraft(id, blob) {
+    try {
+      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ data: blob }),
+        keepalive: true,         // let it finish even if the tab is closing
+      }).catch(() => {/* offline / backend down — local copy still safe */});
+    } catch {}
+  }
+
+  // Before we evict a FOREIGN blob from localStorage (adopting a different
+  // draft), flush it to ITS OWN stamped id so another draft's unsynced edits
+  // aren't destroyed. Correctly keyed by construction (only ever its own stamp).
+  function flushEvictedBlob(blob) {
+    const owner = blob && blob[STAMP];
+    if (!owner) return;
+    if (Object.keys(blob).filter((k) => k !== STAMP).length === 0) return;  // empty → nothing to save
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }         // its pending save is superseded
+    putDraft(owner, blob);
+  }
+
   let _saveTimer = null;
   function scheduleServerSave(state) {
     const id = getDraftId();
     if (!id) return;            // no id yet → nothing to sync
+    // Gate at schedule time: never queue a save of a blob owned by another draft.
+    if (state && state[STAMP] && state[STAMP] !== id) {
+      console.warn("[TW] refused server save: state stamped", state[STAMP], "≠ draft", id);
+      return;
+    }
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
-      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
-        method: "PUT",
-        headers: authHeaders(),
-        body: JSON.stringify({ data: state }),
-        keepalive: true,         // let it finish even if the tab is closing
-      }).catch(() => {/* offline / backend down — local copy still safe */});
+      _saveTimer = null;
+      // Re-check at FIRE time — a bfcache-resumed timer may fire after the URL/draft changed.
+      const nowId = getDraftId();
+      if (!nowId || nowId !== id || (state[STAMP] && state[STAMP] !== nowId)) {
+        console.warn("[TW] skipped queued save — draft changed since it was scheduled");
+        return;
+      }
+      putDraft(id, state);
     }, 2500);                    // debounce: save 2.5s after the last edit
   }
 
-  // Runs once on every page load (before the page's own init reads state).
-  // Handles three cases:
-  //   1. URL has ?d= matching local  → same session, trust local, sync URL
-  //   2. URL has ?d= NOT in local    → cross-device open → pull from server,
-  //                                     write to localStorage, reload once
-  //   3. no ?d= but local has a draft → assert the id back into the URL
-  //   4. nothing                      → mint a fresh id (lazily, on first save)
+  // sessionStorage reload-guard, time-windowed so it only breaks reload LOOPS
+  // (a re-hydrate of the SAME id within GUARD_WINDOW_MS) — it must NOT block a
+  // legitimate re-hydration on later navigation (that was the multi-tab / return
+  // bug). Value format: "<id>:<epoch-ms>". A legacy bare "<id>" blocks once.
+  function guardBlocks(id) {
+    try {
+      const raw = sessionStorage.getItem(RELOAD_GUARD) || "";
+      const i = raw.lastIndexOf(":");
+      if (i < 0) return raw === id;
+      return raw.slice(0, i) === id && (Date.now() - Number(raw.slice(i + 1))) < GUARD_WINDOW_MS;
+    } catch { return false; }
+  }
+  function setGuard(id) { try { sessionStorage.setItem(RELOAD_GUARD, id + ":" + Date.now()); } catch {} }
+
+  // Runs once on every page load, before the page's own init reads state.
+  // Ownership is decided by the blob's STAMP (not by DRAFT_ID_KEY): if the URL's
+  // ?d= draft doesn't own the local blob, hydrate it (fetch → clean-replace →
+  // reload). This self-heals after corruption and covers cross-device opens.
   async function initDraftSync() {
-    // The cross-device pull below hits the auth-gated /api/draft/{id}. Wait for
-    // the Supabase token (set by auth.js) so the GET isn't 401'd — otherwise a
-    // reopened project link would silently start empty instead of hydrating.
+    // The pull below hits the auth-gated /api/draft/{id}. Wait for the Supabase
+    // token (set by auth.js) so the GET isn't 401'd — otherwise a reopened link
+    // would start empty instead of hydrating.
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     let urlId = null;
     try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
     const localId = (() => { try { return localStorage.getItem(DRAFT_ID_KEY); } catch { return null; } })();
-    const guard = (() => { try { return sessionStorage.getItem(RELOAD_GUARD); } catch { return null; } })();
+    const blob = getState();
+    const stamp = blob[STAMP] || null;
+    const empty = Object.keys(blob).filter((k) => k !== STAMP).length === 0;
 
-    if (urlId && urlId !== localId && guard !== urlId) {
-      // Cross-device (or returning) open — pull the server copy.
-      try {
-        const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(urlId),
-                                { headers: authHeaders() });
-        if (res.ok) {
-          const body = await res.json();
-          if (body && body.data) {
-            try { localStorage.setItem(STATE_KEY, JSON.stringify(body.data)); } catch {}
-            try { localStorage.setItem(DRAFT_ID_KEY, urlId); } catch {}
-            try { sessionStorage.setItem(RELOAD_GUARD, urlId); } catch {}
-            window.location.reload();   // re-run page init with hydrated state
-            return;
-          }
-        }
-        // 404 → treat the url id as a brand-new draft on this device.
-        setDraftId(urlId);
-      } catch {
-        setDraftId(urlId);              // backend unreachable — adopt id locally
-      }
-    } else if (urlId) {
-      setDraftId(urlId);                // same-session, keep URL + local in sync
-    } else if (localId) {
-      setDraftId(localId);             // re-assert id into URL after navigation
-    } else {
-      // No draft yet. Mint one only once the user actually has state, so
-      // a bare visit to "/" doesn't create empty drafts. We set it here
-      // anyway so the very first setState() syncs.
-      setDraftId(newDraftId());
+    if (!urlId) {
+      setDraftId(localId || newDraftId());
+      if (!stamp && !empty) { blob[STAMP] = getDraftId(); writeBlob(blob); }   // lazy-stamp legacy blob
+      return;
+    }
+
+    // Does the local blob belong to this URL's draft?
+    const owned = stamp === urlId
+               || (!stamp && localId === urlId)   // migration: unstamped blob is owned by DRAFT_ID_KEY
+               || (!stamp && empty);              // fresh device / just-cleared — nothing to protect
+    if (owned) {
+      setDraftId(urlId);
+      if (!stamp && !empty) { blob[STAMP] = urlId; writeBlob(blob); }          // lazy-stamp
+      return;
+    }
+
+    // Blob belongs to a DIFFERENT draft → must hydrate.
+    if (guardBlocks(urlId)) {
+      // Already hydrated+reloaded this id seconds ago and the stamp STILL
+      // mismatches (storage writes failing, e.g. private mode). Don't loop:
+      // drop a stamped-empty blob so we never render another draft as this one.
+      flushEvictedBlob(blob);
+      writeBlob({ [STAMP]: urlId });
+      setDraftId(urlId);
+      console.error("[TW] hydration loop stopped for draft", urlId, "— local storage may be unavailable");
+      return;
+    }
+
+    flushEvictedBlob(blob);                        // save the OTHER draft's tail under its own id
+    const adoptAndReload = (data) => {
+      data[STAMP] = urlId;                         // force-stamp (server copy may carry a stale stamp)
+      writeBlob(data);
+      setDraftId(urlId);
+      setGuard(urlId);
+      window.location.reload();                    // re-run page init with the right state
+    };
+    const attempt = async () => {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(urlId),
+                              { headers: authHeaders() });
+      if (res.ok) { const body = await res.json(); return adoptAndReload((body && body.data) || {}); }
+      if (res.status === 404) return adoptAndReload({});   // brand-new / never-saved draft → stamped empty
+      throw new Error("HTTP " + res.status);
+    };
+    try { await attempt(); }
+    catch {
+      try { await attempt(); }                     // one silent retry for a transient blip
+      catch { adoptAndReload({}); }                // stamped-empty floor: no page auto-PUTs from empty state
     }
   }
 
-  // Kick off sync as soon as the script loads.
-  try { initDraftSync(); } catch {/* never block page render */}
+  // Kick off sync as soon as the script loads. Expose the promise so pages that
+  // auto-act on load (done.js files-mode) can await a settled draft first.
+  let draftReady;
+  try { draftReady = initDraftSync().catch(() => {}); }
+  catch { draftReady = Promise.resolve(); }         // never block page render
+
+  // Browser Back can restore a frozen (bfcache) page whose in-memory state
+  // belongs to another draft; reload so initDraftSync re-validates ownership.
+  window.addEventListener("pageshow", (e) => { if (e.persisted) window.location.reload(); });
+  // Flush the pending debounced save on navigation so the last ≤2.5s of edits
+  // aren't dropped (same refusal rule as scheduleServerSave).
+  window.addEventListener("pagehide", () => {
+    if (!_saveTimer) return;
+    clearTimeout(_saveTimer); _saveTimer = null;
+    const id = getDraftId();
+    const blob = getState();
+    if (!id || (blob[STAMP] && blob[STAMP] !== id)) return;
+    putDraft(id, blob);
+  });
 
   // ─── Form helpers ─────────────────────────────────────────────────
   /** Serialise a <form> into a plain object. Numbers become Numbers. */
@@ -378,6 +476,31 @@
     return resolveApiBase() + path;
   }
 
+  // Append the current draft id to an in-app path so navigation carries ?d=
+  // (the wizard's Back/Continue + step links otherwise drop it and rely on
+  // localStorage — the exact trust this bug shows is misplaced).
+  function withDraft(path) {
+    const id = getDraftId();
+    if (!id) return path;
+    return path + (path.indexOf("?") >= 0 ? "&" : "?") + "d=" + encodeURIComponent(id);
+  }
+
+  // Rewrite static wizard step-nav anchors to carry ?d=. Skips the "/" home and
+  // "?new" (a fresh start must NOT inherit a draft id); leaves cross-origin and
+  // non-wizard links alone.
+  const _WIZARD_PATH = /^\/(estimate-review|proposal-review|done|dropbox)\.html$|^\/$/;
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("a[href]").forEach((a) => {
+      try {
+        const href = a.getAttribute("href");
+        const u = new URL(href, location.origin);
+        if (u.origin !== location.origin || !_WIZARD_PATH.test(u.pathname)) return;
+        if (u.pathname === "/" && !u.searchParams.has("edit")) return;   // "/" home / "?new" → no ?d=
+        if (!u.searchParams.has("d")) a.setAttribute("href", withDraft(href));
+      } catch {}
+    });
+  });
+
   // ─── Expose ───────────────────────────────────────────────────────
   window.TW = {
     getState,
@@ -397,5 +520,7 @@
     resolveApiBase,
     getDraftId,
     initDraftSync,
+    withDraft,
+    draftReady,
   };
 })();

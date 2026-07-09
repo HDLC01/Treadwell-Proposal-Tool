@@ -719,6 +719,11 @@ function deleteTab(id) {
   delete state.tab_notes[id];
   delete state.tab_opts[id];
   delete state.lock_overrides[id];   // freed copy ids get reused — don't leak locks
+  // Same reuse hazard for the per-option PRICE display override: nextCopyId()
+  // hands the freed "Copy<N>" id to the NEXT copy, so a leftover
+  // price_overrides.options[id] would print this deleted tab's overridden
+  // amount/label on the new (unrelated) option's customer proposal. Drop it.
+  if (state.price_overrides && state.price_overrides.options) delete state.price_overrides.options[id];
   if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
@@ -2618,11 +2623,11 @@ function persistTabState() {
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign("/?edit=1");   // back to intake for the current draft (home is Projects)
+  window.location.assign(TW.withDraft("/?edit=1"));   // back to intake for the current draft (home is Projects)
 });
 document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign("/proposal-review.html");
+  window.location.assign(TW.withDraft("/proposal-review.html"));
 });
 
 // ── System-name helpers (live reads off the grid / HF for the auto System Name) ──
@@ -2701,7 +2706,13 @@ function renderPriceLines() {
       PRICE_LINES[i][inp.dataset.k] = inp.value; persistPriceLines();
     }));
     row.querySelector('[data-act="rm"]').addEventListener("click", () => {
-      PRICE_LINES.splice(i, 1); persistPriceLines(); renderPriceLines();
+      PRICE_LINES.splice(i, 1);
+      // Manual PRICE display overrides are positional (state.price_overrides.manual
+      // indexed by price-line position). Splice in tandem so the deletion doesn't
+      // shift a later line's override onto the wrong line in the customer proposal.
+      const _mo = state.price_overrides && state.price_overrides.manual;
+      if (Array.isArray(_mo) && i < _mo.length) _mo.splice(i, 1);
+      persistPriceLines(); renderPriceLines();
     });
     wrap.appendChild(row);
   });
@@ -2716,9 +2727,19 @@ document.getElementById("cb-add-priceline").addEventListener("click", () => {
 // Recompute the System Name + refresh the base-bid picker / option totals when
 // any grid selection or SF changes (debounced). No engine round-trip anymore —
 // the proposal uses the sheet's own Total Lump Sum.
+//
+// persistTabState() re-snapshots the sheet's live totals into state.priced_tabs /
+// proposal_lump_sum — the ONLY source the Proposal screen reads for the Base Bid.
+// Without this, a cell edit updated the grid + picker but NOT that snapshot, so
+// the base bid only refreshed when the estimator clicked Back/Continue (or a
+// lock/structural edit fired persistTabState). Navigating to the proposal any
+// other way (step nav, browser back/forward) showed a stale base bid until a
+// manual page refresh. Re-snapshotting on every settled edit keeps the proposal's
+// base bid in lockstep with the sheet across every navigation path.
 document.getElementById("sheet-grid").addEventListener("change", () => {
   refreshSystemName();
-  clearTimeout(_cbTimer); _cbTimer = setTimeout(renderBidOptions, 300);
+  clearTimeout(_cbTimer);
+  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
 });
 
 init();

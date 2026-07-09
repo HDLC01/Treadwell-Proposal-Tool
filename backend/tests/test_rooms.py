@@ -404,3 +404,54 @@ def test_non_combo_options_label_unaffected_by_separator_fix():
                                       single_bid=None, tax_breakout=True))
     assert "Options:" in blob
     assert "– Options:" not in blob and "-Options:" not in blob
+
+
+# ── Proposal Review PRICE preview parity (backend contract the fix mirrors) ─
+# The Proposal Review PAGE preview used to duplicate the base bid + hide the
+# "Options:" label. The generated .docx has always been correct: ONE base bid
+# (via {{#single_bid}}), then the "Options:" label, then the priced option lines
+# (via {{#price_line}}). These guard that backend contract so the fixed preview
+# has something stable to mirror. (Fixture quirk: the templates ALSO concatenate
+# the whole price block into one anchor paragraph, so we match lines that ARE
+# EXACTLY a heading — the anchor line contains them only as substrings.)
+def test_generate_rooms_render_single_base_and_options_label():
+    rooms = [
+        {"id": "Epoxy", "is_base": True, "name": "Base",
+         "system_desc": "MACRO Flake Single Broadcast", "bid": {"total": 36763, "remodel": 0}},
+        {"id": "Copy1", "is_base": False, "show": True, "base_total": 36763,
+         "price_mode": "total", "option_desc": "Quartz Double Broadcast",
+         "system_desc": "Quartz Double Broadcast", "bid": {"total": 11126, "remodel": 0},
+         "notes_auto": ["Includes cove base"], "notes_manual": []},
+        # Deduct that costs MORE than the base (savings <= 0) -> falls back to its
+        # own total line, no "Deduct VE" wording (main._build_options fallback).
+        {"id": "Copy2", "is_base": False, "show": True, "base_total": 36763,
+         "price_mode": "deduct", "option_desc": "Premium System",
+         "base_desc": "MACRO Flake Single Broadcast", "bid": {"total": 48777, "remodel": 0}},
+    ]
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS), "rooms": rooms}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    lines = _rendered(client.get(r.json()["docx_download_url"]).content).split("\n")
+    assert lines.count("Base Bid") == 1                # exactly one standalone base heading
+    assert "Options:" in lines                          # the label renders
+    base_i = lines.index("Base Bid")
+    opt_i = lines.index("Options:")
+    assert base_i < opt_i                               # base first, then the Options label
+    after = lines[opt_i + 1:]                            # the real option lines follow it
+    quartz = next(l for l in after if "Quartz Double Broadcast" in l)
+    premium = next(l for l in after if "Premium System as described above" in l)
+    assert " — Includes cove base" in quartz       # auto note folded inline (main.py " — ")
+    assert "$48,777" in premium                          # deduct-costs-more -> own total line
+    assert "Deduct VE" not in "\n".join(after)
+
+
+def test_generate_no_options_price_section_unchanged():
+    rooms = [{"id": "Epoxy", "is_base": True, "name": "Base",
+              "system_desc": "MACRO Flake Single Broadcast", "bid": {"total": 36763, "remodel": 0}}]
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS), "rooms": rooms}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    lines = _rendered(client.get(r.json()["docx_download_url"]).content).split("\n")
+    assert lines.count("Base Bid") == 1                 # base still shows via single_bid
+    assert "Options:" not in lines                       # no options -> label stripped
+    assert "Deduct VE" not in "\n".join(lines)

@@ -15,18 +15,23 @@
   })();
 
   // ─── Decide which mode to show ────────────────────────────────────
-  if (filesMode && (state.proposal_payload || state.project_name || state.job_name)) {
-    viewFiles();                       // generate fresh + show downloads
-  } else if (result) {
-    // Already generated — show download buttons
-    showPostGenerate(result);
-  } else if (state.proposal_payload && state.project_name) {
-    // Ready to generate — show review card with Generate button
-    showPreGenerate();
-  } else {
-    // No project in flight
-    emptyEl.style.display = "";
-  }
+  // Wait for initDraftSync to settle draft ownership first: for a foreign /
+  // mis-keyed blob it reloads the page (and this promise never resolves), so
+  // files-mode can't POST /api/generate from the previous draft's data.
+  (async () => {
+    try { await (TW.draftReady || Promise.resolve()); } catch {}
+    const st = TW.getState();
+    const res = st.generate_result;
+    if (filesMode && (st.proposal_payload || st.project_name || st.job_name)) {
+      viewFiles();                       // generate fresh + show downloads
+    } else if (res) {
+      showPostGenerate(res);             // already generated — show download buttons
+    } else if (st.proposal_payload && st.project_name) {
+      showPreGenerate();                 // ready to generate — show review card
+    } else {
+      emptyEl.style.display = "";        // no project in flight
+    }
+  })();
 
   // Generate the files for a saved project and jump straight to downloads.
   async function viewFiles() {
@@ -63,6 +68,9 @@
       // rooms — pre-existing lossiness, tracked separately; the primary path
       // (proposal_payload above) carries them all.
       system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
+      // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
+      // option + manual line label/amount). Display-only — never affects pricing.
+      price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);
@@ -96,7 +104,7 @@
     document.getElementById("rv-lump").textContent     = state.lump_sum_display || "—";
 
     document.getElementById("back-btn-done").addEventListener("click", () => {
-      window.location.assign("/proposal-review.html");
+      window.location.assign(TW.withDraft("/proposal-review.html"));
     });
     document.getElementById("gen-btn").addEventListener("click", doGenerate);
   }
