@@ -364,6 +364,42 @@ def _strip_leading_separator(p_elem) -> None:
             remaining = 0
 
 
+# Base-bid line: `{{base_bid_formatted}} – <description> as described above {{base_tax_phrase}}`.
+# The <description> is static text in every template (each work type / audience
+# has its own wording, e.g. "Epoxy flooring", "Polished Concrete & Joint Filler"),
+# NOT a token — so a display override swaps just the text BETWEEN the two tokens,
+# leaving the amount + tax-phrase tokens (and each template's default wording when
+# there's no override) untouched. Matches hyphen / en dash / em dash separators.
+_BASE_DESC_RE = re.compile(
+    r"(\{\{\s*base_bid_formatted\s*\}\}\s*[-–—]\s*).*?(\s*\{\{\s*base_tax_phrase\s*\}\})",
+    re.DOTALL,
+)
+
+
+def _apply_base_desc_override(d: Document, desc: str) -> int:
+    """Replace the base-bid line's description with `desc`, preserving the
+    `{{base_bid_formatted}}`/`{{base_tax_phrase}}` tokens + their separators.
+
+    Operates per `<w:t>` run across the whole document (body + text boxes,
+    including the VML-fallback duplicate). The base line is authored as a single
+    run in every template, so a template whose base line were split across runs
+    simply wouldn't match — a safe no-op that keeps the default wording. Runs
+    BEFORE the flat `{{token}}` pass so the anchor tokens are still present.
+    """
+    if not desc:
+        return 0
+    n = 0
+    for t in d.element.body.iter(qn("w:t")):
+        txt = t.text or ""
+        if "base_bid_formatted" in txt and "base_tax_phrase" in txt:
+            new = _BASE_DESC_RE.sub(lambda m: m.group(1) + desc + m.group(2), txt)
+            if new != txt:
+                t.text = new
+                t.set(qn("xml:space"), "preserve")
+                n += 1
+    return n
+
+
 def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]]) -> int:
     """Expand EVERY `{{#<block_name>}}…{{/<block_name>}}` block in `container`.
 
@@ -1014,6 +1050,14 @@ def fill_proposal(
     n_blocks = _expand_all_blocks(d, block_lists)
     if n_blocks:
         log.info("Expanded %d repeatable block(s)", n_blocks)
+
+    # Base-bid line DISPLAY override (single_bid.desc): swap the static
+    # description noun between {{base_bid_formatted}} and {{base_tax_phrase}}
+    # BEFORE the flat pass fills those tokens. No-op unless the caller set
+    # `_base_desc_override` (private key — the flat pass never emits it).
+    _bdo = values.get("_base_desc_override")
+    if _bdo and _apply_base_desc_override(d, str(_bdo)):
+        log.info("Applied base-bid description override")
 
     # Phase 2 — flat {{token}} substitution against `values`. This runs
     # unchanged from v1 and also fills any non-system tokens left inside
