@@ -55,6 +55,14 @@
       tab_copies: Array.isArray(s.tab_copies) ? s.tab_copies : [],
       tab_labels: (s.tab_labels && typeof s.tab_labels === "object") ? s.tab_labels : {},
       tab_order: Array.isArray(s.tab_order) ? s.tab_order : [],
+      // Structural edits + per-cell lock overrides into the .xlsx.
+      tab_structs: Array.isArray(s.tab_structs) ? s.tab_structs : [],
+      lock_overrides: (s.lock_overrides && typeof s.lock_overrides === "object") ? s.lock_overrides : {},
+      // Doc-editor per-option WORK-row display overrides (epoxy only). NOTE:
+      // this fallback still drops notes / paragraph_overrides / remodel /
+      // rooms — pre-existing lossiness, tracked separately; the primary path
+      // (proposal_payload above) carries them all.
+      system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);

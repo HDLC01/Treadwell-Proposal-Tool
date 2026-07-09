@@ -48,6 +48,8 @@ try:
 except ImportError:
     pass
 
+import docx
+from docx.text.paragraph import Paragraph
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -265,6 +267,12 @@ class GenerateIn(BaseModel):
     # Structured proposal price lines (options / unit prices): [{"label","amount"}].
     # Rendered as repeatable {{#price_line}} rows under PRICE; NOT priced into the bid.
     price_lines: list = Field(default_factory=list)
+    # Combo per-option price breakout (pre-formatted): [{"amount_formatted","label"}]
+    # e.g. "$28,400" / "Option 1: Epoxy flooring as described above (…INCLUDED)",
+    # "$1,200" / "Kansas Remodel Tax", "$29,600" / "Total", then Option 2 (Polish).
+    # When present, these render FIRST under PRICE and the combined single-bid line
+    # is suppressed (the two option totals ARE the price).
+    combo_options: list = Field(default_factory=list)
     # Recommended ALTERNATE system bid (the full /api/price response with an
     # `alternate_full_bid` + `alternate`), and its proposal label.
     alternate_computed_bid: Dict[str, Any] | None = None
@@ -285,9 +293,32 @@ class GenerateIn(BaseModel):
     tab_labels: Dict[str, Any] = Field(default_factory=dict)
     # Drag-to-reorder worksheet order, by internal id. Applied to the .xlsx tab order.
     tab_order: list = Field(default_factory=list)
+    # Structural edits (insert/delete rows & columns), in the order made:
+    # [{sheet, kind: insert_rows|delete_rows|insert_cols|delete_cols, at, count}].
+    # Replayed onto the workbook with formula/merge/lock-map translation.
+    tab_structs: list = Field(default_factory=list)
+    # Per-sheet cell-lock overrides from the grid's "Lock cell" toolbar button:
+    # {sheetId: {"lock": [addr...], "unlock": [addr...]}}, addresses in CURRENT
+    # grid coordinates. Merged over the default rate/markup/tax locks in the
+    # generated .xlsx (estimate_writer._resolve_ws_layouts). Normalized there
+    # (_norm_lock_overrides) — never trusted raw.
+    lock_overrides: Dict[str, Any] = Field(default_factory=dict)
     # Editable proposal NOTES (one string per bullet). Empty -> standard per-work-type
     # boilerplate is used (so the notes never vanish).
     notes: list = Field(default_factory=list)
+    # Proposal Review's document editor: free-text edits to template paragraphs
+    # OUTSIDE the priced/repeatable regions (see /api/proposal-template).
+    # [{"id": <int, from that endpoint>, "text": "<resolved plain text>"}].
+    # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
+    # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
+    paragraph_overrides: list = Field(default_factory=list)
+    # Proposal Review doc editor: per-option DISPLAY overrides for the WORK
+    # {{#system}} rows — [{name?, texture?, sqft?}] positionally aligned with
+    # _build_epoxy_systems() output (index i -> systems[i]). These edit only the
+    # proposal's displayed text; they are NEVER written back to cell_values and
+    # NEVER affect pricing. Applied for epoxy only (other work types pass
+    # systems=None). Sanitized index-preserving — see _sanitize_system_overrides.
+    system_overrides: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -794,15 +825,18 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         return {"ok": False, "error": "Autofill failed. Please try again."}
 
 
-def _fmt_usd(n) -> str:
+def _fmt_usd(n, parens: bool = False) -> str:
     """Currency for proposal price lines: "$4,200" (drop trailing .00), "$4,200.50".
-    Matches the frontend fmtUSD style so price-line/alternate text reads consistently."""
+    Matches the frontend fmtUSD style so price-line/alternate text reads consistently.
+    parens=True wraps the magnitude as a deduct/credit, e.g. "($4,200)" — Treadwell's
+    "($x) – Deduct VE …" convention."""
     try:
         v = float(n)
     except (TypeError, ValueError):
         return ""
-    s = f"${v:,.2f}"
-    return s[:-3] if s.endswith(".00") else s
+    s = f"${abs(v):,.2f}" if parens else f"${v:,.2f}"
+    s = s[:-3] if s.endswith(".00") else s
+    return f"({s})" if parens else s
 
 
 def _ensure_state_name(values: Dict[str, Any]) -> None:
@@ -886,62 +920,68 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
     return out
 
 
-def _build_options(rooms_in: list, values: Dict[str, Any]) -> list:
-    """Per-sheet priced options for the proposal PRICE section ({{#room}} block).
+def _flooring_noun(work_type: str) -> str:
+    """The generic flooring phrase for an option's PRICE line, by work type."""
+    return {
+        "epoxy":  "Epoxy flooring",
+        "combo":  "Epoxy flooring",
+        "polish": "Polished Concrete Flooring",
+        "sealer": "Sealed Concrete",
+        "gyp":    "Gypsum Underlayment System",
+    }.get(str(work_type or "").lower(), "Flooring")
 
-    Each input option (from the estimate side) is
-    {name, is_base, base_total, system_desc, show_system, show_diff,
-     bid:{total, sales_tax, remodel}, notes_auto:[...], notes_manual:[...]}.
-    Builds, per option with a positive total (base bid first):
-      heading:         "Grooming:"
-      price_formatted: "$8,310"  (the sheet's all-in D88 — tax-inclusive)
-      price_desc:      "Epoxy flooring as described above (<tax phrase>)"
-      notes_joined:    stacked lines = [system/scope if show_system] +
-                       [signed difference vs base bid if show_diff & not base] +
-                       auto notes + manual notes
-    The tax phrase names the Kansas Remodel Tax only when that option's remodel
-    tax > 0. Returns [] when there are no priced options (block then strips)."""
+
+def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epoxy") -> list:
+    """NON-base priced options for the proposal PRICE section ({{#room}} block).
+
+    The base bid is rendered by {{#single_bid}}, so it is EXCLUDED here. Each input
+    option (from the estimate/proposal side) is
+    {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
+     base_desc, system_desc, bid:{total, sales_tax, remodel}, notes_auto, notes_manual}.
+    A shown option (show != False, positive total) renders in one of two modes:
+      • total  → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
+      • deduct → price_formatted "($3,200)"; desc "Deduct VE for <option>, in lieu of
+                 <base>." where savings = base_total − option_total (both tax-inclusive).
+                 A non-positive deduct falls back to total mode.
+    Returns [] when there are no shown options (the block then strips)."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
         except (TypeError, ValueError):
             return 0.0
 
+    noun = _flooring_noun(work_type)
     out = []
     for r in (rooms_in or []):
-        if not isinstance(r, dict):
-            continue
+        if not isinstance(r, dict) or r.get("is_base"):
+            continue                                  # base is rendered by single_bid
+        if not r.get("show", True):
+            continue                                  # estimator hid this option
         bid = r.get("bid") or {}
         total = num(bid.get("total"))
-        if total <= 0:                              # un-snapshotted / empty sheet
+        if total <= 0:                                # un-snapshotted / empty sheet
             continue
-        is_base = bool(r.get("is_base"))
-        remodel = num(bid.get("remodel"))
-        # Remodel tax is labeled "Remodel Tax" (no state name, per Kyle).
-        tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
-                      if remodel > 0 else "(material sales tax INCLUDED)")
-        name = "Base Bid" if is_base else str(r.get("name") or "").strip().rstrip(": ").strip()
+        option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
+        savings = num(r.get("base_total")) - total
 
-        lines: list[str] = []
-        # System / scope line (each room can carry its own system) — toggleable.
-        system_desc = str(r.get("system_desc") or "").strip()
-        if r.get("show_system", True) and system_desc:
-            lines.append(system_desc)
-        # Signed difference vs. the base bid (copies only) — toggleable.
-        if not is_base and r.get("show_diff"):
-            diff = total - num(r.get("base_total"))
-            if diff > 0:
-                lines.append(f"+{_fmt_usd(diff)} more than the base bid")
-            elif diff < 0:
-                lines.append(f"{_fmt_usd(-diff)} less than the base bid")
-        lines += [str(n).strip()
-                  for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
-                  if str(n).strip()]
+        if str(r.get("price_mode")) == "deduct" and savings > 0:
+            base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
+            price_formatted = _fmt_usd(savings, parens=True)
+            price_desc = f"Deduct VE for {option_desc or noun}, in lieu of {base_desc}."
+        else:                                         # total mode (also the deduct fallback)
+            remodel = num(bid.get("remodel"))
+            tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
+                          if remodel > 0 else "(material sales tax INCLUDED)")
+            price_formatted = _fmt_usd(total)
+            price_desc = f"{option_desc or noun} as described above {tax_phrase}"
 
+        lines = [str(n).strip()
+                 for n in (list(r.get("notes_auto") or []) + list(r.get("notes_manual") or []))
+                 if str(n).strip()]
         out.append({
-            "heading": (name + ":") if name else "",
-            "price_formatted": _fmt_usd(total),
-            "price_desc": "Epoxy flooring as described above " + tax_phrase,
+            "heading": "",
+            "price_formatted": price_formatted,
+            "price_desc": price_desc,
             "notes_joined": "\n".join(lines),
         })
     return out
@@ -964,6 +1004,64 @@ def _notes_for(work_type: str, notes_in: list) -> list:
         wt = str(work_type or "epoxy").lower()
         lines = _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []
     return [{"text": ln} for ln in lines]
+
+
+# Cap + coerce the document editor's paragraph_overrides before they reach
+# proposal_writer.fill_proposal. Mirrors the combo_options sanitization above
+# (str()-coerce before validating, cap the list) — a stale draft or hand-built
+# request can send anything here, and this must never 500 /api/generate.
+# proposal_writer._apply_paragraph_overrides re-validates independently (it's
+# called directly by tests, bypassing this layer), so this is defense in depth,
+# not the only guard.
+_PARAGRAPH_OVERRIDES_MAX = 500
+
+
+def _sanitize_paragraph_overrides(overrides_in: list) -> list:
+    out = []
+    for o in (overrides_in or [])[:_PARAGRAPH_OVERRIDES_MAX]:
+        if not isinstance(o, dict):
+            continue
+        pid = o.get("id")
+        if isinstance(pid, bool):   # bool is an int subclass — True would target id 1
+            continue
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            continue
+        text = o.get("text")
+        if text is None:
+            continue
+        out.append({"id": pid, "text": str(text)})
+    return out
+
+
+# Cap + coerce the doc editor's per-option system_overrides. UNLIKE
+# _sanitize_paragraph_overrides, this is INDEX-PRESERVING: a malformed entry
+# coerces to {} in place rather than being dropped, because the list is
+# positional (index i -> _build_epoxy_systems()[i]) and dropping an entry would
+# shift every later override onto the wrong system. Values are str()-coerced,
+# stripped, blanks dropped (a blank field = "revert this field to the computed
+# value"), and length-capped. Never raises — a stale draft or hand-built request
+# must not 500 /api/generate.
+_SYSTEM_OVERRIDES_MAX = 12
+_SYSTEM_OVERRIDE_FIELDS = ("name", "texture", "sqft")
+_SYSTEM_OVERRIDE_FIELD_MAXLEN = 300
+
+
+def _sanitize_system_overrides(overrides_in: list) -> list:
+    out = []
+    for o in (overrides_in or [])[:_SYSTEM_OVERRIDES_MAX]:
+        entry: Dict[str, str] = {}
+        if isinstance(o, dict):
+            for k in _SYSTEM_OVERRIDE_FIELDS:
+                v = o.get(k)
+                if v is None or isinstance(v, (dict, list, bool)):
+                    continue
+                s = str(v).strip()
+                if s:
+                    entry[k] = s[:_SYSTEM_OVERRIDE_FIELD_MAXLEN]
+        out.append(entry)
+    return out
 
 
 _DEFAULT_EXCLUSIONS = (
@@ -1031,6 +1129,128 @@ def api_default_notes(work_type: str = "epoxy") -> Dict[str, Any]:
     return {"work_type": wt, "notes": _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []}
 
 
+@app.get("/api/proposal-template")
+def api_proposal_template(request: Request, work_type: str = "epoxy", audience: str = "Direct") -> Response:
+    """The REAL proposal template, as an ordered list of editable blocks, for
+    Proposal Review's document editor (replaces the old hand-built HTML
+    approximation — the estimator now edits the actual .docx text/layout).
+
+    `id` is that paragraph's index in `proposal_writer.iter_editable_blocks` —
+    the SAME walk `/api/generate` uses (via `_apply_paragraph_overrides`) to
+    resolve `paragraph_overrides` back onto the pristine template, so an id
+    from this response always lands on the exact right paragraph as long as
+    the template file itself hasn't changed (see `_template_version`, echoed
+    here as `template_version` so the frontend can detect a stale cached id
+    set after a deploy).
+
+    `in_block` marks paragraphs inside a repeatable/priced region
+    (price_line, single_bid, remodel, tax_breakout, has_options, system,
+    room, alternate, notes) — the frontend renders those read-only (driven by
+    the pricing sidebar + engine), never as freely-editable text.
+
+    Fidelity metadata (so the editor looks like the Word file, not an
+    approximation): per-block `align`/`list` flags + `runs` (formatted
+    segments — bold lead-ins, Zetta Serif sizes/colors; tokens isolated per
+    segment, see proposal_writer._block_runs), per-block `txbx` (which
+    floating text box it lives in), and a top-level `geometry` payload (page
+    size/margins, each box's page position, and the anchored letterhead
+    artwork — served by /api/proposal-template/media).
+    """
+    template_path = proposal_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+
+    d = docx.Document(str(template_path))
+    blocks = []
+    for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
+        p = Paragraph(p_elem, d)
+        style_name = None
+        try:
+            style_name = p.style.name if p.style is not None else None
+        except Exception:  # noqa: BLE001 — a style lookup failure is cosmetic only
+            style_name = None
+        bold = any(r.bold for r in p.runs if r.bold is not None)
+        blocks.append({
+            "id": idx,
+            "kind": kind,
+            "text": text,
+            "style": {"name": style_name, "bold": bold},
+            "in_block": in_block,
+            # Floating-text-box membership: True/False kept for callers that
+            # only care front-page-vs-body; `txbx` pairs the block with its
+            # box's geometry. Display placement only — ids are unaffected.
+            "in_txbx": txbx_idx is not None,
+            "txbx": txbx_idx,
+            "align": proposal_writer._para_align(p),
+            "list": proposal_writer._para_is_list(p_elem),
+            "runs": proposal_writer._block_runs(p_elem, p),
+        })
+
+    payload = {
+        "work_type": work_type,
+        "audience": audience,
+        "template_name": template_path.name,
+        "template_version": _template_proposal_version(template_path),
+        "geometry": proposal_writer.template_geometry(d),
+        "blocks": blocks,
+    }
+    return _versioned_json(request, payload, version=f"{work_type}:{audience}:{payload['template_version']}")
+
+
+# Media (letterhead artwork) served straight out of the template package.
+# Kyle's templates bake the entire page design — buffalo logo, DATE:/JOB
+# NAME: labels, the red PROPOSAL stamp, the bordered WORK/PRICE/NOTES/
+# ACCEPTANCE frame with its rotated labels — into full-page PNGs under
+# word/media/, so rendering these behind the text gives the editor the exact
+# printed look with no hand-drawn approximation.
+_MEDIA_CONTENT_TYPES = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "bmp": "image/bmp", "tiff": "image/tiff",
+    "emf": "image/emf", "wmf": "image/wmf", "svg": "image/svg+xml",
+}
+
+
+@app.get("/api/proposal-template/media")
+def api_proposal_template_media(request: Request, work_type: str = "epoxy",
+                                audience: str = "Direct", name: str = "") -> Response:
+    """One media part (by basename) from the picked template's package.
+    Whitelisted against the package's own word/media/ listing — a crafted
+    `name` can't reach any other part (no separators survive the basename
+    match), and unknown names 404."""
+    import zipfile
+    template_path = proposal_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Proposal template not found: {template_path.name}")
+    try:
+        with zipfile.ZipFile(str(template_path)) as z:
+            allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
+                       if n.startswith("word/media/") and "/" not in n[len("word/media/"):]}
+            part = allowed.get(name)
+            if not part:
+                raise HTTPException(404, "No such media in this template")
+            data = z.read(part)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(500, "Template package is unreadable.") from exc
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
+    version = f"{work_type}:{audience}:{name}:{_template_proposal_version(template_path)}"
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
+
+
+def _template_proposal_version(path: Path) -> str:
+    """Cache-busting token for a proposal template file (mtime) — a deploy
+    that changes the .docx changes this, matching `_template_version`'s
+    pattern for the estimate sheet."""
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return "0"
+
+
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
@@ -1057,6 +1277,25 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         values["site_visit_phrase"] = "per plans and specifications provided"
     else:
         values["site_visit_phrase"] = f"per site visit on {_sv}"
+
+    # When the estimator marked ≥1 shown option, the proposal shows the base via
+    # {{#single_bid}} and each option relative to it. Force the displayed base total
+    # from the base room so the printed base EQUALS the deduct denominator
+    # (savings = base_total − option_total). Runs before the PRICE layout so the
+    # tax block below derives base_bid_formatted from the corrected total.
+    _base_room = next((r for r in (payload.rooms or [])
+                       if isinstance(r, dict) and r.get("is_base")), None)
+    _has_shown_options = any(
+        isinstance(r, dict) and not r.get("is_base") and r.get("show", True)
+        and float((r.get("bid") or {}).get("total") or 0) > 0
+        for r in (payload.rooms or []))
+    if _base_room and _has_shown_options:
+        try:
+            _btf = _fmt_usd(float((_base_room.get("bid") or {}).get("total")))
+            if _btf:
+                values["total_formatted"] = _btf
+        except (TypeError, ValueError):
+            pass
 
     # PRICE layout. Default ("INCLUDED") = a single all-in line:
     #   "$Total – … (material sales tax INCLUDED)"  (remodel folded into the total)
@@ -1141,13 +1380,64 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
 
-    # Per-sheet priced options -> {{#room}} proposal block (base bid + each copy,
-    # with toggleable system line + signed difference vs. the base bid).
-    rooms_arg = _build_options(payload.rooms, values)
+    # Non-base priced options. Render them through the existing {{#price_line}}
+    # block (which sits under the "Options:" heading, right after the base bid),
+    # so the Direct templates need NO structural change: each option is
+    # "$8,310 – <system> as described above (…)" or "($6,000) – Deduct VE … in
+    # lieu of <base>". Any per-option notes fold inline. The base bid itself shows
+    # via {{#single_bid}}. (GC/Gyp templates lack {{#price_line}} — Phase 2.)
+    _options = _build_options(payload.rooms, values, payload.work_type)
+    _option_lines = []
+    for _o in _options:
+        _label = _o["price_desc"]
+        if _o.get("notes_joined"):
+            _label += " — " + _o["notes_joined"].replace("\n", "; ")
+        _option_lines.append({"label": _label, "amount_formatted": _o["price_formatted"]})
+    # Options first, then the estimator's manual "Add for" price lines.
+    price_line_dicts = _option_lines + price_line_dicts
 
-    # "Options:" label only prints when there ARE options (structured price lines
-    # or a recommended alternate); otherwise it's stripped (Kyle: no empty Options).
-    _has_options = bool(price_line_dicts or alternates)
+    # Combo per-option breakout (pre-formatted on the frontend): Option 1 (Epoxy) +
+    # Option 2 (Polish), each with its own flooring / Kansas Remodel Tax / Total.
+    # When present these LEAD the PRICE section and the combined single-bid line is
+    # suppressed — the two option totals ARE the base price (per Treadwell's combo
+    # proposal format).
+    # Coerce with str() BEFORE stripping — a caller can send {"label": 123} or
+    # {"label": {"a": 1}} (bad client state, a stale draft, a hand-built request);
+    # calling .strip() on the raw value first raised AttributeError and 500'd the
+    # whole endpoint. Cap the list too: it drives one deep-copied paragraph set
+    # per entry in the docx, and nothing legitimate ever sends more than a handful.
+    _combo_lines = []
+    for c in (payload.combo_options or [])[:50]:
+        if not isinstance(c, dict):
+            continue
+        label = str(c.get("label") or "").strip()
+        amount_formatted = str(c.get("amount_formatted") or "").strip()
+        if label or amount_formatted:
+            _combo_lines.append({"label": label, "amount_formatted": amount_formatted})
+    if _combo_lines:
+        # The combined single-bid line is suppressed below (single_bid=[]), but
+        # the template's "Options:" heading is a {{#has_options}} block that
+        # lives NESTED INSIDE {{#single_bid}} — suppressing single_bid also
+        # deletes it. If there are extra option/manual price lines after the
+        # combo breakout, restore the heading as a label-only price_line row
+        # (empty amount_formatted, stripped of its dash separator in
+        # proposal_writer._strip_leading_separator) so those lines aren't
+        # visually indistinguishable from the combo base price. Skip it when
+        # there's nothing after the breakout — an empty "Options:" would have
+        # nothing to introduce.
+        if price_line_dicts:
+            _combo_lines = _combo_lines + [{"label": "Options:", "amount_formatted": ""}]
+        price_line_dicts = _combo_lines + price_line_dicts
+
+    # The {{#room}} block is unused now (options ride the price_line block) — strip it.
+    rooms_arg = []
+
+    # Base bid shows via {{#single_bid}} — EXCEPT when the combo breakout supplies its
+    # own Option 1/Option 2 base lines, in which case suppress the combined line.
+    _single_bid = [] if _combo_lines else None
+
+    # "Options:" label prints when there ARE option lines; else it's stripped.
+    _has_options = bool(price_line_dicts)
 
     # Fill estimate workbook
     try:
@@ -1159,6 +1449,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             tab_copies=payload.tab_copies,
             tab_labels=payload.tab_labels,
             tab_order=payload.tab_order,
+            tab_structs=payload.tab_structs,
+            lock_overrides=payload.lock_overrides,
         )
     except Exception as exc:
         log.exception("Estimate fill failed")
@@ -1170,6 +1462,15 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         # "System: …", 2+ → "Option 1/2: …") via the template's {{#system}} block.
         systems_arg = (_build_epoxy_systems(payload.cell_values, values)
                        if str(payload.work_type or "").lower() == "epoxy" else None)
+        # Doc-editor DISPLAY overrides for the WORK rows, applied by option index
+        # over the computed systems. `prefix`/`lf_clause` stay computed; nothing
+        # here touches cell_values or the price — display text only. Ignored for
+        # non-epoxy (systems_arg is None there).
+        if systems_arg:
+            for i, ov in enumerate(_sanitize_system_overrides(payload.system_overrides)):
+                if i >= len(systems_arg):
+                    break
+                systems_arg[i].update(ov)
         docx_bytes = proposal_writer.fill_proposal(
             work_type=payload.work_type,
             audience=payload.audience,
@@ -1179,15 +1480,18 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             systems=systems_arg,
             remodel=_remodel_lines,
             rooms=rooms_arg,
-            # rooms present → suppress the single Base-Bid/Total layout (the room
-            # options ARE the price); absent → default (single-bid layout shown).
-            single_bid=([] if rooms_arg else None),
+            # Base shows via {{#single_bid}} normally; suppressed for the combo
+            # breakout (its Option 1/Option 2 lines are the base price).
+            single_bid=_single_bid,
             # Editable NOTES (estimator's edits, else standard boilerplate).
             notes=_notes_for(payload.work_type, payload.notes),
             # PRICE layout: itemize tax lines only when "broken out"; show the
             # "Options:" label only when options exist.
             tax_breakout=_tax_breakout,
             has_options=_has_options,
+            # Proposal Review's document editor: free-text paragraph edits
+            # outside the priced/repeatable regions (see /api/proposal-template).
+            paragraph_overrides=_sanitize_paragraph_overrides(payload.paragraph_overrides),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
@@ -1511,6 +1815,8 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             tab_copies=_list(data.get("tab_copies")),
             tab_labels=_dict(data.get("tab_labels")),
             tab_order=_list(data.get("tab_order")),
+            tab_structs=_list(data.get("tab_structs")),
+            lock_overrides=_dict(data.get("lock_overrides")),
         )
     try:
         out = api_generate(gi, request)                    # reuse the full generate pipeline

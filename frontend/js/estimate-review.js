@@ -354,12 +354,174 @@ state.tab_copies = Array.isArray(state.tab_copies) ? state.tab_copies : [];
 state.tab_labels = (state.tab_labels && typeof state.tab_labels === "object") ? state.tab_labels : {};
 state.tab_notes  = (state.tab_notes  && typeof state.tab_notes  === "object") ? state.tab_notes  : {};
 state.tab_order  = Array.isArray(state.tab_order) ? state.tab_order : [];   // drag-to-reorder
+state.tab_opts   = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : {};
+state.base_tab_id = (typeof state.base_tab_id === "string") ? state.base_tab_id : null;
+// Structural edits (insert/delete rows & columns), in the order made:
+// [{sheet, kind: insert_rows|delete_rows|insert_cols|delete_cols, at, count}].
+// The backend replays these onto the .xlsx; here they drive HF, the cached
+// sheet data, and the coordinate translation below.
+state.tab_structs = Array.isArray(state.tab_structs) ? state.tab_structs : [];
+// Per-sheet cell-lock overrides from the "Lock cell" toolbar button:
+// { sheetId: { lock: [addr...], unlock: [addr...] } }, addresses in CURRENT
+// grid coordinates. Merged over the preset locks by lockedCellsFor / the
+// backend. Rekeyed on structural edits like cellValues.
+state.lock_overrides = (state.lock_overrides && typeof state.lock_overrides === "object" &&
+                        !Array.isArray(state.lock_overrides)) ? state.lock_overrides : {};
+
+// ─── Structural-edit coordinate translation ──────────────────────────
+// Hardcoded TEMPLATE coordinates (lock cells, totals cells, derive reads)
+// must follow the user's inserts/deletes. Mirrors _translate_addr in
+// backend/estimate_writer.py exactly.
+function structOpsFor(sheetId) { return state.tab_structs.filter(o => o.sheet === sheetId); }
+function _shiftIdx(idx, at, count, insert) {
+  if (insert) return idx >= at ? idx + count : idx;
+  if (idx >= at && idx < at + count) return null;          // deleted
+  return idx >= at + count ? idx - count : idx;
+}
+// Template-coordinate addr -> CURRENT addr for `sheetId` (null if deleted).
+function txAddr(sheetId, addr) {
+  const ops = structOpsFor(sheetId);
+  if (!ops.length) return addr;
+  const m = /^([A-Z]{1,3})([0-9]{1,7})$/i.exec(addr);
+  if (!m) return addr;
+  let col = m[1].toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+  let row = parseInt(m[2], 10);
+  for (const op of ops) {
+    const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+    if (rows) row = _shiftIdx(row, op.at, op.count, insert);
+    else col = _shiftIdx(col, op.at, op.count, insert);
+    if (row === null || col === null) return null;
+  }
+  let s = "";
+  while (col > 0) { col--; s = String.fromCharCode(65 + (col % 26)) + s; col = Math.floor(col / 26); }
+  return s + row;
+}
+// HF read at a template coordinate, translated (0 / "" when the cell is gone).
+const hfNumTx = (id, addr) => { const t = txAddr(id, addr); return t ? hfNum(id, t) : 0; };
 
 const labelFor = (id) => state.tab_labels[id] || id;
 function roleFor(id) {
   if (BASE_ROLE[id]) return BASE_ROLE[id];
   const c = state.tab_copies.find(x => x.id === id);
   return c ? (c.role || "epoxy") : "other";
+}
+
+// ─── Base bid + priced options ───────────────────────────────────────
+// One tab is the Base bid (state.base_tab_id); the estimator marks OTHER
+// priced tabs as proposal options, each shown/hidden and priced as a
+// "total" (its own price) or a "deduct" (savings vs. the base). These
+// controls live in #bid-bar here AND mirror onto the Proposal Review
+// sidebar — both edit state.base_tab_id + state.tab_opts[id].
+const PRICED_ROLES = new Set(["epoxy", "polish"]);
+const isPricedRole = (r) => PRICED_ROLES.has(r);
+// role-aware total cells (fixes reading a polish tab at D88 instead of D82).
+// TEMPLATE coordinates translated through the sheet's structural edits, so a
+// tab with inserted/deleted rows still reads ITS actual totals. A deleted
+// totals cell keeps the template addr (deletion of totals rows is blocked in
+// the UI; direct API abuse just reads a stale cell, never a wrong-money one).
+function totalCellsFor(id) {
+  const base = roleFor(id) === "polish" ? TOTAL_CELLS.Polish : TOTAL_CELLS.Epoxy;
+  if (!structOpsFor(id).length) return base;
+  const out = {};
+  for (const k in base) out[k] = txAddr(id, base[k]) || base[k];
+  return out;
+}
+function pricedTabs() { return tabs.filter(t => isPricedRole(t.role)); }
+const hfNum = (id, addr) => { const v = HF.getValue(id, addr); return typeof v === "number" ? v : 0; };
+function resolveBaseTab() {
+  const byId = tabs.find(t => t.id === state.base_tab_id && isPricedRole(t.role));
+  if (byId) return byId;
+  const ep = tabs.filter(t => t.role === "epoxy");           // today's fallback derivation
+  return ep.find(t => t.kind === "base") || ep[0] || pricedTabs()[0] || null;
+}
+function ensureOpt(id) {
+  if (!state.tab_opts[id]) state.tab_opts[id] =
+    { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" };
+  return state.tab_opts[id];
+}
+function persistBidOptions() {
+  TW.setState({ ...state, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts });
+}
+const _escBB = (s) => String(s).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+// Render the per-sheet Base-bid toggles + option chips into #bid-bar. Every priced
+// tab is a chip with a "Base bid" radio; non-base chips carry the option (show +
+// total/deduct) controls. Plus an Auto/combined chip.
+function renderBidOptions() {
+  const list = document.getElementById("bid-options-list");
+  if (!list) return;
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  const priced = pricedTabs();
+  // Guard a stale explicit base from an old draft; never overwrite base_tab_id with
+  // the auto-derived default (null base = auto; for combo that's Epoxy + Polish).
+  if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
+  const baseId = state.base_tab_id;
+  const autoBase = resolveBaseTab();
+  // The combined chip names the ACTUAL base sheets — renamed tabs read as
+  // "Grooming Room + Lobby (combined)", not a hardcoded "Epoxy + Polish".
+  const comboLabel = () => {
+    const bases = priced.filter(t => t.kind === "base");
+    const names = bases.length ? bases.map(t => labelFor(t.id)) : ["Epoxy", "Polish"];
+    return names.join(" + ") + " (combined)";
+  };
+  const autoLabel = wt === "combo" ? comboLabel()
+                                   : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
+  const isPartOfAutoBase = (t) => !baseId && t.kind === "base";
+  const baseRadio = (val, checked, label) =>
+    `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
+  let html = `<span class="bb-opt">${baseRadio("", !baseId, autoLabel)}</span>`;
+  html += priced.map(t => {
+    const o = state.tab_opts[t.id] || {};
+    const isBase = baseId === t.id;
+    const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
+    const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
+    let inner = baseRadio(t.id, isBase, labelFor(t.id)) +
+                `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
+    if (isBase) {
+      inner += `<span class="bb-tag">base bid</span>`;
+    } else if (!isPartOfAutoBase(t)) {
+      inner += `<span class="bb-sub">` +
+        `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
+        `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
+        `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
+        `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select></span>` +
+        `</span></span>`;
+    }
+    return `<span class="bb-opt" data-id="${_escBB(t.id)}">${inner}</span>`;
+  }).join("");
+  list.innerHTML = html;
+  // The legend (#bid-options-hint) stays visible — it explains base vs. option.
+}
+
+// Delegated listeners on #bid-bar (static container — attach once).
+function wireBidBar() {
+  const list = document.getElementById("bid-options-list");
+  if (!list) return;
+  list.addEventListener("change", (e) => {
+    const el = e.target;
+    if (el.classList.contains("bb-base")) {          // Base-bid radio toggled
+      if (!el.checked) return;
+      state.base_tab_id = el.value || null;
+      if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
+      renderBidOptions();
+      persistBidOptions();
+      return;
+    }
+    const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;
+    const o = ensureOpt(wrap.dataset.id);
+    if (el.classList.contains("bb-isopt")) {
+      o.is_option = el.checked;
+      if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+      const sub = wrap.querySelector(".bb-optsub"); if (sub) sub.style.display = el.checked ? "" : "none";
+    } else if (el.classList.contains("bb-show")) {
+      o.show = el.checked;
+    } else if (el.classList.contains("bb-mode")) {
+      o.price_mode = el.value === "deduct" ? "deduct" : "total";
+    }
+    persistBidOptions();
+  });
 }
 
 // Display order of tab ids: saved order first (filtered to ones that still
@@ -504,6 +666,16 @@ function copyTab(sourceId) {
   }
   const label = uniqueLabel(labelFor(sourceId) + " copy");
   state.tab_copies = [...state.tab_copies, { id: newId, source: sourceId, role: srcTab.role }];
+  // The copy starts from the source's CURRENT layout (transformed cache), so
+  // it inherits the source's structural edits under its own id — that keeps
+  // txAddr/lockedCellsFor right on the copy AND tells the backend to replay
+  // the same inserts/deletes on the cloned worksheet.
+  const srcOps = structOpsFor(sourceId);
+  if (srcOps.length) state.tab_structs = [...state.tab_structs, ...srcOps.map(o => ({ ...o, sheet: newId }))];
+  // The copy inherits the source's per-cell lock overrides under its own id —
+  // coordinate spaces match (same op prefix on both), so a deep copy is valid.
+  const srcOv = state.lock_overrides[sourceId];
+  if (srcOv) state.lock_overrides[newId] = { lock: [...(srcOv.lock || [])], unlock: [...(srcOv.unlock || [])] };
   state.tab_labels = { ...state.tab_labels, [newId]: label };
   // Place the copy immediately to the RIGHT of the sheet it was copied from
   // (Excel behavior), not at the far end of the tab bar.
@@ -545,9 +717,13 @@ function deleteTab(id) {
   state.tab_copies = state.tab_copies.filter(c => c.id !== id);
   delete state.tab_labels[id];
   delete state.tab_notes[id];
+  delete state.tab_opts[id];
+  delete state.lock_overrides[id];   // freed copy ids get reused — don't leak locks
+  if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
-                tab_notes: state.tab_notes, cell_values: cellValues });
+                tab_notes: state.tab_notes, tab_opts: state.tab_opts,
+                base_tab_id: state.base_tab_id, cell_values: cellValues });
   renderTabs();
   if (activeSheet === id) showSheet((state.work_type || "epoxy").toLowerCase() === "polish" ? "Polish" : "Epoxy");
 }
@@ -574,9 +750,9 @@ function startRename(btn, id) {
 
 // Auto-derive per-tab notes (cove base) from the tab's cove LF cells.
 function deriveNotes(id) {
-  const n = (a) => { const v = HF.getValue(id, a); return typeof v === "number" ? v : 0; };
+  // Template coords translated through the tab's structural edits.
   const out = [];
-  if (n("E34") + n("E37") > 0) out.push('Includes 6" Cove Base');
+  if (hfNumTx(id, "E34") + hfNumTx(id, "E37") > 0) out.push('Includes 6" Cove Base');
   return out;
 }
 
@@ -745,6 +921,7 @@ function renderTabs() {
     btn.addEventListener("pointerdown", (e) => beginTabDrag(e, btn));
     tabBar.appendChild(btn);
   }
+  renderBidOptions();   // keep the base-bid picker + option chips in sync with the tabs
 }
 
 // The "⧉ Copy sheet" button lives in the header (beside Texture) so it's always
@@ -754,22 +931,87 @@ function renderTabs() {
   if (btn) btn.addEventListener("click", () => { if (activeSheet) copyTab(activeSheet); });
 })();
 
+// ─── "Lock cell" toolbar button (Excel ribbon model) ────────────────────
+// Toggles the PERMANENT lock of the active cell — extends the preset
+// rate/markup/tax locks to ANY cell. The per-cell 🔒 (temporary unlock-for-
+// one-edit) is unchanged. Label + enabled-state track the active cell via
+// syncFormulaBar(); the toggle writes state.lock_overrides then re-renders.
+const lockCellBtn = document.getElementById("lock-cell-btn");
+// The addr the active cell reports as its OWN (data-display-addr) — the same
+// key lockedCellsFor()/the backend merge use. null when no cell is selected.
+function _activeCellAddr() {
+  const inp = _activeCellInput;
+  return (inp && inp.isConnected && inp.dataset && inp.dataset.displayAddr) ? inp.dataset.displayAddr : null;
+}
+function refreshLockButton() {
+  if (!lockCellBtn) return;
+  const addr = _activeCellAddr();
+  if (!addr || !activeSheet) {
+    lockCellBtn.disabled = true;
+    lockCellBtn.textContent = "🔒 Lock cell";
+    lockCellBtn.title = "Select a cell, then lock or unlock it (locked cells can't be edited in Excel)";
+    return;
+  }
+  lockCellBtn.disabled = false;
+  // Label reflects the PERMANENT (merged) lock state, NOT inp.readOnly — a
+  // per-cell temporary unlock leaves readOnly=false while still permanently locked.
+  const locked = lockedCellsFor(activeSheet).has(addr);
+  lockCellBtn.textContent = locked ? `🔓 Unlock ${addr}` : `🔒 Lock ${addr}`;
+  lockCellBtn.title = locked
+    ? `Unlock ${addr} so it can be edited in Excel`
+    : `Lock ${addr} so it can't be fat-fingered in Excel`;
+}
+if (lockCellBtn) {
+  lockCellBtn.addEventListener("click", async () => {
+    const addr = _activeCellAddr();
+    if (!addr || !activeSheet) return;
+    const wasLocked = lockedCellsFor(activeSheet).has(addr);
+    const ov = state.lock_overrides[activeSheet] || { lock: [], unlock: [] };
+    ov.lock = (ov.lock || []).filter(a => a !== addr);
+    ov.unlock = (ov.unlock || []).filter(a => a !== addr);
+    if (wasLocked) ov.unlock.push(addr);   // toggle -> unlocked (unlock wins over any preset)
+    else ov.lock.push(addr);               // toggle -> locked
+    if (ov.lock.length || ov.unlock.length) state.lock_overrides[activeSheet] = ov;
+    else delete state.lock_overrides[activeSheet];
+    const sheet = activeSheet;
+    persistTabState();
+    await showSheet(sheet);                 // re-render so the 🔒 icon / readonly follow
+    // showSheet nulls _activeCellInput — re-focus the same cell so the button
+    // keeps its target (and the label flips) instead of dead-ending.
+    const again = sheetGrid.querySelector(`[data-display-addr="${addr}"]`);
+    if (again) again.focus();
+    refreshLockButton();
+  });
+}
+wireBidBar();   // base-bid toggles + per-tab option controls (delegated, once)
+// Collapse the bid bar to hand its height back to the worksheet (remembered).
+(function wireBidCollapse() {
+  const bar = document.getElementById("bid-bar");
+  const btn = document.getElementById("bid-collapse");
+  if (!bar || !btn) return;
+  const apply = (c) => { bar.classList.toggle("collapsed", c); btn.textContent = c ? "▸ Show" : "▾ Hide"; };
+  let c = false; try { c = localStorage.getItem("tw_bidbar_collapsed") === "1"; } catch {}
+  apply(c);
+  btn.addEventListener("click", () => {
+    c = !c;
+    try { localStorage.setItem("tw_bidbar_collapsed", c ? "1" : "0"); } catch {}
+    apply(c);
+  });
+})();
+
 async function showSheet(name) {
   activeSheet = name;
   for (const btn of tabBar.querySelectorAll("button")) {
     btn.classList.toggle("active", btn.dataset.sheet === name);
   }
-  // Bulk discount is now a PER-TAB value (D41) — reflect THIS sheet's setting in
-  // the toggle so it shows the active tab's state, not a stale global one.
-  const _bulkCb = document.getElementById("cb-bulk");
-  if (_bulkCb) {
-    _bulkCb.checked = String(cellValues[name + "!D41"] || "") === "BULK Discount ON";
-    state.cb_bulk = _bulkCb.checked;
-  }
   badge.textContent = labelFor(name).toUpperCase();
   // Clear stale DOM registrations from the previous sheet — those input
   // elements got detached when we tore down the prior grid.
   if (HF && HF.unregisterAll) HF.unregisterAll();
+  // Same for the formula bar — its active cell is about to be detached
+  // with the old grid, so drop the reference and blank the bar.
+  _activeCellInput = null;
+  syncFormulaBar();
   sheetGrid.className = "sheet-loading";
   sheetGrid.textContent = "Loading " + name + "…";
 
@@ -904,6 +1146,7 @@ function renderSheet(data) {
   // Column letter headers — with draggable right-edge resize handle
   for (let c = 1; c <= maxCol; c++) {
     const header = makeCell("col-header", colLetter(c), { row: 1, col: c + 1 });
+    header.dataset.colIndex = String(c);      // right-click insert/delete target
     const handle = document.createElement("div");
     handle.className = "resize-h";
     handle.dataset.colIndex = String(c);
@@ -913,6 +1156,7 @@ function renderSheet(data) {
   // Row number headers — with draggable bottom-edge resize handle
   for (let r = 1; r <= maxRow; r++) {
     const header = makeCell("row-header", String(r), { row: r + 1, col: 1 });
+    header.dataset.rowIndex = String(r);      // right-click insert/delete target
     const handle = document.createElement("div");
     handle.className = "resize-v";
     handle.dataset.rowIndex = String(r);
@@ -969,7 +1213,11 @@ function refreshDomFromHF(data, grid) {
   if (!HF || !HF.ready) return;
   const sheet = data.sheet;
   for (const cell of data.cells) {
-    if (!cell.isFormula) continue;
+    // Template formula cells AND cells where the user TYPED a formula ("=…"
+    // in cellValues) both display their computed value at rest.
+    const uVal = cellValues[canonicalKey(sheet, cell.addr)];
+    const userFormula = typeof uVal === "string" && uVal.trim().startsWith("=");
+    if (!cell.isFormula && !userFormula) continue;
     // Look up the cell's DOM input via HF's registration map — avoids
     // having to CSS-escape sheet names that contain special chars like
     // 'Gyp (USG 1-8")'.
@@ -1049,7 +1297,7 @@ const TOTAL_CELLS = {
 };
 
 function updateTotalBar(data, byAddr) {
-  const map = TOTAL_CELLS[data.sheet] || {};
+  const map = TOTAL_CELLS[data.sheet] ? totalCellsFor(data.sheet) : {};
   const cellVal = (addr) => {
     if (!addr) return null;
     const c = byAddr.get(addr);
@@ -1222,6 +1470,60 @@ function makeCell(kind, text, pos) {
   return d;
 }
 
+// ─── Locked cells ────────────────────────────────────────────────────
+// The rate/markup/tax cells are LOCKED by default (read-only) so they can't be
+// fat-fingered. A 🔒 on the cell unlocks it for a single edit (re-locks on blur).
+// Keyed by the sheet's template LAYOUT; copies inherit their source's set; the
+// generated .xlsx protects the same cells (backend/estimate_writer.py). Full set
+// incl. the formula % cells (GP / Sales Tax / Remodel) — overwriting those breaks
+// the calc, so they're worth locking most.
+const LOCKED_CELLS = {
+  "Epoxy":        ["B73", "B74", "B75", "B76", "D77", "B80", "B81", "B84"],
+  "Polish":       ["B67", "B68", "B69", "B70", "D71", "B74", "B75", "B78"],
+  "Seal":         ["B67", "B68", "B69", "B70", "D71", "B74", "B75", "B78"],
+  "Seal (+Jnts)": ["B67", "B68", "B69", "B70", "D71", "B74", "B75"],
+  "Leveling":     ["B69", "B70", "B71", "B72", "D73", "B76", "B77", "B80"],
+  "Epoxy blank":  ["B70", "B71", "B72", "B73", "D74", "B77", "B78", "B81"],
+};
+const GYP_LOCKED = ["B72", "B74", "B75", "E76", "B79", "B80", "B83"];
+// Resolve a sheet id to its layout's EFFECTIVE locked-cell Set:
+// (preset rate/markup/tax cells, translated through the sheet's structural
+// edits) ∪ user `lock` − user `unlock`. Presets resolve by the copy's SOURCE
+// layout; user overrides are keyed by the sheet's OWN id and are already in
+// current coordinates (rekeyed live on structural edits), matching the backend
+// merge in estimate_writer._resolve_ws_layouts.
+function lockedCellsFor(sheetId) {
+  let id = sheetId, guard = 0;
+  while (guard++ < 20) {
+    const c = state.tab_copies.find(x => x.id === id);
+    if (!c) break;
+    // A copy's source can be blank on an odd/old draft; the backend defaults
+    // that to "Epoxy" too (estimate_writer.py) — mirror it instead of falling
+    // through to an unlocked grid that doesn't match the generated .xlsx.
+    id = c.source || "Epoxy";
+  }
+  const base = /^Gyp/i.test(id) ? GYP_LOCKED : (LOCKED_CELLS[id] || []);
+  // Preset addresses are TEMPLATE coordinates — follow the sheet's own
+  // structural edits (a deleted rate cell drops out of the set).
+  const preset = structOpsFor(sheetId).length
+    ? base.map(a => txAddr(sheetId, a)).filter(Boolean)
+    : base;
+  const ov = (state.lock_overrides && state.lock_overrides[sheetId]) || null;
+  const set = new Set(preset);
+  if (ov) {
+    (ov.lock || []).forEach(a => set.add(a));
+    (ov.unlock || []).forEach(a => set.delete(a));
+  }
+  return set;
+}
+
+// The grid cell the formula bar is currently pointed at (Excel-style).
+let _activeCellInput = null;
+// True once the bar has written a keystroke through to the active cell this
+// edit session. Blur is the only reliable commit point for a click-away (no
+// Enter) — see the bar's `blur` listener in the ─── Formula bar ─── section.
+let _fbarDirty = false;
+
 function makeDataCell(cell, sheet, r, c, dropdowns) {
   const d = document.createElement("div");
   d.className = "gridcell";
@@ -1312,6 +1614,9 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     }
   }
   inp.dataset.cellAddr = addrKey;
+  // The formula bar's Name Box shows the cell's OWN address — cellAddr holds
+  // the canonical key, which points at Epoxy for mirrored Project-Info cells.
+  inp.dataset.displayAddr = cell.addr;
   // Register this input with HF using the CANONICAL key — that way
   // refreshDomFromHF and propagateChangesToDom can both find it whether
   // the cell is on its source sheet or mirrored from another.
@@ -1363,9 +1668,506 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
       }
     });
   }
+  // Rate/markup/tax cells LOCK by default — read-only until the estimator clicks
+  // the 🔒 to unlock a single edit (auto re-locks on blur). A readonly input
+  // never fires "input", so the edit writers above stay dormant while locked.
+  // The generated .xlsx protects these same cells (backend/estimate_writer.py).
+  if (lockedCellsFor(sheet).has(cell.addr)) {
+    inp.readOnly = true;
+    d.classList.add("locked");
+    const lk = document.createElement("span");
+    lk.className = "cell-lock";
+    lk.textContent = "🔒";
+    lk.title = "Locked — click to unlock for editing";
+    const setLocked = (lock) => {
+      inp.readOnly = lock;
+      d.classList.toggle("locked", lock);
+      d.classList.toggle("unlocked", !lock);
+      lk.textContent = lock ? "🔒" : "🔓";
+      lk.title = lock ? "Locked — click to unlock for editing" : "Unlocked — click to re-lock";
+      // The formula bar mirrors this cell's lock — keep its readOnly in step
+      // so the bar can't sidestep a 🔒 (or stay stuck locked after a 🔓).
+      if (_activeCellInput === inp) syncFormulaBar();
+    };
+    // Exposed so the formula bar's blur handler can re-lock after ITS edit
+    // session ends — the bar edits this cell by remote control, so the
+    // re-lock decision has to live wherever that session actually finishes.
+    inp._setLocked = setLocked;
+    // `readOnly` is INERT on a <select> — block interaction ourselves while
+    // locked, but still allow programmatic focus (mousedown re-focuses) so the
+    // toolbar Lock/Unlock button can target a locked dropdown to unlock it.
+    if (inp.tagName === "SELECT") {
+      inp.addEventListener("mousedown", (e) => { if (inp.readOnly) { e.preventDefault(); inp.focus(); } });
+      inp.addEventListener("keydown", (e) => { if (inp.readOnly) e.preventDefault(); });
+    }
+    lk.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const willUnlock = inp.readOnly;
+      setLocked(!willUnlock);
+      // .select() exists on <input>, not <select> — guard so locking a
+      // dropdown cell (now possible via the toolbar) doesn't throw.
+      if (willUnlock) { inp.focus(); if (typeof inp.select === "function") inp.select(); }
+    });
+    // Don't re-lock when focus is moving INTO the formula bar to keep editing
+    // this same cell — that would re-lock it before the bar ever got to use
+    // the unlock. The bar's own blur listener re-locks once ITS session ends.
+    inp.addEventListener("blur", (e) => { if (!inp.readOnly && e.relatedTarget !== fbarInput) setLocked(true); });
+    d.appendChild(lk);
+  }
+
+  // ── Google-Sheets-style formula views ──
+  // Resting view = the COMPUTED value; edit view (focus) = the formula text.
+  // Covers user-typed formulas (a "=…" string in cellValues) and the
+  // template's own formula cells alike, so clicking any calculated cell shows
+  // the formula for editing — and blurring shows the number again. The
+  // formula bar mirrors whichever view the cell is in.
+  const _userFormula = () => {
+    const v = cellValues[addrKey];
+    return (typeof v === "string" && v.trim().startsWith("=")) ? v : null;
+  };
+  inp._editView = () => {
+    if (inp.tagName === "SELECT") return;
+    const f = _userFormula();
+    if (f) inp.value = f;
+    // Template formula cells carry the formula TEXT in cell.formula; cell.value
+    // is the cached computed number the sheet was saved with.
+    else if (cellValues[addrKey] == null && cell.isFormula) {
+      inp.value = String(cell.formula != null ? cell.formula : cell.value);
+    }
+  };
+  inp._restingView = () => {
+    if (inp.tagName === "SELECT") return;
+    if (!(_userFormula() || (cellValues[addrKey] == null && cell.isFormula))) return;
+    if (!HF || !HF.ready) return;                 // initial render — refreshDomFromHF covers it
+    const tgt = canonicalTarget(sheet, cell.addr);
+    const v = HF.getValue(tgt.sheet, tgt.addr);
+    if (v === null || v === undefined) { inp.value = ""; return; }
+    inp.value = (v && typeof v === "object" && "value" in v) ? String(v.value)
+      : (typeof v === "number" ? formatNumericValue(v, cell.fmt) : String(v));
+  };
+  // Skip the swap-back when focus moves INTO the formula bar — the bar is
+  // still editing this cell and needs its raw text left alone.
+  inp.addEventListener("blur", (e) => {
+    if (e.relatedTarget !== fbarInput) { inp._restingView(); updateRefHighlights(); }
+  });
+  // A user formula re-rendered after a tab switch shows its raw "=…" text —
+  // swap in the computed value right away (no-op before HF is ready).
+  if (_userFormula()) inp._restingView();
+
+  // Formula bar: reflect this cell in the top bar when it gets focus (Excel-style).
+  inp.addEventListener("focus", () => { inp._editView(); _activeCellInput = inp; syncFormulaBar(); });
+
   d.appendChild(inp);
   return d;
 }
+
+// ─── Formula bar ─────────────────────────────────────────────────────
+// Excel-style strip above the worksheet: a Name Box showing the focused
+// cell's address plus a value input bound two-way to that cell. The bar
+// never talks to HyperFormula itself — it writes by dispatching REAL
+// input/change events on the cell input, so the edit handlers wired in
+// makeDataCell (cellValues, HF push, % normalization) run unchanged.
+const fbarName  = document.getElementById("fbar-name");
+const fbarInput = document.getElementById("fbar-input");
+// Tracks which cell input the bar last mirrored, so syncFormulaBar() can tell
+// a genuine cell change (snapshot a fresh Escape target) apart from a repeat
+// sync of the SAME cell (every keystroke, every HF recompute) — the latter
+// must not clobber the snapshot mid-edit.
+let _fbarSyncedInput = null;
+// The active cell's value when the CURRENT bar session started — what Escape
+// restores. Keystrokes typed in the bar write through live (see the "input"
+// listener below), so re-syncing on Escape would just redisplay the
+// already-edited value; only this snapshot lets Escape actually undo it.
+let _fbarOrig = "";
+
+function syncFormulaBar() {
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected) {
+    // No active cell (or it was detached by a grid re-render) — blank out.
+    fbarName.value = "";
+    fbarInput.value = "";
+    fbarInput.readOnly = false;
+    fbarInput.disabled = true;
+    _fbarSyncedInput = null;
+    clearRefHighlights();
+    refreshLockButton();
+    return;
+  }
+  if (_fbarSyncedInput !== inp) {
+    // New cell under the bar — start a fresh Escape snapshot.
+    _fbarOrig = inp.value;
+    _fbarSyncedInput = inp;
+  }
+  fbarName.value = inp.dataset.displayAddr || "";
+  fbarInput.disabled = false;
+  // Dropdown cells only accept their listed options, and locked rate cells
+  // must not be editable through the back door — mirror both as read-only.
+  fbarInput.readOnly = inp.tagName === "SELECT" || inp.readOnly;
+  fbarInput.value = inp.value;
+  updateRefHighlights();   // outline the cells this formula references
+  refreshLockButton();     // keep the toolbar Lock/Unlock label on the active cell
+}
+
+// ─── Formula reference highlights (Excel-style) ─────────────────────
+// While a formula is being edited (in the cell or the bar), outline the
+// cells it references — color-cycled per reference, like Excel. Only refs
+// on the CURRENT sheet get outlines (bare refs, or a sheet-qualified ref
+// naming the active sheet); cross-sheet refs have no DOM to point at.
+const _REF_HL_MAX = 6;                 // color classes ref-hl-0 … ref-hl-5
+const _REF_HL_CELL_CAP = 400;          // don't outline a giant range cell-by-cell
+let _refHlEls = [];
+const _REF_TOKEN_RE = /(?:('(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?(\$?[A-Z]{1,3}\$?[0-9]{1,7})(?::(\$?[A-Z]{1,3}\$?[0-9]{1,7}))?/gi;
+
+function _colToNum(letters) {
+  return letters.toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+}
+function _numToCol(n) {
+  let s = "";
+  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+
+function clearRefHighlights() {
+  for (const el of _refHlEls) {
+    for (let i = 0; i < _REF_HL_MAX; i++) el.classList.remove("ref-hl-" + i);
+  }
+  _refHlEls = [];
+}
+
+function updateRefHighlights() {
+  clearRefHighlights();
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected) return;
+  const v = inp.value;
+  if (typeof v !== "string" || !v.trim().startsWith("=")) return;
+
+  // displayAddr -> .gridcell div, current sheet only (the grid IS the sheet)
+  const byAddr = {};
+  document.querySelectorAll("#sheet-grid .gridcell > input, #sheet-grid .gridcell > select").forEach(el => {
+    if (el.dataset.displayAddr) byAddr[el.dataset.displayAddr] = el.parentElement;
+  });
+
+  let m, colorIdx = 0;
+  _REF_TOKEN_RE.lastIndex = 0;
+  while ((m = _REF_TOKEN_RE.exec(v)) !== null) {
+    const [, sheetTok, a1, a2] = m;
+    if (sheetTok) {
+      const name = (sheetTok.startsWith("'") ? sheetTok.slice(1, -1).replace(/''/g, "'") : sheetTok);
+      if (activeSheet && name.toLowerCase() !== String(activeSheet).toLowerCase()) continue;
+    }
+    const cls = "ref-hl-" + (colorIdx % _REF_HL_MAX);
+    colorIdx++;
+    const parse = (t) => {
+      const mm = t.replace(/\$/g, "").match(/^([A-Z]+)([0-9]+)$/i);
+      return mm ? { c: _colToNum(mm[1]), r: parseInt(mm[2], 10) } : null;
+    };
+    const p1 = parse(a1), p2 = a2 ? parse(a2) : p1;
+    if (!p1 || !p2) continue;
+    const cLo = Math.min(p1.c, p2.c), cHi = Math.max(p1.c, p2.c);
+    const rLo = Math.min(p1.r, p2.r), rHi = Math.max(p1.r, p2.r);
+    if ((cHi - cLo + 1) * (rHi - rLo + 1) > _REF_HL_CELL_CAP) continue;
+    for (let c = cLo; c <= cHi; c++) {
+      for (let r = rLo; r <= rHi; r++) {
+        const el = byAddr[_numToCol(c) + r];
+        if (el) { el.classList.add(cls); _refHlEls.push(el); }
+      }
+    }
+  }
+}
+
+// Cell → bar: while the user types in a grid cell, the bar follows along.
+// Delegated on the grid container so makeDataCell's handlers stay untouched;
+// skipped while the bar itself has focus so the write-back echo (the bar's
+// own dispatched input event bubbling back up) can't fight the user's caret.
+sheetGrid.addEventListener("input", (e) => {
+  if (e.target === _activeCellInput && document.activeElement !== fbarInput) {
+    fbarInput.value = e.target.value;
+    updateRefHighlights();   // live re-outline as the formula is typed
+  }
+});
+// Commit-time rewrites too — the %-cell normalizer reformats on change
+// ("3" → "3%"), and the bar should show what the cell now shows.
+sheetGrid.addEventListener("change", (e) => {
+  if (e.target === _activeCellInput && document.activeElement !== fbarInput) {
+    fbarInput.value = e.target.value;
+  }
+});
+
+// Bar → cell: typing in the bar writes the active cell and fires a real
+// "input" event, so cellValues + HyperFormula update exactly as if the
+// user had typed in the cell itself. Locked cells never get written.
+fbarInput.addEventListener("input", () => {
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected || inp.readOnly || inp.tagName === "SELECT") return;
+  inp.value = fbarInput.value;
+  inp.dispatchEvent(new Event("input", { bubbles: true }));
+  // Mark the session dirty — a plain click-away never fires a native
+  // "change" on its own, so the blur listener below has to commit for us.
+  _fbarDirty = true;
+  updateRefHighlights();   // live re-outline as the formula is typed in the bar
+});
+fbarInput.addEventListener("keydown", (e) => {
+  const inp = _activeCellInput;
+  if (!inp || !inp.isConnected) return;
+  if (e.key === "Enter") {
+    // Commit like blurring the cell would: "change" runs the %-cell
+    // normalization, then re-read the (possibly reformatted) value and
+    // hand focus back to the cell.
+    e.preventDefault();
+    if (!inp.readOnly && inp.tagName !== "SELECT") {
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    // Already committed above — clear dirty so the blur this inp.focus()
+    // triggers doesn't dispatch a second "change" (the normalizer is
+    // idempotent, but don't rely on that).
+    _fbarDirty = false;
+    syncFormulaBar();
+    inp.focus();
+  } else if (e.key === "Escape") {
+    // Abandon the bar edit for real: keystrokes already wrote through live
+    // (see the "input" listener above), so restore the value snapshotted
+    // when this bar session started instead of just re-syncing — re-syncing
+    // would only redisplay the already-edited value, undoing nothing.
+    e.preventDefault();
+    inp.value = _fbarOrig;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    _fbarDirty = false;
+    syncFormulaBar();
+    inp.focus();
+  }
+});
+// The single commit choke point: blur fires whether the user tabs away,
+// clicks another cell, or clicks Continue — none of which fire a native
+// "change" on #fbar-input the way Enter's explicit dispatch above does.
+// Blur also fires BEFORE the next element's focus, so _activeCellInput
+// still points at the cell the bar was editing even when the user clicks
+// straight into another cell.
+fbarInput.addEventListener("blur", (e) => {
+  const inp = _activeCellInput;
+  if (_fbarDirty && inp && inp.isConnected && !inp.readOnly) {
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  _fbarDirty = false;
+  // The unlock this bar session used covered exactly one edit — re-lock
+  // unless focus is heading straight back into the same cell (the user is
+  // still mid-edit, just bouncing focus between the cell and the bar).
+  if (inp && inp._setLocked && !inp.readOnly && e.relatedTarget !== inp) {
+    inp._setLocked(true);
+  }
+  // The cell blurred BEFORE this bar session started, so nothing else will
+  // swap a just-committed formula back to its computed value — do it here
+  // (unless focus is returning to the cell, i.e. the edit continues).
+  if (inp && inp.isConnected && e.relatedTarget !== inp && inp._restingView) {
+    inp._restingView();
+  }
+  syncFormulaBar();   // mirror whatever the commit/re-lock above left behind
+});
+
+// ─── Insert/delete rows & columns (Excel-style structural edits) ─────
+// Right-click a row number / column letter for insert/delete. Each edit is
+// recorded in state.tab_structs, pushed into HyperFormula (which rewrites
+// its own formulas), and the cached sheet data + cellValues keys shift to
+// the new coordinates before a full re-render. The backend replays the same
+// op list onto the real .xlsx at generate time (estimate_writer.py).
+const STRUCT_HEADER_GUARD_ROW = 10;   // rows 1-10 = project-info block, canonical across tabs
+
+function _transformCacheForOp(data, op) {
+  const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+  const sh = (idx) => _shiftIdx(idx, op.at, op.count, insert);
+
+  const cells = [];
+  for (const c of data.cells) {
+    const nr = rows ? sh(c.row) : c.row;
+    const nc = rows ? c.col : sh(c.col);
+    if (nr === null || nc === null) continue;          // deleted with its row/col
+    c.row = nr; c.col = nc; c.addr = colLetter(nc) + nr;
+    cells.push(c);
+  }
+  data.cells = cells;
+
+  const merged = [];
+  for (const m of (data.merged || [])) {
+    let lo = rows ? m.minRow : m.minCol, hi = rows ? m.maxRow : m.maxCol;
+    if (insert) {
+      if (lo >= op.at) lo += op.count;
+      if (hi >= op.at) hi += op.count;
+    } else {
+      const nlo = sh(lo), nhi = sh(hi);
+      lo = nlo === null ? op.at : nlo;
+      hi = nhi === null ? op.at - 1 : nhi;
+      if (lo > hi) continue;                           // merge fully deleted
+    }
+    if (rows) { m.minRow = lo; m.maxRow = hi; } else { m.minCol = lo; m.maxCol = hi; }
+    m.rowSpan = m.maxRow - m.minRow + 1;
+    m.colSpan = m.maxCol - m.minCol + 1;
+    m.anchor = colLetter(m.minCol) + m.minRow;
+    merged.push(m);
+  }
+  data.merged = merged;
+
+  if (rows) {
+    const rh = {};
+    for (const [r, h] of Object.entries(data.row_heights || {})) {
+      const n = sh(parseInt(r, 10));
+      if (n !== null) rh[n] = h;
+    }
+    data.row_heights = rh;
+    data.max_row = Math.max(1, (data.max_row || 1) + (insert ? op.count : -op.count));
+  } else {
+    const cw = {};
+    for (const [letter, w] of Object.entries(data.col_widths || {})) {
+      const idx = letter.split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+      const n = sh(idx);
+      if (n !== null) cw[colLetter(n)] = w;
+    }
+    data.col_widths = cw;
+    data.max_col = Math.max(1, (data.max_col || 1) + (insert ? op.count : -op.count));
+  }
+
+  const dd = {};
+  for (const [addr, opts] of Object.entries(data.dropdowns || {})) {
+    const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(addr);
+    if (!m) continue;
+    let col = m[1].toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    let row = parseInt(m[2], 10);
+    if (rows) row = sh(row); else col = sh(col);
+    if (row !== null && col !== null) dd[colLetter(col) + row] = opts;
+  }
+  data.dropdowns = dd;
+}
+
+function _rekeyCellValuesForOp(sheet, op) {
+  const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+  const moves = [], drops = [];
+  for (const key of Object.keys(cellValues)) {
+    if (!key.startsWith(sheet + "!")) continue;
+    const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(key.slice(sheet.length + 1));
+    if (!m) continue;
+    let col = m[1].toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    let row = parseInt(m[2], 10);
+    if (rows) row = _shiftIdx(row, op.at, op.count, insert);
+    else col = _shiftIdx(col, op.at, op.count, insert);
+    if (row === null || col === null) { drops.push(key); continue; }
+    const nkey = sheet + "!" + colLetter(col) + row;
+    if (nkey !== key) moves.push([key, nkey]);
+  }
+  for (const k of drops) delete cellValues[k];
+  const vals = moves.map(([k]) => cellValues[k]);
+  for (const [k] of moves) delete cellValues[k];          // two-phase: avoid clobbering
+  moves.forEach(([, nk], i) => { cellValues[nk] = vals[i]; });
+}
+
+// Shift a sheet's user lock/unlock addresses through one structural op, the
+// same way cellValues keys move — a deleted cell drops out of both lists.
+function _rekeyLockOverridesForOp(sheet, op) {
+  const ov = state.lock_overrides && state.lock_overrides[sheet];
+  if (!ov) return;
+  const rows = op.kind.endsWith("_rows"), insert = op.kind.startsWith("insert");
+  const shiftList = (arr) => {
+    const out = [];
+    for (const a of (arr || [])) {
+      const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(String(a));
+      if (!m) continue;
+      let col = m[1].toUpperCase().split("").reduce((x, ch) => x * 26 + (ch.charCodeAt(0) - 64), 0);
+      let row = parseInt(m[2], 10);
+      if (rows) row = _shiftIdx(row, op.at, op.count, insert);
+      else col = _shiftIdx(col, op.at, op.count, insert);
+      if (row === null || col === null) continue;           // deleted -> drop
+      out.push(colLetter(col) + row);
+    }
+    return out;
+  };
+  ov.lock = shiftList(ov.lock);
+  ov.unlock = shiftList(ov.unlock);
+  if (!ov.lock.length && !ov.unlock.length) delete state.lock_overrides[sheet];
+}
+
+function applyStructOp(sheet, kind, at, count = 1) {
+  const rows = kind.endsWith("_rows");
+  // The project-info block (rows 1-10) is canonical across every tab and the
+  // intake pre-fill's anchor — structural edits start below it.
+  if (rows && at <= STRUCT_HEADER_GUARD_ROW) {
+    alert(`Rows 1–${STRUCT_HEADER_GUARD_ROW} are the project header — insert or delete below row ${STRUCT_HEADER_GUARD_ROW}.`);
+    return;
+  }
+  // Never let a delete take out the sheet's own totals cells — the bid and
+  // the proposal snapshot read them.
+  if (kind.startsWith("delete") && TOTAL_CELLS[roleFor(sheet) === "polish" ? "Polish" : "Epoxy"]) {
+    const totals = Object.values(totalCellsFor(sheet));
+    for (const a of totals) {
+      const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(a || "");
+      if (!m) continue;
+      const idx = rows ? parseInt(m[2], 10)
+                       : m[1].toUpperCase().split("").reduce((x, ch) => x * 26 + (ch.charCodeAt(0) - 64), 0);
+      if (idx >= at && idx < at + count) {
+        alert("That would delete the sheet's bid totals — blocked.");
+        return;
+      }
+    }
+  }
+  const sid = HF.sheetIdByName[sheet];
+  if (sid === undefined || !HF.instance) return;
+  try {
+    if (kind === "insert_rows")      HF.instance.addRows(sid, [at - 1, count]);
+    else if (kind === "delete_rows") HF.instance.removeRows(sid, [at - 1, count]);
+    else if (kind === "insert_cols") HF.instance.addColumns(sid, [at - 1, count]);
+    else                             HF.instance.removeColumns(sid, [at - 1, count]);
+  } catch (e) {
+    console.warn("structural op failed in HF:", e);
+    alert("Couldn't apply that change.");
+    return;
+  }
+  state.tab_structs = [...state.tab_structs, { sheet, kind, at, count }];
+  const op = { sheet, kind, at, count };
+  if (sheetCache[sheet]) _transformCacheForOp(sheetCache[sheet], op);
+  _rekeyCellValuesForOp(sheet, op);
+  _rekeyLockOverridesForOp(sheet, op);
+  _activeCellInput = null;
+  syncFormulaBar();
+  showSheet(sheet);                       // full re-render from the shifted cache
+  persistTabState();
+}
+
+// Right-click menu on the row/column headers.
+let _ctxMenuEl = null;
+function _closeCtxMenu() { if (_ctxMenuEl) { _ctxMenuEl.remove(); _ctxMenuEl = null; } }
+document.addEventListener("click", _closeCtxMenu);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") _closeCtxMenu(); });
+
+sheetGrid.addEventListener("contextmenu", (e) => {
+  const head = e.target.closest(".row-header, .col-header");
+  if (!head || !activeSheet) return;
+  const isRow = head.classList.contains("row-header");
+  const idx = parseInt(head.dataset[isRow ? "rowIndex" : "colIndex"] || "0", 10);
+  if (!idx) return;
+  e.preventDefault();
+  _closeCtxMenu();
+  const label = isRow ? `row ${idx}` : `column ${colLetter(idx)}`;
+  const items = isRow ? [
+    [`Insert row above ${idx}`,  () => applyStructOp(activeSheet, "insert_rows", idx)],
+    [`Insert row below ${idx}`,  () => applyStructOp(activeSheet, "insert_rows", idx + 1)],
+    [`Delete ${label}`,          () => applyStructOp(activeSheet, "delete_rows", idx)],
+  ] : [
+    [`Insert column left of ${colLetter(idx)}`,  () => applyStructOp(activeSheet, "insert_cols", idx)],
+    [`Insert column right of ${colLetter(idx)}`, () => applyStructOp(activeSheet, "insert_cols", idx + 1)],
+    [`Delete ${label}`,                          () => applyStructOp(activeSheet, "delete_cols", idx)],
+  ];
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu";
+  for (const [text, fn] of items) {
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "ctx-item" + (text.startsWith("Delete") ? " danger" : "");
+    it.textContent = text;
+    it.addEventListener("click", () => { _closeCtxMenu(); fn(); });
+    menu.appendChild(it);
+  }
+  menu.style.left = e.pageX + "px";
+  menu.style.top = e.pageY + "px";
+  document.body.appendChild(menu);
+  _ctxMenuEl = menu;
+});
 
 function propagateChangesToDom(changes) {
   // changes is an array of {sheet, addr, value} from HF.setCellValue.
@@ -1378,6 +2180,11 @@ function propagateChangesToDom(changes) {
     if (!inputEl) continue;
     // Skip the cell the user is actively typing in
     if (document.activeElement === inputEl) continue;
+    // Same skip one hop removed: while the FORMULA BAR is editing this cell,
+    // focus sits in the bar, not the cell — overwriting here would feed HF's
+    // formatted echo ("10" → "1000%") back into the blur-commit normalizer,
+    // committing 100x the typed percent.
+    if (inputEl === _activeCellInput && document.activeElement === fbarInput) continue;
     // Find the original cell from cache to get fmt
     const sourceCells = (sheetCache[ch.sheet] || {}).cells || [];
     const sourceCell = sourceCells.find(c => c.addr === ch.addr);
@@ -1412,8 +2219,8 @@ function updateTotalBarFromHF() {
   }, 0);
   const cellsFor = (key) => {
     const out = [];
-    if (workType !== "polish") out.push({ sheet: "Epoxy",  addr: TOTAL_CELLS.Epoxy[key]  });
-    if (workType !== "epoxy")  out.push({ sheet: "Polish", addr: TOTAL_CELLS.Polish[key] });
+    if (workType !== "polish") out.push({ sheet: "Epoxy",  addr: totalCellsFor("Epoxy")[key]  });
+    if (workType !== "epoxy")  out.push({ sheet: "Polish", addr: totalCellsFor("Polish")[key] });
     return out;
   };
 
@@ -1434,7 +2241,7 @@ function updateTotalBarFromHF() {
       : "—";
   } else {
     const srcSheet = workType === "polish" ? "Polish" : "Epoxy";
-    const v = HF.getValue(srcSheet, TOTAL_CELLS[srcSheet].psf);
+    const v = HF.getValue(srcSheet, totalCellsFor(srcSheet).psf);
     const isErr = v && typeof v === "object" && "value" in v;
     document.getElementById("tb-psf").textContent =
       isErr ? String(v.value) : (typeof v === "number" ? fmtMoney(v) : "—");
@@ -1714,51 +2521,92 @@ function snapshotLumpSumsToState() {
     const v = HF.getValue(s, a);
     return typeof v === "number" ? v : 0;
   };
-  const epoxyLump  = num("Epoxy",  TOTAL_CELLS.Epoxy.total);   // D88
-  const polishLump = num("Polish", TOTAL_CELLS.Polish.total);  // D82
+  const epoxyLump  = num("Epoxy",  totalCellsFor("Epoxy").total);   // D88
+  const polishLump = num("Polish", totalCellsFor("Polish").total);  // D82
   state.hf_lump_sums = {
     epoxy:    epoxyLump,
     polish:   polishLump,
     combined: epoxyLump + polishLump,
   };
-  // The single number the proposal should show, given work_type.
-  state.proposal_lump_sum =
-    wt === "epoxy"  ? epoxyLump :
-    wt === "polish" ? polishLump :
-                      epoxyLump + polishLump;
-  // Sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the proposal's
-  // itemized breakdown matches the Total Lump Sum exactly — not the recipe
-  // engine's figures (which omit Kyle's manual sheet tweaks). Combo sums both.
-  const pick = (e, p) => wt === "epoxy" ? e : wt === "polish" ? p : e + p;
-  state.proposal_sales_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.sales_tax),
-                                  num("Polish", TOTAL_CELLS.Polish.sales_tax));
-  state.proposal_remodel_tax = pick(num("Epoxy", TOTAL_CELLS.Epoxy.remodel),
-                                    num("Polish", TOTAL_CELLS.Polish.remodel));
-  // Per-sheet priced options: when 2+ epoxy-family sheets carry a bid, the proposal
-  // lists each as an option (base bid first, then copies). Each can show its own
-  // system/scope and a signed difference vs. the base bid (estimator toggles on
-  // Proposal Review). 1 epoxy sheet → state.rooms = [] (unchanged single-bid).
-  const tc = TOTAL_CELLS.Epoxy;
-  const epoxyTabs = tabs.filter(t => t.role === "epoxy");
-  const baseTab = epoxyTabs.find(t => t.kind === "base") || epoxyTabs[0];
-  const baseTotal = baseTab ? num(baseTab.id, tc.total) : 0;
-  state.tab_opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : {};
-  const opts = epoxyTabs.map(t => {
-    const isBase = baseTab && t.id === baseTab.id;
-    const saved = state.tab_opts[t.id] || {};
+
+  // Base bid = the estimator's designated tab (state.base_tab_id) or, when unset,
+  // today's derivation (base-kind epoxy tab). A designated base drives the
+  // proposal's Total Lump Sum + itemized taxes from THAT tab's cells; with no
+  // designation we keep the work_type behavior (combo = Epoxy + Polish sum).
+  const baseTab   = resolveBaseTab();
+  const baseCells = baseTab ? totalCellsFor(baseTab.id) : TOTAL_CELLS.Epoxy;
+  const baseTotal = baseTab ? num(baseTab.id, baseCells.total) : 0;
+  if (state.base_tab_id && baseTab) {
+    state.proposal_lump_sum    = baseTotal;
+    state.proposal_sales_tax   = num(baseTab.id, baseCells.sales_tax);
+    state.proposal_remodel_tax = num(baseTab.id, baseCells.remodel);
+  } else {
+    // Fallback (no explicit base): the single number the proposal shows, given
+    // work_type; sheet's OWN sales tax (D80/D74) + remodel tax (D81/D75) so the
+    // itemized breakdown matches the Total Lump Sum. Combo sums both.
+    state.proposal_lump_sum =
+      wt === "epoxy"  ? epoxyLump :
+      wt === "polish" ? polishLump :
+                        epoxyLump + polishLump;
+    const pick = (e, p) => wt === "epoxy" ? e : wt === "polish" ? p : e + p;
+    state.proposal_sales_tax = pick(num("Epoxy", totalCellsFor("Epoxy").sales_tax),
+                                    num("Polish", totalCellsFor("Polish").sales_tax));
+    state.proposal_remodel_tax = pick(num("Epoxy", totalCellsFor("Epoxy").remodel),
+                                      num("Polish", totalCellsFor("Polish").remodel));
+  }
+
+  // Priced options: the estimator EXPLICITLY marks OTHER priced tabs as options
+  // (state.tab_opts[id].is_option) and toggles show + price_mode ("total" | "deduct").
+  // state.rooms = base first, then each SHOWN option; the proposal renders the base
+  // via {{#single_bid}} and each option as a "$total – … as described above" line or
+  // a "($savings) – Deduct VE for … in lieu of <base>" line. No shown option ⇒ [].
+  const baseDesc = baseTab ? deriveSystemNameFor(baseTab.id) : "";
+  const shownBase = state.proposal_lump_sum;   // the base bid the proposal actually displays
+  const mkRoom = (t, isBase) => {
+    const c = totalCellsFor(t.id);
+    const total = isBase ? shownBase : num(t.id, c.total);
+    const o = state.tab_opts[t.id] || {};
+    const desc = deriveSystemNameFor(t.id) || labelFor(t.id);
     return {
       id: t.id, name: labelFor(t.id), is_base: !!isBase,
-      bid: { total: num(t.id, tc.total), sales_tax: num(t.id, tc.sales_tax), remodel: num(t.id, tc.remodel) },
-      base_total: baseTotal,
-      system_desc: deriveSystemNameFor(t.id),
-      show_system: saved.show_system !== undefined ? saved.show_system : true,
-      show_diff: saved.show_diff !== undefined ? saved.show_diff
-                 : (!isBase && epoxyTabs.length === 2),
+      bid: { total, sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel) },
+      base_total: shownBase,
+      deduct_amount: shownBase - total,       // savings vs the shown base; <=0 ⇒ backend falls back to total
+      price_mode: isBase ? "total" : (o.price_mode === "deduct" ? "deduct" : "total"),
+      show: isBase ? true : (o.show !== false),
+      system_desc: desc,
+      option_desc: desc,
+      base_desc: baseDesc,
+      show_system: o.show_system !== undefined ? o.show_system : true,
+      show_diff:   o.show_diff   !== undefined ? o.show_diff   : false,
       notes_auto: deriveNotes(t.id),
       notes_manual: (state.tab_notes[t.id] || []),
     };
-  }).filter(o => o.bid.total > 0);
-  state.rooms = opts.length >= 2 ? opts : [];
+  };
+  const optionTabs = pricedTabs().filter(t =>
+    (!baseTab || t.id !== baseTab.id) &&
+    state.tab_opts[t.id] && state.tab_opts[t.id].is_option &&
+    state.tab_opts[t.id].show !== false);
+  const shownOptions = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
+  state.rooms = (shownOptions.length && baseTab) ? [mkRoom(baseTab, true), ...shownOptions] : [];
+
+  // Full per-tab pricing snapshot so the Proposal Review sidebar can switch the
+  // base / toggle options WITHOUT the sheet engine (proposal-review's rebuildPricing
+  // mirrors this). Every priced tab, not just the shown options.
+  state.priced_tabs = pricedTabs().map(t => {
+    const c = totalCellsFor(t.id);
+    return {
+      id: t.id, name: labelFor(t.id), role: t.role, kind: t.kind,
+      total: num(t.id, c.total), sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel),
+      system_desc: deriveSystemNameFor(t.id), notes_auto: deriveNotes(t.id),
+    };
+  });
+
+  // The Reference Bid engine + Alternate system were removed; the proposal now
+  // uses the sheet totals above. Null the engine/alternate results so a resumed
+  // older draft can't leak a stale figure into the options doc (config kept).
+  state.computed_bid = null;
+  state.alternate_computed_bid = null;
 }
 
 function persistTabState() {
@@ -1766,7 +2614,7 @@ function persistTabState() {
   TW.setState({ ...state, cell_values: cellValues, rooms: state.rooms,
                 tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_notes: state.tab_notes, tab_order: state.tab_order,
-                tab_opts: state.tab_opts });
+                tab_opts: state.tab_opts, lock_overrides: state.lock_overrides });
 }
 document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
@@ -1777,7 +2625,7 @@ document.getElementById("continue-btn").addEventListener("click", () => {
   window.location.assign("/proposal-review.html");
 });
 
-// ── Computed Bid panel (tool's 5.7-recipe pricing: multi-system, bulk, full bid) ──
+// ── System-name helpers (live reads off the grid / HF for the auto System Name) ──
 const _cbNum = x => { const n = parseFloat(String(x).replace(/[$,]/g, "")); return isNaN(n) ? 0 : n; };
 const _cbFmt = n => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 let _cbTimer = null;
@@ -1811,7 +2659,9 @@ function deriveSystemName() {
 // OWN A22/A26 dropdown picks from HF (resolves for non-active tabs too).
 function deriveSystemNameFor(id) {
   const names = [];
-  for (const a of ["A22", "A26"]) {
+  for (const a0 of ["A22", "A26"]) {
+    const a = txAddr(id, a0);            // template coords follow row/col edits
+    if (!a) continue;
     const v = HF.getValue(id, a);
     const s = (typeof v === "string") ? v.trim() : "";
     if (s && _cbRealSystem(s) && !names.includes(s)) names.push(s);
@@ -1826,156 +2676,6 @@ function refreshSystemName() {
   sysNameInput.value = derived;
   pushSysTextureToState();
 }
-
-async function computeBid() {
-  const systems = [], coves = [];
-  [["Epoxy!A22", "Epoxy!E20"], ["Epoxy!A26", "Epoxy!E24"]].forEach(([na, sa]) => {
-    const name = _cbCell(na), sf = _cbNum(_cbCell(sa));
-    if (_cbRealSystem(name) && sf > 0) systems.push({ name, sf });
-  });
-  [["Epoxy!A35", "Epoxy!E34"], ["Epoxy!A37", "Epoxy!E37"]].forEach(([oa, la]) => {
-    const option = _cbCell(oa), lf = _cbNum(_cbCell(la));
-    if (_cbRealCove(option) && lf > 0) coves.push({ option, lf });
-  });
-  const payload = {
-    systems, coves,
-    extras: getExtras(),
-    bulk_discount: document.getElementById("cb-bulk").checked,
-    taxable: String(_cbCell("Epoxy!B6") || "yes").toLowerCase() !== "no",
-    remodel: String(_cbCell("Epoxy!D6") || "").toLowerCase() === "yes",
-    remodel_rate: state.county_remodel_rate || 0,
-    sales_tax_rate: 0.09475,
-    full_bid: true,
-  };
-  const psf = _cbNum(_cbCell("Polish!E18")) || _cbNum(state.polish_sf);
-  if (psf > 0) payload.polish_sf = psf;
-  // Alternate (recommended) system — priced with the SAME tax/labor as the base.
-  if (typeof altActive === "function" && altActive()) {
-    payload.alternate_systems = [{ name: ALT.system, sf: _cbNum(ALT.sf) }];
-    payload.alternate_label = (ALT.label || "").trim();
-  }
-  const grid = document.getElementById("cb-grid"), st = document.getElementById("cb-status");
-  if (!systems.length && !payload.polish_sf) {
-    grid.innerHTML = '<div style="color:var(--ink-variant,#888)">Select a system and enter SF to compute the bid.</div>';
-    return;
-  }
-  st.textContent = "computing…";
-  try {
-    const r = await TW.postJSON("/api/price", payload);
-    renderBid(r); st.textContent = "";
-    // The full response carries `alternate_full_bid` + `alternate` when an
-    // alternate was priced — stash it so the proposal step can render it.
-    state.computed_bid = r;
-    state.alternate_computed_bid = r.alternate_full_bid ? r : null;
-    TW.setState({ ...state, computed_bid: r, alternate_computed_bid: state.alternate_computed_bid });
-  } catch (e) { st.textContent = "error"; }
-}
-
-function renderBid(r) {
-  const fb = r.full_bid, rows = [];
-  r.systems.forEach((s, i) => rows.push([`System ${i + 1}: ${s.system}`, s.material]));
-  if (r.coves && r.coves.length) rows.push(["Cove", r.coves.reduce((a, c) => a + c.material, 0)]);
-  if (r.polish) rows.push(["Polish", r.polish.material]);
-  if (r.patch) rows.push(["Patch", r.patch]);
-  if (r.extras_total) rows.push([`Extra materials (${(r.extras || []).length})`, r.extras_total]);
-  rows.push([`Shipping + escalation (${Math.round((r.shipping_pct || 0) * 100)}%)`, r.shipping_escalation]);
-  rows.push(["Material Total", r.material_total, true]);
-  if (fb) {
-    rows.push(["Install labor + burden", fb.install_labor + fb.labor_burden]);
-    rows.push(["Tooling", fb.tooling]);
-    rows.push([`GP markup (${Math.round(fb.gp_pct * 100)}%)`, fb.gp_markup]);
-    rows.push(["Super/PTO + Soft costs", fb.superintendent_pto + fb.soft_costs]);
-    rows.push(["Sales tax", fb.sales_tax]);
-    rows.push(["KS remodel tax", fb.remodel_tax]);
-    rows.push(["ENGINE REFERENCE TOTAL (proposal uses the sheet's Total Lump Sum)", fb.total_base_bid, true]);
-  }
-  // Alternate (recommended) system — a second priced option beside the base.
-  const altRes = document.getElementById("alt-result");
-  if (r.alternate_full_bid && r.alternate_full_bid.total_base_bid) {
-    const albl = (r.alternate && r.alternate.label) || "Alternate system";
-    rows.push([`ALTERNATE — ${albl}`, r.alternate_full_bid.total_base_bid, true]);
-    if (altRes) altRes.textContent = `Alternate Total Base Bid: ${_cbFmt(r.alternate_full_bid.total_base_bid)}`;
-  } else if (altRes) {
-    altRes.textContent = "";
-  }
-  document.getElementById("cb-grid").innerHTML = rows.map(([l, v, bold]) =>
-    `<div style="display:flex;justify-content:space-between;padding:3px 0;${bold ? 'font-weight:700;border-top:2px solid var(--treadwell-red,#c0392b);margin-top:3px;padding-top:5px' : ''}"><span>${l}</span><span>${_cbFmt(v)}</span></div>`
-  ).join("");
-}
-
-// ── Extra materials (appendable manual qty × unit-price lines) ──────────
-// Mirrors the sheet's spare "=B*C" rows (rows 23,27,28,32,33,39 → 6 native
-// slots). Unlimited in the tool/proposal; on generate the first 6 fill the
-// native rows and any overflow lumps into one line + a note.
-const SHEET_SPARE_ROWS = 6;
-let EXTRAS = Array.isArray(state.extras) ? state.extras.slice() : [];
-
-function getExtras() {
-  // Only lines with a label and a non-zero amount count.
-  return EXTRAS
-    .map(e => ({ label: (e.label || "").trim(), qty: _cbNum(e.qty), unit_price: _cbNum(e.unit_price) }))
-    .filter(e => e.label && e.qty * e.unit_price !== 0);
-}
-
-function persistExtras() { state.extras = EXTRAS; TW.setState({ ...state, extras: EXTRAS }); }
-
-function renderExtras() {
-  const wrap = document.getElementById("cb-extras");
-  document.getElementById("cb-extras-head").style.display = EXTRAS.length ? "grid" : "none";
-  wrap.innerHTML = "";
-  EXTRAS.forEach((e, i) => {
-    const amt = _cbNum(e.qty) * _cbNum(e.unit_price);
-    const row = document.createElement("div");
-    row.style.cssText = "display:grid;grid-template-columns:1fr 70px 90px 90px 28px;gap:6px;align-items:center;margin-bottom:4px;";
-    row.innerHTML =
-      `<input type="text" data-k="label" placeholder="Material name" value="${(e.label || "").replace(/"/g, "&quot;")}" style="font-size:12.5px;padding:3px 6px;">
-       <input type="number" data-k="qty" placeholder="0" value="${e.qty ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
-       <input type="number" step="0.01" data-k="unit_price" placeholder="0.00" value="${e.unit_price ?? ""}" style="font-size:12.5px;padding:3px 6px;text-align:right;">
-       <span style="text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;">${_cbFmt(amt)}</span>
-       <button type="button" data-act="rm" title="Remove" style="cursor:pointer;border:none;background:none;color:var(--treadwell-red,#c0392b);font-size:15px;">×</button>`;
-    row.querySelectorAll("input").forEach(inp => {
-      inp.addEventListener("input", () => {
-        EXTRAS[i][inp.dataset.k] = inp.value;
-        // live-update just this row's amount, persist, recompute (debounced)
-        row.children[3].textContent = _cbFmt(_cbNum(EXTRAS[i].qty) * _cbNum(EXTRAS[i].unit_price));
-        persistExtras();
-        clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
-      });
-    });
-    row.querySelector('[data-act="rm"]').addEventListener("click", () => {
-      EXTRAS.splice(i, 1); persistExtras(); renderExtras(); computeBid();
-    });
-    wrap.appendChild(row);
-  });
-  const note = document.getElementById("cb-extras-note");
-  if (EXTRAS.length > SHEET_SPARE_ROWS) {
-    note.style.display = "block";
-    note.textContent = `⚠ ${EXTRAS.length} lines — the estimate sheet has ${SHEET_SPARE_ROWS} spare material rows; extras beyond that are lumped into one "Misc materials" line in the .xlsx (all lines still itemized in the proposal).`;
-  } else {
-    note.style.display = "none";
-  }
-}
-
-// Seed from the sheet's spare rows if the estimator already typed materials
-// there (e.g. an imported draft) — read label/qty/price straight off the grid.
-function seedExtrasFromSheet() {
-  if (EXTRAS.length) return;   // user/draft data wins
-  const SPARE = [23, 27, 28, 32, 33, 39];
-  for (const r of SPARE) {
-    const label = _cbCell(`Epoxy!A${r}`);
-    if (!label || /^=/.test(label) || /^MATERIAL|Options|Sub Total|Discount/i.test(label)) continue;
-    const qty = _cbNum(_cbCell(`Epoxy!B${r}`)), up = _cbNum(_cbCell(`Epoxy!C${r}`));
-    if (label.trim() && (qty || up)) EXTRAS.push({ label: label.trim(), qty, unit_price: up });
-  }
-}
-
-document.getElementById("cb-add-extra").addEventListener("click", () => {
-  EXTRAS.push({ label: "", qty: "", unit_price: "" });
-  persistExtras(); renderExtras();
-  // focus the new row's name field
-  const inputs = document.querySelectorAll("#cb-extras input[data-k='label']");
-  if (inputs.length) inputs[inputs.length - 1].focus();
-});
 
 // ── Proposal price lines (options / unit prices; display-only) ──────────
 let PRICE_LINES = Array.isArray(state.price_lines) ? state.price_lines.slice() : [];
@@ -2013,148 +2713,27 @@ document.getElementById("cb-add-priceline").addEventListener("click", () => {
   if (inputs.length) inputs[inputs.length - 1].focus();
 });
 
-// ── Alternate (recommended) system selector ─────────────────────────────
-let ALT = Object.assign({ system: "", sf: "", label: "" }, state.alternate || {});
-function altActive() { return _cbRealSystem(ALT.system) && _cbNum(ALT.sf) > 0; }
-function persistAlt() { state.alternate = ALT; TW.setState({ ...state, alternate: ALT }); }
-function populateAltSystems(list) {
-  const sys = document.getElementById("alt-system");
-  if (!sys) return;
-  const cur = ALT.system || "";
-  sys.innerHTML = '<option value="">— none —</option>' +
-    (list || []).map(n => `<option value="${String(n).replace(/"/g, "&quot;")}"${n === cur ? " selected" : ""}>${n}</option>`).join("");
-}
-function wireAlt() {
-  const sys = document.getElementById("alt-system"),
-        sf = document.getElementById("alt-sf"),
-        lab = document.getElementById("alt-label");
-  if (!sys) return;
-  if (ALT.sf) sf.value = ALT.sf;
-  if (ALT.label) lab.value = ALT.label;
-  const recompute = () => {
-    ALT.system = sys.value; ALT.sf = sf.value; ALT.label = lab.value; persistAlt();
-    clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
-  };
-  sys.addEventListener("change", recompute);
-  sf.addEventListener("input", recompute);
-  lab.addEventListener("input", () => { ALT.label = lab.value; persistAlt(); });
-}
-
-document.getElementById("cb-bulk").addEventListener("change", e => {
-  // Bulk discount = the sheet's D41 toggle. Store it PER-TAB (keyed to the
-  // ACTIVE sheet), not a hardcoded "Epoxy!D41", so each copied tab keeps its OWN
-  // value and Copy-sheet carries it (Kyle: "bulk discount didn't carry to the
-  // copied sheet"). Persist so it survives a reload + reaches the generated .xlsx.
-  const key = (activeSheet || "Epoxy") + "!D41";
-  cellValues[key] = e.target.checked ? "BULK Discount ON" : "Bulk Discount OFF";
-  state.cb_bulk = e.target.checked;
-  TW.setState({ ...state, cell_values: cellValues });
-  computeBid();
-});
-// recompute when any grid selection / SF changes (debounced)
+// Recompute the System Name + refresh the base-bid picker / option totals when
+// any grid selection or SF changes (debounced). No engine round-trip anymore —
+// the proposal uses the sheet's own Total Lump Sum.
 document.getElementById("sheet-grid").addEventListener("change", () => {
   refreshSystemName();
-  clearTimeout(_cbTimer); _cbTimer = setTimeout(computeBid, 400);
+  clearTimeout(_cbTimer); _cbTimer = setTimeout(renderBidOptions, 300);
 });
 
 init();
-// (bulk-discount checkbox is synced per-tab inside showSheet now)
 
-// Collapsible Computed Bid → the worksheet gets the rest of the window.
-// Default collapsed (headline totals stay in the total-bar); choice is remembered.
-(function initCbCollapse(){
-  const panel  = document.getElementById("computed-bid");
-  const header = document.getElementById("cb-header");
-  const caret  = document.getElementById("cb-caret");
-  if (!panel || !header) return;
-  let collapsed = true;
-  try { const v = localStorage.getItem("tw_cb_collapsed"); if (v !== null) collapsed = v === "1"; } catch {}
-  const apply = () => {
-    panel.classList.toggle("cb-collapsed", collapsed);
-    if (caret) caret.textContent = collapsed ? "▸ Show breakdown" : "▾ Hide";
-    if (window.__twCbApplySaved) window.__twCbApplySaved();   // re-apply dragged height / hide resizer
-  };
-  apply();
-  header.addEventListener("click", (e) => {
-    // Clicks inside the bulk-discount label toggle the checkbox, not the panel
-    // (replaces the element's former inline onclick="event.stopPropagation()").
-    if (e.target.closest && e.target.closest("#cb-bulk-label")) return;
-    collapsed = !collapsed;
-    try { localStorage.setItem("tw_cb_collapsed", collapsed ? "1" : "0"); } catch {}
-    apply();
-  });
-})();
-
-// Drag the #cb-resizer to resize the WORKSHEET; the Computed Bid panel flexes to
-// fill whatever's left (and its body scrolls), so nothing runs off-screen. We
-// size the worksheet (not the panel) because the panel's content is unbounded.
-(function initCbResize(){
-  const panel = document.getElementById("computed-bid");
-  const vp = document.querySelector(".xl-viewport");
-  const rez = document.getElementById("cb-resizer");
-  if (!panel || !vp || !rez) return;
-  const KEY = "tw_ws_height";   // persisted WORKSHEET height (expanded mode)
-  const tbEl = document.getElementById("total-bar");
-  // Cap the worksheet at the actual space available between it and the bottom of
-  // the window, reserving room for the total-bar, the handle, and a >=90px panel —
-  // so dragging the worksheet bigger can never push the bid panel off-screen.
-  function maxWs(){
-    const vpTop = vp.getBoundingClientRect().top;
-    const tbH = tbEl ? tbEl.getBoundingClientRect().height : 0;
-    const rezH = rez.getBoundingClientRect().height || 10;
-    return Math.max(160, Math.floor(window.innerHeight - vpTop - tbH - rezH - 90));
-  }
-  const clamp = h => Math.max(120, Math.min(h, maxWs()));
-  function applySaved(){
-    if (panel.classList.contains("cb-collapsed")) {
-      // Collapsed: worksheet fills the window (back to flex:1), no resizer.
-      vp.style.height = ""; vp.style.flex = ""; rez.style.display = "none"; return;
-    }
-    rez.style.display = "";
-    // Expanded: fix the worksheet height (default ≈ half the window); the panel
-    // flexes into the remainder and scrolls.
-    const saved = parseInt(localStorage.getItem(KEY) || "", 10);
-    vp.style.flex = "0 0 auto";
-    vp.style.height = clamp(saved || Math.round(window.innerHeight * 0.50)) + "px";
-  }
-  window.__twCbApplySaved = applySaved;
-  let startY = 0, startH = 0, dragging = false;
-  function onMove(e){
-    if (!dragging) return;
-    // Drag DOWN (clientY increases) => bigger worksheet / smaller bid panel.
-    vp.style.height = clamp(startH + (e.clientY - startY)) + "px";
-    e.preventDefault();
-  }
-  function onUp(){
-    if (!dragging) return;
-    dragging = false; document.body.style.userSelect = "";
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onUp);
-    try { localStorage.setItem(KEY, String(Math.round(vp.getBoundingClientRect().height))); } catch {}
-  }
-  rez.addEventListener("pointerdown", e => {
-    if (panel.classList.contains("cb-collapsed")) return;
-    dragging = true; startY = e.clientY; startH = vp.getBoundingClientRect().height;
-    document.body.style.userSelect = "none"; e.preventDefault();
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-  });
-  applySaved();
-})();
-// Load the recipe-known system names so the panel only counts real picks,
-// then compute once the grid + cellValues have hydrated. Wait for the auth
-// token first (gated endpoint) + send it, else it 401s and VALID_SYSTEMS is empty.
+// Load the recipe-known system names so the base-bid picker + System Name only
+// count real picks. Wait for the auth token first (gated endpoint) + send it,
+// else it 401s and VALID_SYSTEMS stays empty.
 (window.TWAuth && window.TWAuth.ready ? window.TWAuth.ready : Promise.resolve())
   .then(() => fetch(TW.absoluteUrl("/api/pricing/systems"), { headers: TW.authHeaders() }))
   .then(r => r.json())
-  .then(d => { const list = (d.systems || d.epoxy || []); list.forEach(n => VALID_SYSTEMS.add(n)); populateAltSystems(list); })
+  .then(d => { const list = (d.systems || d.epoxy || []); list.forEach(n => VALID_SYSTEMS.add(n)); })
   .catch(() => {})
   .finally(() => setTimeout(() => {
-    seedExtrasFromSheet(); renderExtras();
-    renderPriceLines(); wireAlt();
+    renderPriceLines();
     refreshSystemName();
-    computeBid();
+    renderBidOptions();
   }, 1200));
 

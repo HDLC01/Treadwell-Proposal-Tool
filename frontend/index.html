@@ -57,9 +57,9 @@
     <fieldset>
       <legend>Project Info</legend>
       <div class="row">
-        <label style="flex: 0 0 280px;">Project deadline
-          <input type="date" name="deadline" id="deadline-input" required
-                 title="Project deadline / bid due date.">
+        <label style="flex: 0 0 280px;">Bid date
+          <input type="date" name="bid_date" required
+                 title="Bid due date — names the project folder and drives due-date reminders.">
         </label>
         <label>Project name / company
           <input type="text" name="project_name" required>
@@ -84,9 +84,6 @@
         </label>
       </div>
       <div class="row">
-        <label>Bid date
-          <input type="date" name="bid_date">
-        </label>
         <label>Architect / GC
           <input type="text" name="architect">
         </label>
@@ -116,9 +113,6 @@
           <option value="other">Other</option>
         </select>
       </label>
-      <label>Lead notes <span style="font-weight: 400; color: var(--ink-variant);">(paste full email / call notes — fuels the AI Autofill on the next screen)</span>
-        <textarea name="notes" rows="5"></textarea>
-      </label>
     </fieldset>
 
     <fieldset>
@@ -145,14 +139,8 @@
       <p class="hint">
         Pre-fills the estimate. You can refine on the next screen.
       </p>
-      <div class="row">
-        <label style="flex: 0 0 200px;">Number of systems
-          <input type="number" name="num_systems" id="num-systems-input"
-                 min="1" max="6" step="1">
-        </label>
-      </div>
-      <!-- One {Epoxy SF, Polish SF, Cove LF} group per system —
-           rendered by JS from the "Number of systems" value. -->
+      <!-- Two {Epoxy SF, Polish SF, Cove LF} groups (matches the estimate
+           sheet's two-system model) — rendered by JS. System 2 is optional. -->
       <div id="systems-container"></div>
       <div class="row">
         <label>Approx. start date
