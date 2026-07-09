@@ -1,6 +1,11 @@
 /* Treadwell Proposal Generator — minimal styling.
    Single file so the 4 screens share visual language without a build step. */
 
+/* Every screen is a light "paper" UI; opt out of Chromium/Brave auto-dark so
+   the pages + letterhead artwork aren't inverted. (Per-page <meta
+   color-scheme> covers first paint before this file loads.) */
+:root { color-scheme: only light; }
+
 :root {
   --treadwell-red:       #9e001f;
   --treadwell-red-dark:  #6c0015;
@@ -542,3 +547,348 @@ button {
 }
 
 /* Polish has a slightly different layout but reuses same grid */
+
+/* ─── Formula bar (estimate review) ───────────────────────────────── */
+/* Excel-style strip directly above the worksheet grid:
+   [ Name Box | fx | cell contents ]. The two inputs must undo the global
+   input[type="text"] form styling (36px min-height, margins, borders), so
+   everything is scoped under .formula-bar to outrank it. */
+.formula-bar {
+  flex: 0 0 auto;              /* stays thin inside .estimate-app's flex column */
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  background: var(--xl-header-bg);
+  border: 1px solid var(--xl-border);
+  border-bottom: 1px solid var(--surface-dim);
+  font-family: "Calibri", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+}
+.formula-bar .fbar-name {
+  flex: 0 0 90px;
+  width: 90px;
+  margin: 0;
+  padding: 0 6px;
+  min-height: 0;
+  border: none;
+  border-right: 1px solid var(--xl-border);
+  border-radius: 0;
+  background: var(--surface-lowest);
+  color: var(--ink);
+  text-align: center;
+  font-family: Consolas, "SF Mono", "Roboto Mono", monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.formula-bar .fbar-name:focus {
+  outline: none;               /* readOnly name box — no edit affordance */
+}
+.formula-bar .fbar-fx {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--ink-variant);
+  opacity: 0.75;
+  user-select: none;
+}
+.formula-bar .fbar-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0 8px;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;     /* blends into the bar */
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.formula-bar .fbar-input:focus {
+  outline: 2px solid var(--treadwell-red);   /* same edit cue as grid cells */
+  outline-offset: -2px;
+  background: var(--surface-lowest);
+}
+.formula-bar .fbar-input[readonly] {
+  color: var(--ink-variant);   /* locked cell — visible but not editable */
+  cursor: default;
+}
+.formula-bar .fbar-input[readonly]:focus {
+  outline-color: var(--surface-dim);         /* muted ring, not the red edit cue */
+  background: transparent;
+}
+.formula-bar .fbar-input:disabled {
+  color: var(--ink-variant);
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ─── Cell locking — rate/markup/tax cells (estimate review) ──────── */
+/* Locked cells keep their inline sheet fill and may also be
+   .editable/.formula-cell, so the locked look is an ::after OVERLAY +
+   dimmed input, never a background override. position:relative is added
+   ONLY to lock-bearing cells (.locked/.unlocked always accompany the
+   .cell-lock span) so grid layout and sticky headers stay untouched.
+   NOTE: the page's own <style> block loads after this file, so ties in
+   specificity lose — hence the .locked.locked / :has() bumps below. */
+.xl-grid .gridcell.locked,
+.xl-grid .gridcell.unlocked {
+  position: relative;
+}
+.xl-grid .gridcell.locked { cursor: not-allowed; }
+.xl-grid .gridcell.locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(120, 120, 120, 0.06);
+  background-image: repeating-linear-gradient(45deg,
+      rgba(90, 90, 90, 0.07) 0px, rgba(90, 90, 90, 0.07) 3px,
+      transparent 3px, transparent 7px);
+  pointer-events: none;        /* never blocks the 🔒 or the input */
+}
+/* Doubled .locked outranks the page's cursor:text / cursor:cell rules */
+.xl-grid .gridcell.locked.locked input,
+.xl-grid .gridcell.locked.locked select {
+  cursor: not-allowed;
+  opacity: 0.6;                /* dimmed value; inline fills untouched */
+}
+/* Temporarily unlocked (🔓) — warm "edit me now" ring; re-lock-on-blur
+   is obvious when it disappears. The 999px inset shadow is a tint that
+   layers over the cell's inline background without overwriting it. */
+.xl-grid .gridcell.unlocked {
+  box-shadow: inset 0 0 0 2px var(--warning),
+              inset 0 0 0 999px rgba(245, 158, 11, 0.10);
+  z-index: 1;
+}
+/* Focused while unlocked: keep the warm ring instead of the default red
+   (this :has() outranks the page's focus rule) */
+.xl-grid .gridcell.unlocked:has(input:focus),
+.xl-grid .gridcell.unlocked:has(select:focus) {
+  outline-color: var(--warning);
+}
+/* The 🔒/🔓 toggle pinned to the cell's top-right (same spot/scale as the
+   .canonical-mirror ⟲ glyph) — small enough not to cover the value */
+.xl-grid .gridcell .cell-lock {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  z-index: 2;                  /* above the ::after overlay */
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px;
+  cursor: pointer;
+  opacity: 0.45;
+  user-select: none;
+  transition: opacity 0.12s;
+}
+.xl-grid .gridcell:hover .cell-lock,
+.xl-grid .gridcell.unlocked .cell-lock {
+  opacity: 1;
+}
+
+/* ─── Formula reference highlights (Excel-style) ─────────────────────────
+   While a formula is edited (cell or bar), estimate-review.js outlines each
+   referenced cell/range with a color-cycled inset ring (ref-hl-0…5), like
+   Excel's colored reference borders. Rings layer over the cell's own fill
+   via box-shadow so no background is disturbed; cleared on commit/blur. */
+.xl-grid .gridcell.ref-hl-0 { box-shadow: inset 0 0 0 2px #4285f4; }
+.xl-grid .gridcell.ref-hl-1 { box-shadow: inset 0 0 0 2px #ea4335; }
+.xl-grid .gridcell.ref-hl-2 { box-shadow: inset 0 0 0 2px #34a853; }
+.xl-grid .gridcell.ref-hl-3 { box-shadow: inset 0 0 0 2px #9334e6; }
+.xl-grid .gridcell.ref-hl-4 { box-shadow: inset 0 0 0 2px #f29900; }
+.xl-grid .gridcell.ref-hl-5 { box-shadow: inset 0 0 0 2px #12857a; }
+
+/* ─── Structural-edit context menu (insert/delete rows & columns) ────────
+   Small right-click menu anchored to the row/column header the user hit;
+   estimate-review.js positions it at the cursor and removes it on any
+   click/Escape. */
+.ctx-menu {
+  position: absolute;
+  z-index: 1000;
+  min-width: 190px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--xl-border, #c9c9c9);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.ctx-menu .ctx-item {
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: inherit;
+}
+.ctx-menu .ctx-item:hover { background: var(--surface-dim, #f0f0f0); }
+.ctx-menu .ctx-item.danger { color: var(--treadwell-red, #c0392b); }
+
+/* ─── Proposal Review: real-document editor ──────────────────────────────
+   Proposal Review renders the ACTUAL .docx template (fetched from
+   /api/proposal-template) as ONE continuous Word-faithful document: the
+   template's own letterhead artwork (a full-page PNG inside the .docx
+   package — buffalo logo, DATE:/JOB NAME: labels, the red PROPOSAL stamp,
+   the bordered WORK/PRICE/NOTES frame with its rotated labels) painted
+   behind the floating text boxes positioned where Word anchors them, with
+   real run formatting (Zetta Serif, true point sizes, bold lead-ins) and
+   real bullets — everything contenteditable. Values pulled from the
+   estimate sheet / intake are highlighted on-screen only (.tw-fill) — the
+   highlight and any editor chrome never reach the generated .docx
+   (proposal_writer.py only ever writes plain run text). See
+   frontend/js/proposal-review.js. */
+
+/* A value auto-filled from intake/estimate data, inline in the document
+   text. Screen-only cue — never present in the generated file. */
+.tw-fill {
+  background: #ffe975;
+  padding: 0 1px;
+  border-radius: 1px;
+  cursor: default;
+}
+/* An estimate-sourced fill that is ALSO editable in place (system name /
+   texture / area). Keeps the yellow provenance cue; the caret + focus ring
+   signal it can be typed into. :empty keeps an emptied span clickable so the
+   estimator can re-type after clearing it. */
+.tw-fill.tw-fill-edit { cursor: text; outline: none; }
+.tw-fill.tw-fill-edit:hover { background: #ffe04d; }
+.tw-fill.tw-fill-edit:focus { background: #ffe975; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.55); }
+.tw-fill.tw-fill-edit:empty { display: inline-block; min-width: 1.2em; }
+/* Editable NOTES bullet — a real bullet that also takes the caret. */
+.tw-note-edit { outline: none; cursor: text; }
+.tw-note-edit:hover { background: rgba(200, 16, 46, 0.05); }
+.tw-note-edit:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.4); }
+
+/* The zoom rig: the page renders at TRUE point sizes (the template runs
+   8-9pt Zetta Serif) and the whole surface scales up to read comfortably —
+   the Word-zoom effect. #doc-zoom carries the transform; #doc-zoom-outer is
+   sized by JS to the scaled bounds so the canvas scrolls correctly. */
+#doc-zoom { transform-origin: top left; }
+
+/* One rendered page (or page-flow surface) of the real document. */
+.tw-page {
+  position: relative;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.16), 0 4px 14px rgba(0,0,0,0.10);
+  margin: 0 0 14px;
+  font-family: "Zetta Serif Book", "Zetta Serif", Georgia, "Times New Roman", serif;
+  font-size: 9pt;
+  color: #404040;
+  line-height: 1.32;
+}
+/* The letterhead artwork layer (word/media PNG) — behind the text. */
+.tw-page-art {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+}
+/* A floating text box placed at its Word anchor position. */
+.tw-txbx { position: absolute; z-index: 1; }
+
+/* One template paragraph, editable in place. Reads as plain page text;
+   hover/focus reveal the editability; a hand-edited paragraph carries a
+   thin red inset bar. */
+.tw-block {
+  outline: none;
+  min-height: 1.3em;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.tw-block:hover { background: rgba(200, 16, 46, 0.05); }
+.tw-block:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.5); }
+.tw-block.tw-empty { min-height: 1.05em; }
+.tw-block.tw-bold { font-weight: 700; }
+.tw-block.tw-list { margin-left: 14pt; }
+.tw-block.tw-dirty { box-shadow: inset 2px 0 0 rgba(158, 0, 31, 0.45); }
+
+/* Real Word bullets (paragraphs carrying numbering) — hanging indent with a
+   round bullet, matching the template's list rows. Shared by the read-only
+   price/notes previews (they mirror bulleted docx rows). */
+.tw-li {
+  position: relative;
+  margin-left: 14pt;
+  padding-left: 9pt;
+}
+.tw-li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* Flow-fallback caption above a bare-token block (job name, date …): only
+   in flow mode, where the letterhead artwork — which carries the real
+   labels — isn't being rendered (template gave no usable geometry). */
+.tw-flow { padding: 72pt 90pt; }
+.tw-flow .tw-block[data-hint]::before {
+  content: attr(data-hint);
+  display: block;
+  font-size: 7.5pt;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--treadwell-red, #9e001f);
+  opacity: 0.65;
+}
+
+/* A repeatable/priced block region ({{#single_bid}}, {{#price_line}},
+   {{#system}}, {{#notes}}, …) — read-only, engine-driven content rendered
+   INLINE in the document flow (no card chrome: the page must read as one
+   continuous document). Hover hints where to edit it; the engine-driven
+   amounts inside carry the yellow .tw-fill treatment. */
+.tw-priced-region { position: relative; cursor: default; }
+.tw-priced-region .tw-region-badge { display: none; }
+.tw-priced-region:hover { background: rgba(255, 233, 117, 0.22); }
+
+/* Left "Proposal fields" rail — the structured inputs that FEED the
+   highlighted .tw-fill values (system/texture/scope/schedule/etc). The
+   pricing options rail (#options-panel) already owns the right side. */
+.fields-panel {
+  position: fixed; left: 16px; top: 112px; width: 260px;
+  max-height: calc(100vh - 132px); overflow-y: auto;
+  background: #fff; border: 1px solid #ccc; border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  z-index: 40; font-size: 13px; color: #222;
+  transition: left .2s ease;
+}
+/* The workspace nav (auth.js) opens a fixed 240px sidebar and shifts the page
+   body right with margin-left, but margin can't move a fixed element, so
+   without this the nav sits ON TOP of the panel. Track it. */
+html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
+.fields-panel h3 { margin: 0 0 2px; font-size: 13px; color: #9e001f; }
+.fields-panel .op-hint { margin: 0 0 10px; font-size: 11px; color: #777; }
+.fields-panel label.fp-label {
+  display: block; font-size: 11px; font-weight: 700; color: #555;
+  margin: 10px 0 3px; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.fields-panel input[type="text"],
+.fields-panel input[type="number"],
+.fields-panel input[type="date"],
+.fields-panel select,
+.fields-panel textarea {
+  width: 100%; font: inherit; font-size: 12px; padding: 5px 6px;
+  border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;
+}
+.fields-panel textarea { resize: vertical; }
+.fields-panel .fp-row { display: flex; gap: 6px; }
+.fields-panel .fp-row > * { flex: 1; min-width: 0; }
+.fields-panel .fp-check { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 6px; }
+.fields-panel .fp-check input { width: auto; }
+/* Below ~1400px there isn't room for BOTH side rails + an 8.5in page —
+   drop the fields panel inline above the document (matches the
+   pricing-options-panel breakpoint in proposal-review.html). */
+@media (max-width: 1400px) {
+  .fields-panel {
+    position: static; width: auto; max-height: none;
+    margin: 0 16px 12px; box-shadow: none;
+  }
+}

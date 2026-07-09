@@ -2,11 +2,11 @@
   // Restore previous state if user clicked Back from screen 2
   const form = document.getElementById("intake-form");
 
-  // ── Dynamic per-system Scope fields ───────────────────────────────
-  // "Number of systems" controls how many {Epoxy SF, Polish SF, Cove LF}
-  // groups appear. System 1 keeps the legacy field names so the existing
-  // estimate-cell mappings keep working; systems 2+ use suffixed names.
-  const numSystemsInput  = document.getElementById("num-systems-input");
+  // ── Per-system Scope fields (fixed at two) ────────────────────────
+  // The estimate sheet is a two-system model, so we always render exactly
+  // two {Epoxy SF, Polish SF, Cove LF} groups. System 1 keeps the legacy
+  // field names so the existing estimate-cell mappings keep working;
+  // System 2 uses suffixed names and is optional (leave blank to skip it).
   const systemsContainer = document.getElementById("systems-container");
 
   function systemFieldNames(k) {
@@ -23,7 +23,8 @@
     let html = "";
     for (let k = 1; k <= n; k++) {
       const f = systemFieldNames(k);
-      const tag = n > 1 ? `<div class="system-tag">System ${k}</div>` : "";
+      const label = k === 2 ? `System ${k} (optional)` : `System ${k}`;
+      const tag = n > 1 ? `<div class="system-tag">${label}</div>` : "";
       html += `
         <div class="system-block">
           ${tag}
@@ -49,12 +50,9 @@
     });
   }
 
-  // Render from saved state (default 1 system), then hydrate the whole form.
-  renderSystems(parseInt(TW.getState().num_systems, 10) || 1);
+  // Always two systems (System 2 optional), then hydrate the whole form.
+  renderSystems(2);
   TW.writeForm(form, TW.getState());
-  if (numSystemsInput) {
-    numSystemsInput.addEventListener("input", () => renderSystems(numSystemsInput.value));
-  }
 
   // Default the bid date to today so users don't have to think about it.
   const bidInput = form.querySelector("[name='bid_date']");
@@ -155,6 +153,16 @@
     // ({{city_state}}) and tax lookup keep working unchanged. Zip is new
     // and stored separately.
     const cs = [values.city, (values.state || "").toUpperCase()].filter(Boolean).join(", ");
-    TW.setState({ ...values, city_state: cs, work_type: values.work_type || "epoxy" });
+    // Bid date is now the single project date. Mirror it into `deadline` so the
+    // Projects list, the notification bell's due-date reminders, and the Dropbox
+    // folder date (all of which read `deadline`) keep tracking the bid date.
+    // Fixed at two systems — the estimate sheet's model.
+    TW.setState({
+      ...values,
+      city_state: cs,
+      work_type: values.work_type || "epoxy",
+      deadline: values.bid_date || values.deadline || "",
+      num_systems: 2,
+    });
     window.location.assign("/estimate-review.html");
   });
