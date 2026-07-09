@@ -1232,7 +1232,7 @@ def _sanitize_price_overrides(pov_in) -> dict:
         for m in manual_in[:_PRICE_OVERRIDES_MAX]:
             out["manual"].append(clean(m, ("label", "amount")))   # keep {} holes in place
 
-    out["single_bid"] = clean(pov_in.get("single_bid"), ("amount", "tax_phrase"))
+    out["single_bid"] = clean(pov_in.get("single_bid"), ("amount", "tax_phrase", "desc"))
     return out
 
 
@@ -1645,6 +1645,14 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         values["base_bid_formatted"] = _pov["single_bid"]["amount"]
     if _pov["single_bid"].get("tax_phrase"):
         values["base_tax_phrase"] = _pov["single_bid"]["tax_phrase"]
+    # The base line's DESCRIPTION (the noun between the amount and the tax phrase,
+    # e.g. "Epoxy flooring as described above") is static text in each template,
+    # not a token — so proposal_writer replaces it in place at fill time. Passed
+    # via a private (underscore) key so the flat {{token}} pass ignores it. Only
+    # set when overridden: absent → each template keeps its own wording (no
+    # per-template default to drift, no regression for GC/Gyp variants).
+    if _pov["single_bid"].get("desc"):
+        values["_base_desc_override"] = _pov["single_bid"]["desc"]
 
     # Fill estimate workbook
     try:

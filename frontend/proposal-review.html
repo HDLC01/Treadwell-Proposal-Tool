@@ -552,12 +552,14 @@
        generated doc has no heading here either — refreshPriceDisplay hides
        #base-bid-heading to match (see proposal-review.js). -->
   <div id="combo-price-block" style="display:none;"></div>
-  <!-- The base AMOUNT + tax phrase are editable display-override islands
-       (.tw-fill-edit) — see proposal-review.js price_overrides. The Material
-       Sales Tax / Remodel / Total rows below stay PLAIN (engine-owned math). -->
+  <!-- The base AMOUNT, DESCRIPTION, and tax phrase are editable display-override
+       islands (.tw-fill-edit) — see proposal-review.js price_overrides. The " – "
+       separator stays plain (matches the docx, where it's outside the override).
+       The Material Sales Tax / Remodel / Total rows below stay PLAIN (engine math). -->
   <p id="base-bid-row" class="tw-li" style="margin: 0 0 2pt;">
     <strong class="tw-fill tw-fill-edit" id="base-bid-display" contenteditable="true" spellcheck="false"
-            data-po-kind="single_bid" data-po-field="amount" data-computed="">$0</strong> – Epoxy flooring as described above
+            data-po-kind="single_bid" data-po-field="amount" data-computed="">$0</strong> – <span class="tw-fill tw-fill-edit" id="base-desc-display" contenteditable="true" spellcheck="false"
+          data-po-kind="single_bid" data-po-field="desc" data-computed="">Epoxy flooring as described above</span>
     <em class="tw-fill tw-fill-edit" id="base-tax-phrase-display" contenteditable="true" spellcheck="false"
         data-po-kind="single_bid" data-po-field="tax_phrase" data-computed="">(material sales tax INCLUDED)</em>
   </p>

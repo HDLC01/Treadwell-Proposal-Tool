@@ -183,3 +183,24 @@ def test_option_override_composes_with_options_label():
     assert base_i < opt_i                                 # ordered after the base
     after = lines[opt_i + 1:]
     assert any("Renamed Option" in l and "$9,999" in l for l in after)
+
+
+# ── single_bid.desc: base-line description override (in-doc text swap) ──────
+def test_single_bid_desc_override_replaces_base_description():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS), "rooms": _rooms(),
+            "price_overrides": {"single_bid": {"desc": "Custom epoxy system as described above"}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Custom epoxy system as described above" in blob   # base description overridden
+    assert "Epoxy flooring as described above" not in blob     # template's static default replaced
+    assert "Base Bid" in blob                                  # base line still renders
+    assert "$36,763" in blob                                   # desc-only override leaves amount intact
+
+
+def test_base_description_default_preserved_without_override():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS), "rooms": _rooms()}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Epoxy flooring as described above" in blob         # no override -> template wording kept

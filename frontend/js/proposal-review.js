@@ -198,6 +198,19 @@
   function rebuildPricing() {
     const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
     if (!all.length) return;   // older draft w/o the snapshot — leave state.rooms as-is
+    // Reconcile per-option PRICE overrides against the live tabs: drop any
+    // price_overrides.options[id] whose tab no longer exists (deleted, or a
+    // "Copy<N>" id freed then reused by a different copy). Belt-and-suspenders
+    // to deleteTab's own delete — also catches an option that was un-marked and
+    // its tab later removed — so a stale override can never print on an
+    // unrelated option's customer proposal.
+    const _pov = state.price_overrides;
+    if (_pov && _pov.options && typeof _pov.options === "object" && !Array.isArray(_pov.options)) {
+      const liveIds = new Set(all.map(t => t.id));
+      let _pruned = false;
+      for (const oid of Object.keys(_pov.options)) if (!liveIds.has(oid)) { delete _pov.options[oid]; _pruned = true; }
+      if (_pruned) TW.setState({ price_overrides: _pov });
+    }
     const wt = (state.work_type || "epoxy").toLowerCase();
     const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
     const N = (v) => Number(v) || 0;
@@ -315,6 +328,19 @@
   // estimator sees on screen is what the customer gets. The preview elements
   // live inside the document's read-only priced region once the template loads
   // (see initDocumentEditor); until then they sit in the hidden staging div.
+  // The base-bid line's description noun, work-type aware — mirrors each Direct
+  // template's base line so the on-screen preview matches the generated doc. (GC/
+  // Gyp audiences word it slightly differently; the doc keeps its OWN wording
+  // unless the estimator overrides it, so this is just the preview/override default.)
+  function baseDescLabel() {
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    const noun = wt === "polish" ? "Polished Concrete Flooring"
+               : wt === "combo"  ? "Epoxy & Polished Concrete flooring"
+               : wt === "sealer" ? "Sealed Concrete"
+               : "Epoxy flooring";
+    return noun + " as described above";
+  }
+
   function refreshPriceDisplay() {
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const lumpSumN = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
@@ -398,6 +424,13 @@
         if (salesRow)   salesRow.style.display = "none";
         if (remodelRow) remodelRow.style.display = "none";
         if (totalRow)   totalRow.style.display = "none";
+      }
+      // Base description island (work-type noun) — mirror the docx base line so
+      // the preview matches, and honor a single_bid.desc override. Guarded like
+      // the amount/phrase so mid-edit typing isn't clobbered by a repaint.
+      if (!editingBase) {
+        const _bd = document.getElementById("base-desc-display");
+        if (_bd) { const _c = baseDescLabel(); _bd.dataset.computed = _c; _bd.textContent = poValue("single_bid", null, "desc", _c); }
       }
     }
     renderProposalExtras();

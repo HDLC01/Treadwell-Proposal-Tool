@@ -719,6 +719,11 @@ function deleteTab(id) {
   delete state.tab_notes[id];
   delete state.tab_opts[id];
   delete state.lock_overrides[id];   // freed copy ids get reused — don't leak locks
+  // Same reuse hazard for the per-option PRICE display override: nextCopyId()
+  // hands the freed "Copy<N>" id to the NEXT copy, so a leftover
+  // price_overrides.options[id] would print this deleted tab's overridden
+  // amount/label on the new (unrelated) option's customer proposal. Drop it.
+  if (state.price_overrides && state.price_overrides.options) delete state.price_overrides.options[id];
   if (state.base_tab_id === id) state.base_tab_id = null;   // fall back to auto-derive
   buildTabs();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
@@ -2701,7 +2706,13 @@ function renderPriceLines() {
       PRICE_LINES[i][inp.dataset.k] = inp.value; persistPriceLines();
     }));
     row.querySelector('[data-act="rm"]').addEventListener("click", () => {
-      PRICE_LINES.splice(i, 1); persistPriceLines(); renderPriceLines();
+      PRICE_LINES.splice(i, 1);
+      // Manual PRICE display overrides are positional (state.price_overrides.manual
+      // indexed by price-line position). Splice in tandem so the deletion doesn't
+      // shift a later line's override onto the wrong line in the customer proposal.
+      const _mo = state.price_overrides && state.price_overrides.manual;
+      if (Array.isArray(_mo) && i < _mo.length) _mo.splice(i, 1);
+      persistPriceLines(); renderPriceLines();
     });
     wrap.appendChild(row);
   });
