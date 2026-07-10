@@ -731,6 +731,12 @@ button {
 }
 .ctx-menu .ctx-item:hover { background: var(--surface-dim, #f0f0f0); }
 .ctx-menu .ctx-item.danger { color: var(--treadwell-red, #c0392b); }
+/* Cell menu (Sheets-style): grouped items with keyboard-shortcut hints. */
+.ctx-menu .ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.ctx-menu .ctx-item:disabled { color: #b0b0b0; cursor: default; }
+.ctx-menu .ctx-item:disabled:hover { background: none; }
+.ctx-menu .ctx-hint { font-size: 11px; color: #9a9a9a; }
+.ctx-menu .ctx-sep { height: 1px; margin: 4px 6px; background: var(--xl-border, #e0e0e0); }
 
 /* ─── Proposal Review: real-document editor ──────────────────────────────
    Proposal Review renders the ACTUAL .docx template (fetched from

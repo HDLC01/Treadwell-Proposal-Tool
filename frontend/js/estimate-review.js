@@ -486,7 +486,7 @@ function renderBidOptions() {
         `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
         `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
         `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
-        `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct</option></select></span>` +
+        `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct</option></select></span>` +
         `</span></span>`;
     }
     return `<span class="bb-opt" data-id="${_escBB(t.id)}">${inner}</span>`;
@@ -2134,44 +2134,134 @@ function applyStructOp(sheet, kind, at, count = 1) {
   persistTabState();
 }
 
-// Right-click menu on the row/column headers.
+// Right-click menu on the row/column HEADERS and grid CELLS (Sheets-style).
 let _ctxMenuEl = null;
 function _closeCtxMenu() { if (_ctxMenuEl) { _ctxMenuEl.remove(); _ctxMenuEl = null; } }
 document.addEventListener("click", _closeCtxMenu);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") _closeCtxMenu(); });
 
-sheetGrid.addEventListener("contextmenu", (e) => {
-  const head = e.target.closest(".row-header, .col-header");
-  if (!head || !activeSheet) return;
-  const isRow = head.classList.contains("row-header");
-  const idx = parseInt(head.dataset[isRow ? "rowIndex" : "colIndex"] || "0", 10);
-  if (!idx) return;
-  e.preventDefault();
+// Build + show a context menu at (x,y). `items` is a list of
+// {label, fn, danger?, disabled?, hint?} objects; a null entry renders a
+// separator. Shared by the header menu and the cell menu.
+function _openCtxMenu(x, y, items) {
   _closeCtxMenu();
-  const label = isRow ? `row ${idx}` : `column ${colLetter(idx)}`;
-  const items = isRow ? [
-    [`Insert row above ${idx}`,  () => applyStructOp(activeSheet, "insert_rows", idx)],
-    [`Insert row below ${idx}`,  () => applyStructOp(activeSheet, "insert_rows", idx + 1)],
-    [`Delete ${label}`,          () => applyStructOp(activeSheet, "delete_rows", idx)],
-  ] : [
-    [`Insert column left of ${colLetter(idx)}`,  () => applyStructOp(activeSheet, "insert_cols", idx)],
-    [`Insert column right of ${colLetter(idx)}`, () => applyStructOp(activeSheet, "insert_cols", idx + 1)],
-    [`Delete ${label}`,                          () => applyStructOp(activeSheet, "delete_cols", idx)],
-  ];
   const menu = document.createElement("div");
   menu.className = "ctx-menu";
-  for (const [text, fn] of items) {
+  for (const item of items) {
+    if (!item) { const hr = document.createElement("div"); hr.className = "ctx-sep"; menu.appendChild(hr); continue; }
     const it = document.createElement("button");
     it.type = "button";
-    it.className = "ctx-item" + (text.startsWith("Delete") ? " danger" : "");
-    it.textContent = text;
-    it.addEventListener("click", () => { _closeCtxMenu(); fn(); });
+    it.className = "ctx-item" + (item.danger ? " danger" : "");
+    if (item.disabled) it.disabled = true;
+    const lbl = document.createElement("span");
+    lbl.textContent = item.label;
+    it.appendChild(lbl);
+    if (item.hint) { const h = document.createElement("span"); h.className = "ctx-hint"; h.textContent = item.hint; it.appendChild(h); }
+    if (!item.disabled) it.addEventListener("click", () => { _closeCtxMenu(); item.fn(); });
     menu.appendChild(it);
   }
-  menu.style.left = e.pageX + "px";
-  menu.style.top = e.pageY + "px";
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
   document.body.appendChild(menu);
   _ctxMenuEl = menu;
+}
+
+// ── Single-cell clipboard (Sheets-style Cut / Copy / Paste) ───────────────
+// Hybrid: an internal buffer always works; we ALSO mirror to the OS clipboard
+// (best-effort) so a cell copied here can paste into Excel, and Paste can pull
+// a value copied FROM Excel. navigator.clipboard.readText is gated behind a
+// user gesture (the menu click qualifies) + permission; any failure falls back
+// to the internal buffer. No keyboard interception — native Ctrl+C/X/V on the
+// focused input already runs the cell's own commit path.
+let _cellClipboard = "";
+function _clipboardWrite(text) {
+  _cellClipboard = text;
+  try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {}); } catch {}
+}
+async function _clipboardRead() {
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      const t = await navigator.clipboard.readText();
+      if (t != null && t !== "") return t;
+    }
+  } catch {}
+  return _cellClipboard;
+}
+// External pastes (Excel gives tab/newline-delimited grids) collapse to this
+// one cell: first cell of the first row.
+function _sanitizeCellPaste(t) {
+  return String(t == null ? "" : t).replace(/\r/g, "").split("\n")[0].split("\t")[0];
+}
+// Copy/Cut text for a cell: a user-typed FORMULA verbatim (so it re-pastes as a
+// formula), else the displayed value (computed result for template formulas,
+// the literal for value cells, the selected option for dropdowns).
+function _cellCopyText(inp) {
+  const addrKey = inp.dataset.cellAddr;
+  const edited = addrKey != null ? cellValues[addrKey] : undefined;
+  if (typeof edited === "string" && edited.charAt(0) === "=") return edited;
+  return inp.value != null ? String(inp.value) : "";
+}
+// Write `text` into a cell through the SAME path a manual edit takes: set the
+// value + dispatch bubbling "input" (HF + cellValues + totals) and "change"
+// (%-cell normalize + the #sheet-grid persistTabState listener), then restore
+// the resting view (so a pasted formula shows its computed result). Respects
+// readonly + dropdown option constraints; returns false on a no-op.
+function _commitCellWrite(inp, text) {
+  if (inp.readOnly) return false;
+  if (inp.tagName === "SELECT" && !Array.from(inp.options).some(o => o.value === text)) return false;
+  inp.value = text;
+  inp.dispatchEvent(new Event("input", { bubbles: true }));
+  inp.dispatchEvent(new Event("change", { bubbles: true }));
+  if (typeof inp._restingView === "function") { try { inp._restingView(); } catch {} }
+  return true;
+}
+
+sheetGrid.addEventListener("contextmenu", (e) => {
+  if (!activeSheet) return;
+  // HEADER menu (insert/delete rows & columns).
+  const head = e.target.closest(".row-header, .col-header");
+  if (head) {
+    const isRow = head.classList.contains("row-header");
+    const idx = parseInt(head.dataset[isRow ? "rowIndex" : "colIndex"] || "0", 10);
+    if (!idx) return;
+    e.preventDefault();
+    const label = isRow ? `row ${idx}` : `column ${colLetter(idx)}`;
+    _openCtxMenu(e.pageX, e.pageY, isRow ? [
+      { label: `Insert row above ${idx}`, fn: () => applyStructOp(activeSheet, "insert_rows", idx) },
+      { label: `Insert row below ${idx}`, fn: () => applyStructOp(activeSheet, "insert_rows", idx + 1) },
+      { label: `Delete ${label}`, danger: true, fn: () => applyStructOp(activeSheet, "delete_rows", idx) },
+    ] : [
+      { label: `Insert column left of ${colLetter(idx)}`, fn: () => applyStructOp(activeSheet, "insert_cols", idx) },
+      { label: `Insert column right of ${colLetter(idx)}`, fn: () => applyStructOp(activeSheet, "insert_cols", idx + 1) },
+      { label: `Delete ${label}`, danger: true, fn: () => applyStructOp(activeSheet, "delete_cols", idx) },
+    ]);
+    return;
+  }
+  // CELL menu (Sheets-style). Data cells are .gridcell (headers/corner are not).
+  const gc = e.target.closest(".gridcell");
+  if (!gc) return;
+  const inp = gc.querySelector("input[data-cell-addr], select[data-cell-addr]");
+  if (!inp) return;
+  const m = (inp.dataset.displayAddr || "").match(/^([A-Z]+)(\d+)$/);   // OWN addr, never canonical
+  if (!m) return;
+  const col = m[1].split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+  const row = parseInt(m[2], 10);
+  e.preventDefault();
+  inp.focus();   // select the right-clicked cell (sets _activeCellInput + syncs the bar), Sheets-style
+  const ro = !!inp.readOnly;
+  _openCtxMenu(e.pageX, e.pageY, [
+    { label: "Cut",   hint: "Ctrl+X", disabled: ro, fn: () => { _clipboardWrite(_cellCopyText(inp)); _commitCellWrite(inp, ""); } },
+    { label: "Copy",  hint: "Ctrl+C", fn: () => { _clipboardWrite(_cellCopyText(inp)); } },
+    { label: "Paste", hint: "Ctrl+V", disabled: ro, fn: async () => { _commitCellWrite(inp, _sanitizeCellPaste(await _clipboardRead())); } },
+    null,
+    { label: "Insert 1 row above",   fn: () => applyStructOp(activeSheet, "insert_rows", row) },
+    { label: "Insert 1 row below",   fn: () => applyStructOp(activeSheet, "insert_rows", row + 1) },
+    { label: "Insert 1 column left", fn: () => applyStructOp(activeSheet, "insert_cols", col) },
+    { label: "Insert 1 column right",fn: () => applyStructOp(activeSheet, "insert_cols", col + 1) },
+    null,
+    { label: `Delete row ${row}`,               danger: true, fn: () => applyStructOp(activeSheet, "delete_rows", row) },
+    { label: `Delete column ${colLetter(col)}`, danger: true, fn: () => applyStructOp(activeSheet, "delete_cols", col) },
+  ]);
 });
 
 function propagateChangesToDom(changes) {
