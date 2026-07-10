@@ -2181,7 +2181,13 @@ function _clipboardWrite(text) {
 async function _clipboardRead() {
   try {
     if (navigator.clipboard && navigator.clipboard.readText) {
-      const t = await navigator.clipboard.readText();
+      // Race a short timeout: in some contexts (permission pending, headless,
+      // Brave shields) readText() HANGS forever instead of rejecting, which
+      // would wedge Paste. Fall back to the internal buffer after 400ms.
+      const t = await Promise.race([
+        navigator.clipboard.readText(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("clipboard-read-timeout")), 400)),
+      ]);
       if (t != null && t !== "") return t;
     }
   } catch {}
