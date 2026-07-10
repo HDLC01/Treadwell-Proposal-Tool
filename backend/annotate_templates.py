@@ -176,6 +176,55 @@ JOB_NAME_BARE_XXX_TEMPLATES = {
 }
 
 
+# ─── GC audience-aware narrative (Scope / Schedule / Exclusions) ──────────
+# Unlike the Direct templates (which already carry {{scope_notes}} etc.), the 3
+# GC templates ship their Scope/Schedule/Exclusions as STATIC text, so the
+# estimator's sidebar edits never reached the GC doc. We tokenize them here:
+#   - Scope/Schedule/Exclusions each live in ONE <w:p> whose FIRST <w:t> run is
+#     the bold label ("Scope:" / "Schedule:" / "Exclusions:"); the value is
+#     fragmented across the following runs. `_tokenize_label_paragraph` keeps
+#     the bold label, collapses the value into a single {{token}} run.
+#   - Scope's label paragraph holds only step 1; the remaining scope steps are
+#     SEPARATE <w:p> paragraphs after it. Those continuation paragraphs are
+#     deleted (their wording is preserved as the backend/frontend GC scope
+#     default, joined with "\n", so a blank sidebar re-seeds the full list).
+# Everything else in the GC templates (system menu, GC/project addresses, price
+# block, notes) stays as boilerplate. Each block appears TWICE (mc:Choice +
+# mc:Fallback VML copy), so every op below hits both copies.
+#
+# The continuation strings are the XML-ESCAPED joined text of each paragraph
+# (read straight from the pristine word/document.xml — "&amp;" not "&"), so
+# `_delete_paragraphs` can match them exactly.
+GC_SCOPE_CONTINUATIONS: dict[str, list[str]] = {
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": [
+        "Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting)",
+        "Prep substrate (includes patch of minor substrate defects i.e., cracks, non-moving joints, divots, &amp; spalls*)",
+        "Install Resinous System  ^Patch material included:  xx gallons/kits.",
+        "Assumes installation over: clean, sound &amp; solid concrete substrate",
+    ],
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": [
+        "Grind and polish concrete with successive passes using finer grit pads for each pass",
+        "Apply hardener/densifier &amp; topical sealer",
+        "Apply joint filler",
+        "Assumes polish over: clean, sound &amp; solid NEW concrete substrate",
+    ],
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": [
+        "Clean Concrete; -or- Perform 1-2 passes with planetary grinder -or- auto scrubber",
+        "Apply [1 coat -or- up to 2 coats of clear concrete sealer",
+        "Assumes sealer over: clean, sound &amp; solid concrete substrate",
+    ],
+}
+
+# Label → token for the GC Scope/Schedule/Exclusions paragraphs (same for all 3).
+GC_NARRATIVE_LABELS: list[tuple[str, str]] = [
+    ("Scope:",      "{{scope_notes}}"),
+    ("Schedule:",   "{{schedule_notes}}"),
+    ("Exclusions:", "{{exclusions}}"),
+]
+
+GC_NARRATIVE_TEMPLATES = set(GC_SCOPE_CONTINUATIONS.keys())
+
+
 # ─── Replacement engine (raw-XML aware) ──────────────────────────────
 WT_NODE_RE = re.compile(r"(<w:t\b[^>]*>)([^<]*)(</w:t>)")
 AT_NODE_RE = re.compile(r"(<a:t\b[^>]*>)([^<]*)(</a:t>)")
@@ -278,6 +327,69 @@ def _replace_bare_xxx_with_token(xml: str, token: str) -> tuple[str, int]:
     return xml_new, count[0]
 
 
+def _tokenize_label_paragraph(xml: str, label: str, token_text: str) -> tuple[str, int]:
+    """Tokenize a static "Label: <fragmented value>" paragraph.
+
+    For EVERY <w:p> whose FIRST <w:t> text (stripped) exactly equals `label`,
+    keep run[0] (the bold label) verbatim, rewrite run[1]'s text to
+    `" " + token_text` (single leading space so it reads "Label: {{token}}"),
+    and BLANK runs[2:] — collapsing the fragmented static value into one token
+    run while leaving the bold label (and every run's own formatting) intact.
+    Adds xml:space="preserve" to run[1] so the leading space survives.
+
+    Hits BOTH the modern (mc:Choice) and legacy VML (mc:Fallback) copies of the
+    paragraph, so `n >= 2` when a label is present. Returns (new_xml, n).
+    """
+    count = [0]
+
+    def _sub(m):
+        p_xml = m.group(0)
+        tnodes = list(WT_NODE_RE.finditer(p_xml))
+        if len(tnodes) < 2:
+            return p_xml
+        if (tnodes[0].group(2) or "").strip() != label:
+            return p_xml
+        count[0] += 1
+        rebuilt: list[str] = []
+        cursor = 0
+        for i, n in enumerate(tnodes):
+            rebuilt.append(p_xml[cursor:n.start()])
+            opn, inner, cls = n.group(1), n.group(2), n.group(3)
+            if i == 0:                       # bold label — verbatim
+                rebuilt.append(f"{opn}{inner}{cls}")
+            elif i == 1:                     # value run -> single token run
+                new_inner = xml_escape(" " + token_text)
+                rebuilt.append(f"{_ensure_xml_space_preserve(opn)}{new_inner}{cls}")
+            else:                            # blank every trailing value fragment
+                rebuilt.append(f"{opn}{cls}")
+            cursor = n.end()
+        rebuilt.append(p_xml[cursor:])
+        return "".join(rebuilt)
+
+    xml_new = WP_BLOCK_RE.sub(_sub, xml)
+    return xml_new, count[0]
+
+
+def _delete_paragraphs(xml: str, escaped_texts) -> tuple[str, int]:
+    """Delete every <w:p> whose joined <w:t> text (stripped) exactly matches one
+    of `escaped_texts` — given in XML-ESCAPED form ("&amp;" not "&") so they
+    compare directly against the raw <w:t> contents. Removes both the mc:Choice
+    and mc:Fallback copies. Returns (new_xml, n_deleted)."""
+    wanted = set(escaped_texts)
+    count = [0]
+
+    def _sub(m):
+        p_xml = m.group(0)
+        joined = "".join(n.group(2) for n in WT_NODE_RE.finditer(p_xml))
+        if joined.strip() in wanted:
+            count[0] += 1
+            return ""
+        return p_xml
+
+    xml_new = WP_BLOCK_RE.sub(_sub, xml)
+    return xml_new, count[0]
+
+
 def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int:
     print(f"\n=== {rel_path} ===")
 
@@ -304,6 +416,19 @@ def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int
                     if n:
                         print(f"  [OK]  bare 'xxx' (first only) -> {{{{job_name}}}}  ({n} subs)")
                         total += n
+                # GC audience-aware narrative: tokenize the static Scope/Schedule/
+                # Exclusions labels + delete the extra scope-step paragraphs (both
+                # the mc:Choice + mc:Fallback copies). document.xml only.
+                _rel = rel_path.replace("\\", "/")
+                if _rel in GC_NARRATIVE_TEMPLATES and item.filename == "word/document.xml":
+                    for label, token in GC_NARRATIVE_LABELS:
+                        xml, n = _tokenize_label_paragraph(xml, label, token)
+                        if n:
+                            print(f"  [OK]  label {label!r} -> {token}  ({n} paras)")
+                            total += n
+                    xml, n = _delete_paragraphs(xml, GC_SCOPE_CONTINUATIONS[_rel])
+                    if n:
+                        print(f"  [OK]  deleted {n} scope-continuation paragraph(s)")
                 data = xml.encode("utf-8")
             zout.writestr(item, data)
 

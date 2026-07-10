@@ -20,18 +20,71 @@
   // we only fill fields that are still blank: autofill and manual edits win, but
   // a proposal generated without autofill still carries the standard text.
   const _wt = (state.work_type || "epoxy").toLowerCase();
-  const _scopeDefault = _wt === "polish"
-    ? "Demo existing flooring and place in a dumpster. Fill concrete joints with backer rod and polyurea caulking. Patch minor divots. Grind and polish concrete with successive passes using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate."
-    : "Demo (one layer of) existing flooring and place in a dumpster provided by the owner. Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting). Prep substrate cracks and non-moving joints (includes minor floor prep, patching of minor substrate defects, spalls and divots). Install Epoxy System. Assumes installation over: clean, sound & solid concrete substrate.";
-  const PROPOSAL_DEFAULTS = {
-    scope_notes: _scopeDefault,
-    schedule_notes: "Assumes all areas available at one time, approx. 1 week to complete full scope",
-    exclusions: "Multiple layers of floor to be removed (change order is necessary), Moving of Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations",
+  const _audience = state.audience || "Direct";
+
+  // ─── Audience + work-type narrative catalog ─────────────────────────
+  // Scope/Schedule/Exclusions boilerplate. These strings are BYTE-IDENTICAL to
+  // the backend fallbacks in backend/main.py (_DEFAULT_SCOPE_*/_DEFAULT_SCHEDULE*/
+  // _DEFAULT_EXCLUSIONS*) — edit BOTH files together. GC has no dedicated combo
+  // template (it uses the GC Resinous doc, mirroring proposal_writer.pick_template),
+  // so combo -> Resinous defaults; sealer exists only under GC. ’ is the curly
+  // apostrophe in the GC Resinous exclusions ("reqr’d"), matching the template.
+  const SCOPE_EPOXY = "Demo (one layer of) existing flooring and place in a dumpster provided by the owner. Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting). Prep substrate cracks and non-moving joints (includes minor floor prep, patching of minor substrate defects, spalls and divots). Install Epoxy System. Assumes installation over: clean, sound & solid concrete substrate.";
+  const SCOPE_POLISH = "Demo existing flooring and place in a dumpster. Fill concrete joints with backer rod and polyurea caulking. Patch minor divots. Grind and polish concrete with successive passes using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate.";
+  const SCHED_DIRECT = "Assumes all areas available at one time, approx. 1 week to complete full scope";
+  const EXCL_DIRECT = "Multiple layers of floor to be removed (change order is necessary), Moving of Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations";
+  const SCOPE_GC_RESINOUS = "Perform relative humidity test on concrete slab prior to installation (if required)\nPrepare substrate surface profile utilizing mechanical means (grinding or shot blasting)\nPrep substrate (includes patch of minor substrate defects i.e., cracks, non-moving joints, divots, & spalls*)\nInstall Resinous System  ^Patch material included:  xx gallons/kits.\nAssumes installation over: clean, sound & solid concrete substrate";
+  const SCOPE_GC_POLISH = "Prep substrate (includes patching of minor substrate defects i.e., cracks, divots, & spalls*)\nGrind and polish concrete with successive passes using finer grit pads for each pass\nApply hardener/densifier & topical sealer\nApply joint filler\nAssumes polish over: clean, sound & solid NEW concrete substrate";
+  const SCOPE_GC_SEALER = "Prep substrate (includes patching of minor substrate defects i.e., cracks, divots, & spalls*)\nClean Concrete; -or- Perform 1-2 passes with planetary grinder -or- auto scrubber\nApply [1 coat -or- up to 2 coats of clear concrete sealer\nAssumes sealer over: clean, sound & solid concrete substrate";
+  const SCHED_GC = "[ 1 mob/phase ] Assumes all areas available at one time, approx. 1week to complete full scope";
+  const EXCL_GC_RESINOUS = "Epoxy Paint Walls, Wall Patching (as may be reqr’d for new base), Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (see exclusion detail below*), Nights & Weekends";
+  const EXCL_GC_POLISH = "Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (no more than 1 bag per 1,000 sf, see exclusion detail below*), Removal of Existing Joint Filler (if any), Nights & Weekends";
+  const EXCL_GC_SEALER = "Patching, Grinding, Joint Filler (see option), Polishing of Concrete, Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching / Grinding (no more than 1 bag per 1,000 sf, see exclusion detail below*), Mock-Up, Nights & Weekends, Removal of Existing Joint Filler (if any)";
+  const NARRATIVE_DEFAULTS = {
+    Direct: {
+      epoxy:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+      polish: { scope_notes: SCOPE_POLISH, schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+      combo:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+    },
+    GC: {
+      epoxy:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
+      combo:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
+      polish: { scope_notes: SCOPE_GC_POLISH,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_POLISH },
+      sealer: { scope_notes: SCOPE_GC_SEALER,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_SEALER },
+    },
   };
-  for (const [nm, def] of Object.entries(PROPOSAL_DEFAULTS)) {
-    const el = form.querySelector(`[name="${nm}"]`);
-    if (el && !String(el.value || "").trim()) el.value = def;
+  // Resolve (audience, work_type) -> {scope_notes, schedule_notes, exclusions},
+  // mirroring the backend's _ensure_value_aliases (GC: polish/sealer/else-Resinous;
+  // Direct: polish-or-epoxy). Falls back within the audience so an unmapped
+  // work_type still yields that audience's sensible boilerplate.
+  function narrativeDefaults(audience, wt) {
+    const isGC = String(audience || "").trim().toUpperCase() === "GC";
+    wt = String(wt || "epoxy").toLowerCase();
+    const cat = isGC ? NARRATIVE_DEFAULTS.GC : NARRATIVE_DEFAULTS.Direct;
+    return cat[wt] || (isGC ? cat.epoxy : (wt === "polish" ? cat.polish : cat.epoxy));
   }
+  // Every default value for `field` across all work-types in `audience` — used to
+  // recognise (and only then re-seed) untouched machine boilerplate.
+  function audienceFieldDefaults(audience, field) {
+    const cat = String(audience).toUpperCase() === "GC" ? NARRATIVE_DEFAULTS.GC : NARRATIVE_DEFAULTS.Direct;
+    return new Set(Object.values(cat).map(row => row[field]));
+  }
+
+  // Seed the narrative fields: fill blanks with the current audience's default, AND
+  // if a field still holds a verbatim default from the OTHER audience (untouched
+  // boilerplate), re-seed it for the current audience — so a mid-draft Direct⇄GC
+  // switch swaps the machine text but any hand edit (even 1 char) survives.
+  (function seedNarrative() {
+    const cur = narrativeDefaults(_audience, _wt);
+    const otherAudience = String(_audience).toUpperCase() === "GC" ? "Direct" : "GC";
+    for (const nm of ["scope_notes", "schedule_notes", "exclusions"]) {
+      const el = form.querySelector(`[name="${nm}"]`);
+      if (!el) continue;
+      const val = String(el.value || "");
+      if (!val.trim()) { el.value = cur[nm]; continue; }
+      if (audienceFieldDefaults(otherAudience, nm).has(val)) el.value = cur[nm];
+    }
+  })();
 
   // Cove base height: intake/estimate capture cove LENGTH only, never height, so
   // a saved empty-string can blank the inline 6" default (writeForm overwrites
@@ -1654,6 +1707,10 @@
       proposal_payload: {
         work_type: state.work_type || "epoxy",
         audience:  state.audience  || "Direct",
+        // The template version the paragraph_overrides ids were captured against.
+        // The backend drops the overrides if this no longer matches the current
+        // template (annotation shifts editable-block ids) — see api_generate.
+        template_version: templateVersion,
         values:    { ...mergedValues, ...tokenValues },
         cell_values: state.cell_values || {},
         // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows

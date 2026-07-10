@@ -69,3 +69,57 @@ def test_existing_fallback_value_preserved():
     main._ensure_value_aliases(v)
     assert v["work_description"] == "Office Remodel"
     assert v["site_visit_date"] == "6/2/26"
+
+
+# ── audience-aware Scope / Schedule / Exclusions defaults ──────────────
+def test_direct_default_narrative_epoxy():
+    v = {"work_type": "epoxy"}
+    main._ensure_value_aliases(v)                 # no audience -> Direct
+    assert v["scope_notes"] == main._DEFAULT_SCOPE_EPOXY
+    assert v["schedule_notes"] == main._DEFAULT_SCHEDULE
+    assert v["exclusions"] == main._DEFAULT_EXCLUSIONS
+
+
+def test_direct_default_narrative_polish():
+    v = {"work_type": "polish"}
+    main._ensure_value_aliases(v, "Direct")
+    assert v["scope_notes"] == main._DEFAULT_SCOPE_POLISH
+    assert v["exclusions"] == main._DEFAULT_EXCLUSIONS
+
+
+def test_gc_default_narrative_epoxy_and_combo_use_resinous():
+    for wt in ("epoxy", "combo"):
+        v = {"work_type": wt}
+        main._ensure_value_aliases(v, "GC")
+        assert v["scope_notes"] == main._DEFAULT_SCOPE_GC_RESINOUS, wt
+        assert v["schedule_notes"] == main._DEFAULT_SCHEDULE_GC, wt
+        assert v["exclusions"] == main._DEFAULT_EXCLUSIONS_GC_RESINOUS, wt
+
+
+def test_gc_default_narrative_polish_and_sealer():
+    v = {"work_type": "polish"}
+    main._ensure_value_aliases(v, "GC")
+    assert v["scope_notes"] == main._DEFAULT_SCOPE_GC_POLISH
+    assert v["exclusions"] == main._DEFAULT_EXCLUSIONS_GC_POLISH
+
+    v = {"work_type": "sealer"}
+    main._ensure_value_aliases(v, "GC")
+    assert v["scope_notes"] == main._DEFAULT_SCOPE_GC_SEALER
+    assert v["exclusions"] == main._DEFAULT_EXCLUSIONS_GC_SEALER
+
+
+def test_gc_audience_from_values_dict_when_arg_omitted():
+    # audience can also ride in the values dict (arg takes precedence, but the
+    # dict is the fallback) — a GC value there still selects the GC narrative.
+    v = {"work_type": "epoxy", "audience": "GC"}
+    main._ensure_value_aliases(v)
+    assert v["scope_notes"] == main._DEFAULT_SCOPE_GC_RESINOUS
+
+
+def test_hand_edited_narrative_never_overwritten_for_gc():
+    v = {"work_type": "epoxy", "scope_notes": "my custom scope",
+         "schedule_notes": "my sched", "exclusions": "my excl"}
+    main._ensure_value_aliases(v, "GC")
+    assert v["scope_notes"] == "my custom scope"
+    assert v["schedule_notes"] == "my sched"
+    assert v["exclusions"] == "my excl"

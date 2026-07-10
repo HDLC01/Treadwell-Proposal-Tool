@@ -315,6 +315,12 @@ class GenerateIn(BaseModel):
     # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
     # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
     paragraph_overrides: list = Field(default_factory=list)
+    # The proposal template version the paragraph_overrides ids were captured
+    # against (echoed from /api/proposal-template). Since annotation shifts the
+    # editable-block ids, api_generate DROPS paragraph_overrides when this is
+    # non-empty AND doesn't match the current template's version (fail-safe so a
+    # stale draft can't misapply ids). Empty = legacy caller = apply unchanged.
+    template_version: str = ""
     # Proposal Review doc editor: per-option DISPLAY overrides for the WORK
     # {{#system}} rows — [{name?, texture?, sqft?}] positionally aligned with
     # _build_epoxy_systems() output (index i -> systems[i]). These edit only the
@@ -1263,8 +1269,60 @@ _DEFAULT_SCOPE_POLISH = (
     "high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate."
 )
 
+# GC audience narrative fallbacks — the GC templates historically shipped their
+# Scope/Schedule/Exclusions as STATIC text (no token), so sidebar edits never
+# reached them. annotate_templates.py now tokenizes them ({{scope_notes}},
+# {{schedule_notes}}, {{exclusions}}); these constants reproduce the templates'
+# ORIGINAL wording verbatim so a blank sidebar re-seeds the exact GC boilerplate.
+# Scope steps stack under the bold "Scope:" label via "\n" -> <w:br/>
+# (_set_t_multiline in proposal_writer). GC combo has no dedicated template — it
+# uses the GC Resinous doc (see proposal_writer.TEMPLATE_PICKER), so epoxy + combo
+# both map to the Resinous defaults below.
+#
+# ⚠ BYTE-IDENTICAL to the frontend catalog in frontend/js/proposal-review.js
+# (GC_NARRATIVE_DEFAULTS). Edit BOTH sides together or the mid-draft audience
+# re-seed (which matches a field against the other audience's default) breaks.
+_DEFAULT_SCOPE_GC_RESINOUS = (
+    "Perform relative humidity test on concrete slab prior to installation (if required)\n"
+    "Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting)\n"
+    "Prep substrate (includes patch of minor substrate defects i.e., cracks, non-moving joints, divots, & spalls*)\n"
+    "Install Resinous System  ^Patch material included:  xx gallons/kits.\n"
+    "Assumes installation over: clean, sound & solid concrete substrate"
+)
+_DEFAULT_SCOPE_GC_POLISH = (
+    "Prep substrate (includes patching of minor substrate defects i.e., cracks, divots, & spalls*)\n"
+    "Grind and polish concrete with successive passes using finer grit pads for each pass\n"
+    "Apply hardener/densifier & topical sealer\n"
+    "Apply joint filler\n"
+    "Assumes polish over: clean, sound & solid NEW concrete substrate"
+)
+_DEFAULT_SCOPE_GC_SEALER = (
+    "Prep substrate (includes patching of minor substrate defects i.e., cracks, divots, & spalls*)\n"
+    "Clean Concrete; -or- Perform 1-2 passes with planetary grinder -or- auto scrubber\n"
+    "Apply [1 coat -or- up to 2 coats of clear concrete sealer\n"
+    "Assumes sealer over: clean, sound & solid concrete substrate"
+)
+_DEFAULT_SCHEDULE_GC = (
+    "[ 1 mob/phase ] Assumes all areas available at one time, approx. 1week to complete full scope"
+)
+_DEFAULT_EXCLUSIONS_GC_RESINOUS = (
+    "Epoxy Paint Walls, Wall Patching (as may be reqr’d for new base), Demo of Existing "
+    "Floor/Glue/Etc. (new slab), Excessive Patching (see exclusion detail below*), Nights & Weekends"
+)
+_DEFAULT_EXCLUSIONS_GC_POLISH = (
+    "Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (no more than "
+    "1 bag per 1,000 sf, see exclusion detail below*), Removal of Existing Joint Filler (if any), "
+    "Nights & Weekends"
+)
+_DEFAULT_EXCLUSIONS_GC_SEALER = (
+    "Patching, Grinding, Joint Filler (see option), Polishing of Concrete, Cove Base, Dye, Demo of "
+    "Existing Floor/Glue/Etc. (new slab), Excessive Patching / Grinding (no more than 1 bag per "
+    "1,000 sf, see exclusion detail below*), Mock-Up, Nights & Weekends, Removal of Existing Joint "
+    "Filler (if any)"
+)
 
-def _ensure_value_aliases(values: Dict[str, Any]) -> None:
+
+def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
     """Backfill blank token aliases / fallbacks in-place so the proposal never
     emits a raw {{token}} (e.g. job_name <- project_name, work_description <-
     address, site_visit_date <- bid date)."""
@@ -1276,13 +1334,30 @@ def _ensure_value_aliases(values: Dict[str, Any]) -> None:
             values[target] = next(
                 (values[s] for s in sources if not _blank(values.get(s))), ""
             )
+    # Audience-aware narrative fallbacks. GC jobs get the GC templates' verbatim
+    # Scope/Schedule/Exclusions (keyed by work_type, mirroring pick_template:
+    # polish -> GC Polish, sealer -> GC Sealer, epoxy/combo/anything else -> GC
+    # Resinous). Non-GC keeps today's Direct wording BYTE-IDENTICAL.
+    is_gc = str(audience or values.get("audience") or "").strip().upper() == "GC"
+    _wt = str(values.get("work_type") or "epoxy").lower()
+    if is_gc:
+        if _wt == "polish":
+            _scope_def, _excl_def = _DEFAULT_SCOPE_GC_POLISH, _DEFAULT_EXCLUSIONS_GC_POLISH
+        elif _wt == "sealer":
+            _scope_def, _excl_def = _DEFAULT_SCOPE_GC_SEALER, _DEFAULT_EXCLUSIONS_GC_SEALER
+        else:  # epoxy / combo / fallback -> GC Resinous (mirrors pick_template)
+            _scope_def, _excl_def = _DEFAULT_SCOPE_GC_RESINOUS, _DEFAULT_EXCLUSIONS_GC_RESINOUS
+        _sched_def = _DEFAULT_SCHEDULE_GC
+    else:
+        _scope_def = _DEFAULT_SCOPE_POLISH if _wt == "polish" else _DEFAULT_SCOPE_EPOXY
+        _excl_def = _DEFAULT_EXCLUSIONS
+        _sched_def = _DEFAULT_SCHEDULE
     if _blank(values.get("exclusions")):
-        values["exclusions"] = _DEFAULT_EXCLUSIONS
+        values["exclusions"] = _excl_def
     if _blank(values.get("schedule_notes")):
-        values["schedule_notes"] = _DEFAULT_SCHEDULE
+        values["schedule_notes"] = _sched_def
     if _blank(values.get("scope_notes")):
-        _wt = str(values.get("work_type") or "epoxy").lower()
-        values["scope_notes"] = _DEFAULT_SCOPE_POLISH if _wt == "polish" else _DEFAULT_SCOPE_EPOXY
+        values["scope_notes"] = _scope_def
     # Header date token: M/D/YY from the ISO bid_date — backfilled so a caller that
     # omits the pre-formatted value (e.g. the "View files" rebuild path) can't leak
     # a raw {{bid_date_formatted}} into the customer-facing proposal.
@@ -1429,7 +1504,11 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     on-demand pdf). The estimator downloads + files them manually."""
     values = payload.values
     _ensure_state_name(values)
-    _ensure_value_aliases(values)
+    # payload.work_type is authoritative; make sure it's in `values` so the
+    # audience/work_type-keyed narrative fallback (_ensure_value_aliases) can't
+    # mismatch the picked template when a caller omits work_type from values.
+    values.setdefault("work_type", payload.work_type)
+    _ensure_value_aliases(values, payload.audience)
 
     # The epoxy PRICE block itemizes Base Bid + Material Sales Tax. The frontend
     # fills these from the bid; backfill for any caller that doesn't so the
@@ -1671,6 +1750,21 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         log.exception("Estimate fill failed")
         raise HTTPException(500, "Failed to generate the estimate. Please try again.") from exc
 
+    # Version guard for the document editor's paragraph_overrides. Their ids are
+    # positions in iter_editable_blocks over a SPECIFIC template file; a re-annotation
+    # (e.g. the GC Scope/Schedule/Exclusions tokenization) shifts those ids, so a
+    # draft captured against the old template could land an edit on the wrong
+    # paragraph. If the client echoed a template_version and it no longer matches the
+    # current template, drop the overrides (fail-safe). Empty = legacy caller = apply.
+    _cur_template_version = _template_proposal_version(
+        proposal_writer.pick_template(payload.work_type, payload.audience or None))
+    _para_overrides = payload.paragraph_overrides
+    if payload.template_version and payload.template_version != _cur_template_version:
+        log.warning(
+            "Dropping %d paragraph_override(s): stale template_version %r != current %r",
+            len(_para_overrides or []), payload.template_version, _cur_template_version)
+        _para_overrides = []
+
     # Fill proposal document
     try:
         # Epoxy WORK section lists each picked system as its own row (1 system →
@@ -1706,7 +1800,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             has_options=_has_options,
             # Proposal Review's document editor: free-text paragraph edits
             # outside the priced/repeatable regions (see /api/proposal-template).
-            paragraph_overrides=_sanitize_paragraph_overrides(payload.paragraph_overrides),
+            # Version-guarded above (stale template_version -> dropped).
+            paragraph_overrides=_sanitize_paragraph_overrides(_para_overrides),
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
