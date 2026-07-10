@@ -799,6 +799,10 @@ button {
 }
 /* A floating text box placed at its Word anchor position. */
 .tw-txbx { position: absolute; z-index: 1; }
+/* NOTES box that still overflows its design height at the smallest fit font
+   (fitNotesBox floor) — a thin red underline warns it may print over the
+   baked-in acceptance frame below it. */
+.tw-txbx.tw-notes-overflow { box-shadow: inset 0 -2px 0 rgba(158, 0, 31, .45); }
 
 /* One template paragraph, editable in place. Reads as plain page text;
    hover/focus reveal the editability; a hand-edited paragraph carries a
