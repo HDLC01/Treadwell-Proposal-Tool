@@ -20,18 +20,71 @@
   // we only fill fields that are still blank: autofill and manual edits win, but
   // a proposal generated without autofill still carries the standard text.
   const _wt = (state.work_type || "epoxy").toLowerCase();
-  const _scopeDefault = _wt === "polish"
-    ? "Demo existing flooring and place in a dumpster. Fill concrete joints with backer rod and polyurea caulking. Patch minor divots. Grind and polish concrete with successive passes using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate."
-    : "Demo (one layer of) existing flooring and place in a dumpster provided by the owner. Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting). Prep substrate cracks and non-moving joints (includes minor floor prep, patching of minor substrate defects, spalls and divots). Install Epoxy System. Assumes installation over: clean, sound & solid concrete substrate.";
-  const PROPOSAL_DEFAULTS = {
-    scope_notes: _scopeDefault,
-    schedule_notes: "Assumes all areas available at one time, approx. 1 week to complete full scope",
-    exclusions: "Multiple layers of floor to be removed (change order is necessary), Moving of Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations",
+  const _audience = state.audience || "Direct";
+
+  // ─── Audience + work-type narrative catalog ─────────────────────────
+  // Scope/Schedule/Exclusions boilerplate. These strings are BYTE-IDENTICAL to
+  // the backend fallbacks in backend/main.py (_DEFAULT_SCOPE_*/_DEFAULT_SCHEDULE*/
+  // _DEFAULT_EXCLUSIONS*) — edit BOTH files together. GC has no dedicated combo
+  // template (it uses the GC Resinous doc, mirroring proposal_writer.pick_template),
+  // so combo -> Resinous defaults; sealer exists only under GC. ’ is the curly
+  // apostrophe in the GC Resinous exclusions ("reqr’d"), matching the template.
+  const SCOPE_EPOXY = "Demo (one layer of) existing flooring and place in a dumpster provided by the owner. Prepare substrate surface profile utilizing mechanical means (grinding or shot blasting). Prep substrate cracks and non-moving joints (includes minor floor prep, patching of minor substrate defects, spalls and divots). Install Epoxy System. Assumes installation over: clean, sound & solid concrete substrate.";
+  const SCOPE_POLISH = "Demo existing flooring and place in a dumpster. Fill concrete joints with backer rod and polyurea caulking. Patch minor divots. Grind and polish concrete with successive passes using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate.";
+  const SCHED_DIRECT = "Assumes all areas available at one time, approx. 1 week to complete full scope";
+  const EXCL_DIRECT = "Multiple layers of floor to be removed (change order is necessary), Moving of Furniture/Fixtures, Touch-Up Paint, Excessive Patching (i.e., skim coating & more than 1 bag of patch material per 1,000 sf, see notes below), Demo of Existing Floor/Glue/Etc., Weekend or night work, Credit for Unused mobilizations";
+  const SCOPE_GC_RESINOUS = "Perform relative humidity test on concrete slab prior to installation (if required)\nPrepare substrate surface profile utilizing mechanical means (grinding or shot blasting)\nPrep substrate (includes patch of minor substrate defects i.e., cracks, non-moving joints, divots, & spalls*)\nInstall Resinous System  ^Patch material included:  xx gallons/kits.\nAssumes installation over: clean, sound & solid concrete substrate";
+  const SCOPE_GC_POLISH = "Prep substrate (includes patching of minor substrate defects i.e., cracks, divots, & spalls*)\nGrind and polish concrete with successive passes using finer grit pads for each pass\nApply hardener/densifier & topical sealer\nApply joint filler\nAssumes polish over: clean, sound & solid NEW concrete substrate";
+  const SCOPE_GC_SEALER = "Prep substrate (includes patching of minor substrate defects i.e., cracks, divots, & spalls*)\nClean Concrete; -or- Perform 1-2 passes with planetary grinder -or- auto scrubber\nApply [1 coat -or- up to 2 coats of clear concrete sealer\nAssumes sealer over: clean, sound & solid concrete substrate";
+  const SCHED_GC = "[ 1 mob/phase ] Assumes all areas available at one time, approx. 1week to complete full scope";
+  const EXCL_GC_RESINOUS = "Epoxy Paint Walls, Wall Patching (as may be reqr’d for new base), Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (see exclusion detail below*), Nights & Weekends";
+  const EXCL_GC_POLISH = "Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (no more than 1 bag per 1,000 sf, see exclusion detail below*), Removal of Existing Joint Filler (if any), Nights & Weekends";
+  const EXCL_GC_SEALER = "Patching, Grinding, Joint Filler (see option), Polishing of Concrete, Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching / Grinding (no more than 1 bag per 1,000 sf, see exclusion detail below*), Mock-Up, Nights & Weekends, Removal of Existing Joint Filler (if any)";
+  const NARRATIVE_DEFAULTS = {
+    Direct: {
+      epoxy:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+      polish: { scope_notes: SCOPE_POLISH, schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+      combo:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+    },
+    GC: {
+      epoxy:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
+      combo:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
+      polish: { scope_notes: SCOPE_GC_POLISH,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_POLISH },
+      sealer: { scope_notes: SCOPE_GC_SEALER,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_SEALER },
+    },
   };
-  for (const [nm, def] of Object.entries(PROPOSAL_DEFAULTS)) {
-    const el = form.querySelector(`[name="${nm}"]`);
-    if (el && !String(el.value || "").trim()) el.value = def;
+  // Resolve (audience, work_type) -> {scope_notes, schedule_notes, exclusions},
+  // mirroring the backend's _ensure_value_aliases (GC: polish/sealer/else-Resinous;
+  // Direct: polish-or-epoxy). Falls back within the audience so an unmapped
+  // work_type still yields that audience's sensible boilerplate.
+  function narrativeDefaults(audience, wt) {
+    const isGC = String(audience || "").trim().toUpperCase() === "GC";
+    wt = String(wt || "epoxy").toLowerCase();
+    const cat = isGC ? NARRATIVE_DEFAULTS.GC : NARRATIVE_DEFAULTS.Direct;
+    return cat[wt] || (isGC ? cat.epoxy : (wt === "polish" ? cat.polish : cat.epoxy));
   }
+  // Every default value for `field` across all work-types in `audience` — used to
+  // recognise (and only then re-seed) untouched machine boilerplate.
+  function audienceFieldDefaults(audience, field) {
+    const cat = String(audience).toUpperCase() === "GC" ? NARRATIVE_DEFAULTS.GC : NARRATIVE_DEFAULTS.Direct;
+    return new Set(Object.values(cat).map(row => row[field]));
+  }
+
+  // Seed the narrative fields: fill blanks with the current audience's default, AND
+  // if a field still holds a verbatim default from the OTHER audience (untouched
+  // boilerplate), re-seed it for the current audience — so a mid-draft Direct⇄GC
+  // switch swaps the machine text but any hand edit (even 1 char) survives.
+  (function seedNarrative() {
+    const cur = narrativeDefaults(_audience, _wt);
+    const otherAudience = String(_audience).toUpperCase() === "GC" ? "Direct" : "GC";
+    for (const nm of ["scope_notes", "schedule_notes", "exclusions"]) {
+      const el = form.querySelector(`[name="${nm}"]`);
+      if (!el) continue;
+      const val = String(el.value || "");
+      if (!val.trim()) { el.value = cur[nm]; continue; }
+      if (audienceFieldDefaults(otherAudience, nm).has(val)) el.value = cur[nm];
+    }
+  })();
 
   // Cove base height: intake/estimate capture cove LENGTH only, never height, so
   // a saved empty-string can blank the inline 6" default (writeForm overwrites
@@ -535,7 +588,7 @@
           // A "Base bid" radio toggle per sheet (plus an Auto/combined row). The base
           // row hides its option controls; the others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
-            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / deduct).</p>` +
+            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
             `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>`;
           h += allTabs.map(t => {
             const o = opts[t.id] || {};
@@ -553,7 +606,7 @@
               r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
               r += `<div class="pr-optsub"${isOpt ? "" : ' style="display:none"'}>`;
               r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
-              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct (VE)</option></select></label>`;
+              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
               // vs the base; when the option costs as much or more the doc falls back
               // to its own total line — flag that so the estimator isn't surprised.
@@ -771,6 +824,11 @@
   let _termsUnits  = null;
   let _termsGeom   = null;
   let _termsArtUrl = null;
+  // Measured top-band reservation (pt) per terms-art media name — how far the
+  // continuation letterhead's logo ink reaches into the text column, scanned
+  // from the art itself (never a hardcoded offset, so every template's art
+  // works). Cached so switching work-types doesn't re-scan the same PNG.
+  const _termsBandCache = new Map();   // media name -> reserved top band (pt)
 
   // True when the keyboard focus is inside `el` — used to skip any re-render
   // that would rebuild `el`'s innerHTML (and destroy the caret) while the
@@ -1126,6 +1184,44 @@
     notesPreviewEl.innerHTML = lines.map((l, i) =>
       `<p class="tw-li tw-note-edit" contenteditable="true" spellcheck="false"` +
       ` data-note-index="${i}" style="margin:0 0 1pt;">${escHtml(l)}</p>`).join("");
+    try { fitNotesBox(); } catch {}
+  }
+
+  // Shrink the NOTES text box's font just enough to fit its DESIGN height so a
+  // long notes list ({{#notes}}, ~12 bullets) can't overflow onto the
+  // ACCEPTANCE frame baked into the page-1 letterhead PNG below it (that frame
+  // is part of the art and can't move in the DOM). The real docx fits every
+  // bullet at full size on tighter Word metrics; the preview's looser metrics
+  // overflow, so we step the font down until the measured box fits. Every
+  // bullet stays visible + editable (clipping would hide bullets that really
+  // print). Short notes get NO inline font-size — byte-identical to today and
+  // the generated docx is untouched (this only styles the preview wrapper).
+  // Box id differs per template (epoxy 3, polish 5), so we never hardcode it —
+  // we find the box from the mounted notes element. offsetHeight is used (like
+  // applyZoom) so the #doc-zoom transform doesn't skew the measurement.
+  function fitNotesBox() {
+    const box = notesPreviewEl.closest(".tw-txbx");
+    if (!box || !box.dataset.boxHPt) return;
+    box.style.fontSize = "";                                   // reset to the design size
+    const target = parseFloat(box.dataset.boxHPt) * 96 / 72 + 1;   // design height in px (+1 slack)
+    if (!(target > 0)) return;
+    if (box.offsetHeight <= target) {                          // fits at full size — no inline size
+      box.classList.remove("tw-notes-overflow");
+      box.title = "";
+      return;
+    }
+    for (let k = 0.95; k >= 0.60 - 1e-9; k -= 0.05) {
+      box.style.fontSize = Math.round(k * 100) + "%";
+      if (box.offsetHeight <= target) {
+        box.classList.remove("tw-notes-overflow");
+        box.title = "";
+        return;
+      }
+    }
+    // Still over at the 60% floor: keep the floor and flag the collision so the
+    // estimator sees it may print over the acceptance area.
+    box.classList.add("tw-notes-overflow");
+    box.title = "Notes exceed the box and may overlap the acceptance area in print";
   }
 
   // Letterhead artwork, fetched WITH the auth header (a plain <img src>
@@ -1249,6 +1345,7 @@
       el.style.top = box.y_pt + "pt";
       el.style.width = (box.w_pt || 200) + "pt";
       el.style.minHeight = (box.h_pt || 0) + "pt";
+      el.dataset.boxHPt = box.h_pt || "";          // inert metadata for fitNotesBox()
       renderBlockList(el, list, tokens);
       p1.appendChild(el);
     }
@@ -1270,7 +1367,7 @@
       const flow = document.createElement("div");
       renderBlockList(flow, flowBlocks, tokens);
       _termsUnits = Array.from(flow.children);
-      _termsGeom  = { pageH, margin };
+      _termsGeom  = { pageH, margin, topReservePt: 0 };
       repaginateTerms();
       const contArt = arts.find(a => (a.para_index || 0) > 0) || arts[0];
       if (contArt) {
@@ -1278,6 +1375,16 @@
           if (!u) return;
           _termsArtUrl = u;
           docSurface.querySelectorAll(".tw-terms-page").forEach(applyTermsArt);
+          // Reserve a measured top band so packed terms text starts below the
+          // continuation logo's ink (once per art; deferred while the caret is
+          // in a terms page, so no repagination loop).
+          measureTermsBand(u, contArt.name).then(band => {
+            if (!_termsGeom) return;
+            if (band !== (_termsGeom.topReservePt || 0)) {
+              _termsGeom.topReservePt = band;
+              scheduleRepaginate(0);
+            }
+          });
         });
       }
     } else {
@@ -1295,6 +1402,71 @@
     pg.style.backgroundRepeat = "no-repeat";
   }
 
+  // Measure how far the continuation letterhead's ink reaches into the TOP band
+  // of the text column, so repaginateTerms can reserve that as extra padding-
+  // top (the buffalo logo sits top-right, ~y 54-120pt in Kyle's art, and the
+  // real docx clears it with blank leading paragraphs). Fully data-driven — we
+  // scan the art the SAME way it's painted (as a full-page background covering
+  // pageWpt x pageH), so a different template's art yields a different reserve;
+  // NO pixel constant is baked in. Returns a Promise<pt> in [0,120]; resolves 0
+  // on no ink or any error (canvas taint, decode failure). Cached per media
+  // name so a work-type switch reuses the result instead of re-scanning.
+  function measureTermsBand(dataUrl, mediaName) {
+    const key = mediaName || dataUrl;
+    if (_termsBandCache.has(key)) return Promise.resolve(_termsBandCache.get(key));
+    if (!dataUrl || !_termsGeom) return Promise.resolve(0);
+    const { pageH, margin } = _termsGeom;
+    const pageW = pageWpt || 612;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v, cache) => {
+        if (done) return; done = true;
+        if (cache) _termsBandCache.set(key, v);
+        resolve(v);
+      };
+      try {
+        const img = new Image();
+        img.onerror = () => finish(0, false);           // don't cache a decode failure — allow retry
+        img.onload = () => {
+          try {
+            // Downscale the full page to a small canvas; s = page pt -> canvas px.
+            const s = 300 / pageW;
+            const cw = Math.max(1, Math.round(pageW * s));
+            const ch = Math.max(1, Math.round((pageH || 792) * s));
+            const cnv = document.createElement("canvas");
+            cnv.width = cw; cnv.height = ch;
+            const ctx = cnv.getContext("2d", { willReadFrequently: true });
+            if (!ctx) return finish(0, false);
+            ctx.drawImage(img, 0, 0, cw, ch);            // art covers the whole page box, same as the bg
+            // Scan the TOP strip (margin.top .. margin.top+120pt) across the
+            // text column (margin.left .. pageW-margin.right), all in canvas px.
+            const x0 = Math.max(0, Math.floor(margin.left * s));
+            const x1 = Math.min(cw, Math.ceil((pageW - margin.right) * s));
+            const y0 = Math.max(0, Math.floor(margin.top * s));
+            const y1 = Math.min(ch, Math.ceil((margin.top + 120) * s));
+            const sw = Math.max(1, x1 - x0), sh = Math.max(1, y1 - y0);
+            const data = ctx.getImageData(x0, y0, sw, sh).data;   // throws if tainted
+            let maxRow = -1;
+            for (let ry = 0; ry < sh; ry++) {
+              for (let rx = 0; rx < sw; rx++) {
+                const p = (ry * sw + rx) * 4;
+                const r = data[p], g = data[p + 1], b = data[p + 2], a = data[p + 3];
+                if (a > 20 && (r < 245 || g < 245 || b < 245)) { if (ry > maxRow) maxRow = ry; break; }
+              }
+            }
+            let band = 0;
+            if (maxRow >= 0) {
+              const inkYpt = (y0 + maxRow) / s;          // canvas px -> page pt
+              band = Math.min(120, Math.max(0, inkYpt + 6 - margin.top));
+            }
+            finish(band, true);
+          } catch { finish(0, false); }                  // e.g. canvas taint — retry next time
+        };
+        img.src = dataUrl;
+      } catch { finish(0, false); }
+    });
+  }
+
   // Pack the terms blocks into fixed-height page sheets by MEASURED height, so
   // content never crosses a page boundary (where the letterhead's red band and
   // next-page logo live). Uses layout metrics (offsetTop/offsetHeight/
@@ -1304,7 +1476,7 @@
   // collectOverrides() all keep working.
   function repaginateTerms() {
     if (flowMode || !_termsUnits || !_termsUnits.length || !_termsGeom) return;
-    const { pageH, margin } = _termsGeom;
+    const { pageH, margin, topReservePt } = _termsGeom;
     docSurface.querySelectorAll(".tw-terms-page").forEach(p => p.remove());  // units survive via _termsUnits
     let page = null;
     const newPage = () => {
@@ -1313,7 +1485,9 @@
       page.style.width = pageWpt + "pt";
       page.style.height = pageH + "pt";     // border-box: padding lives inside the page
       page.style.overflow = "hidden";
-      page.style.padding = `${margin.top}pt ${margin.right}pt ${margin.bottom}pt ${margin.left}pt`;
+      // Reserve the measured logo band on top of the normal top margin; the
+      // padded box drives roomBottom()/packing/backgroundSize automatically.
+      page.style.padding = `${margin.top + (topReservePt || 0)}pt ${margin.right}pt ${margin.bottom}pt ${margin.left}pt`;
       applyTermsArt(page);
       docSurface.appendChild(page);
     };
@@ -1408,7 +1582,7 @@
       applyZoom();
       // Cheap insurance: if a locally-installed proposal font activates late,
       // re-measure once fonts settle.
-      try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => scheduleRepaginate(0)); } catch {}
+      try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { scheduleRepaginate(0); try { fitNotesBox(); } catch {} }); } catch {}
     } catch (err) {
       // Degraded fallback: surface the price preview alone so the estimator
       // can still verify pricing and continue; previously saved document
@@ -1474,6 +1648,9 @@
     notesPreviewEl.querySelectorAll("[data-note-index]").forEach(p =>
       serializeBlock(p).split("\n").forEach(s => lines.push(s.trim())));
     ta.value = lines.filter(Boolean).join("\n");
+    // Re-fit the font as bullets are typed. This only changes the box's
+    // font-size (never rebuilds the bullets), so the caret is preserved.
+    try { fitNotesBox(); } catch {}
     if (_notesOvTimer) clearTimeout(_notesOvTimer);
     _notesOvTimer = setTimeout(() => { try { TW.setState({ notes_text: ta.value }); } catch {} }, 300);
   });
@@ -1654,6 +1831,10 @@
       proposal_payload: {
         work_type: state.work_type || "epoxy",
         audience:  state.audience  || "Direct",
+        // The template version the paragraph_overrides ids were captured against.
+        // The backend drops the overrides if this no longer matches the current
+        // template (annotation shifts editable-block ids) — see api_generate.
+        template_version: templateVersion,
         values:    { ...mergedValues, ...tokenValues },
         cell_values: state.cell_values || {},
         // Custom material lines (Super Stick / edge-case adds) -> Epoxy spare rows
