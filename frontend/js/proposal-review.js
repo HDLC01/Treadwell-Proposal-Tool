@@ -535,7 +535,7 @@
           // A "Base bid" radio toggle per sheet (plus an Auto/combined row). The base
           // row hides its option controls; the others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
-            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / deduct).</p>` +
+            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
             `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>`;
           h += allTabs.map(t => {
             const o = opts[t.id] || {};
@@ -553,7 +553,7 @@
               r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
               r += `<div class="pr-optsub"${isOpt ? "" : ' style="display:none"'}>`;
               r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
-              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>deduct (VE)</option></select></label>`;
+              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
               // vs the base; when the option costs as much or more the doc falls back
               // to its own total line — flag that so the estimator isn't surprised.
