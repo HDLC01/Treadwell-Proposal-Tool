@@ -590,11 +590,19 @@
                        && r.show !== false && !(comboBreakoutActive && r.is_base));
         // OPTION lines — same mode/label rules as main._build_options.
         let html = rooms.map((r) => {
-          const isDeduct = r.price_mode === "deduct" && N(r.deduct_amount) > 0;
           let label, amount;
-          if (isDeduct) {
-            label = `Deduct VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
-            amount = `(${fmtUSDdoc(r.deduct_amount)})`;
+          if (r.price_mode === "deduct") {
+            // Auto add/deduct by sign: diff = option − base (Will's formula).
+            // Negative → "Deduct ($3,200)"; positive/zero → "Add $2,232". The
+            // Add/Deduct word rides inside the amount island (docx parity).
+            const diff = N(r.bid.total) - N(r.base_total);
+            if (diff < 0) {
+              label = `VE for ${r.option_desc || r.name}, in lieu of ${r.base_desc || "the base bid"}.`;
+              amount = `Deduct (${fmtUSDdoc(Math.abs(diff))})`;
+            } else {
+              label = r.option_desc || r.system_desc || r.name || floorNoun;
+              amount = `Add ${fmtUSDdoc(diff)}`;
+            }
           } else {
             const desc = r.system_desc || r.option_desc || floorNoun;
             const notes = (Array.isArray(r.notes_auto) ? r.notes_auto : [])
@@ -662,10 +670,11 @@
               r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
               r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
-              // vs the base; when the option costs as much or more the doc falls back
-              // to its own total line — flag that so the estimator isn't surprised.
+              // vs the base; add/deduct now self-labels by sign (option − base):
+              // cheaper prints "Deduct ($X)", costlier prints "Add $X" — surface
+              // which one this option will be so the estimator isn't surprised.
               const savings = N(state.proposal_lump_sum) - N(t.total);
-              r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as its own total.</span>`;
+              r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
               r += `<label class="op-notes">Notes (one per line)<textarea class="room-notes" rows="2">${esc(manual)}</textarea></label>`;
               r += `</div>`;
             }

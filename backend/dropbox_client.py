@@ -27,12 +27,13 @@ log = logging.getLogger("proposal_tool.dropbox_client")
 # Treadwell's Estimating category folders (the "To Dropbox" step-5 destinations).
 # Paths are within the Team root namespace (the client rebinds to it in
 # _build_client) and were verified against the live Dropbox via a read-only
-# files_list_folder — including the `$` prefixes, spacing, and the `*Kyle`
-# sub-folder under Commercial Sales (asterisk, not underscore).
+# files_list_folder — including the `$` prefixes and spacing. Commercial files
+# into the CATEGORY folder itself (Hanz 2026-07-14: not into the per-person
+# `*Kyle` sub-folder).
 ESTIMATING_DESTINATIONS: dict[str, str] = {
     "gyp":         "/2023 Treadwell Team Folder/Estimating/$Gyp Estimates",
     "plans_specs": "/2023 Treadwell Team Folder/Estimating/$Plans Specs Estimates",
-    "commercial":  "/2023 Treadwell Team Folder/Estimating/$Commercial Sales Estimates/*Kyle",
+    "commercial":  "/2023 Treadwell Team Folder/Estimating/$Commercial Sales Estimates",
 }
 DESTINATION_LABELS: dict[str, str] = {
     "gyp":         "Gyp Estimates",

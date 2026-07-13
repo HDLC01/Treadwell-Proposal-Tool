@@ -885,6 +885,14 @@ async function init() {
   const initialSheet = wt === "polish" ? "Polish" : "Epoxy";
   badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
+  // 5. Re-render the bid bar + total bar now that EVERY sheet (incl. copied
+  //    tabs) exists in HF with the saved overrides applied. Without this the
+  //    chips keep their pre-HF render (blank prices) until the 1.2s delayed
+  //    pricing IIFE fires — and that one can RACE this async load, leaving a
+  //    copy's chip permanently blank after a back-navigation while its grid
+  //    shows the real total (the "chip vs sheet not uniform" report).
+  renderBidOptions();
+  if (HF && HF.ready) updateTotalBarFromHF();
 }
 
 function renderTabs() {

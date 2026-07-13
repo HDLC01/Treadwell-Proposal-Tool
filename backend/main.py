@@ -1106,10 +1106,12 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
     {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
      base_desc, system_desc, bid:{total, sales_tax, remodel}, notes_auto, notes_manual}.
     A shown option (show != False, positive total) renders in one of two modes:
-      • total  → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
-      • deduct → price_formatted "($3,200)"; desc "Deduct VE for <option>, in lieu of
-                 <base>." where savings = base_total − option_total (both tax-inclusive).
-                 A non-positive deduct falls back to total mode.
+      • total      → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
+      • add/deduct → diff = option_total − base_total (both tax-inclusive), and the
+                     line SELF-LABELS by the sign (Will's spec):
+                       diff < 0  → "Deduct ($3,200)" + "VE for <option>, in lieu of <base>."
+                       diff ≥ 0  → "Add $2,232" + "<option>" (a costlier option is an ADD,
+                                   not a silent fall-back to its own total as before)
     Returns [] when there are no shown options (the block then strips)."""
     def num(x) -> float:
         try:
@@ -1129,13 +1131,19 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
         if total <= 0:                                # un-snapshotted / empty sheet
             continue
         option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
-        savings = num(r.get("base_total")) - total
+        diff = total - num(r.get("base_total"))       # option − base (Will's formula)
 
-        if str(r.get("price_mode")) == "deduct" and savings > 0:
-            base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
-            price_formatted = _fmt_usd(savings, parens=True)
-            price_desc = f"Deduct VE for {option_desc or noun}, in lieu of {base_desc}."
-        else:                                         # total mode (also the deduct fallback)
+        if str(r.get("price_mode")) == "deduct":
+            # Auto add/deduct by sign; the Add/Deduct word rides INSIDE the amount
+            # island so the docx row reads "Add $2,232 – <label>" / "Deduct ($3,200) – <label>".
+            if diff < 0:
+                base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
+                price_formatted = "Deduct " + _fmt_usd(diff, parens=True)   # parens = abs magnitude
+                price_desc = f"VE for {option_desc or noun}, in lieu of {base_desc}."
+            else:
+                price_formatted = "Add " + _fmt_usd(diff)
+                price_desc = option_desc or noun
+        else:                                         # total mode: the option's own price
             remodel = num(bid.get("remodel"))
             tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
                           if remodel > 0 else "(material sales tax INCLUDED)")
