@@ -511,6 +511,7 @@
     postJSON,
     authHeaders,
     confirmDanger,
+    injectModalCss,
     fmtBizDate,
     fmtBizDateTime,
     bizYM,
