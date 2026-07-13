@@ -370,6 +370,20 @@ def _strip_leading_separator(p_elem) -> None:
             remaining = 0
 
 
+def _strip_bullet(p_elem) -> None:
+    """Remove list/bullet formatting (`<w:numPr>`) from a paragraph so a blank
+    NOTES item renders as clean vertical spacing — a genuinely empty line —
+    rather than a lone empty bullet dot. No-op if the paragraph isn't a list
+    item. (The empty `<w:t>` from the substitution already makes the line
+    blank; this just drops its bullet glyph.)"""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        return
+    numpr = ppr.find(qn("w:numPr"))
+    if numpr is not None:
+        ppr.remove(numpr)
+
+
 # Base-bid line: `{{base_bid_formatted}} – <description> as described above {{base_tax_phrase}}`.
 # The <description> is static text in every template (each work type / audience
 # has its own wording, e.g. "Epoxy flooring", "Polished Concrete & Joint Filler"),
@@ -493,6 +507,10 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
                 # untouched.
                 if block_name == "price_line" and not str(item.get("amount_formatted") or "").strip():
                     _strip_leading_separator(clone)
+                # Blank NOTES line — estimator's Word-style spacing. Drop the
+                # bullet so it renders as an empty line, not an empty bullet dot.
+                if block_name == "notes" and not str(item.get("text") or "").strip():
+                    _strip_bullet(clone)
                 new_elems.append(clone)
 
         for clone in new_elems:

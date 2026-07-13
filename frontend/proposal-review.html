@@ -336,7 +336,14 @@
   }
   /* Keep the centered proposal page clear of the right rail when the rail is shown. */
   body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 272px; }
-  .word-canvas { padding-left: 292px; }
+  /* The left "Proposal fields" rail is redundant — the document is fully
+     click-to-edit inline, and its structured fields are set on Intake/Estimate.
+     Hide the rail (the #proposal-form inside stays in the DOM as a hidden
+     data-carrier so readForm/writeForm, the submit-driven Generate button, and
+     the Back button keep working + every value still flows to the files) and
+     reclaim its space so the document centers across the full canvas. */
+  #fields-panel { display: none; }
+  .word-canvas { padding-left: 0; }
   .options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
   .options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
   .options-panel .op-row { border-top: 1px solid #eee; padding: 8px 0; }

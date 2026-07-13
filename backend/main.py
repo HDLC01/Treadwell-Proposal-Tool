@@ -1207,9 +1207,14 @@ def _notes_for(work_type: str, notes_in: list, phase_price=None) -> list:
     notes → the boilerplate default is used) and any legacy draft whose saved
     notes still carry the raw placeholder. A hand-typed numeric amount is left
     untouched — only the literal ``$xxxx`` anchor is replaced (the frontend
-    handles live re-sync of numeric amounts against the cell)."""
-    lines = [str(n).strip() for n in (notes_in or []) if str(n).strip()]
-    if not lines:
+    handles live re-sync of numeric amounts against the cell).
+
+    Blank lines are PRESERVED (Word-style spacing the estimator added in the
+    editor) — each blank becomes a `{"text": ""}` item, which proposal_writer
+    renders as a bullet-less blank line. Defaults kick in only when the caller
+    sent NOTHING but blanks (so an all-empty notes box still gets boilerplate)."""
+    lines = [str(n).rstrip() for n in (notes_in or [])]
+    if not any(l.strip() for l in lines):
         wt = str(work_type or "epoxy").lower()
         lines = _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []
     amt = _fmt_usd(_phase_price_or_default(phase_price))

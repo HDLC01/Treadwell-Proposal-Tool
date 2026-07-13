@@ -69,7 +69,7 @@
       // values.phase_price). NOTE: this fallback still drops paragraph_overrides
       // / remodel / rooms — pre-existing lossiness; the primary path
       // (proposal_payload above) carries them all.
-      notes: String(s.notes_text || "").split("\n").map(t => t.trim()).filter(Boolean),
+      notes: String(s.notes_text || "").replace(/\n+$/, "").split("\n").map(t => t.trim()),
       system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
       // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
       // option + manual line label/amount). Display-only — never affects pricing.
