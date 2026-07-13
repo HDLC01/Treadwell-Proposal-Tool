@@ -102,22 +102,33 @@ def test_build_options_total_mode():
 
 
 def test_build_options_deduct_mode():
+    # Auto add/deduct: diff = option − base = −6,000 → a Deduct, word in the AMOUNT.
     opt = {"name": "Grind & Seal", "is_base": False, "base_total": 50000,
            "price_mode": "deduct", "option_desc": "Grind & Seal", "base_desc": "Polished Concrete",
            "bid": {"total": 44000, "remodel": 0}}
     o = main._build_options([opt], {}, "polish")[0]
-    assert o["price_formatted"] == "($6,000)"                      # savings = 50000 - 44000
-    assert o["price_desc"] == "Deduct VE for Grind & Seal, in lieu of Polished Concrete."
+    assert o["price_formatted"] == "Deduct ($6,000)"
+    assert o["price_desc"] == "VE for Grind & Seal, in lieu of Polished Concrete."
 
 
-def test_build_options_deduct_nonpositive_falls_back_to_total():
-    # Option costs MORE than the base -> savings <= 0 -> render as its own total.
+def test_build_options_deduct_costlier_becomes_add():
+    # Option costs MORE than the base → diff = +11,000 → an ADD line (Will's
+    # spec: option − base, positive = add), no silent fall-back to its own total.
     opt = {"name": "Premium", "is_base": False, "base_total": 50000,
            "price_mode": "deduct", "option_desc": "Premium System",
            "bid": {"total": 61000, "remodel": 0}}
     o = main._build_options([opt], {}, "epoxy")[0]
-    assert o["price_formatted"] == "$61,000"
-    assert "Deduct" not in o["price_desc"] and "as described above" in o["price_desc"]
+    assert o["price_formatted"] == "Add $11,000"
+    assert o["price_desc"] == "Premium System"
+
+
+def test_build_options_deduct_equal_totals_is_add_zero():
+    # Same price as the base → diff = 0 → renders as "Add $0" (edge, but defined).
+    opt = {"name": "Same", "is_base": False, "base_total": 50000,
+           "price_mode": "deduct", "option_desc": "Same System",
+           "bid": {"total": 50000, "remodel": 0}}
+    o = main._build_options([opt], {}, "epoxy")[0]
+    assert o["price_formatted"] == "Add $0"
 
 
 def test_build_options_show_gate_and_base_excluded():
@@ -422,8 +433,9 @@ def test_generate_rooms_render_single_base_and_options_label():
          "price_mode": "total", "option_desc": "Quartz Double Broadcast",
          "system_desc": "Quartz Double Broadcast", "bid": {"total": 11126, "remodel": 0},
          "notes_auto": ["Includes cove base"], "notes_manual": []},
-        # Deduct that costs MORE than the base (savings <= 0) -> falls back to its
-        # own total line, no "Deduct VE" wording (main._build_options fallback).
+        # Add/deduct option that costs MORE than the base → an ADD line:
+        # "Add $12,014 – Premium System" (option − base; Will's spec — no more
+        # silent fall-back to the option's own total).
         {"id": "Copy2", "is_base": False, "show": True, "base_total": 36763,
          "price_mode": "deduct", "option_desc": "Premium System",
          "base_desc": "MACRO Flake Single Broadcast", "bid": {"total": 48777, "remodel": 0}},
@@ -439,10 +451,10 @@ def test_generate_rooms_render_single_base_and_options_label():
     assert base_i < opt_i                               # base first, then the Options label
     after = lines[opt_i + 1:]                            # the real option lines follow it
     quartz = next(l for l in after if "Quartz Double Broadcast" in l)
-    premium = next(l for l in after if "Premium System as described above" in l)
+    premium = next(l for l in after if "Premium System" in l)
     assert " — Includes cove base" in quartz       # auto note folded inline (main.py " — ")
-    assert "$48,777" in premium                          # deduct-costs-more -> own total line
-    assert "Deduct VE" not in "\n".join(after)
+    assert "Add $12,014" in premium                      # 48,777 − 36,763 → an Add line
+    assert "Deduct" not in "\n".join(after)
 
 
 def test_generate_no_options_price_section_unchanged():

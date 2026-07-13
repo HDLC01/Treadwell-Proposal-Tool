@@ -13,9 +13,10 @@ def test_destination_map_has_three_with_verified_paths():
     assert set(d) == {"gyp", "plans_specs", "commercial"}
     assert d["gyp"].endswith("/$Gyp Estimates")
     assert d["plans_specs"].endswith("/$Plans Specs Estimates")
-    # Commercial Sales nests under the estimator sub-folder *Kyle (asterisk,
-    # verified against the live Dropbox — NOT _Kyle).
-    assert d["commercial"].endswith("/$Commercial Sales Estimates/*Kyle")
+    # Commercial Sales files into the CATEGORY folder itself (Hanz 2026-07-14:
+    # not into the per-person *Kyle sub-folder).
+    assert d["commercial"].endswith("/$Commercial Sales Estimates")
+    assert "*Kyle" not in d["commercial"]
     for p in d.values():
         assert p.startswith("/2023 Treadwell Team Folder/Estimating/")
 
