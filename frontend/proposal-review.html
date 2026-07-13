@@ -336,7 +336,21 @@
   }
   /* Keep the centered proposal page clear of the right rail when the rail is shown. */
   body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 272px; }
-  .word-canvas { padding-left: 292px; }
+  /* The left "Proposal fields" rail is redundant — the document is fully
+     click-to-edit inline, and its structured fields are set on Intake/Estimate.
+     Hide the rail (the #proposal-form inside stays in the DOM as a hidden
+     data-carrier so readForm/writeForm, the submit-driven Generate button, and
+     the Back button keep working + every value still flows to the files) and
+     reclaim its space so the document centers across the full canvas. */
+  #fields-panel { display: none; }
+  .word-canvas { padding-left: 0; }
+  /* Compact tax-treatment control kept in the ribbon after the sidebar was
+     removed (it has no inline equivalent + drives the price line). */
+  .ribbon-tax { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px;
+    font-size: 12px; color: #444; white-space: nowrap; }
+  .ribbon-tax span { font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #777; }
+  .ribbon-tax select { font-size: 12px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px;
+    background: #fff; color: #222; }
   .options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
   .options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
   .options-panel .op-row { border-top: 1px solid #eee; padding: 8px 0; }
@@ -403,6 +417,19 @@
     <a class="step" href="/dropbox.html">5 · To Dropbox</a>
   </div>
   <div class="ribbon-spacer"></div>
+  <!-- Compact tax-treatment control. The full "Proposal fields" sidebar is
+       hidden (redundant with inline editing), but tax treatment has no inline
+       equivalent and drives the PRICE line + {{base_tax_phrase}}, so it stays
+       here. Two-way synced with the hidden form's tax_inclusion field (see
+       proposal-review.js) so readForm + the doc repaint keep working. -->
+  <label class="ribbon-tax" title="Tax treatment on the base-bid price line">
+    <span>Tax</span>
+    <select id="tax-treatment-select">
+      <option value="INCLUDED">Included</option>
+      <option value="BROKEN_OUT">Broken out</option>
+      <option value="EXEMPT">Exempt</option>
+    </select>
+  </label>
   <button type="button" id="back-btn" class="secondary">← Back to Estimate</button>
   <button type="submit" form="proposal-form" id="generate-btn">Continue to Done →</button>
 </div>

@@ -480,13 +480,19 @@ function renderBidOptions() {
   };
   const autoLabel = wt === "combo" ? comboLabel()
                                    : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
-  const isPartOfAutoBase = (t) => !baseId && t.kind === "base";
+  // The "Auto" chip only means something when there are 2+ priced tabs (pick a
+  // base, or — for combo — combine them). With a single priced tab it's just a
+  // redundant duplicate of that lone tab, so suppress it and show the tab itself
+  // as the base bid (auto-resolution still works via a null base_tab_id).
+  const showAuto = priced.length > 1;
+  const soloBase = (!baseId && priced.length === 1) ? priced[0].id : null;
+  const isPartOfAutoBase = (t) => !baseId && !soloBase && t.kind === "base";
   const baseRadio = (val, checked, label) =>
     `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
-  let html = `<span class="bb-opt">${baseRadio("", !baseId, autoLabel)}</span>`;
+  let html = showAuto ? `<span class="bb-opt">${baseRadio("", !baseId, autoLabel)}</span>` : "";
   html += priced.map(t => {
     const o = state.tab_opts[t.id] || {};
-    const isBase = baseId === t.id;
+    const isBase = baseId === t.id || soloBase === t.id;
     const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
     const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
     let inner = baseRadio(t.id, isBase, labelFor(t.id)) +

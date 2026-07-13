@@ -14,6 +14,28 @@
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
 
+  // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
+  // tax treatment has no inline equivalent and drives the price line, so a
+  // compact selector lives in the ribbon. Mirror it into the hidden form's
+  // tax_inclusion field and fire a bubbling 'input' so the form's existing
+  // listeners (refreshPriceDisplay + debounced persist) run — no duplicated logic.
+  (function wireRibbonTax() {
+    const sel = document.getElementById("tax-treatment-select");
+    const hidden = form && form.querySelector("[name='tax_inclusion']");
+    if (!sel || !hidden) return;
+    const norm = (v) => {
+      const u = String(v || "INCLUDED").trim().toUpperCase();
+      if (["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(u)) return "EXEMPT";
+      if (["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(u)) return "BROKEN_OUT";
+      return "INCLUDED";
+    };
+    sel.value = norm(hidden.value);                       // reflect the saved/default treatment
+    sel.addEventListener("change", () => {
+      hidden.value = sel.value;
+      hidden.dispatchEvent(new Event("input", { bubbles: true }));   // → form input listeners
+    });
+  })();
+
   // Proposal boilerplate as REAL default values (these used to be placeholders,
   // which never made it into the generated doc — that's why Schedule came out
   // blank). writeForm above already applied any saved / AI-autofilled values, so
@@ -808,6 +830,20 @@
       tax_phrase: (mergedValues.sales_tax_handling || "INCLUDED") === "INCLUDED"
         ? "Sales and KS remodel tax are included in the lump sum above."
         : "Tax is NOT included and will be added at invoice.",
+      // Base-bid line's parenthetical tax phrase. Templates WITHOUT a
+      // {{#single_bid}} base-bid island (polish Direct, every GC template) use
+      // {{base_tax_phrase}} as a plain token — without this the on-page preview
+      // showed a raw "{{base_tax_phrase}}" even though the generated doc was
+      // correct (the backend fills it at generate time). Mirror that backend
+      // logic (broken out → no label; exempt → "(tax exempt)"; else INCLUDED,
+      // with the remodel note when remodel tax applies).
+      base_tax_phrase: (() => {
+        const m = taxTreatmentMode();
+        if (m.broken) return "";
+        if (m.exempt) return "(tax exempt)";
+        return remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+                              : "(material sales tax INCLUDED)";
+      })(),
       ...mergedValues,
     };
 
@@ -1205,17 +1241,36 @@
 
   // NOTES preview — one bullet per non-blank sidebar line ({{#notes}} block;
   // the template's notes rows are real Word bullets).
+  // Highlight the sheet-pulled additional-phase amount as a .tw-fill provenance
+  // island (screen-only, like the other estimate-sourced fills) — it tracks the
+  // "Add for additional phase" estimate cell. Only the exact phase-note line
+  // matches, so no stray number gets highlighted.
+  function noteLineHtml(l) {
+    const m = l.match(/^(Add\s+)(\$[\d,]+(?:\.\d{1,2})?)(\s+for each additional phase beyond the above stated schedule\.)$/i);
+    if (m) return escHtml(m[1]) + `<span class="tw-fill">${escHtml(m[2])}</span>` + escHtml(m[3]);
+    return escHtml(l);
+  }
+
   function renderNotesPreview() {
     // Don't rebuild the bullets while the estimator is typing in one.
     if (focusInside(notesPreviewEl)) return;
     const ta = document.getElementById("notes-text");
-    const lines = String((ta && ta.value) || "").split("\n").map(s => s.trim()).filter(Boolean);
-    // Bullets are editable in place and two-way bound to the sidebar
-    // #notes-text textarea (the single source of truth — no separate payload
-    // field; the generate payload's `notes` still derives from the textarea).
-    notesPreviewEl.innerHTML = lines.map((l, i) =>
-      `<p class="tw-li tw-note-edit" contenteditable="true" spellcheck="false"` +
-      ` data-note-index="${i}" style="margin:0 0 1pt;">${escHtml(l)}</p>`).join("");
+    // Preserve blank lines (Word-style spacing) — a blank line renders as an
+    // empty, bullet-less spacer paragraph (kept clickable via .tw-note-blank's
+    // min-height) and round-trips through the textarea + generate payload + the
+    // docx (see _notes_for + the notes block's blank handling). One trailing
+    // newline (a common textarea artifact) is dropped so it can't creep.
+    const lines = String((ta && ta.value) || "").replace(/\n$/, "").split("\n");
+    // Bullets are editable in place and two-way bound to the #notes-text
+    // textarea (the single source of truth; the generate payload's `notes`
+    // still derives from it).
+    notesPreviewEl.innerHTML = lines.map((l, i) => {
+      if (l.trim() === "")
+        return `<p class="tw-note-edit tw-note-blank" contenteditable="true" spellcheck="false"` +
+               ` data-note-index="${i}" style="margin:0 0 1pt;"></p>`;
+      return `<p class="tw-li tw-note-edit" contenteditable="true" spellcheck="false"` +
+             ` data-note-index="${i}" style="margin:0 0 1pt;">${noteLineHtml(l.trim())}</p>`;
+    }).join("");
     try { fitNotesBox(); } catch {}
   }
 
@@ -1304,6 +1359,18 @@
   // the whole surface scales to fill the canvas — like the ~150% zoom the
   // estimators read the real file at. The outer div takes the scaled bounds
   // so the canvas scrolls normally.
+  // Size the outer to #doc-zoom's SCALED bounds so the canvas reserves the right
+  // scroll height. transform:scale doesn't change the layout box, so the outer
+  // must be told the scaled size explicitly — and kept in sync (see the observer
+  // below), or a late height change leaves it too short and the bottom of the
+  // page (NOTES / ACCEPTANCE) can't be scrolled to.
+  function syncZoomOuter() {
+    if (!docZoom || !docZoomOuter) return;
+    const r = docZoom.getBoundingClientRect();
+    docZoomOuter.style.width = r.width + "px";
+    docZoomOuter.style.height = r.height + "px";
+  }
+  let _zoomRO = null;
   function applyZoom() {
     if (!docZoom || !docZoomOuter) return;
     const canvas = document.querySelector(".word-canvas");
@@ -1317,9 +1384,16 @@
     // the outer to the transformed bounds so the canvas scrolls correctly.
     docZoom.style.width = pageWpt + "pt";
     docZoom.style.transform = `scale(${k})`;
-    const r = docZoom.getBoundingClientRect();
-    docZoomOuter.style.width = r.width + "px";
-    docZoomOuter.style.height = r.height + "px";
+    syncZoomOuter();
+    // Re-sync the reserved height whenever the document's own height changes
+    // AFTER this pass — font swap (Zetta Serif), price/notes island re-render,
+    // repagination — none of which necessarily re-call applyZoom. Without this
+    // the one-shot measure above goes stale and clips the bottom. Setting the
+    // outer's height never resizes #doc-zoom, so there's no feedback loop.
+    if (!_zoomRO && window.ResizeObserver) {
+      _zoomRO = new ResizeObserver(() => syncZoomOuter());
+      _zoomRO.observe(docZoom);
+    }
   }
   window.addEventListener("resize", applyZoom);
 
@@ -1679,7 +1753,14 @@
     const lines = [];
     notesPreviewEl.querySelectorAll("[data-note-index]").forEach(p =>
       serializeBlock(p).split("\n").forEach(s => lines.push(s.trim())));
-    ta.value = lines.filter(Boolean).join("\n");
+    // Preserve blank lines (spacing). Collapse only 3+ consecutive blanks to 2
+    // (guards against contenteditable "bogus <br>" doubling during editing) and
+    // trim a trailing blank so blanks can't creep across edits.
+    while (lines.length && lines[lines.length - 1] === "") lines.pop();
+    const kept = [];
+    let run = 0;
+    for (const s of lines) { if (s === "") { if (++run > 2) continue; } else run = 0; kept.push(s); }
+    ta.value = kept.join("\n");
     // Re-fit the font as bullets are typed. This only changes the box's
     // font-size (never rebuilds the bullets), so the caret is preserved.
     try { fitNotesBox(); } catch {}
@@ -1899,7 +1980,7 @@
         // default rate/markup/tax locks in the generated .xlsx sheet protection.
         lock_overrides: (state.lock_overrides && typeof state.lock_overrides === "object") ? state.lock_overrides : {},
         // Editable NOTES (one bullet per line); empty -> backend uses the standard list.
-        notes: String(mergedValues.notes_text || "").split("\n").map(s => s.trim()).filter(Boolean),
+        notes: String(mergedValues.notes_text || "").replace(/\n+$/, "").split("\n").map(s => s.trim()),
         // Document-editor edits -> proposal_writer paragraph overrides,
         // applied to the pristine template BEFORE block expansion (id-safe).
         paragraph_overrides: paragraphOverrides,

@@ -768,10 +768,19 @@ button {
 .tw-fill.tw-fill-edit:hover { background: #ffe04d; }
 .tw-fill.tw-fill-edit:focus { background: #ffe975; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.55); }
 .tw-fill.tw-fill-edit:empty { display: inline-block; min-width: 1.2em; }
+/* PRICE-row islands (base amount / description / tax phrase, and option+manual
+   lines) must not break mid-value — a wrapped "(material sales tax INCLUDED)"
+   leaves an orphaned highlighted ")" on the next line. Keep each island intact;
+   the row still wraps between islands at the plain " – " joins. */
+#base-bid-row .tw-fill, #price-lines-block .tw-fill { white-space: nowrap; }
 /* Editable NOTES bullet — a real bullet that also takes the caret. */
 .tw-note-edit { outline: none; cursor: text; }
 .tw-note-edit:hover { background: rgba(200, 16, 46, 0.05); }
 .tw-note-edit:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.4); }
+/* A blank NOTES line = Word-style vertical spacing: no bullet, but keep enough
+   height that it stays visible + clickable so the estimator can edit it. */
+.tw-note-blank { list-style: none; min-height: 0.95em; }
+.tw-note-blank::marker { content: ""; }
 
 /* The zoom rig: the page renders at TRUE point sizes (the template runs
    8-9pt Zetta Serif) and the whole surface scales up to read comfortably —
