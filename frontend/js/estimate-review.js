@@ -405,6 +405,18 @@ function roleFor(id) {
   const c = state.tab_copies.find(x => x.id === id);
   return c ? (c.role || "epoxy") : "other";
 }
+// A tab's underlying TEMPLATE layout sheet: walk copy-source chains (a copy of a
+// copy resolves to the original template tab). Mirrors lockedCellsFor's walk —
+// used to guard coordinate reads that only make sense on Epoxy/Polish layouts.
+function layoutIdFor(id) {
+  let cur = id, guard = 0;
+  while (guard++ < 20) {
+    const c = state.tab_copies.find(x => x.id === cur);
+    if (!c) break;
+    cur = c.source || "Epoxy";
+  }
+  return cur;
+}
 
 // ─── Base bid + priced options ───────────────────────────────────────
 // One tab is the Base bid (state.base_tab_id); the estimator marks OTHER
@@ -1297,8 +1309,8 @@ function refreshDomFromHF(data, grid) {
 // sheets (Seal, Gyp, Leveling, etc.) are reference tabs — the Total
 // Bar shows the same bid totals regardless of which tab is active.
 const TOTAL_CELLS = {
-  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62", sales_tax: "D80", remodel: "D81" },
-  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75" },
+  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62", sales_tax: "D80", remodel: "D81", phase: "C91" },
+  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75", phase: "C85" },
 };
 
 function updateTotalBar(data, byAddr) {
@@ -2655,6 +2667,25 @@ function snapshotLumpSumsToState() {
     state.proposal_remodel_tax = pick(num("Epoxy", totalCellsFor("Epoxy").remodel),
                                       num("Polish", totalCellsFor("Polish").remodel));
   }
+
+  // Per-phase surcharge ("Add for additional phase" cell) — INFORMATIONAL: it
+  // drives the proposal NOTES bullet only, never the bid total. Read the base
+  // tab's phase cell (Epoxy!C91 / Polish!C85), guarded to tabs whose underlying
+  // layout is actually Epoxy/Polish — Seal/Gyp/Leveling reuse those coords by
+  // role fallback but have different layouts, so they must NOT read the phase
+  // cell. 0 (unset / guarded out / row deleted) → proposal defaults to $4,500.
+  const phaseAt = (id) => {
+    const role = roleFor(id);
+    if (role === "polish" ? layoutIdFor(id) !== "Polish" : layoutIdFor(id) !== "Epoxy") return 0;
+    const t = txAddr(id, (role === "polish" ? TOTAL_CELLS.Polish : TOTAL_CELLS.Epoxy).phase);
+    if (!t) return 0;
+    const v = HF.getValue(id, t);
+    const n = typeof v === "number" ? v : parseFloat(String(v == null ? "" : v).replace(/[$,]/g, ""));
+    return isFinite(n) ? n : 0;
+  };
+  let _phase = (state.base_tab_id && baseTab) ? phaseAt(baseTab.id) : 0;
+  if (!_phase) _phase = phaseAt(wt === "polish" ? "Polish" : "Epoxy");
+  state.phase_price = _phase || 0;
 
   // Priced options: the estimator EXPLICITLY marks OTHER priced tabs as options
   // (state.tab_opts[id].is_option) and toggles show + price_mode ("total" | "deduct").
