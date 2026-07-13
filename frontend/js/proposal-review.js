@@ -14,6 +14,28 @@
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
 
+  // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
+  // tax treatment has no inline equivalent and drives the price line, so a
+  // compact selector lives in the ribbon. Mirror it into the hidden form's
+  // tax_inclusion field and fire a bubbling 'input' so the form's existing
+  // listeners (refreshPriceDisplay + debounced persist) run — no duplicated logic.
+  (function wireRibbonTax() {
+    const sel = document.getElementById("tax-treatment-select");
+    const hidden = form && form.querySelector("[name='tax_inclusion']");
+    if (!sel || !hidden) return;
+    const norm = (v) => {
+      const u = String(v || "INCLUDED").trim().toUpperCase();
+      if (["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(u)) return "EXEMPT";
+      if (["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(u)) return "BROKEN_OUT";
+      return "INCLUDED";
+    };
+    sel.value = norm(hidden.value);                       // reflect the saved/default treatment
+    sel.addEventListener("change", () => {
+      hidden.value = sel.value;
+      hidden.dispatchEvent(new Event("input", { bubbles: true }));   // → form input listeners
+    });
+  })();
+
   // Proposal boilerplate as REAL default values (these used to be placeholders,
   // which never made it into the generated doc — that's why Schedule came out
   // blank). writeForm above already applied any saved / AI-autofilled values, so
@@ -808,6 +830,20 @@
       tax_phrase: (mergedValues.sales_tax_handling || "INCLUDED") === "INCLUDED"
         ? "Sales and KS remodel tax are included in the lump sum above."
         : "Tax is NOT included and will be added at invoice.",
+      // Base-bid line's parenthetical tax phrase. Templates WITHOUT a
+      // {{#single_bid}} base-bid island (polish Direct, every GC template) use
+      // {{base_tax_phrase}} as a plain token — without this the on-page preview
+      // showed a raw "{{base_tax_phrase}}" even though the generated doc was
+      // correct (the backend fills it at generate time). Mirror that backend
+      // logic (broken out → no label; exempt → "(tax exempt)"; else INCLUDED,
+      // with the remodel note when remodel tax applies).
+      base_tax_phrase: (() => {
+        const m = taxTreatmentMode();
+        if (m.broken) return "";
+        if (m.exempt) return "(tax exempt)";
+        return remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+                              : "(material sales tax INCLUDED)";
+      })(),
       ...mergedValues,
     };
 
