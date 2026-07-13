@@ -1134,6 +1134,26 @@ def _phase_price_or_default(v) -> float:
     return n if 0 < n < 10_000_000 else 4500.0
 
 
+def _phase_price_override_amount(v) -> Optional[str]:
+    """The GC additional-phase amount to force into the proposal — but ONLY when
+    the estimator actually CHANGED the cell. Returns a bare comma-grouped number
+    string ("5,200"), or None to leave each GC template's own native default
+    ($5,000 Resinous / $2,300 Polish/Sealer) in place.
+
+    The estimate cell defaults to $4,500, so a value of exactly 4,500 (or
+    blank/garbage/out-of-range) counts as 'unedited' → None. This encodes the
+    product rule: a GC proposal keeps its native default until the cell changes,
+    then follows the cell (Direct proposals already track the cell via the
+    {{#notes}} bullet, independent of this). Never raises."""
+    try:
+        n = float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    if not (0 < n < 10_000_000) or round(n) == 4500:
+        return None
+    return f"{int(round(n)):,}"
+
+
 def _notes_for(work_type: str, notes_in: list, phase_price=None) -> list:
     """{{#notes}} items: the estimator's edited notes, else the standard
     per-work-type boilerplate (so the proposal's notes section never vanishes).
@@ -1752,6 +1772,15 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # per-template default to drift, no regression for GC/Gyp variants).
     if _pov["single_bid"].get("desc"):
         values["_base_desc_override"] = _pov["single_bid"]["desc"]
+    # GC additional-phase amount: force the estimator's cell value into the GC
+    # Clarifications text ONLY when they changed it off the $4,500 default; else
+    # each GC template keeps its native $5,000/$2,300 wording. Private (underscore)
+    # key so the flat {{token}} pass ignores it (proposal_writer._apply_gc_phase_override
+    # rewrites the static clause in place). Direct proposals are unaffected — they
+    # track the cell through the {{#notes}} "$xxxx" bullet instead.
+    _ppo = _phase_price_override_amount((payload.values or {}).get("phase_price"))
+    if _ppo:
+        values["_phase_price_override"] = _ppo
 
     # Fill estimate workbook
     try:

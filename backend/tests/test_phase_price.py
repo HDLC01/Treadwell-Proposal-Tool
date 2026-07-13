@@ -127,6 +127,81 @@ def test_generate_docx_phase_bullet_default_when_absent():
     assert m and m.group(1) == "4,500", blob
 
 
+# ── GC proposals: additional-phase clause is static template text, driven by the
+#    cell ONLY when edited off the $4,500 default (else each GC template keeps its
+#    native default — Resinous $5,000, Polish/Sealer $2,300). ──────────────────
+_GC_PHASE_RE = re.compile(
+    r"Add \$([\d,]+) for each additional required phase beyond above stated schedule\.")
+
+
+def _gc_amount(work_type, phase_price):
+    """Generate a GC proposal, return the phase amount rendered in its docx."""
+    values = dict(_VALS)
+    if phase_price is not None:
+        values["phase_price"] = phase_price
+    r = client.post("/api/generate", json={
+        "work_type": work_type, "audience": "GC", "values": values, "cell_values": {}})
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    m = _GC_PHASE_RE.search(blob)
+    assert m, "GC phase clause not found in docx:\n" + blob
+    return m.group(1)
+
+
+def test_gc_epoxy_keeps_native_5000_when_unedited():
+    # No phase_price at all, and the sentinel default 4,500, both mean "unedited"
+    # → the Resinous template's native $5,000 stays.
+    assert _gc_amount("epoxy", None) == "5,000"
+    assert _gc_amount("epoxy", 4500) == "5,000"
+
+
+def test_gc_epoxy_follows_cell_when_edited():
+    assert _gc_amount("epoxy", 6000) == "6,000"
+    assert _gc_amount("epoxy", "5,200") == "5,200"
+
+
+def test_gc_polish_keeps_native_2300_when_unedited():
+    assert _gc_amount("polish", None) == "2,300"
+    assert _gc_amount("polish", 4500) == "2,300"
+
+
+def test_gc_polish_follows_cell_when_edited():
+    assert _gc_amount("polish", 6000) == "6,000"
+
+
+def test_phase_price_override_amount_coercion():
+    f = main._phase_price_override_amount
+    assert f(None) is None
+    assert f("") is None
+    assert f("abc") is None
+    assert f(4500) is None          # the cell default = "unedited"
+    assert f("4,500") is None
+    assert f(0) is None
+    assert f(10_000_000) is None    # out of range
+    assert f(6000) == "6,000"
+    assert f("5,200") == "5,200"
+    assert f("$5,200") == "5,200"
+
+
+def test_apply_gc_phase_override_is_idempotent_and_safe():
+    import io as _io
+    from docx import Document as _Doc
+    import proposal_writer as pw
+    tmpl = pw.pick_template("epoxy", "GC")
+    d = _Doc(str(tmpl))
+    # blank amount is a no-op
+    assert pw._apply_gc_phase_override(d, "") == 0
+    # first apply rewrites the clause; re-applying the SAME value rewrites nothing
+    first = pw._apply_gc_phase_override(d, "6,000")
+    assert first >= 1
+    assert pw._apply_gc_phase_override(d, "6,000") == 0
+    # and the doc now reads $6,000, not the native $5,000
+    buf = _io.BytesIO(); d.save(buf)
+    blob = _rendered(buf.getvalue())
+    assert "Add $6,000 for each additional required phase" in blob
+    assert "Add $5,000 for each additional required phase" not in blob
+
+
 # ── template pin (reproducibility artifact for the template edit) ───────────
 def test_template_has_phase_cells():
     wb = load_workbook(_TEMPLATE, data_only=False)
