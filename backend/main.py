@@ -448,13 +448,56 @@ def _safe_id(value: str) -> str:
     return value
 
 
+_PORTAL_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_MAX_PORTAL_EMAILS = 10
+
+
+class PortalPublishIn(BaseModel):
+    """Optional body for /api/portal/publish — extra portal recipients typed on
+    the Files screen (the intake contact is always included by the portal)."""
+    emails: list[str] = Field(default_factory=list)
+
+
+def _clean_portal_emails(raw: list) -> list:
+    """Trim / validate / case-insensitively dedupe (keep first casing) / cap.
+    Raises HTTPException(400) on a malformed address. Empty list is fine (the
+    portal falls back to the draft's contact_email)."""
+    out, seen = [], set()
+    for e in raw or []:
+        e = (e or "").strip()
+        if not e:
+            continue
+        if len(e) > 254 or not _PORTAL_EMAIL_RE.match(e):
+            raise HTTPException(400, "invalid_email")
+        key = e.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    if len(out) > _MAX_PORTAL_EMAILS:
+        raise HTTPException(400, "too_many_emails")
+    return out
+
+
 @app.post("/api/portal/publish")
-def api_portal_publish(draft_id: str, request: Request) -> Dict[str, Any]:
-    """Send a proposal (draft) to the customer portal — mints a link + emails it."""
+def api_portal_publish(draft_id: str, request: Request,
+                       payload: Optional[PortalPublishIn] = None) -> Dict[str, Any]:
+    """Send a proposal (draft) to the customer portal — mints a link + emails it.
+
+    Backward compatible: the currently-deployed frontend sends no body → `payload`
+    is None → we forward exactly `{draft_id, by}` (legacy). The new Files-screen
+    modal sends `{emails: [...]}` (intake contact + extras); we validate + forward
+    them so the portal emails/authorizes every recipient. Malformed JSON or a
+    wrong-typed `emails` yields FastAPI's 422 — never a 500 — keeping the sync
+    handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop."""
     draft_id = _safe_id(draft_id)
     if not drafts.load_draft(draft_id):
         raise HTTPException(404, "Draft not found")
-    return _portal("/api/admin/publish", "POST", {"draft_id": draft_id, "by": _user_email(request)})
+    body: Dict[str, Any] = {"draft_id": draft_id, "by": _user_email(request)}
+    emails = _clean_portal_emails(payload.emails if payload else [])
+    if emails:
+        body["emails"] = emails
+    return _portal("/api/admin/publish", "POST", body)
 
 
 @app.get("/api/portal/pipeline")

@@ -75,6 +75,34 @@
     font-size: 12px;
     color: var(--ink-variant);
   }
+  /* Portal "Send to customer portal" recipients modal. Reuses shared.js's
+     .tw-ov / .tw-dlg base (injected via TW.injectModalCss); these are the
+     portal-only additions, namespaced under .tw-dlg--portal so they never
+     leak into the confirmDanger dialogs. */
+  .tw-dlg--portal { text-align: left; max-width: 460px; }
+  .tw-dlg--portal .tw-dlg-h { text-align: center; }
+  .tw-dlg--portal .tw-dlg-m { text-align: center; }
+  .tw-dlg--portal .tw-dlg-go { background: var(--treadwell-red); color: #fff; }
+  .tw-em-list { margin: 16px 0 4px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; }
+  .tw-em-row {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface-low); border: 1px solid var(--surface-dim);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px;
+  }
+  .tw-em-row .em { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+  .tw-em-tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+    color: var(--ink-variant); background: var(--surface-dim); border-radius: 5px; padding: 2px 6px;
+  }
+  .tw-em-x { border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1;
+    color: var(--ink-variant); padding: 2px 7px; border-radius: 6px; }
+  .tw-em-x:hover { background: var(--surface-dim); color: var(--treadwell-red-dark); }
+  .tw-em-add { display: flex; gap: 8px; margin-top: 12px; }
+  .tw-em-add input { flex: 1; }
+  .tw-em-add button { padding: 9px 14px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer;
+    background: var(--surface-lowest); border: 1px solid var(--surface-dim); color: var(--ink); }
+  .tw-em-add button:hover { background: var(--surface-dim); }
+  .tw-em-err { color: #9e001f; font-size: 12.5px; margin: 8px 0 0; min-height: 16px; }
 </style>
 </head>
 <body>
