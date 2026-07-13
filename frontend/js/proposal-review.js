@@ -100,12 +100,44 @@
   // (The try{} around renderNotesPreview: during the synchronous init path the
   // editor's consts below aren't initialized yet — initDocumentEditor repaints
   // the notes preview itself, so a skipped early paint costs nothing.)
+  // Sync the "Add $X for each additional phase…" NOTES bullet to the estimate's
+  // phase-price cell (state.phase_price, from Epoxy!C91 / Polish!C85). The cell
+  // is the source of truth: a literal "$xxxx" placeholder is always filled; a
+  // numeric amount is re-synced ONLY when the estimate actually snapshotted a
+  // price (phase_price > 0), so old drafts / hand-typed amounts aren't clobbered
+  // when no cell value exists. Any OTHER wording edit on the line is left alone.
+  function syncPhaseNote() {
+    const ta = document.getElementById("notes-text");
+    if (!ta) return;
+    const usd = (n) => {   // self-contained: runs before fmtUSDdoc's const is initialized
+      const s = "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return s.endsWith(".00") ? s.slice(0, -3) : s;
+    };
+    const p = Number(state.phase_price);
+    const hasCell = isFinite(p) && p > 0;
+    const target = `Add ${usd(hasCell ? p : 4500)} for each additional phase beyond the above stated schedule.`;
+    const RE = /^Add \$(xxxx|[\d,]+(?:\.\d{1,2})?) for each additional phase beyond the above stated schedule\.$/;
+    let changed = false;
+    const out = String(ta.value || "").split("\n").map((line) => {
+      const t = line.trim();
+      const m = RE.exec(t);
+      if (!m || t === target) return line;
+      if (m[1] !== "xxxx" && !hasCell) return line;   // legacy hand-set amount, no cell snapshot → keep
+      changed = true;
+      return target;
+    });
+    if (!changed) return;
+    ta.value = out.join("\n");
+    try { renderNotesPreview(); } catch {}
+    try { TW.setState({ notes_text: ta.value }); } catch {}
+  }
+
   (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
-    const applyAndPreview = (text) => { ta.value = text; try { renderNotesPreview(); } catch {} };
+    const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
-    if (String(ta.value || "").trim()) return;
+    if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
     fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
       .then(r => r.json())
       .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) applyAndPreview(j.notes.join("\n")); })

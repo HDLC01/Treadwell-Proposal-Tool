@@ -1124,13 +1124,33 @@ except Exception:  # noqa: BLE001 — missing/garbled file shouldn't crash start
     _DEFAULT_NOTES = {}
 
 
-def _notes_for(work_type: str, notes_in: list) -> list:
+def _phase_price_or_default(v) -> float:
+    """Coerce the estimate's 'additional phase' price to a positive dollar amount;
+    fall back to $4,500 on blank/garbage/out-of-range. Never raises."""
+    try:
+        n = float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 4500.0
+    return n if 0 < n < 10_000_000 else 4500.0
+
+
+def _notes_for(work_type: str, notes_in: list, phase_price=None) -> list:
     """{{#notes}} items: the estimator's edited notes, else the standard
-    per-work-type boilerplate (so the proposal's notes section never vanishes)."""
+    per-work-type boilerplate (so the proposal's notes section never vanishes).
+
+    Backstop for the "Add $xxxx for each additional phase…" bullet: substitute
+    the literal ``$xxxx`` placeholder with the estimate's phase price (default
+    $4,500). This covers the done.js "View files" fallback path (which ships no
+    notes → the boilerplate default is used) and any legacy draft whose saved
+    notes still carry the raw placeholder. A hand-typed numeric amount is left
+    untouched — only the literal ``$xxxx`` anchor is replaced (the frontend
+    handles live re-sync of numeric amounts against the cell)."""
     lines = [str(n).strip() for n in (notes_in or []) if str(n).strip()]
     if not lines:
         wt = str(work_type or "epoxy").lower()
         lines = _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []
+    amt = _fmt_usd(_phase_price_or_default(phase_price))
+    lines = [ln.replace("$xxxx", amt) for ln in lines]   # list comp: never mutates _DEFAULT_NOTES
     return [{"text": ln} for ln in lines]
 
 
@@ -1793,7 +1813,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # breakout (its Option 1/Option 2 lines are the base price).
             single_bid=_single_bid,
             # Editable NOTES (estimator's edits, else standard boilerplate).
-            notes=_notes_for(payload.work_type, payload.notes),
+            notes=_notes_for(payload.work_type, payload.notes, (payload.values or {}).get("phase_price")),
             # PRICE layout: itemize tax lines only when "broken out"; show the
             # "Options:" label only when options exist.
             tax_breakout=_tax_breakout,
