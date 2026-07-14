@@ -691,6 +691,15 @@ button {
   opacity: 1;
 }
 
+/* ─── Multi-cell range selection (Excel-style) ───────────────────────────
+   estimate-review.js tints every covered cell (except the anchor, which keeps
+   its :has(input:focus) outline) while a range is selected. The tint layers
+   over the cell's inline fill via an inset box-shadow (same trick as .unlocked
+   above — an inline `style.background` would beat any class background). Placed
+   BEFORE the ref-hl rings so a formula-reference ring outranks the tint on a
+   shared cell (both write box-shadow; later rule wins). */
+.xl-grid .gridcell.sel-range { box-shadow: inset 0 0 0 999px rgba(192, 57, 43, 0.12); }
+
 /* ─── Formula reference highlights (Excel-style) ─────────────────────────
    While a formula is edited (cell or bar), estimate-review.js outlines each
    referenced cell/range with a color-cycled inset ring (ref-hl-0…5), like

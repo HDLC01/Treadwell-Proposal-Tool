@@ -1191,6 +1191,10 @@ async function showSheet(name) {
   // Same for the formula bar — its active cell is about to be detached
   // with the old grid, so drop the reference and blank the bar.
   _activeCellInput = null;
+  // Any multi-cell selection belonged to the outgoing sheet's DOM — clear it so
+  // the range never points at detached cells (also covers structural-op /
+  // lock-toggle re-renders, which all route through showSheet).
+  if (typeof _clearRangeSel === "function") { _rangeSel = null; _rangeEls = []; }
   syncFormulaBar();
   sheetGrid.className = "sheet-loading";
   sheetGrid.textContent = "Loading " + name + "…";
@@ -1378,6 +1382,8 @@ function renderSheet(data) {
   attachResizers(grid, colPx, rowPx);
   // Wire up Excel-style keyboard nav between cells
   attachKeyboardNav(grid, maxRow, maxCol, data.sheet);
+  // Bounds for range selection (clamp drag / Shift-arrow / paste to the grid).
+  _rangeBounds.maxRow = maxRow; _rangeBounds.maxCol = maxCol;
   // Update the project/sheet labels in the bar (the rest is filled below)
   document.getElementById("tb-project").textContent = state.project_name || "—";
   document.getElementById("tb-sheet").textContent   = data.sheet;
@@ -1831,8 +1837,9 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     if (HF && HF.ready) {
       const tgt = canonicalTarget(sheet, cell.addr);
       const affected = HF.setCellValue(tgt.sheet, tgt.addr, newVal);
-      propagateChangesToDom(affected);
-      updateTotalBarFromHF();
+      // During a bulk paste/clear the per-cell DOM propagate + total-bar refresh
+      // are deferred to one _afterBulkWrite pass (HF itself still updates here).
+      if (!_bulkWrite) { propagateChangesToDom(affected); updateTotalBarFromHF(); }
     }
   });
   // Percent entry on a %-formatted cell: the number you type IS the percent.
@@ -1852,8 +1859,7 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
       if (HF && HF.ready) {
         const tgt = canonicalTarget(sheet, cell.addr);
         const affected = HF.setCellValue(tgt.sheet, tgt.addr, norm);
-        propagateChangesToDom(affected);
-        updateTotalBarFromHF();
+        if (!_bulkWrite) { propagateChangesToDom(affected); updateTotalBarFromHF(); }
       }
     });
   }
@@ -1988,6 +1994,10 @@ function syncFormulaBar() {
     _fbarSyncedInput = inp;
   }
   fbarName.value = inp.dataset.displayAddr || "";
+  // A multi-cell selection shows its range ("A1:C5") in the name box instead of
+  // the single anchor address (a re-sync from a lock toggle / recompute must not
+  // clobber it). _rangeIsMulti is a hoisted function declaration.
+  if (_rangeIsMulti()) fbarName.value = _rangeRef();
   fbarInput.disabled = false;
   // Dropdown cells only accept their listed options, and locked rate cells
   // must not be editable through the back door — mirror both as read-only.
@@ -2406,6 +2416,276 @@ function _commitCellWrite(inp, text) {
   return true;
 }
 
+// ─── Multi-cell range selection (Excel-style) ───────────────────────────
+// Drag / Shift-click / Shift-Arrow select a rectangle (shown as "F10:H14" in the
+// name box); Ctrl+C copies it as TSV (pasteable into Excel), Ctrl+V spills a TSV
+// block from the anchor, Delete clears every covered cell. Single-cell behavior
+// is UNCHANGED whenever no multi-cell range is active — _rangeIsMulti() gates
+// every new path. The anchor is always the focused input, so its existing
+// :has(input:focus) outline marks it (the painter skips the anchor); the other
+// covered cells get .sel-range. All listeners bind once to the persistent
+// #sheet-grid / document (renderSheet only sets _rangeBounds each render).
+let _rangeSel   = null;   // { anchor:{r,c}, extent:{r,c} } — grid coords, ACTIVE sheet only
+let _rangeEls   = [];     // painted .gridcell wrappers (fast unpaint)
+let _dragAnchor = null;   // {r,c} mousedown'd cell, before a drag activates
+let _dragActive = false;
+let _bulkWrite  = false;  // suppress per-cell propagate/total during paste/clear loops
+const _rangeBounds = { maxRow: 1, maxCol: 1 };
+
+function _rangeNorm() {
+  const a = _rangeSel.anchor, e = _rangeSel.extent;
+  return { rLo: Math.min(a.r, e.r), rHi: Math.max(a.r, e.r),
+           cLo: Math.min(a.c, e.c), cHi: Math.max(a.c, e.c) };
+}
+function _rangeRef() {
+  const { rLo, rHi, cLo, cHi } = _rangeNorm();
+  return `${_numToCol(cLo)}${rLo}:${_numToCol(cHi)}${rHi}`;
+}
+function _rangeIsMulti() {
+  return !!_rangeSel && (_rangeSel.anchor.r !== _rangeSel.extent.r || _rangeSel.anchor.c !== _rangeSel.extent.c);
+}
+function _cellRC(inp) {   // displayAddr "F10" -> {r,c}; null if not a plain cell
+  const m = ((inp && inp.dataset && inp.dataset.displayAddr) || "").match(/^([A-Z]+)(\d+)$/);
+  return m ? { c: _colToNum(m[1]), r: parseInt(m[2], 10) } : null;
+}
+function _gridInputsByAddr() {   // displayAddr -> input, for the current grid
+  const map = {};
+  sheetGrid.querySelectorAll("input[data-display-addr], select[data-display-addr]")
+    .forEach(el => { map[el.dataset.displayAddr] = el; });
+  return map;
+}
+function _clearRangeSel() {
+  for (const el of _rangeEls) el.classList.remove("sel-range");
+  _rangeEls = [];
+  _rangeSel = null;
+  syncFormulaBar();   // restore the single-cell name box
+}
+function _paintRangeSel() {
+  for (const el of _rangeEls) el.classList.remove("sel-range");
+  _rangeEls = [];
+  if (!_rangeIsMulti()) { syncFormulaBar(); return; }
+  const { rLo, rHi, cLo, cHi } = _rangeNorm();
+  const anchor = _rangeSel.anchor;
+  const byAddr = _gridInputsByAddr();
+  for (let r = rLo; r <= rHi; r++) {
+    for (let c = cLo; c <= cHi; c++) {
+      if (r === anchor.r && c === anchor.c) continue;   // anchor keeps its focus outline
+      const inp = byAddr[_numToCol(c) + r];
+      const gc = inp && inp.closest(".gridcell");
+      if (gc) { gc.classList.add("sel-range"); _rangeEls.push(gc); }
+    }
+  }
+  if (fbarName) fbarName.value = _rangeRef();
+}
+// Extend (or start) the selection from the active cell to (r,c), clamped.
+function _extendRangeTo(r, c) {
+  const a = _cellRC(_activeCellInput);
+  if (!a) return;
+  r = Math.max(1, Math.min(_rangeBounds.maxRow, r));
+  c = Math.max(1, Math.min(_rangeBounds.maxCol, c));
+  _rangeSel = { anchor: (_rangeSel && _rangeSel.anchor) || a, extent: { r, c } };
+  _paintRangeSel();
+}
+// TSV of the covered cells (row-major). The anchor sits in edit-view (raw
+// formula) — swap it to resting so its cell matches the computed values the
+// other cells report, then restore. Merged interiors (no input) emit "".
+function _tsvFromRange() {
+  const { rLo, rHi, cLo, cHi } = _rangeNorm();
+  const byAddr = _gridInputsByAddr();
+  const anchor = _activeCellInput;
+  try { anchor && anchor._restingView && anchor._restingView(); } catch {}
+  const rows = [];
+  for (let r = rLo; r <= rHi; r++) {
+    const cols = [];
+    for (let c = cLo; c <= cHi; c++) {
+      const inp = byAddr[_numToCol(c) + r];
+      cols.push(inp ? _cellCopyText(inp) : "");
+    }
+    rows.push(cols.join("\t"));
+  }
+  try { anchor && anchor._editView && anchor._editView(); } catch {}
+  return rows.join("\n");
+}
+function _tsvParse(text) {
+  let s = String(text == null ? "" : text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  s = s.replace(/\n$/, "");   // drop the single trailing newline Excel appends
+  return s.split("\n").map(line => line.split("\t"));
+}
+// End a bulk paste/clear: re-render the grid from HF + refresh the derived UI
+// once (replicating what the per-cell events, suppressed via _bulkWrite, would
+// have coalesced to via the 300ms persist debounce).
+function _afterBulkWrite(sheet) {
+  _bulkWrite = false;
+  try { refreshDomFromHF(sheetCache[sheet], sheetGrid.querySelector(".xl-grid")); } catch {}
+  try { updateTotalBarFromHF(); } catch {}
+  try { refreshSystemName(); } catch {}
+  clearTimeout(_cbTimer);
+  _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
+}
+// Spill TSV `text` from `origin`. Multi-cell → _commitCellWrite per target (full
+// edit path: HF + cellValues + % normalize), returning the skipped (locked /
+// invalid-dropdown) count. Single-cell text → today's _sanitizeCellPaste path.
+function _pasteTextInto(origin, text) {
+  const rows = _tsvParse(text);
+  const multi = rows.length > 1 || (rows[0] && rows[0].length > 1);
+  if (!multi) { _commitCellWrite(origin, _sanitizeCellPaste(text)); return 0; }
+  const rc = _cellRC(origin);
+  if (!rc) return 0;
+  const byAddr = _gridInputsByAddr();
+  let skipped = 0, widest = 1;
+  _bulkWrite = true;
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      const rr = rc.r + i;
+      if (rr > _rangeBounds.maxRow) break;
+      widest = Math.max(widest, rows[i].length);
+      for (let j = 0; j < rows[i].length; j++) {
+        const cc = rc.c + j;
+        if (cc > _rangeBounds.maxCol) break;
+        const inp = byAddr[_numToCol(cc) + rr];
+        if (!inp) continue;                         // merged interior — skip silently
+        if (!_commitCellWrite(inp, rows[i][j])) skipped++;
+      }
+    }
+  } finally { _afterBulkWrite(activeSheet); }
+  // Select the pasted block (Excel behavior).
+  _rangeSel = { anchor: { r: rc.r, c: rc.c },
+                extent: { r: Math.min(_rangeBounds.maxRow, rc.r + rows.length - 1),
+                          c: Math.min(_rangeBounds.maxCol, rc.c + widest - 1) } };
+  _paintRangeSel();
+  return skipped;
+}
+function _clearRangeContents() {
+  if (!_rangeIsMulti()) return;
+  const { rLo, rHi, cLo, cHi } = _rangeNorm();
+  const byAddr = _gridInputsByAddr();
+  _bulkWrite = true;
+  try {
+    for (let r = rLo; r <= rHi; r++)
+      for (let c = cLo; c <= cHi; c++) {
+        const inp = byAddr[_numToCol(c) + r];
+        if (inp) _commitCellWrite(inp, "");   // locked cells skip silently
+      }
+  } finally { _afterBulkWrite(activeSheet); }
+}
+
+// Mouse: drag-select + Shift-click. Plain click never preventDefaults (native
+// focus + caret intact); Shift-click preventDefaults (keeps focus on the anchor).
+sheetGrid.addEventListener("mousedown", (e) => {
+  if (e.target.closest(".resize-h, .resize-v, .cell-lock, .row-header, .col-header, .corner")) return;
+  const gc = e.target.closest(".gridcell");
+  const inp = gc && gc.querySelector("input[data-display-addr], select[data-display-addr]");
+  const rc = inp && _cellRC(inp);
+  if (e.button !== 0) {   // right-click: keep the range if inside it (for the ctx menu), else clear
+    if (_rangeIsMulti() && rc) {
+      const { rLo, rHi, cLo, cHi } = _rangeNorm();
+      if (!(rc.r >= rLo && rc.r <= rHi && rc.c >= cLo && rc.c <= cHi)) _clearRangeSel();
+    }
+    return;
+  }
+  if (!rc) return;
+  if (e.shiftKey && _activeCellInput && _activeCellInput.isConnected) {
+    e.preventDefault();                    // don't move focus off the anchor
+    _extendRangeTo(rc.r, rc.c);
+    return;
+  }
+  _clearRangeSel();                        // plain click starts fresh
+  _dragAnchor = rc; _dragActive = false;   // NO preventDefault — input focuses as today
+});
+document.addEventListener("mousemove", (e) => {
+  if (!_dragAnchor) return;
+  const vp = sheetGrid.closest(".xl-viewport") || sheetGrid;
+  const box = vp.getBoundingClientRect();
+  const el = document.elementFromPoint(
+    Math.max(box.left + 2, Math.min(box.right - 4, e.clientX)),
+    Math.max(box.top + 2,  Math.min(box.bottom - 4, e.clientY)));
+  const gc = el && el.closest && el.closest("#sheet-grid .gridcell");
+  const inp = gc && gc.querySelector("input[data-display-addr], select[data-display-addr]");
+  const rc = inp && _cellRC(inp);
+  if (!rc) return;
+  if (!_dragActive) {
+    if (rc.r === _dragAnchor.r && rc.c === _dragAnchor.c) return;   // still in the origin cell
+    _dragActive = true;
+    document.body.style.userSelect = "none";
+  }
+  const sel = window.getSelection && window.getSelection();
+  if (sel && !sel.isCollapsed) sel.removeAllRanges();
+  _rangeSel = { anchor: _dragAnchor, extent: rc };
+  _paintRangeSel();
+  if (e.clientX > box.right - 16) vp.scrollLeft += 24;
+  else if (e.clientX < box.left + 16) vp.scrollLeft -= 24;
+  if (e.clientY > box.bottom - 16) vp.scrollTop += 24;
+  else if (e.clientY < box.top + 16) vp.scrollTop -= 24;
+});
+document.addEventListener("mouseup", () => {
+  _dragAnchor = null;
+  if (_dragActive) { _dragActive = false; document.body.style.userSelect = ""; }
+});
+// Keyboard: CAPTURE on #sheet-grid so it runs before attachKeyboardNav's bubble
+// nav. Consumes (preventDefault + stopPropagation) ONLY the keys it handles.
+sheetGrid.addEventListener("keydown", (e) => {
+  const inp = e.target;
+  if (!(inp && inp.dataset && inp.dataset.displayAddr)) return;
+  const rc = _cellRC(inp);
+  if (!rc) return;
+  const meta = e.ctrlKey || e.metaKey;
+  const isArrow = e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight";
+  if (e.shiftKey && !meta && isArrow) {
+    const horiz = e.key === "ArrowLeft" || e.key === "ArrowRight";
+    // Left/Right defer to native in-input caret selection UNLESS a range is
+    // already active, it's a SELECT, or the field text is fully selected/empty
+    // (mirrors attachKeyboardNav's caret gate).
+    if (horiz && !_rangeIsMulti() && inp.tagName !== "SELECT" &&
+        !(inp.selectionStart === 0 && inp.selectionEnd === (inp.value || "").length)) return;
+    const cur = (_rangeSel && _rangeSel.extent) || rc;
+    const dr = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    const dc = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    e.preventDefault(); e.stopPropagation();
+    _extendRangeTo(cur.r + dr, cur.c + dc);
+    return;
+  }
+  if ((e.key === "Delete" || e.key === "Backspace") && _rangeIsMulti()) {
+    e.preventDefault(); e.stopPropagation();
+    _clearRangeContents();
+    return;
+  }
+  if (meta && (e.key === "c" || e.key === "C") && _rangeIsMulti()) {
+    e.preventDefault(); e.stopPropagation();
+    _clipboardWrite(_tsvFromRange());
+    return;
+  }
+  if (e.key === "Escape" && _rangeIsMulti()) { _clearRangeSel(); return; }   // don't consume (ctx-menu Esc)
+  // Any other key with a range active (unshifted nav or a typed char): collapse
+  // the range, DON'T consume — the keystroke lands in the anchor / nav proceeds.
+  if (_rangeIsMulti() && !meta &&
+      (e.key.length === 1 || isArrow || e.key === "Tab" || e.key === "Enter")) {
+    _clearRangeSel();
+  }
+}, true);
+// Paste: only intercept a MULTI-cell TSV; a single value takes the native path.
+sheetGrid.addEventListener("paste", (e) => {
+  const inp = e.target;
+  if (!(inp && inp.dataset && inp.dataset.cellAddr)) return;
+  const text = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
+  const stripped = text.replace(/\r?\n$/, "");
+  if (stripped.indexOf("\t") < 0 && stripped.indexOf("\n") < 0) return;   // single cell → native
+  e.preventDefault();
+  let origin = inp;
+  if (_rangeIsMulti()) {
+    const { rLo, cLo } = _rangeNorm();
+    origin = _gridInputsByAddr()[_numToCol(cLo) + rLo] || inp;
+  }
+  const skipped = _pasteTextInto(origin, text);
+  if (skipped > 0) alert(`Skipped ${skipped} locked/invalid cell(s).`);
+});
+// Clicking OUTSIDE the grid (and not the ctx menu / formula bar) clears the range.
+document.addEventListener("mousedown", (e) => {
+  if (!_rangeSel) return;
+  if (e.target === fbarName || e.target === fbarInput) return;
+  if (e.target.closest && (e.target.closest("#sheet-grid") || e.target.closest(".ctx-menu"))) return;
+  _clearRangeSel();
+}, true);
+
 sheetGrid.addEventListener("contextmenu", (e) => {
   if (!activeSheet) return;
   // HEADER menu (insert/delete rows & columns).
@@ -2437,9 +2717,22 @@ sheetGrid.addEventListener("contextmenu", (e) => {
   const col = m[1].split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
   const row = parseInt(m[2], 10);
   e.preventDefault();
-  inp.focus();   // select the right-clicked cell (sets _activeCellInput + syncs the bar), Sheets-style
+  // Right-clicking INSIDE a multi-cell range acts on the range (the mousedown
+  // that preceded this already cleared the range if the click was outside it) —
+  // keep the anchor (don't refocus) and show range Copy/Paste/Clear.
+  const inRange = _rangeIsMulti();
+  if (!inRange) inp.focus();   // Sheets-style: select the right-clicked single cell
   const ro = !!inp.readOnly;
-  _openCtxMenu(e.pageX, e.pageY, [
+  _openCtxMenu(e.pageX, e.pageY, inRange ? [
+    { label: "Copy",  hint: "Ctrl+C", fn: () => { _clipboardWrite(_tsvFromRange()); } },
+    { label: "Paste", hint: "Ctrl+V", fn: async () => {
+        const { rLo, cLo } = _rangeNorm();
+        const origin = _gridInputsByAddr()[_numToCol(cLo) + rLo] || inp;
+        const skipped = _pasteTextInto(origin, await _clipboardRead());
+        if (skipped > 0) alert(`Skipped ${skipped} locked/invalid cell(s).`);
+      } },
+    { label: "Clear contents", fn: () => { _clearRangeContents(); } },
+  ] : [
     { label: "Cut",   hint: "Ctrl+X", disabled: ro, fn: () => { _clipboardWrite(_cellCopyText(inp)); _commitCellWrite(inp, ""); } },
     { label: "Copy",  hint: "Ctrl+C", fn: () => { _clipboardWrite(_cellCopyText(inp)); } },
     { label: "Paste", hint: "Ctrl+V", disabled: ro, fn: async () => { _commitCellWrite(inp, _sanitizeCellPaste(await _clipboardRead())); } },
@@ -3102,6 +3395,7 @@ document.getElementById("cb-add-priceline").addEventListener("click", () => {
 // manual page refresh. Re-snapshotting on every settled edit keeps the proposal's
 // base bid in lockstep with the sheet across every navigation path.
 document.getElementById("sheet-grid").addEventListener("change", () => {
+  if (_bulkWrite) return;   // bulk paste/clear coalesces into one _afterBulkWrite pass
   refreshSystemName();
   clearTimeout(_cbTimer);
   _cbTimer = setTimeout(() => { renderBidOptions(); persistTabState(); }, 300);
