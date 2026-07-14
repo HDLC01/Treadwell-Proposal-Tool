@@ -237,7 +237,7 @@ def _write_t_text(t, text: str) -> None:
         t.set(qn("xml:space"), "preserve")
 
 
-def _sub_runs_preserving(p_elem, pattern, repl) -> int:
+def _sub_runs_preserving(p_elem, pattern, repl, require_braces: bool = True) -> int:
     """Substitute `pattern` matches across a paragraph's runs WITHOUT collapsing
     run formatting.
 
@@ -250,6 +250,12 @@ def _sub_runs_preserving(p_elem, pattern, repl) -> int:
 
     Works on any element with <w:t> descendants (a python-docx paragraph's `_p`
     or a raw cloned block <w:p>), so both substitution phases share one engine.
+
+    `require_braces` (default True) short-circuits paragraphs with no `{{` — the
+    right optimization for the `{{token}}` passes. Pass False to substitute a
+    plain-text pattern that isn't a token (e.g. rewriting a hardcoded amount that
+    spans runs); the caller's `repl` must then return None once the match already
+    equals the replacement, or the loop would rewrite it forever.
     """
     n = 0
     guard = 0
@@ -260,7 +266,7 @@ def _sub_runs_preserving(p_elem, pattern, repl) -> int:
             break
         texts = [(t.text or "") for t in tnodes]
         joined = "".join(texts)
-        if "{{" not in joined:
+        if require_braces and "{{" not in joined:
             break
         chosen = None
         for m in pattern.finditer(joined):
@@ -364,6 +370,20 @@ def _strip_leading_separator(p_elem) -> None:
             remaining = 0
 
 
+def _strip_bullet(p_elem) -> None:
+    """Remove list/bullet formatting (`<w:numPr>`) from a paragraph so a blank
+    NOTES item renders as clean vertical spacing — a genuinely empty line —
+    rather than a lone empty bullet dot. No-op if the paragraph isn't a list
+    item. (The empty `<w:t>` from the substitution already makes the line
+    blank; this just drops its bullet glyph.)"""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        return
+    numpr = ppr.find(qn("w:numPr"))
+    if numpr is not None:
+        ppr.remove(numpr)
+
+
 # Base-bid line: `{{base_bid_formatted}} – <description> as described above {{base_tax_phrase}}`.
 # The <description> is static text in every template (each work type / audience
 # has its own wording, e.g. "Epoxy flooring", "Polished Concrete & Joint Filler"),
@@ -397,6 +417,44 @@ def _apply_base_desc_override(d: Document, desc: str) -> int:
                 t.text = new
                 t.set(qn("xml:space"), "preserve")
                 n += 1
+    return n
+
+
+# The GC proposal templates (Resinous/Polish/Sealer) hardcode an additional-phase
+# surcharge amount in their Clarifications text — e.g. "Add $5,000 for each
+# additional required phase beyond above stated schedule." — each with its OWN
+# native default ($5,000 Resinous, $2,300 Polish/Sealer). It is static body text
+# in a text box, NOT a {{token}}, and the digits span many single-char runs. When
+# the estimator changes the "Add for additional phase" estimate cell, main.py sets
+# `_phase_price_override`; we then rewrite JUST the digits in place, keeping "Add $"
+# + the clause wording + every run's formatting. Absent → each template keeps its
+# own literal default (mirrors `_base_desc_override`: no per-template default to
+# drift). Matches only the phase clause (the trailing lookahead), never the "$500"
+# mobilization figures elsewhere in the same paragraph.
+_GC_PHASE_RE = re.compile(r"(?<=Add \$)[\d,]+(?= for each additional required phase)")
+_TXBX_CONTENT = qn("w:txbxContent")
+
+
+def _apply_gc_phase_override(d: Document, amount: str) -> int:
+    """Replace the GC additional-phase amount with `amount` (a bare number string
+    like "5,200") across runs, everywhere the clause appears (incl. the VML
+    fallback duplicate). No-op if `amount` is falsy or no clause matches.
+    """
+    if not amount:
+        return 0
+    n = 0
+    for p in d.element.body.iter(qn("w:p")):
+        # Skip anchor paragraphs that merely CONTAIN a text box — the box's own
+        # <w:p> children (where the clause text actually lives) are visited
+        # separately, so processing the anchor too would rewrite runs across the
+        # nesting boundary. Leaf paragraphs (incl. the ones inside the box) match.
+        if p.find(".//" + _TXBX_CONTENT) is not None:
+            continue
+        n += _sub_runs_preserving(
+            p, _GC_PHASE_RE,
+            lambda m: None if m.group(0) == amount else amount,
+            require_braces=False,
+        )
     return n
 
 
@@ -449,6 +507,10 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
                 # untouched.
                 if block_name == "price_line" and not str(item.get("amount_formatted") or "").strip():
                     _strip_leading_separator(clone)
+                # Blank NOTES line — estimator's Word-style spacing. Drop the
+                # bullet so it renders as an empty line, not an empty bullet dot.
+                if block_name == "notes" and not str(item.get("text") or "").strip():
+                    _strip_bullet(clone)
                 new_elems.append(clone)
 
         for clone in new_elems:
@@ -1058,6 +1120,13 @@ def fill_proposal(
     _bdo = values.get("_base_desc_override")
     if _bdo and _apply_base_desc_override(d, str(_bdo)):
         log.info("Applied base-bid description override")
+
+    # GC additional-phase amount (static Clarifications text, not a token) — only
+    # rewritten when the estimator changed the phase cell (main.py sets
+    # `_phase_price_override`). Absent → each GC template keeps its native default.
+    _ppo = values.get("_phase_price_override")
+    if _ppo and _apply_gc_phase_override(d, str(_ppo)):
+        log.info("Applied GC additional-phase override (%s)", _ppo)
 
     # Phase 2 — flat {{token}} substitution against `values`. This runs
     # unchanged from v1 and also fills any non-system tokens left inside

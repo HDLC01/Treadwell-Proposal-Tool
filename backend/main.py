@@ -448,13 +448,56 @@ def _safe_id(value: str) -> str:
     return value
 
 
+_PORTAL_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_MAX_PORTAL_EMAILS = 10
+
+
+class PortalPublishIn(BaseModel):
+    """Optional body for /api/portal/publish — extra portal recipients typed on
+    the Files screen (the intake contact is always included by the portal)."""
+    emails: list[str] = Field(default_factory=list)
+
+
+def _clean_portal_emails(raw: list) -> list:
+    """Trim / validate / case-insensitively dedupe (keep first casing) / cap.
+    Raises HTTPException(400) on a malformed address. Empty list is fine (the
+    portal falls back to the draft's contact_email)."""
+    out, seen = [], set()
+    for e in raw or []:
+        e = (e or "").strip()
+        if not e:
+            continue
+        if len(e) > 254 or not _PORTAL_EMAIL_RE.match(e):
+            raise HTTPException(400, "invalid_email")
+        key = e.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    if len(out) > _MAX_PORTAL_EMAILS:
+        raise HTTPException(400, "too_many_emails")
+    return out
+
+
 @app.post("/api/portal/publish")
-def api_portal_publish(draft_id: str, request: Request) -> Dict[str, Any]:
-    """Send a proposal (draft) to the customer portal — mints a link + emails it."""
+def api_portal_publish(draft_id: str, request: Request,
+                       payload: Optional[PortalPublishIn] = None) -> Dict[str, Any]:
+    """Send a proposal (draft) to the customer portal — mints a link + emails it.
+
+    Backward compatible: the currently-deployed frontend sends no body → `payload`
+    is None → we forward exactly `{draft_id, by}` (legacy). The new Files-screen
+    modal sends `{emails: [...]}` (intake contact + extras); we validate + forward
+    them so the portal emails/authorizes every recipient. Malformed JSON or a
+    wrong-typed `emails` yields FastAPI's 422 — never a 500 — keeping the sync
+    handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop."""
     draft_id = _safe_id(draft_id)
     if not drafts.load_draft(draft_id):
         raise HTTPException(404, "Draft not found")
-    return _portal("/api/admin/publish", "POST", {"draft_id": draft_id, "by": _user_email(request)})
+    body: Dict[str, Any] = {"draft_id": draft_id, "by": _user_email(request)}
+    emails = _clean_portal_emails(payload.emails if payload else [])
+    if emails:
+        body["emails"] = emails
+    return _portal("/api/admin/publish", "POST", body)
 
 
 @app.get("/api/portal/pipeline")
@@ -1063,10 +1106,12 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
     {name, is_base, base_total, deduct_amount, price_mode, show, option_desc,
      base_desc, system_desc, bid:{total, sales_tax, remodel}, notes_auto, notes_manual}.
     A shown option (show != False, positive total) renders in one of two modes:
-      • total  → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
-      • deduct → price_formatted "($3,200)"; desc "Deduct VE for <option>, in lieu of
-                 <base>." where savings = base_total − option_total (both tax-inclusive).
-                 A non-positive deduct falls back to total mode.
+      • total      → price_formatted "$8,310"; desc "<system> as described above (<tax>)"
+      • add/deduct → diff = option_total − base_total (both tax-inclusive), and the
+                     line SELF-LABELS by the sign (Will's spec):
+                       diff < 0  → "Deduct ($3,200)" + "VE for <option>, in lieu of <base>."
+                       diff ≥ 0  → "Add $2,232" + "<option>" (a costlier option is an ADD,
+                                   not a silent fall-back to its own total as before)
     Returns [] when there are no shown options (the block then strips)."""
     def num(x) -> float:
         try:
@@ -1086,13 +1131,19 @@ def _build_options(rooms_in: list, values: Dict[str, Any], work_type: str = "epo
         if total <= 0:                                # un-snapshotted / empty sheet
             continue
         option_desc = str(r.get("option_desc") or r.get("system_desc") or r.get("name") or "").strip()
-        savings = num(r.get("base_total")) - total
+        diff = total - num(r.get("base_total"))       # option − base (Will's formula)
 
-        if str(r.get("price_mode")) == "deduct" and savings > 0:
-            base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
-            price_formatted = _fmt_usd(savings, parens=True)
-            price_desc = f"Deduct VE for {option_desc or noun}, in lieu of {base_desc}."
-        else:                                         # total mode (also the deduct fallback)
+        if str(r.get("price_mode")) == "deduct":
+            # Auto add/deduct by sign; the Add/Deduct word rides INSIDE the amount
+            # island so the docx row reads "Add $2,232 – <label>" / "Deduct ($3,200) – <label>".
+            if diff < 0:
+                base_desc = str(r.get("base_desc") or "").strip() or "the base bid"
+                price_formatted = "Deduct " + _fmt_usd(diff, parens=True)   # parens = abs magnitude
+                price_desc = f"VE for {option_desc or noun}, in lieu of {base_desc}."
+            else:
+                price_formatted = "Add " + _fmt_usd(diff)
+                price_desc = option_desc or noun
+        else:                                         # total mode: the option's own price
             remodel = num(bid.get("remodel"))
             tax_phrase = ("(Remodel Tax AND material sales tax INCLUDED)"
                           if remodel > 0 else "(material sales tax INCLUDED)")
@@ -1124,13 +1175,58 @@ except Exception:  # noqa: BLE001 — missing/garbled file shouldn't crash start
     _DEFAULT_NOTES = {}
 
 
-def _notes_for(work_type: str, notes_in: list) -> list:
+def _phase_price_or_default(v) -> float:
+    """Coerce the estimate's 'additional phase' price to a positive dollar amount;
+    fall back to $4,500 on blank/garbage/out-of-range. Never raises."""
+    try:
+        n = float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 4500.0
+    return n if 0 < n < 10_000_000 else 4500.0
+
+
+def _phase_price_override_amount(v) -> Optional[str]:
+    """The GC additional-phase amount to force into the proposal — but ONLY when
+    the estimator actually CHANGED the cell. Returns a bare comma-grouped number
+    string ("5,200"), or None to leave each GC template's own native default
+    ($5,000 Resinous / $2,300 Polish/Sealer) in place.
+
+    The estimate cell defaults to $4,500, so a value of exactly 4,500 (or
+    blank/garbage/out-of-range) counts as 'unedited' → None. This encodes the
+    product rule: a GC proposal keeps its native default until the cell changes,
+    then follows the cell (Direct proposals already track the cell via the
+    {{#notes}} bullet, independent of this). Never raises."""
+    try:
+        n = float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    if not (0 < n < 10_000_000) or round(n) == 4500:
+        return None
+    return f"{int(round(n)):,}"
+
+
+def _notes_for(work_type: str, notes_in: list, phase_price=None) -> list:
     """{{#notes}} items: the estimator's edited notes, else the standard
-    per-work-type boilerplate (so the proposal's notes section never vanishes)."""
-    lines = [str(n).strip() for n in (notes_in or []) if str(n).strip()]
-    if not lines:
+    per-work-type boilerplate (so the proposal's notes section never vanishes).
+
+    Backstop for the "Add $xxxx for each additional phase…" bullet: substitute
+    the literal ``$xxxx`` placeholder with the estimate's phase price (default
+    $4,500). This covers the done.js "View files" fallback path (which ships no
+    notes → the boilerplate default is used) and any legacy draft whose saved
+    notes still carry the raw placeholder. A hand-typed numeric amount is left
+    untouched — only the literal ``$xxxx`` anchor is replaced (the frontend
+    handles live re-sync of numeric amounts against the cell).
+
+    Blank lines are PRESERVED (Word-style spacing the estimator added in the
+    editor) — each blank becomes a `{"text": ""}` item, which proposal_writer
+    renders as a bullet-less blank line. Defaults kick in only when the caller
+    sent NOTHING but blanks (so an all-empty notes box still gets boilerplate)."""
+    lines = [str(n).rstrip() for n in (notes_in or [])]
+    if not any(l.strip() for l in lines):
         wt = str(work_type or "epoxy").lower()
         lines = _DEFAULT_NOTES.get(wt) or _DEFAULT_NOTES.get("epoxy") or []
+    amt = _fmt_usd(_phase_price_or_default(phase_price))
+    lines = [ln.replace("$xxxx", amt) for ln in lines]   # list comp: never mutates _DEFAULT_NOTES
     return [{"text": ln} for ln in lines]
 
 
@@ -1732,6 +1828,15 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # per-template default to drift, no regression for GC/Gyp variants).
     if _pov["single_bid"].get("desc"):
         values["_base_desc_override"] = _pov["single_bid"]["desc"]
+    # GC additional-phase amount: force the estimator's cell value into the GC
+    # Clarifications text ONLY when they changed it off the $4,500 default; else
+    # each GC template keeps its native $5,000/$2,300 wording. Private (underscore)
+    # key so the flat {{token}} pass ignores it (proposal_writer._apply_gc_phase_override
+    # rewrites the static clause in place). Direct proposals are unaffected — they
+    # track the cell through the {{#notes}} "$xxxx" bullet instead.
+    _ppo = _phase_price_override_amount((payload.values or {}).get("phase_price"))
+    if _ppo:
+        values["_phase_price_override"] = _ppo
 
     # Fill estimate workbook
     try:
@@ -1793,7 +1898,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # breakout (its Option 1/Option 2 lines are the base price).
             single_bid=_single_bid,
             # Editable NOTES (estimator's edits, else standard boilerplate).
-            notes=_notes_for(payload.work_type, payload.notes),
+            notes=_notes_for(payload.work_type, payload.notes, (payload.values or {}).get("phase_price")),
             # PRICE layout: itemize tax lines only when "broken out"; show the
             # "Options:" label only when options exist.
             tax_breakout=_tax_breakout,
