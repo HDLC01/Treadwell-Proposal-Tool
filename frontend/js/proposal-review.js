@@ -679,7 +679,10 @@
           // gyp is a priced role, so allTabs carries epoxy/polish + all 5 gyp
           // variants on every job. Show only the tabs relevant to this work type
           // (mirrors estimate-review.js's chipVisible filter).
-          const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option) || N(t.total) > 0;
+          // "Engaged" = the estimator explicitly made it the base or an option.
+          // Not "non-zero total" — every sheet carries fixed overhead at 0 SF, so
+          // that would never hide the cross-work-type rows (mirrors estimate-review).
+          const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option);
           const visTabs = allTabs.filter(t => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
                                                              : (t.role !== "gyp" || engaged(t)));
           // Auto base = epoxy/polish base-kind tab(s); on gyp jobs, only the gyp base.
