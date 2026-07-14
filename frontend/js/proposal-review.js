@@ -324,6 +324,18 @@
   // the Estimate screen (state.priced_tabs). This lets the base-bid picker + the
   // per-option total/deduct toggles work HERE too, without the sheet engine. It
   // MIRRORS estimate-review.js:snapshotLumpSumsToState — keep the two in sync.
+  // Sum the Area buckets (SF / cove LF) from the BASE tab(s) ONLY — options
+  // never contribute. MIRRORS estimate-review.js:baseAreaFrom. Stale snapshots
+  // (priced_tabs without .sf) contribute nothing → callers fall back to intake.
+  function baseAreaFrom(tabsSnap, baseIds) {
+    const acc = {};
+    const ids = new Set((baseIds || []).filter(Boolean));
+    for (const t of tabsSnap || []) {
+      if (!ids.has(t.id) || !t.sf) continue;
+      for (const k in t.sf) acc[k] = (acc[k] || 0) + (Number(t.sf[k]) || 0);
+    }
+    return acc;
+  }
   function rebuildPricing() {
     const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
     if (!all.length) return;   // older draft w/o the snapshot — leave state.rooms as-is
@@ -389,10 +401,23 @@
       !(!state.base_tab_id && wt === "combo" && t.kind === "base"));
     const shown = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
     state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
+    // Recompute Area from the base tab(s) so a base switch / option toggle HERE
+    // re-derives the proposal's SF without the sheet engine (mirrors the
+    // estimate snapshot; combo default = the epoxy + polish base-kind tabs).
+    const _baseKindId = (role) => {
+      const t = all.find(x => x.role === role && x.kind === "base") || all.find(x => x.role === role);
+      return t ? t.id : null;
+    };
+    let _areaBaseIds;
+    if (state.base_tab_id && baseTab) _areaBaseIds = [baseTab.id];
+    else if (wt === "combo")         _areaBaseIds = [_baseKindId("epoxy"), _baseKindId("polish")];
+    else                             _areaBaseIds = [baseTab ? baseTab.id : null];
+    state.sheet_area = baseAreaFrom(all, _areaBaseIds);
     const el = document.querySelector("#tb-total");
     if (el) el.textContent = fmtUSD(shownBase);
     TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
-      proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax });
+      proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax,
+      sheet_area: state.sheet_area });
   }
 
   // Tax-treatment mode, read from the sidebar's dropdown. Shared by the
@@ -832,9 +857,15 @@
   // exact strings the .docx will carry.
   function computeTokenValues(mergedValues) {
     const workType = (state.work_type || "epoxy").toLowerCase();
-    const polishSF = Number(mergedValues.polish_sf || mergedValues.system_1_sf || 0);
-    const epoxySF  = Number(mergedValues.system_1_sf || 0);
-    const coveLF   = Number(mergedValues.cove_1_lf  || 0);
+    // Area SF/LF are SHEET-FIRST: the resolved base tab's cells (snapshotted into
+    // state.sheet_area — system-1 bucket for the flat tokens, matching today's
+    // semantics) win when > 0, else fall back to the intake fields. This makes a
+    // copy-base's SF flow to the proposal instead of only the intake number.
+    const sa = (state.sheet_area && typeof state.sheet_area === "object") ? state.sheet_area : {};
+    const sheetFirst = (sheetV, intakeV) => (Number(sheetV) > 0 ? Number(sheetV) : (Number(intakeV) || 0));
+    const polishSF = sheetFirst(sa.polish_sf, mergedValues.polish_sf || mergedValues.system_1_sf);
+    const epoxySF  = sheetFirst(sa.epoxy_sf,  mergedValues.system_1_sf);
+    const coveLF   = sheetFirst(sa.cove_lf,   mergedValues.cove_1_lf);
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const lumpSumNumber = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
     // Tax-inclusive bid. Kyle's .docx itemizes KS remodel tax on its own
@@ -923,6 +954,22 @@
       ...mergedValues,
     };
 
+    // Area (SF / cove LF) tokens are re-assigned AFTER the ...mergedValues spread
+    // so a re-opened, previously-generated draft's persisted epoxy_sf /
+    // area_description (api_generate saves `values` back into the draft) can't
+    // shadow the freshly-resolved sheet-first figures. Non-gyp only; the gyp
+    // block below owns the gyp buckets.
+    if (workType !== "gyp") {
+      tokenValues.epoxy_sf  = epoxySF ? Number(epoxySF).toLocaleString("en-US") : "0";
+      tokenValues.polish_sf = polishSF ? Number(polishSF).toLocaleString("en-US") : "0";
+      tokenValues.cove_lf   = coveLF ? Number(coveLF).toLocaleString("en-US") : "0";
+      tokenValues.lf        = tokenValues.cove_lf;
+      tokenValues.sqft      = (workType === "polish" ? Number(polishSF || 0) : Number(epoxySF || 0)).toLocaleString("en-US");
+      tokenValues.area_description = workType === "polish"
+        ? `${fmtSF(polishSF)} of polished concrete flooring`
+        : `${fmtSF(epoxySF)} of epoxy flooring`;
+    }
+
     // Gyp-only tokens. The gyp template prints {{gyp_*_sf}} directly and the
     // backend only backfills BLANK ones, so the frontend must supply them here
     // comma-formatted (a raw number from mergedValues would show "27825"). Also
@@ -932,7 +979,10 @@
     if (workType === "gyp") {
       const gN = (v) => Number(String(v == null ? "" : v).replace(/,/g, "")) || 0;
       const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
-      const soft = gN(mergedValues.gyp_soft_sf), hard = gN(mergedValues.gyp_hard_sf), corr = gN(mergedValues.gyp_corridor_sf);
+      // Sheet-first: base gyp tab's G9/I9/K9 (state.sheet_area) win over intake.
+      const soft = sheetFirst(sa.gyp_soft_sf, gN(mergedValues.gyp_soft_sf));
+      const hard = sheetFirst(sa.gyp_hard_sf, gN(mergedValues.gyp_hard_sf));
+      const corr = sheetFirst(sa.gyp_corridor_sf, gN(mergedValues.gyp_corridor_sf));
       tokenValues.gyp_soft_sf     = fmtInt(soft);
       tokenValues.gyp_hard_sf     = fmtInt(hard);
       tokenValues.gyp_corridor_sf = fmtInt(corr);
@@ -1295,8 +1345,32 @@
     }, 150);
   }
 
+  // WORK {{#system}} picks sourced from the resolved EPOXY BASE tab's sheet cells
+  // (system 1 = E20/E34, system 2 = E24/E37) + its A22/A26 names — via the
+  // priced_tabs snapshot, so a copy base works. Options never contribute (base
+  // only, per Hanz). Returns null for a stale snapshot (no per-tab .sf) so
+  // renderSystemPreview keeps the legacy hardcoded-cell fallback.
+  function sheetSystems() {
+    const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
+    if (!all.length || !all.some(t => t.sf)) return null;
+    const byId = (id) => all.find(t => t.id === id);
+    let base = state.base_tab_id ? byId(state.base_tab_id) : null;
+    if (!base || base.role !== "epoxy")
+      base = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy") || base;
+    if (!base || !base.sf) return null;
+    const names = Array.isArray(base.sys_names) ? base.sys_names : [];
+    const out = [];
+    [["epoxy_sf", "cove_lf"], ["epoxy_sf_2", "cove_lf_2"]].forEach(([sfK, lfK], i) => {
+      const nm = String(names[i] || "").trim();
+      if (nm && !nm.includes("Options")) out.push({ name: nm, sf: Number(base.sf[sfK]) || 0, lf: Number(base.sf[lfK]) || 0 });
+    });
+    if (!out.length) out.push({ name: "", sf: Number(base.sf.epoxy_sf) || 0, lf: Number(base.sf.cove_lf) || 0 });
+    return out;
+  }
+
   // WORK systems preview — mirrors main._build_epoxy_systems + the template's
-  // {{#system}} rows (grid picks from Epoxy!A22/A26, else the flat fields).
+  // {{#system}} rows. Sourced from the resolved BASE tab's sheet cells
+  // (sheetSystems), with the legacy Epoxy!-cell reads as a stale-draft fallback.
   function renderSystemPreview() {
     // Don't rebuild while the estimator is editing one of the fill islands.
     if (focusInside(systemPreviewEl)) return;
@@ -1304,14 +1378,20 @@
     const cells = state.cell_values || {};
     const num = (v) => Number(String(v == null ? "" : v).replace(/[$,]/g, "")) || 0;
     const fmt = (n) => Math.round(n).toLocaleString("en-US");
-    const picks = [];
-    [["Epoxy!A22", "Epoxy!E20", "Epoxy!E34"], ["Epoxy!A26", "Epoxy!E24", "Epoxy!E37"]].forEach(([na, sa, la]) => {
-      const name = String(cells[na] || "").trim();
-      if (name && !name.includes("Options")) picks.push({ name, sf: num(cells[sa]), lf: num(cells[la]) });
-    });
-    if (!picks.length) {
-      picks.push({ name: String(merged.system_name || "").trim() || "Epoxy System",
-                   sf: num(merged.system_1_sf), lf: num(merged.cove_1_lf) });
+    let picks;
+    const ss = sheetSystems();
+    if (ss) {
+      picks = ss.map(s => ({ name: s.name || (String(merged.system_name || "").trim() || "Epoxy System"), sf: s.sf, lf: s.lf }));
+    } else {
+      picks = [];
+      [["Epoxy!A22", "Epoxy!E20", "Epoxy!E34"], ["Epoxy!A26", "Epoxy!E24", "Epoxy!E37"]].forEach(([na, sa, la]) => {
+        const name = String(cells[na] || "").trim();
+        if (name && !name.includes("Options")) picks.push({ name, sf: num(cells[sa]), lf: num(cells[la]) });
+      });
+      if (!picks.length) {
+        picks.push({ name: String(merged.system_name || "").trim() || "Epoxy System",
+                     sf: num(merged.system_1_sf), lf: num(merged.cove_1_lf) });
+      }
     }
     const texture = String(merged.texture || "").trim();
     const coveH = String(merged.cove_height || "6").trim() || "6";
@@ -1333,12 +1413,22 @@
     };
     systemPreviewEl.innerHTML = picks.map((s, i) => {
       const prefix = multi ? `Option ${i + 1}:` : "System:";
-      const lf = s.lf > 0 ? ` and ${fmt(s.lf)} LF of ${coveH}" epoxy cove base` : "";
+      const coveClause = `${fmt(s.lf)} LF of ${coveH}" epoxy cove base`;
+      const lfClause = s.lf > 0 ? ` and ${coveClause}` : "";
+      // Resolve the shown SF (an emptied/edited sqft island override wins) so the
+      // cove-only case is detected on the DISPLAYED value, not just the computed one.
+      const ov = ovs[i] || {};
+      const resolvedSqft = num((typeof ov.sqft === "string" && ov.sqft.trim()) ? ov.sqft : fmt(s.sf));
+      // Cove-only system (0 SF but cove present): drop the meaningless
+      // "~0 SF of epoxy flooring and " prefix and show just the cove clause.
+      const areaInner = (resolvedSqft === 0 && s.lf > 0)
+        ? `Area: ${escHtml(coveClause)}`
+        : `Area: ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lfClause)}`;
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
       return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${escHtml(prefix)}</strong>   ${editSpan(i, "name", s.name)}</p>` +
              `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">Texture:  ${editSpan(i, "texture", texture)}</p>` +
-             `<p class="tw-li" style="margin:0 0 4pt;"><strong>Area: ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lf)}</strong></p>`;
+             `<p class="tw-li" style="margin:0 0 4pt;"><strong>${areaInner}</strong></p>`;
     }).join("");
   }
 
@@ -2091,6 +2181,11 @@
         // rows (epoxy only) — edit the shown system name/texture/area without
         // touching cell_values or the price.
         system_overrides: Array.isArray(state.system_overrides) ? state.system_overrides : [],
+        // WORK {{#system}} picks resolved from the BASE tab's sheet cells (name +
+        // SF + cove LF per system) so the docx Area matches the on-screen preview
+        // even when the base is a copy tab. Empty -> backend keeps its legacy
+        // Epoxy!-cell reads (stale drafts / fallback path).
+        sheet_systems: (sheetSystems() || []).filter(s => (s.name && !s.name.includes("Options")) || s.sf > 0 || s.lf > 0),
         // Doc-editor per-line DISPLAY overrides for the PRICE section (base bid
         // amount / tax phrase, option + manual line label/amount). Display-only —
         // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).

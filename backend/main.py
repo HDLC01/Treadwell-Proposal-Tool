@@ -335,6 +335,12 @@ class GenerateIn(BaseModel):
     # text on the proposal's PRICE lines; they NEVER touch cell_values, the .xlsx,
     # or GenerateOut totals. Sanitized in api_generate — see _sanitize_price_overrides.
     price_overrides: Dict[str, Any] = Field(default_factory=dict)
+    # Proposal Review: the WORK {{#system}} picks resolved from the BASE tab's
+    # sheet cells (name + SF + cove LF per system) so the docx Area matches the
+    # on-screen preview even when the base is a copy tab. [{name?, sf, lf}].
+    # Empty -> _build_epoxy_systems keeps its legacy Epoxy!-cell reads (stale
+    # drafts / the To-Dropbox reconstruction path). Sanitized in api_generate.
+    sheet_systems: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -1046,11 +1052,15 @@ def _blank(v: Any) -> bool:
     return not str(v or "").strip()
 
 
-def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
-    """WORK-section system list for an epoxy proposal, from the picked System 1/2
-    cells (Epoxy!A22/E20/E34 and A26/E24/E37). One system → "System:   <name>"
-    (no Option label); 2+ → "Option 1: …" / "Option 2: …". Falls back to a single
-    system from the flat values so the {{#system}} block always has ≥1 row."""
+def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any],
+                         sheet_systems: list | None = None) -> list:
+    """WORK-section system list for an epoxy proposal. Preferred source is
+    `sheet_systems` — the picks the frontend resolved from the BASE tab's sheet
+    cells (name + SF + cove LF per system), so a copy-base's SF flows through.
+    Falls back to the legacy Epoxy!A22/E20/E34 + A26/E24/E37 cell reads (stale
+    drafts / the To-Dropbox reconstruction path) then to the flat values, so the
+    {{#system}} block always has ≥1 row. One system → "System:   <name>";
+    2+ → "Option 1: …" / "Option 2: …"."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
@@ -1060,11 +1070,18 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
         return f"{int(round(n)):,}"
 
     picks = []
-    for na, sa, la in (("Epoxy!A22", "Epoxy!E20", "Epoxy!E34"),
-                       ("Epoxy!A26", "Epoxy!E24", "Epoxy!E37")):
-        name = str(cells.get(na) or "").strip()
-        if name and "Options" not in name:        # skip the dropdown header placeholders
-            picks.append({"name": name, "sf": num(cells.get(sa)), "lf": num(cells.get(la))})
+    if sheet_systems:                              # frontend-resolved base-tab picks
+        for s in sheet_systems:
+            nm = str((s or {}).get("name") or "").strip()
+            if not nm or "Options" in nm:
+                nm = str(values.get("system_name") or "").strip() or "Epoxy System"
+            picks.append({"name": nm, "sf": num((s or {}).get("sf")), "lf": num((s or {}).get("lf"))})
+    if not picks:
+        for na, sa, la in (("Epoxy!A22", "Epoxy!E20", "Epoxy!E34"),
+                           ("Epoxy!A26", "Epoxy!E24", "Epoxy!E37")):
+            name = str(cells.get(na) or "").strip()
+            if name and "Options" not in name:     # skip the dropdown header placeholders
+                picks.append({"name": name, "sf": num(cells.get(sa)), "lf": num(cells.get(la))})
     if not picks:                                  # no grid pick → single system from flat values
         picks = [{
             "name": str(values.get("system_name") or "").strip() or "Epoxy System",
@@ -1285,6 +1302,27 @@ def _sanitize_system_overrides(overrides_in: list) -> list:
                 if s:
                     entry[k] = s[:_SYSTEM_OVERRIDE_FIELD_MAXLEN]
         out.append(entry)
+    return out
+
+
+# Cap + coerce the frontend-resolved sheet_systems ([{name?, sf, lf}]) — the WORK
+# picks sourced from the BASE tab's sheet cells. name is str()-coerced + capped;
+# sf/lf coerced to a float >= 0; non-dict entries dropped. Never raises.
+_SHEET_SYSTEMS_MAX = 4
+
+
+def _sanitize_sheet_systems(systems_in: list) -> list:
+    out = []
+    for s in (systems_in or [])[:_SHEET_SYSTEMS_MAX]:
+        if not isinstance(s, dict):
+            continue
+        def _f(x):
+            try:
+                return max(0.0, float(str(x).replace(",", "").replace("$", "").strip() or 0))
+            except (TypeError, ValueError):
+                return 0.0
+        out.append({"name": str(s.get("name") or "").strip()[:_SYSTEM_OVERRIDE_FIELD_MAXLEN],
+                    "sf": _f(s.get("sf")), "lf": _f(s.get("lf"))})
     return out
 
 
@@ -1918,7 +1956,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     try:
         # Epoxy WORK section lists each picked system as its own row (1 system →
         # "System: …", 2+ → "Option 1/2: …") via the template's {{#system}} block.
-        systems_arg = (_build_epoxy_systems(payload.cell_values, values)
+        systems_arg = (_build_epoxy_systems(payload.cell_values, values,
+                                             _sanitize_sheet_systems(payload.sheet_systems))
                        if str(payload.work_type or "").lower() == "epoxy" else None)
         # Doc-editor DISPLAY overrides for the WORK rows, applied by option index
         # over the computed systems. `prefix`/`lf_clause` stay computed; nothing
