@@ -267,6 +267,17 @@ const GYP_FORM_TO_CELL = {
 // compare variants / mark them as options without re-typing the takeoff.
 const GYP_SF_CELLS = { gyp_soft_sf: "G9", gyp_hard_sf: "I9", gyp_corridor_sf: "K9" };
 
+// SF / cove-LF INPUT cells per template LAYOUT (template coords — always read
+// through txAddr so a copy tab with row edits still resolves). Snapshotted from
+// the resolved BASE tab into state.sheet_area so the proposal's "Area" line
+// follows the sheet (incl. a copy base) instead of only the intake fields.
+// JS↔PY parity: backend/tests/test_area_sourcing.py greps this map. Gyp layouts
+// reuse GYP_SF_CELLS (G9/I9/K9).
+const AREA_SF_CELLS = {
+  Epoxy:  { epoxy_sf: "E20", epoxy_sf_2: "E24", cove_lf: "E34", cove_lf_2: "E37" },
+  Polish: { polish_sf: "E18" },
+};
+
 // Lookup-table automations layered on top of the raw intake → cell map.
 // These never override the user's saved edits (we skip if cellValues
 // already has the address). Each one cites the rule it's encoding.
@@ -490,6 +501,43 @@ function totalCellsFor(id) {
 }
 function pricedTabs() { return tabs.filter(t => isPricedRole(t.role)); }
 const hfNum = (id, addr) => { const v = HF.getValue(id, addr); return typeof v === "number" ? v : 0; };
+
+// ─── Sheet-sourced Area (SF / cove LF) for the proposal ─────────────
+// Read a tab's SF / cove-LF input cells (by role/layout, through txAddr so a
+// copy tab with row edits still resolves) into a plain {field: number}. Feeds
+// state.sheet_area so the proposal's "Area" line follows the resolved BASE
+// tab's sheet cells (incl. a copy base) instead of only the intake fields.
+function sfFieldsFor(id) {
+  const role = roleFor(id);
+  const map = role === "gyp"    ? GYP_SF_CELLS
+            : role === "polish" ? AREA_SF_CELLS.Polish
+            :                     AREA_SF_CELLS.Epoxy;
+  const out = {};
+  for (const f in map) out[f] = hfNumTx(id, map[f]);
+  return out;
+}
+// The two epoxy system-name picks (A22/A26) for a tab, as raw strings — the
+// caller filters "Options" placeholders (matching renderSystemPreview).
+function sysNamesFor(id) {
+  return ["A22", "A26"].map(a0 => {
+    const a = txAddr(id, a0);
+    const v = a ? HF.getValue(id, a) : "";
+    return typeof v === "string" ? v : "";
+  });
+}
+// Aggregate the Area buckets from the BASE tab(s) ONLY — options never
+// contribute (per Hanz: "SF options should not be present in the proposal").
+// combo default base = the epoxy + polish base-kind tabs. Stale snapshots
+// (no .sf) contribute nothing. MIRRORS proposal-review.js:baseAreaFrom.
+function baseAreaFrom(tabsSnap, baseIds) {
+  const acc = {};
+  const ids = new Set((baseIds || []).filter(Boolean));
+  for (const t of tabsSnap || []) {
+    if (!ids.has(t.id) || !t.sf) continue;
+    for (const k in t.sf) acc[k] = (acc[k] || 0) + (Number(t.sf[k]) || 0);
+  }
+  return acc;
+}
 // The template sheet to open / fall back to for the current work type:
 // gyp → the gyp base, polish → Polish, else Epoxy.
 function defaultBaseSheet() {
@@ -2880,15 +2928,35 @@ function snapshotLumpSumsToState() {
 
   // Full per-tab pricing snapshot so the Proposal Review sidebar can switch the
   // base / toggle options WITHOUT the sheet engine (proposal-review's rebuildPricing
-  // mirrors this). Every priced tab, not just the shown options.
+  // mirrors this). Every priced tab, not just the shown options. `sf`/`sys_names`
+  // carry the tab's own Area inputs so the proposal's Area line can follow the
+  // resolved BASE tab (see state.sheet_area below).
   state.priced_tabs = pricedTabs().map(t => {
     const c = totalCellsFor(t.id);
     return {
       id: t.id, name: labelFor(t.id), role: t.role, kind: t.kind,
       total: num(t.id, c.total), sales_tax: num(t.id, c.sales_tax), remodel: num(t.id, c.remodel),
       system_desc: deriveSystemNameFor(t.id), notes_auto: deriveNotes(t.id),
+      sf: sfFieldsFor(t.id),
+      sys_names: roleFor(t.id) === "polish" || roleFor(t.id) === "gyp" ? [] : sysNamesFor(t.id),
     };
   });
+  // Area (SF / cove LF) for the proposal, sourced from the BASE tab(s) ONLY —
+  // options never contribute. Mirrors the lump-sum base resolution above
+  // (explicit base → that tab; else work_type default; combo = epoxy+polish
+  // base-kind tabs). proposal-review.js:rebuildPricing recomputes this the same
+  // way so a base switch there re-aggregates without the sheet engine.
+  const _baseKindId = (role) => {
+    const t = tabs.find(x => x.role === role && x.kind === "base") || tabs.find(x => x.role === role);
+    return t ? t.id : null;
+  };
+  let _areaBaseIds;
+  if (state.base_tab_id && baseTab) _areaBaseIds = [baseTab.id];
+  else if (wt === "gyp")           _areaBaseIds = [baseTab ? baseTab.id : GYP_BASE];
+  else if (wt === "polish")        _areaBaseIds = [_baseKindId("polish")];
+  else if (wt === "combo")         _areaBaseIds = [_baseKindId("epoxy"), _baseKindId("polish")];
+  else                             _areaBaseIds = [_baseKindId("epoxy")];
+  state.sheet_area = baseAreaFrom(state.priced_tabs, _areaBaseIds);
 
   // The Reference Bid engine + Alternate system were removed; the proposal now
   // uses the sheet totals above. Null the engine/alternate results so a resumed

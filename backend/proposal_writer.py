@@ -458,6 +458,28 @@ def _apply_gc_phase_override(d: Document, amount: str) -> int:
     return n
 
 
+# Cove-only WORK rows: after the flat {{token}} fill, an epoxy system with 0 SF
+# but a cove clause reads "Area: ~0 SF of epoxy flooring and <n> LF …". Drop the
+# meaningless "~0 SF of epoxy flooring and " prefix so it reads "Area: <n> LF …"
+# (mirrors the on-screen renderSystemPreview). A 0-SF row with NO cove has no
+# " and " after "flooring", so the pattern can't match — it keeps today's line.
+_AREA_ZERO_RE = re.compile(r"Area:\s*~0 SF of epoxy flooring and ")
+
+
+def _drop_zero_sf_prefix(d: Document) -> int:
+    n = 0
+    for p in d.element.body.iter(qn("w:p")):
+        # Skip text-box anchor paragraphs (their <w:p> children are visited on
+        # their own) — same nesting guard as _apply_gc_phase_override.
+        if p.find(".//" + _TXBX_CONTENT) is not None:
+            continue
+        # repl returns a fixed "Area: " (never equal to the matched span, and the
+        # result no longer contains the pattern) so the require_braces=False loop
+        # can't rewrite forever.
+        n += _sub_runs_preserving(p, _AREA_ZERO_RE, lambda m: "Area: ", require_braces=False)
+    return n
+
+
 def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]]) -> int:
     """Expand EVERY `{{#<block_name>}}…{{/<block_name>}}` block in `container`.
 
@@ -1136,6 +1158,10 @@ def fill_proposal(
         total_subs += _replace_in_paragraph(p, values)
 
     log.info("Substituted %d tokens", total_subs)
+    # Cove-only WORK rows: drop the "~0 SF of epoxy flooring and " prefix now that
+    # the sqft/lf_clause tokens are filled (matches the on-screen preview).
+    if _drop_zero_sf_prefix(d):
+        log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
