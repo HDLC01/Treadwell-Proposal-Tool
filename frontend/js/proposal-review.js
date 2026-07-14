@@ -676,30 +676,40 @@
           const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
           const baseId = state.base_tab_id;
           const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
+          // For gyp the "Auto" row resolves to a single listed variant (the gyp
+          // base) — redundant. Suppress it and treat the resolved gyp base as the
+          // effective base. (Combo keeps Auto = "Epoxy + Polish combined".)
+          const gypAutoBaseId = (wt === "gyp" && !baseId) ? GYP_BASE : null;
+          const effectiveBaseId = baseId || gypAutoBaseId;
+          const showAutoRow = !gypAutoBaseId;
           // gyp is a priced role, so allTabs carries epoxy/polish + all 5 gyp
-          // variants on every job. Show only the tabs relevant to this work type
-          // (mirrors estimate-review.js's chipVisible filter).
+          // variants on every job. By default show only the tabs relevant to this
+          // work type (mirrors estimate-review.js's chipVisible filter); the
+          // "+ Add another system" toggle (state.reveal_systems, shared with the
+          // estimate bid bar) reveals the cross-type rows for a multi-system bid.
           // "Engaged" = the estimator explicitly made it the base or an option.
-          // Not "non-zero total" — every sheet carries fixed overhead at 0 SF, so
-          // that would never hide the cross-work-type rows (mirrors estimate-review).
           const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option);
-          const visTabs = allTabs.filter(t => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
-                                                             : (t.role !== "gyp" || engaged(t)));
-          // Auto base = epoxy/polish base-kind tab(s); on gyp jobs, only the gyp base.
+          const defaultVis = (t) => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
+                                                    : (t.role !== "gyp" || engaged(t));
+          const revealSystems = !!state.reveal_systems;
+          const visTabs = revealSystems ? allTabs.slice() : allTabs.filter(defaultVis);
+          const hasHiddenSystems = allTabs.some(t => !defaultVis(t));
+          // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
+          // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
           const isPartOfAutoBase = (t) => {
-            if (baseId) return false;
-            if (wt === "gyp") return t.id === GYP_BASE;
+            if (baseId || gypAutoBaseId) return false;
             return t.kind === "base" && t.role !== "gyp";
           };
           optsPanel.hidden = false;
-          // A "Base bid" radio toggle per sheet (plus an Auto/combined row). The base
-          // row hides its option controls; the others keep show + total/deduct.
+          // A "Base bid" radio toggle per sheet (plus an Auto/combined row for
+          // epoxy/polish/combo). The base row hides its option controls; the
+          // others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
             `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
-            `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>`;
+            (showAutoRow ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
-            const isBase = baseId === t.id;
+            const isBase = effectiveBaseId === t.id;
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
             const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
@@ -726,7 +736,19 @@
             r += `</div>`;
             return r;
           }).join("");
+          // "+ Add another system" — reveals cross-work-type rows (mirrors the
+          // estimate bid bar) so a multi-system bid can be built here too.
+          if (hasHiddenSystems) {
+            const lbl = revealSystems ? "− Fewer systems" : "+ Add another system";
+            h += `<button type="button" class="pr-addsys-btn">${esc(lbl)}</button>`;
+          }
           optsPanel.innerHTML = h;
+          const addsysBtn = optsPanel.querySelector(".pr-addsys-btn");
+          if (addsysBtn) addsysBtn.addEventListener("click", () => {
+            state.reveal_systems = !state.reveal_systems;
+            try { TW.setState({ reveal_systems: state.reveal_systems }); } catch {}
+            renderProposalExtras();
+          });
 
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };

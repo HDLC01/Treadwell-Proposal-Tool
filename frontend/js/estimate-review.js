@@ -532,18 +532,22 @@ function renderBidOptions() {
   const baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
   // gyp is a priced role too, so all 5 gyp variants live in `priced` on EVERY
-  // job. Show gyp chips only on gyp jobs; on a non-gyp job hide them unless the
-  // estimator explicitly engaged one (as the base or an option), and vice-versa
-  // for epoxy/polish on a gyp job. NOTE: don't treat "has a non-zero total" as
-  // engaged — every sheet (epoxy/polish/gyp) carries non-zero fixed overhead
-  // even at 0 SF, so that would never hide anything. The stale-base guard above
-  // still runs on the unfiltered `priced` list.
+  // job. By default show only the job's own work-type chips (gyp → gyp variants;
+  // else → epoxy/polish) plus anything engaged. Cross-type systems stay hidden
+  // UNTIL the estimator clicks "+ Add another system" (state.reveal_systems) —
+  // this supports the real, if uncommon, multi-system bid (e.g. a big gyp job
+  // with a small epoxy scope). Engaged tabs always show, so a revealed option
+  // survives a collapse. NOTE: don't treat "non-zero total" as engaged — every
+  // sheet carries fixed overhead at 0 SF, so that would never hide anything. The
+  // stale-base guard above still runs on the unfiltered `priced` list.
   const chipEngaged = (t) =>
     t.id === baseId ||
     (state.tab_opts[t.id] && state.tab_opts[t.id].is_option);
-  const chipVisible = (t) => (wt === "gyp") ? (t.role === "gyp" || chipEngaged(t))
-                                            : (t.role !== "gyp" || chipEngaged(t));
-  const visible = priced.filter(chipVisible);
+  const defaultChipVisible = (t) => (wt === "gyp") ? (t.role === "gyp" || chipEngaged(t))
+                                                   : (t.role !== "gyp" || chipEngaged(t));
+  const revealSystems = !!state.reveal_systems;
+  const visible = revealSystems ? priced.slice() : priced.filter(defaultChipVisible);
+  const hasHiddenSystems = priced.some(t => !defaultChipVisible(t));
   // The combined chip names the ACTUAL base sheets — renamed tabs read as
   // "Grooming Room + Lobby (combined)", not a hardcoded "Epoxy + Polish".
   // Scoped to epoxy/polish so a gyp variant never joins the "(combined)" label.
@@ -554,11 +558,13 @@ function renderBidOptions() {
   };
   const autoLabel = wt === "combo" ? comboLabel()
                                    : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
-  // The "Auto" chip only means something when there are 2+ visible priced tabs
-  // (pick a base, or — for combo — combine them). With a single visible tab it's
-  // just a redundant duplicate, so suppress it and show the tab itself as base.
-  const showAuto = visible.length > 1;
-  const soloBase = (!baseId && visible.length === 1) ? visible[0].id : null;
+  // The "Auto" chip only means something when it resolves to something that
+  // ISN'T already its own chip: for combo that's "Epoxy + Polish combined". For
+  // gyp (and the single-visible-tab case) Auto resolves to one listed tab, so
+  // it's a redundant duplicate — suppress it and show that tab AS the base bid.
+  const gypAutoBaseId = (wt === "gyp" && !baseId && autoBase) ? autoBase.id : null;
+  const showAuto = visible.length > 1 && !gypAutoBaseId;
+  const soloBase = gypAutoBaseId || ((!baseId && visible.length === 1) ? visible[0].id : null);
   // A tab whose option controls are hidden because it's already the auto-base:
   // epoxy/polish → the combined base tabs; gyp → only the resolved gyp base.
   const isPartOfAutoBase = (t) => {
@@ -588,6 +594,13 @@ function renderBidOptions() {
     }
     return `<span class="bb-opt" data-id="${_escBB(t.id)}">${inner}</span>`;
   }).join("");
+  // "+ Add another system" — reveals the cross-work-type chips (e.g. Epoxy/Polish
+  // on a gyp job) so the estimator can mark them as options for a multi-system
+  // bid. Only shown when there ARE hidden systems to reveal.
+  if (hasHiddenSystems) {
+    const lbl = revealSystems ? "− Fewer systems" : "+ Add another system";
+    html += `<span class="bb-opt bb-addsys"><button type="button" class="bb-addsys-btn">${_escBB(lbl)}</button></span>`;
+  }
   list.innerHTML = html;
   // The legend (#bid-options-hint) stays visible — it explains base vs. option.
 }
@@ -596,6 +609,13 @@ function renderBidOptions() {
 function wireBidBar() {
   const list = document.getElementById("bid-options-list");
   if (!list) return;
+  // "+ Add another system" / "− Fewer systems" toggle (a button → click, not change).
+  list.addEventListener("click", (e) => {
+    if (!e.target.classList.contains("bb-addsys-btn")) return;
+    state.reveal_systems = !state.reveal_systems;
+    renderBidOptions();
+    TW.setState({ ...state, reveal_systems: state.reveal_systems });
+  });
   list.addEventListener("change", (e) => {
     const el = e.target;
     if (el.classList.contains("bb-base")) {          // Base-bid radio toggled
