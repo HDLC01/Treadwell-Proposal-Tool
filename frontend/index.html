@@ -135,6 +135,10 @@
           <input type="radio" name="work_type" value="combo">
           <span>Combo (Epoxy + Polish)</span>
         </label>
+        <label class="radio">
+          <input type="radio" name="work_type" value="gyp">
+          <span>Gyp (Gypsum Underlayment)</span>
+        </label>
       </div>
     </fieldset>
 
@@ -146,6 +150,21 @@
       <!-- Two {Epoxy SF, Polish SF, Cove LF} groups (matches the estimate
            sheet's two-system model) — rendered by JS. System 2 is optional. -->
       <div id="systems-container"></div>
+      <!-- Gyp jobs quote SF in three buckets (soft / hard / corridor) — shown
+           only when Gyp is the work type (toggled in index.js). -->
+      <div id="gyp-sf-container" style="display:none;">
+        <div class="row">
+          <label>Soft surfaces SF
+            <input type="number" name="gyp_soft_sf" min="0" step="1" value="0">
+          </label>
+          <label>Hard surfaces SF
+            <input type="number" name="gyp_hard_sf" min="0" step="1" value="0">
+          </label>
+          <label>Corridors SF
+            <input type="number" name="gyp_corridor_sf" min="0" step="1" value="0">
+          </label>
+        </div>
+      </div>
       <div class="row">
         <label>Approx. start date
           <input type="date" name="approx_start_date">
