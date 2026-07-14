@@ -532,13 +532,15 @@ function renderBidOptions() {
   const baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
   // gyp is a priced role too, so all 5 gyp variants live in `priced` on EVERY
-  // job. Show gyp chips only on gyp jobs (or when the estimator has engaged one
-  // as base/option/non-zero); conversely hide the epoxy/polish chips on a gyp
-  // job unless engaged. The stale-base guard above still uses unfiltered `priced`.
+  // job. Show gyp chips only on gyp jobs; on a non-gyp job hide them unless the
+  // estimator explicitly engaged one (as the base or an option), and vice-versa
+  // for epoxy/polish on a gyp job. NOTE: don't treat "has a non-zero total" as
+  // engaged — every sheet (epoxy/polish/gyp) carries non-zero fixed overhead
+  // even at 0 SF, so that would never hide anything. The stale-base guard above
+  // still runs on the unfiltered `priced` list.
   const chipEngaged = (t) =>
     t.id === baseId ||
-    (state.tab_opts[t.id] && state.tab_opts[t.id].is_option) ||
-    (HF.ready && hfNum(t.id, totalCellsFor(t.id).total) > 0);
+    (state.tab_opts[t.id] && state.tab_opts[t.id].is_option);
   const chipVisible = (t) => (wt === "gyp") ? (t.role === "gyp" || chipEngaged(t))
                                             : (t.role !== "gyp" || chipEngaged(t));
   const visible = priced.filter(chipVisible);
