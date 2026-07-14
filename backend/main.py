@@ -1364,6 +1364,20 @@ _DEFAULT_SCOPE_POLISH = (
     "using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform "
     "high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate."
 )
+# Gyp underlayment (the {{scope_notes}} token isn't in the gyp template, so this is
+# defensive/sidebar-coherence only; {{exclusions}} IS a gyp token — its default is
+# the underlayment template's verbatim Exclusions line).
+_DEFAULT_SCOPE_GYP = (
+    "Pour USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over plywood subfloor / sound "
+    "mat as described above, at a uniform thickness & finished to a smooth surface."
+)
+_DEFAULT_EXCLUSIONS_GYP = (
+    "Sealer, Removal of ISO after pour, Credit for unused Mobs, water hook-up, form work, work "
+    "on podium level or below, pour stops, pre-pours of tubs/showers or party walls, metal lath "
+    "or mesh reinforcements, gyp under any thresholds, stair treads, lightweight conc., "
+    "mechanical ventilation, any caulking, any leveling, P&P Bonds, traffic control (provided by "
+    "others)."
+)
 
 # GC audience narrative fallbacks — the GC templates historically shipped their
 # Scope/Schedule/Exclusions as STATIC text (no token), so sidebar edits never
@@ -1436,7 +1450,32 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
     # Resinous). Non-GC keeps today's Direct wording BYTE-IDENTICAL.
     is_gc = str(audience or values.get("audience") or "").strip().upper() == "GC"
     _wt = str(values.get("work_type") or "epoxy").lower()
-    if is_gc:
+    if _wt == "gyp":
+        # Gyp uses ONE underlayment template regardless of audience.
+        _scope_def, _excl_def, _sched_def = _DEFAULT_SCOPE_GYP, _DEFAULT_EXCLUSIONS_GYP, _DEFAULT_SCHEDULE
+        # Gyp-only template tokens — backfill so generate never leaks a raw token
+        # (frontend computeTokenValues normally supplies the SFs; these are the
+        # defensive fallbacks + the fields the frontend doesn't compute).
+        def _sf(v):
+            s = str(v if v is not None else "").replace(",", "").strip()
+            try:
+                return f"{int(round(float(s))):,}" if s else "0"
+            except (TypeError, ValueError):
+                return s or "0"
+        for _t in ("gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"):
+            if _blank(values.get(_t)):
+                values[_t] = _sf(values.get(_t))
+        _thk = {"gyp_soft_thickness": '3/4"', "gyp_hard_thickness": '1"', "gyp_corridor_thickness": '3/4"'}
+        for _t, _d in _thk.items():
+            if _blank(values.get(_t)):
+                values[_t] = _d
+        if _blank(values.get("mobilizations_line")):
+            values["mobilizations_line"] = "1 Mobilization to Site."
+        # Gyp has no work_description input, so the generic address-alias (set
+        # above) would leak the address into the spec line — force the gyp default
+        # (the estimator refines the actual spec/drawings line in the doc editor).
+        values["work_description"] = "per plans & specifications provided"
+    elif is_gc:
         if _wt == "polish":
             _scope_def, _excl_def = _DEFAULT_SCOPE_GC_POLISH, _DEFAULT_EXCLUSIONS_GC_POLISH
         elif _wt == "sealer":
@@ -1651,6 +1690,11 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
     _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
     _broken = _incl in ("BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT")
+    # Gyp always itemizes (its template shows Base + Material Sales Tax + Kansas
+    # Remodel Tax + Total as flat rows), so never collapse base_bid_formatted to
+    # the total for gyp — keep the pre-tax base the frontend computed.
+    if str(values.get("work_type") or "").lower() == "gyp":
+        _broken = True
     if _broken:
         # Itemized: keep the frontend's pre-tax base + Material Sales Tax + Total;
         # remodel shows as its own line; no "INCLUDED" label on the base line.
@@ -2066,7 +2110,7 @@ def _warm_sheet_cache() -> None:
     import threading
 
     def _warm() -> None:
-        for name in ("Epoxy", "Polish"):
+        for name in ("Epoxy", "Polish", 'Gyp (USG 1-8")'):
             try:
                 estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
                 log.info("Warmed sheet cache: %s", name)
@@ -2217,7 +2261,8 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         _list = lambda x: x if isinstance(x, list) else []
         _dict = lambda x: x if isinstance(x, dict) else {}
         vals = {k: v for k, v in data.items() if k not in ("proposal_payload", "generate_result")}
-        if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")):
+        if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")
+                or vals.get("gyp_soft_sf") or vals.get("gyp_hard_sf") or vals.get("gyp_corridor_sf")):
             return {"ok": False, "error": "This project has no estimate yet — open it and generate first."}
         gi = GenerateIn(
             work_type=data.get("work_type") or "epoxy",

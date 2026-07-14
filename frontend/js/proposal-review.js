@@ -43,6 +43,9 @@
   // a proposal generated without autofill still carries the standard text.
   const _wt = (state.work_type || "epoxy").toLowerCase();
   const _audience = state.audience || "Direct";
+  // The gyp base tab id (must match estimate-review.js GYP_BASE) — the default
+  // priced base for gyp jobs; other gyp variants are options.
+  const GYP_BASE = 'Gyp (USG 1-8")';
 
   // ─── Audience + work-type narrative catalog ─────────────────────────
   // Scope/Schedule/Exclusions boilerplate. These strings are BYTE-IDENTICAL to
@@ -62,17 +65,24 @@
   const EXCL_GC_RESINOUS = "Epoxy Paint Walls, Wall Patching (as may be reqr’d for new base), Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (see exclusion detail below*), Nights & Weekends";
   const EXCL_GC_POLISH = "Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (no more than 1 bag per 1,000 sf, see exclusion detail below*), Removal of Existing Joint Filler (if any), Nights & Weekends";
   const EXCL_GC_SEALER = "Patching, Grinding, Joint Filler (see option), Polishing of Concrete, Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching / Grinding (no more than 1 bag per 1,000 sf, see exclusion detail below*), Mock-Up, Nights & Weekends, Removal of Existing Joint Filler (if any)";
+  // Gyp underlayment: {{scope_notes}}/{{schedule_notes}} aren't tokens in the gyp
+  // template (sidebar-coherence only), but {{exclusions}} IS — EXCL_GYP prints.
+  // Backend uses _DEFAULT_SCHEDULE (== SCHED_DIRECT) for gyp regardless of audience.
+  const SCOPE_GYP = "Pour USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over plywood subfloor / sound mat as described above, at a uniform thickness & finished to a smooth surface.";
+  const EXCL_GYP = "Sealer, Removal of ISO after pour, Credit for unused Mobs, water hook-up, form work, work on podium level or below, pour stops, pre-pours of tubs/showers or party walls, metal lath or mesh reinforcements, gyp under any thresholds, stair treads, lightweight conc., mechanical ventilation, any caulking, any leveling, P&P Bonds, traffic control (provided by others).";
   const NARRATIVE_DEFAULTS = {
     Direct: {
       epoxy:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
       polish: { scope_notes: SCOPE_POLISH, schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
       combo:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+      gyp:    { scope_notes: SCOPE_GYP,    schedule_notes: SCHED_DIRECT, exclusions: EXCL_GYP },
     },
     GC: {
       epoxy:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
       combo:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
       polish: { scope_notes: SCOPE_GC_POLISH,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_POLISH },
       sealer: { scope_notes: SCOPE_GC_SEALER,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_SEALER },
+      gyp:    { scope_notes: SCOPE_GYP,         schedule_notes: SCHED_DIRECT, exclusions: EXCL_GYP },
     },
   };
   // Resolve (audience, work_type) -> {scope_notes, schedule_notes, exclusions},
@@ -193,24 +203,35 @@
     const wt = (state.work_type || "epoxy").toLowerCase();
     const label = wt === "polish" ? "Polished Concrete Flooring"
                 : wt === "combo"  ? "Epoxy & Polished Concrete Flooring"
+                : wt === "gyp"    ? "Gypsum Underlayment"
                 :                   "Epoxy Flooring";
     document.getElementById("work-type-label").value = label;
 
     // Toggle area rows by work_type
     const epoxyRow  = document.getElementById("area-row-epoxy");
     const polishRow = document.getElementById("area-row-polish");
+    const gypRow    = document.getElementById("area-row-gyp");
     const textureRow = document.getElementById("texture-row");
-    if (wt === "polish") {
+    if (wt === "gyp") {
+      // Gyp: only the 3-bucket gyp area row; no epoxy/polish rows, no texture.
+      epoxyRow.style.display  = "none";
+      polishRow.style.display = "none";
+      if (gypRow) gypRow.style.display = "";
+      textureRow.style.display = "none";
+    } else if (wt === "polish") {
       epoxyRow.style.display  = "none";
       polishRow.style.display = "";
+      if (gypRow) gypRow.style.display = "none";
       textureRow.style.display = "none"; // polish doesn't have texture
     } else if (wt === "epoxy") {
       epoxyRow.style.display  = "";
       polishRow.style.display = "none";
+      if (gypRow) gypRow.style.display = "none";
       textureRow.style.display = "";
     } else { // combo
       epoxyRow.style.display  = "";
       polishRow.style.display = "";
+      if (gypRow) gypRow.style.display = "none";
       textureRow.style.display = "";
       // For combo, clarify which area is which in the key
       epoxyRow.querySelector(".key").textContent  = "Epoxy Area:";
@@ -223,7 +244,8 @@
 
   // Texture is a fixed dropdown (epoxy/combo only — polish hides the row above).
   (function buildTextureControl() {
-    if ((state.work_type || "epoxy").toLowerCase() === "polish") return;
+    const _twt = (state.work_type || "epoxy").toLowerCase();
+    if (_twt === "polish" || _twt === "gyp") return;   // no texture row for these
     const input = document.querySelector('#texture-row input[name="texture"]');
     if (!input) return;
     const cur = (state.texture || input.value || "").trim();
@@ -327,10 +349,17 @@
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
     } else {
-      // No explicit base: work_type fallback (combo = Epoxy + Polish base tabs).
+      // No explicit base: work_type fallback (combo = Epoxy + Polish base tabs;
+      // gyp = the single gyp base tab).
       const eB = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy");
       const pB = all.find(t => t.role === "polish" && t.kind === "base") || all.find(t => t.role === "polish");
-      if (wt === "polish") { baseTab = pB || null; shownBase = N(pB && pB.total); salesTax = N(pB && pB.sales_tax); remodelTax = N(pB && pB.remodel); }
+      if (wt === "gyp") {
+        const gB = all.find(t => t.role === "gyp" && t.id === GYP_BASE)
+                || all.find(t => t.role === "gyp" && t.kind === "base")
+                || all.find(t => t.role === "gyp");
+        baseTab = gB || null; shownBase = N(gB && gB.total); salesTax = N(gB && gB.sales_tax); remodelTax = N(gB && gB.remodel);
+      }
+      else if (wt === "polish") { baseTab = pB || null; shownBase = N(pB && pB.total); salesTax = N(pB && pB.sales_tax); remodelTax = N(pB && pB.remodel); }
       else if (wt === "combo") { baseTab = eB || null; shownBase = N(eB && eB.total) + N(pB && pB.total); salesTax = N(eB && eB.sales_tax) + N(pB && pB.sales_tax); remodelTax = N(eB && eB.remodel) + N(pB && pB.remodel); }
       else { baseTab = eB || null; shownBase = N(eB && eB.total); salesTax = N(eB && eB.sales_tax); remodelTax = N(eB && eB.remodel); }
     }
@@ -444,6 +473,7 @@
     const noun = wt === "polish" ? "Polished Concrete Flooring"
                : wt === "combo"  ? "Epoxy & Polished Concrete flooring"
                : wt === "sealer" ? "Sealed Concrete"
+               : wt === "gyp"    ? "Gypsum Underlayment System"
                : "Epoxy flooring";
     return noun + " as described above";
   }
@@ -561,7 +591,8 @@
       const wt = (state.work_type || "epoxy").toLowerCase();
       const N = (v) => Number(v) || 0;
       const floorNoun = wt === "polish" ? "Polished Concrete Flooring"
-                      : wt === "sealer" ? "Sealed Concrete" : "Epoxy flooring";
+                      : wt === "sealer" ? "Sealed Concrete"
+                      : wt === "gyp"    ? "Gypsum Underlayment System" : "Epoxy flooring";
       const taxPhrase = (r) => N(r.bid && r.bid.remodel) > 0
         ? "(Remodel Tax AND material sales tax INCLUDED)"
         : "(material sales tax INCLUDED)";
@@ -645,14 +676,25 @@
           const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
           const baseId = state.base_tab_id;
           const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
-          const isPartOfAutoBase = (t) => !baseId && t.kind === "base";   // Auto base = the base-kind tab(s)
+          // gyp is a priced role, so allTabs carries epoxy/polish + all 5 gyp
+          // variants on every job. Show only the tabs relevant to this work type
+          // (mirrors estimate-review.js's chipVisible filter).
+          const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option) || N(t.total) > 0;
+          const visTabs = allTabs.filter(t => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
+                                                             : (t.role !== "gyp" || engaged(t)));
+          // Auto base = epoxy/polish base-kind tab(s); on gyp jobs, only the gyp base.
+          const isPartOfAutoBase = (t) => {
+            if (baseId) return false;
+            if (wt === "gyp") return t.id === GYP_BASE;
+            return t.kind === "base" && t.role !== "gyp";
+          };
           optsPanel.hidden = false;
           // A "Base bid" radio toggle per sheet (plus an Auto/combined row). The base
           // row hides its option controls; the others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
             `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
             `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>`;
-          h += allTabs.map(t => {
+          h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = baseId === t.id;
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
@@ -855,6 +897,33 @@
       })(),
       ...mergedValues,
     };
+
+    // Gyp-only tokens. The gyp template prints {{gyp_*_sf}} directly and the
+    // backend only backfills BLANK ones, so the frontend must supply them here
+    // comma-formatted (a raw number from mergedValues would show "27825"). Also
+    // seed the thickness / mobilization / work_description defaults so the doc
+    // editor never shows a raw {{token}} before the estimator touches anything —
+    // byte-identical to main.py:_ensure_value_aliases' gyp branch.
+    if (workType === "gyp") {
+      const gN = (v) => Number(String(v == null ? "" : v).replace(/,/g, "")) || 0;
+      const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
+      const soft = gN(mergedValues.gyp_soft_sf), hard = gN(mergedValues.gyp_hard_sf), corr = gN(mergedValues.gyp_corridor_sf);
+      tokenValues.gyp_soft_sf     = fmtInt(soft);
+      tokenValues.gyp_hard_sf     = fmtInt(hard);
+      tokenValues.gyp_corridor_sf = fmtInt(corr);
+      tokenValues.gyp_soft_sf_formatted     = tokenValues.gyp_soft_sf;
+      tokenValues.gyp_hard_sf_formatted     = tokenValues.gyp_hard_sf;
+      tokenValues.gyp_corridor_sf_formatted = tokenValues.gyp_corridor_sf;
+      if (!String(tokenValues.gyp_soft_thickness || "").trim())     tokenValues.gyp_soft_thickness = '3/4"';
+      if (!String(tokenValues.gyp_hard_thickness || "").trim())     tokenValues.gyp_hard_thickness = '1"';
+      if (!String(tokenValues.gyp_corridor_thickness || "").trim()) tokenValues.gyp_corridor_thickness = '3/4"';
+      if (!String(tokenValues.mobilizations_line || "").trim())     tokenValues.mobilizations_line = "1 Mobilization to Site.";
+      // Gyp has no work_description input; backend forces this spec-line default.
+      if (!String(mergedValues.work_description || "").trim())      tokenValues.work_description = "per plans & specifications provided";
+      const gypTotal = soft + hard + corr;
+      tokenValues.sqft = fmtInt(gypTotal);
+      tokenValues.area_description = `${fmtSF(gypTotal)} of gypsum underlayment`;
+    }
 
     // Editor-only extras the backend derives inside api_generate — resolved
     // here with the SAME rules so the on-page fills match the generated doc

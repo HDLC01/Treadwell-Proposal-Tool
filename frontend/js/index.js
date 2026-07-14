@@ -54,6 +54,18 @@
   renderSystems(2);
   TW.writeForm(form, TW.getState());
 
+  // Gyp jobs use 3 SF buckets instead of the epoxy/polish system fields — show
+  // the right scope inputs for the selected work type (and on a restored draft).
+  const gypBox = document.getElementById("gyp-sf-container");
+  function syncScopeToWorkType() {
+    const wt = (form.querySelector("[name='work_type']:checked") || {}).value || "epoxy";
+    const isGyp = wt === "gyp";
+    if (gypBox) gypBox.style.display = isGyp ? "" : "none";
+    if (systemsContainer) systemsContainer.style.display = isGyp ? "none" : "";
+  }
+  form.querySelectorAll("[name='work_type']").forEach(r => r.addEventListener("change", syncScopeToWorkType));
+  syncScopeToWorkType();
+
   // Default the bid date to today so users don't have to think about it.
   const bidInput = form.querySelector("[name='bid_date']");
   if (bidInput && !bidInput.value) {
@@ -153,6 +165,12 @@
     // ({{city_state}}) and tax lookup keep working unchanged. Zip is new
     // and stored separately.
     const cs = [values.city, (values.state || "").toUpperCase()].filter(Boolean).join(", ");
+    // Non-gyp jobs clear the gyp SF buckets to "" (NOT delete — setState merges,
+    // and "" is skipped by the estimate seeds + the .xlsx writer). Keeps a draft
+    // toggled off Gyp from carrying stale gyp SFs into an epoxy/polish estimate.
+    if ((values.work_type || "epoxy") !== "gyp") {
+      values.gyp_soft_sf = ""; values.gyp_hard_sf = ""; values.gyp_corridor_sf = "";
+    }
     // Bid date is now the single project date. Mirror it into `deadline` so the
     // Projects list, the notification bell's due-date reminders, and the Dropbox
     // folder date (all of which read `deadline`) keep tracking the bid date.

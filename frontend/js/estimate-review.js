@@ -183,15 +183,26 @@ if (!state.project_name) {
 // "Project Info" zone and ALWAYS write to Epoxy!{addr} no matter which
 // tab the user is currently on. Other tabs render the same value live.
 const CANONICAL_SHEET = "Epoxy";
+// The 5 gyp underlayment variants (identical layout). Their project-info block
+// lives on the GYP base sheet (offset +1 row vs Epoxy, NOT =Epoxy! mirrors), so
+// project-info edits on any gyp tab must canonicalize to the gyp base — NOT Epoxy.
+const GYP_BASE = 'Gyp (USG 1-8")';
+const GYP_SHEETS = [GYP_BASE, 'Gyp (USG N12ULTRA)', 'Gyp (USG N25 1-4")', 'Gyp (GWorx SC190)', 'Gyp (FR)'];
 function isProjectInfoCell(addr) {
   const m = (addr || "").match(/^([A-D])(\d+)$/);
   if (!m) return false;
   const row = parseInt(m[2], 10);
   return row >= 1 && row <= 10;
 }
+// Which sheet a tab's shared project-info canonicalizes to. Gyp-layout tabs →
+// the gyp base; everything else → Epoxy (unchanged for epoxy/polish/seal/etc.).
+function canonicalSheetFor(sheet) {
+  try { return /^Gyp/i.test(layoutIdFor(sheet)) ? GYP_BASE : CANONICAL_SHEET; }
+  catch { return CANONICAL_SHEET; }
+}
 function canonicalKey(sheet, addr) {
   return isProjectInfoCell(addr)
-    ? `${CANONICAL_SHEET}!${addr}`
+    ? `${canonicalSheetFor(sheet)}!${addr}`
     : `${sheet}!${addr}`;
 }
 
@@ -199,7 +210,7 @@ function canonicalKey(sheet, addr) {
 // HF needs both, not a single combined key.
 function canonicalTarget(sheet, addr) {
   return isProjectInfoCell(addr)
-    ? { sheet: CANONICAL_SHEET, addr }
+    ? { sheet: canonicalSheetFor(sheet), addr }
     : { sheet, addr };
 }
 
@@ -238,10 +249,32 @@ const FORM_TO_CELL = {
   contact_phone:     "Epoxy!I2",
 };
 
+// Gyp intake → estimate cells. Project info lives on the gyp BASE sheet at a
+// +1-row offset vs Epoxy and is NOT an =Epoxy! mirror, so it maps to its own
+// cells (parity: mirrors backend GYP_CELL_MAP / GYP_SF_MAP).
+const GYP_FORM_TO_CELL = {
+  project_name:      `${GYP_BASE}!B2`,
+  bid_date:          `${GYP_BASE}!B3`,
+  address:           `${GYP_BASE}!B4`,
+  city_state:        `${GYP_BASE}!C4`,
+  approx_start_date: `${GYP_BASE}!B9`,
+  architect:         `${GYP_BASE}!B10`,
+  contact_name:      `${GYP_BASE}!G2`,
+  contact_email:     `${GYP_BASE}!H2`,
+  contact_phone:     `${GYP_BASE}!I2`,
+};
+// The three SF buckets seed G9/I9/K9 on EVERY gyp variant so the estimator can
+// compare variants / mark them as options without re-typing the takeoff.
+const GYP_SF_CELLS = { gyp_soft_sf: "G9", gyp_hard_sf: "I9", gyp_corridor_sf: "K9" };
+
 // Lookup-table automations layered on top of the raw intake → cell map.
 // These never override the user's saved edits (we skip if cellValues
 // already has the address). Each one cites the rule it's encoding.
 function applyHeuristics(intake, putIfBlank) {
+  // Gyp is mobilization-based and doesn't use the Epoxy crew/labor sheet — skip
+  // the Epoxy!A47/B47/C47 heuristics entirely so a gyp job never seeds stale
+  // crew/rate values onto the (reference-only) Epoxy tab.
+  if ((intake.work_type || "epoxy").toLowerCase() === "gyp") return;
   const sf = Number(intake.system_1_sf || 0);
   // Crew + days heuristic — scale a baseline crew to floor SF.
   //   ≤ 5k SF  → 2 guys × 3 days
@@ -264,11 +297,17 @@ function applyHeuristics(intake, putIfBlank) {
 }
 
 (function autofillFromIntake() {
-  for (const [field, addr] of Object.entries(FORM_TO_CELL)) {
-    const v = state[field];
-    if (v !== undefined && v !== null && v !== "" && cellValues[addr] === undefined) {
-      cellValues[addr] = v;
-    }
+  const seed = (addr, v) => {
+    if (v !== undefined && v !== null && v !== "" && cellValues[addr] === undefined) cellValues[addr] = v;
+  };
+  for (const [field, addr] of Object.entries(FORM_TO_CELL)) seed(addr, state[field]);
+  // Gyp jobs additionally seed the gyp base sheet's project info + the three SF
+  // buckets across all five gyp variants (Epoxy/Polish seeds above are inert
+  // reference data — the gyp base is the actual bid driver here).
+  if ((state.work_type || "epoxy").toLowerCase() === "gyp") {
+    for (const [field, addr] of Object.entries(GYP_FORM_TO_CELL)) seed(addr, state[field]);
+    for (const sheet of GYP_SHEETS)
+      for (const [field, cell] of Object.entries(GYP_SF_CELLS)) seed(`${sheet}!${cell}`, state[field]);
   }
   applyHeuristics(state, (addr, val) => {
     if (cellValues[addr] === undefined) cellValues[addr] = val;
@@ -285,6 +324,13 @@ if (state.system_name) sysNameInput.value = state.system_name;
 const TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
 (function buildTextureControl() {
   const wt = (state.work_type || "epoxy").toLowerCase();
+  // Gyp underlayment has no texture/sheen selection — hide the whole control
+  // (its label wrapper) so the ribbon doesn't show an irrelevant field.
+  if (wt === "gyp") {
+    const wrap = texInput.closest("label") || texInput;
+    if (wrap) wrap.style.display = "none";
+    return;
+  }
   if (wt === "polish") { if (state.texture) texInput.value = state.texture; return; }
   const cur = state.texture || "";
   const sel = document.createElement("select");
@@ -341,6 +387,7 @@ let sheetCache = {};  // name → fetched cell data
 // keyed "<id>!<addr>". A copied epoxy tab is one priced option in the proposal.
 const MAX_COPIES = 12;
 const BASE_ROLE = { Epoxy: "epoxy", Polish: "polish" };
+GYP_SHEETS.forEach((s) => { BASE_ROLE[s] = "gyp"; });   // all 5 gyp variants are priced 'gyp'
 
 // One-time migration of the old separate-"rooms" model → the tab model.
 if (Array.isArray(state.rooms) && state.rooms.length && !Array.isArray(state.tab_copies)) {
@@ -424,7 +471,7 @@ function layoutIdFor(id) {
 // "total" (its own price) or a "deduct" (savings vs. the base). These
 // controls live in #bid-bar here AND mirror onto the Proposal Review
 // sidebar — both edit state.base_tab_id + state.tab_opts[id].
-const PRICED_ROLES = new Set(["epoxy", "polish"]);
+const PRICED_ROLES = new Set(["epoxy", "polish", "gyp"]);
 const isPricedRole = (r) => PRICED_ROLES.has(r);
 // role-aware total cells (fixes reading a polish tab at D88 instead of D82).
 // TEMPLATE coordinates translated through the sheet's structural edits, so a
@@ -432,7 +479,10 @@ const isPricedRole = (r) => PRICED_ROLES.has(r);
 // totals cell keeps the template addr (deletion of totals rows is blocked in
 // the UI; direct API abuse just reads a stale cell, never a wrong-money one).
 function totalCellsFor(id) {
-  const base = roleFor(id) === "polish" ? TOTAL_CELLS.Polish : TOTAL_CELLS.Epoxy;
+  const role = roleFor(id);
+  const base = role === "polish" ? TOTAL_CELLS.Polish
+             : role === "gyp"    ? TOTAL_CELLS.Gyp
+             : TOTAL_CELLS.Epoxy;
   if (!structOpsFor(id).length) return base;
   const out = {};
   for (const k in base) out[k] = txAddr(id, base[k]) || base[k];
@@ -440,9 +490,19 @@ function totalCellsFor(id) {
 }
 function pricedTabs() { return tabs.filter(t => isPricedRole(t.role)); }
 const hfNum = (id, addr) => { const v = HF.getValue(id, addr); return typeof v === "number" ? v : 0; };
+// The template sheet to open / fall back to for the current work type:
+// gyp → the gyp base, polish → Polish, else Epoxy.
+function defaultBaseSheet() {
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  return wt === "gyp" ? GYP_BASE : wt === "polish" ? "Polish" : "Epoxy";
+}
 function resolveBaseTab() {
   const byId = tabs.find(t => t.id === state.base_tab_id && isPricedRole(t.role));
   if (byId) return byId;
+  if ((state.work_type || "epoxy").toLowerCase() === "gyp") {
+    const g = tabs.filter(t => t.role === "gyp");             // gyp base = the USG 1-8" tab
+    return g.find(t => t.id === GYP_BASE) || g.find(t => t.kind === "base") || g[0] || pricedTabs()[0] || null;
+  }
   const ep = tabs.filter(t => t.role === "epoxy");           // today's fallback derivation
   return ep.find(t => t.kind === "base") || ep[0] || pricedTabs()[0] || null;
 }
@@ -471,26 +531,43 @@ function renderBidOptions() {
   if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
   const baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
+  // gyp is a priced role too, so all 5 gyp variants live in `priced` on EVERY
+  // job. Show gyp chips only on gyp jobs (or when the estimator has engaged one
+  // as base/option/non-zero); conversely hide the epoxy/polish chips on a gyp
+  // job unless engaged. The stale-base guard above still uses unfiltered `priced`.
+  const chipEngaged = (t) =>
+    t.id === baseId ||
+    (state.tab_opts[t.id] && state.tab_opts[t.id].is_option) ||
+    (HF.ready && hfNum(t.id, totalCellsFor(t.id).total) > 0);
+  const chipVisible = (t) => (wt === "gyp") ? (t.role === "gyp" || chipEngaged(t))
+                                            : (t.role !== "gyp" || chipEngaged(t));
+  const visible = priced.filter(chipVisible);
   // The combined chip names the ACTUAL base sheets — renamed tabs read as
   // "Grooming Room + Lobby (combined)", not a hardcoded "Epoxy + Polish".
+  // Scoped to epoxy/polish so a gyp variant never joins the "(combined)" label.
   const comboLabel = () => {
-    const bases = priced.filter(t => t.kind === "base");
+    const bases = priced.filter(t => t.kind === "base" && t.role !== "gyp");
     const names = bases.length ? bases.map(t => labelFor(t.id)) : ["Epoxy", "Polish"];
     return names.join(" + ") + " (combined)";
   };
   const autoLabel = wt === "combo" ? comboLabel()
                                    : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
-  // The "Auto" chip only means something when there are 2+ priced tabs (pick a
-  // base, or — for combo — combine them). With a single priced tab it's just a
-  // redundant duplicate of that lone tab, so suppress it and show the tab itself
-  // as the base bid (auto-resolution still works via a null base_tab_id).
-  const showAuto = priced.length > 1;
-  const soloBase = (!baseId && priced.length === 1) ? priced[0].id : null;
-  const isPartOfAutoBase = (t) => !baseId && !soloBase && t.kind === "base";
+  // The "Auto" chip only means something when there are 2+ visible priced tabs
+  // (pick a base, or — for combo — combine them). With a single visible tab it's
+  // just a redundant duplicate, so suppress it and show the tab itself as base.
+  const showAuto = visible.length > 1;
+  const soloBase = (!baseId && visible.length === 1) ? visible[0].id : null;
+  // A tab whose option controls are hidden because it's already the auto-base:
+  // epoxy/polish → the combined base tabs; gyp → only the resolved gyp base.
+  const isPartOfAutoBase = (t) => {
+    if (baseId || soloBase) return false;
+    if (wt === "gyp") return !!(autoBase && t.id === autoBase.id);
+    return t.kind === "base" && t.role !== "gyp";
+  };
   const baseRadio = (val, checked, label) =>
     `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
   let html = showAuto ? `<span class="bb-opt">${baseRadio("", !baseId, autoLabel)}</span>` : "";
-  html += priced.map(t => {
+  html += visible.map(t => {
     const o = state.tab_opts[t.id] || {};
     const isBase = baseId === t.id || soloBase === t.id;
     const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
@@ -748,7 +825,7 @@ function deleteTab(id) {
                 tab_notes: state.tab_notes, tab_opts: state.tab_opts,
                 base_tab_id: state.base_tab_id, cell_values: cellValues });
   renderTabs();
-  if (activeSheet === id) showSheet((state.work_type || "epoxy").toLowerCase() === "polish" ? "Polish" : "Epoxy");
+  if (activeSheet === id) showSheet(defaultBaseSheet());
 }
 
 // Inline rename: double-click a tab → editable input (Enter commits, Esc cancels).
@@ -773,6 +850,9 @@ function startRename(btn, id) {
 
 // Auto-derive per-tab notes (cove base) from the tab's cove LF cells.
 function deriveNotes(id) {
+  // Gyp layouts don't have cove cells at E34/E37 — those coords hold unrelated
+  // takeoff numbers on a gyp sheet, so the cove heuristic would false-positive.
+  if (roleFor(id) === "gyp") return [];
   // Template coords translated through the tab's structural edits.
   const out = [];
   if (hfNumTx(id, "E34") + hfNumTx(id, "E37") > 0) out.push('Includes 6" Cove Base');
@@ -880,9 +960,8 @@ async function init() {
     if (sheet && addr) HF.setCellValue(sheet, addr, val);
   }
 
-  // 4. Open the right starting tab
-  const wt = (state.work_type || "epoxy").toLowerCase();
-  const initialSheet = wt === "polish" ? "Polish" : "Epoxy";
+  // 4. Open the right starting tab (gyp → the gyp base, polish → Polish, else Epoxy)
+  const initialSheet = defaultBaseSheet();
   badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
   // 5. Re-render the bid bar + total bar now that EVERY sheet (incl. copied
@@ -1257,17 +1336,19 @@ function refreshDomFromHF(data, grid) {
     if (!inp) continue;
     if (document.activeElement === inp) continue; // don't clobber a focused cell
 
-    // Project-info cells (rows 1-10) on Polish/Gyp/… are =Epoxy!Bn formulas.
-    // An empty Epoxy source makes that formula compute to 0 → "0" (text cells)
-    // or a date artifact. Mirror the CANONICAL Epoxy value so the block is
-    // identical on every tab (blank when Epoxy is blank).
-    if (isProjectInfoCell(cell.addr) && sheet !== CANONICAL_SHEET) {
-      const cKey = `${CANONICAL_SHEET}!${cell.addr}`;
+    // Project-info cells (rows 1-10) on a non-canonical tab are =<canonical>!Bn
+    // mirrors: Polish/Seal/… mirror Epoxy; gyp VARIANTS mirror the gyp base. An
+    // empty source makes that formula compute to 0 → "0" (text cells) or a date
+    // artifact. Mirror the CANONICAL value so the block is identical on every
+    // tab of that layout (blank when the source is blank).
+    const canon = canonicalSheetFor(sheet);
+    if (isProjectInfoCell(cell.addr) && sheet !== canon) {
+      const cKey = `${canon}!${cell.addr}`;
       if (cellValues[cKey] != null) {
         inp.value = cellValues[cKey];
       } else {
-        const epoxy = sheetCache[CANONICAL_SHEET];
-        const src = epoxy && epoxy.cells ? epoxy.cells.find(c => c.addr === cell.addr) : null;
+        const srcSheet = sheetCache[canon];
+        const src = srcSheet && srcSheet.cells ? srcSheet.cells.find(c => c.addr === cell.addr) : null;
         inp.value = (src && src.value !== null && src.value !== undefined)
           ? formatNumericValue(src.value, src.fmt) : "";
       }
@@ -1325,10 +1406,16 @@ function refreshDomFromHF(data, grid) {
 const TOTAL_CELLS = {
   Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62", sales_tax: "D80", remodel: "D81", phase: "C91" },
   Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75", phase: "C85" },
+  // Gyp totals live in column E; mobilization-based → NO phase cell (phase_price
+  // snapshots 0). All 5 gyp variants share this layout, so it's keyed by role,
+  // not sheet name (see totalCellsFor / updateTotalBar's gyp-aware guards).
+  Gyp:    { total: "E87", psf: "E18", material: "E41", labor: "E52", tooling: "E61", sales_tax: "E79", remodel: "E80" },
 };
 
 function updateTotalBar(data, byAddr) {
-  const map = TOTAL_CELLS[data.sheet] ? totalCellsFor(data.sheet) : {};
+  // Gyp variant tabs aren't named "Gyp", so the sheet-name lookup misses them —
+  // fall through to totalCellsFor (role-aware) when the sheet is a gyp layout.
+  const map = (TOTAL_CELLS[data.sheet] || roleFor(data.sheet) === "gyp") ? totalCellsFor(data.sheet) : {};
   const cellVal = (addr) => {
     if (!addr) return null;
     const c = byAddr.get(addr);
@@ -1581,17 +1668,18 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   // Borders from the source xlsx (overrides the default grid lines)
   if (cell.borders) applyBorders(d, cell.borders);
 
-  // Canonical-key remap: Project Info cells (A1:D10) always live on
-  // Epoxy. Editing them on any tab writes to Epoxy!{addr} so all tabs
-  // stay in sync (mirroring how the source xlsx wires Polish/Gyp/etc
-  // to Epoxy via cross-sheet formula references).
+  // Canonical-key remap: Project Info cells (A1:D10) canonicalize to the
+  // layout's source tab — Epoxy for epoxy/polish/seal/…, the gyp BASE for gyp
+  // variants. Editing them on any tab writes to <canon>!{addr} so all tabs of
+  // that layout stay in sync (mirroring the source xlsx's cross-sheet formulas).
   const addrKey = canonicalKey(sheet, cell.addr);
+  const canon = canonicalSheetFor(sheet);
   const isYellow = cell.fill && /^#FFF[F4][0A][03A]/i.test(cell.fill);
   if (isYellow) d.classList.add("editable");
   // Visual cue when a cell is canonicalised but we're not on the source tab
-  if (isProjectInfoCell(cell.addr) && sheet !== CANONICAL_SHEET) {
+  if (isProjectInfoCell(cell.addr) && sheet !== canon) {
     d.classList.add("canonical-mirror");
-    d.title = `Project Info — canonical source: ${CANONICAL_SHEET}!${cell.addr}`;
+    d.title = `Project Info — canonical source: ${canon}!${cell.addr}`;
   }
 
   // Every cell is editable. Dropdowns become <select>; everything else
@@ -1616,14 +1704,14 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     inp = document.createElement("input");
     inp.type = "text";
     let displayVal;
-    // For canonical-mirror cells: prefer the user's edit, else the
-    // Epoxy source cell's cached value, else fall back to the local
-    // cell's value. This way Polish's "Project Info" rows actually
-    // show what Epoxy holds, not the local formula's stale 0.
+    // For canonical-mirror cells: prefer the user's edit, else the canonical
+    // source cell's cached value (Epoxy for epoxy/polish, the gyp base for gyp
+    // variants), else fall back to the local cell's value. This way a mirror
+    // tab's "Project Info" rows show what the source holds, not a stale 0.
     let displaySource = cell;
-    if (isProjectInfoCell(cell.addr) && sheet !== CANONICAL_SHEET && sheetCache[CANONICAL_SHEET]) {
-      const epoxyCells = sheetCache[CANONICAL_SHEET].cells || [];
-      const sourceCell = epoxyCells.find(c => c.addr === cell.addr);
+    if (isProjectInfoCell(cell.addr) && sheet !== canon && sheetCache[canon]) {
+      const srcCells = sheetCache[canon].cells || [];
+      const sourceCell = srcCells.find(c => c.addr === cell.addr);
       if (sourceCell) displaySource = sourceCell;
     }
     if (cellValues[addrKey] != null) {
@@ -2123,8 +2211,8 @@ function applyStructOp(sheet, kind, at, count = 1) {
     return;
   }
   // Never let a delete take out the sheet's own totals cells — the bid and
-  // the proposal snapshot read them.
-  if (kind.startsWith("delete") && TOTAL_CELLS[roleFor(sheet) === "polish" ? "Polish" : "Epoxy"]) {
+  // the proposal snapshot read them. (Priced roles = epoxy/polish/gyp.)
+  if (kind.startsWith("delete") && isPricedRole(roleFor(sheet))) {
     const totals = Object.values(totalCellsFor(sheet));
     for (const a of totals) {
       const m = /^([A-Z]{1,3})([0-9]+)$/i.exec(a || "");
@@ -2337,6 +2425,25 @@ function updateTotalBarFromHF() {
   // bid totals; they're lookup data.
   if (!HF.ready) return;
   const workType = (state.work_type || "epoxy").toLowerCase();
+  // Gyp is priced off ONE base tab (mobilization-based, column-E totals) — the
+  // Total bar mirrors that single gyp sheet, not the Epoxy/Polish bid drivers.
+  if (workType === "gyp") {
+    const baseTab = resolveBaseTab();
+    const gid  = baseTab ? baseTab.id : GYP_BASE;
+    const gmap = totalCellsFor(gid);
+    const val = (key) => {
+      const v = HF.getValue(gid, gmap[key]);
+      if (v && typeof v === "object" && "value" in v) return null;   // HF error
+      return typeof v === "number" ? v : null;
+    };
+    const setTB = (id, v) => { document.getElementById(id).textContent = v == null ? "—" : fmtMoney(v); };
+    setTB("tb-material", val("material"));
+    setTB("tb-labor",    val("labor"));
+    setTB("tb-tooling",  val("tooling"));
+    setTB("tb-total",    val("total"));
+    setTB("tb-psf",      val("psf"));
+    return;
+  }
   // Sums numeric HF values, skipping errors / nulls
   const sumCells = (sources) => sources.reduce((acc, src) => {
     const v = HF.getValue(src.sheet, src.addr);
@@ -2650,20 +2757,31 @@ function snapshotLumpSumsToState() {
   };
   const epoxyLump  = num("Epoxy",  totalCellsFor("Epoxy").total);   // D88
   const polishLump = num("Polish", totalCellsFor("Polish").total);  // D82
+  // Base bid = the estimator's designated tab (state.base_tab_id) or, when unset,
+  // today's derivation (base-kind epoxy tab, or the gyp base on gyp jobs). A
+  // designated base drives the proposal's Total Lump Sum + itemized taxes from
+  // THAT tab's cells; with no designation we keep the work_type behavior
+  // (combo = Epoxy + Polish sum; gyp = the single gyp base tab's col-E totals).
+  const baseTab   = resolveBaseTab();
+  const baseCells = baseTab ? totalCellsFor(baseTab.id) : TOTAL_CELLS.Epoxy;
+  const baseTotal = baseTab ? num(baseTab.id, baseCells.total) : 0;
+  const gypLump   = (wt === "gyp" && baseTab) ? num(baseTab.id, baseCells.total) : 0;
   state.hf_lump_sums = {
     epoxy:    epoxyLump,
     polish:   polishLump,
     combined: epoxyLump + polishLump,
+    gyp:      gypLump,
   };
 
-  // Base bid = the estimator's designated tab (state.base_tab_id) or, when unset,
-  // today's derivation (base-kind epoxy tab). A designated base drives the
-  // proposal's Total Lump Sum + itemized taxes from THAT tab's cells; with no
-  // designation we keep the work_type behavior (combo = Epoxy + Polish sum).
-  const baseTab   = resolveBaseTab();
-  const baseCells = baseTab ? totalCellsFor(baseTab.id) : TOTAL_CELLS.Epoxy;
-  const baseTotal = baseTab ? num(baseTab.id, baseCells.total) : 0;
-  if (state.base_tab_id && baseTab) {
+  if (wt === "gyp") {
+    // Gyp: one base tab, column-E totals, no combo. Always drive off the resolved
+    // gyp base (resolveBaseTab picks Gyp (USG 1-8") when nothing is designated).
+    const gid    = baseTab ? baseTab.id : GYP_BASE;
+    const gCells = baseTab ? baseCells : TOTAL_CELLS.Gyp;
+    state.proposal_lump_sum    = num(gid, gCells.total);
+    state.proposal_sales_tax   = num(gid, gCells.sales_tax);
+    state.proposal_remodel_tax = num(gid, gCells.remodel);
+  } else if (state.base_tab_id && baseTab) {
     state.proposal_lump_sum    = baseTotal;
     state.proposal_sales_tax   = num(baseTab.id, baseCells.sales_tax);
     state.proposal_remodel_tax = num(baseTab.id, baseCells.remodel);
@@ -2697,8 +2815,10 @@ function snapshotLumpSumsToState() {
     const n = typeof v === "number" ? v : parseFloat(String(v == null ? "" : v).replace(/[$,]/g, ""));
     return isFinite(n) ? n : 0;
   };
-  let _phase = (state.base_tab_id && baseTab) ? phaseAt(baseTab.id) : 0;
-  if (!_phase) _phase = phaseAt(wt === "polish" ? "Polish" : "Epoxy");
+  // Gyp is mobilization-based — it has NO phase cell, so phase_price stays 0
+  // (the gyp notes use a "$8,600 / $10,800 per mobilization" bullet instead).
+  let _phase = (state.base_tab_id && baseTab && wt !== "gyp") ? phaseAt(baseTab.id) : 0;
+  if (!_phase && wt !== "gyp") _phase = phaseAt(wt === "polish" ? "Polish" : "Epoxy");
   state.phase_price = _phase || 0;
 
   // Priced options: the estimator EXPLICITLY marks OTHER priced tabs as options
@@ -2792,6 +2912,12 @@ const _cbRealCove = o => /^(Epoxy|WR)\s+\d/.test(o || "");
 // Polished Concrete option on combos, e.g. "Treadwell MACRO Flake Single
 // Broadcast & Polished Concrete". Empty until a real system is picked.
 function deriveSystemName() {
+  // Gyp jobs name the system from the gyp base tab's B16 (e.g. 'N12 1/8"'),
+  // not the Epoxy system dropdowns.
+  if ((state.work_type || "epoxy").toLowerCase() === "gyp") {
+    const b = resolveBaseTab();
+    return b ? deriveSystemNameFor(b.id) : "";
+  }
   const names = [];
   ["Epoxy!A22", "Epoxy!A26"].forEach(a => {
     const v = _cbCell(a);
@@ -2804,6 +2930,14 @@ function deriveSystemName() {
 // Per-tab system name — each room/copy can pick its own system. Reads the tab's
 // OWN A22/A26 dropdown picks from HF (resolves for non-active tabs too).
 function deriveSystemNameFor(id) {
+  // Gyp layouts hold the system name in B16 (e.g. 'N12 1/8"'); fall back to the
+  // tab label when the cell is blank.
+  if (roleFor(id) === "gyp") {
+    const a = txAddr(id, "B16");
+    const v = a ? HF.getValue(id, a) : "";
+    const s = (typeof v === "string") ? v.trim() : (typeof v === "number" ? String(v) : "");
+    return s || labelFor(id);
+  }
   const names = [];
   for (const a0 of ["A22", "A26"]) {
     const a = txAddr(id, a0);            // template coords follow row/col edits
