@@ -66,6 +66,9 @@ COMBO_VALUES = {
     "exclusions": "Standard Treadwell exclusions list",
     "site_visit_phrase": "per site visit on 6/15/26",
     "base_tax_phrase": "(material sales tax INCLUDED)",
+    # combo WORK "Notes:" line (added 2026-07-16); a direct fill_proposal caller
+    # must supply it since _ensure_value_aliases (which coerces it) isn't in this path.
+    "work_notes": "Job-specific combo note.",
 }
 
 

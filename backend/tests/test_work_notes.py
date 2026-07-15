@@ -25,6 +25,7 @@ def _vals(wt, **over):
         "gyp_soft_sf": "1,000", "gyp_hard_sf": "0", "gyp_corridor_sf": "0",
         "gyp_soft_thickness": '3/4"', "gyp_hard_thickness": '1"', "gyp_corridor_thickness": '3/4"',
         "mobilizations_line": "1 Mob", "work_description": "per plans",
+        "epoxy_system_name": "Epoxy System",   # combo WORK uses this
     }
     v.update(over)
     return v
@@ -40,7 +41,7 @@ def _gen(wt, **over):
 
 
 def test_work_notes_line_renders_for_epoxy_polish_gyp():
-    for wt in ("epoxy", "polish", "gyp"):
+    for wt in ("epoxy", "polish", "gyp", "combo"):
         xml, text = _gen(wt, work_notes="VCT ghosting warning ZZZ")
         assert "{{work_notes}}" not in xml, f"{wt}: raw work_notes token leaked"
         assert "Notes:" in text, f"{wt}: WORK 'Notes:' label missing"
@@ -48,7 +49,7 @@ def test_work_notes_line_renders_for_epoxy_polish_gyp():
 
 
 def test_blank_work_notes_never_leaks_raw_token():
-    for wt in ("epoxy", "polish", "gyp"):
+    for wt in ("epoxy", "polish", "gyp", "combo"):
         # explicit empty
         xml, text = _gen(wt, work_notes="")
         assert "{{work_notes}}" not in xml, f"{wt}: raw token on empty work_notes"
