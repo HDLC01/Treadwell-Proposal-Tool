@@ -1531,6 +1531,11 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
         values["schedule_notes"] = _sched_def
     if _blank(values.get("scope_notes")):
         values["scope_notes"] = _scope_def
+    # WORK "Notes:" line ({{work_notes}} in the Direct epoxy/polish + gyp WORK
+    # sections) — an editable per-job note (e.g. VCT "ghosting" warnings). Always
+    # coerce to a string so the line renders "Notes:" with NO raw token even when
+    # the estimator left it blank; they fill it from the fields sidebar.
+    values["work_notes"] = str(values.get("work_notes") or "")
     # Header date token: M/D/YY from the ISO bid_date — backfilled so a caller that
     # omits the pre-formatted value (e.g. the "View files" rebuild path) can't leak
     # a raw {{bid_date_formatted}} into the customer-facing proposal.
