@@ -90,6 +90,28 @@ def test_polish_and_gyp_price_rows_flush_no_bullets():
     assert _xml(gout).count('<w:numId w:val="3"') == 0
 
 
+def test_double_spacing_before_options_heading():
+    # Kyle: double spacing after the base-bid Total. _space_before_options inserts
+    # 2 blank paragraphs immediately before each "Options" heading (both the
+    # mc:Choice and mc:Fallback copies of the text box).
+    pv = _vals(system_name="Polish", base_bid_formatted="$13,614.00",
+               total_formatted="$14,973.00")
+    out = pw.fill_proposal(work_type="polish", audience="Direct", values=pv, has_options=True,
+                           price_lines=[{"amount_formatted": "$1,927", "label": "Polish Add Dye"}])
+    from docx import Document
+    d = Document(io.BytesIO(out))
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paras = d.element.findall(".//" + W + "txbxContent//" + W + "p")
+    txts = ["".join(t.text or "" for t in p.findall(".//" + W + "t")).strip() for p in paras]
+    found = False
+    for i, t in enumerate(txts):
+        if t == "Options":
+            assert i >= 2 and txts[i - 1] == "" and txts[i - 2] == "", \
+                f"expected 2 blank paragraphs before 'Options' at {i}, got {txts[i-2:i]!r}"
+            found = True
+    assert found, "no 'Options' heading found to check spacing"
+
+
 def test_polish_options_heading_precedes_option_lines():
     # Kyle's Polish Direct template authored the "Options" heading at the BOTTOM
     # (after the {{#price_line}} rows + {{#alternate}}); it was moved to render
