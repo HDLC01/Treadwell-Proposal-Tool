@@ -46,9 +46,9 @@ _GC_TEMPLATES = {
 }
 
 _DIRECT_TEMPLATES = {
-    "Direct/XX.XX TREADWELL EPOXY PROPOSAL - New Direct.docx":       "be9051b8c52bc62a",
+    "Direct/XX.XX TREADWELL EPOXY PROPOSAL - New Direct.docx":       "b7864a02a9995101",
     "Direct/xx.xx TREADWELL BUDGET PRICING.docx":                    "684e11d2ac9763a4",
-    "Direct/xx.xx TREADWELL POLISH PROPOSAL - NewDirect.docx":       "a21eacb414676f6c",
+    "Direct/xx.xx TREADWELL POLISH PROPOSAL - NewDirect.docx":       "470ee25f9e935c70",
     "Direct/xx.xx.xx TREADWELL COMBO PROPOSAL - CUSTMOER NAME.docx": "cd6e90ecd4c161d1",
 }
 

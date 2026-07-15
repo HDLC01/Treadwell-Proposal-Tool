@@ -1016,6 +1016,10 @@
       scope_notes:        safe(mergedValues.scope_notes),
       schedule_notes:     safe(mergedValues.schedule_notes),
       exclusions:         safe(mergedValues.exclusions),
+      // WORK "Notes:" line — editable per-job note (empty until the estimator
+      // fills it; NOT `safe()` which would render "0"). The backend coerces the
+      // same way so a blank never prints a raw {{work_notes}} token.
+      work_notes:         String(mergedValues.work_notes || ""),
       sales_tax_handling: mergedValues.sales_tax_handling || "INCLUDED",
       tax_phrase: (mergedValues.sales_tax_handling || "INCLUDED") === "INCLUDED"
         ? "Sales and KS remodel tax are included in the lump sum above."
