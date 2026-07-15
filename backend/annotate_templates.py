@@ -153,7 +153,95 @@ GC_SEALER_RULES: list[tuple[str, str]] = [
     ("$x – Total",                                   "{{total_formatted}} – Total"),
 ]
 
-GYP_RULES: list[tuple[str, str]] = []   # mostly generic, no placeholders found
+_GYP_REL = "Gyp/xx TREADWELL UNDERLAYMENT PROPOSAL - xx.docx"
+
+# Gyp underlayment: static-boilerplate template with `xx` / `$x` placeholders,
+# laid out in floating text boxes over letterhead art (choice + VML fallback, so
+# every op hits 2 copies). Search strings are the XML-ESCAPED joined paragraph
+# text (verified byte-exact against the 2026-07-03 docx: NBSP=\xa0, en dash=–,
+# "&gt;"/"&amp;" escaped); replacements are plain (the engine xml_escapes them, so
+# ">" -> "&gt;"). Gyp shows its 4 price rows natively (base + material tax +
+# remodel + total), so those are FLAT tokens (always render); the backend fills
+# broken-out values for gyp. Options integrate via {{#price_line}} (the tool's
+# option tabs / add-deduct); the Clarifications box becomes {{#notes}}.
+GYP_RULES: list[tuple[str, str]] = [
+    ("Greg Ingebretson",                                          "{{estimator_name}}"),
+    ("7/1/26",                                                    "{{bid_date_formatted}}"),
+    ("xx, KS ",                                                   "{{city_state}}"),
+    ("xx, MO ",                                                   ""),
+    # Spec / drawings line value (keeps the bold "Gypsum Underlayment:" label — see LABEL_TOKENS)
+    ("per Spec 035413 &amp; Drawings by xx Architects dated 6/1/26 (NO spec)",
+                                                                  "{{work_description}}"),
+    # System & Scope — the 3 "Based on xx sf of x/x\" ..." sentences. L1/L2/L3 differ
+    # only by NBSP placement + the sound-mat clause; each full string is unique.
+    ("Based on\xa0xx sf\xa0of x/x\"\xa0USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over &gt;3/4\" plywood ",
+     "Based on {{gyp_soft_sf}} sf of {{gyp_soft_thickness}} USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over >3/4\" plywood "),
+    ("Based on\xa0xx sf\xa0of\xa0x/x\"\xa0USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over 1/8\" – SAM-N12 ",
+     "Based on {{gyp_hard_sf}} sf of {{gyp_hard_thickness}} USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over 1/8\" – SAM-N12 "),
+    ("Based on\xa0xx sf\xa0of\xa0x/x\" USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over &gt;3/4\" plywood ",
+     "Based on {{gyp_corridor_sf}} sf of {{gyp_corridor_thickness}} USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over >3/4\" plywood "),
+    # PRICE — flat tokens (gyp always itemizes; backend forces broken-out values)
+    ("$x – Gypsum Underlayment System as described above (material sales tax INCLUDED)",
+     "{{base_bid_formatted}} – Gypsum Underlayment System as described above (material sales tax INCLUDED)"),
+    ("$  x – Material Sales Tax",                            "{{material_tax_formatted}} – Material Sales Tax"),
+    ("$  x – Kansas Remodel Tax",                           "{{tax_amount_formatted}} – Kansas Remodel Tax"),
+    ("$x – Total",                                          "{{total_formatted}} – Total"),
+    ("xx Mobilizations to Site (x per building = x total).",     "{{mobilizations_line}}"),
+    # Options — the GrassWorx VE row becomes the {{#price_line}} row template
+    ("($x) – Deduct VE for GrassWorx SC 190 Sound Mat, in lieu of USG’s sound mat described above.",
+     "{{price_line.amount_formatted}} – {{price_line.label}}"),
+    # NOTES box — first paragraph becomes the block start (can't insert-before a
+    # box's first paragraph); second becomes the row template.
+    ("Excludes Union Labor/Prevailing Wage Labor (unless otherwise noted), bond &amp; liquidated damages ",
+     "{{#notes}}"),
+    ("Excludes hoisting or lifting of equipment to elevated slabs if elevator is unavailable",
+     "{{notes.text}}"),
+]
+
+# Bold-label paragraphs whose value spans following runs (kept label + tokenized value).
+GYP_LABEL_TOKENS: list[tuple[str, str]] = [
+    ("Exclusions:", "{{exclusions}}"),
+]
+
+# Marker paragraphs inserted relative to an anchor paragraph (post-replacement,
+# stripped, XML-escaped text). Anchors are all mid-box (never a box's first para).
+# Ordered: each pass re-scans the (updated) XML, so {{/has_options}} anchors on the
+# already-inserted {{/price_line}} para → correct nesting
+# {{#has_options}} / Options: / {{#price_line}} / row / {{/price_line}} / {{/has_options}}.
+GYP_MARKER_INSERTS: list[tuple[str, str, str]] = [
+    ("Options:",                                                   "{{#has_options}}", "before"),
+    ("{{price_line.amount_formatted}} – {{price_line.label}}", "{{#price_line}}",  "before"),
+    ("{{price_line.amount_formatted}} – {{price_line.label}}", "{{/price_line}}",  "after"),
+    ("{{/price_line}}",                                            "{{/has_options}}", "after"),
+    ("{{notes.text}}",                                             "{{/notes}}",       "after"),
+]
+
+# Static paragraphs removed (XML-escaped joined text, exact). The 7 leftover option/
+# footnote rows in PRICE + the 13 remaining Clarifications rows (preserved verbatim
+# as default_notes.json["gyp"]). None is a box-first paragraph.
+GYP_DELETE_PARAS: list[str] = [
+    "Note: ^ Limited Warranty applies.",
+    "($x) – Deduct to reduce Gypsum to 3/4\" thickness and Sound Mat to 3/16” for SAM-N12 ULTRA*.",
+    "*ULTRA mat will provide a better sound rating than the 1/4\" called for, while using less gyp. material.",
+    "$x – Add for Offsite Storage (if onsite storage of 500 sf not provided by GC).",
+    "$x – Add for Gypsum Sealer Material ONLY* (to be install by others).",
+    "* Consult your floor coverings expert for compatibility &amp; application.",
+    "* Treadwell not responsible for mis-use or improper storage of material.",
+    "Excludes temporary/permanent lighting &amp; HVAC as required by the manufacturer for system installation.",
+    "Excludes .03% Textura Fees",
+    "A FRESH water supply of at least 40 GPM with a 2\" hook-up must be provided, by others [must be Legal + Permitted].",
+    "Add $4,800 $8,600 for each additional mobilization, Add $5,600 $10,800 for each Pre-Pour mobilization.",
+    "Add $500/crew hour for “show up time” if crew mobilizes at agreed upon start date &amp; time but the job site is not ready.",
+    "Add $500/crew hour for “stand down time” if working, onsite crew is stopped for a reason outside of Treadwell’s control.",
+    "Addenda Acknowledged: 0",
+    "Treadwell typically requires 5 weeks of notice when scheduling new work",
+    "Treadwell includes the following insurance coverage: GL: 1M/2M, WC: 1M, Auto: 1M, Umb: 5M. Additional Coverage can be",
+    "provided at an additional cost.",
+    "Treadwell reserves the right to terminate the contract for customers not meeting Treadwell's pre-qual. requirements.",
+    "Up to 8% material escalation for 12 months from the date of this quote is included.  Any material escalation over 8% will be",
+    "added.  Any material ordered 12 months after the date of this quote will be repriced &amp; added to our contract.",
+    "Proposal valid for 60 days. The attached “Terms and Conditions” are part of this proposal/contract.",
+]
 
 # Map relative path → rule list
 TEMPLATE_RULES: dict[str, list[tuple[str, str]]] = {
@@ -390,6 +478,27 @@ def _delete_paragraphs(xml: str, escaped_texts) -> tuple[str, int]:
     return xml_new, count[0]
 
 
+def _insert_marker_paragraph(xml: str, anchor_text: str, marker: str, where: str) -> tuple[str, int]:
+    """Insert a bare marker paragraph (`<w:p>…{marker}…</w:p>`) immediately
+    before/after EVERY <w:p> whose joined <w:t> text (stripped) equals
+    `anchor_text` (XML-escaped form). Used to wrap {{#block}}…{{/block}} markers
+    around already-tokenized rows. `anchor_text` must never be a text box's FIRST
+    paragraph (WP_BLOCK_RE would match a bogus span incl. the outer anchor).
+    Returns (new_xml, n_inserted)."""
+    count = [0]
+    para = f'<w:p><w:r><w:t xml:space="preserve">{marker}</w:t></w:r></w:p>'
+
+    def _sub(m):
+        p_xml = m.group(0)
+        joined = "".join(n.group(2) for n in WT_NODE_RE.finditer(p_xml))
+        if joined.strip() != anchor_text:
+            return p_xml
+        count[0] += 1
+        return (para + p_xml) if where == "before" else (p_xml + para)
+
+    return WP_BLOCK_RE.sub(_sub, xml), count[0]
+
+
 def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int:
     print(f"\n=== {rel_path} ===")
 
@@ -429,6 +538,28 @@ def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int
                     xml, n = _delete_paragraphs(xml, GC_SCOPE_CONTINUATIONS[_rel])
                     if n:
                         print(f"  [OK]  deleted {n} scope-continuation paragraph(s)")
+                # Gyp underlayment: label-token Exclusions, delete leftover static
+                # option/clarification rows, then wrap {{#block}} markers + bare-xx
+                # job name. Order matters (delete before marker inserts).
+                if _rel == _GYP_REL and item.filename == "word/document.xml":
+                    for label, token in GYP_LABEL_TOKENS:
+                        xml, n = _tokenize_label_paragraph(xml, label, token)
+                        print(f"  [{'OK' if n else '--'}]  gyp label {label!r} -> {token}  ({n})")
+                        total += n
+                    xml, n = _delete_paragraphs(xml, GYP_DELETE_PARAS)
+                    print(f"  [{'OK' if n else '--'}]  gyp deleted {n} static paragraph(s) (expect 42)")
+                    for anchor, marker, where in GYP_MARKER_INSERTS:
+                        xml, n = _insert_marker_paragraph(xml, anchor, marker, where)
+                        print(f"  [{'OK' if n else '--'}]  gyp insert {marker} {where} {anchor[:34]!r}  ({n})")
+                    # bare 'xx' (whole-node) = the job name (BOX0); only whole-node
+                    # 'xx' remains after the rules above, so this is unambiguous.
+                    _pat = re.compile(r"(<w:t\b[^>]*>)xx(</w:t>)")
+                    _c = [0]
+                    def _jn(mm):
+                        _c[0] += 1
+                        return f"{_ensure_xml_space_preserve(mm.group(1))}{{{{job_name}}}}{mm.group(2)}"
+                    xml = _pat.sub(_jn, xml)
+                    print(f"  [{'OK' if _c[0] else '--'}]  gyp bare 'xx' -> {{{{job_name}}}}  ({_c[0]})")
                 data = xml.encode("utf-8")
             zout.writestr(item, data)
 
@@ -437,9 +568,16 @@ def annotate_one(path: Path, rules: list[tuple[str, str]], rel_path: str) -> int
 
 
 def main() -> int:
-    print(f"Annotating templates in {TEMPLATES_DIR}")
+    # Optional argv filter: only (re-)annotate the named template(s). CRITICAL —
+    # re-running the rules over an ALREADY-annotated template corrupts it, so pass
+    # the target when adding/fixing ONE template (e.g. the Gyp file) and leave the
+    # rest untouched. No args = annotate all (fresh-checkout bootstrap only).
+    targets = {a.replace("\\", "/") for a in sys.argv[1:]}
+    print(f"Annotating templates in {TEMPLATES_DIR}" + (f" (targets: {sorted(targets)})" if targets else " (ALL)"))
     grand_total = 0
     for rel_path, rules in TEMPLATE_RULES.items():
+        if targets and rel_path.replace("\\", "/") not in targets:
+            continue
         full = TEMPLATES_DIR / rel_path
         if not full.exists():
             print(f"\n!! Missing template: {rel_path}")
