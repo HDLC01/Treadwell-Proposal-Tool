@@ -335,6 +335,12 @@ class GenerateIn(BaseModel):
     # text on the proposal's PRICE lines; they NEVER touch cell_values, the .xlsx,
     # or GenerateOut totals. Sanitized in api_generate — see _sanitize_price_overrides.
     price_overrides: Dict[str, Any] = Field(default_factory=dict)
+    # Proposal Review: the WORK {{#system}} picks resolved from the BASE tab's
+    # sheet cells (name + SF + cove LF per system) so the docx Area matches the
+    # on-screen preview even when the base is a copy tab. [{name?, sf, lf}].
+    # Empty -> _build_epoxy_systems keeps its legacy Epoxy!-cell reads (stale
+    # drafts / the To-Dropbox reconstruction path). Sanitized in api_generate.
+    sheet_systems: list = Field(default_factory=list)
 
 
 class AutofillIn(BaseModel):
@@ -1046,11 +1052,15 @@ def _blank(v: Any) -> bool:
     return not str(v or "").strip()
 
 
-def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
-    """WORK-section system list for an epoxy proposal, from the picked System 1/2
-    cells (Epoxy!A22/E20/E34 and A26/E24/E37). One system → "System:   <name>"
-    (no Option label); 2+ → "Option 1: …" / "Option 2: …". Falls back to a single
-    system from the flat values so the {{#system}} block always has ≥1 row."""
+def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any],
+                         sheet_systems: list | None = None) -> list:
+    """WORK-section system list for an epoxy proposal. Preferred source is
+    `sheet_systems` — the picks the frontend resolved from the BASE tab's sheet
+    cells (name + SF + cove LF per system), so a copy-base's SF flows through.
+    Falls back to the legacy Epoxy!A22/E20/E34 + A26/E24/E37 cell reads (stale
+    drafts / the To-Dropbox reconstruction path) then to the flat values, so the
+    {{#system}} block always has ≥1 row. One system → "System:   <name>";
+    2+ → "Option 1: …" / "Option 2: …"."""
     def num(x) -> float:
         try:
             return float(str(x).replace(",", "").replace("$", "").strip() or 0)
@@ -1060,11 +1070,18 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any]) -> list:
         return f"{int(round(n)):,}"
 
     picks = []
-    for na, sa, la in (("Epoxy!A22", "Epoxy!E20", "Epoxy!E34"),
-                       ("Epoxy!A26", "Epoxy!E24", "Epoxy!E37")):
-        name = str(cells.get(na) or "").strip()
-        if name and "Options" not in name:        # skip the dropdown header placeholders
-            picks.append({"name": name, "sf": num(cells.get(sa)), "lf": num(cells.get(la))})
+    if sheet_systems:                              # frontend-resolved base-tab picks
+        for s in sheet_systems:
+            nm = str((s or {}).get("name") or "").strip()
+            if not nm or "Options" in nm:
+                nm = str(values.get("system_name") or "").strip() or "Epoxy System"
+            picks.append({"name": nm, "sf": num((s or {}).get("sf")), "lf": num((s or {}).get("lf"))})
+    if not picks:
+        for na, sa, la in (("Epoxy!A22", "Epoxy!E20", "Epoxy!E34"),
+                           ("Epoxy!A26", "Epoxy!E24", "Epoxy!E37")):
+            name = str(cells.get(na) or "").strip()
+            if name and "Options" not in name:     # skip the dropdown header placeholders
+                picks.append({"name": name, "sf": num(cells.get(sa)), "lf": num(cells.get(la))})
     if not picks:                                  # no grid pick → single system from flat values
         picks = [{
             "name": str(values.get("system_name") or "").strip() or "Epoxy System",
@@ -1288,6 +1305,27 @@ def _sanitize_system_overrides(overrides_in: list) -> list:
     return out
 
 
+# Cap + coerce the frontend-resolved sheet_systems ([{name?, sf, lf}]) — the WORK
+# picks sourced from the BASE tab's sheet cells. name is str()-coerced + capped;
+# sf/lf coerced to a float >= 0; non-dict entries dropped. Never raises.
+_SHEET_SYSTEMS_MAX = 4
+
+
+def _sanitize_sheet_systems(systems_in: list) -> list:
+    out = []
+    for s in (systems_in or [])[:_SHEET_SYSTEMS_MAX]:
+        if not isinstance(s, dict):
+            continue
+        def _f(x):
+            try:
+                return max(0.0, float(str(x).replace(",", "").replace("$", "").strip() or 0))
+            except (TypeError, ValueError):
+                return 0.0
+        out.append({"name": str(s.get("name") or "").strip()[:_SYSTEM_OVERRIDE_FIELD_MAXLEN],
+                    "sf": _f(s.get("sf")), "lf": _f(s.get("lf"))})
+    return out
+
+
 # Cap + coerce the doc editor's price_overrides. DISPLAY-ONLY: these override the
 # TEXT shown on the proposal's PRICE lines (base bid, priced options, manual price
 # lines) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals. Mirrors
@@ -1364,6 +1402,20 @@ _DEFAULT_SCOPE_POLISH = (
     "using finer grit pads for each pass. Apply hardener/densifier & topical sealer. Perform "
     "high-speed burnish. Assumes polish over: clean, sound & solid concrete substrate."
 )
+# Gyp underlayment (the {{scope_notes}} token isn't in the gyp template, so this is
+# defensive/sidebar-coherence only; {{exclusions}} IS a gyp token — its default is
+# the underlayment template's verbatim Exclusions line).
+_DEFAULT_SCOPE_GYP = (
+    "Pour USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over plywood subfloor / sound "
+    "mat as described above, at a uniform thickness & finished to a smooth surface."
+)
+_DEFAULT_EXCLUSIONS_GYP = (
+    "Sealer, Removal of ISO after pour, Credit for unused Mobs, water hook-up, form work, work "
+    "on podium level or below, pour stops, pre-pours of tubs/showers or party walls, metal lath "
+    "or mesh reinforcements, gyp under any thresholds, stair treads, lightweight conc., "
+    "mechanical ventilation, any caulking, any leveling, P&P Bonds, traffic control (provided by "
+    "others)."
+)
 
 # GC audience narrative fallbacks — the GC templates historically shipped their
 # Scope/Schedule/Exclusions as STATIC text (no token), so sidebar edits never
@@ -1436,7 +1488,32 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
     # Resinous). Non-GC keeps today's Direct wording BYTE-IDENTICAL.
     is_gc = str(audience or values.get("audience") or "").strip().upper() == "GC"
     _wt = str(values.get("work_type") or "epoxy").lower()
-    if is_gc:
+    if _wt == "gyp":
+        # Gyp uses ONE underlayment template regardless of audience.
+        _scope_def, _excl_def, _sched_def = _DEFAULT_SCOPE_GYP, _DEFAULT_EXCLUSIONS_GYP, _DEFAULT_SCHEDULE
+        # Gyp-only template tokens — backfill so generate never leaks a raw token
+        # (frontend computeTokenValues normally supplies the SFs; these are the
+        # defensive fallbacks + the fields the frontend doesn't compute).
+        def _sf(v):
+            s = str(v if v is not None else "").replace(",", "").strip()
+            try:
+                return f"{int(round(float(s))):,}" if s else "0"
+            except (TypeError, ValueError):
+                return s or "0"
+        for _t in ("gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"):
+            if _blank(values.get(_t)):
+                values[_t] = _sf(values.get(_t))
+        _thk = {"gyp_soft_thickness": '3/4"', "gyp_hard_thickness": '1"', "gyp_corridor_thickness": '3/4"'}
+        for _t, _d in _thk.items():
+            if _blank(values.get(_t)):
+                values[_t] = _d
+        if _blank(values.get("mobilizations_line")):
+            values["mobilizations_line"] = "1 Mobilization to Site."
+        # Gyp has no work_description input, so the generic address-alias (set
+        # above) would leak the address into the spec line — force the gyp default
+        # (the estimator refines the actual spec/drawings line in the doc editor).
+        values["work_description"] = "per plans & specifications provided"
+    elif is_gc:
         if _wt == "polish":
             _scope_def, _excl_def = _DEFAULT_SCOPE_GC_POLISH, _DEFAULT_EXCLUSIONS_GC_POLISH
         elif _wt == "sealer":
@@ -1651,6 +1728,11 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
     _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
     _broken = _incl in ("BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT")
+    # Gyp always itemizes (its template shows Base + Material Sales Tax + Kansas
+    # Remodel Tax + Total as flat rows), so never collapse base_bid_formatted to
+    # the total for gyp — keep the pre-tax base the frontend computed.
+    if str(values.get("work_type") or "").lower() == "gyp":
+        _broken = True
     if _broken:
         # Itemized: keep the frontend's pre-tax base + Material Sales Tax + Total;
         # remodel shows as its own line; no "INCLUDED" label on the base line.
@@ -1874,7 +1956,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     try:
         # Epoxy WORK section lists each picked system as its own row (1 system →
         # "System: …", 2+ → "Option 1/2: …") via the template's {{#system}} block.
-        systems_arg = (_build_epoxy_systems(payload.cell_values, values)
+        systems_arg = (_build_epoxy_systems(payload.cell_values, values,
+                                             _sanitize_sheet_systems(payload.sheet_systems))
                        if str(payload.work_type or "").lower() == "epoxy" else None)
         # Doc-editor DISPLAY overrides for the WORK rows, applied by option index
         # over the computed systems. `prefix`/`lf_clause` stay computed; nothing
@@ -2066,7 +2149,7 @@ def _warm_sheet_cache() -> None:
     import threading
 
     def _warm() -> None:
-        for name in ("Epoxy", "Polish"):
+        for name in ("Epoxy", "Polish", 'Gyp (USG 1-8")'):
             try:
                 estimate_writer.read_sheet_grid(name)  # populates _SHEET_GRID_CACHE
                 log.info("Warmed sheet cache: %s", name)
@@ -2217,7 +2300,8 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         _list = lambda x: x if isinstance(x, list) else []
         _dict = lambda x: x if isinstance(x, dict) else {}
         vals = {k: v for k, v in data.items() if k not in ("proposal_payload", "generate_result")}
-        if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")):
+        if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")
+                or vals.get("gyp_soft_sf") or vals.get("gyp_hard_sf") or vals.get("gyp_corridor_sf")):
             return {"ok": False, "error": "This project has no estimate yet — open it and generate first."}
         gi = GenerateIn(
             work_type=data.get("work_type") or "epoxy",

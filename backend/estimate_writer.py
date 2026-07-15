@@ -364,6 +364,30 @@ POLISH_TOTALS: Dict[str, str] = {
     "price_per_sf":    "D15",
 }
 
+# Gyp underlayment sheets. All 5 variants share this layout; totals live in
+# column E (unlike Epoxy/Polish col D). Project info is written to the BASE sheet
+# only (variants mirror it via formula); the 3 SF inputs are written to ALL 5
+# (so the variant-as-option comparison works). Verified against estimate_sheet_5.7.xlsx.
+GYP_SHEET = 'Gyp (USG 1-8")'
+GYP_SHEETS = [GYP_SHEET, 'Gyp (USG N12ULTRA)', 'Gyp (USG N25 1-4")', 'Gyp (GWorx SC190)', 'Gyp (FR)']
+GYP_CELL_MAP: Dict[str, str] = {          # base sheet only (offset +1 row vs Epoxy; NOT =Epoxy! mirrors)
+    "project_name": "B2", "bid_date": "B3", "address": "B4", "city_state": "C4",
+    "approx_start_date": "B9", "architect": "B10",
+    "contact_name": "G2", "contact_email": "H2", "contact_phone": "I2",
+}
+GYP_SF_MAP: Dict[str, str] = {            # written to ALL 5 gyp sheets
+    "gyp_soft_sf": "G9", "gyp_hard_sf": "I9", "gyp_corridor_sf": "K9",
+}
+GYP_TOTALS: Dict[str, str] = {
+    "material_total":  "E41",
+    "labor_install":   "E52",
+    "tooling_total":   "E61",
+    "travel_total":    "E67",
+    "subtotal":        "E69",
+    "lump_sum":        "E87",   # final TOTAL
+    "price_per_sf":    "C87",
+}
+
 
 # ─── Rate / markup / tax cell-lock map ─────────────────────────────────
 # Cells that get Excel sheet-protection LOCKED in the generated .xlsx so the
@@ -734,6 +758,22 @@ def fill_estimate(
     for field, coord in POLISH_CELL_MAP.items():
         if field in values and values[field] not in (None, ""):
             polish[coord] = _coerce(values[field])
+
+    # Gyp underlayment: project info -> base sheet; the 3 SF inputs -> ALL 5 gyp
+    # variants (variant comparison). Presence-based (intake blanks gyp_* to "" for
+    # non-gyp jobs), and cell_values below still wins for anything the estimator
+    # typed. SF writes override the G9/I9/K9 takeoff formulas with literals — the
+    # same effect as typing in those cells.
+    if GYP_SHEET in wb.sheetnames:
+        gyp = wb[GYP_SHEET]
+        for field, coord in GYP_CELL_MAP.items():
+            if field in values and values[field] not in (None, ""):
+                gyp[coord] = _coerce(values[field])
+        for field, coord in GYP_SF_MAP.items():
+            if field in values and values[field] not in (None, ""):
+                for name in GYP_SHEETS:
+                    if name in wb.sheetnames:
+                        wb[name][coord] = _coerce(values[field])
 
     # 1.5 Duplicated worksheets: clone each {id, source} BEFORE the cell_values
     # loop (which skips sheets not yet in wb.sheetnames), so the copy's
@@ -1712,11 +1752,14 @@ def read_totals(filled_xlsx_bytes: bytes) -> Dict[str, Dict[str, Any]]:
     completeness.
     """
     wb = load_workbook(io.BytesIO(filled_xlsx_bytes), data_only=True)
-    out: Dict[str, Dict[str, Any]] = {"epoxy": {}, "polish": {}}
+    out: Dict[str, Dict[str, Any]] = {"epoxy": {}, "polish": {}, "gyp": {}}
     for name, coord in EPOXY_TOTALS.items():
         out["epoxy"][name] = wb["Epoxy"][coord].value
     for name, coord in POLISH_TOTALS.items():
         out["polish"][name] = wb["Polish"][coord].value
+    if GYP_SHEET in wb.sheetnames:
+        for name, coord in GYP_TOTALS.items():
+            out["gyp"][name] = wb[GYP_SHEET][coord].value
     return out
 
 

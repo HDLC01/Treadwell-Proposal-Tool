@@ -43,6 +43,9 @@
   // a proposal generated without autofill still carries the standard text.
   const _wt = (state.work_type || "epoxy").toLowerCase();
   const _audience = state.audience || "Direct";
+  // The gyp base tab id (must match estimate-review.js GYP_BASE) — the default
+  // priced base for gyp jobs; other gyp variants are options.
+  const GYP_BASE = 'Gyp (USG 1-8")';
 
   // ─── Audience + work-type narrative catalog ─────────────────────────
   // Scope/Schedule/Exclusions boilerplate. These strings are BYTE-IDENTICAL to
@@ -62,17 +65,24 @@
   const EXCL_GC_RESINOUS = "Epoxy Paint Walls, Wall Patching (as may be reqr’d for new base), Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (see exclusion detail below*), Nights & Weekends";
   const EXCL_GC_POLISH = "Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching (no more than 1 bag per 1,000 sf, see exclusion detail below*), Removal of Existing Joint Filler (if any), Nights & Weekends";
   const EXCL_GC_SEALER = "Patching, Grinding, Joint Filler (see option), Polishing of Concrete, Cove Base, Dye, Demo of Existing Floor/Glue/Etc. (new slab), Excessive Patching / Grinding (no more than 1 bag per 1,000 sf, see exclusion detail below*), Mock-Up, Nights & Weekends, Removal of Existing Joint Filler (if any)";
+  // Gyp underlayment: {{scope_notes}}/{{schedule_notes}} aren't tokens in the gyp
+  // template (sidebar-coherence only), but {{exclusions}} IS — EXCL_GYP prints.
+  // Backend uses _DEFAULT_SCHEDULE (== SCHED_DIRECT) for gyp regardless of audience.
+  const SCOPE_GYP = "Pour USG Levelrock 2500 Gypsum Floor Topping at 2,500 psi over plywood subfloor / sound mat as described above, at a uniform thickness & finished to a smooth surface.";
+  const EXCL_GYP = "Sealer, Removal of ISO after pour, Credit for unused Mobs, water hook-up, form work, work on podium level or below, pour stops, pre-pours of tubs/showers or party walls, metal lath or mesh reinforcements, gyp under any thresholds, stair treads, lightweight conc., mechanical ventilation, any caulking, any leveling, P&P Bonds, traffic control (provided by others).";
   const NARRATIVE_DEFAULTS = {
     Direct: {
       epoxy:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
       polish: { scope_notes: SCOPE_POLISH, schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
       combo:  { scope_notes: SCOPE_EPOXY,  schedule_notes: SCHED_DIRECT, exclusions: EXCL_DIRECT },
+      gyp:    { scope_notes: SCOPE_GYP,    schedule_notes: SCHED_DIRECT, exclusions: EXCL_GYP },
     },
     GC: {
       epoxy:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
       combo:  { scope_notes: SCOPE_GC_RESINOUS, schedule_notes: SCHED_GC, exclusions: EXCL_GC_RESINOUS },
       polish: { scope_notes: SCOPE_GC_POLISH,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_POLISH },
       sealer: { scope_notes: SCOPE_GC_SEALER,   schedule_notes: SCHED_GC, exclusions: EXCL_GC_SEALER },
+      gyp:    { scope_notes: SCOPE_GYP,         schedule_notes: SCHED_DIRECT, exclusions: EXCL_GYP },
     },
   };
   // Resolve (audience, work_type) -> {scope_notes, schedule_notes, exclusions},
@@ -193,24 +203,35 @@
     const wt = (state.work_type || "epoxy").toLowerCase();
     const label = wt === "polish" ? "Polished Concrete Flooring"
                 : wt === "combo"  ? "Epoxy & Polished Concrete Flooring"
+                : wt === "gyp"    ? "Gypsum Underlayment"
                 :                   "Epoxy Flooring";
     document.getElementById("work-type-label").value = label;
 
     // Toggle area rows by work_type
     const epoxyRow  = document.getElementById("area-row-epoxy");
     const polishRow = document.getElementById("area-row-polish");
+    const gypRow    = document.getElementById("area-row-gyp");
     const textureRow = document.getElementById("texture-row");
-    if (wt === "polish") {
+    if (wt === "gyp") {
+      // Gyp: only the 3-bucket gyp area row; no epoxy/polish rows, no texture.
+      epoxyRow.style.display  = "none";
+      polishRow.style.display = "none";
+      if (gypRow) gypRow.style.display = "";
+      textureRow.style.display = "none";
+    } else if (wt === "polish") {
       epoxyRow.style.display  = "none";
       polishRow.style.display = "";
+      if (gypRow) gypRow.style.display = "none";
       textureRow.style.display = "none"; // polish doesn't have texture
     } else if (wt === "epoxy") {
       epoxyRow.style.display  = "";
       polishRow.style.display = "none";
+      if (gypRow) gypRow.style.display = "none";
       textureRow.style.display = "";
     } else { // combo
       epoxyRow.style.display  = "";
       polishRow.style.display = "";
+      if (gypRow) gypRow.style.display = "none";
       textureRow.style.display = "";
       // For combo, clarify which area is which in the key
       epoxyRow.querySelector(".key").textContent  = "Epoxy Area:";
@@ -223,7 +244,8 @@
 
   // Texture is a fixed dropdown (epoxy/combo only — polish hides the row above).
   (function buildTextureControl() {
-    if ((state.work_type || "epoxy").toLowerCase() === "polish") return;
+    const _twt = (state.work_type || "epoxy").toLowerCase();
+    if (_twt === "polish" || _twt === "gyp") return;   // no texture row for these
     const input = document.querySelector('#texture-row input[name="texture"]');
     if (!input) return;
     const cur = (state.texture || input.value || "").trim();
@@ -302,6 +324,18 @@
   // the Estimate screen (state.priced_tabs). This lets the base-bid picker + the
   // per-option total/deduct toggles work HERE too, without the sheet engine. It
   // MIRRORS estimate-review.js:snapshotLumpSumsToState — keep the two in sync.
+  // Sum the Area buckets (SF / cove LF) from the BASE tab(s) ONLY — options
+  // never contribute. MIRRORS estimate-review.js:baseAreaFrom. Stale snapshots
+  // (priced_tabs without .sf) contribute nothing → callers fall back to intake.
+  function baseAreaFrom(tabsSnap, baseIds) {
+    const acc = {};
+    const ids = new Set((baseIds || []).filter(Boolean));
+    for (const t of tabsSnap || []) {
+      if (!ids.has(t.id) || !t.sf) continue;
+      for (const k in t.sf) acc[k] = (acc[k] || 0) + (Number(t.sf[k]) || 0);
+    }
+    return acc;
+  }
   function rebuildPricing() {
     const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
     if (!all.length) return;   // older draft w/o the snapshot — leave state.rooms as-is
@@ -327,10 +361,17 @@
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
     } else {
-      // No explicit base: work_type fallback (combo = Epoxy + Polish base tabs).
+      // No explicit base: work_type fallback (combo = Epoxy + Polish base tabs;
+      // gyp = the single gyp base tab).
       const eB = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy");
       const pB = all.find(t => t.role === "polish" && t.kind === "base") || all.find(t => t.role === "polish");
-      if (wt === "polish") { baseTab = pB || null; shownBase = N(pB && pB.total); salesTax = N(pB && pB.sales_tax); remodelTax = N(pB && pB.remodel); }
+      if (wt === "gyp") {
+        const gB = all.find(t => t.role === "gyp" && t.id === GYP_BASE)
+                || all.find(t => t.role === "gyp" && t.kind === "base")
+                || all.find(t => t.role === "gyp");
+        baseTab = gB || null; shownBase = N(gB && gB.total); salesTax = N(gB && gB.sales_tax); remodelTax = N(gB && gB.remodel);
+      }
+      else if (wt === "polish") { baseTab = pB || null; shownBase = N(pB && pB.total); salesTax = N(pB && pB.sales_tax); remodelTax = N(pB && pB.remodel); }
       else if (wt === "combo") { baseTab = eB || null; shownBase = N(eB && eB.total) + N(pB && pB.total); salesTax = N(eB && eB.sales_tax) + N(pB && pB.sales_tax); remodelTax = N(eB && eB.remodel) + N(pB && pB.remodel); }
       else { baseTab = eB || null; shownBase = N(eB && eB.total); salesTax = N(eB && eB.sales_tax); remodelTax = N(eB && eB.remodel); }
     }
@@ -360,10 +401,23 @@
       !(!state.base_tab_id && wt === "combo" && t.kind === "base"));
     const shown = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
     state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
+    // Recompute Area from the base tab(s) so a base switch / option toggle HERE
+    // re-derives the proposal's SF without the sheet engine (mirrors the
+    // estimate snapshot; combo default = the epoxy + polish base-kind tabs).
+    const _baseKindId = (role) => {
+      const t = all.find(x => x.role === role && x.kind === "base") || all.find(x => x.role === role);
+      return t ? t.id : null;
+    };
+    let _areaBaseIds;
+    if (state.base_tab_id && baseTab) _areaBaseIds = [baseTab.id];
+    else if (wt === "combo")         _areaBaseIds = [_baseKindId("epoxy"), _baseKindId("polish")];
+    else                             _areaBaseIds = [baseTab ? baseTab.id : null];
+    state.sheet_area = baseAreaFrom(all, _areaBaseIds);
     const el = document.querySelector("#tb-total");
     if (el) el.textContent = fmtUSD(shownBase);
     TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
-      proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax });
+      proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax,
+      sheet_area: state.sheet_area });
   }
 
   // Tax-treatment mode, read from the sidebar's dropdown. Shared by the
@@ -444,6 +498,7 @@
     const noun = wt === "polish" ? "Polished Concrete Flooring"
                : wt === "combo"  ? "Epoxy & Polished Concrete flooring"
                : wt === "sealer" ? "Sealed Concrete"
+               : wt === "gyp"    ? "Gypsum Underlayment System"
                : "Epoxy flooring";
     return noun + " as described above";
   }
@@ -561,7 +616,8 @@
       const wt = (state.work_type || "epoxy").toLowerCase();
       const N = (v) => Number(v) || 0;
       const floorNoun = wt === "polish" ? "Polished Concrete Flooring"
-                      : wt === "sealer" ? "Sealed Concrete" : "Epoxy flooring";
+                      : wt === "sealer" ? "Sealed Concrete"
+                      : wt === "gyp"    ? "Gypsum Underlayment System" : "Epoxy flooring";
       const taxPhrase = (r) => N(r.bid && r.bid.remodel) > 0
         ? "(Remodel Tax AND material sales tax INCLUDED)"
         : "(material sales tax INCLUDED)";
@@ -645,16 +701,40 @@
           const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
           const baseId = state.base_tab_id;
           const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
-          const isPartOfAutoBase = (t) => !baseId && t.kind === "base";   // Auto base = the base-kind tab(s)
+          // For gyp the "Auto" row resolves to a single listed variant (the gyp
+          // base) — redundant. Suppress it and treat the resolved gyp base as the
+          // effective base. (Combo keeps Auto = "Epoxy + Polish combined".)
+          const gypAutoBaseId = (wt === "gyp" && !baseId) ? GYP_BASE : null;
+          const effectiveBaseId = baseId || gypAutoBaseId;
+          const showAutoRow = !gypAutoBaseId;
+          // gyp is a priced role, so allTabs carries epoxy/polish + all 5 gyp
+          // variants on every job. By default show only the tabs relevant to this
+          // work type (mirrors estimate-review.js's chipVisible filter); the
+          // "+ Add another system" toggle (state.reveal_systems, shared with the
+          // estimate bid bar) reveals the cross-type rows for a multi-system bid.
+          // "Engaged" = the estimator explicitly made it the base or an option.
+          const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option);
+          const defaultVis = (t) => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
+                                                    : (t.role !== "gyp" || engaged(t));
+          const revealSystems = !!state.reveal_systems;
+          const visTabs = revealSystems ? allTabs.slice() : allTabs.filter(defaultVis);
+          const hasHiddenSystems = allTabs.some(t => !defaultVis(t));
+          // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
+          // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
+          const isPartOfAutoBase = (t) => {
+            if (baseId || gypAutoBaseId) return false;
+            return t.kind === "base" && t.role !== "gyp";
+          };
           optsPanel.hidden = false;
-          // A "Base bid" radio toggle per sheet (plus an Auto/combined row). The base
-          // row hides its option controls; the others keep show + total/deduct.
+          // A "Base bid" radio toggle per sheet (plus an Auto/combined row for
+          // epoxy/polish/combo). The base row hides its option controls; the
+          // others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
             `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
-            `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>`;
-          h += allTabs.map(t => {
+            (showAutoRow ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>` : "");
+          h += visTabs.map(t => {
             const o = opts[t.id] || {};
-            const isBase = baseId === t.id;
+            const isBase = effectiveBaseId === t.id;
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
             const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
@@ -681,7 +761,19 @@
             r += `</div>`;
             return r;
           }).join("");
+          // "+ Add another system" — reveals cross-work-type rows (mirrors the
+          // estimate bid bar) so a multi-system bid can be built here too.
+          if (hasHiddenSystems) {
+            const lbl = revealSystems ? "− Fewer systems" : "+ Add another system";
+            h += `<button type="button" class="pr-addsys-btn">${esc(lbl)}</button>`;
+          }
           optsPanel.innerHTML = h;
+          const addsysBtn = optsPanel.querySelector(".pr-addsys-btn");
+          if (addsysBtn) addsysBtn.addEventListener("click", () => {
+            state.reveal_systems = !state.reveal_systems;
+            try { TW.setState({ reveal_systems: state.reveal_systems }); } catch {}
+            renderProposalExtras();
+          });
 
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };
@@ -765,9 +857,15 @@
   // exact strings the .docx will carry.
   function computeTokenValues(mergedValues) {
     const workType = (state.work_type || "epoxy").toLowerCase();
-    const polishSF = Number(mergedValues.polish_sf || mergedValues.system_1_sf || 0);
-    const epoxySF  = Number(mergedValues.system_1_sf || 0);
-    const coveLF   = Number(mergedValues.cove_1_lf  || 0);
+    // Area SF/LF are SHEET-FIRST: the resolved base tab's cells (snapshotted into
+    // state.sheet_area — system-1 bucket for the flat tokens, matching today's
+    // semantics) win when > 0, else fall back to the intake fields. This makes a
+    // copy-base's SF flow to the proposal instead of only the intake number.
+    const sa = (state.sheet_area && typeof state.sheet_area === "object") ? state.sheet_area : {};
+    const sheetFirst = (sheetV, intakeV) => (Number(sheetV) > 0 ? Number(sheetV) : (Number(intakeV) || 0));
+    const polishSF = sheetFirst(sa.polish_sf, mergedValues.polish_sf || mergedValues.system_1_sf);
+    const epoxySF  = sheetFirst(sa.epoxy_sf,  mergedValues.system_1_sf);
+    const coveLF   = sheetFirst(sa.cove_lf,   mergedValues.cove_1_lf);
     const lumpSumText = document.querySelector("#tb-total")?.textContent || "$0.00";
     const lumpSumNumber = Number(String(lumpSumText).replace(/[^0-9.-]/g, "")) || 0;
     // Tax-inclusive bid. Kyle's .docx itemizes KS remodel tax on its own
@@ -855,6 +953,52 @@
       })(),
       ...mergedValues,
     };
+
+    // Area (SF / cove LF) tokens are re-assigned AFTER the ...mergedValues spread
+    // so a re-opened, previously-generated draft's persisted epoxy_sf /
+    // area_description (api_generate saves `values` back into the draft) can't
+    // shadow the freshly-resolved sheet-first figures. Non-gyp only; the gyp
+    // block below owns the gyp buckets.
+    if (workType !== "gyp") {
+      tokenValues.epoxy_sf  = epoxySF ? Number(epoxySF).toLocaleString("en-US") : "0";
+      tokenValues.polish_sf = polishSF ? Number(polishSF).toLocaleString("en-US") : "0";
+      tokenValues.cove_lf   = coveLF ? Number(coveLF).toLocaleString("en-US") : "0";
+      tokenValues.lf        = tokenValues.cove_lf;
+      tokenValues.sqft      = (workType === "polish" ? Number(polishSF || 0) : Number(epoxySF || 0)).toLocaleString("en-US");
+      tokenValues.area_description = workType === "polish"
+        ? `${fmtSF(polishSF)} of polished concrete flooring`
+        : `${fmtSF(epoxySF)} of epoxy flooring`;
+    }
+
+    // Gyp-only tokens. The gyp template prints {{gyp_*_sf}} directly and the
+    // backend only backfills BLANK ones, so the frontend must supply them here
+    // comma-formatted (a raw number from mergedValues would show "27825"). Also
+    // seed the thickness / mobilization / work_description defaults so the doc
+    // editor never shows a raw {{token}} before the estimator touches anything —
+    // byte-identical to main.py:_ensure_value_aliases' gyp branch.
+    if (workType === "gyp") {
+      const gN = (v) => Number(String(v == null ? "" : v).replace(/,/g, "")) || 0;
+      const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
+      // Sheet-first: base gyp tab's G9/I9/K9 (state.sheet_area) win over intake.
+      const soft = sheetFirst(sa.gyp_soft_sf, gN(mergedValues.gyp_soft_sf));
+      const hard = sheetFirst(sa.gyp_hard_sf, gN(mergedValues.gyp_hard_sf));
+      const corr = sheetFirst(sa.gyp_corridor_sf, gN(mergedValues.gyp_corridor_sf));
+      tokenValues.gyp_soft_sf     = fmtInt(soft);
+      tokenValues.gyp_hard_sf     = fmtInt(hard);
+      tokenValues.gyp_corridor_sf = fmtInt(corr);
+      tokenValues.gyp_soft_sf_formatted     = tokenValues.gyp_soft_sf;
+      tokenValues.gyp_hard_sf_formatted     = tokenValues.gyp_hard_sf;
+      tokenValues.gyp_corridor_sf_formatted = tokenValues.gyp_corridor_sf;
+      if (!String(tokenValues.gyp_soft_thickness || "").trim())     tokenValues.gyp_soft_thickness = '3/4"';
+      if (!String(tokenValues.gyp_hard_thickness || "").trim())     tokenValues.gyp_hard_thickness = '1"';
+      if (!String(tokenValues.gyp_corridor_thickness || "").trim()) tokenValues.gyp_corridor_thickness = '3/4"';
+      if (!String(tokenValues.mobilizations_line || "").trim())     tokenValues.mobilizations_line = "1 Mobilization to Site.";
+      // Gyp has no work_description input; backend forces this spec-line default.
+      if (!String(mergedValues.work_description || "").trim())      tokenValues.work_description = "per plans & specifications provided";
+      const gypTotal = soft + hard + corr;
+      tokenValues.sqft = fmtInt(gypTotal);
+      tokenValues.area_description = `${fmtSF(gypTotal)} of gypsum underlayment`;
+    }
 
     // Editor-only extras the backend derives inside api_generate — resolved
     // here with the SAME rules so the on-page fills match the generated doc
@@ -1201,8 +1345,32 @@
     }, 150);
   }
 
+  // WORK {{#system}} picks sourced from the resolved EPOXY BASE tab's sheet cells
+  // (system 1 = E20/E34, system 2 = E24/E37) + its A22/A26 names — via the
+  // priced_tabs snapshot, so a copy base works. Options never contribute (base
+  // only, per Hanz). Returns null for a stale snapshot (no per-tab .sf) so
+  // renderSystemPreview keeps the legacy hardcoded-cell fallback.
+  function sheetSystems() {
+    const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
+    if (!all.length || !all.some(t => t.sf)) return null;
+    const byId = (id) => all.find(t => t.id === id);
+    let base = state.base_tab_id ? byId(state.base_tab_id) : null;
+    if (!base || base.role !== "epoxy")
+      base = all.find(t => t.role === "epoxy" && t.kind === "base") || all.find(t => t.role === "epoxy") || base;
+    if (!base || !base.sf) return null;
+    const names = Array.isArray(base.sys_names) ? base.sys_names : [];
+    const out = [];
+    [["epoxy_sf", "cove_lf"], ["epoxy_sf_2", "cove_lf_2"]].forEach(([sfK, lfK], i) => {
+      const nm = String(names[i] || "").trim();
+      if (nm && !nm.includes("Options")) out.push({ name: nm, sf: Number(base.sf[sfK]) || 0, lf: Number(base.sf[lfK]) || 0 });
+    });
+    if (!out.length) out.push({ name: "", sf: Number(base.sf.epoxy_sf) || 0, lf: Number(base.sf.cove_lf) || 0 });
+    return out;
+  }
+
   // WORK systems preview — mirrors main._build_epoxy_systems + the template's
-  // {{#system}} rows (grid picks from Epoxy!A22/A26, else the flat fields).
+  // {{#system}} rows. Sourced from the resolved BASE tab's sheet cells
+  // (sheetSystems), with the legacy Epoxy!-cell reads as a stale-draft fallback.
   function renderSystemPreview() {
     // Don't rebuild while the estimator is editing one of the fill islands.
     if (focusInside(systemPreviewEl)) return;
@@ -1210,14 +1378,20 @@
     const cells = state.cell_values || {};
     const num = (v) => Number(String(v == null ? "" : v).replace(/[$,]/g, "")) || 0;
     const fmt = (n) => Math.round(n).toLocaleString("en-US");
-    const picks = [];
-    [["Epoxy!A22", "Epoxy!E20", "Epoxy!E34"], ["Epoxy!A26", "Epoxy!E24", "Epoxy!E37"]].forEach(([na, sa, la]) => {
-      const name = String(cells[na] || "").trim();
-      if (name && !name.includes("Options")) picks.push({ name, sf: num(cells[sa]), lf: num(cells[la]) });
-    });
-    if (!picks.length) {
-      picks.push({ name: String(merged.system_name || "").trim() || "Epoxy System",
-                   sf: num(merged.system_1_sf), lf: num(merged.cove_1_lf) });
+    let picks;
+    const ss = sheetSystems();
+    if (ss) {
+      picks = ss.map(s => ({ name: s.name || (String(merged.system_name || "").trim() || "Epoxy System"), sf: s.sf, lf: s.lf }));
+    } else {
+      picks = [];
+      [["Epoxy!A22", "Epoxy!E20", "Epoxy!E34"], ["Epoxy!A26", "Epoxy!E24", "Epoxy!E37"]].forEach(([na, sa, la]) => {
+        const name = String(cells[na] || "").trim();
+        if (name && !name.includes("Options")) picks.push({ name, sf: num(cells[sa]), lf: num(cells[la]) });
+      });
+      if (!picks.length) {
+        picks.push({ name: String(merged.system_name || "").trim() || "Epoxy System",
+                     sf: num(merged.system_1_sf), lf: num(merged.cove_1_lf) });
+      }
     }
     const texture = String(merged.texture || "").trim();
     const coveH = String(merged.cove_height || "6").trim() || "6";
@@ -1239,12 +1413,22 @@
     };
     systemPreviewEl.innerHTML = picks.map((s, i) => {
       const prefix = multi ? `Option ${i + 1}:` : "System:";
-      const lf = s.lf > 0 ? ` and ${fmt(s.lf)} LF of ${coveH}" epoxy cove base` : "";
+      const coveClause = `${fmt(s.lf)} LF of ${coveH}" epoxy cove base`;
+      const lfClause = s.lf > 0 ? ` and ${coveClause}` : "";
+      // Resolve the shown SF (an emptied/edited sqft island override wins) so the
+      // cove-only case is detected on the DISPLAYED value, not just the computed one.
+      const ov = ovs[i] || {};
+      const resolvedSqft = num((typeof ov.sqft === "string" && ov.sqft.trim()) ? ov.sqft : fmt(s.sf));
+      // Cove-only system (0 SF but cove present): drop the meaningless
+      // "~0 SF of epoxy flooring and " prefix and show just the cove clause.
+      const areaInner = (resolvedSqft === 0 && s.lf > 0)
+        ? `Area: ${escHtml(coveClause)}`
+        : `Area: ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lfClause)}`;
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
       return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${escHtml(prefix)}</strong>   ${editSpan(i, "name", s.name)}</p>` +
              `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">Texture:  ${editSpan(i, "texture", texture)}</p>` +
-             `<p class="tw-li" style="margin:0 0 4pt;"><strong>Area: ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lf)}</strong></p>`;
+             `<p class="tw-li" style="margin:0 0 4pt;"><strong>${areaInner}</strong></p>`;
     }).join("");
   }
 
@@ -1997,6 +2181,11 @@
         // rows (epoxy only) — edit the shown system name/texture/area without
         // touching cell_values or the price.
         system_overrides: Array.isArray(state.system_overrides) ? state.system_overrides : [],
+        // WORK {{#system}} picks resolved from the BASE tab's sheet cells (name +
+        // SF + cove LF per system) so the docx Area matches the on-screen preview
+        // even when the base is a copy tab. Empty -> backend keeps its legacy
+        // Epoxy!-cell reads (stale drafts / fallback path).
+        sheet_systems: (sheetSystems() || []).filter(s => (s.name && !s.name.includes("Options")) || s.sf > 0 || s.lf > 0),
         // Doc-editor per-line DISPLAY overrides for the PRICE section (base bid
         // amount / tax phrase, option + manual line label/amount). Display-only —
         // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
