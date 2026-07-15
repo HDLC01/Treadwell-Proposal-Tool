@@ -547,11 +547,16 @@ function defaultBaseSheet() {
 function resolveBaseTab() {
   const byId = tabs.find(t => t.id === state.base_tab_id && isPricedRole(t.role));
   if (byId) return byId;
-  if ((state.work_type || "epoxy").toLowerCase() === "gyp") {
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  if (wt === "gyp") {
     const g = tabs.filter(t => t.role === "gyp");             // gyp base = the USG 1-8" tab
     return g.find(t => t.id === GYP_BASE) || g.find(t => t.kind === "base") || g[0] || pricedTabs()[0] || null;
   }
-  const ep = tabs.filter(t => t.role === "epoxy");           // today's fallback derivation
+  if (wt === "polish") {                                      // polish-only base = the Polish tab
+    const po = tabs.filter(t => t.role === "polish");
+    return po.find(t => t.kind === "base") || po[0] || pricedTabs()[0] || null;
+  }
+  const ep = tabs.filter(t => t.role === "epoxy");           // epoxy / combo fallback derivation
   return ep.find(t => t.kind === "base") || ep[0] || pricedTabs()[0] || null;
 }
 function ensureOpt(id) {
@@ -608,13 +613,16 @@ function renderBidOptions() {
                                    : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
   // The "Auto" chip only means something when it resolves to something that
   // ISN'T already its own chip: for combo that's "Epoxy + Polish combined". For
-  // gyp (and the single-visible-tab case) Auto resolves to one listed tab, so
-  // it's a redundant duplicate — suppress it and show that tab AS the base bid.
-  const gypAutoBaseId = (wt === "gyp" && !baseId && autoBase) ? autoBase.id : null;
-  const showAuto = visible.length > 1 && !gypAutoBaseId;
-  const soloBase = gypAutoBaseId || ((!baseId && visible.length === 1) ? visible[0].id : null);
-  // A tab whose option controls are hidden because it's already the auto-base:
-  // epoxy/polish → the combined base tabs; gyp → only the resolved gyp base.
+  // every single-system job (gyp, epoxy-only, polish-only) Auto resolves to one
+  // listed tab, so it's a redundant duplicate (and mislabels epoxy vs polish) —
+  // suppress it and show that resolved tab AS the base bid. Combo keeps Auto.
+  const soloAutoBaseId = (wt !== "combo" && !baseId && autoBase) ? autoBase.id : null;
+  const showAuto = visible.length > 1 && !soloAutoBaseId;
+  const soloBase = soloAutoBaseId || ((!baseId && visible.length === 1) ? visible[0].id : null);
+  // A tab whose option controls are hidden because it's already the auto-base.
+  // soloBase now covers every single-system job (gyp/epoxy/polish) via the early
+  // return below, so only a true combo reaches the combined-base test. The gyp
+  // line stays as a defensive fallback for the (autoBase == null) edge.
   const isPartOfAutoBase = (t) => {
     if (baseId || soloBase) return false;
     if (wt === "gyp") return !!(autoBase && t.id === autoBase.id);
@@ -920,9 +928,10 @@ function startRename(btn, id) {
 
 // Auto-derive per-tab notes (cove base) from the tab's cove LF cells.
 function deriveNotes(id) {
-  // Gyp layouts don't have cove cells at E34/E37 — those coords hold unrelated
-  // takeoff numbers on a gyp sheet, so the cove heuristic would false-positive.
-  if (roleFor(id) === "gyp") return [];
+  // E34/E37 are the EPOXY-layout cove cells. On Polish/Gyp/other layouts those
+  // same coords hold unrelated takeoff numbers, so the cove heuristic would
+  // false-positive — gate it to Epoxy-layout tabs (mirrors phaseAt's guard).
+  if (layoutIdFor(id) !== "Epoxy") return [];
   // Template coords translated through the tab's structural edits.
   const out = [];
   if (hfNumTx(id, "E34") + hfNumTx(id, "E37") > 0) out.push('Includes 6" Cove Base');
@@ -1822,6 +1831,10 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   // Track only real edits (the original formula/value stays in the xlsx
   // unless the user actually types something different).
   const original = inp.value;
+  // %-formatted cells (GP / discounts / tax rates) take whole-number entry
+  // ("10" = 10%); see the "change" normalizer below. Declared here so the
+  // "input" handler can skip the live HF push for them (no mid-type flash).
+  const isPctCell = /%/.test(cell.fmt || "");
   inp.addEventListener("input", (e) => {
     const newVal = e.target.value;
     if (newVal === original) {
@@ -1834,7 +1847,11 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     // IMPORTANT: route project-info edits to the CANONICAL source on Epoxy.
     // Editing Polish!B1 should update Epoxy!B1; the formula =Epoxy!B1 on
     // Polish!B1 then recomputes naturally without us touching it.
-    if (HF && HF.ready) {
+    // %-cells defer the HF write to the "change" normalizer (n/100) so the raw
+    // whole number ("10") never lands in HF mid-type — that would flash a 1000%
+    // total. cellValues bookkeeping above still tracks the raw text; "change"
+    // fixes cellValues + HF + totals on commit (blur / Enter / paste).
+    if (HF && HF.ready && !isPctCell) {
       const tgt = canonicalTarget(sheet, cell.addr);
       const affected = HF.setCellValue(tgt.sheet, tgt.addr, newVal);
       // During a bulk paste/clear the per-cell DOM propagate + total-bar refresh
@@ -1846,7 +1863,6 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
   // Kyle types whole numbers like in his sheet — hard-bid "-10" → -10%, soft
   // "10" → 10%, super "3" → 3%, "-17" → -17%. A trailing "%" is fine too
   // ("-17%" → -17%). Applied on commit (blur). Non-numeric text is left alone.
-  const isPctCell = /%/.test(cell.fmt || "");
   if (isPctCell) {
     inp.addEventListener("change", (e) => {
       const raw = String(e.target.value || "").trim();
