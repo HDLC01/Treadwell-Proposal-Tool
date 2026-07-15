@@ -12,8 +12,27 @@ import io
 import re
 import zipfile
 
+from fastapi.testclient import TestClient
+
 import main
 import proposal_writer as pw
+
+client = TestClient(main.app)
+
+_MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+
+
+def _rendered_lines(docx_bytes):
+    from docx import Document
+    d = Document(io.BytesIO(docx_bytes))
+    out = []
+    for p in d.element.xpath("//w:p"):
+        if any(True for _ in p.iterancestors(f"{_MC}Fallback")):
+            continue
+        t = "".join(x.text or "" for x in p.xpath(".//w:t")).strip()
+        if t:
+            out.append(t)
+    return out
 
 
 def _xml(docx_bytes):
@@ -66,3 +85,24 @@ def test_polish_and_gyp_price_rows_have_no_bullets():
                total_formatted="$103,364.00")
     gout = pw.fill_proposal(work_type="gyp", audience="Direct", values=gv)
     assert _xml(gout).count('<w:numId w:val="3"') == 0
+
+
+def test_polish_options_heading_precedes_option_lines():
+    # Kyle's Polish Direct template authored the "Options" heading at the BOTTOM
+    # (after the {{#price_line}} rows + {{#alternate}}); it was moved to render
+    # ABOVE the option lines like Epoxy/Combo so a "Polish Add Dye" option reads
+    # under its heading. Assert order at the writer level (no /api/generate — the
+    # option-line contract there is separate and tested elsewhere).
+    pv = _vals(system_name="Polish", base_bid_formatted="$15,257.00",
+               total_formatted="$16,707.00")
+    out = pw.fill_proposal(work_type="polish", audience="Direct", values=pv,
+                           has_options=True,
+                           price_lines=[{"amount_formatted": "$1,100",
+                                         "label": "Polish Add Dye"}])
+    # The price block renders both as separate paragraphs AND as one text-box
+    # paragraph with <w:br> breaks (python-docx concatenates the latter), so
+    # compare order within the joined text rather than by paragraph index.
+    full = "\n".join(_rendered_lines(out))
+    opt_at, add_at = full.find("Options"), full.find("Polish Add Dye")
+    assert opt_at != -1 and add_at != -1, "Options heading / Add option line missing"
+    assert opt_at < add_at, f"Options heading (@{opt_at}) must precede the Add line (@{add_at})"
