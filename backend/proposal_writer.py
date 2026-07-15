@@ -384,6 +384,22 @@ def _strip_bullet(p_elem) -> None:
         ppr.remove(numpr)
 
 
+def _shrink_overflowing_text_boxes(d: Document) -> int:
+    """Switch floating text boxes from <a:noAutofit/> (fixed size — long content
+    spills past the box, over the next box / the baked page-frame art) to
+    <a:normAutofit/> = "shrink text on overflow". Word/LibreOffice then scale the
+    font down just enough to fit the box. Boxes whose content already fits are
+    unaffected (scale stays 100%). This is what keeps gyp's verbose WORK scope
+    from overlapping the PRICE box without moving the fixed frame. Applied to all
+    work types (harmless where nothing overflows)."""
+    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    n = 0
+    for na in list(d.element.iter(f"{{{A}}}noAutofit")):
+        na.tag = f"{{{A}}}normAutofit"     # empty element; renderer computes the scale
+        n += 1
+    return n
+
+
 def _flatten_price_bullets(d: Document) -> int:
     """Remove list/bullet formatting from the PRICE section so amounts read as
     clean flush-left lines (Kyle: no bullet points in the pricing). Every price
@@ -909,6 +925,21 @@ def _para_is_list(p_elem) -> bool:
     return ppr is not None and ppr.find(qn("w:numPr")) is not None
 
 
+def _para_price_list(p_elem) -> bool:
+    """True when the paragraph is on the PRICE list (numId=3) that
+    _flatten_price_bullets strips at generate time. The on-screen document
+    editor uses this to render those rows flush/bullet-less so the preview
+    matches the generated .docx (Kyle: no bullet points in the pricing)."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        return False
+    numpr = ppr.find(qn("w:numPr"))
+    if numpr is None:
+        return False
+    numid = numpr.find(qn("w:numId"))
+    return numid is not None and numid.get(qn("w:val")) == "3"
+
+
 def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 
@@ -1228,9 +1259,17 @@ def fill_proposal(
     # the sqft/lf_clause tokens are filled (matches the on-screen preview).
     if _drop_zero_sf_prefix(d):
         log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
-    # PRICE section: strip the list bullets so amounts read as clean flush-left
-    # lines (Kyle: no bullet points in the pricing).
-    _flatten_price_bullets(d)
+    # NOTE: the PRICE rows keep their template list bullets — Kyle's templates
+    # use a RED SQUARE bullet (numId 1/3/4 = Wingdings filled square, #A71320)
+    # on the WORK, PRICE and NOTES lists, and Hanz confirmed the pricing should
+    # match that. (Earlier this called _flatten_price_bullets to strip them,
+    # which was the wrong read of "no bullets" — that helper is kept unused for
+    # now but must NOT run.)
+    # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
+    # overflow its fixed box and overlap the next box / frame art.
+    _shrunk = _shrink_overflowing_text_boxes(d)
+    if _shrunk:
+        log.info("Set %d text box(es) to shrink-on-overflow (normAutofit)", _shrunk)
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",

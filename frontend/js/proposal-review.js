@@ -164,12 +164,17 @@
     try { TW.setState({ notes_text: ta.value }); } catch {}
   }
 
-  (function prefillNotes() {
+  (async function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
     const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
+    // /api/default-notes is auth-gated — wait for the Supabase token before the
+    // fetch, else authHeaders() has no Bearer yet and the request 401s (a
+    // brand-new project would then miss its boilerplate scope/schedule/exclusions
+    // notes on first paint). Mirrors the gated-fetch pattern used elsewhere.
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
       .then(r => r.json())
       .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) applyAndPreview(j.notes.join("\n")); })
@@ -541,7 +546,7 @@
         c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
       comboBlock.style.display = "";
       comboBlock.innerHTML = comboLines.map(l =>
-        `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${escP(l.amount_formatted)}</strong> – ${escP(l.label)}</p>`).join("");
+        `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${escP(l.amount_formatted)}</strong> – ${escP(l.label)}</p>`).join("");
       if (baseBidHeading) baseBidHeading.style.display = "none";
       if (baseBidRow) baseBidRow.style.display = "none";
       if (salesRow)   salesRow.style.display = "none";
@@ -667,7 +672,7 @@
             if (notes.length) label += " — " + notes.join("; ");   // inline, matches main.py
             amount = fmtUSDdoc(r.bid.total);
           }
-          return `<p class="tw-li" style="margin:0 0 2pt;">` +
+          return `<p class="tw-priceline" style="margin:0 0 2pt;">` +
                  poIsland("option", r.id, "amount", amount, { strong: true }) + ` – ` +
                  poIsland("option", r.id, "label", label) + `</p>`;
         }).join("");
@@ -679,7 +684,7 @@
           const amt = Number(l.amount || 0);
           const label = (l.label || "").trim();
           if (!amt || !label) return "";
-          return `<p class="tw-li" style="margin:0 0 2pt;">` +
+          return `<p class="tw-priceline" style="margin:0 0 2pt;">` +
                  poIsland("manual", i, "amount", fmtUSDdoc(amt), { strong: true }) + ` – ` +
                  poIsland("manual", i, "label", label) + `</p>`;
         }).join("");
@@ -840,14 +845,14 @@
     // INCLUDED)", and the tax line is just "Remodel Tax" (no state name). All
     // rows are real bullets in the template.
     altBlock.innerHTML =
-      `<p class="tw-li" style="margin:6pt 0 2pt;font-weight:bold;">` +
+      `<p class="tw-priceline" style="margin:6pt 0 2pt;font-weight:bold;">` +
       `ALTERNATE SYSTEM — <span class="tw-fill">${esc(altLabel)}</span></p>` +
-      `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
+      `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
       `(material sales tax INCLUDED)</p>` +
       (altRemodel > 0
-        ? `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altRemodel)}</strong> – Remodel Tax</p>`
+        ? `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altRemodel)}</strong> – Remodel Tax</p>`
         : "") +
-      `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altTotal)}</strong> – Total</p>`;
+      `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
 
   // ─── Token values (shared by the document fills + the generate payload) ──
@@ -1204,7 +1209,11 @@
     el.dataset.id = String(b.id);
     el.contentEditable = "true";
     el.spellcheck = false;
-    if (b.list) el.classList.add("tw-li");                       // real Word bullet
+    // PRICE-list rows (numId=3) are flattened to flush, bullet-less lines in the
+    // generated .docx (_flatten_price_bullets) — mirror that here so the on-screen
+    // editor matches (Kyle: no bullet points in the pricing).
+    if (b.price_flat) el.classList.add("tw-priceline");
+    else if (b.list) el.classList.add("tw-li");                  // real Word bullet
     else if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
     if (b.align) el.style.textAlign = b.align;
     if (b.style && b.style.bold && !(Array.isArray(b.runs) && b.runs.length)) {
@@ -1479,29 +1488,44 @@
   // Box id differs per template (epoxy 3, polish 5), so we never hardcode it —
   // we find the box from the mounted notes element. offsetHeight is used (like
   // applyZoom) so the #doc-zoom transform doesn't skew the measurement.
-  function fitNotesBox() {
-    const box = notesPreviewEl.closest(".tw-txbx");
+  // Shrink ONE positioned text box's font until its content fits the box's
+  // design height (mirrors the .docx normAutofit "shrink text on overflow").
+  // Boxes that already fit get NO inline font-size (byte-identical to the design
+  // + the generated docx). Applies to EVERY box — WORK, PRICE, NOTES — so long
+  // content (e.g. gyp's verbose WORK scope) can't grow past its region and
+  // overlap the next box / the baked page-frame art.
+  function fitTxbx(box) {
     if (!box || !box.dataset.boxHPt) return;
     box.style.fontSize = "";                                   // reset to the design size
+    box.style.transform = "";
+    box.style.transformOrigin = "";
     const target = parseFloat(box.dataset.boxHPt) * 96 / 72 + 1;   // design height in px (+1 slack)
     if (!(target > 0)) return;
-    if (box.offsetHeight <= target) {                          // fits at full size — no inline size
-      box.classList.remove("tw-notes-overflow");
-      box.title = "";
-      return;
-    }
+    const clear = () => { box.classList.remove("tw-notes-overflow"); box.title = ""; };
+    if (box.offsetHeight <= target) { clear(); return; }       // fits at full size — no inline size
+    // 1) Font-size shrink first — keeps the full box width and matches the .docx
+    //    normAutofit "shrink text on overflow". Handles the common moderate case.
     for (let k = 0.95; k >= 0.60 - 1e-9; k -= 0.05) {
       box.style.fontSize = Math.round(k * 100) + "%";
-      if (box.offsetHeight <= target) {
-        box.classList.remove("tw-notes-overflow");
-        box.title = "";
-        return;
-      }
+      if (box.offsetHeight <= target) { clear(); return; }
     }
-    // Still over at the 60% floor: keep the floor and flag the collision so the
-    // estimator sees it may print over the acceptance area.
-    box.classList.add("tw-notes-overflow");
-    box.title = "Notes exceed the box and may overlap the acceptance area in print";
+    // 2) Still over at the 60% floor (very long content, e.g. gyp's verbose WORK
+    //    scope) — uniformly scale the whole box down so it CANNOT overlap the next
+    //    section. Belt-and-suspenders over the docx shrink; a bit narrower, but no
+    //    collision. Floor at 45% so it never becomes unreadable.
+    box.style.fontSize = "";
+    const k = Math.max(0.45, target / box.offsetHeight);
+    box.style.transformOrigin = "top left";
+    box.style.transform = "scale(" + k.toFixed(3) + ")";
+    clear();
+    if (k <= 0.45 + 1e-9) {                                    // even 45% wasn't enough — warn
+      box.classList.add("tw-notes-overflow");
+      box.title = "Very long content — scaled to fit; consider trimming.";
+    }
+  }
+  // Fit every mounted positioned text box (WORK / PRICE / NOTES / …).
+  function fitNotesBox() {
+    document.querySelectorAll(".tw-txbx").forEach(fitTxbx);
   }
 
   // Letterhead artwork, fetched WITH the auth header (a plain <img src>

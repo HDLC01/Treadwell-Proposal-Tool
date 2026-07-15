@@ -601,36 +601,21 @@ function renderBidOptions() {
   const revealSystems = !!state.reveal_systems;
   const visible = revealSystems ? priced.slice() : priced.filter(defaultChipVisible);
   const hasHiddenSystems = priced.some(t => !defaultChipVisible(t));
-  // The combined chip names the ACTUAL base sheets — renamed tabs read as
-  // "Grooming Room + Lobby (combined)", not a hardcoded "Epoxy + Polish".
-  // Scoped to epoxy/polish so a gyp variant never joins the "(combined)" label.
-  const comboLabel = () => {
-    const bases = priced.filter(t => t.kind === "base" && t.role !== "gyp");
-    const names = bases.length ? bases.map(t => labelFor(t.id)) : ["Epoxy", "Polish"];
-    return names.join(" + ") + " (combined)";
-  };
-  const autoLabel = wt === "combo" ? comboLabel()
-                                   : "Auto — " + (autoBase ? labelFor(autoBase.id) : "default");
-  // The "Auto" chip only means something when it resolves to something that
-  // ISN'T already its own chip: for combo that's "Epoxy + Polish combined". For
-  // every single-system job (gyp, epoxy-only, polish-only) Auto resolves to one
-  // listed tab, so it's a redundant duplicate (and mislabels epoxy vs polish) —
-  // suppress it and show that resolved tab AS the base bid. Combo keeps Auto.
-  const soloAutoBaseId = (wt !== "combo" && !baseId && autoBase) ? autoBase.id : null;
-  const showAuto = visible.length > 1 && !soloAutoBaseId;
-  const soloBase = soloAutoBaseId || ((!baseId && visible.length === 1) ? visible[0].id : null);
-  // A tab whose option controls are hidden because it's already the auto-base.
-  // soloBase now covers every single-system job (gyp/epoxy/polish) via the early
-  // return below, so only a true combo reaches the combined-base test. The gyp
-  // line stays as a defensive fallback for the (autoBase == null) edge.
-  const isPartOfAutoBase = (t) => {
-    if (baseId || soloBase) return false;
-    if (wt === "gyp") return !!(autoBase && t.id === autoBase.id);
-    return t.kind === "base" && t.role !== "gyp";
-  };
+  // NO "Auto"/"combined" pseudo-chip on ANY job (Hanz: remove it from epoxy,
+  // polish, gyp — and combo too). The base bid is always a real, listed sheet:
+  // the estimator's explicit pick (baseId), or — until they pick one — the
+  // auto-resolved base tab (autoBase), shown with the "base bid" tag. Every
+  // other sheet, including the second base-kind tab on a combo, appears as an
+  // ordinary "add as option" chip.
+  const soloBase = baseId ? null
+                 : (autoBase ? autoBase.id
+                             : (visible.length ? visible[0].id : null));
+  // No hidden-under-auto-base tabs anymore: with a single resolved base, every
+  // other chip gets its normal option controls.
+  const isPartOfAutoBase = () => false;
   const baseRadio = (val, checked, label) =>
     `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
-  let html = showAuto ? `<span class="bb-opt">${baseRadio("", !baseId, autoLabel)}</span>` : "";
+  let html = "";
   html += visible.map(t => {
     const o = state.tab_opts[t.id] || {};
     const isBase = baseId === t.id || soloBase === t.id;

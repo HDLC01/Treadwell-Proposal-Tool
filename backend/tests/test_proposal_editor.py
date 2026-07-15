@@ -463,3 +463,26 @@ def test_system_override_does_not_touch_estimate_cells():
     assert r.status_code == 200, r.text
     wb = load_workbook(io.BytesIO(client.get(r.json()["xlsx_download_url"]).content))
     assert wb["Epoxy"]["A22"].value == "Zeta Broadcast System"
+
+
+def test_price_rows_carry_price_flat_flag():
+    """PRICE-list rows (numId=3) carry price_flat=True so the on-screen document
+    editor can render them with the red-square PRICE-list style (.tw-priceline),
+    matching Kyle's template. WORK + Terms rows are not flagged (price_flat
+    falsy) — they render via their own bullet/number style."""
+    r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
+    assert r.status_code == 200
+    blocks = r.json()["blocks"]
+
+    def all_flat(sub):
+        hits = [b for b in blocks if sub in b["text"]]
+        assert hits, f"{sub!r} not found among blocks"
+        return all(b.get("price_flat") for b in hits)
+
+    for sub in ("base_bid_formatted", "material_tax_formatted",
+                "price_line.amount_formatted", "total_formatted"):
+        assert all_flat(sub), f"{sub} rows should be price_flat"
+
+    # Terms (numId 5) must NOT be flagged — they keep their bullets.
+    terms = [b for b in blocks if b["text"].strip() == "TERMS AND CONDITIONS"]
+    assert terms and not any(b.get("price_flat") for b in terms)
