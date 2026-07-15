@@ -546,7 +546,7 @@
         c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
       comboBlock.style.display = "";
       comboBlock.innerHTML = comboLines.map(l =>
-        `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${escP(l.amount_formatted)}</strong> – ${escP(l.label)}</p>`).join("");
+        `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${escP(l.amount_formatted)}</strong> – ${escP(l.label)}</p>`).join("");
       if (baseBidHeading) baseBidHeading.style.display = "none";
       if (baseBidRow) baseBidRow.style.display = "none";
       if (salesRow)   salesRow.style.display = "none";
@@ -672,7 +672,7 @@
             if (notes.length) label += " — " + notes.join("; ");   // inline, matches main.py
             amount = fmtUSDdoc(r.bid.total);
           }
-          return `<p class="tw-li" style="margin:0 0 2pt;">` +
+          return `<p class="tw-priceline" style="margin:0 0 2pt;">` +
                  poIsland("option", r.id, "amount", amount, { strong: true }) + ` – ` +
                  poIsland("option", r.id, "label", label) + `</p>`;
         }).join("");
@@ -684,7 +684,7 @@
           const amt = Number(l.amount || 0);
           const label = (l.label || "").trim();
           if (!amt || !label) return "";
-          return `<p class="tw-li" style="margin:0 0 2pt;">` +
+          return `<p class="tw-priceline" style="margin:0 0 2pt;">` +
                  poIsland("manual", i, "amount", fmtUSDdoc(amt), { strong: true }) + ` – ` +
                  poIsland("manual", i, "label", label) + `</p>`;
         }).join("");
@@ -845,14 +845,14 @@
     // INCLUDED)", and the tax line is just "Remodel Tax" (no state name). All
     // rows are real bullets in the template.
     altBlock.innerHTML =
-      `<p class="tw-li" style="margin:6pt 0 2pt;font-weight:bold;">` +
+      `<p class="tw-priceline" style="margin:6pt 0 2pt;font-weight:bold;">` +
       `ALTERNATE SYSTEM — <span class="tw-fill">${esc(altLabel)}</span></p>` +
-      `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
+      `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
       `(material sales tax INCLUDED)</p>` +
       (altRemodel > 0
-        ? `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altRemodel)}</strong> – Remodel Tax</p>`
+        ? `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altRemodel)}</strong> – Remodel Tax</p>`
         : "") +
-      `<p class="tw-li" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altTotal)}</strong> – Total</p>`;
+      `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altTotal)}</strong> – Total</p>`;
   }
 
   // ─── Token values (shared by the document fills + the generate payload) ──
@@ -1209,7 +1209,11 @@
     el.dataset.id = String(b.id);
     el.contentEditable = "true";
     el.spellcheck = false;
-    if (b.list) el.classList.add("tw-li");                       // real Word bullet
+    // PRICE-list rows (numId=3) are flattened to flush, bullet-less lines in the
+    // generated .docx (_flatten_price_bullets) — mirror that here so the on-screen
+    // editor matches (Kyle: no bullet points in the pricing).
+    if (b.price_flat) el.classList.add("tw-priceline");
+    else if (b.list) el.classList.add("tw-li");                  // real Word bullet
     else if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
     if (b.align) el.style.textAlign = b.align;
     if (b.style && b.style.bold && !(Array.isArray(b.runs) && b.runs.length)) {

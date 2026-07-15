@@ -909,6 +909,21 @@ def _para_is_list(p_elem) -> bool:
     return ppr is not None and ppr.find(qn("w:numPr")) is not None
 
 
+def _para_price_list(p_elem) -> bool:
+    """True when the paragraph is on the PRICE list (numId=3) that
+    _flatten_price_bullets strips at generate time. The on-screen document
+    editor uses this to render those rows flush/bullet-less so the preview
+    matches the generated .docx (Kyle: no bullet points in the pricing)."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        return False
+    numpr = ppr.find(qn("w:numPr"))
+    if numpr is None:
+        return False
+    numid = numpr.find(qn("w:numId"))
+    return numid is not None and numid.get(qn("w:val")) == "3"
+
+
 def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 

@@ -852,6 +852,11 @@ button {
   left: 0;
   top: 0;
 }
+/* PRICE rows mirror the de-bulleted docx price list — flush left, NO bullet
+   (Kyle: "no bullet points in the pricing"). Used for Base Bid / Material Sales
+   Tax / Remodel / Total / Options / alternate rows so the on-screen preview
+   matches proposal_writer._flatten_price_bullets (numId stripped, ind left=0). */
+.tw-priceline { margin-left: 0; padding-left: 0; }
 
 /* Flow-fallback caption above a bare-token block (job name, date …): only
    in flow mode, where the letterhead artwork — which carries the real
