@@ -384,6 +384,22 @@ def _strip_bullet(p_elem) -> None:
         ppr.remove(numpr)
 
 
+def _shrink_overflowing_text_boxes(d: Document) -> int:
+    """Switch floating text boxes from <a:noAutofit/> (fixed size — long content
+    spills past the box, over the next box / the baked page-frame art) to
+    <a:normAutofit/> = "shrink text on overflow". Word/LibreOffice then scale the
+    font down just enough to fit the box. Boxes whose content already fits are
+    unaffected (scale stays 100%). This is what keeps gyp's verbose WORK scope
+    from overlapping the PRICE box without moving the fixed frame. Applied to all
+    work types (harmless where nothing overflows)."""
+    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    n = 0
+    for na in list(d.element.iter(f"{{{A}}}noAutofit")):
+        na.tag = f"{{{A}}}normAutofit"     # empty element; renderer computes the scale
+        n += 1
+    return n
+
+
 def _flatten_price_bullets(d: Document) -> int:
     """Remove list/bullet formatting from the PRICE section so amounts read as
     clean flush-left lines (Kyle: no bullet points in the pricing). Every price
@@ -1249,6 +1265,11 @@ def fill_proposal(
     # match that. (Earlier this called _flatten_price_bullets to strip them,
     # which was the wrong read of "no bullets" — that helper is kept unused for
     # now but must NOT run.)
+    # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
+    # overflow its fixed box and overlap the next box / frame art.
+    _shrunk = _shrink_overflowing_text_boxes(d)
+    if _shrunk:
+        log.info("Set %d text box(es) to shrink-on-overflow (normAutofit)", _shrunk)
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
