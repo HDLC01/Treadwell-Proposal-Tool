@@ -164,12 +164,17 @@
     try { TW.setState({ notes_text: ta.value }); } catch {}
   }
 
-  (function prefillNotes() {
+  (async function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
     const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
+    // /api/default-notes is auth-gated — wait for the Supabase token before the
+    // fetch, else authHeaders() has no Bearer yet and the request 401s (a
+    // brand-new project would then miss its boilerplate scope/schedule/exclusions
+    // notes on first paint). Mirrors the gated-fetch pattern used elsewhere.
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
       .then(r => r.json())
       .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) applyAndPreview(j.notes.join("\n")); })
