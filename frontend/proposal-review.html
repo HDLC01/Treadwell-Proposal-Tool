@@ -614,7 +614,10 @@
        label nested at the END of the .docx {{#single_bid}} group. Mounted LAST
        in the single_bid region; shown iff there's ≥1 option or manual price
        line (toggled by renderOptionLinesPreview). -->
-  <p id="options-heading" style="font-weight:bold;display:none;margin:10pt 0 1pt;">Options:</p>
+  <!-- ~24pt top margin ≈ the 2 blank paragraphs the writer inserts before the
+       Options heading (_space_before_options), so the preview spacing after the
+       Total matches the generated .docx. -->
+  <p id="options-heading" style="font-weight:bold;display:none;margin:24pt 0 1pt;">Options:</p>
   <!-- Per-room priced options (per-room jobs): read-only preview; manual
        notes are edited in the pricing-options rail. -->
   <div id="rooms-block"></div>

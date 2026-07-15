@@ -1176,6 +1176,18 @@
     single_bid: () => ["base-bid-heading", "combo-price-block", "base-bid-row",
                        "sales-tax-row", "remodel-tax-row", "total-row", "options-heading"]
                        .map(id => document.getElementById(id)),
+    // Polish / GC templates DON'T wrap the base bid in {{#single_bid}} — "Base Bid"
+    // + the base line are plain template blocks (already shown), and the tax lines
+    // live in separate {{#tax_breakout}} / {{#remodel}} / {{#has_options}} regions.
+    // Mount the SAME live staging rows there — in the doc's Material Sales Tax →
+    // Remodel → Total → Options order — so the on-screen preview itemizes exactly
+    // like the generated .docx (refreshPriceDisplay show/hides them by tax mode).
+    // remodel-tax-row rides under tax_breakout for ordering; the {{#remodel}}
+    // region itself mounts nothing to avoid a duplicate.
+    tax_breakout: () => ["sales-tax-row", "remodel-tax-row", "total-row"]
+                       .map(id => document.getElementById(id)),
+    remodel:      () => [],
+    has_options:  () => [document.getElementById("options-heading")],
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
   };
