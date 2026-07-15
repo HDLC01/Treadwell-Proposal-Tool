@@ -1,12 +1,13 @@
-"""PRICE section formatting: red-square bullets kept, bold amounts.
+"""PRICE section formatting: NO bullets (flush-left), bold amounts.
 
-Every proposal template puts its PRICE rows (base bid, Material Sales Tax,
+Every proposal template authors its PRICE rows (base bid, Material Sales Tax,
 Remodel, Total, {{#price_line}} options, {{#room}}, {{#alternate}}) on list
-numId=3 — a RED SQUARE bullet (Wingdings filled square, #A71320) matching the
-WORK (numId 4) and NOTES (numId 1) lists. Hanz confirmed the pricing should keep
-those bullets (an earlier pass wrongly stripped them). So the generated docx
-preserves numId=3, and the amount runs stay bold (already bold in the templates;
-token fill preserves run formatting).
+numId=3 — a RED SQUARE bullet (Wingdings filled square, #A71320). Kyle wants the
+PRICING to read as clean flush-left lines with NO bullets (confirmed by Hanz
+2026-07-16, reversing an earlier "keep the red squares" pass), so
+`_flatten_price_bullets` strips numId=3 at generate time. The WORK (numId 4) and
+Terms (numId 5) lists keep their bullets, and the amount runs stay bold (already
+bold in the templates; token fill preserves run formatting).
 """
 import io
 import re
@@ -53,18 +54,18 @@ def _vals(**over):
     return v
 
 
-def test_epoxy_price_rows_keep_red_square_bullets_and_bold_amounts():
+def test_epoxy_price_rows_flush_no_bullets_bold_amounts():
     vals = _vals()
     systems = main._build_epoxy_systems({}, vals, [{"name": "MACRO Flake", "sf": 12000, "lf": 250}])
     out = pw.fill_proposal(work_type="epoxy", audience="Direct", values=vals, systems=systems,
                            price_lines=[{"amount_formatted": "$2,500", "label": "Add VE"}])
     xml = _xml(out)
-    # PRICE rows KEEP their template list bullets (numId=3, the red-square list —
-    # Kyle's design); WORK (4) + Terms (5) also survive. (We no longer flatten.)
-    assert xml.count('<w:numId w:val="3"') > 0
+    # PRICE rows are FLUSH — every numId=3 list bullet is stripped; the WORK (4)
+    # and Terms (5) lists keep theirs.
+    assert xml.count('<w:numId w:val="3"') == 0
     assert xml.count('<w:numId w:val="4"') > 0
     assert xml.count('<w:numId w:val="5"') > 0
-    # Amounts stay bold (base bid + option line).
+    # Amounts stay bold (base bid + option line) — flattening only removes numbering.
     for amt in ("58,523", "2,500"):
         para = next(p for p in re.findall(r"<w:p\b.*?</w:p>", xml, re.S)
                     if amt in "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", p)))
@@ -72,13 +73,13 @@ def test_epoxy_price_rows_keep_red_square_bullets_and_bold_amounts():
         assert re.search(r"<w:b[ />]", run0), f"amount {amt} run not bold"
 
 
-def test_polish_and_gyp_price_rows_keep_bullets():
-    # Polish (option/alternate list) + Gyp (underlayment) both KEEP numId=3
-    # (the red-square PRICE list) — matches Kyle's template, no flattening.
+def test_polish_and_gyp_price_rows_flush_no_bullets():
+    # Polish (option/alternate list) + Gyp (underlayment) both drop numId=3
+    # (the red-square PRICE list) so the pricing reads flush-left.
     pv = _vals(base_bid_formatted="$14,391.00", total_formatted="$16,707.00")
     pout = pw.fill_proposal(work_type="polish", audience="Direct", values=pv,
                             price_lines=[{"amount_formatted": "$1,100", "label": "Polish Add Dye"}])
-    assert _xml(pout).count('<w:numId w:val="3"') > 0
+    assert _xml(pout).count('<w:numId w:val="3"') == 0
 
     gv = _vals(gyp_soft_sf="27,825", gyp_hard_sf="11,795", gyp_corridor_sf="5,655",
                gyp_soft_thickness='3/4"', gyp_hard_thickness='1"', gyp_corridor_thickness='3/4"',
@@ -86,7 +87,29 @@ def test_polish_and_gyp_price_rows_keep_bullets():
                base_bid_formatted="$98,000.00", tax_amount_formatted="$0.00",
                total_formatted="$103,364.00")
     gout = pw.fill_proposal(work_type="gyp", audience="Direct", values=gv)
-    assert _xml(gout).count('<w:numId w:val="3"') > 0
+    assert _xml(gout).count('<w:numId w:val="3"') == 0
+
+
+def test_double_spacing_before_options_heading():
+    # Kyle: double spacing after the base-bid Total. _space_before_options inserts
+    # 2 blank paragraphs immediately before each "Options" heading (both the
+    # mc:Choice and mc:Fallback copies of the text box).
+    pv = _vals(system_name="Polish", base_bid_formatted="$13,614.00",
+               total_formatted="$14,973.00")
+    out = pw.fill_proposal(work_type="polish", audience="Direct", values=pv, has_options=True,
+                           price_lines=[{"amount_formatted": "$1,927", "label": "Polish Add Dye"}])
+    from docx import Document
+    d = Document(io.BytesIO(out))
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paras = d.element.findall(".//" + W + "txbxContent//" + W + "p")
+    txts = ["".join(t.text or "" for t in p.findall(".//" + W + "t")).strip() for p in paras]
+    found = False
+    for i, t in enumerate(txts):
+        if t == "Options":
+            assert i >= 2 and txts[i - 1] == "" and txts[i - 2] == "", \
+                f"expected 2 blank paragraphs before 'Options' at {i}, got {txts[i-2:i]!r}"
+            found = True
+    assert found, "no 'Options' heading found to check spacing"
 
 
 def test_polish_options_heading_precedes_option_lines():

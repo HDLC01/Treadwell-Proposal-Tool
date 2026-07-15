@@ -47,6 +47,30 @@
   // priced base for gyp jobs; other gyp variants are options.
   const GYP_BASE = 'Gyp (USG 1-8")';
 
+  // ─── Phase B: the base-bid tab's ROLE drives the whole proposal ─────────
+  // The estimator can pick which sheet is the base bid on this screen. When the
+  // chosen base is a DIFFERENT work type than the intake `work_type` (e.g. a
+  // polish sheet on an epoxy job), the ENTIRE proposal should follow the base —
+  // template + artwork, area/noun, scope/schedule/exclusions, notes, and the
+  // generate payload — so we're "really pulling the right data" (Hanz).
+  //   • combo stays "combo" (the base switch there picks which sub-bid LEADS,
+  //     handled inside the combo layout — the template itself doesn't change).
+  //   • No explicit base, or a role we don't render (sealer/leveling) → fall
+  //     back to the intake work_type (byte-identical to the old behavior).
+  // `state` is a live object (the base radios mutate state.base_tab_id in place),
+  // so this re-resolves correctly whenever it's called.
+  function effectiveWorkType() {
+    const wt = (state.work_type || "epoxy").toLowerCase();
+    if (wt === "combo") return "combo";
+    const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
+    const base = state.base_tab_id ? all.find(t => t && t.id === state.base_tab_id) : null;
+    const role = base && base.role ? String(base.role).toLowerCase() : "";
+    return (role === "epoxy" || role === "polish" || role === "gyp") ? role : wt;
+  }
+  // The effective work type currently reflected on screen — reloadForWorkType()
+  // compares against this to know when a base switch actually changed the type.
+  let _lastEffWt = effectiveWorkType();
+
   // ─── Audience + work-type narrative catalog ─────────────────────────
   // Scope/Schedule/Exclusions boilerplate. These strings are BYTE-IDENTICAL to
   // the backend fallbacks in backend/main.py (_DEFAULT_SCOPE_*/_DEFAULT_SCHEDULE*/
@@ -95,28 +119,42 @@
     const cat = isGC ? NARRATIVE_DEFAULTS.GC : NARRATIVE_DEFAULTS.Direct;
     return cat[wt] || (isGC ? cat.epoxy : (wt === "polish" ? cat.polish : cat.epoxy));
   }
-  // Every default value for `field` across all work-types in `audience` — used to
-  // recognise (and only then re-seed) untouched machine boilerplate.
-  function audienceFieldDefaults(audience, field) {
-    const cat = String(audience).toUpperCase() === "GC" ? NARRATIVE_DEFAULTS.GC : NARRATIVE_DEFAULTS.Direct;
-    return new Set(Object.values(cat).map(row => row[field]));
+  // Every default value for `field` across BOTH audiences and ALL work-types —
+  // used to recognise (and only then re-seed) untouched machine boilerplate,
+  // whichever audience/work-type it was originally seeded from.
+  function allFieldDefaults(field) {
+    const out = new Set();
+    for (const cat of [NARRATIVE_DEFAULTS.Direct, NARRATIVE_DEFAULTS.GC])
+      for (const row of Object.values(cat))
+        if (row[field] != null) out.add(row[field]);
+    return out;
   }
 
-  // Seed the narrative fields: fill blanks with the current audience's default, AND
-  // if a field still holds a verbatim default from the OTHER audience (untouched
-  // boilerplate), re-seed it for the current audience — so a mid-draft Direct⇄GC
-  // switch swaps the machine text but any hand edit (even 1 char) survives.
-  (function seedNarrative() {
-    const cur = narrativeDefaults(_audience, _wt);
-    const otherAudience = String(_audience).toUpperCase() === "GC" ? "Direct" : "GC";
+  // Seed the narrative fields: fill blanks with the current audience + EFFECTIVE
+  // work type's default, AND if a field still holds a verbatim default from any
+  // OTHER audience/work-type (untouched boilerplate), re-seed it — so a mid-draft
+  // Direct⇄GC audience switch OR a base-bid work-type switch (Phase B) swaps the
+  // machine text, but any hand edit (even 1 char) survives. Re-runnable: called
+  // once at init and again from reloadForWorkType when the base's role changes.
+  function seedNarrative(fireInput) {
+    const cur = narrativeDefaults(_audience, effectiveWorkType());
     for (const nm of ["scope_notes", "schedule_notes", "exclusions"]) {
       const el = form.querySelector(`[name="${nm}"]`);
       if (!el) continue;
       const val = String(el.value || "");
-      if (!val.trim()) { el.value = cur[nm]; continue; }
-      if (audienceFieldDefaults(otherAudience, nm).has(val)) el.value = cur[nm];
+      let next = null;
+      if (!val.trim()) next = cur[nm];
+      else if (val !== cur[nm] && allFieldDefaults(nm).has(val)) next = cur[nm];
+      if (next == null || next === val) continue;
+      el.value = next;
+      // On a base-switch re-seed, fire input so the form's persistence + doc-fill
+      // listeners pick up the swap (a programmatic value set doesn't dispatch on
+      // its own). Omitted at init to stay byte-identical to the old behavior (the
+      // seeded default flows to the doc/generate via readForm, no early autosave).
+      if (fireInput) { try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch {} }
     }
-  })();
+  }
+  seedNarrative();
 
   // Cove base height: intake/estimate capture cove LENGTH only, never height, so
   // a saved empty-string can blank the inline 6" default (writeForm overwrites
@@ -164,22 +202,54 @@
     try { TW.setState({ notes_text: ta.value }); } catch {}
   }
 
-  (async function prefillNotes() {
+  // Tracks the exact notes text last AUTO-SEEDED from /api/default-notes, so a
+  // base-bid work-type switch (Phase B) can distinguish untouched boilerplate
+  // (re-seed for the new work type) from a hand edit or saved notes (leave alone).
+  let _seededNotes = "";
+
+  // Fetch the EFFECTIVE work type's default notes (auth-gated — wait for the
+  // Supabase token, else authHeaders() has no Bearer yet and it 401s) and hand
+  // the joined text to `onText`. Shared by the initial prefill + the base re-seed.
+  function fetchDefaultNotes(onText) {
+    return (async () => {
+      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+      try {
+        const r = await fetch("/api/default-notes?work_type=" + encodeURIComponent(effectiveWorkType()),
+                              { headers: TW.authHeaders() });
+        const j = await r.json();
+        if (Array.isArray(j.notes)) onText(j.notes.join("\n"));
+      } catch {}
+    })();
+  }
+
+  (function prefillNotes() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
     const applyAndPreview = (text) => { ta.value = text; syncPhaseNote(); try { renderNotesPreview(); } catch {} };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
     if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
-    // /api/default-notes is auth-gated — wait for the Supabase token before the
-    // fetch, else authHeaders() has no Bearer yet and the request 401s (a
-    // brand-new project would then miss its boilerplate scope/schedule/exclusions
-    // notes on first paint). Mirrors the gated-fetch pattern used elsewhere.
-    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-    fetch("/api/default-notes?work_type=" + encodeURIComponent(_wt), { headers: TW.authHeaders() })
-      .then(r => r.json())
-      .then(j => { if (!String(ta.value || "").trim() && Array.isArray(j.notes)) applyAndPreview(j.notes.join("\n")); })
-      .catch(() => {});
+    // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
+    fetchDefaultNotes((text) => {
+      if (String(ta.value || "").trim()) return;   // user typed during the fetch
+      applyAndPreview(text);
+      _seededNotes = text;
+    });
   })();
+
+  // Base-switch (Phase B): re-fetch default notes for the new effective work type
+  // ONLY when the current notes are still the auto-seeded boilerplate (or blank);
+  // hand-edited or saved notes are preserved.
+  function reseedNotesForWorkType() {
+    const ta = document.getElementById("notes-text");
+    if (!ta) return;
+    const cur = String(ta.value || "");
+    if (cur.trim() && cur !== _seededNotes) return;   // hand-edited / saved → keep
+    fetchDefaultNotes((text) => {
+      ta.value = text; _seededNotes = text; syncPhaseNote();
+      try { renderNotesPreview(); } catch {}
+      try { TW.setState({ notes_text: ta.value }); } catch {}
+    });
+  }
 
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
   // the project already carries one. Editable — they can change who signs.
@@ -204,8 +274,8 @@
   //   epoxy  → "Epoxy Flooring" + Epoxy area row + texture row
   //   polish → "Polished Concrete Flooring" + Polish area row, no texture
   //   combo  → "Epoxy + Polished Concrete Flooring" + BOTH area rows + texture
-  (function adaptToWorkType() {
-    const wt = (state.work_type || "epoxy").toLowerCase();
+  function adaptToWorkType() {
+    const wt = effectiveWorkType();
     const label = wt === "polish" ? "Polished Concrete Flooring"
                 : wt === "combo"  ? "Epoxy & Polished Concrete Flooring"
                 : wt === "gyp"    ? "Gypsum Underlayment"
@@ -245,11 +315,14 @@
     // For pure single-type, simplify the key back to just "Area:"
     if (wt === "epoxy")  epoxyRow.querySelector(".key").textContent  = "Area:";
     if (wt === "polish") polishRow.querySelector(".key").textContent = "Area:";
-  })();
+  }
+  adaptToWorkType();
 
   // Texture is a fixed dropdown (epoxy/combo only — polish hides the row above).
-  (function buildTextureControl() {
-    const _twt = (state.work_type || "epoxy").toLowerCase();
+  // Re-runnable: after the first call the field is already a <select>, so the
+  // `input[name=texture]` lookup misses and it no-ops (safe on a base switch).
+  function buildTextureControl() {
+    const _twt = effectiveWorkType();
     if (_twt === "polish" || _twt === "gyp") return;   // no texture row for these
     const input = document.querySelector('#texture-row input[name="texture"]');
     if (!input) return;
@@ -263,7 +336,8 @@
       opts.map(o => `<option value="${o.replace(/"/g, "&quot;")}">${o}</option>`).join("");
     sel.value = cur;
     input.replaceWith(sel);
-  })();
+  }
+  buildTextureControl();
 
   // Editing the System name here marks it manual, so returning to the Estimate
   // screen won't re-derive over the estimator's wording.
@@ -276,10 +350,13 @@
     });
   })();
 
-  document.getElementById("doc-name").textContent =
-    (state.project_name || "Untitled") + " - " +
-    (state.work_type || "Epoxy").charAt(0).toUpperCase() +
-    (state.work_type || "Epoxy").slice(1).toLowerCase() + " Proposal.docx";
+  function updateDocName() {
+    const wt = effectiveWorkType();
+    document.getElementById("doc-name").textContent =
+      (state.project_name || "Untitled") + " - " +
+      wt.charAt(0).toUpperCase() + wt.slice(1).toLowerCase() + " Proposal.docx";
+  }
+  updateDocName();
 
   // Format helpers
   const fmtUSD = (n) => "$" + Number(n || 0).toLocaleString(undefined,
@@ -499,7 +576,7 @@
   // Gyp audiences word it slightly differently; the doc keeps its OWN wording
   // unless the estimator overrides it, so this is just the preview/override default.)
   function baseDescLabel() {
-    const wt = (state.work_type || "epoxy").toLowerCase();
+    const wt = effectiveWorkType();
     const noun = wt === "polish" ? "Polished Concrete Flooring"
                : wt === "combo"  ? "Epoxy & Polished Concrete flooring"
                : wt === "sealer" ? "Sealed Concrete"
@@ -618,7 +695,7 @@
     const roomsBlock = document.getElementById("rooms-block");
     const optsPanel  = document.getElementById("options-panel");
     {
-      const wt = (state.work_type || "epoxy").toLowerCase();
+      const wt = effectiveWorkType();
       const N = (v) => Number(v) || 0;
       const floorNoun = wt === "polish" ? "Polished Concrete Flooring"
                       : wt === "sealer" ? "Sealed Concrete"
@@ -788,6 +865,7 @@
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
             applyAndRefresh();
+            reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
           optsPanel.querySelectorAll(".op-row").forEach(row => {
             const id = row.dataset.id;
@@ -861,7 +939,7 @@
   // .tw-fill spans) and to build the generate payload — so the page shows the
   // exact strings the .docx will carry.
   function computeTokenValues(mergedValues) {
-    const workType = (state.work_type || "epoxy").toLowerCase();
+    const workType = effectiveWorkType();
     // Area SF/LF are SHEET-FIRST: the resolved base tab's cells (snapshotted into
     // state.sheet_area — system-1 bucket for the flat tokens, matching today's
     // semantics) win when > 0, else fall back to the intake fields. This makes a
@@ -938,6 +1016,10 @@
       scope_notes:        safe(mergedValues.scope_notes),
       schedule_notes:     safe(mergedValues.schedule_notes),
       exclusions:         safe(mergedValues.exclusions),
+      // WORK "Notes:" line — editable per-job note (empty until the estimator
+      // fills it; NOT `safe()` which would render "0"). The backend coerces the
+      // same way so a blank never prints a raw {{work_notes}} token.
+      work_notes:         String(mergedValues.work_notes || ""),
       sales_tax_handling: mergedValues.sales_tax_handling || "INCLUDED",
       tax_phrase: (mergedValues.sales_tax_handling || "INCLUDED") === "INCLUDED"
         ? "Sales and KS remodel tax are included in the lump sum above."
@@ -1098,6 +1180,18 @@
     single_bid: () => ["base-bid-heading", "combo-price-block", "base-bid-row",
                        "sales-tax-row", "remodel-tax-row", "total-row", "options-heading"]
                        .map(id => document.getElementById(id)),
+    // Polish / GC templates DON'T wrap the base bid in {{#single_bid}} — "Base Bid"
+    // + the base line are plain template blocks (already shown), and the tax lines
+    // live in separate {{#tax_breakout}} / {{#remodel}} / {{#has_options}} regions.
+    // Mount the SAME live staging rows there — in the doc's Material Sales Tax →
+    // Remodel → Total → Options order — so the on-screen preview itemizes exactly
+    // like the generated .docx (refreshPriceDisplay show/hides them by tax mode).
+    // remodel-tax-row rides under tax_breakout for ordering; the {{#remodel}}
+    // region itself mounts nothing to avoid a duplicate.
+    tax_breakout: () => ["sales-tax-row", "remodel-tax-row", "total-row"]
+                       .map(id => document.getElementById(id)),
+    remodel:      () => [],
+    has_options:  () => [document.getElementById("options-heading")],
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
   };
@@ -1324,7 +1418,7 @@
           paragraph_overrides: collectOverrides(),
           paragraph_overrides_meta: {
             template_version: templateVersion,
-            work_type: (state.work_type || "epoxy").toLowerCase(),
+            work_type: effectiveWorkType(),
             audience: state.audience || "Direct",
           },
         });
@@ -1360,6 +1454,12 @@
   // only, per Hanz). Returns null for a stale snapshot (no per-tab .sf) so
   // renderSystemPreview keeps the legacy hardcoded-cell fallback.
   function sheetSystems() {
+    // The {{#system}} WORK block exists only in the epoxy/combo templates, and
+    // the backend consumes sheet_systems only for work_type=="epoxy" — so when
+    // the base's role makes the proposal polish/gyp (Phase B), don't resolve (or
+    // ship) epoxy systems at all.
+    const _ewt = effectiveWorkType();
+    if (_ewt !== "epoxy" && _ewt !== "combo") return null;
     const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
     if (!all.length || !all.some(t => t.sf)) return null;
     const byId = (id) => all.find(t => t.id === id);
@@ -1542,8 +1642,12 @@
   // null so a transient failure (e.g. the page-load auth race) retries on the
   // next render instead of blanking the letterhead for the whole session.
   function artUrl(name) {
-    if (!artUrlCache.has(name)) {
-      const wt = (state.work_type || "epoxy").toLowerCase();
+    const wt = effectiveWorkType();
+    // Key by work type: a base-switch template reload can load a DIFFERENT
+    // work type whose PNGs share a name (image1.png) with the previous one — a
+    // name-only cache would then serve the stale (wrong) letterhead.
+    const key = wt + ":" + name;
+    if (!artUrlCache.has(key)) {
       const audience = state.audience || "Direct";
       const url = `/api/proposal-template/media?work_type=${encodeURIComponent(wt)}` +
                   `&audience=${encodeURIComponent(audience)}&name=${encodeURIComponent(name)}`;
@@ -1552,12 +1656,12 @@
         .then(b => (b ? blobToDataUrl(b) : null))
         .catch(() => null)
         .then(u => {
-          if (!u) artUrlCache.delete(name);   // don't cache a failure — allow retry
+          if (!u) artUrlCache.delete(key);   // don't cache a failure — allow retry
           return u;
         });
-      artUrlCache.set(name, p);
+      artUrlCache.set(key, p);
     }
-    return artUrlCache.get(name);
+    return artUrlCache.get(key);
   }
 
   // Blob -> data: URI. Used for letterhead artwork so the <img> passes the
@@ -1871,7 +1975,7 @@
   }
 
   async function initDocumentEditor() {
-    const wt = (state.work_type || "epoxy").toLowerCase();
+    const wt = effectiveWorkType();
     const audience = state.audience || "Direct";
     // The endpoint is auth-gated; wait for the Supabase token like the other
     // pull-on-load fetches do, so a slow login doesn't 401 the template.
@@ -1919,6 +2023,27 @@
       refreshPriceDisplay();
       applyZoom();
     }
+  }
+
+  // Phase B: when a base-bid switch changes the EFFECTIVE work type (e.g. an
+  // epoxy job whose base is now a polish sheet), re-derive the whole proposal
+  // from the new role: adapt the sidebar rows/labels, re-seed untouched
+  // narrative + notes boilerplate (hand edits survive), and reload the template
+  // + artwork. No-op when the type is unchanged (same-role base switches — the
+  // common case — only re-price, via applyAndRefresh). initDocumentEditor is
+  // idempotent and recomputes tokens from the current state, so this is safe to
+  // re-run; overrides are keyed by work_type, so epoxy edits don't bleed into
+  // the polish render.
+  function reloadForWorkType() {
+    const cur = effectiveWorkType();
+    if (cur === _lastEffWt) return;
+    _lastEffWt = cur;
+    adaptToWorkType();
+    buildTextureControl();
+    updateDocName();
+    seedNarrative(true);          // scope/schedule/exclusions (sync fields + persist)
+    reseedNotesForWorkType();     // default notes (async re-fetch, self-repaints)
+    initDocumentEditor();         // template + artwork reload, token recompute, re-render
   }
 
   // Mark blocks dirty as they're edited (delegated — blocks re-render freely).
@@ -2155,11 +2280,11 @@
       paragraph_overrides: paragraphOverrides,
       paragraph_overrides_meta: {
         template_version: templateVersion,
-        work_type: (state.work_type || "epoxy").toLowerCase(),
+        work_type: effectiveWorkType(),
         audience: state.audience || "Direct",
       },
       proposal_payload: {
-        work_type: state.work_type || "epoxy",
+        work_type: effectiveWorkType(),
         audience:  state.audience  || "Direct",
         // The template version the paragraph_overrides ids were captured against.
         // The backend drops the overrides if this no longer matches the current
