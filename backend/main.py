@@ -1618,7 +1618,8 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         "geometry": proposal_writer.template_geometry(d),
         "blocks": blocks,
     }
-    return _versioned_json(request, payload, version=f"{work_type}:{audience}:{payload['template_version']}")
+    return _versioned_json(request, payload,
+                           version=f"{work_type}:{audience}:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
 
 
 # Media (letterhead artwork) served straight out of the template package.
@@ -1663,6 +1664,14 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
     if etag in (request.headers.get("if-none-match") or ""):
         return Response(status_code=304, headers=headers)
     return Response(content=data, media_type=ctype, headers=headers)
+
+
+# Block-model SCHEMA version for /api/proposal-template's ETag. The template
+# ETag is otherwise keyed on the .docx mtime, so a CODE change to the block
+# dict (new fields, changed semantics) wouldn't bust a browser's cached
+# response — it would 304 and keep rendering stale blocks. BUMP THIS whenever
+# the block shape changes. v2: added `price_flat` (flush/bullet-less PRICE rows).
+_BLOCK_SCHEMA_VERSION = "2"
 
 
 def _template_proposal_version(path: Path) -> str:
