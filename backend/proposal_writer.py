@@ -432,6 +432,25 @@ def _flatten_price_bullets(d: Document) -> int:
     return n
 
 
+def _space_before_options(d: Document, n: int = 2) -> int:
+    """Insert `n` blank paragraphs before the PRICE "Options" heading so the
+    base-bid Total isn't cramped against the Options section (Kyle: double
+    spacing after the Total). Runs AFTER block expansion + substitution over
+    body + text-box paragraphs; targets the first standalone "Options" heading.
+    No-op for a bid with no options (no heading to anchor to). Blank paragraphs
+    inherit the document default height — enough to read as clean line breaks."""
+    # Insert before EVERY standalone "Options" heading — a floating text box is
+    # duplicated across mc:Choice (DrawingML) + mc:Fallback (VML), and different
+    # renderers (Word vs LibreOffice→PDF) pick different copies, so both need the
+    # spacing to stay consistent.
+    targets = [p for p in d.element.body.iter(qn("w:p"))
+               if "".join(t.text or "" for t in p.iter(qn("w:t"))).strip() == "Options"]
+    for target in targets:
+        for _ in range(n):
+            target.addprevious(OxmlElement("w:p"))
+    return len(targets)
+
+
 def _is_total_row(p_elem) -> bool:
     """True for the PRICE block's Total row — the `{{#tax_breakout}}` paragraph
     carrying the `{{total_label}}` / `{{total_formatted}}` token (as opposed to
@@ -1268,6 +1287,9 @@ def fill_proposal(
     _n_flat = _flatten_price_bullets(d)
     if _n_flat:
         log.info("Flattened %d PRICE bullet row(s)", _n_flat)
+    # Double spacing after the base-bid Total, before the Options section (Kyle).
+    if _space_before_options(d, 2):
+        log.info("Added double spacing before the PRICE Options heading")
     # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
     # overflow its fixed box and overlap the next box / frame art.
     _shrunk = _shrink_overflowing_text_boxes(d)
