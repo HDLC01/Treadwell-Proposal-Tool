@@ -1603,6 +1603,10 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             "txbx": txbx_idx,
             "align": proposal_writer._para_align(p),
             "list": proposal_writer._para_is_list(p_elem),
+            # PRICE-list rows (numId=3) get their bullets stripped at generate
+            # time (_flatten_price_bullets); flag them so the on-screen editor
+            # renders them flush/bullet-less to match the generated .docx.
+            "price_flat": proposal_writer._para_price_list(p_elem),
             "runs": proposal_writer._block_runs(p_elem, p),
         })
 
