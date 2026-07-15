@@ -839,24 +839,23 @@ button {
 .tw-block.tw-dirty { box-shadow: inset 2px 0 0 rgba(158, 0, 31, 0.45); }
 
 /* Real Word bullets (paragraphs carrying numbering) — hanging indent with a
-   round bullet, matching the template's list rows. Shared by the read-only
-   price/notes previews (they mirror bulleted docx rows). */
-.tw-li {
+   RED SQUARE bullet, matching Kyle's template list rows (numId 1/3/4 all use a
+   Wingdings filled square colored #A71320). Shared by the WORK / PRICE / NOTES
+   previews so the on-screen editor matches the generated .docx. */
+.tw-li,
+.tw-priceline {
   position: relative;
   margin-left: 14pt;
   padding-left: 9pt;
 }
-.tw-li::before {
-  content: "•";
+.tw-li::before,
+.tw-priceline::before {
+  content: "\25AA";                       /* ▪ small filled square */
+  color: #a71320;                         /* Treadwell red, matches the template list */
   position: absolute;
   left: 0;
   top: 0;
 }
-/* PRICE rows mirror the de-bulleted docx price list — flush left, NO bullet
-   (Kyle: "no bullet points in the pricing"). Used for Base Bid / Material Sales
-   Tax / Remodel / Total / Options / alternate rows so the on-screen preview
-   matches proposal_writer._flatten_price_bullets (numId stripped, ind left=0). */
-.tw-priceline { margin-left: 0; padding-left: 0; }
 
 /* Flow-fallback caption above a bare-token block (job name, date …): only
    in flow mode, where the letterhead artwork — which carries the real
