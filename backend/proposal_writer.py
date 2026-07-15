@@ -1259,12 +1259,15 @@ def fill_proposal(
     # the sqft/lf_clause tokens are filled (matches the on-screen preview).
     if _drop_zero_sf_prefix(d):
         log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
-    # NOTE: the PRICE rows keep their template list bullets — Kyle's templates
-    # use a RED SQUARE bullet (numId 1/3/4 = Wingdings filled square, #A71320)
-    # on the WORK, PRICE and NOTES lists, and Hanz confirmed the pricing should
-    # match that. (Earlier this called _flatten_price_bullets to strip them,
-    # which was the wrong read of "no bullets" — that helper is kept unused for
-    # now but must NOT run.)
+    # PRICE section reads as clean flush-left lines — Kyle wants NO bullets in the
+    # pricing (confirmed by Hanz 2026-07-16, reversing the earlier "keep the red
+    # squares" read). _flatten_price_bullets strips the numId=3 list formatting off
+    # every PRICE row (base bid, Material Sales Tax, Remodel, Total, {{#price_line}}
+    # options, {{#room}}, {{#alternate}}) across all Direct/GC/Gyp templates; the
+    # WORK (numId 4), NOTES (numId 1) and Terms (numId 5) lists keep their bullets.
+    _n_flat = _flatten_price_bullets(d)
+    if _n_flat:
+        log.info("Flattened %d PRICE bullet row(s)", _n_flat)
     # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
     # overflow its fixed box and overlap the next box / frame art.
     _shrunk = _shrink_overflowing_text_boxes(d)
