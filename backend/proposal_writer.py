@@ -384,6 +384,64 @@ def _strip_bullet(p_elem) -> None:
         ppr.remove(numpr)
 
 
+def _flatten_price_bullets(d: Document) -> int:
+    """Remove list/bullet formatting from the PRICE section so amounts read as
+    clean flush-left lines (Kyle: no bullet points in the pricing). Every price
+    template puts its PRICE rows — base bid, Material Sales Tax, Remodel, Total,
+    {{#price_line}} options, {{#room}}, {{#alternate}} — on list numId=3 (verified
+    across all Direct/GC/Gyp templates); NOTES (numId 1), the WORK section
+    (numId 4) and Terms (numId 5) keep their bullets. Runs AFTER block expansion
+    (so cloned option/room/tax rows are covered) over body + text-box paragraphs.
+    Supersedes the older per-row _zero_list_indent hide-the-bullet trick."""
+    n = 0
+    for p in d.element.body.iter(qn("w:p")):
+        ppr = p.find(qn("w:pPr"))
+        if ppr is None:
+            continue
+        numpr = ppr.find(qn("w:numPr"))
+        if numpr is None:
+            continue
+        numid = numpr.find(qn("w:numId"))
+        if numid is None or numid.get(qn("w:val")) != "3":
+            continue
+        ppr.remove(numpr)
+        # No longer a list item — pin flush-left so no orphaned hanging indent remains.
+        ind = ppr.find(qn("w:ind"))
+        if ind is None:
+            ind = OxmlElement("w:ind")
+            ppr.append(ind)
+        ind.set(qn("w:left"), "0")
+        ind.set(qn("w:start"), "0")
+        n += 1
+    return n
+
+
+def _is_total_row(p_elem) -> bool:
+    """True for the PRICE block's Total row — the `{{#tax_breakout}}` paragraph
+    carrying the `{{total_label}}` / `{{total_formatted}}` token (as opposed to
+    the sibling Material Sales Tax row that shares the same block name)."""
+    txt = _p_text(p_elem)
+    return "{{total_label}}" in txt or "{{total_formatted}}" in txt
+
+
+def _zero_list_indent(p_elem) -> None:
+    """Zero a list paragraph's left indent (`<w:ind w:left="0" w:start="0"/>`) so
+    the numbering level's hanging bullet tucks into the margin and doesn't print —
+    the same trick Kyle's other PRICE rows use to hide their bullet while keeping
+    the text flush left. Keeps `<w:numPr>` intact so spacing/style are unchanged.
+    Appended last (after `<w:rPr>`) to match the sibling rows' element order.
+    No-op without a pPr; idempotent where the indent is already zeroed."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        return
+    ind = ppr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        ppr.append(ind)
+    ind.set(qn("w:left"), "0")
+    ind.set(qn("w:start"), "0")
+
+
 # Base-bid line: `{{base_bid_formatted}} – <description> as described above {{base_tax_phrase}}`.
 # The <description> is static text in every template (each work type / audience
 # has its own wording, e.g. "Epoxy flooring", "Polished Concrete & Joint Filler"),
@@ -533,6 +591,14 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
                 # bullet so it renders as an empty line, not an empty bullet dot.
                 if block_name == "notes" and not str(item.get("text") or "").strip():
                     _strip_bullet(clone)
+                # PRICE Total row: the sibling rows (base bid / Material Sales Tax /
+                # Remodel) zero their list indent so the numbering's hanging bullet
+                # tucks into the margin and doesn't print; the Polish template's
+                # Total row was missed and so shows a lone stray bullet. Match the
+                # siblings so the whole PRICE block formats consistently (no-op where
+                # the template already zeros it — e.g. the Epoxy template).
+                if block_name == "tax_breakout" and _is_total_row(clone):
+                    _zero_list_indent(clone)
                 new_elems.append(clone)
 
         for clone in new_elems:
@@ -1162,6 +1228,9 @@ def fill_proposal(
     # the sqft/lf_clause tokens are filled (matches the on-screen preview).
     if _drop_zero_sf_prefix(d):
         log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
+    # PRICE section: strip the list bullets so amounts read as clean flush-left
+    # lines (Kyle: no bullet points in the pricing).
+    _flatten_price_bullets(d)
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
