@@ -1,12 +1,12 @@
-"""PRICE section formatting: no bullets, bold amounts (Kyle: "prices should be
-bold and no bullet points in the pricing").
+"""PRICE section formatting: red-square bullets kept, bold amounts.
 
 Every proposal template puts its PRICE rows (base bid, Material Sales Tax,
 Remodel, Total, {{#price_line}} options, {{#room}}, {{#alternate}}) on list
-numId=3; NOTES (numId 1), the WORK section (numId 4), and Terms (numId 5) keep
-their bullets. proposal_writer._flatten_price_bullets strips numId=3 at render
-time so the amounts read as clean flush-left lines, and the amount runs stay
-bold (already bold in the templates; token fill preserves run formatting).
+numId=3 — a RED SQUARE bullet (Wingdings filled square, #A71320) matching the
+WORK (numId 4) and NOTES (numId 1) lists. Hanz confirmed the pricing should keep
+those bullets (an earlier pass wrongly stripped them). So the generated docx
+preserves numId=3, and the amount runs stay bold (already bold in the templates;
+token fill preserves run formatting).
 """
 import io
 import re
@@ -53,14 +53,15 @@ def _vals(**over):
     return v
 
 
-def test_epoxy_price_rows_have_no_bullets_and_bold_amounts():
+def test_epoxy_price_rows_keep_red_square_bullets_and_bold_amounts():
     vals = _vals()
     systems = main._build_epoxy_systems({}, vals, [{"name": "MACRO Flake", "sf": 12000, "lf": 250}])
     out = pw.fill_proposal(work_type="epoxy", audience="Direct", values=vals, systems=systems,
                            price_lines=[{"amount_formatted": "$2,500", "label": "Add VE"}])
     xml = _xml(out)
-    # numId=3 (the PRICE list) is fully stripped; WORK (4) + Terms (5) survive.
-    assert xml.count('<w:numId w:val="3"') == 0
+    # PRICE rows KEEP their template list bullets (numId=3, the red-square list —
+    # Kyle's design); WORK (4) + Terms (5) also survive. (We no longer flatten.)
+    assert xml.count('<w:numId w:val="3"') > 0
     assert xml.count('<w:numId w:val="4"') > 0
     assert xml.count('<w:numId w:val="5"') > 0
     # Amounts stay bold (base bid + option line).
@@ -71,12 +72,13 @@ def test_epoxy_price_rows_have_no_bullets_and_bold_amounts():
         assert re.search(r"<w:b[ />]", run0), f"amount {amt} run not bold"
 
 
-def test_polish_and_gyp_price_rows_have_no_bullets():
-    # Polish (option/alternate list) + Gyp (underlayment) both strip numId=3.
+def test_polish_and_gyp_price_rows_keep_bullets():
+    # Polish (option/alternate list) + Gyp (underlayment) both KEEP numId=3
+    # (the red-square PRICE list) — matches Kyle's template, no flattening.
     pv = _vals(base_bid_formatted="$14,391.00", total_formatted="$16,707.00")
     pout = pw.fill_proposal(work_type="polish", audience="Direct", values=pv,
                             price_lines=[{"amount_formatted": "$1,100", "label": "Polish Add Dye"}])
-    assert _xml(pout).count('<w:numId w:val="3"') == 0
+    assert _xml(pout).count('<w:numId w:val="3"') > 0
 
     gv = _vals(gyp_soft_sf="27,825", gyp_hard_sf="11,795", gyp_corridor_sf="5,655",
                gyp_soft_thickness='3/4"', gyp_hard_thickness='1"', gyp_corridor_thickness='3/4"',
@@ -84,7 +86,7 @@ def test_polish_and_gyp_price_rows_have_no_bullets():
                base_bid_formatted="$98,000.00", tax_amount_formatted="$0.00",
                total_formatted="$103,364.00")
     gout = pw.fill_proposal(work_type="gyp", audience="Direct", values=gv)
-    assert _xml(gout).count('<w:numId w:val="3"') == 0
+    assert _xml(gout).count('<w:numId w:val="3"') > 0
 
 
 def test_polish_options_heading_precedes_option_lines():

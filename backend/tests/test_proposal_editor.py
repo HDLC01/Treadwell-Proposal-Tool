@@ -465,11 +465,11 @@ def test_system_override_does_not_touch_estimate_cells():
     assert wb["Epoxy"]["A22"].value == "Zeta Broadcast System"
 
 
-def test_price_rows_carry_price_flat_for_flush_render():
+def test_price_rows_carry_price_flat_flag():
     """PRICE-list rows (numId=3) carry price_flat=True so the on-screen document
-    editor renders them flush/bullet-less, matching proposal_writer.
-    _flatten_price_bullets in the generated .docx (Kyle: no bullet points in the
-    pricing). WORK + Terms rows keep their bullets (price_flat falsy)."""
+    editor can render them with the red-square PRICE-list style (.tw-priceline),
+    matching Kyle's template. WORK + Terms rows are not flagged (price_flat
+    falsy) — they render via their own bullet/number style."""
     r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
     assert r.status_code == 200
     blocks = r.json()["blocks"]

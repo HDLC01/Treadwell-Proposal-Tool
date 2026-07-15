@@ -1243,9 +1243,12 @@ def fill_proposal(
     # the sqft/lf_clause tokens are filled (matches the on-screen preview).
     if _drop_zero_sf_prefix(d):
         log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
-    # PRICE section: strip the list bullets so amounts read as clean flush-left
-    # lines (Kyle: no bullet points in the pricing).
-    _flatten_price_bullets(d)
+    # NOTE: the PRICE rows keep their template list bullets — Kyle's templates
+    # use a RED SQUARE bullet (numId 1/3/4 = Wingdings filled square, #A71320)
+    # on the WORK, PRICE and NOTES lists, and Hanz confirmed the pricing should
+    # match that. (Earlier this called _flatten_price_bullets to strip them,
+    # which was the wrong read of "no bullets" — that helper is kept unused for
+    # now but must NOT run.)
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
