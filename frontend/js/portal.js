@@ -111,8 +111,9 @@
       return `<div class="note sys">💳 Deposit requested${amt}</div>`;
     }
     const staff = m.author_kind === "staff";
+    const viaEmail = m.meta && m.meta.source === "email";
     return `<div class="msg ${staff ? "staff" : "customer"}">
-      <div class="who">${staff ? "Treadwell" : "Customer"}</div>
+      <div class="who">${staff ? "Treadwell" : "Customer"}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
       <div>${esc(m.body)}</div>
       <div class="when">${t}</div>
     </div>`;
