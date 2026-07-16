@@ -75,6 +75,43 @@
     font-size: 12px;
     color: var(--ink-variant);
   }
+  /* Portal "Send to customer portal" recipients modal. Reuses shared.js's
+     .tw-ov / .tw-dlg base (injected via TW.injectModalCss); these are the
+     portal-only additions, namespaced under .tw-dlg--portal so they never
+     leak into the confirmDanger dialogs. */
+  .tw-dlg--portal { text-align: left; max-width: 460px; }
+  .tw-dlg--portal .tw-dlg-h { text-align: center; }
+  .tw-dlg--portal .tw-dlg-m { text-align: center; }
+  .tw-dlg--portal .tw-dlg-go { background: var(--treadwell-red); color: #fff; }
+  .tw-em-list { margin: 16px 0 4px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; }
+  .tw-em-row {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface-low); border: 1px solid var(--surface-dim);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px;
+  }
+  .tw-em-row .em { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+  .tw-em-tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+    color: var(--ink-variant); background: var(--surface-dim); border-radius: 5px; padding: 2px 6px;
+  }
+  .tw-em-x { border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1;
+    color: var(--ink-variant); padding: 2px 7px; border-radius: 6px; }
+  .tw-em-x:hover { background: var(--surface-dim); color: var(--treadwell-red-dark); }
+  .tw-em-add { display: flex; gap: 8px; margin-top: 12px; }
+  .tw-em-add input { flex: 1; }
+  .tw-em-add button { padding: 9px 14px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer;
+    background: var(--surface-lowest); border: 1px solid var(--surface-dim); color: var(--ink); }
+  .tw-em-add button:hover { background: var(--surface-dim); }
+  .tw-em-err { color: #9e001f; font-size: 12.5px; margin: 8px 0 0; min-height: 16px; }
+  /* Inline recipients editor on the Files page (shown before sending, no popup):
+     reuses the .tw-em-* rows above, in a compact left-aligned block. */
+  .portal-recip { text-align: left; max-width: 460px; margin: 0 auto 14px; }
+  .portal-recip .tw-em-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+    color: var(--ink-variant); margin-bottom: 2px;
+  }
+  .portal-recip .tw-em-list { margin: 6px 0 0; }
+  .portal-recip .tw-em-empty { font-size: 12.5px; color: var(--ink-variant); padding: 4px 2px; }
 </style>
 </head>
 <body>
@@ -155,9 +192,13 @@
     </p>
 
     <div style="margin-top:18px;padding-top:18px;border-top:1px dashed var(--surface-dim);">
+      <!-- Recipients are shown + editable inline (no popup): the intake email is a
+           fixed row, the estimator adds/removes extras, then the button sends to
+           the whole list. Populated by done.js (mountPortalRecipients). -->
+      <div id="portal-recipients" class="portal-recip"></div>
       <button id="portal-btn" class="btn-primary" type="button" style="padding:12px 20px;">↗ Send to customer portal</button>
       <p id="portal-result" class="hint" style="display:none;margin-top:12px;"></p>
-      <p class="hint" style="margin-top:8px;">Emails the customer a secure link to view, ask questions, and approve online.</p>
+      <p class="hint" style="margin-top:8px;">Each recipient gets a secure link to view, ask questions, and approve online.</p>
     </div>
 
     <div class="actions" style="justify-content: center; margin-top: 32px; gap: 12px; flex-wrap: wrap;">

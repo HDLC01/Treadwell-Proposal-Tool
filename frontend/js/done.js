@@ -63,10 +63,13 @@
       // Structural edits + per-cell lock overrides into the .xlsx.
       tab_structs: Array.isArray(s.tab_structs) ? s.tab_structs : [],
       lock_overrides: (s.lock_overrides && typeof s.lock_overrides === "object") ? s.lock_overrides : {},
-      // Doc-editor per-option WORK-row display overrides (epoxy only). NOTE:
-      // this fallback still drops notes / paragraph_overrides / remodel /
-      // rooms — pre-existing lossiness, tracked separately; the primary path
+      // Editable NOTES (one bullet per line) — carry them so the "View files"
+      // rebuild keeps the estimator's notes AND the substituted phase-price
+      // bullet (empty → backend uses the standard list, phase price from
+      // values.phase_price). NOTE: this fallback still drops paragraph_overrides
+      // / remodel / rooms — pre-existing lossiness; the primary path
       // (proposal_payload above) carries them all.
+      notes: String(s.notes_text || "").replace(/\n+$/, "").split("\n").map(t => t.trim()),
       system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
       // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
       // option + manual line label/amount). Display-only — never affects pricing.
@@ -87,6 +90,112 @@
   function fmtUSD(n) {
     return "$" + Number(n || 0).toLocaleString(undefined,
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // ─── "Send to customer portal" recipients modal ───────────────────────
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const MAX_PORTAL_EMAILS = 10;
+
+  // TW.postJSON flattens a non-2xx into Error("POST … → 400: {\"detail\":\"…\"}").
+  // Pull the human message back out for the modal's inline error line.
+  function portalErrMsg(err) {
+    const s = String((err && err.message) || err || "");
+    const m = /"(?:detail|error)"\s*:\s*"([^"]+)"/.exec(s);
+    if (m) return m[1];
+    return s || "Send failed — try again.";
+  }
+
+  // Inline recipients editor on the Files page — shown BEFORE sending (no popup).
+  // The intake email is a fixed row; the estimator adds/removes extra recipients;
+  // the "Send to customer portal" button sends to the whole list. Every recipient
+  // gets a secure link + full portal access (view / ask / approve). Exposes a few
+  // methods on `portalRecip` for the button handler below.
+  const portalRecip = { intake: "", hasIntake: false, extras: [], ready: false };
+
+  function mountPortalRecipients() {
+    const box = document.getElementById("portal-recipients");
+    if (!box) return;
+    const st = TW.getState();
+    const intake = String(st.contact_email || "").trim();
+    portalRecip.intake = intake;
+    portalRecip.hasIntake = !!intake && EMAIL_RE.test(intake);
+    const saved = Array.isArray(st.portal_emails) ? st.portal_emails : [];
+    portalRecip.extras = saved
+      .map(e => String(e || "").trim())
+      .filter(e => e && EMAIL_RE.test(e) && (!portalRecip.hasIntake || e.toLowerCase() !== intake.toLowerCase()));
+
+    box.innerHTML =
+      '<div class="tw-em-label">Recipients</div>' +
+      '<div class="tw-em-list"></div>' +
+      '<div class="tw-em-add"><input type="email" placeholder="Add another email — name@company.com" autocomplete="off">' +
+      '<button type="button" class="tw-em-addbtn">Add</button></div>' +
+      '<p class="tw-em-err"></p>';
+
+    const listEl = box.querySelector(".tw-em-list");
+    const addInput = box.querySelector(".tw-em-add input");
+    const addBtn = box.querySelector(".tw-em-addbtn");
+    const errEl = box.querySelector(".tw-em-err");
+
+    const setErr = (m) => { errEl.textContent = m || ""; };
+    const allEmails = () => (portalRecip.hasIntake ? [portalRecip.intake] : []).concat(portalRecip.extras);
+
+    function renderList() {
+      listEl.textContent = "";
+      const rows = (portalRecip.hasIntake ? [{ email: portalRecip.intake, fixed: true }] : [])
+        .concat(portalRecip.extras.map(e => ({ email: e, fixed: false })));
+      if (!rows.length) {
+        const empty = document.createElement("div");
+        empty.className = "tw-em-empty";
+        empty.textContent = "No customer email on file — add one below.";
+        listEl.appendChild(empty);
+      }
+      rows.forEach((r) => {
+        const row = document.createElement("div");
+        row.className = "tw-em-row";
+        const em = document.createElement("span");
+        em.className = "em"; em.textContent = r.email;
+        row.appendChild(em);
+        if (r.fixed) {
+          const tag = document.createElement("span");
+          tag.className = "tw-em-tag"; tag.textContent = "intake";
+          row.appendChild(tag);
+        } else {
+          const x = document.createElement("button");
+          x.type = "button"; x.className = "tw-em-x"; x.textContent = "\u00d7";
+          x.setAttribute("aria-label", "Remove " + r.email);
+          x.addEventListener("click", () => {
+            const k = portalRecip.extras.indexOf(r.email);
+            if (k >= 0) portalRecip.extras.splice(k, 1);
+            setErr(""); renderList();
+          });
+          row.appendChild(x);
+        }
+        listEl.appendChild(row);
+      });
+    }
+
+    // Add whatever is typed. Returns false (+ shows an error) on invalid residual
+    // text so the send can block instead of silently dropping it.
+    function tryAdd() {
+      const v = addInput.value.trim();
+      if (!v) return true;
+      if (!EMAIL_RE.test(v)) { setErr("That doesn\u2019t look like an email address."); return false; }
+      const lc = v.toLowerCase();
+      if (allEmails().some(e => e.toLowerCase() === lc)) { setErr("That email is already in the list."); return false; }
+      if (allEmails().length >= MAX_PORTAL_EMAILS) { setErr("Maximum " + MAX_PORTAL_EMAILS + " recipients."); return false; }
+      portalRecip.extras.push(v); addInput.value = ""; setErr(""); renderList(); addInput.focus();
+      return true;
+    }
+
+    addBtn.addEventListener("click", () => tryAdd());
+    addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); tryAdd(); } });
+
+    portalRecip.allEmails = allEmails;
+    portalRecip.tryAdd = tryAdd;
+    portalRecip.setErr = setErr;
+    portalRecip.setBusy = (b) => { addInput.disabled = addBtn.disabled = !!b; };
+    portalRecip.ready = true;
+    renderList();
   }
 
   function showPreGenerate() {
@@ -195,34 +304,52 @@
       pdfBtn.style.display = "none";
     }
 
-    // Send to customer portal — mints a secure link + emails the customer.
+    // Send to the inline recipient list shown above (no popup). Every recipient
+    // gets a secure link + full portal access (view / ask / approve).
+    mountPortalRecipients();
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
         const draftId = TW.getDraftId();
         if (!draftId) { alert("Save the project first (open it from Projects), then send."); return; }
+        if (portalRecip.tryAdd && !portalRecip.tryAdd()) return;   // invalid residual text blocks the send
+        const emails = portalRecip.allEmails ? portalRecip.allEmails() : [];
+        if (!emails.length) { if (portalRecip.setErr) portalRecip.setErr("Add at least one recipient email."); return; }
         const orig = portalBtn.textContent;
-        portalBtn.disabled = true; portalBtn.textContent = "Sending…";
+        portalBtn.disabled = true; portalBtn.textContent = "Sending\u2026";
+        if (portalRecip.setBusy) portalRecip.setBusy(true);
+        if (portalRecip.setErr) portalRecip.setErr("");
         try {
-          const resp = await fetch(TW.resolveApiBase() + "/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
-            { method: "POST", headers: TW.authHeaders() });
-          const j = await resp.json().catch(() => ({}));
-          if (!resp.ok || j.ok === false) {
-            const e = j.error || j.detail || ("HTTP " + resp.status);
-            throw new Error(e === "no_contact_email"
-              ? "This proposal has no customer email — add one on the Intake screen first."
-              : e);
-          }
-          portalBtn.textContent = "✓ Sent to customer portal";
+          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), { emails });
+          if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+          TW.setState({ portal_emails: emails });     // persist so it pre-fills next time
+          if (portalRecip.setBusy) portalRecip.setBusy(false);
+          portalBtn.textContent = "\u2713 Sent to customer portal";
           const r = document.getElementById("portal-result");
           if (r) {
             r.style.display = "";
-            r.innerHTML = "Customer link: <a href='" + j.url + "' target='_blank' rel='noopener'>" + j.url +
-              "</a><br>Emailed to <strong>" + (j.customer_email || "the customer") + "</strong>.";
+            r.textContent = "";
+            const recips = (j.recipients && j.recipients.length) ? j.recipients
+                          : [j.customer_email || "the customer"];
+            const a = document.createElement("a");
+            a.href = j.url || "#"; a.target = "_blank"; a.rel = "noopener";
+            a.textContent = j.url || "(link)";
+            r.appendChild(document.createTextNode("Customer link: "));
+            r.appendChild(a);
+            r.appendChild(document.createElement("br"));
+            r.appendChild(document.createTextNode("Emailed to "));
+            const strong = document.createElement("strong");
+            strong.textContent = recips.join(", ");
+            r.appendChild(strong);
+            r.appendChild(document.createTextNode("."));
           }
+          setTimeout(() => { portalBtn.textContent = "\u2197 Re-send to customer portal"; portalBtn.disabled = false; }, 2500);
         } catch (err) {
-          portalBtn.textContent = "Failed — " + (err.message || "try again");
-          setTimeout(() => { portalBtn.textContent = orig; portalBtn.disabled = false; }, 3000);
+          portalBtn.disabled = false; portalBtn.textContent = orig;
+          if (portalRecip.setBusy) portalRecip.setBusy(false);
+          const msg = portalErrMsg(err);
+          if (portalRecip.setErr) portalRecip.setErr(msg === "no_contact_email"
+            ? "This proposal has no customer email — add a recipient above." : msg);
         }
       });
     }
