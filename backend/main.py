@@ -524,6 +524,21 @@ async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]
                    {"body": (body or {}).get("body") or "", "by": _user_email(request)})
 
 
+@app.post("/api/portal/proposal/{proposal_id}/deposit-request")
+async def api_portal_deposit_request(proposal_id: str, request: Request) -> Dict[str, Any]:
+    """Staff-triggered: push a deposit request into the customer chat + email.
+    Optional {amount} override; otherwise the portal uses its 25% auto-calc."""
+    proposal_id = _safe_id(proposal_id)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — empty/malformed body is fine (amount optional)
+        body = {}
+    payload: Dict[str, Any] = {"by": _user_email(request)}
+    if isinstance(body, dict) and body.get("amount") is not None:
+        payload["amount"] = body["amount"]
+    return _portal(f"/api/admin/proposal/{proposal_id}/deposit-request", "POST", payload)
+
+
 @app.post("/api/portal/proposal/{proposal_id}/deposit-received")
 def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})
@@ -532,6 +547,35 @@ def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
 @app.post("/api/portal/proposal/{proposal_id}/scheduled")
 def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
+
+
+# ─── Team-notification recipients (configurable; proxied to the portal) ────────
+@app.get("/api/portal/notify-recipients")
+def api_portal_notify_list() -> Dict[str, Any]:
+    return _portal("/api/admin/notify-recipients", "GET")
+
+
+@app.post("/api/portal/notify-recipients")
+async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Invalid body.")
+    email = (body.get("email") or "").strip().lower()
+    kind = (body.get("kind") or "general").strip().lower()
+    if kind not in ("general", "deposit"):
+        raise HTTPException(400, "Choose a general or deposit recipient.")
+    if len(email) > 254 or not _PORTAL_EMAIL_RE.match(email):
+        raise HTTPException(400, "Enter a valid email address.")
+    return _portal("/api/admin/notify-recipients", "POST",
+                   {"email": email, "kind": kind, "by": _user_email(request)})
+
+
+@app.delete("/api/portal/notify-recipients/{rid}")
+def api_portal_notify_delete(rid: int) -> Dict[str, Any]:
+    return _portal(f"/api/admin/notify-recipients/{rid}", "DELETE")
 
 
 @app.get("/api/admin/proposal-pdf")

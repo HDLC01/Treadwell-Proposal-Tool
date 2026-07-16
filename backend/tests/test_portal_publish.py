@@ -88,3 +88,70 @@ def test_rejects_unsafe_draft_id(monkeypatch):
     _wire(monkeypatch)
     r = client.post("/api/portal/publish?draft_id=..%2Fevil", json={"emails": ["a@x.com"]})
     assert r.status_code == 400
+
+
+# ── deposit-request proxy (staff-triggered) ───────────────────────────────────
+def test_deposit_request_no_body_omits_amount(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/proposal/p1/deposit-request")
+    assert r.status_code == 200, r.text
+    assert cap["path"] == "/api/admin/proposal/p1/deposit-request" and cap["method"] == "POST"
+    assert cap["body"] == {"by": "tester@wetreadwell.com"}     # no amount key when none sent
+
+
+def test_deposit_request_forwards_amount_override(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/proposal/p1/deposit-request", json={"amount": 1500})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["amount"] == 1500 and cap["body"]["by"] == "tester@wetreadwell.com"
+
+
+def test_deposit_request_null_amount_omitted(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/proposal/p1/deposit-request", json={"amount": None})
+    assert r.status_code == 200, r.text
+    assert "amount" not in cap["body"]
+
+
+# ── notify-recipients proxy ───────────────────────────────────────────────────
+def test_notify_list_proxies(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.get("/api/portal/notify-recipients")
+    assert r.status_code == 200
+    assert cap["path"] == "/api/admin/notify-recipients" and cap["method"] == "GET"
+
+
+def test_notify_add_forwards_cleaned(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/notify-recipients", json={"email": " Kyle@X.com ", "kind": "deposit"})
+    assert r.status_code == 200, r.text
+    assert cap["path"] == "/api/admin/notify-recipients" and cap["method"] == "POST"
+    assert cap["body"] == {"email": "kyle@x.com", "kind": "deposit", "by": "tester@wetreadwell.com"}
+
+
+def test_notify_add_defaults_kind_general(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/notify-recipients", json={"email": "a@x.com"})
+    assert r.status_code == 200
+    assert cap["body"]["kind"] == "general"
+
+
+def test_notify_add_rejects_bad_email(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/notify-recipients", json={"email": "nope", "kind": "general"})
+    assert r.status_code == 400
+    assert cap == {}                                             # _portal never called
+
+
+def test_notify_add_rejects_bad_kind(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post("/api/portal/notify-recipients", json={"email": "a@x.com", "kind": "boss"})
+    assert r.status_code == 400
+    assert cap == {}
+
+
+def test_notify_delete_proxies(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.delete("/api/portal/notify-recipients/7")
+    assert r.status_code == 200
+    assert cap["path"] == "/api/admin/notify-recipients/7" and cap["method"] == "DELETE"
