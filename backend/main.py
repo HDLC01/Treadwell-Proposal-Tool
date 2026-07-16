@@ -454,7 +454,11 @@ def _safe_id(value: str) -> str:
     return value
 
 
-_PORTAL_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Linear-time email shape check: dot-separated domain labels that exclude '.',
+# so there is no overlap between the label class and the '.' separator (the old
+# [^@\s]+\.[^@\s]+ form backtracked polynomially — a ReDoS). The portal
+# re-validates on its side; this is a cheap first-line guard.
+_PORTAL_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
 _MAX_PORTAL_EMAILS = 10
 
 
@@ -575,7 +579,9 @@ async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
 
 @app.delete("/api/portal/notify-recipients/{rid}")
 def api_portal_notify_delete(rid: int) -> Dict[str, Any]:
-    return _portal(f"/api/admin/notify-recipients/{rid}", "DELETE")
+    # rid is int-typed, but route it through the same id guard as every other
+    # proxied path segment so the outbound URL is provably constrained.
+    return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
 
 
 @app.get("/api/admin/proposal-pdf")
