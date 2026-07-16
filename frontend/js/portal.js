@@ -41,6 +41,7 @@
     $("board").innerHTML = STAGES.map((s) => {
       const cards = byStage[s].map((p) => `
         <div class="deal" data-id="${esc(p.proposal_id)}">
+          ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           <div class="meta">${esc(p.customer_email || "")}</div>
           ${p.approved_total != null ? `<div class="val">${money(p.approved_total)}</div>` : ""}
