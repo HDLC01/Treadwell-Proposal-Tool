@@ -20,7 +20,10 @@
 
   function stageOf(p) {
     if (p.schedule_status === "scheduled") return "Scheduled";
-    if (p.contacts_status === "received") return "Contact info";
+    // Deposit is a prerequisite for advancing past it: a customer may submit
+    // contacts right after approval (portal allows it), but an unpaid deal must
+    // NOT read as further along than a paid one, so gate "Contact info" on deposit.
+    if (p.deposit_status === "received" && p.contacts_status === "received") return "Contact info";
     if (p.deposit_status === "received") return "Deposit received";
     if (p.proposal_status === "approved") return "Approved";
     if (p.proposal_status === "viewed") return "Viewed";
