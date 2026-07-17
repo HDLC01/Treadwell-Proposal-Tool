@@ -199,6 +199,15 @@ def test_generate_gyp_end_to_end():
     assert "$x" not in xml
 
 
+def test_gyp_no_highlight_markup():
+    """Kyle's review highlights (yellow/cyan) must not leak into the customer doc."""
+    r = client.post("/api/generate", json={"work_type": "gyp", "audience": "Direct",
+                                            "values": _gyp_vals()})
+    assert r.status_code == 200, r.text
+    xml = _doc_xml(client.get(r.json()["docx_download_url"]).content)
+    assert "w:highlight" not in xml
+
+
 def test_gyp_base_bid_not_labeled_tax_included():
     """Gyp itemizes Base + Material Sales Tax + Kansas Remodel Tax + Total, so the
     base line must NOT claim "(material sales tax INCLUDED)" — that contradicts the
