@@ -139,7 +139,40 @@
     const setErr = (m) => { errEl.textContent = m || ""; };
     const allEmails = () => (portalRecip.hasIntake ? [portalRecip.intake] : []).concat(portalRecip.extras);
 
+    // The intake email starts locked (it came from the customer's lead). "Edit"
+    // unlocks it inline so the estimator can retarget the send — e.g. to their own
+    // address for a test. The edit is a TRANSIENT send-target override only: it
+    // changes who this send goes to, and deliberately does NOT persist back to the
+    // draft's contact_email, so a test send can never overwrite the customer's real
+    // email of record (which also feeds the estimate sheet + portal identity).
+    let editingIntake = false;
+    let editInput = null;   // the live <input> while the intake row is being edited
+    let intakeDraft = null; // typed-but-unsaved value, preserved across re-renders
+    let editJustOpened = false; // focus the editor only on first open, not every rebuild
+    let intakeEdited = false;   // once retargeted, the row is no longer the raw intake
+
+    // Commit an edited intake address into the in-memory send target. Validates and
+    // folds a duplicate extra into the intake slot. Does NOT touch contact_email —
+    // the send uses the emails list, and persisting would corrupt customer data.
+    // Returns true on success, false (+ inline error) on an invalid address so the
+    // caller can block — the send guard relies on this.
+    function saveIntake(val) {
+      const v = String(val || "").trim();
+      if (!EMAIL_RE.test(v)) { setErr("That doesn’t look like an email address."); return false; }
+      const lc = v.toLowerCase();
+      portalRecip.extras = portalRecip.extras.filter(e => e.toLowerCase() !== lc);
+      portalRecip.intake = v;
+      portalRecip.hasIntake = true;
+      intakeEdited = true;
+      editingIntake = false; editInput = null; intakeDraft = null; setErr(""); renderList();
+      return true;
+    }
+
     function renderList() {
+      // Preserve an in-progress intake edit across incidental rebuilds (e.g. the
+      // user adds/removes another recipient mid-edit) so Send can't silently revert
+      // to the original address. A detached <input> keeps its .value.
+      if (editingIntake && editInput) intakeDraft = editInput.value;
       listEl.textContent = "";
       const rows = (portalRecip.hasIntake ? [{ email: portalRecip.intake, fixed: true }] : [])
         .concat(portalRecip.extras.map(e => ({ email: e, fixed: false })));
@@ -152,13 +185,49 @@
       rows.forEach((r) => {
         const row = document.createElement("div");
         row.className = "tw-em-row";
+
+        // Intake row in edit mode: swap the locked label for an input + Save/Cancel.
+        if (r.fixed && editingIntake) {
+          const input = document.createElement("input");
+          input.type = "email"; input.className = "em";
+          input.value = (intakeDraft != null) ? intakeDraft : portalRecip.intake;
+          input.setAttribute("aria-label", "Edit the recipient email");
+          editInput = input;
+          const save = document.createElement("button");
+          save.type = "button"; save.className = "tw-em-editbtn"; save.textContent = "Save";
+          const cancel = document.createElement("button");
+          cancel.type = "button"; cancel.className = "tw-em-editbtn"; cancel.textContent = "Cancel";
+          cancel.setAttribute("aria-label", "Cancel editing");
+          const cancelEdit = () => { editingIntake = false; editInput = null; intakeDraft = null; setErr(""); renderList(); };
+          save.addEventListener("click", () => saveIntake(input.value));
+          cancel.addEventListener("click", cancelEdit);
+          input.addEventListener("input", () => { intakeDraft = input.value; });
+          input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); saveIntake(input.value); }
+            else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+          });
+          row.appendChild(input); row.appendChild(save); row.appendChild(cancel);
+          listEl.appendChild(row);
+          // Focus only when the editor first opens — not on every incidental rebuild,
+          // which would otherwise steal focus + reselect while the user is elsewhere.
+          if (editJustOpened) { editJustOpened = false; setTimeout(() => { input.focus(); input.select(); }, 0); }
+          return;
+        }
+
         const em = document.createElement("span");
         em.className = "em"; em.textContent = r.email;
         row.appendChild(em);
         if (r.fixed) {
           const tag = document.createElement("span");
-          tag.className = "tw-em-tag"; tag.textContent = "intake";
+          tag.className = "tw-em-tag"; tag.textContent = intakeEdited ? "custom" : "intake";
           row.appendChild(tag);
+          const edit = document.createElement("button");
+          edit.type = "button"; edit.className = "tw-em-editbtn"; edit.textContent = "Edit";
+          edit.setAttribute("aria-label", "Edit this recipient email to send to a different address");
+          edit.addEventListener("click", () => {
+            editingIntake = true; intakeDraft = portalRecip.intake; editJustOpened = true; setErr(""); renderList();
+          });
+          row.appendChild(edit);
         } else {
           const x = document.createElement("button");
           x.type = "button"; x.className = "tw-em-x"; x.textContent = "\u00d7";
@@ -192,6 +261,10 @@
 
     portalRecip.allEmails = allEmails;
     portalRecip.tryAdd = tryAdd;
+    // Flush a pending intake edit before a send, so clicking "Send" without first
+    // clicking "Save" still uses the edited address (returns false to block on an
+    // invalid in-progress edit).
+    portalRecip.commitEdit = () => (!editingIntake) ? true : saveIntake(editInput ? editInput.value : portalRecip.intake);
     portalRecip.setErr = setErr;
     portalRecip.setBusy = (b) => { addInput.disabled = addBtn.disabled = !!b; };
     portalRecip.ready = true;
@@ -312,6 +385,7 @@
       portalBtn.addEventListener("click", async () => {
         const draftId = TW.getDraftId();
         if (!draftId) { alert("Save the project first (open it from Projects), then send."); return; }
+        if (portalRecip.commitEdit && !portalRecip.commitEdit()) return;   // flush a pending intake edit
         if (portalRecip.tryAdd && !portalRecip.tryAdd()) return;   // invalid residual text blocks the send
         const emails = portalRecip.allEmails ? portalRecip.allEmails() : [];
         if (!emails.length) { if (portalRecip.setErr) portalRecip.setErr("Add at least one recipient email."); return; }
@@ -322,7 +396,11 @@
         try {
           const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), { emails });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
-          TW.setState({ portal_emails: emails });     // persist so it pre-fills next time
+          // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
+          // The intake is restored from contact_email on the next mount; persisting it
+          // here would re-add an edited/retargeted intake as a stray extra on reload.
+          const persistExtras = emails.filter(e => !portalRecip.hasIntake || e.toLowerCase() !== String(portalRecip.intake || "").toLowerCase());
+          TW.setState({ portal_emails: persistExtras });
           if (portalRecip.setBusy) portalRecip.setBusy(false);
           portalBtn.textContent = "\u2713 Sent to customer portal";
           const r = document.getElementById("portal-result");

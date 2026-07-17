@@ -36,6 +36,7 @@ from __future__ import annotations
 import copy
 import io
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -384,19 +385,244 @@ def _strip_bullet(p_elem) -> None:
         ppr.remove(numpr)
 
 
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+# Default text-box insets when <a:bodyPr> omits them (OOXML defaults): 0.1" L/R,
+# 0.05" T/B. In points.
+_TXBX_INSET_LR_PT = 0.1 * 72 * 2      # left + right
+_TXBX_INSET_TB_PT = 0.05 * 72 * 2     # top + bottom
+# Rough proportional-font metrics for Carlito/Calibri body text: average glyph
+# advance ≈ 0.5·fontSize, single line height ≈ 1.2·fontSize. Biased slightly
+# toward OVER-estimating height (wider glyph, taller line) so we err on the side
+# of shrinking a hair MORE rather than clipping. The floor mirrors the editor's
+# on-screen fitTxbx (0.60).
+_TXBX_GLYPH_W = 0.50
+_TXBX_LINE_H = 1.20
+_TXBX_SCALE_FLOOR = 0.60
+
+
+def _estimate_txbx_scale(txbx, box: dict | None) -> float:
+    """Estimate the font scale (0.60–1.0) needed for a text box's content to fit
+    its fixed design height. Returns 1.0 when it already fits or geometry is
+    unknown. Pure estimate (no renderer) — see the metric constants above."""
+    if not box:
+        return 1.0
+    w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
+    if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
+        return 1.0
+    lIns, rIns, tIns, bIns = _txbx_insets(txbx)   # actual box insets (padding must reduce usable height)
+    usable_w = w_pt - (lIns + rIns) / _EMU_PER_PT
+    usable_h = h_pt - (tIns + bIns) / _EMU_PER_PT
+    if usable_w <= 0 or usable_h <= 0:
+        return 1.0
+    content_h = 0.0
+    for p in txbx.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+        sz = p.find(".//" + qn("w:sz"))
+        try:
+            font_pt = int(sz.get(qn("w:val"))) / 2.0 if sz is not None else 9.0
+        except (TypeError, ValueError):
+            font_pt = 9.0
+        if font_pt <= 0:
+            font_pt = 9.0
+        chars_per_line = max(1.0, usable_w / (_TXBX_GLYPH_W * font_pt))
+        lines = max(1, math.ceil(len(text) / chars_per_line))   # empty para → 1 line of height
+        content_h += lines * _TXBX_LINE_H * font_pt
+    if content_h <= usable_h or content_h <= 0:
+        return 1.0
+    return max(_TXBX_SCALE_FLOOR, usable_h / content_h)
+
+
+def _shape_of_txbx(txbx):
+    el = txbx.getparent()
+    for _ in range(4):
+        if el is None:
+            return None
+        if el.tag.endswith("}wsp"):
+            return el
+        el = el.getparent()
+    return None
+
+
+# OOXML default text-box insets (EMU) when <a:bodyPr> omits them.
+_DEF_TXBX_INS = {"lIns": 91440, "rIns": 91440, "tIns": 45720, "bIns": 45720}
+
+
+def _txbx_insets(txbx):
+    """(lIns, rIns, tIns, bIns) in EMU for a text box, reading its <bodyPr> and
+    falling back to the OOXML defaults."""
+    ins = dict(_DEF_TXBX_INS)
+    shape = _shape_of_txbx(txbx)
+    if shape is not None:
+        for bp in shape.iter():
+            if bp.tag.endswith("}bodyPr"):
+                for k in ins:
+                    v = bp.get(k)
+                    if v is not None:
+                        try:
+                            ins[k] = int(v)
+                        except (TypeError, ValueError):
+                            pass
+                break
+    return ins["lIns"], ins["rIns"], ins["tIns"], ins["bIns"]
+
+
+def _scale_txbx_runs(txbx, scale: float) -> None:
+    """Directly shrink every run's font size in a text box by `scale`.
+
+    Why not autofit: LibreOffice-headless (our docx→PDF engine) does NOT apply
+    DrawingML text autofit — neither an empty <a:normAutofit/> nor one with an
+    explicit fontScale shrinks the render (verified on staging: the last WORK line
+    still clipped). It DOES always honor explicit run sizes (<w:sz>), so we scale
+    those directly. Size-less runs inherit — we give them the box's most common
+    size so they shrink too. Floored at 4pt so nothing vanishes."""
+    sizes = [int(v) for sz in txbx.iter(qn("w:sz"))
+             if (v := sz.get(qn("w:val"))) and v.isdigit()]
+    default_hp = max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
+    for r in txbx.iter(qn("w:r")):
+        rpr = r.find(qn("w:rPr"))
+        cur = None
+        if rpr is not None:
+            sz = rpr.find(qn("w:sz"))
+            v = sz.get(qn("w:val")) if sz is not None else None
+            if v and v.isdigit():
+                cur = int(v)
+        new_hp = max(8, int(round((cur if cur is not None else default_hp) * scale)))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            r.insert(0, rpr)
+        for tag in ("w:sz", "w:szCs"):
+            el = rpr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                rpr.append(el)
+            el.set(qn("w:val"), str(new_hp))
+
+
 def _shrink_overflowing_text_boxes(d: Document) -> int:
-    """Switch floating text boxes from <a:noAutofit/> (fixed size — long content
-    spills past the box, over the next box / the baked page-frame art) to
-    <a:normAutofit/> = "shrink text on overflow". Word/LibreOffice then scale the
-    font down just enough to fit the box. Boxes whose content already fits are
-    unaffected (scale stays 100%). This is what keeps gyp's verbose WORK scope
-    from overlapping the PRICE box without moving the fixed frame. Applied to all
-    work types (harmless where nothing overflows)."""
-    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    """Keep long text-box content from spilling past its fixed box (over the next
+    box / the baked page-frame art) — e.g. a combo's two options + exclusions,
+    whose last line ("*Assumes installation over…") was overdrawn by the PRICE
+    frame (the "cut-off last line" bug).
+
+    Kyle's boxes are fixed-size (<a:noAutofit/>). The obvious fix — flip to
+    <a:normAutofit/> "shrink text on overflow" — is a NO-OP under LibreOffice-
+    headless (it doesn't compute/apply DrawingML autofit, with or without an
+    explicit fontScale). So for boxes we estimate to overflow, we shrink the RUN
+    sizes directly (which LibreOffice always honors), mirroring the editor's
+    on-screen `fitTxbx` so preview == generated doc. We still flip noAutofit→
+    normAutofit (harmless; lets Word re-fit if the doc is opened there). Boxes
+    that already fit are untouched (byte-identical output)."""
+    NO, NORM = f"{{{_A_NS}}}noAutofit", f"{{{_A_NS}}}normAutofit"
+    try:
+        boxes = template_geometry(d).get("boxes", [])
+    except Exception:                       # geometry is best-effort; never block generation
+        boxes = []
     n = 0
-    for na in list(d.element.iter(f"{{{A}}}noAutofit")):
-        na.tag = f"{{{A}}}normAutofit"     # empty element; renderer computes the scale
+    for i, txbx in enumerate(_iter_txbx(d)):
+        shape = _shape_of_txbx(txbx)
+        af = None
+        if shape is not None:
+            af = shape.find(f".//{NO}")
+            if af is None:
+                af = shape.find(f".//{NORM}")
+        if af is None:
+            continue
+        af.tag = NORM
+        af.attrib.pop("fontScale", None)    # empty normAutofit; we shrink runs directly below
+        af.attrib.pop("lnSpcReduction", None)
+        scale = _estimate_txbx_scale(txbx, boxes[i] if i < len(boxes) else None)
+        if scale < 0.999:
+            _scale_txbx_runs(txbx, scale)
         n += 1
+    # Straggler noAutofit not paired to a geometry box: preserve the old intent.
+    for na in list(d.element.iter(NO)):
+        na.tag = NORM
+        n += 1
+    return n
+
+
+def _force_terms_on_new_page(d: Document) -> bool:
+    """Make the "TERMS AND CONDITIONS" section start on a fresh page.
+
+    Kyle's templates have NO forced break before the T&C heading — they rely on
+    the body flowing onto a later page, which fails for the combo (its body is
+    short): the heading + its terms-page letterhead land on the bottom of page 1,
+    over the ACCEPTANCE frame. We set <w:pageBreakBefore/> on the terms
+    letterhead's host paragraph — the empty paragraph that anchors the terms-page
+    PNG (positionV relative to that paragraph), immediately before the heading —
+    so the letterhead AND heading move to the new page together. pageBreakBefore
+    never inserts a blank page, so templates whose T&C already starts a page are
+    unaffected. Budget pricing has no T&C section → no-op."""
+    tops = [c for c in d.element.body if c.tag == qn("w:p")]
+    h = None
+    for i, p in enumerate(tops):
+        if "".join(t.text or "" for t in p.iter(qn("w:t"))).strip().upper() == "TERMS AND CONDITIONS":
+            h = i
+            break
+    if h is None:
+        return False
+    target = tops[h]
+    for j in range(h, max(-1, h - 4), -1):          # heading + up to 3 paras before it
+        if list(tops[j].iter(qn("wp:anchor"))):      # the terms-page letterhead's host paragraph
+            target = tops[j]
+            break
+    ppr = target.find(qn("w:pPr"))
+    if ppr is None:
+        ppr = OxmlElement("w:pPr")
+        target.insert(0, ppr)
+    if ppr.find(qn("w:pageBreakBefore")) is None:
+        ppr.insert(0, OxmlElement("w:pageBreakBefore"))
+    return True
+
+
+# Some templates position a framed box's top edge at/above its red frame border
+# with zero top-inset, so the first line hugs / rides over the border. Which boxes
+# are affected varies PER TEMPLATE (Kyle positioned each individually; verified by
+# rendering): the NOTES box crosses on the Polish + Gyp templates (Combo + Epoxy
+# are fine); Gyp additionally has its WORK + PRICE boxes touching ("Base Bid" on
+# the PRICE border). Give the affected boxes a top inset so the first line clears
+# the border. EMU (1pt = 12700). MUST run BEFORE _shrink_overflowing_text_boxes so
+# the shrink estimate (which reads the actual inset) accounts for the reduced
+# usable height and can't push the WORK box into overflow.
+_FRAME_BOX_TOP_INSET_EMU = 114300   # ~9pt
+
+
+def _pad_frame_boxes(d: Document, notes, work_type) -> int:
+    """Top-inset the framed boxes whose first line rides over its border. NOTES on
+    polish + gyp; WORK + PRICE additionally on gyp. Boxes identified by content
+    markers so the DATE/JOB-NAME/estimator header boxes are never touched."""
+    wt = str(work_type or "").lower()
+    pad_notes = wt in ("polish", "gyp")     # these templates' NOTES box crosses its border
+    pad_work_price = wt == "gyp"            # gyp also has WORK + PRICE touching
+    if not (pad_notes or pad_work_price):
+        return 0
+    markers = []
+    if pad_notes:
+        note_keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
+        markers += [k for k in note_keys if len(k) >= 8][:4]
+    if pad_work_price:
+        # WORK has "Exclusions:"/"Assumptions:"/"per plans"; PRICE has "Base Bid".
+        markers += ["Base Bid", "Exclusions", "Assumptions", "per plans"]
+    if not markers:
+        return 0
+    n = 0
+    for txbx in _iter_txbx(d):
+        txt = "".join(t.text or "" for t in txbx.iter(qn("w:t")))
+        if not any(m in txt for m in markers):
+            continue
+        shape = _shape_of_txbx(txbx)
+        if shape is None:
+            continue
+        for bp in shape.iter():
+            if bp.tag.endswith("}bodyPr"):
+                try:
+                    cur = int(bp.get("tIns") or 0)
+                except (TypeError, ValueError):
+                    cur = 0
+                if cur < _FRAME_BOX_TOP_INSET_EMU:
+                    bp.set("tIns", str(_FRAME_BOX_TOP_INSET_EMU))
+                    n += 1
+                break
     return n
 
 
@@ -1290,11 +1516,21 @@ def fill_proposal(
     # Double spacing after the base-bid Total, before the Options section (Kyle).
     if _space_before_options(d, 2):
         log.info("Added double spacing before the PRICE Options heading")
+    # Pad affected framed boxes' top inset (so the first NOTES bullet / "Base Bid"
+    # clear their red borders) BEFORE the shrink, so the shrink estimate sees the
+    # reduced usable height and can't push the WORK box into overflow.
+    _padded = _pad_frame_boxes(d, notes, work_type)
+    if _padded:
+        log.info("Padded %d framed box(es) top inset (clears the frame border)", _padded)
     # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
     # overflow its fixed box and overlap the next box / frame art.
     _shrunk = _shrink_overflowing_text_boxes(d)
     if _shrunk:
         log.info("Set %d text box(es) to shrink-on-overflow (normAutofit)", _shrunk)
+    # Force the Terms & Conditions onto their own page (templates ship without a
+    # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
+    if _force_terms_on_new_page(d):
+        log.info("Forced a page break before the Terms & Conditions section")
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
