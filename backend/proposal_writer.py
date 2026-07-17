@@ -36,6 +36,7 @@ from __future__ import annotations
 import copy
 import io
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -384,18 +385,102 @@ def _strip_bullet(p_elem) -> None:
         ppr.remove(numpr)
 
 
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+# Default text-box insets when <a:bodyPr> omits them (OOXML defaults): 0.1" L/R,
+# 0.05" T/B. In points.
+_TXBX_INSET_LR_PT = 0.1 * 72 * 2      # left + right
+_TXBX_INSET_TB_PT = 0.05 * 72 * 2     # top + bottom
+# Rough proportional-font metrics for Carlito/Calibri body text: average glyph
+# advance ≈ 0.5·fontSize, single line height ≈ 1.2·fontSize. Biased slightly
+# toward OVER-estimating height (wider glyph, taller line) so we err on the side
+# of shrinking a hair MORE rather than clipping. The floor mirrors the editor's
+# on-screen fitTxbx (0.60).
+_TXBX_GLYPH_W = 0.50
+_TXBX_LINE_H = 1.20
+_TXBX_SCALE_FLOOR = 0.60
+
+
+def _estimate_txbx_scale(txbx, box: dict | None) -> float:
+    """Estimate the font scale (0.60–1.0) needed for a text box's content to fit
+    its fixed design height. Returns 1.0 when it already fits or geometry is
+    unknown. Pure estimate (no renderer) — see the metric constants above."""
+    if not box:
+        return 1.0
+    w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
+    if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
+        return 1.0
+    usable_w = w_pt - _TXBX_INSET_LR_PT
+    usable_h = h_pt - _TXBX_INSET_TB_PT
+    if usable_w <= 0 or usable_h <= 0:
+        return 1.0
+    content_h = 0.0
+    for p in txbx.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in p.iter(qn("w:t")))
+        sz = p.find(".//" + qn("w:sz"))
+        try:
+            font_pt = int(sz.get(qn("w:val"))) / 2.0 if sz is not None else 9.0
+        except (TypeError, ValueError):
+            font_pt = 9.0
+        if font_pt <= 0:
+            font_pt = 9.0
+        chars_per_line = max(1.0, usable_w / (_TXBX_GLYPH_W * font_pt))
+        lines = max(1, math.ceil(len(text) / chars_per_line))   # empty para → 1 line of height
+        content_h += lines * _TXBX_LINE_H * font_pt
+    if content_h <= usable_h or content_h <= 0:
+        return 1.0
+    return max(_TXBX_SCALE_FLOOR, usable_h / content_h)
+
+
+def _shape_of_txbx(txbx):
+    el = txbx.getparent()
+    for _ in range(4):
+        if el is None:
+            return None
+        if el.tag.endswith("}wsp"):
+            return el
+        el = el.getparent()
+    return None
+
+
 def _shrink_overflowing_text_boxes(d: Document) -> int:
     """Switch floating text boxes from <a:noAutofit/> (fixed size — long content
     spills past the box, over the next box / the baked page-frame art) to
-    <a:normAutofit/> = "shrink text on overflow". Word/LibreOffice then scale the
-    font down just enough to fit the box. Boxes whose content already fits are
-    unaffected (scale stays 100%). This is what keeps gyp's verbose WORK scope
-    from overlapping the PRICE box without moving the fixed frame. Applied to all
-    work types (harmless where nothing overflows)."""
-    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    <a:normAutofit/> = "shrink text on overflow", AND bake an explicit `fontScale`
+    for boxes whose content overflows.
+
+    Why the explicit scale: an EMPTY <a:normAutofit/> delegates the font-scaling
+    to the renderer, and LibreOffice-headless (our docx→PDF engine) does NOT
+    compute it — so long content (e.g. a combo's two options + exclusions) spilled
+    past the box and got overdrawn by the PRICE frame (the "cut-off last line"
+    bug). We estimate the needed scale from the box's design geometry and content
+    and write it as `fontScale`, which LibreOffice honors. This mirrors the
+    editor's on-screen `fitTxbx` shrink so preview == generated doc. Boxes that
+    already fit keep an empty normAutofit (100%, unchanged)."""
+    NO, NORM = f"{{{_A_NS}}}noAutofit", f"{{{_A_NS}}}normAutofit"
+    try:
+        boxes = template_geometry(d).get("boxes", [])
+    except Exception:                       # geometry is best-effort; never block generation
+        boxes = []
     n = 0
-    for na in list(d.element.iter(f"{{{A}}}noAutofit")):
-        na.tag = f"{{{A}}}normAutofit"     # empty element; renderer computes the scale
+    for i, txbx in enumerate(_iter_txbx(d)):
+        shape = _shape_of_txbx(txbx)
+        af = None
+        if shape is not None:
+            af = shape.find(f".//{NO}")
+            if af is None:
+                af = shape.find(f".//{NORM}")
+        if af is None:
+            continue
+        af.tag = NORM
+        af.attrib.pop("fontScale", None)
+        af.attrib.pop("lnSpcReduction", None)
+        scale = _estimate_txbx_scale(txbx, boxes[i] if i < len(boxes) else None)
+        if scale < 0.999:
+            af.set("fontScale", str(int(round(scale * 100000))))   # OOXML: 100% = 100000
+        n += 1
+    # Straggler noAutofit not paired to a geometry box: preserve the old intent.
+    for na in list(d.element.iter(NO)):
+        na.tag = NORM
         n += 1
     return n
 
