@@ -138,9 +138,14 @@
       `${c.email ? " · " + esc(c.email) : ""}${c.phone ? " · " + esc(c.phone) : ""}</div>`).join("")
       || '<p class="note">No contacts submitted yet.</p>';
 
-    const deposits = (data.deposits || []).map((x) => `
+    const deposits = (data.deposits || []).map((x) => {
+      const sentTo = [x.sent_to_beneficiary, x.sent_to_bank,
+                      x.sent_to_routing ? "rtg " + x.sent_to_routing : "",
+                      x.sent_to_account ? "acct " + x.sent_to_account : ""].filter(Boolean).map(esc).join(" / ");
+      return `
       <div class="note" style="margin-bottom:6px;">${esc(x.method.toUpperCase())} · ${esc(x.account_name || "—")} ·
-      ${esc(x.bank_name || "—")}${x.sent_date ? " · sent " + esc(x.sent_date) : ""}${x.trace_ref ? " · trace " + esc(x.trace_ref) : ""}${x.masked_ref ? " · " + esc(x.masked_ref) : ""}${x.note ? " · " + esc(x.note) : ""}</div>`).join("");
+      ${esc(x.bank_name || "—")}${x.sent_date ? " · sent " + esc(x.sent_date) : ""}${x.trace_ref ? " · trace " + esc(x.trace_ref) : ""}${x.masked_ref ? " · " + esc(x.masked_ref) : ""}${x.note ? " · " + esc(x.note) : ""}${sentTo ? '<br><span style="color:var(--ink-variant)">sent to: ' + sentTo + "</span>" : ""}</div>`;
+    }).join("");
 
     const approvedOpts = a && a.options && a.options.length ? a.options.join(", ") : (a ? a.option : "");
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
