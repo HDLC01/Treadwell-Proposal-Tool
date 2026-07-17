@@ -442,20 +442,52 @@ def _shape_of_txbx(txbx):
     return None
 
 
-def _shrink_overflowing_text_boxes(d: Document) -> int:
-    """Switch floating text boxes from <a:noAutofit/> (fixed size — long content
-    spills past the box, over the next box / the baked page-frame art) to
-    <a:normAutofit/> = "shrink text on overflow", AND bake an explicit `fontScale`
-    for boxes whose content overflows.
+def _scale_txbx_runs(txbx, scale: float) -> None:
+    """Directly shrink every run's font size in a text box by `scale`.
 
-    Why the explicit scale: an EMPTY <a:normAutofit/> delegates the font-scaling
-    to the renderer, and LibreOffice-headless (our docx→PDF engine) does NOT
-    compute it — so long content (e.g. a combo's two options + exclusions) spilled
-    past the box and got overdrawn by the PRICE frame (the "cut-off last line"
-    bug). We estimate the needed scale from the box's design geometry and content
-    and write it as `fontScale`, which LibreOffice honors. This mirrors the
-    editor's on-screen `fitTxbx` shrink so preview == generated doc. Boxes that
-    already fit keep an empty normAutofit (100%, unchanged)."""
+    Why not autofit: LibreOffice-headless (our docx→PDF engine) does NOT apply
+    DrawingML text autofit — neither an empty <a:normAutofit/> nor one with an
+    explicit fontScale shrinks the render (verified on staging: the last WORK line
+    still clipped). It DOES always honor explicit run sizes (<w:sz>), so we scale
+    those directly. Size-less runs inherit — we give them the box's most common
+    size so they shrink too. Floored at 4pt so nothing vanishes."""
+    sizes = [int(v) for sz in txbx.iter(qn("w:sz"))
+             if (v := sz.get(qn("w:val"))) and v.isdigit()]
+    default_hp = max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
+    for r in txbx.iter(qn("w:r")):
+        rpr = r.find(qn("w:rPr"))
+        cur = None
+        if rpr is not None:
+            sz = rpr.find(qn("w:sz"))
+            v = sz.get(qn("w:val")) if sz is not None else None
+            if v and v.isdigit():
+                cur = int(v)
+        new_hp = max(8, int(round((cur if cur is not None else default_hp) * scale)))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            r.insert(0, rpr)
+        for tag in ("w:sz", "w:szCs"):
+            el = rpr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                rpr.append(el)
+            el.set(qn("w:val"), str(new_hp))
+
+
+def _shrink_overflowing_text_boxes(d: Document) -> int:
+    """Keep long text-box content from spilling past its fixed box (over the next
+    box / the baked page-frame art) — e.g. a combo's two options + exclusions,
+    whose last line ("*Assumes installation over…") was overdrawn by the PRICE
+    frame (the "cut-off last line" bug).
+
+    Kyle's boxes are fixed-size (<a:noAutofit/>). The obvious fix — flip to
+    <a:normAutofit/> "shrink text on overflow" — is a NO-OP under LibreOffice-
+    headless (it doesn't compute/apply DrawingML autofit, with or without an
+    explicit fontScale). So for boxes we estimate to overflow, we shrink the RUN
+    sizes directly (which LibreOffice always honors), mirroring the editor's
+    on-screen `fitTxbx` so preview == generated doc. We still flip noAutofit→
+    normAutofit (harmless; lets Word re-fit if the doc is opened there). Boxes
+    that already fit are untouched (byte-identical output)."""
     NO, NORM = f"{{{_A_NS}}}noAutofit", f"{{{_A_NS}}}normAutofit"
     try:
         boxes = template_geometry(d).get("boxes", [])
@@ -472,11 +504,11 @@ def _shrink_overflowing_text_boxes(d: Document) -> int:
         if af is None:
             continue
         af.tag = NORM
-        af.attrib.pop("fontScale", None)
+        af.attrib.pop("fontScale", None)    # empty normAutofit; we shrink runs directly below
         af.attrib.pop("lnSpcReduction", None)
         scale = _estimate_txbx_scale(txbx, boxes[i] if i < len(boxes) else None)
         if scale < 0.999:
-            af.set("fontScale", str(int(round(scale * 100000))))   # OOXML: 100% = 100000
+            _scale_txbx_runs(txbx, scale)
         n += 1
     # Straggler noAutofit not paired to a geometry box: preserve the old intent.
     for na in list(d.element.iter(NO)):

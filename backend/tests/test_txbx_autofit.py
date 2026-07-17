@@ -5,7 +5,7 @@ the estimate is baked as an explicit <a:normAutofit fontScale=…> the renderer
 honors (an empty normAutofit is a no-op in LibreOffice)."""
 import proposal_writer as pw
 from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls
+from docx.oxml.ns import nsdecls, qn
 
 
 def _txbx(paras, sz_halfpt=18):
@@ -42,3 +42,21 @@ def test_moderate_overflow_is_partial_shrink():
     txbx = _txbx([line] * 8)
     scale = pw._estimate_txbx_scale(txbx, {"w_pt": 420, "h_pt": 90})
     assert pw._TXBX_SCALE_FLOOR <= scale < 1.0
+
+
+def _sizes(txbx):
+    return [int(sz.get(qn("w:val"))) for sz in txbx.iter(qn("w:sz"))]
+
+
+def test_scale_runs_reduces_explicit_sizes():
+    # LibreOffice ignores autofit, so we scale the actual run sizes.
+    txbx = _txbx(["Line one", "Line two"], sz_halfpt=18)   # 9pt
+    pw._scale_txbx_runs(txbx, 0.5)
+    sizes = _sizes(txbx)
+    assert sizes and all(s == 9 for s in sizes)            # 18 * 0.5 → 9 half-points (4.5pt)
+
+
+def test_scale_runs_floors_small_text():
+    txbx = _txbx(["x"], sz_halfpt=10)                      # 5pt
+    pw._scale_txbx_runs(txbx, 0.1)
+    assert min(_sizes(txbx)) >= 8                          # never below the 4pt floor
