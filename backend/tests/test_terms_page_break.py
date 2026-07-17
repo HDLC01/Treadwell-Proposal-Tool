@@ -70,10 +70,10 @@ def _notes_box_tins(doc):
 
 def test_gyp_notes_box_gets_top_inset():
     doc = Document(io.BytesIO(pw.fill_proposal(work_type="gyp", audience="Direct", values=dict(VALS), notes=_NOTES)))
-    assert _notes_box_tins(doc) == pw._GYP_NOTES_TOP_INSET_EMU
+    assert _notes_box_tins(doc) == pw._GYP_BOX_TOP_INSET_EMU
 
 
 def test_non_gyp_notes_box_not_padded():
     doc = Document(io.BytesIO(pw.fill_proposal(work_type="polish", audience="Direct", values=dict(VALS), notes=_NOTES)))
     tins = _notes_box_tins(doc)
-    assert tins is None or tins < pw._GYP_NOTES_TOP_INSET_EMU   # polish NOTES left as designed
+    assert tins is None or tins < pw._GYP_BOX_TOP_INSET_EMU   # polish NOTES left as designed

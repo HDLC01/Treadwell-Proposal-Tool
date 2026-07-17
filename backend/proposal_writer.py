@@ -409,8 +409,9 @@ def _estimate_txbx_scale(txbx, box: dict | None) -> float:
     w_pt, h_pt = box.get("w_pt"), box.get("h_pt")
     if not w_pt or not h_pt or w_pt <= 0 or h_pt <= 0:
         return 1.0
-    usable_w = w_pt - _TXBX_INSET_LR_PT
-    usable_h = h_pt - _TXBX_INSET_TB_PT
+    lIns, rIns, tIns, bIns = _txbx_insets(txbx)   # actual box insets (padding must reduce usable height)
+    usable_w = w_pt - (lIns + rIns) / _EMU_PER_PT
+    usable_h = h_pt - (tIns + bIns) / _EMU_PER_PT
     if usable_w <= 0 or usable_h <= 0:
         return 1.0
     content_h = 0.0
@@ -440,6 +441,29 @@ def _shape_of_txbx(txbx):
             return el
         el = el.getparent()
     return None
+
+
+# OOXML default text-box insets (EMU) when <a:bodyPr> omits them.
+_DEF_TXBX_INS = {"lIns": 91440, "rIns": 91440, "tIns": 45720, "bIns": 45720}
+
+
+def _txbx_insets(txbx):
+    """(lIns, rIns, tIns, bIns) in EMU for a text box, reading its <bodyPr> and
+    falling back to the OOXML defaults."""
+    ins = dict(_DEF_TXBX_INS)
+    shape = _shape_of_txbx(txbx)
+    if shape is not None:
+        for bp in shape.iter():
+            if bp.tag.endswith("}bodyPr"):
+                for k in ins:
+                    v = bp.get(k)
+                    if v is not None:
+                        try:
+                            ins[k] = int(v)
+                        except (TypeError, ValueError):
+                            pass
+                break
+    return ins["lIns"], ins["rIns"], ins["tIns"], ins["bIns"]
 
 
 def _scale_txbx_runs(txbx, scale: float) -> None:
@@ -551,26 +575,31 @@ def _force_terms_on_new_page(d: Document) -> bool:
     return True
 
 
-# The gyp template's NOTES text box sits slightly higher than its frame's top
-# border; with the box's zero top-inset the first bullet rides up over the red
-# line. Nudge the box's top inset down so the first bullet clears the border.
-# EMU (1pt = 12700). Gyp-only — the other templates' NOTES align correctly.
-_GYP_NOTES_TOP_INSET_EMU = 114300   # ~9pt
+# The gyp template's framed content boxes (WORK, PRICE, NOTES) sit with their
+# top edge at/above the frame's red border and carry zero top-inset, so the first
+# line hugs / rides over the border (e.g. "Base Bid" touching the PRICE border,
+# the first NOTES bullet crossing the NOTES border). Give those boxes a top inset
+# so the first line clears the border. EMU (1pt = 12700). Gyp-only — the other
+# templates' boxes align correctly. MUST run BEFORE _shrink_overflowing_text_boxes
+# so the shrink estimate (which reads the actual inset) accounts for the reduced
+# usable height and can't push the WORK box into overflow.
+_GYP_BOX_TOP_INSET_EMU = 114300   # ~9pt
 
 
-def _pad_gyp_notes_box(d: Document, notes, work_type) -> bool:
-    """Give the gyp NOTES box a top inset so its first bullet clears the frame
-    border (see the constant's note). Scoped to gyp; identified by matching the
-    box that contains the note text (so we never touch WORK/PRICE)."""
+def _pad_gyp_boxes(d: Document, notes, work_type) -> int:
+    """Add a top inset to the gyp WORK/PRICE/NOTES framed boxes so their first
+    line clears the frame border. Scoped to gyp; boxes identified by content
+    markers so the DATE/JOB-NAME/estimator header boxes are never touched."""
     if str(work_type or "").lower() != "gyp":
-        return False
-    keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
-    keys = [k for k in keys if len(k) >= 8][:4]
-    if not keys:
-        return False
+        return 0
+    note_keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
+    note_keys = [k for k in note_keys if len(k) >= 8][:4]
+    # WORK has "Exclusions:"/"Assumptions:"/"per plans"; PRICE has "Base Bid".
+    markers = ["Base Bid", "Exclusions", "Assumptions", "per plans"] + note_keys
+    n = 0
     for txbx in _iter_txbx(d):
         txt = "".join(t.text or "" for t in txbx.iter(qn("w:t")))
-        if not any(k in txt for k in keys):
+        if not any(m in txt for m in markers):
             continue
         shape = _shape_of_txbx(txbx)
         if shape is None:
@@ -581,10 +610,11 @@ def _pad_gyp_notes_box(d: Document, notes, work_type) -> bool:
                     cur = int(bp.get("tIns") or 0)
                 except (TypeError, ValueError):
                     cur = 0
-                if cur < _GYP_NOTES_TOP_INSET_EMU:
-                    bp.set("tIns", str(_GYP_NOTES_TOP_INSET_EMU))
-                return True
-    return False
+                if cur < _GYP_BOX_TOP_INSET_EMU:
+                    bp.set("tIns", str(_GYP_BOX_TOP_INSET_EMU))
+                    n += 1
+                break
+    return n
 
 
 def _flatten_price_bullets(d: Document) -> int:
@@ -1477,6 +1507,12 @@ def fill_proposal(
     # Double spacing after the base-bid Total, before the Options section (Kyle).
     if _space_before_options(d, 2):
         log.info("Added double spacing before the PRICE Options heading")
+    # Pad the gyp framed boxes' top inset (so "Base Bid" / the first NOTES bullet
+    # clear their red borders) BEFORE the shrink, so the shrink estimate sees the
+    # reduced usable height and can't push the WORK box into overflow.
+    _padded = _pad_gyp_boxes(d, notes, work_type)
+    if _padded:
+        log.info("Padded %d gyp box(es) top inset (clears the frame border)", _padded)
     # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
     # overflow its fixed box and overlap the next box / frame art.
     _shrunk = _shrink_overflowing_text_boxes(d)
@@ -1486,8 +1522,6 @@ def fill_proposal(
     # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
     if _force_terms_on_new_page(d):
         log.info("Forced a page break before the Terms & Conditions section")
-    if _pad_gyp_notes_box(d, notes, work_type):
-        log.info("Padded the gyp NOTES box top inset (clears the frame border)")
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
