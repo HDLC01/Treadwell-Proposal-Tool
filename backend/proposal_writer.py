@@ -551,6 +551,42 @@ def _force_terms_on_new_page(d: Document) -> bool:
     return True
 
 
+# The gyp template's NOTES text box sits slightly higher than its frame's top
+# border; with the box's zero top-inset the first bullet rides up over the red
+# line. Nudge the box's top inset down so the first bullet clears the border.
+# EMU (1pt = 12700). Gyp-only — the other templates' NOTES align correctly.
+_GYP_NOTES_TOP_INSET_EMU = 114300   # ~9pt
+
+
+def _pad_gyp_notes_box(d: Document, notes, work_type) -> bool:
+    """Give the gyp NOTES box a top inset so its first bullet clears the frame
+    border (see the constant's note). Scoped to gyp; identified by matching the
+    box that contains the note text (so we never touch WORK/PRICE)."""
+    if str(work_type or "").lower() != "gyp":
+        return False
+    keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
+    keys = [k for k in keys if len(k) >= 8][:4]
+    if not keys:
+        return False
+    for txbx in _iter_txbx(d):
+        txt = "".join(t.text or "" for t in txbx.iter(qn("w:t")))
+        if not any(k in txt for k in keys):
+            continue
+        shape = _shape_of_txbx(txbx)
+        if shape is None:
+            continue
+        for bp in shape.iter():
+            if bp.tag.endswith("}bodyPr"):
+                try:
+                    cur = int(bp.get("tIns") or 0)
+                except (TypeError, ValueError):
+                    cur = 0
+                if cur < _GYP_NOTES_TOP_INSET_EMU:
+                    bp.set("tIns", str(_GYP_NOTES_TOP_INSET_EMU))
+                return True
+    return False
+
+
 def _flatten_price_bullets(d: Document) -> int:
     """Remove list/bullet formatting from the PRICE section so amounts read as
     clean flush-left lines (Kyle: no bullet points in the pricing). Every price
@@ -1450,6 +1486,8 @@ def fill_proposal(
     # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
     if _force_terms_on_new_page(d):
         log.info("Forced a page break before the Terms & Conditions section")
+    if _pad_gyp_notes_box(d, notes, work_type):
+        log.info("Padded the gyp NOTES box top inset (clears the frame border)")
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",

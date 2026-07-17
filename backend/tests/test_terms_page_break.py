@@ -48,3 +48,32 @@ def test_epoxy_terms_start_on_own_page():
 def test_polish_terms_start_on_own_page():
     doc = Document(io.BytesIO(pw.fill_proposal(work_type="polish", audience="Direct", values=dict(VALS))))
     assert _terms_forced_to_new_page(doc)
+
+
+# ── gyp NOTES box top inset (first bullet clears its frame border) ──────────
+_NOTES = [{"text": "Excludes Union Labor/Prevailing Wage Labor bond and liquidated damages"},
+          {"text": "Excludes hoisting or lifting of equipment to elevated slabs"}]
+
+
+def _notes_box_tins(doc):
+    for txbx in pw._iter_txbx(doc):
+        if "Excludes Union Labor" in "".join(t.text or "" for t in txbx.iter(qn("w:t"))):
+            shape = pw._shape_of_txbx(txbx)
+            for bp in (shape.iter() if shape is not None else []):
+                if bp.tag.endswith("}bodyPr"):
+                    try:
+                        return int(bp.get("tIns") or 0)
+                    except (TypeError, ValueError):
+                        return 0
+    return None
+
+
+def test_gyp_notes_box_gets_top_inset():
+    doc = Document(io.BytesIO(pw.fill_proposal(work_type="gyp", audience="Direct", values=dict(VALS), notes=_NOTES)))
+    assert _notes_box_tins(doc) == pw._GYP_NOTES_TOP_INSET_EMU
+
+
+def test_non_gyp_notes_box_not_padded():
+    doc = Document(io.BytesIO(pw.fill_proposal(work_type="polish", audience="Direct", values=dict(VALS), notes=_NOTES)))
+    tins = _notes_box_tins(doc)
+    assert tins is None or tins < pw._GYP_NOTES_TOP_INSET_EMU   # polish NOTES left as designed
