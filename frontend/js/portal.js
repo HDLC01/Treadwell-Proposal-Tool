@@ -140,7 +140,7 @@
 
     const deposits = (data.deposits || []).map((x) => `
       <div class="note" style="margin-bottom:6px;">${esc(x.method.toUpperCase())} · ${esc(x.account_name || "—")} ·
-      ${esc(x.bank_name || "—")} · ${esc(x.masked_ref || "—")}${x.note ? " · " + esc(x.note) : ""}</div>`).join("");
+      ${esc(x.bank_name || "—")}${x.sent_date ? " · sent " + esc(x.sent_date) : ""}${x.trace_ref ? " · trace " + esc(x.trace_ref) : ""}${x.masked_ref ? " · " + esc(x.masked_ref) : ""}${x.note ? " · " + esc(x.note) : ""}</div>`).join("");
 
     const approvedOpts = a && a.options && a.options.length ? a.options.join(", ") : (a ? a.option : "");
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
@@ -164,7 +164,7 @@
 
         <div class="sec">
           <div class="lbl">Deposit</div>
-          <div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${p.deposit_requested_at ? ` · Requested ${when(p.deposit_requested_at)}` : ""}</div>
+          <div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${data.deposit_ref ? ` · match ref <strong>${esc(data.deposit_ref)}</strong> on the statement` : ""}${p.deposit_requested_at ? ` · requested ${when(p.deposit_requested_at)}` : ""}</div>
           <div class="row3" style="margin-top:8px">
             <button class="btn btn-p" id="send-deposit-req" ${approved ? "" : "disabled"} title="${approved ? "" : "Available once the customer approves"}">${p.deposit_requested_at ? "Resend deposit request" : "Send deposit request"}</button>
             <button class="btn btn-s" id="mark-deposit" ${depositDone ? "disabled" : ""}>Mark deposit received</button>
