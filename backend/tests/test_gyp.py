@@ -199,6 +199,29 @@ def test_generate_gyp_end_to_end():
     assert "$x" not in xml
 
 
+def test_gyp_no_highlight_markup():
+    """Kyle's review highlights (yellow/cyan) must not leak into the customer doc."""
+    r = client.post("/api/generate", json={"work_type": "gyp", "audience": "Direct",
+                                            "values": _gyp_vals()})
+    assert r.status_code == 200, r.text
+    xml = _doc_xml(client.get(r.json()["docx_download_url"]).content)
+    assert "w:highlight" not in xml
+
+
+def test_gyp_base_bid_not_labeled_tax_included():
+    """Gyp itemizes Base + Material Sales Tax + Kansas Remodel Tax + Total, so the
+    base line must NOT claim "(material sales tax INCLUDED)" — that contradicts the
+    separately-added tax lines (Base + taxes = Total). Regression: the gyp template
+    hardcoded the phrase instead of the {{base_tax_phrase}} token the code blanks."""
+    r = client.post("/api/generate", json={"work_type": "gyp", "audience": "Direct",
+                                            "values": _gyp_vals()})
+    assert r.status_code == 200, r.text
+    txt = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Gypsum Underlayment System as described above" in txt   # base line present
+    assert "material sales tax INCLUDED" not in txt                 # but NOT the contradictory label
+    assert "Material Sales Tax" in txt                              # tax is itemized instead
+
+
 def test_proposal_template_endpoint_gyp():
     r = client.get("/api/proposal-template?work_type=gyp&audience=Direct")
     assert r.status_code == 200, r.text
