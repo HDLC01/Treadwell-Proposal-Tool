@@ -575,27 +575,36 @@ def _force_terms_on_new_page(d: Document) -> bool:
     return True
 
 
-# The gyp template's framed content boxes (WORK, PRICE, NOTES) sit with their
-# top edge at/above the frame's red border and carry zero top-inset, so the first
-# line hugs / rides over the border (e.g. "Base Bid" touching the PRICE border,
-# the first NOTES bullet crossing the NOTES border). Give those boxes a top inset
-# so the first line clears the border. EMU (1pt = 12700). Gyp-only — the other
-# templates' boxes align correctly. MUST run BEFORE _shrink_overflowing_text_boxes
-# so the shrink estimate (which reads the actual inset) accounts for the reduced
+# Some templates position a framed box's top edge at/above its red frame border
+# with zero top-inset, so the first line hugs / rides over the border. Which boxes
+# are affected varies PER TEMPLATE (Kyle positioned each individually; verified by
+# rendering): the NOTES box crosses on the Polish + Gyp templates (Combo + Epoxy
+# are fine); Gyp additionally has its WORK + PRICE boxes touching ("Base Bid" on
+# the PRICE border). Give the affected boxes a top inset so the first line clears
+# the border. EMU (1pt = 12700). MUST run BEFORE _shrink_overflowing_text_boxes so
+# the shrink estimate (which reads the actual inset) accounts for the reduced
 # usable height and can't push the WORK box into overflow.
-_GYP_BOX_TOP_INSET_EMU = 114300   # ~9pt
+_FRAME_BOX_TOP_INSET_EMU = 114300   # ~9pt
 
 
-def _pad_gyp_boxes(d: Document, notes, work_type) -> int:
-    """Add a top inset to the gyp WORK/PRICE/NOTES framed boxes so their first
-    line clears the frame border. Scoped to gyp; boxes identified by content
+def _pad_frame_boxes(d: Document, notes, work_type) -> int:
+    """Top-inset the framed boxes whose first line rides over its border. NOTES on
+    polish + gyp; WORK + PRICE additionally on gyp. Boxes identified by content
     markers so the DATE/JOB-NAME/estimator header boxes are never touched."""
-    if str(work_type or "").lower() != "gyp":
+    wt = str(work_type or "").lower()
+    pad_notes = wt in ("polish", "gyp")     # these templates' NOTES box crosses its border
+    pad_work_price = wt == "gyp"            # gyp also has WORK + PRICE touching
+    if not (pad_notes or pad_work_price):
         return 0
-    note_keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
-    note_keys = [k for k in note_keys if len(k) >= 8][:4]
-    # WORK has "Exclusions:"/"Assumptions:"/"per plans"; PRICE has "Base Bid".
-    markers = ["Base Bid", "Exclusions", "Assumptions", "per plans"] + note_keys
+    markers = []
+    if pad_notes:
+        note_keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
+        markers += [k for k in note_keys if len(k) >= 8][:4]
+    if pad_work_price:
+        # WORK has "Exclusions:"/"Assumptions:"/"per plans"; PRICE has "Base Bid".
+        markers += ["Base Bid", "Exclusions", "Assumptions", "per plans"]
+    if not markers:
+        return 0
     n = 0
     for txbx in _iter_txbx(d):
         txt = "".join(t.text or "" for t in txbx.iter(qn("w:t")))
@@ -610,8 +619,8 @@ def _pad_gyp_boxes(d: Document, notes, work_type) -> int:
                     cur = int(bp.get("tIns") or 0)
                 except (TypeError, ValueError):
                     cur = 0
-                if cur < _GYP_BOX_TOP_INSET_EMU:
-                    bp.set("tIns", str(_GYP_BOX_TOP_INSET_EMU))
+                if cur < _FRAME_BOX_TOP_INSET_EMU:
+                    bp.set("tIns", str(_FRAME_BOX_TOP_INSET_EMU))
                     n += 1
                 break
     return n
@@ -1507,12 +1516,12 @@ def fill_proposal(
     # Double spacing after the base-bid Total, before the Options section (Kyle).
     if _space_before_options(d, 2):
         log.info("Added double spacing before the PRICE Options heading")
-    # Pad the gyp framed boxes' top inset (so "Base Bid" / the first NOTES bullet
+    # Pad affected framed boxes' top inset (so the first NOTES bullet / "Base Bid"
     # clear their red borders) BEFORE the shrink, so the shrink estimate sees the
     # reduced usable height and can't push the WORK box into overflow.
-    _padded = _pad_gyp_boxes(d, notes, work_type)
+    _padded = _pad_frame_boxes(d, notes, work_type)
     if _padded:
-        log.info("Padded %d gyp box(es) top inset (clears the frame border)", _padded)
+        log.info("Padded %d framed box(es) top inset (clears the frame border)", _padded)
     # Shrink-to-fit: long content (esp. gyp's verbose WORK scope) would otherwise
     # overflow its fixed box and overlap the next box / frame art.
     _shrunk = _shrink_overflowing_text_boxes(d)
