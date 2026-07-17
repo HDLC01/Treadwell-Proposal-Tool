@@ -517,6 +517,40 @@ def _shrink_overflowing_text_boxes(d: Document) -> int:
     return n
 
 
+def _force_terms_on_new_page(d: Document) -> bool:
+    """Make the "TERMS AND CONDITIONS" section start on a fresh page.
+
+    Kyle's templates have NO forced break before the T&C heading — they rely on
+    the body flowing onto a later page, which fails for the combo (its body is
+    short): the heading + its terms-page letterhead land on the bottom of page 1,
+    over the ACCEPTANCE frame. We set <w:pageBreakBefore/> on the terms
+    letterhead's host paragraph — the empty paragraph that anchors the terms-page
+    PNG (positionV relative to that paragraph), immediately before the heading —
+    so the letterhead AND heading move to the new page together. pageBreakBefore
+    never inserts a blank page, so templates whose T&C already starts a page are
+    unaffected. Budget pricing has no T&C section → no-op."""
+    tops = [c for c in d.element.body if c.tag == qn("w:p")]
+    h = None
+    for i, p in enumerate(tops):
+        if "".join(t.text or "" for t in p.iter(qn("w:t"))).strip().upper() == "TERMS AND CONDITIONS":
+            h = i
+            break
+    if h is None:
+        return False
+    target = tops[h]
+    for j in range(h, max(-1, h - 4), -1):          # heading + up to 3 paras before it
+        if list(tops[j].iter(qn("wp:anchor"))):      # the terms-page letterhead's host paragraph
+            target = tops[j]
+            break
+    ppr = target.find(qn("w:pPr"))
+    if ppr is None:
+        ppr = OxmlElement("w:pPr")
+        target.insert(0, ppr)
+    if ppr.find(qn("w:pageBreakBefore")) is None:
+        ppr.insert(0, OxmlElement("w:pageBreakBefore"))
+    return True
+
+
 def _flatten_price_bullets(d: Document) -> int:
     """Remove list/bullet formatting from the PRICE section so amounts read as
     clean flush-left lines (Kyle: no bullet points in the pricing). Every price
@@ -1412,6 +1446,10 @@ def fill_proposal(
     _shrunk = _shrink_overflowing_text_boxes(d)
     if _shrunk:
         log.info("Set %d text box(es) to shrink-on-overflow (normAutofit)", _shrunk)
+    # Force the Terms & Conditions onto their own page (templates ship without a
+    # forced break, so a short body — e.g. combo — spills T&C over the acceptance).
+    if _force_terms_on_new_page(d):
+        log.info("Forced a page break before the Terms & Conditions section")
     if total_subs == 0 and not systems:
         log.warning(
             "Template has no {{tokens}}: %s. Returning unmodified.",
