@@ -229,11 +229,17 @@
       }
     };
 
-    $("send-deposit-req").addEventListener("click", (e) => {
-      if (e.target.disabled) return;
+    $("send-deposit-req").addEventListener("click", async (e) => {
+      const btn = e.target;
+      if (btn.disabled) return;
       const amt = depAmt != null ? money(depAmt) : "the deposit";
-      if (!window.confirm(`Send a deposit request for ${amt} to the customer? They'll get a chat message and an email.`)) return;
-      act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", e.target);
+      const ok = await TW.confirmDanger({
+        title: "Send deposit request?",
+        message: `Send a deposit request for ${amt} to the customer? They'll get a chat message and an email.`,
+        confirmText: "Send request", tone: "warn", icon: "💳",
+      });
+      if (!ok) return;
+      act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", btn);
     });
     $("mark-deposit").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", e.target));
     $("mark-scheduled").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/scheduled", e.target));

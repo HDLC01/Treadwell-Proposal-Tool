@@ -125,7 +125,11 @@
   async function removeOne(id, chip) {
     const em = chip.querySelector(".em");
     const who = em ? em.textContent : "this person";
-    if (!window.confirm("Remove " + who + " from the notification list?")) return;
+    const ok = await TW.confirmDanger({
+      title: "Remove from notifications?", before: "Stop sending Customer Portal notifications to ",
+      name: who, after: "?", confirmText: "Remove", tone: "danger",
+    });
+    if (!ok) return;
     try {
       const r = await api("/api/portal/notify-recipients/" + encodeURIComponent(id), { method: "DELETE" });
       const j = await r.json().catch(() => ({}));
@@ -219,7 +223,12 @@
     const ov = OVERRIDES[pid] || {};
     const emails = Object.keys(ov);
     if (!emails.length) return;
-    if (!window.confirm("Reset this project to the global default? Clears " + emails.length + " exception(s).")) return;
+    const ok = await TW.confirmDanger({
+      title: "Reset to global?",
+      message: "Clear " + emails.length + " per-project exception(s) and use the global default for this project?",
+      confirmText: "Reset", tone: "warn", icon: "↺",
+    });
+    if (!ok) return;
     try {
       for (const e of emails) {
         const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/notify-overrides",

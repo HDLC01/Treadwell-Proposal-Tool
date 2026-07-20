@@ -91,7 +91,9 @@
         }));
     }
     async function doDeleteProject(id, name){
-      if (!confirm(`Move project "${name||id}" to Trash?\n\nIt leaves the shared Projects list but stays restorable from the Trash page.`)) return;
+      const ok = await TW.confirmDanger({ title:"Move to Trash?", before:"Move ", name:(name||id), after:" to Trash?",
+        detail:"It leaves the shared Projects list but stays restorable from the Trash page.", confirmText:"Move to Trash", tone:"warn", icon:"🗑" });
+      if (!ok) return;
       const r = await api(`/api/admin/projects/${encodeURIComponent(id)}`, { method:"DELETE" });
       if (!r || r.ok===false){ alert((r&&r.error)||"Move to Trash failed"); }
       refresh();
@@ -135,8 +137,10 @@
     async function doRole(id, role){ const r = await api(`/api/admin/users/${id}/role`,{method:"PATCH",body:JSON.stringify({role})}); after(r); }
     async function doAction(act, id, tr){
       const email = tr.children[0].textContent;
-      if (act==="delete" && !confirm(`Delete ${email}? This can't be undone.`)) return;
-      if (act==="ban" && !confirm(`Ban ${email}? They won't be able to sign in.`)) return;
+      if (act==="delete" && !(await TW.confirmDanger({ title:"Delete user?", before:"Delete ", name:email, after:"?",
+        detail:"This can't be undone.", confirmText:"Delete", tone:"danger" }))) return;
+      if (act==="ban" && !(await TW.confirmDanger({ title:"Ban user?", before:"Ban ", name:email, after:"?",
+        detail:"They won't be able to sign in.", confirmText:"Ban", tone:"danger" }))) return;
       let r;
       if (act==="pause") r = await api(`/api/admin/users/${id}/status`,{method:"PUT",body:JSON.stringify({status:"paused"})});
       else if (act==="resume") r = await api(`/api/admin/users/${id}/status`,{method:"PUT",body:JSON.stringify({status:"active"})});
