@@ -139,6 +139,16 @@
       || '<p class="note">No contacts submitted yet.</p>';
 
     const deposits = (data.deposits || []).map((x) => {
+      // Check: show only the fields present (check_number may be absent from an
+      // older portal payload during deploy skew — filter(Boolean) drops it cleanly).
+      if (x.method === "check") {
+        const parts = [String(x.method || "").toUpperCase(),
+                       x.check_number ? "#" + x.check_number : "",
+                       x.account_name || "", x.bank_name || "",
+                       x.sent_date ? "sent " + x.sent_date : "", x.note || ""]
+                      .filter(Boolean).map(esc).join(" · ");
+        return `<div class="note" style="margin-bottom:6px;">${parts}</div>`;
+      }
       const sentTo = [x.sent_to_beneficiary, x.sent_to_bank,
                       x.sent_to_routing ? "rtg " + x.sent_to_routing : "",
                       x.sent_to_account ? "acct " + x.sent_to_account : ""].filter(Boolean).map(esc).join(" / ");
