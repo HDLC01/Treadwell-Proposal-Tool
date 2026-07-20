@@ -864,11 +864,13 @@ function renameTab(id, rawNew) {
 }
 
 // Delete is offered for copied tabs only (base template tabs stay).
-function deleteTab(id) {
+async function deleteTab(id) {
   // Invariant: never delete a base template tab — it would break the hardcoded
   // Epoxy!/Polish! reads + the canonical project-info block.
   if (BASE_ROLE[id] || sheets.includes(id) || !state.tab_copies.some(c => c.id === id)) return;
-  if (!confirm(`Delete the "${labelFor(id)}" tab? Its estimate is removed.`)) return;
+  const ok = await TW.confirmDanger({ title: "Delete tab?", before: "Delete the ", name: labelFor(id),
+    after: " tab?", detail: "Its estimate is removed.", confirmText: "Delete", tone: "danger" });
+  if (!ok) return;
   HF.removeSheet(id);
   for (const key of Object.keys(cellValues)) if (key.startsWith(id + "!")) delete cellValues[key];
   delete sheetCache[id];
