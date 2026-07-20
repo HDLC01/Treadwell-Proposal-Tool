@@ -4,6 +4,8 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
+    .filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
   const money = (n) => (n == null ? "" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   const when = (s) => (s ? new Date(s).toLocaleString() : "");
   const STAGES = ["Sent", "Viewed", "Approved", "Deposit received", "Contact info", "Scheduled"];
@@ -259,7 +261,7 @@
           const eff = mode === "add" ? true : mode === "mute" ? false : p.base;
           const canEdit = isAdmin || e === myEmail;
           return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
-               + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">${esc(String(p.email).split("@")[0])}</button>`;
+               + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">${esc(nameOf(p.email))}</button>`;
         }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
         wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
           if (b.disabled) return;

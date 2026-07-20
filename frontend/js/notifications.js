@@ -12,6 +12,9 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const api = (path, opts) => fetch(path, Object.assign({ headers: TW.authHeaders() }, opts || {}));
+  // Display label from an email local-part with each word capitalized (john.doe → John Doe).
+  const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
+    .filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
 
   let ADMIN = false, MY_EMAIL = "";
   let ROSTER = [];                 // [{email, enabled}] — the global base
@@ -74,7 +77,7 @@
         const on = x.enabled !== false;
         return '<span class="chip ' + (on ? "on " : "") + (ADMIN ? "can" : "") + '" data-id="' + esc(x.id) + '" data-on="' + (on ? 1 : 0) + '"'
              + (ADMIN ? ' role="button" tabindex="0"' : "") + '>'
-             + esc(String(x.email).split("@")[0]) + ' <span class="em">' + esc(x.email) + '</span>'
+             + esc(nameOf(x.email)) + ' <span class="em">' + esc(x.email) + '</span>'
              + (ADMIN ? ' <button class="x" title="Remove" aria-label="Remove">&times;</button>' : "")
              + '</span>';
       }).join("") || '<span class="note">No one on the list yet' + (ADMIN ? " — add someone below." : ".") + '</span>';
@@ -180,7 +183,7 @@
         const canEdit = ADMIN || e === MY_EMAIL;
         return '<button class="nt-chip ' + (eff ? "on" : "") + '" data-pid="' + esc(pid) + '" data-email="' + esc(person.email) + '"'
              + ' data-base="' + (person.base ? 1 : 0) + '" data-eff="' + (eff ? 1 : 0) + '"'
-             + (canEdit ? "" : " disabled") + ' title="' + esc(person.email) + '">' + esc(e.split("@")[0]) + '</button>';
+             + (canEdit ? "" : " disabled") + ' title="' + esc(person.email) + '">' + esc(nameOf(person.email)) + '</button>';
       }).join("");
       return '<div class="pp-row">' +
         '<div class="pp-head"><span class="pp-name">' + esc(p.project_name || "Proposal") + '</span>' +
