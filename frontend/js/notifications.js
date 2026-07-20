@@ -117,7 +117,7 @@
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       $("nn-email").value = "";
       await load(); renderProjects();
-      alert("ok", "Added " + email + " — green (receiving).");
+      alert("ok", "Added " + email + " — it's off (gray). Click it to turn green and start sending.");
     } catch (err) { alert("err", "Could not add: " + (err.message || "retry")); }
     finally { btn.disabled = false; btn.textContent = "Add"; }
   }
