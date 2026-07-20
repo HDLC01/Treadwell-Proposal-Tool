@@ -4,6 +4,8 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
+    .filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
   const money = (n) => (n == null ? "" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   const when = (s) => (s ? new Date(s).toLocaleString() : "");
   const STAGES = ["Sent", "Viewed", "Approved", "Deposit received", "Contact info", "Scheduled"];
@@ -69,14 +71,12 @@
     if (openId) openDetail(openId);
   }
 
-  // ── modal pop-ups (detail drawer + recipients) ──────────────────────────────
+  // ── modal pop-up (detail drawer) ────────────────────────────────────────────
   function syncScrim() {
-    const anyOpen = $("drawer").classList.contains("open") || $("recips").classList.contains("open");
-    $("scrim").style.display = anyOpen ? "block" : "none";
+    $("scrim").style.display = $("drawer").classList.contains("open") ? "block" : "none";
   }
   function closeDrawer() { $("drawer").classList.remove("open"); syncScrim(); }
-  function closeRecips() { $("recips").classList.remove("open"); syncScrim(); }
-  function closeAll() { closeDrawer(); closeRecips(); }
+  function closeAll() { closeDrawer(); }
   $("scrim").addEventListener("click", closeAll);              // click the backdrop to close
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAll(); });  // Esc to close
 
@@ -197,6 +197,13 @@
         ${deposits ? `<div class="sec"><div class="lbl">Deposit submissions</div>${deposits}</div>` : ""}
 
         <div class="sec">
+          <div class="lbl">Notifications for this project</div>
+          <p class="note" id="nt-help" style="margin:0 0 4px">Green = receives this project's emails. Overrides the global roster for this project only.</p>
+          <div id="nt-alert" class="note" style="margin:4px 0"></div>
+          <div id="nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
+        </div>
+
+        <div class="sec">
           <div class="lbl">Conversation</div>
           <div id="thread">${thread}</div>
           <div id="reply-alert" class="note" style="margin:6px 0;"></div>
@@ -222,14 +229,67 @@
       }
     };
 
-    $("send-deposit-req").addEventListener("click", (e) => {
-      if (e.target.disabled) return;
+    $("send-deposit-req").addEventListener("click", async (e) => {
+      const btn = e.target;
+      if (btn.disabled) return;
       const amt = depAmt != null ? money(depAmt) : "the deposit";
-      if (!window.confirm(`Send a deposit request for ${amt} to the customer? They'll get a chat message and an email.`)) return;
-      act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", e.target);
+      const ok = await TW.confirmDanger({
+        title: "Send deposit request?",
+        message: `Send a deposit request for ${amt} to the customer? They'll get a chat message and an email.`,
+        confirmText: "Send request", tone: "warn", icon: "💳",
+      });
+      if (!ok) return;
+      act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", btn);
     });
     $("mark-deposit").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", e.target));
     $("mark-scheduled").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/scheduled", e.target));
+
+    // Per-project notification chips: who receives THIS project's emails. Effective
+    // state = global roster toggle, overridden per-project (add/mute). Admins may
+    // toggle anyone; other staff only their own address (server-enforced too).
+    (async () => {
+      const me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
+      const isAdmin = me.role === "admin" || me.role === "super_admin";
+      const myEmail = (me.email || "").toLowerCase();
+      const wrap = $("nt-chips");
+      try {
+        const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/notify-overrides");
+        const j = await r.json();
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        const ov = {};                                        // email -> 'add' | 'mute'
+        (j.overrides || []).forEach((o) => { ov[String(o.email).toLowerCase()] = o.mode; });
+        const seen = {}, people = [];
+        (j.roster || []).forEach((m) => { const e = String(m.email).toLowerCase(); seen[e] = 1; people.push({ email: m.email, base: !!m.enabled }); });
+        Object.keys(ov).forEach((e) => { if (!seen[e]) people.push({ email: e, base: false }); });   // 'add'ed non-roster person
+        wrap.innerHTML = people.map((p) => {
+          const e = String(p.email).toLowerCase();
+          const mode = ov[e];
+          const eff = mode === "add" ? true : mode === "mute" ? false : p.base;
+          const canEdit = isAdmin || e === myEmail;
+          return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
+               + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">${esc(nameOf(p.email))}</button>`;
+        }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
+        wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
+          if (b.disabled) return;
+          const email = b.dataset.email, base = b.dataset.base === "1", eff = b.dataset.eff === "1";
+          const newEff = !eff;
+          const mode = (newEff === base) ? "clear" : (newEff ? "add" : "mute");   // clear when back to base
+          b.disabled = true;
+          try {
+            const rr = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/notify-overrides",
+              { method: "PUT", body: JSON.stringify({ email, mode }) });
+            const jj = await rr.json().catch(() => ({}));
+            if (!rr.ok || jj.ok === false) throw new Error(jj.error || jj.detail || ("HTTP " + rr.status));
+            openDetail(pid);   // refresh chips
+          } catch (err) {
+            $("nt-alert").textContent = "Could not update: " + (err.message || "retry");
+            b.disabled = false;
+          }
+        }));
+      } catch (err) {
+        if (wrap) wrap.innerHTML = '<span class="note">Could not load notifications: ' + esc(err.message) + "</span>";
+      }
+    })();
 
     $("reply-btn").addEventListener("click", async () => {
       const body = $("reply-body").value.trim();
@@ -248,82 +308,9 @@
     });
   }
 
-  // ── team-notification recipients ────────────────────────────────────────────
-  async function openRecips() {
-    $("recips").classList.add("open"); syncScrim();
-    const m = $("recips");
-    m.innerHTML = '<div class="dbody"><p class="note">Loading…</p></div>';
-    await tokenReady();
-    try {
-      const r = await api("/api/portal/notify-recipients");
-      const j = await r.json();
-      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      renderRecips(j.recipients || []);
-    } catch (err) {
-      m.innerHTML = '<div class="dhead"><h2>Team notifications</h2><button class="dclose">&times;</button></div>' +
-        '<div class="dbody"><p class="note">' + esc(err.message) + '</p></div>';
-      m.querySelector(".dclose").addEventListener("click", closeRecips);
-    }
-  }
+  // (The global notification roster moved to its own page — /notifications.html.
+  //  Per-project overrides live in the detail drawer above.)
 
-  function renderRecips(list) {
-    const rows = list.map((x) => `
-      <div class="recip-row">
-        <span><strong>${esc(x.email)}</strong> <span class="pill ${x.kind === "deposit" ? "warn" : "pend"}">${esc(x.kind)}</span></span>
-        <button class="btn btn-s recip-del" data-id="${esc(x.id)}">Remove</button>
-      </div>`).join("") || '<p class="note">No custom recipients — notifications use the server defaults.</p>';
-    $("recips").innerHTML = `
-      <div class="dhead"><h2>Team notifications</h2><button class="dclose" aria-label="Close">&times;</button></div>
-      <div class="dbody">
-        <p class="note">Who's emailed when a customer asks a question, approves, submits a deposit, or sends contacts.
-          Leave the list empty to use the server defaults (Kyle, Kylene &amp; RJ are re-seeded on restart).
-          "Deposit" recipients receive deposit alerts specifically; "general" get everything else.</p>
-        <div class="sec"><div class="lbl">Recipients</div><div id="recip-list">${rows}</div></div>
-        <div class="sec">
-          <div class="lbl">Add recipient</div>
-          <div id="recip-alert" class="note" style="margin:4px 0"></div>
-          <div class="recip-add">
-            <input id="recip-email" type="email" placeholder="name@wetreadwell.com" />
-            <select id="recip-kind"><option value="general">General</option><option value="deposit">Deposit</option></select>
-            <button class="btn btn-p" id="recip-add-btn" type="button">Add</button>
-          </div>
-        </div>
-      </div>`;
-    const m = $("recips");
-    m.querySelector(".dclose").addEventListener("click", closeRecips);
-    m.querySelectorAll(".recip-del").forEach((b) => b.addEventListener("click", () => delRecip(b.dataset.id)));
-    $("recip-add-btn").addEventListener("click", addRecip);
-    $("recip-email").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addRecip(); } });
-  }
-
-  async function addRecip() {
-    const email = ($("recip-email").value || "").trim().toLowerCase();
-    const kind = $("recip-kind").value;
-    if (!email) { $("recip-alert").textContent = "Enter an email address."; return; }
-    const btn = $("recip-add-btn"); btn.disabled = true; btn.textContent = "Adding…";
-    try {
-      const r = await api("/api/portal/notify-recipients", { method: "POST", body: JSON.stringify({ email, kind }) });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      openRecips();
-    } catch (err) {
-      $("recip-alert").textContent = "Could not add: " + (err.message || "retry");
-      btn.disabled = false; btn.textContent = "Add";
-    }
-  }
-
-  async function delRecip(id) {
-    try {
-      const r = await api("/api/portal/notify-recipients/" + encodeURIComponent(id), { method: "DELETE" });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      openRecips();
-    } catch (err) {
-      const a = $("recip-alert"); if (a) a.textContent = "Could not remove: " + (err.message || "retry");
-    }
-  }
-
-  $("recips-btn").addEventListener("click", openRecips);
   $("search").addEventListener("input", renderBoard);
   load();
 })();
