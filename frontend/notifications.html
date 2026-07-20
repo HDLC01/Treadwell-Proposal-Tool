@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Notification Sending · Treadwell Proposal Generator</title>
+<style>
+  :root { --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
+    --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--surf); color:var(--ink);
+    font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .wrap { padding:24px 28px 64px; max-width:880px; }
+  h1 { font-size:26px; font-weight:700; letter-spacing:-.01em; margin:0 0 2px; }
+  .sub { color:var(--ink-v); margin:0 0 18px; font-size:13px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:16px; }
+  .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); margin-bottom:8px; }
+  .note { color:var(--ink-v); font-size:12px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:999px;
+    padding:7px 12px; font-size:13px; font-weight:700; background:var(--surf-high); color:var(--ink-v); }
+  .chip.can { cursor:pointer; }
+  .chip.on { background:#dcf5e3; color:#0f7b34; border-color:#bfe3c8; }
+  .chip .em { font-weight:400; font-size:11px; opacity:.8; }
+  .chip .x { border:none; background:none; color:inherit; cursor:pointer; font-size:15px; line-height:1; padding:0; }
+  .addrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+  .addrow input { flex:1; min-width:220px; min-height:40px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; }
+  .btn { min-height:40px; padding:0 16px; border-radius:7px; border:1px solid transparent; font:inherit; font-weight:700; cursor:pointer; }
+  .btn-p { background:var(--red-dark); color:#fff; } .btn-p:hover { background:var(--red); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .alert { font-size:13px; margin:6px 0; min-height:1em; }
+  .alert.err { color:var(--red-dark); }
+  .alert.ok { color:var(--ok); }
+</style>
+</head>
+<body>
+  <div class="wrap" id="root">
+    <h1>Notification Sending</h1>
+    <p class="sub">Loading…</p>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/notifications.js"></script>
+</body>
+</html>

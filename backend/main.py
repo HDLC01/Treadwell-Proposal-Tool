@@ -553,7 +553,19 @@ def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
 
 
-# ─── Team-notification recipients (configurable; proxied to the portal) ────────
+# ─── Notification Sending: roster + per-project overrides (proxied to the portal) ─
+# Access (Hanz: "admins edit, staff self-serve"): the GLOBAL roster (add / remove /
+# toggle) is ADMIN-only, enforced here server-side (not just hidden buttons); the
+# per-project overrides allow ANY signed-in staff to toggle THEMSELVES for a project,
+# and admins to toggle anyone. All routes are already bearer-gated by _auth_gate.
+def _caller_is_admin(request: Request) -> bool:
+    try:
+        _require_admin(request)
+        return True
+    except HTTPException:
+        return False
+
+
 @app.get("/api/portal/notify-recipients")
 def api_portal_notify_list() -> Dict[str, Any]:
     return _portal("/api/admin/notify-recipients", "GET")
@@ -561,6 +573,7 @@ def api_portal_notify_list() -> Dict[str, Any]:
 
 @app.post("/api/portal/notify-recipients")
 async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -577,11 +590,50 @@ async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
                    {"email": email, "kind": kind, "by": _user_email(request)})
 
 
+@app.patch("/api/portal/notify-recipients/{rid}")
+async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    enabled = bool(isinstance(body, dict) and body.get("enabled"))
+    return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "PATCH", {"enabled": enabled})
+
+
 @app.delete("/api/portal/notify-recipients/{rid}")
-def api_portal_notify_delete(rid: int) -> Dict[str, Any]:
+def api_portal_notify_delete(rid: int, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
     # rid is int-typed, but route it through the same id guard as every other
     # proxied path segment so the outbound URL is provably constrained.
     return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
+
+
+@app.get("/api/portal/proposal/{pid}/notify-overrides")
+def api_portal_notify_overrides_get(pid: str) -> Dict[str, Any]:
+    return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "GET")
+
+
+@app.put("/api/portal/proposal/{pid}/notify-overrides")
+async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Invalid body.")
+    email = (body.get("email") or "").strip().lower()
+    mode = (body.get("mode") or "").strip().lower()
+    if len(email) > 254 or not _PORTAL_EMAIL_RE.match(email):
+        raise HTTPException(400, "Enter a valid email address.")
+    if mode not in ("add", "mute", "clear"):
+        raise HTTPException(400, "Invalid mode.")
+    # Admin may toggle anyone; a non-admin may only toggle THEIR OWN address.
+    me = (_user_email(request) or "").strip().lower()
+    if not _caller_is_admin(request) and email != me:
+        raise HTTPException(403, "You can only change your own notifications for a project.")
+    return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "PUT",
+                   {"email": email, "mode": mode})
 
 
 @app.get("/api/admin/proposal-pdf")
