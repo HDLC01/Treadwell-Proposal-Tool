@@ -137,6 +137,7 @@
       navItem("/projects.html", "▣", "Projects") +
       navItem("/crm.html", "▦", "Pipeline") +
       navItem("/portal.html", "◆", "Customer Portal") +
+      navItem("/notifications.html", "✉", "Notification Sending") +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
       (isAdmin ? '<div class="tw-section">System</div>' + navItem("/admin.html", "◇", "Admin") : "") +
