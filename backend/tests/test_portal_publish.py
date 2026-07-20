@@ -182,6 +182,13 @@ def test_overrides_get_proxies(monkeypatch):
     assert cap["path"] == "/api/admin/proposal/p1/notify-overrides" and cap["method"] == "GET"
 
 
+def test_overrides_all_proxies(monkeypatch):
+    cap = _wire(monkeypatch)                                     # read-only, not admin-gated
+    r = client.get("/api/portal/notify-overrides-all")
+    assert r.status_code == 200
+    assert cap["path"] == "/api/admin/notify-overrides" and cap["method"] == "GET"
+
+
 def test_overrides_put_admin_forwards(monkeypatch):
     cap = _wire(monkeypatch)                                     # admin
     r = client.put("/api/portal/proposal/p1/notify-overrides", json={"email": "Dane@X.com", "mode": "add"})

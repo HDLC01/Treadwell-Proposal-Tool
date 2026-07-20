@@ -609,6 +609,14 @@ def api_portal_notify_delete(rid: int, request: Request) -> Dict[str, Any]:
     return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
 
 
+@app.get("/api/portal/notify-overrides-all")
+def api_portal_notify_overrides_all() -> Dict[str, Any]:
+    # Every per-project override at once, for the Notification Sending page's
+    # per-project view. Read-only (bearer-gated by _auth_gate; not admin-gated,
+    # same as the roster + single-project GETs).
+    return _portal("/api/admin/notify-overrides", "GET")
+
+
 @app.get("/api/portal/proposal/{pid}/notify-overrides")
 def api_portal_notify_overrides_get(pid: str) -> Dict[str, Any]:
     return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "GET")

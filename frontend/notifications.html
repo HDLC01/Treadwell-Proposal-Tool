@@ -31,6 +31,20 @@
   .alert { font-size:13px; margin:6px 0; min-height:1em; }
   .alert.err { color:var(--red-dark); }
   .alert.ok { color:var(--ok); }
+  /* per-project card */
+  .pp-search { width:100%; max-width:420px; min-height:38px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; margin:2px 0 12px; }
+  .pp-row { padding:12px 0; border-top:1px solid var(--line); }
+  .pp-row:first-child { border-top:none; }
+  .pp-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+  .pp-name { font-weight:700; }
+  .pp-cust { color:var(--ink-v); font-size:12px; }
+  .pp-badge { background:#fff4d6; color:#8a6d00; border:1px solid #f0e0a8; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:700; }
+  .pp-reset { border:none; background:none; color:var(--red-dark); font:inherit; font-size:12px; font-weight:700; cursor:pointer; padding:0; }
+  .nt-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .nt-chip { border:1px solid var(--line); border-radius:999px; padding:5px 11px; font-size:12px; font-weight:700; cursor:pointer;
+    background:var(--surf-high); color:var(--ink-v); }
+  .nt-chip.on { background:#dcf5e3; color:#0f7b34; border-color:#bfe3c8; }
+  .nt-chip:disabled { cursor:not-allowed; opacity:.6; }
 </style>
 </head>
 <body>
