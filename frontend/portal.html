@@ -36,11 +36,17 @@
   .pill.pend { background:var(--surf-high); color:var(--ink-v); }
   /* detail — centered modal pop-up (dimmed backdrop; Esc / backdrop / × to close) */
   #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10000; display:none; }
-  #drawer, #recips { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+  #drawer { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
     width:min(560px,94vw); max-height:88vh; background:#fff; z-index:10001;
     border-radius:12px; box-shadow:0 16px 48px rgba(0,0,0,.30); overflow:hidden;
     display:none; flex-direction:column; }
-  #drawer.open, #recips.open { display:flex; }
+  #drawer.open { display:flex; }
+  /* per-project notification chips (in the detail drawer) */
+  .nt-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .nt-chip { border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700;
+    cursor:pointer; background:var(--surf-high); color:var(--ink-v); }
+  .nt-chip.on { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
+  .nt-chip:disabled { cursor:not-allowed; opacity:.7; }
   .dhead { flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:18px 20px; border-bottom:1px solid var(--line); }
   .dhead h2 { margin:0; font-size:18px; }
   .dclose { border:none; background:none; font-size:22px; cursor:pointer; color:var(--ink-v); line-height:1; }
@@ -63,11 +69,6 @@
   a.link { color:var(--red-dark); word-break:break-all; }
   .note { color:var(--ink-v); font-size:12px; }
   .note.sys { text-align:center; background:var(--surf-low); border-radius:6px; padding:5px 10px; margin:6px 0; }
-  .recip-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); }
-  .recip-add { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .recip-add input { flex:1; min-width:180px; min-height:40px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font:inherit; }
-  .recip-add select { min-height:40px; border:1px solid var(--line); border-radius:6px; padding:0 8px; font:inherit; }
-  .recip-del { min-height:34px; padding:0 12px; }
 </style>
 </head>
 <body>
@@ -77,14 +78,13 @@
     <div class="toolbar">
       <input id="search" type="search" placeholder="Search by project or email…" />
       <span id="count" class="count"></span>
-      <button id="recips-btn" class="btn btn-s" type="button" style="min-height:40px">Team notifications</button>
+      <a href="/notifications.html" class="btn btn-s" style="min-height:40px;display:inline-flex;align-items:center;text-decoration:none">Notification Sending →</a>
     </div>
     <div id="board" class="board"><div class="empty">Loading…</div></div>
   </div>
 
   <div id="scrim"></div>
   <aside id="drawer"></aside>
-  <aside id="recips"></aside>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/auth.js"></script>
