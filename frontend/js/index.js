@@ -82,6 +82,8 @@
   // host, no scraping — just a fetch to a public endpoint.
   const addrInput   = document.getElementById("address-input");
   const addrResults = document.getElementById("address-results");
+  const businessInput = document.getElementById("business-input");
+  const businessResults = document.getElementById("business-results");
   const cityInput   = document.getElementById("city-input");
   const stateInput  = document.getElementById("state-input");
   const zipInput    = document.getElementById("zip-input");
@@ -136,6 +138,44 @@
     addrResults.classList.remove("open");
   }
 
+  function fillLocation(p) {
+    addrInput.value  = fmtLine1(p);
+    cityInput.value  = p.city || p.county || "";
+    stateInput.value = STATE_ABBR[p.state] || (p.state || "").slice(0, 2).toUpperCase();
+    zipInput.value   = p.postcode || "";
+  }
+
+  function renderBusinesses(features) {
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    const seen = new Set(), items = [];
+    for (const f of features) {
+      const p = f.properties || {};
+      const name = (p.name || "").trim();
+      const address = fmtLine1(p);
+      const locality = [p.city || p.county, STATE_ABBR[p.state] || p.state, p.postcode].filter(Boolean).join(", ");
+      if (!name || (!address && !locality)) continue;
+      const key = (name + "|" + address + "|" + locality).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ f, name, address: [address, locality].filter(Boolean).join(", ") });
+    }
+    if (!items.length) {
+      businessResults.innerHTML = '<div class="addr-row addr-msg">No business matches — enter the address manually</div>';
+      businessResults.classList.add("open");
+      return;
+    }
+    businessResults.innerHTML = items.map((it, i) =>
+      `<div class="addr-row" data-idx="${i}"><div class="addr-l1">${esc(it.name)}</div><div class="addr-l2">${esc(it.address)}</div></div>`
+    ).join("");
+    businessResults.classList.add("open");
+    businessResults.querySelectorAll(".addr-row").forEach(row => row.addEventListener("click", () => {
+      // Keep the name Kyle entered (it can include a job description); this is
+      // only a location lookup, not a replacement for the project name.
+      fillLocation(items[+row.dataset.idx].f.properties || {});
+      businessResults.classList.remove("open");
+    }));
+  }
+
   let addrTimer = null, addrSeq = 0;
   addrInput.addEventListener("input", () => {
     const q = addrInput.value.trim();
@@ -153,9 +193,27 @@
       } catch { addrResults.classList.remove("open"); }
     }, 300);  // debounce
   });
+  let businessTimer = null, businessSeq = 0;
+  if (businessInput && businessResults) businessInput.addEventListener("input", () => {
+    const q = businessInput.value.trim();
+    if (businessTimer) clearTimeout(businessTimer);
+    if (q.length < 3) { businessResults.classList.remove("open"); return; }
+    businessTimer = setTimeout(async () => {
+      const seq = ++businessSeq;
+      try {
+        // Free OSM business/location search, biased toward the Kansas City metro.
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en&lat=39.0997&lon=-94.5786`;
+        const data = await (await fetch(url)).json();
+        if (seq !== businessSeq) return;
+        renderBusinesses((data.features || []).filter(f => (f.properties.countrycode || "US") === "US"));
+      } catch { businessResults.classList.remove("open"); }
+    }, 300);
+  });
   document.addEventListener("click", e => {
     if (!addrInput.contains(e.target) && !addrResults.contains(e.target))
       addrResults.classList.remove("open");
+    if (businessInput && businessResults && !businessInput.contains(e.target) && !businessResults.contains(e.target))
+      businessResults.classList.remove("open");
   });
 
   form.addEventListener("submit", (e) => {
