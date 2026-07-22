@@ -25,3 +25,17 @@ def test_proposal_base_picker_has_no_noncombo_auto_default():
     assert "Auto (work-type default)" not in js
     assert "wt === \"combo\" ? `<label class=\"pr-baserow\"" in js
     assert "pov.single_bid = {}" in js
+
+
+def test_broken_out_tax_preview_uses_current_total_and_total_label():
+    """Persisted draft tokens must not mask the newly selected tax treatment."""
+    js = (ROOT / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
+    start = js.index("const tokenValues = {")
+    end = js.index("    };", start)
+    values = js[start:end]
+
+    # Draft values are only defaults. The current calculation must overwrite
+    # them, so a saved '(tax exempt)' phrase cannot survive broken-out tax.
+    assert values.index("...mergedValues,") < values.index("total_label:")
+    assert "total_label:        `${fmtUSD(lumpSumNumber)} – Total`" in values
+    assert "if (m.broken) return \"\";" in values
