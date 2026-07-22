@@ -620,6 +620,12 @@
     const salesRow   = document.getElementById("sales-tax-row");
     const remodelRow = document.getElementById("remodel-tax-row");
     const totalRow   = document.getElementById("total-row");
+    // The template blocks are mounted asynchronously. A tax-mode change can
+    // arrive before its breakout rows are in the document, so retain the state
+    // and paint those rows once mounted instead of throwing and blocking Done.
+    const salesTaxDisplay = document.getElementById("sales-tax-display");
+    const remodelTaxDisplay = document.getElementById("tax-amount-display");
+    const totalDisplay = document.getElementById("total-display");
     const phraseEl   = document.getElementById("base-tax-phrase-display");
     const comboBlock = document.getElementById("combo-price-block");
     const baseBidRow = document.getElementById("base-bid-row");
@@ -662,12 +668,12 @@
           if (baseDisp) { baseDisp.dataset.computed = computedBase; baseDisp.textContent = poValue("single_bid", null, "amount", computedBase); }
           if (phraseEl) { phraseEl.dataset.computed = ""; phraseEl.textContent = poValue("single_bid", null, "tax_phrase", ""); }
         }
-        document.getElementById("sales-tax-display").textContent = fmtUSD(salesTax);
+        if (salesTaxDisplay) salesTaxDisplay.textContent = fmtUSD(salesTax);
         if (salesRow)   salesRow.style.display = "";
         if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-        document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
+        if (remodelTaxDisplay) remodelTaxDisplay.textContent = fmtUSD(remodelTax);
         if (totalRow)   totalRow.style.display = "";
-        document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
+        if (totalDisplay) totalDisplay.textContent = fmtUSD(lumpSumN);
       } else {
         const computedPhrase = exempt ? "(tax exempt)"
           : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"

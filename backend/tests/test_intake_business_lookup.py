@@ -39,3 +39,12 @@ def test_broken_out_tax_preview_uses_current_total_and_total_label():
     assert values.index("...mergedValues,") < values.index("total_label:")
     assert "total_label:        `${fmtUSD(lumpSumNumber)} – Total`" in values
     assert "if (m.broken) return \"\";" in values
+
+
+def test_broken_out_tax_can_change_before_template_rows_mount():
+    """An early tax selector change must not block the Proposal → Done handoff."""
+    js = (ROOT / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
+
+    for name in ("salesTaxDisplay", "remodelTaxDisplay", "totalDisplay"):
+        assert f"const {name} = document.getElementById" in js
+        assert f"if ({name}) {name}.textContent" in js
