@@ -169,6 +169,82 @@ def _iter_all_paragraphs(d: Document):
 # live inside ONE container (one text box, one table cell, or the body).
 # Name-capturing block markers — `{{#<name>}}` / `{{/<name>}}` — so any named
 # list can drive a repeatable block (`system`, `price_line`, `alternate`, …).
+_WORK_ANCHOR_RE = re.compile(r"^\s*(?:scope|schedule|exclusions)\s*:", re.I)
+
+
+def _set_run_bold(run_elem, value: bool) -> None:
+    """Set an explicit bold value without disturbing the run's other styling."""
+    rpr = run_elem.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        run_elem.insert(0, rpr)
+    bold = rpr.find(qn("w:b"))
+    if bold is None:
+        bold = OxmlElement("w:b")
+        rpr.append(bold)
+    if value:
+        bold.attrib.pop(qn("w:val"), None)
+    else:
+        bold.set(qn("w:val"), "0")
+
+
+def _set_direct_run_text(run_elem, text: str) -> None:
+    """Replace one run's visible text/break children, retaining its rPr."""
+    for child in list(run_elem):
+        if child.tag in (qn("w:t"), qn("w:br"), qn("w:tab")):
+            run_elem.remove(child)
+    t = OxmlElement("w:t")
+    run_elem.append(t)
+    _write_t_text(t, text)
+
+
+def _normalize_work_label_formatting(d: Document) -> int:
+    """Make WORK-box labels bold through their first colon, values normal."""
+    changed = 0
+    for txbx in d.element.body.iter(qn("w:txbxContent")):
+        paragraphs = list(txbx.iter(qn("w:p")))
+        if not any(_WORK_ANCHOR_RE.match(_own_text(p).strip()) for p in paragraphs):
+            continue
+        for p_elem in paragraphs:
+            text = _own_text(p_elem)
+            colon = text.find(":")
+            if colon < 0:
+                continue
+            # A colon occurring later in prose (for example the Gyp terms'
+            # "following: access to …") is not a label/value row.
+            label = text[:colon].strip()
+            if not label or len(label) > 48 or any(ch in label for ch in ".?!"):
+                continue
+            offset = 0
+            passed_colon = False
+            for run_elem in list(p_elem.findall(qn("w:r"))):
+                # Drawing/object runs only anchor artwork or nested text boxes.
+                run_text = "".join(t.text or "" for t in run_elem.iter(qn("w:t")))
+                if not run_text:
+                    continue
+                start, end = offset, offset + len(run_text)
+                offset = end
+                if passed_colon or start > colon:
+                    _set_run_bold(run_elem, False)
+                    changed += 1
+                    continue
+                if start <= colon < end:
+                    split_at = colon - start + 1
+                    if split_at < len(run_text):
+                        suffix = copy.deepcopy(run_elem)
+                        _set_direct_run_text(run_elem, run_text[:split_at])
+                        _set_direct_run_text(suffix, run_text[split_at:])
+                        _set_run_bold(suffix, False)
+                        run_elem.addnext(suffix)
+                    _set_run_bold(run_elem, True)
+                    changed += 1
+                    passed_colon = True
+                else:
+                    _set_run_bold(run_elem, True)
+                    changed += 1
+    return changed
+
+
 BLOCK_START_RE = re.compile(r"\{\{\s*#\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 BLOCK_END_RE = re.compile(r"\{\{\s*/\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
@@ -1504,6 +1580,9 @@ def fill_proposal(
     # the sqft/lf_clause tokens are filled (matches the on-screen preview).
     if _drop_zero_sf_prefix(d):
         log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
+    _n_work_format = _normalize_work_label_formatting(d)
+    if _n_work_format:
+        log.info("Normalized %d WORK label/value run(s)", _n_work_format)
     # PRICE section reads as clean flush-left lines — Kyle wants NO bullets in the
     # pricing (confirmed by Hanz 2026-07-16, reversing the earlier "keep the red
     # squares" read). _flatten_price_bullets strips the numId=3 list formatting off

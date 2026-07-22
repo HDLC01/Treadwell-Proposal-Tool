@@ -567,6 +567,11 @@ function ensureOpt(id) {
 function persistBidOptions() {
   TW.setState({ ...state, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts });
 }
+function clearSingleBidDisplayOverride() {
+  const pov = state.price_overrides;
+  if (!pov || typeof pov !== "object" || Array.isArray(pov) || !pov.single_bid) return;
+  pov.single_bid = {};
+}
 const _escBB = (s) => String(s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -582,8 +587,15 @@ function renderBidOptions() {
   // Guard a stale explicit base from an old draft; never overwrite base_tab_id with
   // the auto-derived default (null base = auto; for combo that's Epoxy + Polish).
   if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
-  const baseId = state.base_tab_id;
+  let baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
+  // Non-Combo bids always have one real worksheet as their base. Persist the
+  // resolved default so a resumed draft cannot carry an ambiguous Auto base.
+  if (!baseId && wt !== "combo" && autoBase) {
+    state.base_tab_id = autoBase.id;
+    baseId = autoBase.id;
+    TW.setState({ base_tab_id: baseId });
+  }
   // gyp is a priced role too, so all 5 gyp variants live in `priced` on EVERY
   // job. By default show only the job's own work-type chips (gyp → gyp variants;
   // else → epoxy/polish) plus anything engaged. Cross-type systems stay hidden
@@ -661,8 +673,10 @@ function wireBidBar() {
     const el = e.target;
     if (el.classList.contains("bb-base")) {          // Base-bid radio toggled
       if (!el.checked) return;
+      const priorBaseId = state.base_tab_id;
       state.base_tab_id = el.value || null;
       if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
+      if (state.base_tab_id !== priorBaseId) clearSingleBidDisplayOverride();
       renderBidOptions();
       persistBidOptions();
       return;

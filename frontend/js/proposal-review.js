@@ -439,6 +439,19 @@
     const N = (v) => Number(v) || 0;
     const byId = (id) => all.find(t => t.id === id);
     let baseTab = state.base_tab_id ? byId(state.base_tab_id) : null;
+    // A non-Combo proposal must always name an actual worksheet as its base.
+    // This migrates older null-base drafts before any total is displayed.
+    if (!baseTab && wt !== "combo") {
+      const defaultRole = wt === "polish" ? "polish" : wt === "gyp" ? "gyp" : "epoxy";
+      const defaultId = defaultRole === "gyp" ? GYP_BASE : null;
+      const resolved = all.find(t => t.id === defaultId)
+        || all.find(t => t.role === defaultRole && t.kind === "base")
+        || all.find(t => t.role === defaultRole);
+      if (resolved) {
+        baseTab = resolved;
+        state.base_tab_id = resolved.id;
+      }
+    }
     let shownBase, salesTax, remodelTax;
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
@@ -781,14 +794,21 @@
         if (!allTabs.length) { optsPanel.hidden = true; optsPanel.innerHTML = ""; }
         else {
           const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
-          const baseId = state.base_tab_id;
-          const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
-          // For gyp the "Auto" row resolves to a single listed variant (the gyp
-          // base) — redundant. Suppress it and treat the resolved gyp base as the
-          // effective base. (Combo keeps Auto = "Epoxy + Polish combined".)
-          const gypAutoBaseId = (wt === "gyp" && !baseId) ? GYP_BASE : null;
-          const effectiveBaseId = baseId || gypAutoBaseId;
-          const showAutoRow = !gypAutoBaseId;
+          let baseId = state.base_tab_id;
+          // Keep Combo's named combined base. Every other work type resolves
+          // directly to a real sheet, so the misleading Auto row is gone.
+          if (!baseId && wt !== "combo") {
+            const role = wt === "polish" ? "polish" : wt === "gyp" ? "gyp" : "epoxy";
+            const resolved = allTabs.find(t => t.id === (role === "gyp" ? GYP_BASE : null))
+              || allTabs.find(t => t.role === role && t.kind === "base")
+              || allTabs.find(t => t.role === role);
+            if (resolved) {
+              state.base_tab_id = resolved.id;
+              baseId = resolved.id;
+              TW.setState({ base_tab_id: baseId });
+            }
+          }
+          const effectiveBaseId = baseId;
           // gyp is a priced role, so allTabs carries epoxy/polish + all 5 gyp
           // variants on every job. By default show only the tabs relevant to this
           // work type (mirrors estimate-review.js's chipVisible filter); the
@@ -804,16 +824,16 @@
           // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
           // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
           const isPartOfAutoBase = (t) => {
-            if (baseId || gypAutoBaseId) return false;
+            if (baseId || wt !== "combo") return false;
             return t.kind === "base" && t.role !== "gyp";
           };
           optsPanel.hidden = false;
-          // A "Base bid" radio toggle per sheet (plus an Auto/combined row for
-          // epoxy/polish/combo). The base row hides its option controls; the
+          // A "Base bid" radio toggle per sheet. Combo additionally retains its
+          // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
             `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
-            (showAutoRow ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>` : "");
+            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = effectiveBaseId === t.id;
@@ -859,11 +879,16 @@
 
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };
-          // Base-bid radios (Auto + one per sheet) — turning one on sets the base.
+          // Base-bid radios — turning one on sets the base.
           optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
             if (!rb.checked) return;
+            const priorBaseId = state.base_tab_id;
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
+            if (state.base_tab_id !== priorBaseId) {
+              const pov = state.price_overrides;
+              if (pov && typeof pov === "object" && !Array.isArray(pov) && pov.single_bid) pov.single_bid = {};
+            }
             applyAndRefresh();
             reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
