@@ -14,6 +14,12 @@
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
 
+  // Bind the ribbon action before document-template initialization. The
+  // function declaration below is hoisted, so this remains safe while ensuring
+  // a template-load failure cannot leave the visible Continue button inert.
+  const earlyGenerateBtn = document.getElementById("generate-btn");
+  if (earlyGenerateBtn) earlyGenerateBtn.onclick = continueToDone;
+
   // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
   // tax treatment has no inline equivalent and drives the price line, so a
   // compact selector lives in the ribbon. Mirror it into the hidden form's
@@ -2385,4 +2391,3 @@
   }
 
   form.addEventListener("submit", continueToDone);
-  document.getElementById("generate-btn").addEventListener("click", continueToDone);
