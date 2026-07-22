@@ -56,6 +56,7 @@ def test_proposal_continue_button_has_a_direct_handoff_listener():
     js = (ROOT / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
 
     assert '<button type="button" id="generate-btn">Continue to Done' in html
+    assert 'src="/js/proposal-review.js?v=' in html
     assert "async function continueToDone(e)" in js
     assert "const earlyGenerateBtn = document.getElementById(\"generate-btn\");" in js
     assert "earlyGenerateBtn.onclick = continueToDone;" in js
