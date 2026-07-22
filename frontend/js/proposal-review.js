@@ -2287,8 +2287,12 @@
     window.location.assign(TW.withDraft("/estimate-review.html"));
   });
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
+  // The visible Continue button sits in the ribbon, outside the intentionally
+  // hidden fields form. Wire it directly instead of relying on the browser's
+  // cross-form submit behavior, which can be skipped when the hidden template
+  // is still mounting. Keep the form listener too for keyboard submission.
+  async function continueToDone(e) {
+    e?.preventDefault();
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";
@@ -2378,4 +2382,7 @@
       lump_sum_display: lumpSumText,
     });
     window.location.assign(TW.withDraft("/done.html"));
-  });
+  }
+
+  form.addEventListener("submit", continueToDone);
+  document.getElementById("generate-btn").addEventListener("click", continueToDone);
