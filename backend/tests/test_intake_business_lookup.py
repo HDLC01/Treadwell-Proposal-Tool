@@ -46,7 +46,6 @@ def test_broken_out_tax_can_change_before_template_rows_mount():
         assert f"const {name} = document.getElementById" in js
         assert f"if ({name}) {name}.textContent" in js
 
-
 def test_proposal_continue_button_has_a_direct_handoff_listener():
     """The ribbon button is outside the hidden form, so it cannot rely on submit."""
     html = (ROOT / "frontend" / "proposal-review.html").read_text(encoding="utf-8")
