@@ -1696,6 +1696,9 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
         raise HTTPException(404, f"Proposal template not found: {template_path.name}")
 
     d = docx.Document(str(template_path))
+    # Original templates differ on whether the value after a WORK label colon
+    # inherits bold. Normalize preview metadata to the generated DOCX.
+    proposal_writer._normalize_work_label_formatting(d)
     blocks = []
     for idx, kind, p_elem, in_block, text, txbx_idx in proposal_writer.iter_editable_blocks(d):
         p = Paragraph(p_elem, d)
@@ -1786,7 +1789,7 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # dict (new fields, changed semantics) wouldn't bust a browser's cached
 # response — it would 304 and keep rendering stale blocks. BUMP THIS whenever
 # the block shape changes. v2: added `price_flat` (flush/bullet-less PRICE rows).
-_BLOCK_SCHEMA_VERSION = "2"
+_BLOCK_SCHEMA_VERSION = "3"
 
 
 def _template_proposal_version(path: Path) -> str:
