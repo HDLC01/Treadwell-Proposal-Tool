@@ -994,7 +994,13 @@
     const baseBid = Math.max(0, lumpSumNumber - salesTax - remodelTax);
     const safe = (v) => (v === undefined || v === null || v === "" ? "0" : v);
 
+    // A generated proposal is persisted back into `mergedValues`.  Seed those
+    // fields first, then let the current screen's computed values win below.
+    // In particular, a previously saved `(tax exempt)` phrase or total must not
+    // overwrite a newly selected "Sales tax broken out" preview.  The live
+    // proposal must show the selected base bid, its sales-tax row, and Total.
     const tokenValues = {
+      ...mergedValues,
       job_name:           safe(mergedValues.project_name),
       project_name:       safe(mergedValues.project_name),
       // Signs the proposal — the field (pre-filled from the signed-in user),
@@ -1063,14 +1069,10 @@
         return remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
                               : "(material sales tax INCLUDED)";
       })(),
-      ...mergedValues,
     };
 
-    // Area (SF / cove LF) tokens are re-assigned AFTER the ...mergedValues spread
-    // so a re-opened, previously-generated draft's persisted epoxy_sf /
-    // area_description (api_generate saves `values` back into the draft) can't
-    // shadow the freshly-resolved sheet-first figures. Non-gyp only; the gyp
-    // block below owns the gyp buckets.
+    // Area (SF / cove LF) tokens are sheet-first. Non-gyp only; the gyp block
+    // below owns the gyp buckets.
     if (workType !== "gyp") {
       tokenValues.epoxy_sf  = epoxySF ? Number(epoxySF).toLocaleString("en-US") : "0";
       tokenValues.polish_sf = polishSF ? Number(polishSF).toLocaleString("en-US") : "0";
