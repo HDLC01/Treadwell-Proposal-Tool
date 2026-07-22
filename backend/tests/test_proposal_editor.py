@@ -186,6 +186,46 @@ def test_paragraph_override_lands_in_docx_with_formatting_preserved():
     assert new_bold == orig_bold
 
 
+def _assert_work_values_are_not_bold(blob):
+    """Every WORK label is bold through its first colon, never beyond it."""
+    d = docx.Document(io.BytesIO(blob))
+    hits = 0
+    for p in pw._iter_all_paragraphs(d):
+        text = p.text
+        colon = text.find(":")
+        if colon < 0 or not any(text.lstrip().startswith(label) for label in
+                                ("System:", "System & Scope:", "Area:", "Scope:",
+                                 "Schedule:", "Exclusions:", "Notes:")):
+            continue
+        hits += 1
+        offset = 0
+        for run in p.runs:
+            end = offset + len(run.text)
+            if run.text and offset <= colon < end:
+                assert run.bold is True, repr(text)
+            elif run.text and offset > colon:
+                assert run.bold is not True, repr(text)
+            offset = end
+    assert hits, "expected at least one formatted WORK line"
+
+
+def test_work_labels_only_are_bold_across_templates_and_overrides():
+    for work_type, audience in (("epoxy", "Direct"), ("epoxy", "GC"),
+                                ("combo", "Direct"), ("gyp", None)):
+        _assert_work_values_are_not_bold(
+            pw.fill_proposal(work_type=work_type, audience=audience, values=_BASE_VALS)
+        )
+
+    # A Proposal Review edit is applied before token substitution, then receives
+    # the exact same label/value formatting treatment as an untouched paragraph.
+    blocks = _blocks_via_walk(_EPOXY_TEMPLATE)
+    scope = _find(blocks, lambda t: t.strip().startswith("Scope:"))
+    _assert_work_values_are_not_bold(pw.fill_proposal(
+        work_type="epoxy", audience="Direct", values=_BASE_VALS,
+        paragraph_overrides=[{"id": scope["id"], "text": "Scope: Custom value"}],
+    ))
+
+
 def test_paragraph_override_inside_block_region_is_rejected():
     blocks = _blocks_via_walk(_EPOXY_TEMPLATE)
     base_bid = _find(blocks, lambda t: t.strip() == "Base Bid")

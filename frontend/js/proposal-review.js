@@ -14,6 +14,12 @@
   const form = document.getElementById("proposal-form");
   TW.writeForm(form, state);
 
+  // Bind the ribbon action before document-template initialization. The
+  // function declaration below is hoisted, so this remains safe while ensuring
+  // a template-load failure cannot leave the visible Continue button inert.
+  const earlyGenerateBtn = document.getElementById("generate-btn");
+  if (earlyGenerateBtn) earlyGenerateBtn.onclick = continueToDone;
+
   // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
   // tax treatment has no inline equivalent and drives the price line, so a
   // compact selector lives in the ribbon. Mirror it into the hidden form's
@@ -439,6 +445,19 @@
     const N = (v) => Number(v) || 0;
     const byId = (id) => all.find(t => t.id === id);
     let baseTab = state.base_tab_id ? byId(state.base_tab_id) : null;
+    // A non-Combo proposal must always name an actual worksheet as its base.
+    // This migrates older null-base drafts before any total is displayed.
+    if (!baseTab && wt !== "combo") {
+      const defaultRole = wt === "polish" ? "polish" : wt === "gyp" ? "gyp" : "epoxy";
+      const defaultId = defaultRole === "gyp" ? GYP_BASE : null;
+      const resolved = all.find(t => t.id === defaultId)
+        || all.find(t => t.role === defaultRole && t.kind === "base")
+        || all.find(t => t.role === defaultRole);
+      if (resolved) {
+        baseTab = resolved;
+        state.base_tab_id = resolved.id;
+      }
+    }
     let shownBase, salesTax, remodelTax;
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
@@ -607,6 +626,12 @@
     const salesRow   = document.getElementById("sales-tax-row");
     const remodelRow = document.getElementById("remodel-tax-row");
     const totalRow   = document.getElementById("total-row");
+    // The template blocks are mounted asynchronously. A tax-mode change can
+    // arrive before its breakout rows are in the document, so retain the state
+    // and paint those rows once mounted instead of throwing and blocking Done.
+    const salesTaxDisplay = document.getElementById("sales-tax-display");
+    const remodelTaxDisplay = document.getElementById("tax-amount-display");
+    const totalDisplay = document.getElementById("total-display");
     const phraseEl   = document.getElementById("base-tax-phrase-display");
     const comboBlock = document.getElementById("combo-price-block");
     const baseBidRow = document.getElementById("base-bid-row");
@@ -649,12 +674,12 @@
           if (baseDisp) { baseDisp.dataset.computed = computedBase; baseDisp.textContent = poValue("single_bid", null, "amount", computedBase); }
           if (phraseEl) { phraseEl.dataset.computed = ""; phraseEl.textContent = poValue("single_bid", null, "tax_phrase", ""); }
         }
-        document.getElementById("sales-tax-display").textContent = fmtUSD(salesTax);
+        if (salesTaxDisplay) salesTaxDisplay.textContent = fmtUSD(salesTax);
         if (salesRow)   salesRow.style.display = "";
         if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-        document.getElementById("tax-amount-display").textContent = fmtUSD(remodelTax);
+        if (remodelTaxDisplay) remodelTaxDisplay.textContent = fmtUSD(remodelTax);
         if (totalRow)   totalRow.style.display = "";
-        document.getElementById("total-display").textContent = fmtUSD(lumpSumN);
+        if (totalDisplay) totalDisplay.textContent = fmtUSD(lumpSumN);
       } else {
         const computedPhrase = exempt ? "(tax exempt)"
           : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
@@ -781,14 +806,21 @@
         if (!allTabs.length) { optsPanel.hidden = true; optsPanel.innerHTML = ""; }
         else {
           const opts = (state.tab_opts && typeof state.tab_opts === "object") ? state.tab_opts : (state.tab_opts = {});
-          const baseId = state.base_tab_id;
-          const autoLabel = wt === "combo" ? "Epoxy + Polish (combined)" : "Auto (work-type default)";
-          // For gyp the "Auto" row resolves to a single listed variant (the gyp
-          // base) — redundant. Suppress it and treat the resolved gyp base as the
-          // effective base. (Combo keeps Auto = "Epoxy + Polish combined".)
-          const gypAutoBaseId = (wt === "gyp" && !baseId) ? GYP_BASE : null;
-          const effectiveBaseId = baseId || gypAutoBaseId;
-          const showAutoRow = !gypAutoBaseId;
+          let baseId = state.base_tab_id;
+          // Keep Combo's named combined base. Every other work type resolves
+          // directly to a real sheet, so the misleading Auto row is gone.
+          if (!baseId && wt !== "combo") {
+            const role = wt === "polish" ? "polish" : wt === "gyp" ? "gyp" : "epoxy";
+            const resolved = allTabs.find(t => t.id === (role === "gyp" ? GYP_BASE : null))
+              || allTabs.find(t => t.role === role && t.kind === "base")
+              || allTabs.find(t => t.role === role);
+            if (resolved) {
+              state.base_tab_id = resolved.id;
+              baseId = resolved.id;
+              TW.setState({ base_tab_id: baseId });
+            }
+          }
+          const effectiveBaseId = baseId;
           // gyp is a priced role, so allTabs carries epoxy/polish + all 5 gyp
           // variants on every job. By default show only the tabs relevant to this
           // work type (mirrors estimate-review.js's chipVisible filter); the
@@ -804,16 +836,16 @@
           // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
           // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
           const isPartOfAutoBase = (t) => {
-            if (baseId || gypAutoBaseId) return false;
+            if (baseId || wt !== "combo") return false;
             return t.kind === "base" && t.role !== "gyp";
           };
           optsPanel.hidden = false;
-          // A "Base bid" radio toggle per sheet (plus an Auto/combined row for
-          // epoxy/polish/combo). The base row hides its option controls; the
+          // A "Base bid" radio toggle per sheet. Combo additionally retains its
+          // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
           let h = `<h3>Pricing options</h3>` +
             `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
-            (showAutoRow ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> ${esc(autoLabel)}</label>` : "");
+            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = effectiveBaseId === t.id;
@@ -859,11 +891,16 @@
 
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); };
-          // Base-bid radios (Auto + one per sheet) — turning one on sets the base.
+          // Base-bid radios — turning one on sets the base.
           optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
             if (!rb.checked) return;
+            const priorBaseId = state.base_tab_id;
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
+            if (state.base_tab_id !== priorBaseId) {
+              const pov = state.price_overrides;
+              if (pov && typeof pov === "object" && !Array.isArray(pov) && pov.single_bid) pov.single_bid = {};
+            }
             applyAndRefresh();
             reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
@@ -969,7 +1006,13 @@
     const baseBid = Math.max(0, lumpSumNumber - salesTax - remodelTax);
     const safe = (v) => (v === undefined || v === null || v === "" ? "0" : v);
 
+    // A generated proposal is persisted back into `mergedValues`.  Seed those
+    // fields first, then let the current screen's computed values win below.
+    // In particular, a previously saved `(tax exempt)` phrase or total must not
+    // overwrite a newly selected "Sales tax broken out" preview.  The live
+    // proposal must show the selected base bid, its sales-tax row, and Total.
     const tokenValues = {
+      ...mergedValues,
       job_name:           safe(mergedValues.project_name),
       project_name:       safe(mergedValues.project_name),
       // Signs the proposal — the field (pre-filled from the signed-in user),
@@ -1038,14 +1081,10 @@
         return remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
                               : "(material sales tax INCLUDED)";
       })(),
-      ...mergedValues,
     };
 
-    // Area (SF / cove LF) tokens are re-assigned AFTER the ...mergedValues spread
-    // so a re-opened, previously-generated draft's persisted epoxy_sf /
-    // area_description (api_generate saves `values` back into the draft) can't
-    // shadow the freshly-resolved sheet-first figures. Non-gyp only; the gyp
-    // block below owns the gyp buckets.
+    // Area (SF / cove LF) tokens are sheet-first. Non-gyp only; the gyp block
+    // below owns the gyp buckets.
     if (workType !== "gyp") {
       tokenValues.epoxy_sf  = epoxySF ? Number(epoxySF).toLocaleString("en-US") : "0";
       tokenValues.polish_sf = polishSF ? Number(polishSF).toLocaleString("en-US") : "0";
@@ -2254,8 +2293,12 @@
     window.location.assign(TW.withDraft("/estimate-review.html"));
   });
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
+  // The visible Continue button sits in the ribbon, outside the intentionally
+  // hidden fields form. Wire it directly instead of relying on the browser's
+  // cross-form submit behavior, which can be skipped when the hidden template
+  // is still mounting. Keep the form listener too for keyboard submission.
+  async function continueToDone(e) {
+    e?.preventDefault();
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";
@@ -2345,4 +2388,6 @@
       lump_sum_display: lumpSumText,
     });
     window.location.assign(TW.withDraft("/done.html"));
-  });
+  }
+
+  form.addEventListener("submit", continueToDone);
