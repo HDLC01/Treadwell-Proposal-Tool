@@ -80,6 +80,24 @@ def _template_xml(rel_path):
         return z.read("word/document.xml").decode("utf-8")
 
 
+def _bodypr_left_inset(docx_bytes, contains):
+    """The left inset (lIns, int EMU) on the DrawingML <a:bodyPr> of the text box
+    whose visible text contains `contains` (the mc:Choice box; the VML mc:Fallback
+    shapes carry no <a:bodyPr>). None if no such box / attr is found."""
+    d = Document(io.BytesIO(docx_bytes))
+    for txbx in pw._iter_txbx(d):
+        txt = "".join(t.text or "" for t in txbx.iter(pw.qn("w:t")))
+        if contains not in txt:
+            continue
+        shape = pw._shape_of_txbx(txbx)
+        if shape is None:
+            continue
+        bp = next((e for e in shape.iter() if e.tag.endswith("}bodyPr")), None)
+        if bp is not None:
+            return int(bp.get("lIns") or 0)
+    return None
+
+
 # Real project: Branson Meadows Home2Suites (soft 27,825 / hard 11,795 /
 # corridor 5,655). Money tokens supplied like the frontend's computeTokenValues.
 def _gyp_vals(**over):
@@ -228,3 +246,39 @@ def test_proposal_template_endpoint_gyp():
     # The editor gets ordered blocks; the notes region is a block group.
     body = r.json()
     assert isinstance(body.get("blocks"), list) and body["blocks"]
+
+
+# ── (g) gyp NOTES box left-inset (clears the baked "NOTES" gutter label) ──────
+def test_gyp_notes_box_left_inset_clears_gutter_label():
+    """The gyp NOTES content box sits ~0.54" left of WORK/PRICE (posH 0.451" vs
+    ~1.0"), all with zero left inset, so its bullets render over the baked-in
+    rotated red "NOTES" gutter label. _pad_frame_boxes gives the gyp NOTES box a
+    left inset so its text clears the label. WORK ("Exclusions") + PRICE ("Base
+    Bid") already start at the right x and must NOT be shifted (guard holds)."""
+    notes = main._notes_for("gyp", [])
+    out = pw.fill_proposal(work_type="gyp", audience="Direct", values=_gyp_vals(), notes=notes)
+    note0 = notes[0]["text"][:18]                      # locate the NOTES box by its 1st bullet
+    ins = _bodypr_left_inset(out, note0)
+    assert ins is not None, "gyp NOTES box not found"
+    assert ins >= pw._GYP_NOTES_LEFT_INSET_EMU, f"gyp NOTES lIns={ins} not padded"
+    assert (_bodypr_left_inset(out, "Base Bid") or 0) < pw._GYP_NOTES_LEFT_INSET_EMU
+    assert (_bodypr_left_inset(out, "Exclusions") or 0) < pw._GYP_NOTES_LEFT_INSET_EMU
+
+
+def test_left_inset_is_gyp_template_only():
+    """The NOTES left-inset is specific to the gyp template's shifted box. A polish
+    proposal — whose NOTES box still gets the TOP inset — must NOT be left-inset,
+    even though it matches the same note-content markers."""
+    notes = main._notes_for("polish", [])
+    pv = {
+        "job_name": "Polish QA", "project_name": "Polish QA", "city_state": "Olathe, KS",
+        "bid_date_formatted": "7/15/26", "system_name": "Polish", "texture": "OP",
+        "epoxy_sf": "0", "polish_sf": "10,000", "cove_lf": "0",
+        "base_bid_formatted": "$14,391.00", "total_formatted": "$16,707.00",
+        "material_tax_formatted": "$0.00", "estimator_name": "Kyle",
+    }
+    out = pw.fill_proposal(work_type="polish", audience="Direct", values=pv, notes=notes)
+    note0 = notes[0]["text"][:18]
+    ins = _bodypr_left_inset(out, note0)
+    assert ins is not None, "polish NOTES box not found"
+    assert ins < pw._GYP_NOTES_LEFT_INSET_EMU, f"polish NOTES wrongly left-inset (lIns={ins})"
