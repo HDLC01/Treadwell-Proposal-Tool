@@ -661,30 +661,44 @@ def _force_terms_on_new_page(d: Document) -> bool:
 # the shrink estimate (which reads the actual inset) accounts for the reduced
 # usable height and can't push the WORK box into overflow.
 _FRAME_BOX_TOP_INSET_EMU = 114300   # ~9pt
+# The gyp template's NOTES content box sits ~0.54" further LEFT than its WORK/PRICE
+# boxes (column-relative posH 0.451" vs 0.991"/1.000"), all with a zero left inset,
+# so its bullets render on top of the baked-in rotated red "NOTES" gutter label
+# (the labels are fixed raster art in the page PNGs — only the content box can move).
+# Left-inset the gyp NOTES box so its text clears the label and left-aligns with the
+# WORK/PRICE text. EMU (1pt=12700); 39pt ~= the 0.54" posH delta. ONLY the gyp NOTES
+# box needs it — polish's NOTES box and gyp's WORK/PRICE already start at the right x.
+_GYP_NOTES_LEFT_INSET_EMU = 495300   # ~39pt (~0.54")
 
 
 def _pad_frame_boxes(d: Document, notes, work_type) -> int:
-    """Top-inset the framed boxes whose first line rides over its border. NOTES on
-    polish + gyp; WORK + PRICE additionally on gyp. Boxes identified by content
-    markers so the DATE/JOB-NAME/estimator header boxes are never touched."""
+    """Inset the framed boxes whose text rides over the baked frame art. TOP-inset
+    (first line hugs the border): NOTES on polish + gyp, WORK + PRICE additionally on
+    gyp. LEFT-inset (bullets overlap the "NOTES" gutter label): the gyp NOTES box
+    only. Boxes identified by content markers so the DATE/JOB-NAME/estimator header
+    boxes are never touched; the left inset is guarded to the NOTES box (a note
+    marker present, no WORK/PRICE marker) so WORK/PRICE are never shifted."""
     wt = str(work_type or "").lower()
     pad_notes = wt in ("polish", "gyp")     # these templates' NOTES box crosses its border
     pad_work_price = wt == "gyp"            # gyp also has WORK + PRICE touching
+    left_inset_notes = wt == "gyp"          # gyp NOTES box also overlaps the left gutter label
     if not (pad_notes or pad_work_price):
         return 0
-    markers = []
+    note_markers, work_price_markers = [], []
     if pad_notes:
         note_keys = [str((n or {}).get("text") or "").strip()[:20] for n in (notes or [])]
-        markers += [k for k in note_keys if len(k) >= 8][:4]
+        note_markers = [k for k in note_keys if len(k) >= 8][:4]
     if pad_work_price:
         # WORK has "Exclusions:"/"Assumptions:"/"per plans"; PRICE has "Base Bid".
-        markers += ["Base Bid", "Exclusions", "Assumptions", "per plans"]
-    if not markers:
+        work_price_markers = ["Base Bid", "Exclusions", "Assumptions", "per plans"]
+    if not (note_markers or work_price_markers):
         return 0
     n = 0
     for txbx in _iter_txbx(d):
         txt = "".join(t.text or "" for t in txbx.iter(qn("w:t")))
-        if not any(m in txt for m in markers):
+        is_notes = any(m in txt for m in note_markers)
+        is_work_price = any(m in txt for m in work_price_markers)
+        if not (is_notes or is_work_price):
             continue
         shape = _shape_of_txbx(txbx)
         if shape is None:
@@ -692,12 +706,20 @@ def _pad_frame_boxes(d: Document, notes, work_type) -> int:
         for bp in shape.iter():
             if bp.tag.endswith("}bodyPr"):
                 try:
-                    cur = int(bp.get("tIns") or 0)
+                    cur_t = int(bp.get("tIns") or 0)
                 except (TypeError, ValueError):
-                    cur = 0
-                if cur < _FRAME_BOX_TOP_INSET_EMU:
+                    cur_t = 0
+                if cur_t < _FRAME_BOX_TOP_INSET_EMU:
                     bp.set("tIns", str(_FRAME_BOX_TOP_INSET_EMU))
                     n += 1
+                if left_inset_notes and is_notes and not is_work_price:
+                    try:
+                        cur_l = int(bp.get("lIns") or 0)
+                    except (TypeError, ValueError):
+                        cur_l = 0
+                    if cur_l < _GYP_NOTES_LEFT_INSET_EMU:
+                        bp.set("lIns", str(_GYP_NOTES_LEFT_INSET_EMU))
+                        n += 1
                 break
     return n
 
