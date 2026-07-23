@@ -35,7 +35,8 @@
     $("root").innerHTML =
       '<h1>Notification Sending</h1>' +
       '<p class="sub">Who gets emailed when a customer approves, replies, asks a question, or submits a deposit or contacts. ' +
-      'Green = receives; gray = off.</p>' +
+      'Green = receives; gray = off. <strong>Toggling a name never sends an email.</strong> It only sets who gets ' +
+      'notified the next time a customer replies, approves, or pays.</p>' +
       '<div class="card">' +
         '<div class="lbl">Team — global default (all projects)</div>' +
         '<div id="nn-alert" class="alert"></div>' +
