@@ -198,7 +198,7 @@
 
         <div class="sec">
           <div class="lbl">Notifications for this project</div>
-          <p class="note" id="nt-help" style="margin:0 0 4px">Green = receives this project's emails. Overrides the global roster for this project only.</p>
+          <p class="note" id="nt-help" style="margin:0 0 4px">Green = receives this project's emails. Overrides the global roster for this project only. Toggling never sends an email; it only sets who's notified when a customer next replies, approves, or pays.</p>
           <div id="nt-alert" class="note" style="margin:4px 0"></div>
           <div id="nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
         </div>
