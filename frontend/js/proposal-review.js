@@ -422,6 +422,48 @@
            ` data-computed="${e(computed)}">${e(shown)}</${tag}>`;
   }
 
+  // ── WHOLE-LINE display overrides (state.price_overrides.lines) ─────────────
+  // Every PRICE line is edited as ONE contenteditable line (click anywhere,
+  // rewrite the whole thing, keep spaces). Stored keyed by a stable line key:
+  //   base · heading_base · sales_tax · remodel · total · heading_options
+  //   combo:<role.line> · option:<id> · manual:<idx> · alt_name/alt_flooring/…
+  // Display-only (backend price_overrides.lines) — never touches the .xlsx/totals.
+  function lineOverride(key) {
+    const pov = state.price_overrides;
+    const lines = (pov && typeof pov === "object" && pov.lines && typeof pov.lines === "object") ? pov.lines : null;
+    const v = lines ? lines[key] : null;
+    return (typeof v === "string" && v.trim()) ? v : null;
+  }
+  function lineValue(key, computed) {
+    const ov = lineOverride(key);
+    return ov != null ? ov : computed;
+  }
+  // Markup for a JS-rendered whole-line (combo / option / manual / alternate).
+  function lineEl(key, computed, opts) {
+    const e = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const shown = lineValue(key, computed);
+    const ov = String(shown) !== String(computed);
+    const style = (opts && opts.style) || "margin:0 0 2pt;";
+    const bold = (opts && opts.bold) ? "font-weight:bold;" : "";
+    return `<p class="tw-priceline tw-line-edit${ov ? " tw-overridden" : ""}" contenteditable="true" spellcheck="false"` +
+           ` data-po-kind="line" data-po-linekey="${e(key)}" data-computed="${e(computed)}"` +
+           (ov ? ` title="${_OVERRIDE_TITLE}"` : "") +
+           ` style="${style}${bold}">${e(shown)}</p>`;
+  }
+  // Repaint a static whole-line element (the base/tax/total/heading <p>s in the
+  // HTML staging): show the override or the freshly-computed line, flag ⚠, set
+  // data-computed for revert. Skip while the caret is inside (self-heals on blur).
+  function paintLine(el, key, computed) {
+    if (!el || focusInside(el)) return;
+    el.dataset.computed = computed;
+    const shown = lineValue(key, computed);
+    el.textContent = shown;
+    const ov = String(shown) !== String(computed);
+    el.classList.toggle("tw-overridden", ov);
+    if (ov) el.title = _OVERRIDE_TITLE; else el.removeAttribute("title");
+  }
+
   // Recompute the base bid + priced options from the per-tab totals snapshotted on
   // the Estimate screen (state.priced_tabs). This lets the base-bid picker + the
   // per-option total/deduct toggles work HERE too, without the sheet engine. It
@@ -601,15 +643,17 @@
     return lines;
   }
 
-  // Combo lines for the GENERATE payload, with display overrides pre-applied to
-  // the pre-formatted amount/label strings (combo docx lines come straight from
-  // payload.combo_options — see backend main._combo_lines — so applying the
-  // overrides here keeps the on-screen preview and the generated doc identical).
+  // Combo lines for the GENERATE payload. A whole-line override replaces the entire
+  // line: send it as the label with an empty amount so the backend's
+  // _strip_leading_separator drops the orphaned " – " and prints the exact line
+  // (combo docx lines come straight from payload.combo_options — see main._combo_lines
+  // — so preview and generated doc match).
   function comboLinesForPayload() {
-    return comboSystemLines().map(l => ({
-      amount_formatted: poValue("combo", l.key, "amount", l.amount_formatted),
-      label: poValue("combo", l.key, "label", l.label),
-    }));
+    return comboSystemLines().map(l => {
+      const ov = lineOverride("combo:" + l.key);
+      return ov != null ? { label: ov, amount_formatted: "" }
+                        : { amount_formatted: l.amount_formatted, label: l.label };
+    });
   }
 
   // Live update the inline $ amounts in the price preview. This preview MIRRORS
@@ -657,58 +701,19 @@
     // The template blocks are mounted asynchronously. A tax-mode change can
     // arrive before its breakout rows are in the document, so retain the state
     // and paint those rows once mounted instead of throwing and blocking Done.
-    const salesTaxDisplay = document.getElementById("sales-tax-display");
-    const remodelTaxDisplay = document.getElementById("tax-amount-display");
-    const totalDisplay = document.getElementById("total-display");
-    const phraseEl   = document.getElementById("base-tax-phrase-display");
     const comboBlock = document.getElementById("combo-price-block");
     const baseBidRow = document.getElementById("base-bid-row");
     const baseBidHeading = document.getElementById("base-bid-heading");
     const comboLines = comboSystemLines();
 
-    // Toggle the ⚠ "edited — differs from the estimate" cue on a painted island.
-    const markOv = (el, shown, computed) => {
-      if (!el) return;
-      const ov = String(shown) !== String(computed);
-      el.classList.toggle("tw-overridden", ov);
-      if (ov) el.title = _OVERRIDE_TITLE; else el.removeAttribute("title");
-    };
-    // Paint a tax row's amount + label islands (Material Sales Tax / Remodel /
-    // Total): honor the display override, set data-computed for revert, flag ⚠.
-    // Skip while the caret is inside the row (a repaint would kill the edit) —
-    // self-heals on the row's focusout re-render.
-    const paintRow = (rowEl, ampEl, labelEl, key, computedAmt, computedLabel) => {
-      if (!rowEl || focusInside(rowEl)) return;
-      if (ampEl) {
-        ampEl.dataset.computed = computedAmt;
-        const shown = poValue("row", key, "amount", computedAmt);
-        ampEl.textContent = shown; markOv(ampEl, shown, computedAmt);
-      }
-      if (labelEl) {
-        labelEl.dataset.computed = computedLabel;
-        const shown = poValue("row", key, "label", computedLabel);
-        labelEl.textContent = shown; markOv(labelEl, shown, computedLabel);
-      }
-    };
-    const salesLabelEl   = document.getElementById("sales-tax-label");
-    const remodelLabelEl = document.getElementById("remodel-tax-label");
-    const totalLabelEl   = document.getElementById("total-label");
-
     if (comboLines.length && comboBlock) {
-      // Combo: show Option 1 (Epoxy) + Option 2 (Polish), each with its own
-      // flooring / tax line(s) / Total; hide the single combined base line AND
-      // the static "Base Bid" heading above it — the Direct combo template keeps
-      // that heading INSIDE {{#single_bid}}, so a generated combo doc starts
-      // straight at "$X – Option 1: …" with no heading at all.
+      // Combo: Option 1 (Epoxy) + Option 2 (Polish) as WHOLE-LINE rows; hide the
+      // single base line + "Base Bid" heading (a combo doc starts at the options).
+      // Don't rebuild mid-edit — self-heals on the block's focusout re-render.
       comboBlock.style.display = "";
-      // Each combo line's amount + label is an editable display-override island
-      // (keyed by its semantic role key). Don't rebuild mid-edit — self-heals on
-      // the block's focusout re-render.
       if (!focusInside(comboBlock)) {
         comboBlock.innerHTML = comboLines.map(l =>
-          `<p class="tw-priceline" style="margin:0 0 2pt;">` +
-          poIsland("combo", l.key, "amount", l.amount_formatted, { strong: true }) + ` – ` +
-          poIsland("combo", l.key, "label", l.label) + `</p>`).join("");
+          lineEl("combo:" + l.key, `${l.amount_formatted} – ${l.label}`)).join("");
       }
       if (baseBidHeading) baseBidHeading.style.display = "none";
       if (baseBidRow) baseBidRow.style.display = "none";
@@ -717,50 +722,28 @@
       if (totalRow)   totalRow.style.display = "none";
     } else {
       if (comboBlock) comboBlock.style.display = "none";
-      if (baseBidHeading) baseBidHeading.style.display = "";
+      if (baseBidHeading) { baseBidHeading.style.display = ""; paintLine(baseBidHeading, "heading_base", "Base Bid"); }
       if (baseBidRow) baseBidRow.style.display = "";
-      // The base amount + tax phrase are editable override islands. Don't repaint
-      // them while the caret is inside #base-bid-row (it would be destroyed) —
-      // self-heals on focusout (which re-runs refreshPriceDisplay). The Total /
-      // Material Sales Tax / Remodel rows stay engine-owned (plain, read-only).
-      const editingBase = focusInside(baseBidRow);
-      const baseDisp = document.getElementById("base-bid-display");
+      const desc = baseDescLabel();
       if (broken) {
-        if (!editingBase) {
-          // Base line keeps cents (fmtUSD): the docx fills it from
-          // base_bid_formatted / total_formatted, both produced by fmtUSD (.00),
-          // NOT through _fmt_usd. Only the option/manual lines (which DO go
-          // through _fmt_usd) use fmtUSDdoc's trailing-.00 strip.
-          const computedBase = fmtUSD(baseBid);
-          if (baseDisp) { baseDisp.dataset.computed = computedBase; const s = poValue("single_bid", null, "amount", computedBase); baseDisp.textContent = s; markOv(baseDisp, s, computedBase); }
-          if (phraseEl) { phraseEl.dataset.computed = ""; const s = poValue("single_bid", null, "tax_phrase", ""); phraseEl.textContent = s; markOv(phraseEl, s, ""); }
-        }
+        // Broken out: base (pre-tax) + Material Sales Tax + Remodel + Total. fmtUSD
+        // keeps cents to match the docx (base_bid_formatted / total_formatted).
+        paintLine(baseBidRow, "base", `${fmtUSD(baseBid)} – ${desc}`);
         if (salesRow)   salesRow.style.display = "";
-        paintRow(salesRow, salesTaxDisplay, salesLabelEl, "sales_tax", fmtUSD(salesTax), "Material Sales Tax");
+        paintLine(salesRow, "sales_tax", `${fmtUSD(salesTax)} – Material Sales Tax`);
         if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-        paintRow(remodelRow, remodelTaxDisplay, remodelLabelEl, "remodel", fmtUSD(remodelTax), "Remodel Tax");
+        paintLine(remodelRow, "remodel", `${fmtUSD(remodelTax)} – Remodel Tax`);
         if (totalRow)   totalRow.style.display = "";
-        paintRow(totalRow, totalDisplay, totalLabelEl, "total", fmtUSD(lumpSumN), "Total");
+        paintLine(totalRow, "total", `${fmtUSD(lumpSumN)} – Total`);
       } else {
+        // Included / exempt: ONE all-in base line; tax rows hidden.
         const computedPhrase = exempt ? "(tax exempt)"
           : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
           : "(material sales tax INCLUDED)";
-        if (!editingBase) {
-          // Base line keeps cents (fmtUSD) to match the docx (total_formatted).
-          const computedBase = fmtUSD(lumpSumN);
-          if (baseDisp) { baseDisp.dataset.computed = computedBase; const s = poValue("single_bid", null, "amount", computedBase); baseDisp.textContent = s; markOv(baseDisp, s, computedBase); }
-          if (phraseEl) { phraseEl.dataset.computed = computedPhrase; const s = poValue("single_bid", null, "tax_phrase", computedPhrase); phraseEl.textContent = s; markOv(phraseEl, s, computedPhrase); }
-        }
+        paintLine(baseBidRow, "base", `${fmtUSD(lumpSumN)} – ${desc} ${computedPhrase}`);
         if (salesRow)   salesRow.style.display = "none";
         if (remodelRow) remodelRow.style.display = "none";
         if (totalRow)   totalRow.style.display = "none";
-      }
-      // Base description island (work-type noun) — mirror the docx base line so
-      // the preview matches, and honor a single_bid.desc override. Guarded like
-      // the amount/phrase so mid-edit typing isn't clobbered by a repaint.
-      if (!editingBase) {
-        const _bd = document.getElementById("base-desc-display");
-        if (_bd) { const _c = baseDescLabel(); _bd.dataset.computed = _c; const s = poValue("single_bid", null, "desc", _c); _bd.textContent = s; markOv(_bd, s, _c); }
       }
     }
     renderProposalExtras();
@@ -835,9 +818,7 @@
             if (notes.length) label += " — " + notes.join("; ");   // inline, matches main.py
             amount = fmtUSDdoc(r.bid.total);
           }
-          return `<p class="tw-priceline" style="margin:0 0 2pt;">` +
-                 poIsland("option", r.id, "amount", amount, { strong: true }) + ` – ` +
-                 poIsland("option", r.id, "label", label) + `</p>`;
+          return lineEl("option:" + r.id, `${amount} – ${label}`);
         }).join("");
         // Manual {{#price_line}} rows AFTER the options. data-po-index is the
         // ORIGINAL price_lines index (not the filtered one) so a skipped/blank row
@@ -847,9 +828,7 @@
           const amt = Number(l.amount || 0);
           const label = (l.label || "").trim();
           if (!amt || !label) return "";
-          return `<p class="tw-priceline" style="margin:0 0 2pt;">` +
-                 poIsland("manual", i, "amount", fmtUSDdoc(amt), { strong: true }) + ` – ` +
-                 poIsland("manual", i, "label", label) + `</p>`;
+          return lineEl("manual:" + i, `${fmtUSDdoc(amt)} – ${label}`);
         }).join("");
         plBlock.innerHTML = html;
         // "Options:" heading visible iff there's ≥1 option or manual price line.
@@ -963,7 +942,14 @@
               // breakout, so their display overrides are stale — clear them (the
               // base-independent alternate block's overrides are kept).
               const pov = state.price_overrides;
-              if (pov && typeof pov === "object" && !Array.isArray(pov)) { pov.single_bid = {}; pov.rows = {}; pov.combo = {}; }
+              if (pov && typeof pov === "object" && !Array.isArray(pov)) {
+                pov.single_bid = {}; pov.rows = {}; pov.combo = {};
+                // Clear base-dependent whole-line overrides; keep the base-independent
+                // alternate block (alt_*).
+                if (pov.lines && typeof pov.lines === "object") {
+                  for (const k of Object.keys(pov.lines)) if (!k.startsWith("alt_")) delete pov.lines[k];
+                }
+              }
             }
             applyAndRefresh();
             reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
@@ -1021,19 +1007,14 @@
     const altFloor   = altTotal - altRemodel;
     const altLabel   = (state.alternate && state.alternate.label)
                        || (acb.alternate && acb.alternate.label) || "Alternate System";
-    // Mirrors the .docx {{#alternate}} block literally: header carries the system
-    // name, the price line reads "Flooring as described above (material sales tax
-    // INCLUDED)", and the tax line is just "Remodel Tax" (no state name). Every
-    // amount + label is an editable display-override island (kind "alt").
-    const A = (field, computed, opts) => poIsland("alt", null, field, computed, opts);
+    // Mirrors the .docx {{#alternate}} block literally, each row a WHOLE-LINE
+    // editable: header (system name), "$X – Flooring as described above (…)",
+    // optional "$X – Remodel Tax", "$X – Total".
     altBlock.innerHTML =
-      `<p class="tw-priceline" style="margin:6pt 0 2pt;font-weight:bold;">ALTERNATE SYSTEM — ` + A("name", altLabel) + `</p>` +
-      `<p class="tw-priceline" style="margin:0 0 2pt;">` + A("flooring_amount", fmtUSD(altFloor), { strong: true }) +
-        ` – ` + A("flooring_label", "Flooring as described above (material sales tax INCLUDED)") + `</p>` +
-      (altRemodel > 0
-        ? `<p class="tw-priceline" style="margin:0 0 2pt;">` + A("remodel_amount", fmtUSD(altRemodel), { strong: true }) + ` – ` + A("remodel_label", "Remodel Tax") + `</p>`
-        : "") +
-      `<p class="tw-priceline" style="margin:0 0 2pt;">` + A("total_amount", fmtUSD(altTotal), { strong: true }) + ` – ` + A("total_label", "Total") + `</p>`;
+      lineEl("alt_name", `ALTERNATE SYSTEM — ${altLabel}`, { bold: true, style: "margin:6pt 0 2pt;" }) +
+      lineEl("alt_flooring", `${fmtUSD(altFloor)} – Flooring as described above (material sales tax INCLUDED)`) +
+      (altRemodel > 0 ? lineEl("alt_remodel", `${fmtUSD(altRemodel)} – Remodel Tax`) : "") +
+      lineEl("alt_total", `${fmtUSD(altTotal)} – Total`);
   }
 
   // ─── Token values (shared by the document fills + the generate payload) ──
@@ -2243,9 +2224,29 @@
     if (!pov.rows || typeof pov.rows !== "object" || Array.isArray(pov.rows)) pov.rows = {};
     if (!pov.combo || typeof pov.combo !== "object" || Array.isArray(pov.combo)) pov.combo = {};
     if (!pov.alternate || typeof pov.alternate !== "object" || Array.isArray(pov.alternate)) pov.alternate = {};
+    if (!pov.lines || typeof pov.lines !== "object" || Array.isArray(pov.lines)) pov.lines = {};
     return pov;
   }
   function _handlePoInput(e) {
+    // WHOLE-LINE edit: the whole <p> is contenteditable (base / tax / total /
+    // combo / option / manual / alternate / headings). Store the full line text
+    // keyed by data-po-linekey. Preserve spaces — collapse only newlines to a
+    // single space (a price line is one line); NEVER trim (leading/trailing
+    // spaces are intentional and must survive to the docx).
+    const lineNode = e.target && e.target.closest ? e.target.closest('[data-po-kind="line"][data-po-linekey]') : null;
+    if (lineNode) {
+      const key = lineNode.dataset.poLinekey;
+      if (!key) return;
+      const v = serializeBlock(lineNode).replace(/\n+/g, " ");
+      const pov = _ensurePov();
+      if (v.trim() === "" || v === (lineNode.dataset.computed || "")) delete pov.lines[key];
+      else pov.lines[key] = v;
+      if (_povTimer) clearTimeout(_povTimer);
+      _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
+      return;
+    }
+    // Legacy per-field islands (retained for back-compat; not emitted by the
+    // current whole-line UI).
     const sp = e.target && e.target.closest ? e.target.closest("[data-po-field]") : null;
     if (!sp) return;
     const kind = sp.dataset.poKind, field = sp.dataset.poField;
@@ -2297,10 +2298,11 @@
       if (!_baseBidRowEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
     });
   }
-  // The tax rows (Material Sales Tax / Remodel / Total), the combo per-option
-  // breakout, and the ALTERNATE SYSTEM block are all now editable island
-  // containers too. Same delegated input + focusout-normalize pattern.
-  ["sales-tax-row", "remodel-tax-row", "total-row", "combo-price-block", "alternate-block"].forEach(id => {
+  // Every whole-line PRICE element: the tax rows, the Base Bid / Options headings,
+  // the combo breakout, and the ALTERNATE SYSTEM block. Same delegated input +
+  // focusout-normalize pattern (base-bid-row + price-lines-block wired above).
+  ["sales-tax-row", "remodel-tax-row", "total-row", "base-bid-heading",
+   "options-heading", "combo-price-block", "alternate-block"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener("input", _handlePoInput);

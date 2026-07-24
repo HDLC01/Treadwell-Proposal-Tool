@@ -1461,7 +1461,7 @@ _PRICE_OVERRIDE_FIELD_MAXLEN = 500
 
 
 def _sanitize_price_overrides(pov_in) -> dict:
-    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}}
+    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {}}
     if not isinstance(pov_in, dict):
         return out
 
@@ -1506,6 +1506,21 @@ def _sanitize_price_overrides(pov_in) -> dict:
         ("name", "flooring_amount", "flooring_label",
          "remodel_amount", "remodel_label", "total_amount", "total_label"),
     )
+
+    # WHOLE-LINE overrides: {<line key>: <full line text>}. Keys are stable line
+    # ids (base, sales_tax, remodel, total, heading_base, heading_options,
+    # combo:<k>, option:<id>, manual:<idx>, alt_name, alt_flooring, alt_remodel,
+    # alt_total). Spaces are PRESERVED (no .strip()) so the estimator's exact line
+    # — leading/trailing/interior spaces and all — reaches the docx; only a
+    # whitespace-only line is dropped (= revert to computed).
+    lines_in = pov_in.get("lines")
+    if isinstance(lines_in, dict):
+        for k, v in list(lines_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if v is None or isinstance(v, (dict, list, bool)):
+                continue
+            s = str(v)
+            if s.strip():
+                out["lines"][str(k)[:120]] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
     return out
 
 
@@ -1946,15 +1961,20 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             amt = 0.0
         if label and amt:
             row = {"label": label, "amount_formatted": _fmt_usd(amt)}
-            # DISPLAY override for this manual line, positional by the ORIGINAL
-            # price_lines index (_i) so a filtered-out row can't shift it onto the
-            # wrong line — the frontend stores overrides at that same raw index.
-            _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
-            if _mov:
-                if _mov.get("label"):
-                    row["label"] = _mov["label"]
-                if _mov.get("amount"):
-                    row["amount_formatted"] = _mov["amount"]
+            # WHOLE-LINE override for this manual line wins: the estimator rewrote the
+            # entire line, so put it in the label and blank the amount (the writer's
+            # _strip_leading_separator drops the orphaned " – " and prints it verbatim).
+            _lov = _pov["lines"].get("manual:" + str(_i))
+            if _lov:
+                row = {"label": _lov, "amount_formatted": ""}
+            else:
+                # Legacy per-field override (positional by ORIGINAL price_lines index).
+                _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
+                if _mov:
+                    if _mov.get("label"):
+                        row["label"] = _mov["label"]
+                    if _mov.get("amount"):
+                        row["amount_formatted"] = _mov["amount"]
             price_line_dicts.append(row)
 
     # Recommended ALTERNATE system -> a 0/1-item {{#alternate}} block + a second
@@ -2013,8 +2033,14 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         if _o.get("notes_joined"):
             _label += " — " + _o["notes_joined"].replace("\n", "; ")
         _amount = _o["price_formatted"]
-        # DISPLAY override for this option line, keyed by the option's id.
         _oid = str(_o.get("id") or "")
+        # WHOLE-LINE override wins (whole line in the label, blank amount → the
+        # writer strips the orphaned separator and prints it verbatim).
+        _olov = _pov["lines"].get("option:" + _oid) if _oid else None
+        if _olov:
+            _option_lines.append({"label": _olov, "amount_formatted": ""})
+            continue
+        # Legacy per-field override, keyed by the option's id.
         _oov = _pov["options"].get(_oid) if _oid else None
         if _oov:
             if _oov.get("label"):
@@ -2123,6 +2149,33 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             _t_amt = _tt.get("amount") or values.get("total_formatted") or ""
             _t_lbl = _tt.get("label") or "Total"
             values["total_label"] = f"{_t_amt} – {_t_lbl}"
+
+    # WHOLE-LINE overrides (state.price_overrides.lines): the estimator rewrote an
+    # ENTIRE line. Display-only. combo/option/manual lines were already folded into
+    # the price_line rows above; base/tax/total/headings/alternate lines are replaced
+    # in place by proposal_writer._apply_line_overrides via private keys. Gated like
+    # the tax rows for base/sales_tax/remodel/total (Direct epoxy/polish/combo);
+    # headings + the alternate block apply wherever the template carries them.
+    _lines = _pov["lines"]
+    if _lines:
+        if _rows_ok:
+            if _lines.get("base"):      values["_line_base"] = _lines["base"]
+            if _lines.get("sales_tax"): values["_line_sales_tax"] = _lines["sales_tax"]
+            if _lines.get("remodel"):   values["_line_remodel"] = _lines["remodel"]
+            if _lines.get("total"):
+                # Polish's Total line is the whole-line {{total_label}} token; epoxy/
+                # combo use "{{total_formatted}} – Total" (replaced in place).
+                if str(payload.work_type or "").lower() == "polish":
+                    values["total_label"] = _lines["total"]
+                else:
+                    values["_line_total"] = _lines["total"]
+        if _lines.get("heading_base"):    values["_line_heading_base"] = _lines["heading_base"]
+        if _lines.get("heading_options"): values["_line_heading_options"] = _lines["heading_options"]
+        if _lines.get("alt_name"):        values["_line_alt_name"] = _lines["alt_name"]
+        if _lines.get("alt_flooring"):    values["_line_alt_flooring"] = _lines["alt_flooring"]
+        if _lines.get("alt_remodel"):     values["_line_alt_remodel"] = _lines["alt_remodel"]
+        if _lines.get("alt_total"):       values["_line_alt_total"] = _lines["alt_total"]
+
     # GC additional-phase amount: force the estimator's cell value into the GC
     # Clarifications text ONLY when they changed it off the $4,500 default; else
     # each GC template keeps its native $5,000/$2,300 wording. Private (underscore)

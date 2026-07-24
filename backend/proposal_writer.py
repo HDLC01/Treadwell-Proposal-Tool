@@ -919,6 +919,54 @@ def _apply_price_label_overrides(d: Document, values) -> int:
     return n
 
 
+# WHOLE-LINE overrides: the estimator rewrote an ENTIRE price/heading/alternate
+# line in the doc editor. main.py passes the full text in a private `_line_*`
+# value; we find the paragraph that carries the line's anchor and REPLACE the
+# whole paragraph text with it (preserving spaces via _set_paragraph_text →
+# xml:space="preserve"). Token anchors ({{...}}) match pre-expansion (item tokens
+# like {{#remodel}}/{{#alternate}} are consumed by expansion); heading anchors
+# match the exact paragraph text. First match per anchor wins; text-box anchor
+# paragraphs are skipped. (`is_token`: True = {{token}} regex, False = literal text.)
+_LINE_ANCHORS = (
+    ("_line_base",            "base_bid_formatted",           True),
+    ("_line_sales_tax",       "material_tax_formatted",       True),
+    ("_line_remodel",         "remodel.amount_formatted",     True),
+    ("_line_total",           "total_formatted",              True),
+    ("_line_alt_name",        "alternate.system_name",        True),
+    ("_line_alt_flooring",    "alternate.lump_sum_formatted", True),
+    ("_line_alt_remodel",     "alternate.remodel_tax",        True),
+    ("_line_alt_total",       "alternate.total_formatted",    True),
+    ("_line_heading_base",    "Base Bid",                     False),
+    ("_line_heading_options", "Options:",                     False),
+)
+
+
+def _apply_line_overrides(d: Document, values) -> int:
+    """Replace an ENTIRE price/heading/alternate line with the estimator's whole-line
+    override. Runs in Phase 0.5 (before block expansion). No-op for any line not set
+    or whose anchor isn't present. Rewrites EVERY matching paragraph — both the
+    mc:Choice and the VML mc:Fallback copies — so no un-replaced copy keeps the
+    token and renders the computed line (same reach as _apply_price_label_overrides)."""
+    n = 0
+    for key, anchor, is_token in _LINE_ANCHORS:
+        text = values.get(key)
+        if text is None:
+            continue
+        text = str(text)
+        pat = re.compile(r"\{\{\s*" + re.escape(anchor) + r"\s*\}\}") if is_token else None
+        for p in d.element.body.iter(qn("w:p")):
+            # Skip anchor paragraphs that merely CONTAIN a text box (their inner
+            # <w:p> are visited on their own) — same nesting guard as the others.
+            if p.find(".//" + _TXBX_CONTENT) is not None:
+                continue
+            ptext = "".join(t.text or "" for t in p.iter(qn("w:t")))
+            hit = pat.search(ptext) if is_token else (ptext.strip() == anchor)
+            if hit:
+                _set_paragraph_text(p, text)
+                n += 1
+    return n
+
+
 # Cove-only WORK rows: after the flat {{token}} fill, an epoxy system with 0 SF
 # but a cove clause reads "Area: ~0 SF of epoxy flooring and <n> LF …". Drop the
 # meaningless "~0 SF of epoxy flooring and " prefix so it reads "Area: <n> LF …"
@@ -1615,10 +1663,15 @@ def fill_proposal(
         # {{#notes}} — editable boilerplate notes (one bullet per item).
         "notes": list(notes or []),
     }
-    # Phase 0.5 — rewrite PRICE/ALTERNATE row LABELS (static text trailing an amount
-    # token) from the doc editor's display overrides. BEFORE block expansion so the
+    # Phase 0.5 — doc-editor display overrides, BEFORE block expansion so the
     # {{#remodel}} / {{#alternate}} item-token anchors still exist (expansion
-    # consumes them). No-op unless a `_*_label_override` private key is set.
+    # consumes them). WHOLE-LINE overrides first (they replace the entire line and
+    # drop the token), then per-field LABEL overrides (a no-op on any line already
+    # whole-line-replaced, since its anchor token is gone). No-op unless a private
+    # `_line_*` / `_*_label_override` key is set.
+    _n_line = _apply_line_overrides(d, values)
+    if _n_line:
+        log.info("Applied %d whole-line PRICE override(s)", _n_line)
     _n_lbl = _apply_price_label_overrides(d, values)
     if _n_lbl:
         log.info("Applied %d PRICE/ALTERNATE label override(s)", _n_lbl)
