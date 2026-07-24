@@ -883,7 +883,7 @@
           // A "Base bid" radio toggle per sheet. Combo additionally retains its
           // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
-          let h = `<h3>Pricing options</h3>` +
+          let h = `<div class="op-drag" title="Drag to move">Pricing options</div>` +
             `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
             (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
@@ -2310,6 +2310,50 @@
       if (!el.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }
     });
   });
+
+  // Pricing options is a FLOATING, MOVABLE widget: drag its header to reposition
+  // it (so it never has to sit over the document or the top controls). One-time
+  // init — the panel element is stable; its .op-drag header is rebuilt on each
+  // render, so pointerdown is delegated. Position persists in localStorage.
+  (function initOptionsPanelDrag() {
+    const panel = document.getElementById("options-panel");
+    if (!panel) return;
+    try {
+      const p = JSON.parse(localStorage.getItem("tw_opts_pos") || "null");
+      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)) {
+        panel.style.left = p.left + "px"; panel.style.top = p.top + "px"; panel.style.right = "auto";
+      }
+    } catch {}
+    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    panel.addEventListener("pointerdown", (e) => {
+      const h = e.target.closest && e.target.closest(".op-drag");
+      if (!h || !panel.contains(h)) return;
+      const r = panel.getBoundingClientRect();
+      dragging = true; ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
+      panel.style.left = ox + "px"; panel.style.top = oy + "px"; panel.style.right = "auto";
+      panel.classList.add("op-dragging");
+      try { h.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+    });
+    panel.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const w = panel.offsetWidth || 240;
+      let nl = ox + (e.clientX - sx), nt = oy + (e.clientY - sy);
+      nl = Math.max(4, Math.min(nl, window.innerWidth - w - 4));
+      nt = Math.max(4, Math.min(nt, window.innerHeight - 40));      // keep the drag header on-screen
+      panel.style.left = nl + "px"; panel.style.top = nt + "px";
+    });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false; panel.classList.remove("op-dragging");
+      try {
+        localStorage.setItem("tw_opts_pos", JSON.stringify({
+          left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 }));
+      } catch {}
+    };
+    panel.addEventListener("pointerup", end);
+    panel.addEventListener("pointercancel", end);
+  })();
 
   initDocumentEditor();
 
