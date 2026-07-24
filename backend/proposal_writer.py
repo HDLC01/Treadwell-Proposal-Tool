@@ -875,6 +875,50 @@ def _apply_gc_phase_override(d: Document, amount: str) -> int:
     return n
 
 
+# PRICE tax-row + ALTERNATE labels ("Material Sales Tax", "Remodel Tax", "Total",
+# "Flooring as described above (…)") are STATIC text trailing their amount token,
+# not tokens themselves. When the estimator overrides a label in the doc editor,
+# main.py sets a private `_*_label_override` value; we rewrite the text that
+# trails the anchor token IN PLACE, preserving runs. Each anchor maps a private
+# key to the {{token}} that immediately precedes the label. MUST run in Phase 0.5
+# (before block expansion) so the {{#remodel}} / {{#alternate}} ITEM tokens are
+# still present as anchors — expansion consumes them.
+_PRICE_LABEL_ANCHORS = (
+    ("_sales_tax_label_override",    "material_tax_formatted"),
+    ("_remodel_label_override",      "remodel.amount_formatted"),
+    ("_total_label_override",        "total_formatted"),
+    ("_alt_flooring_label_override", "alternate.lump_sum_formatted"),
+    ("_alt_remodel_label_override",  "alternate.remodel_tax"),
+    ("_alt_total_label_override",    "alternate.total_formatted"),
+)
+
+
+def _apply_price_label_overrides(d: Document, values) -> int:
+    """Rewrite each PRICE/ALTERNATE row's static LABEL (the text after its amount
+    token) to the estimator's override, preserving runs. Anchored on the amount
+    token + separator so the token stays for the flat pass to fill. No-op for any
+    label not set; never touches a row whose anchor token isn't present."""
+    n = 0
+    for key, anchor in _PRICE_LABEL_ANCHORS:
+        label = values.get(key)
+        if not label:
+            continue
+        label = str(label)
+        # "{{ anchor }} <sep> <rest-of-line>" → keep the token+separator, replace the
+        # trailing label. repl returns None once the tail already equals the label
+        # (stops the loop) — the token keeps `{{`, so require_braces stays satisfied.
+        pat = re.compile(r"(\{\{\s*" + re.escape(anchor) + r"\s*\}\}\s*[–—-]\s*)(.*)$", re.DOTALL)
+        def _repl(m, _lbl=label):
+            return None if m.group(2) == _lbl else m.group(1) + _lbl
+        for p in d.element.body.iter(qn("w:p")):
+            # Skip text-box anchor paragraphs (their inner <w:p> are visited on
+            # their own) — same nesting guard as _apply_gc_phase_override.
+            if p.find(".//" + _TXBX_CONTENT) is not None:
+                continue
+            n += _sub_runs_preserving(p, pat, _repl)
+    return n
+
+
 # Cove-only WORK rows: after the flat {{token}} fill, an epoxy system with 0 SF
 # but a cove clause reads "Area: ~0 SF of epoxy flooring and <n> LF …". Drop the
 # meaningless "~0 SF of epoxy flooring and " prefix so it reads "Area: <n> LF …"
@@ -1571,6 +1615,13 @@ def fill_proposal(
         # {{#notes}} — editable boilerplate notes (one bullet per item).
         "notes": list(notes or []),
     }
+    # Phase 0.5 — rewrite PRICE/ALTERNATE row LABELS (static text trailing an amount
+    # token) from the doc editor's display overrides. BEFORE block expansion so the
+    # {{#remodel}} / {{#alternate}} item-token anchors still exist (expansion
+    # consumes them). No-op unless a `_*_label_override` private key is set.
+    _n_lbl = _apply_price_label_overrides(d, values)
+    if _n_lbl:
+        log.info("Applied %d PRICE/ALTERNATE label override(s)", _n_lbl)
     n_blocks = _expand_all_blocks(d, block_lists)
     if n_blocks:
         log.info("Expanded %d repeatable block(s)", n_blocks)

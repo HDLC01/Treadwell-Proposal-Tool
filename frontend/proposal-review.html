@@ -595,10 +595,12 @@
        generated doc has no heading here either — refreshPriceDisplay hides
        #base-bid-heading to match (see proposal-review.js). -->
   <div id="combo-price-block" style="display:none;"></div>
-  <!-- The base AMOUNT, DESCRIPTION, and tax phrase are editable display-override
-       islands (.tw-fill-edit) — see proposal-review.js price_overrides. The " – "
-       separator stays plain (matches the docx, where it's outside the override).
-       The Material Sales Tax / Remodel / Total rows below stay PLAIN (engine math). -->
+  <!-- Every PRICE line is an editable display-override island (.tw-fill-edit):
+       base bid amount/description/tax-phrase AND the Material Sales Tax / Remodel /
+       Total rows (amount AND label). Edits are DISPLAY-ONLY (state.price_overrides →
+       backend applies to the docx text; the estimate .xlsx + totals never change).
+       The " – " separator stays plain (matches the docx). An edited island shows a
+       ⚠ reminder that the doc now differs from the computed estimate. -->
   <p id="base-bid-row" class="tw-priceline" style="margin: 0 0 2pt;">
     <strong class="tw-fill tw-fill-edit" id="base-bid-display" contenteditable="true" spellcheck="false"
             data-po-kind="single_bid" data-po-field="amount" data-computed="">$0</strong> – <span class="tw-fill tw-fill-edit" id="base-desc-display" contenteditable="true" spellcheck="false"
@@ -607,13 +609,19 @@
         data-po-kind="single_bid" data-po-field="tax_phrase" data-computed="">(material sales tax INCLUDED)</em>
   </p>
   <p id="sales-tax-row" class="tw-priceline" style="margin: 0 0 2pt; display:none;">
-    <strong class="tw-fill" id="sales-tax-display">$0</strong> – Material Sales Tax
+    <strong class="tw-fill tw-fill-edit" id="sales-tax-display" contenteditable="true" spellcheck="false"
+            data-po-kind="row" data-po-row="sales_tax" data-po-field="amount" data-computed="">$0</strong> – <span class="tw-fill tw-fill-edit" id="sales-tax-label" contenteditable="true" spellcheck="false"
+          data-po-kind="row" data-po-row="sales_tax" data-po-field="label" data-computed="Material Sales Tax">Material Sales Tax</span>
   </p>
   <p id="remodel-tax-row" class="tw-priceline" style="margin: 0 0 2pt; display:none;">
-    <strong class="tw-fill" id="tax-amount-display">$0</strong> – Remodel Tax
+    <strong class="tw-fill tw-fill-edit" id="tax-amount-display" contenteditable="true" spellcheck="false"
+            data-po-kind="row" data-po-row="remodel" data-po-field="amount" data-computed="">$0</strong> – <span class="tw-fill tw-fill-edit" id="remodel-tax-label" contenteditable="true" spellcheck="false"
+          data-po-kind="row" data-po-row="remodel" data-po-field="label" data-computed="Remodel Tax">Remodel Tax</span>
   </p>
   <p id="total-row" class="tw-priceline" style="margin: 0 0 4pt;">
-    <strong class="tw-fill" id="total-display">$0</strong> – Total
+    <strong class="tw-fill tw-fill-edit" id="total-display" contenteditable="true" spellcheck="false"
+            data-po-kind="row" data-po-row="total" data-po-field="amount" data-computed="">$0</strong> – <span class="tw-fill tw-fill-edit" id="total-label" contenteditable="true" spellcheck="false"
+          data-po-kind="row" data-po-row="total" data-po-field="label" data-computed="Total">Total</span>
   </p>
   <!-- "Options:" heading — mirrors the {{#has_options}}Options:{{/has_options}}
        label nested at the END of the .docx {{#single_bid}} group. Mounted LAST
@@ -635,7 +643,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
 <script src="/auth.js"></script>
 <script src="/shared.js"></script>
-<script src="/js/proposal-review.js?v=20260722-1"></script>
+<script src="/js/proposal-review.js?v=20260724-1"></script>
 
 </body>
 </html>

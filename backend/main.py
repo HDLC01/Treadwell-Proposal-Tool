@@ -1438,23 +1438,30 @@ def _sanitize_sheet_systems(systems_in: list) -> list:
 
 # Cap + coerce the doc editor's price_overrides. DISPLAY-ONLY: these override the
 # TEXT shown on the proposal's PRICE lines (base bid, priced options, manual price
-# lines) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals. Mirrors
-# _sanitize_system_overrides (str()-coerce, .strip(), drop a blank field = "revert
-# to computed", per-field maxlen, never raises). Normalized shape:
+# lines, the Material Sales Tax / Remodel / Total tax rows, and the ALTERNATE
+# SYSTEM block) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals.
+# Mirrors _sanitize_system_overrides (str()-coerce, .strip(), drop a blank field =
+# "revert to computed", per-field maxlen, never raises). Normalized shape:
 #   {"options":    {<option id>: {label?, amount?}},
 #    "manual":     [{label?, amount?}, ...],   # index-preserving, {} placeholders
-#    "single_bid": {amount?, tax_phrase?}}
+#    "single_bid": {amount?, tax_phrase?, desc?},
+#    "rows":       {sales_tax?: {amount?, label?}, remodel?: {...}, total?: {...}},
+#    "alternate":  {name?, flooring_amount?, flooring_label?, remodel_amount?,
+#                   remodel_label?, total_amount?, total_label?}}
 # `manual` is index-preserving (a malformed/blank entry -> {} in place) so a
 # filtered-out price line can't shift a later override onto the wrong row — same
-# rationale as _sanitize_system_overrides. An option entry that cleans to {} is
-# dropped (a blank override = revert). Never raises: a stale draft or hand-built
-# request must not 500 /api/generate.
+# rationale as _sanitize_system_overrides. An option/row entry that cleans to {} is
+# dropped (a blank override = revert). The combo per-option breakout's overrides do
+# NOT live here — they travel PRE-APPLIED inside payload.combo_options (sanitized
+# separately in api_generate), so the on-screen combo preview and the docx match by
+# construction. Never raises: a stale draft or hand-built request must not 500
+# /api/generate.
 _PRICE_OVERRIDES_MAX = 100
 _PRICE_OVERRIDE_FIELD_MAXLEN = 500
 
 
 def _sanitize_price_overrides(pov_in) -> dict:
-    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}}
+    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}}
     if not isinstance(pov_in, dict):
         return out
 
@@ -1483,6 +1490,22 @@ def _sanitize_price_overrides(pov_in) -> dict:
             out["manual"].append(clean(m, ("label", "amount")))   # keep {} holes in place
 
     out["single_bid"] = clean(pov_in.get("single_bid"), ("amount", "tax_phrase", "desc"))
+
+    # Tax rows (Material Sales Tax / Remodel / Total): amount + label per row. Only
+    # the three fixed keys; a blank/garbage row cleans to {} and is dropped (revert).
+    rows_in = pov_in.get("rows")
+    if isinstance(rows_in, dict):
+        for rk in ("sales_tax", "remodel", "total"):
+            entry = clean(rows_in.get(rk), ("amount", "label"))
+            if entry:
+                out["rows"][rk] = entry
+
+    # ALTERNATE SYSTEM block: name + each row's amount/label.
+    out["alternate"] = clean(
+        pov_in.get("alternate"),
+        ("name", "flooring_amount", "flooring_label",
+         "remodel_amount", "remodel_label", "total_amount", "total_label"),
+    )
     return out
 
 
@@ -1955,6 +1978,27 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         alternate_arg = {"sf": alt_meta.get("sf"),
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
+        # Doc-editor DISPLAY overrides for the ALTERNATE SYSTEM block (name + each
+        # row's amount/label). Display-only — updates the {{#alternate}} docx item
+        # only; alternate_arg (the .xlsx tab) keeps the COMPUTED figures. Amounts
+        # ride the item dict; static labels via private keys rewritten in place by
+        # proposal_writer._apply_price_label_overrides.
+        _aov = _pov["alternate"]
+        if _aov:
+            if _aov.get("name"):
+                alternates[0]["system_name"] = _aov["name"]
+            if _aov.get("flooring_amount"):
+                alternates[0]["lump_sum_formatted"] = _aov["flooring_amount"]
+            if _aov.get("remodel_amount"):
+                alternates[0]["remodel_tax"] = _aov["remodel_amount"]
+            if _aov.get("total_amount"):
+                alternates[0]["total_formatted"] = _aov["total_amount"]
+            if _aov.get("flooring_label"):
+                values["_alt_flooring_label_override"] = _aov["flooring_label"]
+            if _aov.get("remodel_label"):
+                values["_alt_remodel_label_override"] = _aov["remodel_label"]
+            if _aov.get("total_label"):
+                values["_alt_total_label_override"] = _aov["total_label"]
 
     # Non-base priced options. Render them through the existing {{#price_line}}
     # block (which sits under the "Options:" heading, right after the base bid),
@@ -2041,6 +2085,44 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # per-template default to drift, no regression for GC/Gyp variants).
     if _pov["single_bid"].get("desc"):
         values["_base_desc_override"] = _pov["single_bid"]["desc"]
+
+    # Doc-editor DISPLAY overrides for the tax rows (Material Sales Tax / Remodel /
+    # Total) — amount + label, display-only. Applied AFTER the tax layout so the
+    # included-mode base collapse (base_bid_formatted = total_formatted, above) ran
+    # on the COMPUTED total and can't pick up an override. Gated to the Direct
+    # epoxy/polish/combo templates whose tax rows are engine-owned blocks (the
+    # editable islands only mount there); gyp/GC tax rows are FREE paragraphs edited
+    # via paragraph_overrides, so a stale row override must never touch them. Amount
+    # tokens (material_tax_formatted / total_formatted) and the {{#remodel}} item
+    # amount ride the values dict / _remodel_lines; the static row LABELS are
+    # rewritten in place by proposal_writer._apply_price_label_overrides via private
+    # keys (only set when overridden, so each template keeps its own wording).
+    _rows_ok = (str(payload.work_type or "").lower() in ("epoxy", "polish", "combo")
+                and str(payload.audience or "Direct").strip().lower() != "gc")
+    if _rows_ok:
+        _st = _pov["rows"].get("sales_tax") or {}
+        if _st.get("amount"):
+            values["material_tax_formatted"] = _st["amount"]
+        if _st.get("label"):
+            values["_sales_tax_label_override"] = _st["label"]
+        _rm = _pov["rows"].get("remodel") or {}
+        if _rm.get("amount"):
+            for _rl in _remodel_lines:
+                _rl["amount_formatted"] = _rm["amount"]
+        if _rm.get("label"):
+            values["_remodel_label_override"] = _rm["label"]
+        _tt = _pov["rows"].get("total") or {}
+        if _tt.get("amount"):
+            values["total_formatted"] = _tt["amount"]
+        if _tt.get("label"):
+            values["_total_label_override"] = _tt["label"]
+        # Polish's Total line is a single {{total_label}} token ("$X – Total"), not
+        # "{{total_formatted}} – Total" — recompose it when either part is overridden
+        # (matches the frontend format `${fmtUSD(total)} – Total`).
+        if _tt.get("amount") or _tt.get("label"):
+            _t_amt = _tt.get("amount") or values.get("total_formatted") or ""
+            _t_lbl = _tt.get("label") or "Total"
+            values["total_label"] = f"{_t_amt} – {_t_lbl}"
     # GC additional-phase amount: force the estimator's cell value into the GC
     # Clarifications text ONLY when they changed it off the $4,500 default; else
     # each GC template keeps its native $5,000/$2,300 wording. Private (underscore)

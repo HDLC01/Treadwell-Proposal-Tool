@@ -42,12 +42,19 @@ def test_broken_out_tax_preview_uses_current_total_and_total_label():
 
 
 def test_broken_out_tax_can_change_before_template_rows_mount():
-    """An early tax selector change must not block the Proposal → Done handoff."""
+    """An early tax selector change must not block the Proposal → Done handoff:
+    the tax-row display elements are looked up defensively and written ONLY
+    through the guarded paintRow helper, so a tax-mode change before the price
+    region mounts (elements still absent) can't throw."""
     js = (ROOT / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
 
     for name in ("salesTaxDisplay", "remodelTaxDisplay", "totalDisplay"):
         assert f"const {name} = document.getElementById" in js
-        assert f"if ({name}) {name}.textContent" in js
+    # The amounts paint through paintRow, which bails when its row is absent and
+    # guards each element before writing — no unguarded .textContent assignment.
+    assert "const paintRow = (rowEl, ampEl, labelEl," in js
+    assert "if (!rowEl || focusInside(rowEl)) return;" in js
+    assert "if (ampEl) {" in js
 
 
 def test_proposal_continue_button_has_a_direct_handoff_listener():
