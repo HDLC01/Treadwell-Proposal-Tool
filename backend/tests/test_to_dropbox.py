@@ -21,6 +21,19 @@ def test_destination_map_has_three_with_verified_paths():
         assert p.startswith("/2023 Treadwell Team Folder/Estimating/")
 
 
+def test_commercial_owner_subfolders():
+    # Verified live 2026-07-24: these are the per-person folders under Commercial Sales.
+    assert dc.COMMERCIAL_OWNER_SUBFOLDERS == {
+        "liz": "*Liz", "kyle": "*Kyle", "troy": "*Troy", "hanz": "*Hanz", "rj": "*RJ"}
+    assert dc.commercial_owner_subfolder("Kyle") == "*Kyle"     # case-insensitive
+    assert dc.commercial_owner_subfolder("  rj ") == "*RJ"      # trimmed
+    assert dc.commercial_owner_subfolder("") == ""             # blank → category folder
+    assert dc.commercial_owner_subfolder(None) == ""           # none → category folder
+    assert dc.commercial_owner_subfolder("nobody") == ""       # unknown → category folder
+    # the base commercial destination stays the category root (no *Name baked in)
+    assert "*" not in dc.ESTIMATING_DESTINATIONS["commercial"]
+
+
 def test_simple_folder_path_is_date_space_name_no_marker():
     base = dc.ESTIMATING_DESTINATIONS["gyp"]
     got = dc._simple_folder_path(base, "Fuel House", "2026-07-10")
