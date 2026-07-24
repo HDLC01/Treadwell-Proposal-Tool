@@ -25,6 +25,8 @@ def test_proposal_base_picker_has_no_noncombo_auto_default():
     assert "Auto (work-type default)" not in js
     assert "wt === \"combo\" ? `<label class=\"pr-baserow\"" in js
     assert "pov.single_bid = {}" in js
+
+
 def test_broken_out_tax_preview_uses_current_total_and_total_label():
     """Persisted draft tokens must not mask the newly selected tax treatment."""
     js = (ROOT / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
@@ -38,13 +40,21 @@ def test_broken_out_tax_preview_uses_current_total_and_total_label():
     assert "total_label:        `${fmtUSD(lumpSumNumber)} – Total`" in values
     assert "if (m.broken) return \"\";" in values
 
+
 def test_broken_out_tax_can_change_before_template_rows_mount():
-    """An early tax selector change must not block the Proposal → Done handoff."""
+    """An early tax selector change must not block the Proposal → Done handoff:
+    the tax-row line elements are looked up defensively and painted ONLY through
+    the guarded paintLine helper, so a tax-mode change before the price region
+    mounts (elements still absent) can't throw."""
     js = (ROOT / "frontend" / "js" / "proposal-review.js").read_text(encoding="utf-8")
 
-    for name in ("salesTaxDisplay", "remodelTaxDisplay", "totalDisplay"):
-        assert f"const {name} = document.getElementById" in js
-        assert f"if ({name}) {name}.textContent" in js
+    for row_id in ('sales-tax-row', 'remodel-tax-row', 'total-row'):
+        assert f'getElementById("{row_id}")' in js
+    # Each whole-line row paints through paintLine, which no-ops when the element
+    # is absent (or focused) — no unguarded .textContent write can throw.
+    assert "function paintLine(el, key, computed)" in js
+    assert "if (!el || focusInside(el)) return;" in js
+
 
 def test_proposal_continue_button_has_a_direct_handoff_listener():
     """The ribbon button is outside the hidden form, so it cannot rely on submit."""

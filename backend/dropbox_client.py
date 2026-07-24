@@ -41,6 +41,25 @@ DESTINATION_LABELS: dict[str, str] = {
     "commercial":  "Commercial Sales Estimates",
 }
 
+# Per-person sub-folders inside $Commercial Sales Estimates (verified live via a
+# read-only files_list_folder 2026-07-24). A blank/unknown owner files into the
+# category folder itself. Only Commercial Sales has these; Gyp / Plans & Specs
+# always use their category folder.
+COMMERCIAL_OWNER_SUBFOLDERS: dict[str, str] = {
+    "liz":  "*Liz",
+    "kyle": "*Kyle",
+    "troy": "*Troy",
+    "hanz": "*Hanz",
+    "rj":   "*RJ",
+}
+
+
+def commercial_owner_subfolder(owner: str | None) -> str:
+    """Sub-folder under $Commercial Sales Estimates for the chosen owner.
+    Blank/unknown owner → "" (file into the category folder itself)."""
+    return COMMERCIAL_OWNER_SUBFOLDERS.get((owner or "").strip().lower(), "")
+
+
 # Every project folder is a COPY of this bid template (Docs/ + Numbers 5.7.26/
 # with the blank estimate sheet, proposal templates, disclaimer, terms + daf
 # tool). The step-5 flow copies it, then files the filled estimate + proposal

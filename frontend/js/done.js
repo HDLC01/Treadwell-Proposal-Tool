@@ -380,6 +380,9 @@
     // Send to the inline recipient list shown above (no popup). Every recipient
     // gets a secure link + full portal access (view / ask / approve).
     mountPortalRecipients();
+    // Restore a previously-typed customer message (so a re-send keeps it).
+    const _msgEl = document.getElementById("portal-message");
+    if (_msgEl) { try { _msgEl.value = TW.getState().portal_message || ""; } catch {} }
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
@@ -393,9 +396,12 @@
         portalBtn.disabled = true; portalBtn.textContent = "Sending\u2026";
         if (portalRecip.setBusy) portalRecip.setBusy(true);
         if (portalRecip.setErr) portalRecip.setErr("");
+        const msgEl = document.getElementById("portal-message");
+        const message = (msgEl && msgEl.value || "").trim();
         try {
-          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), { emails });
+          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), { emails, message });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+          TW.setState({ portal_message: message });   // remember for a re-send
           // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
           // The intake is restored from contact_email on the next mount; persisting it
           // here would re-add an edited/retargeted intake as a stray extra on reload.

@@ -328,12 +328,23 @@
      gets matching left+right padding so the centered document never sits
      under either rail. */
   .options-panel {
-    position: fixed; right: 16px; top: 112px; width: 240px;
-    max-height: calc(100vh - 132px); overflow-y: auto;
+    position: fixed; right: 16px; top: 150px; width: 240px;
+    max-height: calc(100vh - 170px); overflow-y: auto;
     background: #fff; border: 1px solid #ccc; border-radius: 8px;
     padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
     z-index: 40; font-size: 13px; color: #222;
   }
+  /* Draggable header — the panel is a FLOATING, MOVABLE widget. Starts below the
+     top ribbon (top:150px) so it never covers the Back / TAX / Generate controls;
+     the estimator can then drag it anywhere. Position persists in localStorage. */
+  .options-panel .op-drag {
+    cursor: move; user-select: none; font-size: 12px; font-weight: 700; color: #c8102e;
+    margin: -12px -14px 8px; padding: 7px 14px; border-bottom: 1px solid #eee;
+    border-radius: 8px 8px 0 0; background: #faf7f7; display: flex; align-items: center; gap: 6px;
+    position: sticky; top: -12px;
+  }
+  .options-panel .op-drag::before { content: "\2630"; font-size: 12px; opacity: .7; }  /* ☰ grip */
+  .options-panel.op-dragging { opacity: .93; box-shadow: 0 6px 20px rgba(0,0,0,.28); }
   /* Keep the centered proposal page clear of the right rail when the rail is shown. */
   body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 272px; }
   /* The left "Proposal fields" rail is redundant — the document is fully
@@ -588,33 +599,28 @@
      loads they're MOVED into the matching read-only region of the document;
      if the template fetch fails they're shown as a fallback preview. -->
 <div id="price-preview-staging" hidden>
-  <p id="base-bid-heading" style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
+  <p id="base-bid-heading" class="tw-line-edit" contenteditable="true" spellcheck="false"
+     data-po-kind="line" data-po-linekey="heading_base" data-computed="Base Bid" style="margin: 0 0 2pt; font-weight: bold;">Base Bid</p>
   <!-- Combo per-option breakout (Option 1 Epoxy / Option 2 Polish); shown
        instead of the single base line when work_type=combo (combined). The
        Direct combo template keeps "Base Bid" INSIDE {{#single_bid}}, so the
        generated doc has no heading here either — refreshPriceDisplay hides
        #base-bid-heading to match (see proposal-review.js). -->
   <div id="combo-price-block" style="display:none;"></div>
-  <!-- The base AMOUNT, DESCRIPTION, and tax phrase are editable display-override
-       islands (.tw-fill-edit) — see proposal-review.js price_overrides. The " – "
-       separator stays plain (matches the docx, where it's outside the override).
-       The Material Sales Tax / Remodel / Total rows below stay PLAIN (engine math). -->
-  <p id="base-bid-row" class="tw-priceline" style="margin: 0 0 2pt;">
-    <strong class="tw-fill tw-fill-edit" id="base-bid-display" contenteditable="true" spellcheck="false"
-            data-po-kind="single_bid" data-po-field="amount" data-computed="">$0</strong> – <span class="tw-fill tw-fill-edit" id="base-desc-display" contenteditable="true" spellcheck="false"
-          data-po-kind="single_bid" data-po-field="desc" data-computed="">Epoxy flooring as described above</span>
-    <em class="tw-fill tw-fill-edit" id="base-tax-phrase-display" contenteditable="true" spellcheck="false"
-        data-po-kind="single_bid" data-po-field="tax_phrase" data-computed="">(material sales tax INCLUDED)</em>
-  </p>
-  <p id="sales-tax-row" class="tw-priceline" style="margin: 0 0 2pt; display:none;">
-    <strong class="tw-fill" id="sales-tax-display">$0</strong> – Material Sales Tax
-  </p>
-  <p id="remodel-tax-row" class="tw-priceline" style="margin: 0 0 2pt; display:none;">
-    <strong class="tw-fill" id="tax-amount-display">$0</strong> – Remodel Tax
-  </p>
-  <p id="total-row" class="tw-priceline" style="margin: 0 0 4pt;">
-    <strong class="tw-fill" id="total-display">$0</strong> – Total
-  </p>
+  <!-- Every PRICE line is a WHOLE-LINE editable display-override (.tw-line-edit):
+       click anywhere on the line and rewrite the entire thing, spaces and all.
+       Edits are DISPLAY-ONLY (state.price_overrides.lines → backend applies to the
+       docx line text; the estimate .xlsx + totals never change). An edited line
+       shows a ⚠ reminder that the doc now differs from the computed estimate. The
+       element text = the full computed line until the estimator overrides it. -->
+  <p id="base-bid-row" class="tw-priceline tw-line-edit" contenteditable="true" spellcheck="false"
+     data-po-kind="line" data-po-linekey="base" data-computed="" style="margin: 0 0 2pt;">$0 – Epoxy flooring as described above</p>
+  <p id="sales-tax-row" class="tw-priceline tw-line-edit" contenteditable="true" spellcheck="false"
+     data-po-kind="line" data-po-linekey="sales_tax" data-computed="" style="margin: 0 0 2pt; display:none;">$0 – Material Sales Tax</p>
+  <p id="remodel-tax-row" class="tw-priceline tw-line-edit" contenteditable="true" spellcheck="false"
+     data-po-kind="line" data-po-linekey="remodel" data-computed="" style="margin: 0 0 2pt; display:none;">$0 – Remodel Tax</p>
+  <p id="total-row" class="tw-priceline tw-line-edit" contenteditable="true" spellcheck="false"
+     data-po-kind="line" data-po-linekey="total" data-computed="" style="margin: 0 0 4pt;">$0 – Total</p>
   <!-- "Options:" heading — mirrors the {{#has_options}}Options:{{/has_options}}
        label nested at the END of the .docx {{#single_bid}} group. Mounted LAST
        in the single_bid region; shown iff there's ≥1 option or manual price
@@ -622,7 +628,9 @@
   <!-- ~24pt top margin ≈ the 2 blank paragraphs the writer inserts before the
        Options heading (_space_before_options), so the preview spacing after the
        Total matches the generated .docx. -->
-  <p id="options-heading" style="font-weight:bold;display:none;margin:24pt 0 1pt;">Options:</p>
+  <p id="options-heading" class="tw-line-edit" contenteditable="true" spellcheck="false"
+     data-po-kind="line" data-po-linekey="heading_options" data-computed="Options:"
+     style="font-weight:bold;display:none;margin:24pt 0 1pt;">Options:</p>
   <!-- Per-room priced options (per-room jobs): read-only preview; manual
        notes are edited in the pricing-options rail. -->
   <div id="rooms-block"></div>
@@ -635,7 +643,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
 <script src="/auth.js"></script>
 <script src="/shared.js"></script>
-<script src="/js/proposal-review.js?v=20260722-1"></script>
+<script src="/js/proposal-review.js?v=20260725-1"></script>
 
 </body>
 </html>
