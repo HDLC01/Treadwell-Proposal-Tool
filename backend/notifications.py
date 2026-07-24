@@ -43,6 +43,7 @@ _LOCK = threading.Lock()
 _MEM_STATE: Dict[str, Any] = {}        # fallback when the volume isn't writable
 _PIPELINE_TTL_S = 55                   # don't re-diff Basisboard more often than this
 _PIPELINE_KEEP_DAYS = 30               # prune pipeline change events older than this
+_PORTAL_MSG_TTL_S = 55                 # don't re-poll the portal for messages more often than this
 _MAX_ITEMS = 60
 _TZ_NAME = "America/Chicago"
 _EPOCH = "1970-01-01T00:00:00+00:00"
@@ -183,6 +184,62 @@ def _refresh_pipeline(state: Dict[str, Any]) -> None:
     state["pipeline_synced_at"] = now_iso
 
 
+# ── customer portal messages ───────────────────────────────────────────
+def _refresh_portal_messages(state: Dict[str, Any]) -> None:
+    """Poll the portal's admin API for the newest customer messages (chat +
+    inbound-email replies) and cache them in `state`. Throttled + best-effort:
+    an unconfigured portal or any HTTP/parse error keeps the previous cache and
+    never raises (the bell just shows no new messages). Mutates `state` in place.
+
+    The staff tool never touches the portal_* tables directly — it calls the
+    SERVICE_TOKEN-gated admin endpoint, same as main.py's _portal() proxy."""
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        return
+    synced_at = state.get("portal_msgs_synced_at")
+    if synced_at:
+        try:
+            if (_now() - datetime.fromisoformat(synced_at)).total_seconds() < _PORTAL_MSG_TTL_S:
+                return
+        except Exception:              # noqa: BLE001 - bad stored value → refresh anyway
+            pass
+    import httpx
+    try:
+        with httpx.Client(timeout=8.0, headers={"X-Service-Token": token}) as c:
+            resp = c.get(base + "/api/admin/recent-messages")
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:           # noqa: BLE001 - never let the portal break the bell
+        log.warning("portal messages fetch failed: %s", exc)
+        return
+    if not data.get("ok"):
+        return
+    state["portal_messages"] = data.get("messages") or []
+    state["portal_msgs_synced_at"] = _now_iso()
+
+
+def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Map the cached portal messages onto bell items. `sort:-1` floats them above
+    every other section; the id (`pmsg:<row id>`) lets the frontend dedupe toasts."""
+    out: List[Dict[str, Any]] = []
+    for r in (state.get("portal_messages") or []):
+        rid = r.get("id")
+        if rid is None:
+            continue
+        who = r.get("customer_name") or r.get("author_email") or "A customer"
+        proj = r.get("project_name") or "a project"
+        pid = r.get("proposal_id")
+        out.append({
+            "id": f"pmsg:{rid}", "kind": "portal_message", "icon": "💬",
+            "severity": "high", "sort": -1, "ts": r.get("created_at") or _EPOCH,
+            "title": f"{who} · {proj}",
+            "body": r.get("body") or "New message",
+            "link": f"/portal.html?open={pid}" if pid else "/portal.html",
+        })
+    return out
+
+
 # ── deadlines ──────────────────────────────────────────────────────────
 def _parse_date(s: Optional[str]):
     if not s:
@@ -278,6 +335,10 @@ def get_notifications() -> Dict[str, Any]:
             _refresh_pipeline(state)
         except Exception as exc:       # noqa: BLE001 - never let the pipeline break the bell
             log.warning("pipeline refresh failed: %s", exc)
+        try:
+            _refresh_portal_messages(state)
+        except Exception as exc:       # noqa: BLE001 - never let the portal break the bell
+            log.warning("portal messages refresh failed: %s", exc)
         _save_state(state)
         last_seen = state.get("last_seen_at") or _EPOCH
 
@@ -291,8 +352,9 @@ def get_notifications() -> Dict[str, Any]:
     for e in (state.get("pipeline_events") or []):
         items.append(e)
     items.extend(_dropbox_notifications())
+    items.extend(_portal_message_notifications(state))
 
-    # Section order (overdue→today→soon→pipeline→no-deadline), newest-first within.
+    # Section order (messages→overdue→today→soon→pipeline→no-deadline), newest-first within.
     items.sort(key=lambda x: x.get("ts") or "", reverse=True)
     items.sort(key=lambda x: x.get("sort", 3))
     unread = sum(1 for x in items if (x.get("ts") or "") > last_seen)
