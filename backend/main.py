@@ -464,8 +464,11 @@ _MAX_PORTAL_EMAILS = 10
 
 class PortalPublishIn(BaseModel):
     """Optional body for /api/portal/publish — extra portal recipients typed on
-    the Files screen (the intake contact is always included by the portal)."""
+    the Files screen (the intake contact is always included by the portal), plus an
+    optional custom `message` the estimator types on the Done page (shown in the
+    customer's proposal-ready email)."""
     emails: list[str] = Field(default_factory=list)
+    message: str = ""
 
 
 def _clean_portal_emails(raw: list) -> list:
@@ -507,6 +510,10 @@ def api_portal_publish(draft_id: str, request: Request,
     emails = _clean_portal_emails(payload.emails if payload else [])
     if emails:
         body["emails"] = emails
+    # Optional custom message for the customer's proposal-ready email (capped).
+    msg = (payload.message if payload else "").strip()
+    if msg:
+        body["message"] = msg[:2000]
     return _portal("/api/admin/publish", "POST", body)
 
 
@@ -1438,23 +1445,30 @@ def _sanitize_sheet_systems(systems_in: list) -> list:
 
 # Cap + coerce the doc editor's price_overrides. DISPLAY-ONLY: these override the
 # TEXT shown on the proposal's PRICE lines (base bid, priced options, manual price
-# lines) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals. Mirrors
-# _sanitize_system_overrides (str()-coerce, .strip(), drop a blank field = "revert
-# to computed", per-field maxlen, never raises). Normalized shape:
+# lines, the Material Sales Tax / Remodel / Total tax rows, and the ALTERNATE
+# SYSTEM block) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals.
+# Mirrors _sanitize_system_overrides (str()-coerce, .strip(), drop a blank field =
+# "revert to computed", per-field maxlen, never raises). Normalized shape:
 #   {"options":    {<option id>: {label?, amount?}},
 #    "manual":     [{label?, amount?}, ...],   # index-preserving, {} placeholders
-#    "single_bid": {amount?, tax_phrase?}}
+#    "single_bid": {amount?, tax_phrase?, desc?},
+#    "rows":       {sales_tax?: {amount?, label?}, remodel?: {...}, total?: {...}},
+#    "alternate":  {name?, flooring_amount?, flooring_label?, remodel_amount?,
+#                   remodel_label?, total_amount?, total_label?}}
 # `manual` is index-preserving (a malformed/blank entry -> {} in place) so a
 # filtered-out price line can't shift a later override onto the wrong row — same
-# rationale as _sanitize_system_overrides. An option entry that cleans to {} is
-# dropped (a blank override = revert). Never raises: a stale draft or hand-built
-# request must not 500 /api/generate.
+# rationale as _sanitize_system_overrides. An option/row entry that cleans to {} is
+# dropped (a blank override = revert). The combo per-option breakout's overrides do
+# NOT live here — they travel PRE-APPLIED inside payload.combo_options (sanitized
+# separately in api_generate), so the on-screen combo preview and the docx match by
+# construction. Never raises: a stale draft or hand-built request must not 500
+# /api/generate.
 _PRICE_OVERRIDES_MAX = 100
 _PRICE_OVERRIDE_FIELD_MAXLEN = 500
 
 
 def _sanitize_price_overrides(pov_in) -> dict:
-    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}}
+    out: Dict[str, Any] = {"options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {}}
     if not isinstance(pov_in, dict):
         return out
 
@@ -1483,6 +1497,37 @@ def _sanitize_price_overrides(pov_in) -> dict:
             out["manual"].append(clean(m, ("label", "amount")))   # keep {} holes in place
 
     out["single_bid"] = clean(pov_in.get("single_bid"), ("amount", "tax_phrase", "desc"))
+
+    # Tax rows (Material Sales Tax / Remodel / Total): amount + label per row. Only
+    # the three fixed keys; a blank/garbage row cleans to {} and is dropped (revert).
+    rows_in = pov_in.get("rows")
+    if isinstance(rows_in, dict):
+        for rk in ("sales_tax", "remodel", "total"):
+            entry = clean(rows_in.get(rk), ("amount", "label"))
+            if entry:
+                out["rows"][rk] = entry
+
+    # ALTERNATE SYSTEM block: name + each row's amount/label.
+    out["alternate"] = clean(
+        pov_in.get("alternate"),
+        ("name", "flooring_amount", "flooring_label",
+         "remodel_amount", "remodel_label", "total_amount", "total_label"),
+    )
+
+    # WHOLE-LINE overrides: {<line key>: <full line text>}. Keys are stable line
+    # ids (base, sales_tax, remodel, total, heading_base, heading_options,
+    # combo:<k>, option:<id>, manual:<idx>, alt_name, alt_flooring, alt_remodel,
+    # alt_total). Spaces are PRESERVED (no .strip()) so the estimator's exact line
+    # — leading/trailing/interior spaces and all — reaches the docx; only a
+    # whitespace-only line is dropped (= revert to computed).
+    lines_in = pov_in.get("lines")
+    if isinstance(lines_in, dict):
+        for k, v in list(lines_in.items())[:_PRICE_OVERRIDES_MAX]:
+            if v is None or isinstance(v, (dict, list, bool)):
+                continue
+            s = str(v)
+            if s.strip():
+                out["lines"][str(k)[:120]] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
     return out
 
 
@@ -1923,15 +1968,20 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             amt = 0.0
         if label and amt:
             row = {"label": label, "amount_formatted": _fmt_usd(amt)}
-            # DISPLAY override for this manual line, positional by the ORIGINAL
-            # price_lines index (_i) so a filtered-out row can't shift it onto the
-            # wrong line — the frontend stores overrides at that same raw index.
-            _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
-            if _mov:
-                if _mov.get("label"):
-                    row["label"] = _mov["label"]
-                if _mov.get("amount"):
-                    row["amount_formatted"] = _mov["amount"]
+            # WHOLE-LINE override for this manual line wins: the estimator rewrote the
+            # entire line, so put it in the label and blank the amount (the writer's
+            # _strip_leading_separator drops the orphaned " – " and prints it verbatim).
+            _lov = _pov["lines"].get("manual:" + str(_i))
+            if _lov:
+                row = {"label": _lov, "amount_formatted": ""}
+            else:
+                # Legacy per-field override (positional by ORIGINAL price_lines index).
+                _mov = _pov["manual"][_i] if _i < len(_pov["manual"]) else None
+                if _mov:
+                    if _mov.get("label"):
+                        row["label"] = _mov["label"]
+                    if _mov.get("amount"):
+                        row["amount_formatted"] = _mov["amount"]
             price_line_dicts.append(row)
 
     # Recommended ALTERNATE system -> a 0/1-item {{#alternate}} block + a second
@@ -1955,6 +2005,27 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         alternate_arg = {"sf": alt_meta.get("sf"),
                          "material_sub": alt_meta.get("material_sub"),
                          "label": alt_label}
+        # Doc-editor DISPLAY overrides for the ALTERNATE SYSTEM block (name + each
+        # row's amount/label). Display-only — updates the {{#alternate}} docx item
+        # only; alternate_arg (the .xlsx tab) keeps the COMPUTED figures. Amounts
+        # ride the item dict; static labels via private keys rewritten in place by
+        # proposal_writer._apply_price_label_overrides.
+        _aov = _pov["alternate"]
+        if _aov:
+            if _aov.get("name"):
+                alternates[0]["system_name"] = _aov["name"]
+            if _aov.get("flooring_amount"):
+                alternates[0]["lump_sum_formatted"] = _aov["flooring_amount"]
+            if _aov.get("remodel_amount"):
+                alternates[0]["remodel_tax"] = _aov["remodel_amount"]
+            if _aov.get("total_amount"):
+                alternates[0]["total_formatted"] = _aov["total_amount"]
+            if _aov.get("flooring_label"):
+                values["_alt_flooring_label_override"] = _aov["flooring_label"]
+            if _aov.get("remodel_label"):
+                values["_alt_remodel_label_override"] = _aov["remodel_label"]
+            if _aov.get("total_label"):
+                values["_alt_total_label_override"] = _aov["total_label"]
 
     # Non-base priced options. Render them through the existing {{#price_line}}
     # block (which sits under the "Options:" heading, right after the base bid),
@@ -1969,8 +2040,14 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
         if _o.get("notes_joined"):
             _label += " — " + _o["notes_joined"].replace("\n", "; ")
         _amount = _o["price_formatted"]
-        # DISPLAY override for this option line, keyed by the option's id.
         _oid = str(_o.get("id") or "")
+        # WHOLE-LINE override wins (whole line in the label, blank amount → the
+        # writer strips the orphaned separator and prints it verbatim).
+        _olov = _pov["lines"].get("option:" + _oid) if _oid else None
+        if _olov:
+            _option_lines.append({"label": _olov, "amount_formatted": ""})
+            continue
+        # Legacy per-field override, keyed by the option's id.
         _oov = _pov["options"].get(_oid) if _oid else None
         if _oov:
             if _oov.get("label"):
@@ -2041,6 +2118,71 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # per-template default to drift, no regression for GC/Gyp variants).
     if _pov["single_bid"].get("desc"):
         values["_base_desc_override"] = _pov["single_bid"]["desc"]
+
+    # Doc-editor DISPLAY overrides for the tax rows (Material Sales Tax / Remodel /
+    # Total) — amount + label, display-only. Applied AFTER the tax layout so the
+    # included-mode base collapse (base_bid_formatted = total_formatted, above) ran
+    # on the COMPUTED total and can't pick up an override. Gated to the Direct
+    # epoxy/polish/combo templates whose tax rows are engine-owned blocks (the
+    # editable islands only mount there); gyp/GC tax rows are FREE paragraphs edited
+    # via paragraph_overrides, so a stale row override must never touch them. Amount
+    # tokens (material_tax_formatted / total_formatted) and the {{#remodel}} item
+    # amount ride the values dict / _remodel_lines; the static row LABELS are
+    # rewritten in place by proposal_writer._apply_price_label_overrides via private
+    # keys (only set when overridden, so each template keeps its own wording).
+    _rows_ok = (str(payload.work_type or "").lower() in ("epoxy", "polish", "combo")
+                and str(payload.audience or "Direct").strip().lower() != "gc")
+    if _rows_ok:
+        _st = _pov["rows"].get("sales_tax") or {}
+        if _st.get("amount"):
+            values["material_tax_formatted"] = _st["amount"]
+        if _st.get("label"):
+            values["_sales_tax_label_override"] = _st["label"]
+        _rm = _pov["rows"].get("remodel") or {}
+        if _rm.get("amount"):
+            for _rl in _remodel_lines:
+                _rl["amount_formatted"] = _rm["amount"]
+        if _rm.get("label"):
+            values["_remodel_label_override"] = _rm["label"]
+        _tt = _pov["rows"].get("total") or {}
+        if _tt.get("amount"):
+            values["total_formatted"] = _tt["amount"]
+        if _tt.get("label"):
+            values["_total_label_override"] = _tt["label"]
+        # Polish's Total line is a single {{total_label}} token ("$X – Total"), not
+        # "{{total_formatted}} – Total" — recompose it when either part is overridden
+        # (matches the frontend format `${fmtUSD(total)} – Total`).
+        if _tt.get("amount") or _tt.get("label"):
+            _t_amt = _tt.get("amount") or values.get("total_formatted") or ""
+            _t_lbl = _tt.get("label") or "Total"
+            values["total_label"] = f"{_t_amt} – {_t_lbl}"
+
+    # WHOLE-LINE overrides (state.price_overrides.lines): the estimator rewrote an
+    # ENTIRE line. Display-only. combo/option/manual lines were already folded into
+    # the price_line rows above; base/tax/total/headings/alternate lines are replaced
+    # in place by proposal_writer._apply_line_overrides via private keys. Gated like
+    # the tax rows for base/sales_tax/remodel/total (Direct epoxy/polish/combo);
+    # headings + the alternate block apply wherever the template carries them.
+    _lines = _pov["lines"]
+    if _lines:
+        if _rows_ok:
+            if _lines.get("base"):      values["_line_base"] = _lines["base"]
+            if _lines.get("sales_tax"): values["_line_sales_tax"] = _lines["sales_tax"]
+            if _lines.get("remodel"):   values["_line_remodel"] = _lines["remodel"]
+            if _lines.get("total"):
+                # Polish's Total line is the whole-line {{total_label}} token; epoxy/
+                # combo use "{{total_formatted}} – Total" (replaced in place).
+                if str(payload.work_type or "").lower() == "polish":
+                    values["total_label"] = _lines["total"]
+                else:
+                    values["_line_total"] = _lines["total"]
+        if _lines.get("heading_base"):    values["_line_heading_base"] = _lines["heading_base"]
+        if _lines.get("heading_options"): values["_line_heading_options"] = _lines["heading_options"]
+        if _lines.get("alt_name"):        values["_line_alt_name"] = _lines["alt_name"]
+        if _lines.get("alt_flooring"):    values["_line_alt_flooring"] = _lines["alt_flooring"]
+        if _lines.get("alt_remodel"):     values["_line_alt_remodel"] = _lines["alt_remodel"]
+        if _lines.get("alt_total"):       values["_line_alt_total"] = _lines["alt_total"]
+
     # GC additional-phase amount: force the estimator's cell value into the GC
     # Clarifications text ONLY when they changed it off the $4,500 default; else
     # each GC template keeps its native $5,000/$2,300 wording. Private (underscore)
@@ -2403,6 +2545,7 @@ def api_notifications_seen(request: Request) -> Dict[str, Any]:
 class ToDropboxIn(BaseModel):
     draft_id: str
     destination: str   # "gyp" | "plans_specs" | "commercial"
+    folder_owner: str | None = None   # Commercial Sales only: blank/None = category folder, else "liz"/"kyle"/"troy"/"hanz"/"rj"
 
 
 @app.post("/api/to-dropbox")
@@ -2416,6 +2559,13 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     base_path = dropbox_client.ESTIMATING_DESTINATIONS.get(payload.destination)
     if not base_path:
         return {"ok": False, "error": "Unknown destination folder."}
+    # Commercial Sales can file into a per-person sub-folder (*Liz, *Kyle, …); a
+    # blank owner — and every other category — files into the category folder itself.
+    owner_subfolder = ""
+    if payload.destination == "commercial":
+        owner_subfolder = dropbox_client.commercial_owner_subfolder(payload.folder_owner)
+        if owner_subfolder:
+            base_path = f"{base_path}/{owner_subfolder}"
     row = drafts.load_draft(payload.draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
@@ -2481,6 +2631,7 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
                          {"destination": payload.destination,
                           "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
+                          "folder_owner": payload.folder_owner,
                           "project_name": _vals.get("project_name") or _vals.get("job_name"),
                           "folder": result.get("folder_path"),
                           "folder_url": result.get("folder_url")})
@@ -2490,6 +2641,7 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             cur = (drafts.load_draft(payload.draft_id) or {}).get("data") or {}
             cur["dropbox_result"] = {
                 "destination": payload.destination,
+                "folder_owner": payload.folder_owner,
                 "folder_path": result.get("folder_path"),
                 "folder_url": result.get("folder_url"),
                 "xlsx_url": result.get("xlsx_url"),
