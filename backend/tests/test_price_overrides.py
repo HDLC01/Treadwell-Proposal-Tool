@@ -167,7 +167,7 @@ def test_sanitize_price_overrides_caps_and_coerces():
     assert len(long_one["single_bid"]["amount"]) == main._PRICE_OVERRIDE_FIELD_MAXLEN
     # non-dict input never raises
     assert main._sanitize_price_overrides("nope") == {
-        "options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}}
+        "options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}, "lines": {}}
 
 
 # ── unit: tax-row + alternate sanitize (new keys) ──────────────────────────
@@ -279,6 +279,80 @@ def test_malformed_rows_alternate_never_500():
             "price_overrides": {"rows": "nope", "alternate": ["bad"], "combo": {"x": 1}}}
     r = client.post("/api/generate", json=body)
     assert r.status_code == 200, r.text
+
+
+# ── WHOLE-LINE overrides (price_overrides.lines): edit any line, keep spaces ──
+def _xml(docx_bytes):
+    import zipfile
+    return zipfile.ZipFile(io.BytesIO(docx_bytes)).read("word/document.xml").decode("utf-8")
+
+
+def test_sanitize_lines_preserves_spaces_and_drops_blank():
+    out = main._sanitize_price_overrides({"lines": {
+        "base": "  keep  leading/interior/trailing  ",   # spaces preserved (NO strip)
+        "sales_tax": "   ",                                # whitespace-only → dropped (revert)
+        "total": 42,                                       # coerced to "42"
+        "bad": {"n": 1},                                   # non-scalar → skipped
+    }})
+    assert out["lines"]["base"] == "  keep  leading/interior/trailing  "
+    assert "sales_tax" not in out["lines"]
+    assert out["lines"]["total"] == "42"
+    assert "bad" not in out["lines"]
+    # legacy payload → empty lines map
+    assert main._sanitize_price_overrides({"single_bid": {"amount": "$1"}})["lines"] == {}
+
+
+def test_whole_line_overrides_land_with_spaces_and_no_leak():
+    vals = dict(_VALS); vals["tax_inclusion"] = "BROKEN_OUT"
+    lines = {"base": "CUSTOM base  with   spaces", "sales_tax": "  Leading and trailing  ",
+             "total": "$99,999 GRAND TOTAL", "heading_base": "PRICING"}
+    body = {"work_type": "epoxy", "audience": "Direct", "values": vals,
+            "remodel": [{"amount_formatted": "$1,200.00"}],
+            "price_overrides": {"lines": lines}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    docx_bytes = client.get(r.json()["docx_download_url"]).content
+    rows = _rendered(docx_bytes).split("\n")                # NB: _rendered .strip()s each line
+    assert "CUSTOM base  with   spaces" in rows          # interior spaces preserved
+    assert "$99,999 GRAND TOTAL" in rows
+    assert "PRICING" in rows
+    # Leading + trailing spaces survive in the DOCX itself (the render helper strips
+    # per-line, so assert against the raw XML, where the text is literal).
+    xml = _xml(docx_bytes)
+    assert "  Leading and trailing  " in xml
+    assert 'xml:space="preserve"' in xml                  # spaces are hard-preserved
+    # No computed leftovers (both mc:Choice + mc:Fallback copies replaced).
+    blob = _rendered(docx_bytes)
+    assert "$2,639.00" not in blob and "$36,763.00" not in blob and "$58,523.00" not in blob
+
+
+def test_whole_line_option_and_manual_render_verbatim():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS), "rooms": _rooms(),
+            "price_lines": [{"label": "Add VE", "amount": 2500}],
+            "price_overrides": {"lines": {
+                "option:Copy1": "Whole custom option line — no separator",
+                "manual:0": "Whole custom manual line"}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "Whole custom option line — no separator" in blob
+    assert "Whole custom manual line" in blob
+    assert "Quartz Double Broadcast" not in blob          # computed option label replaced
+
+
+def test_whole_line_gate_leaves_gyp_computed():
+    vals = {"work_type": "gyp", "job_name": "J", "city_state": "Branson, MO",
+            "bid_date_formatted": "7/10/26", "gyp_soft_sf": "100", "gyp_hard_sf": "50",
+            "gyp_corridor_sf": "25", "base_bid_formatted": "$98,000.00",
+            "material_tax_formatted": "$5,364.00", "tax_amount_formatted": "$0.00",
+            "total_formatted": "$103,364.00", "estimator_name": "Kyle"}
+    body = {"work_type": "gyp", "audience": "Direct", "values": vals,
+            "price_overrides": {"lines": {"base": "HACKED", "sales_tax": "HACKED2"}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "HACKED" not in blob                            # base/tax lines gated off for gyp
+    assert "$5,364.00" in blob                             # gyp keeps computed (paragraph channel)
 
 
 # ── option override composes with the "Options:" label + ordering ──────────

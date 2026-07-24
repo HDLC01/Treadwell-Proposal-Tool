@@ -791,6 +791,29 @@ button {
 .tw-note-blank { list-style: none; min-height: 0.95em; }
 .tw-note-blank::marker { content: ""; }
 
+/* WHOLE-LINE editable PRICE lines (base / tax rows / total / combo / options /
+   alternate / headings): click anywhere and rewrite the whole line. pre-wrap so
+   typed spaces (incl. leading/trailing/multiple) render and survive to the docx. */
+.tw-line-edit {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  outline: none;
+  cursor: text;
+  border-radius: 2px;
+}
+.tw-line-edit:hover { background: rgba(200, 16, 46, 0.05); }
+.tw-line-edit:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.4); }
+.tw-line-edit:empty { min-height: 1.1em; }
+/* Edited whole-line: subtle amber wash + ⚠ reminder that it differs from the estimate. */
+.tw-line-edit.tw-overridden { background: rgba(255, 207, 63, 0.28); }
+.tw-line-edit.tw-overridden::after {
+  content: " \26A0";
+  font-size: 0.72em;
+  color: #b26a00;
+  vertical-align: super;
+  cursor: help;
+}
+
 /* ⚠ reminder: this value was hand-edited off the computed estimate. The printed
    proposal shows the edited text; the estimate sheet + on-screen totals are
    unchanged. Shown on price islands (base / tax rows / combo / options / alternate)
