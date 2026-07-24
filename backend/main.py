@@ -464,8 +464,11 @@ _MAX_PORTAL_EMAILS = 10
 
 class PortalPublishIn(BaseModel):
     """Optional body for /api/portal/publish — extra portal recipients typed on
-    the Files screen (the intake contact is always included by the portal)."""
+    the Files screen (the intake contact is always included by the portal), plus an
+    optional custom `message` the estimator types on the Done page (shown in the
+    customer's proposal-ready email)."""
     emails: list[str] = Field(default_factory=list)
+    message: str = ""
 
 
 def _clean_portal_emails(raw: list) -> list:
@@ -507,6 +510,10 @@ def api_portal_publish(draft_id: str, request: Request,
     emails = _clean_portal_emails(payload.emails if payload else [])
     if emails:
         body["emails"] = emails
+    # Optional custom message for the customer's proposal-ready email (capped).
+    msg = (payload.message if payload else "").strip()
+    if msg:
+        body["message"] = msg[:2000]
     return _portal("/api/admin/publish", "POST", body)
 
 
