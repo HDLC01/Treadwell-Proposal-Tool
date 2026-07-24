@@ -202,7 +202,15 @@
            fixed row, the estimator adds/removes extras, then the button sends to
            the whole list. Populated by done.js (mountPortalRecipients). -->
       <div id="portal-recipients" class="portal-recip"></div>
-      <button id="portal-btn" class="btn-primary" type="button" style="padding:12px 20px;">↗ Send to customer portal</button>
+      <!-- Optional custom message included in the customer's proposal-ready email
+           (rendered above the "View your proposal" button). -->
+      <label for="portal-message" class="hint" style="display:block;margin:12px 0 4px;font-weight:600;">
+        Message to the customer <span style="font-weight:400;">(optional — included in the email)</span>
+      </label>
+      <textarea id="portal-message" rows="3" maxlength="2000"
+                placeholder="e.g. Thanks for meeting today — here's your proposal. Let me know if you have any questions."
+                style="width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--surface-dim,#ccc);border-radius:6px;resize:vertical;"></textarea>
+      <button id="portal-btn" class="btn-primary" type="button" style="padding:12px 20px;margin-top:10px;">↗ Send to customer portal</button>
       <p id="portal-result" class="hint" style="display:none;margin-top:12px;"></p>
       <p class="hint" style="margin-top:8px;">Each recipient gets a secure link to view, ask questions, and approve online.</p>
     </div>
