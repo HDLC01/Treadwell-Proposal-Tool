@@ -2403,6 +2403,7 @@ def api_notifications_seen(request: Request) -> Dict[str, Any]:
 class ToDropboxIn(BaseModel):
     draft_id: str
     destination: str   # "gyp" | "plans_specs" | "commercial"
+    folder_owner: str | None = None   # Commercial Sales only: blank/None = category folder, else "liz"/"kyle"/"troy"/"hanz"/"rj"
 
 
 @app.post("/api/to-dropbox")
@@ -2416,6 +2417,13 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     base_path = dropbox_client.ESTIMATING_DESTINATIONS.get(payload.destination)
     if not base_path:
         return {"ok": False, "error": "Unknown destination folder."}
+    # Commercial Sales can file into a per-person sub-folder (*Liz, *Kyle, …); a
+    # blank owner — and every other category — files into the category folder itself.
+    owner_subfolder = ""
+    if payload.destination == "commercial":
+        owner_subfolder = dropbox_client.commercial_owner_subfolder(payload.folder_owner)
+        if owner_subfolder:
+            base_path = f"{base_path}/{owner_subfolder}"
     row = drafts.load_draft(payload.draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
@@ -2481,6 +2489,7 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
                          {"destination": payload.destination,
                           "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
+                          "folder_owner": payload.folder_owner,
                           "project_name": _vals.get("project_name") or _vals.get("job_name"),
                           "folder": result.get("folder_path"),
                           "folder_url": result.get("folder_url")})
@@ -2490,6 +2499,7 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             cur = (drafts.load_draft(payload.draft_id) or {}).get("data") or {}
             cur["dropbox_result"] = {
                 "destination": payload.destination,
+                "folder_owner": payload.folder_owner,
                 "folder_path": result.get("folder_path"),
                 "folder_url": result.get("folder_url"),
                 "xlsx_url": result.get("xlsx_url"),

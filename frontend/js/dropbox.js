@@ -23,6 +23,13 @@
     const dest = document.getElementById("dbx-dest");
     const go = document.getElementById("dbx-go");
     const result = document.getElementById("dbx-result");
+    const owner = document.getElementById("dbx-owner");
+    const ownerField = document.getElementById("dbx-owner-field");
+
+    // The per-person "Store in" picker only applies to Commercial Sales.
+    function syncOwner() {
+      if (ownerField) ownerField.style.display = (dest.value === "commercial") ? "" : "none";
+    }
 
     function renderResult(j) {
       const link = (url, label) => url
@@ -48,11 +55,13 @@
     const prev = state.dropbox_result;
     if (prev && prev.folder_url) {
       if (prev.destination) dest.value = prev.destination;
+      if (owner && prev.folder_owner != null) owner.value = prev.folder_owner;
       renderResult(prev);
       showUploaded();
     }
+    syncOwner();
 
-    dest.addEventListener("change", () => { go.disabled = !dest.value; });
+    dest.addEventListener("change", () => { go.disabled = !dest.value; syncOwner(); });
 
     go.addEventListener("click", async () => {
       const draftId = TW.getDraftId();
@@ -65,7 +74,8 @@
         const resp = await fetch(TW.resolveApiBase() + "/api/to-dropbox", {
           method: "POST",
           headers: TW.authHeaders(),
-          body: JSON.stringify({ draft_id: draftId, destination: dest.value }),
+          body: JSON.stringify({ draft_id: draftId, destination: dest.value,
+            folder_owner: (dest.value === "commercial" && owner) ? owner.value : "" }),
         });
         const j = await resp.json().catch(() => ({}));
         if (!resp.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + resp.status));
@@ -75,7 +85,9 @@
         // state immediately (the backend also persisted it on the draft).
         try {
           TW.setState({ dropbox_result: {
-            destination: dest.value, folder_path: j.folder_path, folder_url: j.folder_url,
+            destination: dest.value,
+            folder_owner: (dest.value === "commercial" && owner) ? owner.value : "",
+            folder_path: j.folder_path, folder_url: j.folder_url,
             xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url } });
         } catch {}
       } catch (err) {
