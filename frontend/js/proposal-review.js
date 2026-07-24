@@ -380,12 +380,18 @@
   // _sanitize_price_overrides); an emptied / back-to-computed island reverts.
   // Shape mirrors the backend: { options:{<id>:{label?,amount?}},
   // manual:[{label?,amount?}...], single_bid:{amount?,tax_phrase?} }.
+  // Tooltip on an edited (overridden) island. Plain text (no &, <, >, ") so it's
+  // safe both inside an HTML title="" attribute and as an .title DOM property.
+  const _OVERRIDE_TITLE = "Edited — the printed proposal differs from the computed estimate; the estimate sheet and totals are unchanged.";
   function poOverride(kind, key) {
     const pov = (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : null;
     if (!pov) return null;
     if (kind === "option")     return (pov.options && typeof pov.options === "object") ? pov.options[key] : null;
     if (kind === "manual")     return Array.isArray(pov.manual) ? pov.manual[key] : null;
     if (kind === "single_bid") return (pov.single_bid && typeof pov.single_bid === "object") ? pov.single_bid : null;
+    if (kind === "row")        return (pov.rows && typeof pov.rows === "object") ? pov.rows[key] : null;
+    if (kind === "combo")      return (pov.combo && typeof pov.combo === "object") ? pov.combo[key] : null;
+    if (kind === "alt")        return (pov.alternate && typeof pov.alternate === "object") ? pov.alternate : null;
     return null;
   }
   // Current shown value for an override field: the saved override text if present
@@ -402,10 +408,18 @@
       c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const tag = (opts && opts.strong) ? "strong" : "span";
     const keyAttr = kind === "option" ? ` data-po-id="${e(String(key))}"`
-                  : kind === "manual" ? ` data-po-index="${key}"` : "";
-    return `<${tag} class="tw-fill tw-fill-edit" contenteditable="true" spellcheck="false"` +
+                  : kind === "manual" ? ` data-po-index="${key}"`
+                  : kind === "row"    ? ` data-po-row="${e(String(key))}"`
+                  : kind === "combo"  ? ` data-po-key="${e(String(key))}"` : "";
+    const shown = poValue(kind, key, field, computed);
+    // ⚠ reminder when this island carries a display override (differs from the
+    // engine-computed value) — the printed doc will differ from the estimate.
+    const overridden = String(shown) !== String(computed);
+    const cls = "tw-fill tw-fill-edit" + (overridden ? " tw-overridden" : "");
+    const titleAttr = overridden ? ` title="${_OVERRIDE_TITLE}"` : "";
+    return `<${tag} class="${cls}"${titleAttr} contenteditable="true" spellcheck="false"` +
            ` data-po-kind="${kind}"${keyAttr} data-po-field="${field}"` +
-           ` data-computed="${e(computed)}">${e(poValue(kind, key, field, computed))}</${tag}>`;
+           ` data-computed="${e(computed)}">${e(shown)}</${tag}>`;
   }
 
   // Recompute the base bid + priced options from the per-tab totals snapshotted on
@@ -549,7 +563,10 @@
     const { exempt, broken } = taxTreatmentMode();
     const lines = [];
     let optionNum = 0;
-    const pushSys = (sys, noun) => {
+    // `role` ("epoxy"/"polish") gives each line a STABLE semantic key
+    // (role.flooring|sales_tax|remodel|total) so a display override never lands on
+    // the wrong line when the tax mode changes or a tab is zeroed.
+    const pushSys = (sys, noun, role) => {
       if (!sys) return;
       const total = N(sys.total); if (total <= 0) return;
       const remodel = N(sys.remodel);
@@ -560,28 +577,39 @@
         // Broken out: base (pre-tax) + Material Sales Tax + Remodel Tax = Total —
         // mirrors the non-combo broken-out layout, no "(…INCLUDED)" phrase.
         const flooring = total - remodel - salesTax;
-        lines.push({ amount_formatted: fmtUSD(flooring), label: `${optLabel}: ${noun} as described above` });
-        if (salesTax > 0) lines.push({ amount_formatted: fmtUSD(salesTax), label: "Material Sales Tax" });
-        if (remodel > 0) lines.push({ amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSD(flooring), label: `${optLabel}: ${noun} as described above` });
+        if (salesTax > 0) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSD(salesTax), label: "Material Sales Tax" });
+        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
       } else if (exempt) {
         // Tax exempt: the full total carries the "(tax exempt)" phrase — no sales
         // tax is baked in to strip out. Remodel line only if the snapshot actually
         // has one (normally zero on an exempt job).
-        lines.push({ amount_formatted: fmtUSD(total), label: `${optLabel}: ${noun} as described above (tax exempt)` });
-        if (remodel > 0) lines.push({ amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSD(total), label: `${optLabel}: ${noun} as described above (tax exempt)` });
+        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
       } else {
         // Included (default): one all-in flooring line + a separate remodel line
         // when it applies — this is the pre-existing combo wording.
         const flooring = total - remodel;
-        lines.push({ amount_formatted: fmtUSD(flooring),
+        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSD(flooring),
           label: `${optLabel}: ${noun} as described above (material sales tax INCLUDED)` });
-        if (remodel > 0) lines.push({ amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
       }
-      lines.push({ amount_formatted: fmtUSD(total), label: "Total" });
+      lines.push({ key: `${role}.total`, amount_formatted: fmtUSD(total), label: "Total" });
     };
-    pushSys(eB, "Epoxy flooring");
-    pushSys(pB, "Polished Concrete flooring");
+    pushSys(eB, "Epoxy flooring", "epoxy");
+    pushSys(pB, "Polished Concrete flooring", "polish");
     return lines;
+  }
+
+  // Combo lines for the GENERATE payload, with display overrides pre-applied to
+  // the pre-formatted amount/label strings (combo docx lines come straight from
+  // payload.combo_options — see backend main._combo_lines — so applying the
+  // overrides here keeps the on-screen preview and the generated doc identical).
+  function comboLinesForPayload() {
+    return comboSystemLines().map(l => ({
+      amount_formatted: poValue("combo", l.key, "amount", l.amount_formatted),
+      label: poValue("combo", l.key, "label", l.label),
+    }));
   }
 
   // Live update the inline $ amounts in the price preview. This preview MIRRORS
@@ -638,17 +666,50 @@
     const baseBidHeading = document.getElementById("base-bid-heading");
     const comboLines = comboSystemLines();
 
+    // Toggle the ⚠ "edited — differs from the estimate" cue on a painted island.
+    const markOv = (el, shown, computed) => {
+      if (!el) return;
+      const ov = String(shown) !== String(computed);
+      el.classList.toggle("tw-overridden", ov);
+      if (ov) el.title = _OVERRIDE_TITLE; else el.removeAttribute("title");
+    };
+    // Paint a tax row's amount + label islands (Material Sales Tax / Remodel /
+    // Total): honor the display override, set data-computed for revert, flag ⚠.
+    // Skip while the caret is inside the row (a repaint would kill the edit) —
+    // self-heals on the row's focusout re-render.
+    const paintRow = (rowEl, ampEl, labelEl, key, computedAmt, computedLabel) => {
+      if (!rowEl || focusInside(rowEl)) return;
+      if (ampEl) {
+        ampEl.dataset.computed = computedAmt;
+        const shown = poValue("row", key, "amount", computedAmt);
+        ampEl.textContent = shown; markOv(ampEl, shown, computedAmt);
+      }
+      if (labelEl) {
+        labelEl.dataset.computed = computedLabel;
+        const shown = poValue("row", key, "label", computedLabel);
+        labelEl.textContent = shown; markOv(labelEl, shown, computedLabel);
+      }
+    };
+    const salesLabelEl   = document.getElementById("sales-tax-label");
+    const remodelLabelEl = document.getElementById("remodel-tax-label");
+    const totalLabelEl   = document.getElementById("total-label");
+
     if (comboLines.length && comboBlock) {
       // Combo: show Option 1 (Epoxy) + Option 2 (Polish), each with its own
       // flooring / tax line(s) / Total; hide the single combined base line AND
       // the static "Base Bid" heading above it — the Direct combo template keeps
       // that heading INSIDE {{#single_bid}}, so a generated combo doc starts
       // straight at "$X – Option 1: …" with no heading at all.
-      const escP = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
-        c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
       comboBlock.style.display = "";
-      comboBlock.innerHTML = comboLines.map(l =>
-        `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${escP(l.amount_formatted)}</strong> – ${escP(l.label)}</p>`).join("");
+      // Each combo line's amount + label is an editable display-override island
+      // (keyed by its semantic role key). Don't rebuild mid-edit — self-heals on
+      // the block's focusout re-render.
+      if (!focusInside(comboBlock)) {
+        comboBlock.innerHTML = comboLines.map(l =>
+          `<p class="tw-priceline" style="margin:0 0 2pt;">` +
+          poIsland("combo", l.key, "amount", l.amount_formatted, { strong: true }) + ` – ` +
+          poIsland("combo", l.key, "label", l.label) + `</p>`).join("");
+      }
       if (baseBidHeading) baseBidHeading.style.display = "none";
       if (baseBidRow) baseBidRow.style.display = "none";
       if (salesRow)   salesRow.style.display = "none";
@@ -671,15 +732,15 @@
           // NOT through _fmt_usd. Only the option/manual lines (which DO go
           // through _fmt_usd) use fmtUSDdoc's trailing-.00 strip.
           const computedBase = fmtUSD(baseBid);
-          if (baseDisp) { baseDisp.dataset.computed = computedBase; baseDisp.textContent = poValue("single_bid", null, "amount", computedBase); }
-          if (phraseEl) { phraseEl.dataset.computed = ""; phraseEl.textContent = poValue("single_bid", null, "tax_phrase", ""); }
+          if (baseDisp) { baseDisp.dataset.computed = computedBase; const s = poValue("single_bid", null, "amount", computedBase); baseDisp.textContent = s; markOv(baseDisp, s, computedBase); }
+          if (phraseEl) { phraseEl.dataset.computed = ""; const s = poValue("single_bid", null, "tax_phrase", ""); phraseEl.textContent = s; markOv(phraseEl, s, ""); }
         }
-        if (salesTaxDisplay) salesTaxDisplay.textContent = fmtUSD(salesTax);
         if (salesRow)   salesRow.style.display = "";
+        paintRow(salesRow, salesTaxDisplay, salesLabelEl, "sales_tax", fmtUSD(salesTax), "Material Sales Tax");
         if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-        if (remodelTaxDisplay) remodelTaxDisplay.textContent = fmtUSD(remodelTax);
+        paintRow(remodelRow, remodelTaxDisplay, remodelLabelEl, "remodel", fmtUSD(remodelTax), "Remodel Tax");
         if (totalRow)   totalRow.style.display = "";
-        if (totalDisplay) totalDisplay.textContent = fmtUSD(lumpSumN);
+        paintRow(totalRow, totalDisplay, totalLabelEl, "total", fmtUSD(lumpSumN), "Total");
       } else {
         const computedPhrase = exempt ? "(tax exempt)"
           : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
@@ -687,8 +748,8 @@
         if (!editingBase) {
           // Base line keeps cents (fmtUSD) to match the docx (total_formatted).
           const computedBase = fmtUSD(lumpSumN);
-          if (baseDisp) { baseDisp.dataset.computed = computedBase; baseDisp.textContent = poValue("single_bid", null, "amount", computedBase); }
-          if (phraseEl) { phraseEl.dataset.computed = computedPhrase; phraseEl.textContent = poValue("single_bid", null, "tax_phrase", computedPhrase); }
+          if (baseDisp) { baseDisp.dataset.computed = computedBase; const s = poValue("single_bid", null, "amount", computedBase); baseDisp.textContent = s; markOv(baseDisp, s, computedBase); }
+          if (phraseEl) { phraseEl.dataset.computed = computedPhrase; const s = poValue("single_bid", null, "tax_phrase", computedPhrase); phraseEl.textContent = s; markOv(phraseEl, s, computedPhrase); }
         }
         if (salesRow)   salesRow.style.display = "none";
         if (remodelRow) remodelRow.style.display = "none";
@@ -699,7 +760,7 @@
       // the amount/phrase so mid-edit typing isn't clobbered by a repaint.
       if (!editingBase) {
         const _bd = document.getElementById("base-desc-display");
-        if (_bd) { const _c = baseDescLabel(); _bd.dataset.computed = _c; _bd.textContent = poValue("single_bid", null, "desc", _c); }
+        if (_bd) { const _c = baseDescLabel(); _bd.dataset.computed = _c; const s = poValue("single_bid", null, "desc", _c); _bd.textContent = s; markOv(_bd, s, _c); }
       }
     }
     renderProposalExtras();
@@ -898,8 +959,11 @@
             state.base_tab_id = rb.value || null;
             if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
             if (state.base_tab_id !== priorBaseId) {
+              // A base/work-type change re-derives the base + tax rows + combo
+              // breakout, so their display overrides are stale — clear them (the
+              // base-independent alternate block's overrides are kept).
               const pov = state.price_overrides;
-              if (pov && typeof pov === "object" && !Array.isArray(pov) && pov.single_bid) pov.single_bid = {};
+              if (pov && typeof pov === "object" && !Array.isArray(pov)) { pov.single_bid = {}; pov.rows = {}; pov.combo = {}; }
             }
             applyAndRefresh();
             reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
@@ -949,7 +1013,9 @@
     if (!altBlock) return;
     const acb   = state.alternate_computed_bid;
     const altFb = acb && acb.alternate_full_bid;
-    if (!altFb || typeof altFb.total_base_bid !== "number") { altBlock.innerHTML = ""; return; }
+    if (!altFb || typeof altFb.total_base_bid !== "number") { if (!focusInside(altBlock)) altBlock.innerHTML = ""; return; }
+    // Don't rebuild while the caret is inside one of the alternate islands.
+    if (focusInside(altBlock)) return;
     const altTotal   = altFb.total_base_bid;
     const altRemodel = Number(altFb.remodel_tax || 0);
     const altFloor   = altTotal - altRemodel;
@@ -957,17 +1023,17 @@
                        || (acb.alternate && acb.alternate.label) || "Alternate System";
     // Mirrors the .docx {{#alternate}} block literally: header carries the system
     // name, the price line reads "Flooring as described above (material sales tax
-    // INCLUDED)", and the tax line is just "Remodel Tax" (no state name). All
-    // rows are real bullets in the template.
+    // INCLUDED)", and the tax line is just "Remodel Tax" (no state name). Every
+    // amount + label is an editable display-override island (kind "alt").
+    const A = (field, computed, opts) => poIsland("alt", null, field, computed, opts);
     altBlock.innerHTML =
-      `<p class="tw-priceline" style="margin:6pt 0 2pt;font-weight:bold;">` +
-      `ALTERNATE SYSTEM — <span class="tw-fill">${esc(altLabel)}</span></p>` +
-      `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altFloor)}</strong> – Flooring as described above ` +
-      `(material sales tax INCLUDED)</p>` +
+      `<p class="tw-priceline" style="margin:6pt 0 2pt;font-weight:bold;">ALTERNATE SYSTEM — ` + A("name", altLabel) + `</p>` +
+      `<p class="tw-priceline" style="margin:0 0 2pt;">` + A("flooring_amount", fmtUSD(altFloor), { strong: true }) +
+        ` – ` + A("flooring_label", "Flooring as described above (material sales tax INCLUDED)") + `</p>` +
       (altRemodel > 0
-        ? `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altRemodel)}</strong> – Remodel Tax</p>`
+        ? `<p class="tw-priceline" style="margin:0 0 2pt;">` + A("remodel_amount", fmtUSD(altRemodel), { strong: true }) + ` – ` + A("remodel_label", "Remodel Tax") + `</p>`
         : "") +
-      `<p class="tw-priceline" style="margin:0 0 2pt;"><strong class="tw-fill">${fmtUSD(altTotal)}</strong> – Total</p>`;
+      `<p class="tw-priceline" style="margin:0 0 2pt;">` + A("total_amount", fmtUSD(altTotal), { strong: true }) + ` – ` + A("total_label", "Total") + `</p>`;
   }
 
   // ─── Token values (shared by the document fills + the generate payload) ──
@@ -1554,8 +1620,13 @@
     // and backend system_overrides).
     const editSpan = (i, field, computed) => {
       const ov = ovs[i] || {};
-      const v = (typeof ov[field] === "string" && ov[field].trim()) ? ov[field] : computed;
-      return `<span class="tw-fill tw-fill-edit" contenteditable="true" spellcheck="false"` +
+      const has = (typeof ov[field] === "string" && ov[field].trim());
+      const v = has ? ov[field] : computed;
+      // ⚠ reminder when an SF / system value is edited off the estimate figure.
+      const overridden = has && String(v) !== String(computed);
+      const cls = "tw-fill tw-fill-edit" + (overridden ? " tw-overridden" : "");
+      const titleAttr = overridden ? ` title="${_OVERRIDE_TITLE}"` : "";
+      return `<span class="${cls}"${titleAttr} contenteditable="true" spellcheck="false"` +
              ` data-sys-index="${i}" data-sys-field="${field}"` +
              ` data-computed="${escHtml(computed)}">${escHtml(v)}</span>`;
     };
@@ -2090,8 +2161,12 @@
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
     if (!el) return;
     const cur = serializeBlock(el);
-    el.classList.toggle("tw-dirty", cur !== pristineById.get(Number(el.dataset.id)));
+    const changed = cur !== pristineById.get(Number(el.dataset.id));
+    el.classList.toggle("tw-dirty", changed);
     el.classList.toggle("tw-empty", !cur.trim());
+    // ⚠ reminder when an edited free paragraph carries a price ($) or an SF/LF
+    // area measure (covers the gyp/GC price rows, which edit as plain paragraphs).
+    el.classList.toggle("tw-dirty-warn", changed && /\$\s?\d|\bSF\b|\bLF\b/i.test(cur));
     schedulePersistOverrides();
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
@@ -2165,6 +2240,9 @@
     if (!pov.options || typeof pov.options !== "object" || Array.isArray(pov.options)) pov.options = {};
     if (!Array.isArray(pov.manual)) pov.manual = [];
     if (!pov.single_bid || typeof pov.single_bid !== "object" || Array.isArray(pov.single_bid)) pov.single_bid = {};
+    if (!pov.rows || typeof pov.rows !== "object" || Array.isArray(pov.rows)) pov.rows = {};
+    if (!pov.combo || typeof pov.combo !== "object" || Array.isArray(pov.combo)) pov.combo = {};
+    if (!pov.alternate || typeof pov.alternate !== "object" || Array.isArray(pov.alternate)) pov.alternate = {};
     return pov;
   }
   function _handlePoInput(e) {
@@ -2189,6 +2267,18 @@
       if (revert) delete pov.manual[idx][field]; else pov.manual[idx][field] = v;
     } else if (kind === "single_bid") {
       if (revert) delete pov.single_bid[field]; else pov.single_bid[field] = v;
+    } else if (kind === "row") {
+      const rk = sp.dataset.poRow || "";
+      if (!["sales_tax", "remodel", "total"].includes(rk)) return;
+      if (revert) { if (pov.rows[rk]) { delete pov.rows[rk][field]; if (!Object.keys(pov.rows[rk]).length) delete pov.rows[rk]; } }
+      else { (pov.rows[rk] = pov.rows[rk] || {})[field] = v; }
+    } else if (kind === "combo") {
+      const ck = sp.dataset.poKey || "";
+      if (!ck) return;
+      if (revert) { if (pov.combo[ck]) { delete pov.combo[ck][field]; if (!Object.keys(pov.combo[ck]).length) delete pov.combo[ck]; } }
+      else { (pov.combo[ck] = pov.combo[ck] || {})[field] = v; }
+    } else if (kind === "alt") {
+      if (revert) delete pov.alternate[field]; else pov.alternate[field] = v;
     } else { return; }
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
@@ -2207,6 +2297,17 @@
       if (!_baseBidRowEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
     });
   }
+  // The tax rows (Material Sales Tax / Remodel / Total), the combo per-option
+  // breakout, and the ALTERNATE SYSTEM block are all now editable island
+  // containers too. Same delegated input + focusout-normalize pattern.
+  ["sales-tax-row", "remodel-tax-row", "total-row", "combo-price-block", "alternate-block"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("input", _handlePoInput);
+    el.addEventListener("focusout", (e) => {
+      if (!el.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }
+    });
+  });
 
   initDocumentEditor();
 
@@ -2341,7 +2442,8 @@
         price_lines: Array.isArray(state.price_lines) ? state.price_lines : [],
         // Combo per-option breakout (Option 1 Epoxy / Option 2 Polish, each w/ tax +
         // total) -> leads the PRICE section, suppresses the combined single-bid line.
-        combo_options: comboSystemLines(),
+        // Display overrides pre-applied to the line strings (see comboLinesForPayload).
+        combo_options: comboLinesForPayload(),
         // Authoritative bid from the 5.7-recipe engine — the generate
         // response echoes this so nothing downstream shows a stale total.
         computed_bid: state.computed_bid || null,

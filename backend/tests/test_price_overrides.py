@@ -166,7 +166,119 @@ def test_sanitize_price_overrides_caps_and_coerces():
     long_one = main._sanitize_price_overrides({"single_bid": {"amount": "z" * 999}})
     assert len(long_one["single_bid"]["amount"]) == main._PRICE_OVERRIDE_FIELD_MAXLEN
     # non-dict input never raises
-    assert main._sanitize_price_overrides("nope") == {"options": {}, "manual": [], "single_bid": {}}
+    assert main._sanitize_price_overrides("nope") == {
+        "options": {}, "manual": [], "single_bid": {}, "rows": {}, "alternate": {}}
+
+
+# ── unit: tax-row + alternate sanitize (new keys) ──────────────────────────
+def test_sanitize_rows_and_alternate():
+    out = main._sanitize_price_overrides({
+        "rows": {
+            "sales_tax": {"amount": "  $2,000 ", "label": 7},     # coerce + strip
+            "remodel":   {"amount": "", "label": "   "},           # blank -> dropped
+            "total":     {"amount": "$9", "label": "Grand Total"},
+            "bogus_row": {"amount": "$1"},                         # unknown key ignored
+        },
+        "alternate": {"name": "Alt Sys", "total_amount": "$5,000", "bogus": "x",
+                      "total_label": {"n": 1}},                    # nested field dropped
+    })
+    assert out["rows"] == {"sales_tax": {"amount": "$2,000", "label": "7"},
+                           "total": {"amount": "$9", "label": "Grand Total"}}
+    assert out["alternate"] == {"name": "Alt Sys", "total_amount": "$5,000"}
+    # legacy payload (no rows/alternate) still yields the empty new keys
+    legacy = main._sanitize_price_overrides({"single_bid": {"amount": "$1"}})
+    assert legacy["rows"] == {} and legacy["alternate"] == {}
+
+
+# ── tax rows: amount + label overridden in the docx, .xlsx untouched ───────
+def test_tax_row_overrides_amount_and_label_brokenout_epoxy():
+    vals = dict(_VALS); vals["tax_inclusion"] = "BROKEN_OUT"
+    body = {"work_type": "epoxy", "audience": "Direct", "values": vals,
+            "cell_values": {"Epoxy!E20": 12345},
+            "remodel": [{"amount_formatted": "$1,200.00"}],
+            "price_overrides": {"rows": {
+                "sales_tax": {"amount": "$2,000", "label": "Sales Tax Custom"},
+                "remodel":   {"amount": "$1,500", "label": "Remodel Custom"},
+                "total":     {"amount": "$99,999", "label": "Grand Total"}}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    for s in ("$2,000", "Sales Tax Custom", "$1,500", "Remodel Custom", "$99,999", "Grand Total"):
+        assert s in blob, f"missing override {s!r}"
+    assert "$2,639.00" not in blob      # computed material tax replaced
+    assert "$36,763.00" not in blob     # computed total replaced
+    # .xlsx is generated independently of price_overrides (display-only).
+    wb = load_workbook(io.BytesIO(client.get(r.json()["xlsx_download_url"]).content))
+    assert wb["Epoxy"]["E20"].value == 12345
+
+
+# ── gate: gyp is NOT touched by a stale row override (paragraph-channel rows) ─
+def test_tax_row_override_gate_leaves_gyp_computed():
+    vals = {"work_type": "gyp", "job_name": "J", "city_state": "Branson, MO",
+            "bid_date_formatted": "7/10/26", "gyp_soft_sf": "100", "gyp_hard_sf": "50",
+            "gyp_corridor_sf": "25", "base_bid_formatted": "$98,000.00",
+            "material_tax_formatted": "$5,364.00", "tax_amount_formatted": "$0.00",
+            "total_formatted": "$103,364.00", "estimator_name": "Kyle"}
+    body = {"work_type": "gyp", "audience": "Direct", "values": vals,
+            "price_overrides": {"rows": {"sales_tax": {"amount": "$777", "label": "HACKED"}}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "$5,364.00" in blob and "Material Sales Tax" in blob  # computed row intact
+    assert "HACKED" not in blob and "$777" not in blob           # gate blocked the override
+
+
+# ── included mode: a total override must not leak into the base line ───────
+def test_total_override_no_leak_in_included_mode():
+    vals = dict(_VALS)  # default INCLUDED layout (no tax_inclusion)
+    body = {"work_type": "epoxy", "audience": "Direct", "values": vals,
+            "price_overrides": {"rows": {"total": {"amount": "$1"}}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    # Included mode: the single base line carries the COMPUTED total, never the
+    # override (the total row itself is hidden/stripped in included mode).
+    assert "$36,763.00" in blob
+    assert "$1 " not in blob and "$1\n" not in blob
+
+
+# ── alternate block: name + rows overridden in docx; .xlsx tab computed ────
+def test_alternate_block_overrides_docx_only():
+    acb = {"alternate_full_bid": {"total_base_bid": 20000.0, "remodel_tax": 1000.0},
+           "alternate": {"label": "Computed Alt", "sf": 5000}}
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+            "alternate_computed_bid": acb, "alternate_label": "Computed Alt",
+            "price_overrides": {"alternate": {
+                "name": "Premium Alternate", "flooring_amount": "$18,500",
+                "flooring_label": "Premium flooring as described above",
+                "total_amount": "$21,000", "total_label": "Alt Grand Total"}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    for s in ("Premium Alternate", "$18,500", "Premium flooring as described above",
+              "$21,000", "Alt Grand Total"):
+        assert s in blob, f"missing alternate override {s!r}"
+    assert "Computed Alt" not in blob     # name replaced
+
+
+# ── combo: overrides ride pre-applied combo_options strings ────────────────
+def test_combo_options_overridden_strings_render():
+    body = {"work_type": "combo", "audience": "Direct", "values": dict(_VALS),
+            "combo_options": [
+                {"amount_formatted": "$12,345", "label": "Option 1: Custom Epoxy line"},
+                {"amount_formatted": "$67,890", "label": "Total"}]}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    blob = _rendered(client.get(r.json()["docx_download_url"]).content)
+    assert "$12,345" in blob and "Option 1: Custom Epoxy line" in blob
+    assert "$67,890" in blob
+
+
+def test_malformed_rows_alternate_never_500():
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_VALS),
+            "price_overrides": {"rows": "nope", "alternate": ["bad"], "combo": {"x": 1}}}
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
 
 
 # ── option override composes with the "Options:" label + ordering ──────────
