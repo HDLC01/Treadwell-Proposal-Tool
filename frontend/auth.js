@@ -224,7 +224,46 @@
     back.id = "tw-notif-backdrop"; back.hidden = true;
     document.body.appendChild(back);
 
+    // Bottom-right toast stack for brand-new customer messages (slides in on poll).
+    const toasts = document.createElement("div");
+    toasts.id = "tw-toasts";
+    document.body.appendChild(toasts);
+
     let items = [], unread = 0, open = false;
+    let toasted = loadToasted();   // ids already previewed (per browser) so we never repeat
+
+    // Which message ids we've already shown a toast for — survives navigation via
+    // localStorage, capped so it can't grow without bound.
+    function loadToasted() {
+      try { return new Set(JSON.parse(localStorage.getItem("tw_toasted") || "[]")); }
+      catch { return new Set(); }
+    }
+    function saveToasted(set) {
+      try { localStorage.setItem("tw_toasted", JSON.stringify(Array.from(set).slice(-100))); }
+      catch { /* quota / private mode — best-effort */ }
+    }
+    function showToast(n) {
+      const el = document.createElement("div");
+      el.className = "tw-toast";
+      el.innerHTML =
+        '<span class="tw-toast-ico">' + esc(n.icon || "💬") + '</span>' +
+        '<span class="tw-toast-main">' +
+        '<span class="tw-toast-title">' + esc(n.title || "") + '</span>' +
+        '<span class="tw-toast-body">' + esc(n.body || "") + '</span>' +
+        '<span class="tw-toast-time">' + esc(relTime(n.ts)) + '</span></span>' +
+        '<button class="tw-toast-x" title="Dismiss" aria-label="Dismiss">×</button>';
+      toasts.appendChild(el);
+      requestAnimationFrame(() => el.classList.add("tw-toast-in"));   // trigger slide-in
+      let gone = false;
+      const dismiss = () => {
+        if (gone) return; gone = true;
+        el.classList.remove("tw-toast-in");
+        setTimeout(() => el.remove(), 400);   // after the slide-out transition
+      };
+      el.querySelector(".tw-toast-x").addEventListener("click", (e) => { e.stopPropagation(); dismiss(); });
+      el.addEventListener("click", () => { if (n.link) location.href = n.link; });
+      setTimeout(dismiss, 10000);   // auto-dismiss
+    }
 
     function setBadge(n) {
       const b = document.getElementById("tw-bell-badge");
@@ -265,8 +304,22 @@
           items = j.notifications || []; unread = j.unread || 0;
           if (!open) setBadge(unread);
           if (open) renderList();
+          maybeToast(j.last_seen_at || "");
         }
       } catch { /* offline — keep the last view */ }
+    }
+    // Preview brand-new customer messages: newer than the global last-seen AND not
+    // shown before. Toast the 3 newest (items arrive newest-first) and mark the
+    // rest previewed so a backlog lands in the bell without a toast storm. Never
+    // toasts while the bell panel is open.
+    function maybeToast(lastSeen) {
+      if (open) return;
+      const fresh = items.filter(x =>
+        x.kind === "portal_message" && (x.ts || "") > lastSeen && !toasted.has(x.id));
+      if (!fresh.length) return;
+      fresh.slice(0, 3).forEach(showToast);
+      fresh.forEach(x => toasted.add(x.id));
+      saveToasted(toasted);
     }
     async function markSeen() {
       try {
@@ -378,7 +431,26 @@ font-weight:700;font-size:14px;border-bottom:1px solid rgba(27,28,28,.08);positi
 .tw-notif-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tw-notif-body{color:var(--tw-ink-v);font-size:12px;}
 .tw-notif-time{color:var(--tw-ink-v);font-size:11px;flex:none;white-space:nowrap;padding-top:1px;}
-.tw-notif-item.sev-high .tw-notif-title{color:var(--tw-red-dark);}`;
+.tw-notif-item.sev-high .tw-notif-title{color:var(--tw-red-dark);}
+/* bottom-right toast previews for new customer messages */
+#tw-toasts{position:fixed;right:16px;bottom:16px;z-index:9990;display:flex;flex-direction:column;gap:10px;
+width:min(360px,calc(100vw - 28px));pointer-events:none;}
+.tw-toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;background:#fff;
+border:1px solid rgba(27,28,28,.12);border-left:3px solid var(--tw-red);border-radius:11px;
+padding:12px 12px 12px 13px;box-shadow:0 12px 34px rgba(0,0,0,.20);cursor:pointer;
+transform:translateX(120%);opacity:0;transition:transform .32s cubic-bezier(.22,1,.36,1),opacity .32s ease;
+font:400 13px/1.4 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--tw-ink);}
+.tw-toast.tw-toast-in{transform:translateX(0);opacity:1;}
+.tw-toast-ico{font-size:16px;line-height:1.25;flex:none;}
+.tw-toast-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.tw-toast-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tw-toast-body{color:var(--tw-ink-v);font-size:12px;display:-webkit-box;-webkit-line-clamp:3;
+-webkit-box-orient:vertical;overflow:hidden;}
+.tw-toast-time{color:var(--tw-ink-v);font-size:11px;margin-top:2px;}
+.tw-toast-x{border:none;background:none;color:var(--tw-ink-v);font-size:17px;line-height:1;cursor:pointer;
+padding:0 3px;border-radius:6px;flex:none;}
+.tw-toast-x:hover{background:var(--tw-surf-low);color:var(--tw-red-dark);}
+@media (max-width:767px){#tw-toasts{left:12px;right:12px;bottom:12px;width:auto;}}`;
     const style = document.createElement("style");
     style.id = "tw-sidebar-css"; style.textContent = css;
     document.head.appendChild(style);
