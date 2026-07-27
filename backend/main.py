@@ -63,6 +63,7 @@ import basisboard_client
 import drafts
 import dropbox_client
 import estimate_writer
+import invoice_writer
 import notifications
 import pdf_writer
 import pricing
@@ -141,7 +142,10 @@ def _template_version() -> str:
 _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       # server-to-server (the customer portal renders the proposal
                       # PDF on demand); gated by SERVICE_TOKEN inside the handler.
-                      "/api/admin/proposal-pdf"}
+                      "/api/admin/proposal-pdf",
+                      # same deal for the deposit invoice — the portal owns deposits
+                      # but has no LibreOffice, so it renders here.
+                      "/api/admin/deposit-invoice"}
 
 
 def _auth_is_public(path: str, method: str) -> bool:
@@ -685,6 +689,51 @@ def api_admin_proposal_pdf(draft_id: str, request: Request) -> Response:
     proj = re.sub(r"[^\x20-\x7e]", "_", str((row.get("data") or {}).get("project_name") or "Treadwell Proposal"))
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{proj} - Proposal.pdf"'})
+
+
+@app.post("/api/admin/deposit-invoice")
+async def api_admin_deposit_invoice(request: Request) -> Response:
+    """Render the deposit invoice from Kyle's Invoice_Deposit.docx template.
+
+    Server-to-server (SERVICE_TOKEN-gated, in _AUTH_PUBLIC_PATHS): the portal owns
+    deposits but ships without python-docx or LibreOffice, so the document is built
+    here — the same split as the proposal PDF.
+
+    The body is the field set; whatever the staff typed on the review screen wins
+    over the derived defaults, which is the whole point of editing before sending.
+    Set `format: "docx"` to get the Word file instead of a PDF."""
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "Invalid JSON body.")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Invalid body.")
+
+    template = proposal_writer.TEMPLATES_ROOT / invoice_writer.TEMPLATE_NAME
+    if not template.is_file():
+        raise HTTPException(500, f"{invoice_writer.TEMPLATE_NAME} is missing from templates/.")
+    want_docx = str(body.get("format") or "").lower() == "docx"
+    try:
+        if want_docx:
+            blob = invoice_writer.build_invoice_docx(body, template)
+            media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ext = "docx"
+        else:
+            with _PDF_RENDER_SEM:
+                blob = invoice_writer.build_invoice_pdf(body, template)
+            media, ext = "application/pdf", "pdf"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Deposit invoice render failed")
+        raise HTTPException(500, "Failed to render the deposit invoice.") from exc
+
+    no = re.sub(r"[^A-Za-z0-9._-]", "", str(body.get("invoice_no") or "deposit")) or "deposit"
+    return Response(content=blob, media_type=media,
+                    headers={"Content-Disposition": f'inline; filename="Treadwell Invoice {no}.{ext}"'})
 
 
 @app.post("/api/detect-work-type", response_model=DetectWorkTypeOut)
