@@ -75,7 +75,11 @@ def list_estimating_folders() -> dict[str, Any]:
     if _FOLDER_CACHE["data"] is not None and (now - _FOLDER_CACHE["at"]) < _FOLDER_TTL_S:
         return _FOLDER_CACHE["data"]
 
-    dbx, FolderMetadata = _build_client()
+    # _build_client() returns the client ALONE (see its other caller) — unpacking
+    # it as a pair raised "cannot unpack non-iterable Dropbox object" live.
+    from dropbox.files import FolderMetadata
+    dbx = _build_client()
+
     def _subfolders(path: str) -> list[str]:
         out = []
         res = dbx.files_list_folder(path)

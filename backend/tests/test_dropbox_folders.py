@@ -60,3 +60,34 @@ def test_owner_folder_falls_back_to_the_constants(monkeypatch):
     assert dropbox_client.commercial_owner_subfolder("kyle") == "*Kyle"
     assert dropbox_client.commercial_owner_subfolder("") == ""
     assert dropbox_client.commercial_owner_subfolder("nobody") == ""
+
+
+def test_listing_calls_the_client_the_way_the_rest_of_the_module_does(monkeypatch):
+    """Regression: this called `dbx, FolderMetadata = _build_client()`, but
+    _build_client returns the client ALONE — it blew up with "cannot unpack
+    non-iterable Dropbox object" the first time it hit real Dropbox. The existing
+    tests only ever stubbed list_estimating_folders, so nothing exercised the call."""
+    from dropbox.files import FolderMetadata      # real type: the filter is an isinstance check
+
+    class _Res:
+        def __init__(self, names):
+            self.entries = [FolderMetadata(name=n) for n in names]
+            self.has_more = False
+
+    calls = []
+
+    class _Client:
+        def files_list_folder(self, path):
+            calls.append(path)
+            return _Res(["$Gyp Estimates", "$Commercial Sales Estimates"] if path.endswith("Estimating")
+                        else ["*Kyle", "*Hanz"])
+
+    monkeypatch.setattr(dropbox_client, "_build_client", lambda: _Client())
+    dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)      # bypass the TTL cache
+    try:
+        d = dropbox_client.list_estimating_folders()
+    finally:
+        dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)
+    assert [x["label"] for x in d["destinations"]] == ["Commercial Sales Estimates", "Gyp Estimates"]
+    assert [o["label"] for o in d["owners"]] == ["Hanz", "Kyle"]
+    assert calls[0].endswith("/Estimating")
