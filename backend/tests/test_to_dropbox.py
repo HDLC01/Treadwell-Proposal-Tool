@@ -21,10 +21,13 @@ def test_destination_map_has_three_with_verified_paths():
         assert p.startswith("/2023 Treadwell Team Folder/Estimating/")
 
 
-def test_commercial_owner_subfolders():
-    # Verified live 2026-07-24: these are the per-person folders under Commercial Sales.
-    assert dc.COMMERCIAL_OWNER_SUBFOLDERS == {
-        "liz": "*Liz", "kyle": "*Kyle", "troy": "*Troy", "hanz": "*Hanz", "rj": "*RJ"}
+def test_commercial_owner_subfolders(monkeypatch):
+    # FALLBACK list only — the live set now comes from list_estimating_folders().
+    # Liz and Troy were dropped per Will. Stub the live call so this test pins the
+    # fallback rather than whatever Dropbox currently holds.
+    monkeypatch.setattr(dc, "list_estimating_folders",
+                        lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+    assert dc.COMMERCIAL_OWNER_SUBFOLDERS == {"kyle": "*Kyle", "hanz": "*Hanz", "rj": "*RJ"}
     assert dc.commercial_owner_subfolder("Kyle") == "*Kyle"     # case-insensitive
     assert dc.commercial_owner_subfolder("  rj ") == "*RJ"      # trimmed
     assert dc.commercial_owner_subfolder("") == ""             # blank → category folder

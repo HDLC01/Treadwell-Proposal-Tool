@@ -1,4 +1,9 @@
 // Externalized from dropbox.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+// Wrapped in an IIFE: this now loads on done.html ALONGSIDE done.js, and both
+// declare top-level `const state` / `const result`. Sharing global scope threw
+// "Identifier 'state' has already been declared", so this file never ran and
+// the Dropbox section stayed hidden.
+(function () {
   const state = TW.getState();
   // Something must have been estimated/generated before there's anything to file:
   // a Screen-3 proposal_payload, a prior generate_result, OR estimate cell_values
@@ -27,9 +32,37 @@
     const ownerField = document.getElementById("dbx-owner-field");
 
     // The per-person "Store in" picker only applies to Commercial Sales.
+    let COMMERCIAL_KEY = "commercial";
     function syncOwner() {
-      if (ownerField) ownerField.style.display = (dest.value === "commercial") ? "" : "none";
+      if (ownerField) ownerField.style.display = (dest.value === COMMERCIAL_KEY) ? "" : "none";
     }
+
+    /** Fill both pickers from the LIVE Dropbox listing, so a folder added or
+     *  removed there shows up without a deploy. The endpoint falls back to the
+     *  server's constants if Dropbox is unreachable, so this never empties the
+     *  form; on a total failure we simply keep the markup's defaults. */
+    async function loadFolders() {
+      try {
+        const r = await fetch("/api/dropbox/folders", { headers: TW.authHeaders() });
+        const j = await r.json();
+        if (!j || !j.ok || !Array.isArray(j.destinations) || !j.destinations.length) return;
+        COMMERCIAL_KEY = j.commercial_key || COMMERCIAL_KEY;
+        const keep = dest.value;
+        dest.innerHTML = '<option value="">Choose a folder…</option>'
+          + j.destinations.map((d) => `<option value="${esc(d.key)}">${esc(d.label)}</option>`).join("");
+        if (keep && dest.querySelector(`option[value="${CSS.escape(keep)}"]`)) dest.value = keep;
+        if (owner) {
+          const keepOwner = owner.value;
+          const catLabel = (j.destinations.find((d) => d.key === COMMERCIAL_KEY) || {}).label
+            || "Commercial Sales Estimates";
+          owner.innerHTML = `<option value="">${esc(catLabel)}</option>`
+            + (j.owners || []).map((o) => `<option value="${esc(o.key)}">${esc(o.label)}</option>`).join("");
+          if (keepOwner && owner.querySelector(`option[value="${CSS.escape(keepOwner)}"]`)) owner.value = keepOwner;
+        }
+        syncOwner();
+      } catch { /* keep the markup defaults */ }
+    }
+    loadFolders();
 
     function renderResult(j) {
       const link = (url, label) => url
@@ -75,7 +108,7 @@
           method: "POST",
           headers: TW.authHeaders(),
           body: JSON.stringify({ draft_id: draftId, destination: dest.value,
-            folder_owner: (dest.value === "commercial" && owner) ? owner.value : "" }),
+            folder_owner: (dest.value === COMMERCIAL_KEY && owner) ? owner.value : "" }),
         });
         const j = await resp.json().catch(() => ({}));
         if (!resp.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + resp.status));
@@ -86,7 +119,7 @@
         try {
           TW.setState({ dropbox_result: {
             destination: dest.value,
-            folder_owner: (dest.value === "commercial" && owner) ? owner.value : "",
+            folder_owner: (dest.value === COMMERCIAL_KEY && owner) ? owner.value : "",
             folder_path: j.folder_path, folder_url: j.folder_url,
             xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url } });
         } catch {}
@@ -99,3 +132,4 @@
   }
 
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+})();
