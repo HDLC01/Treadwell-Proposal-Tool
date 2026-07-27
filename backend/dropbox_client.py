@@ -58,9 +58,45 @@ _FOLDER_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
 _FOLDER_TTL_S = 300          # 5 min: new folders show up promptly without hammering Dropbox
 
 
+# Folders that live under Estimating but are NOT filing destinations. "$$ Bid
+# Template" is the template each project folder is COPIED FROM — offering it
+# would let someone file a job into the template itself.
+_NOT_DESTINATIONS = {"$$ bid template"}
+
+# Owner folders Will asked to drop from the picker. The folders still exist in
+# Dropbox (we don't delete anyone's files), so the live listing keeps returning
+# them — hide them here rather than in Dropbox.
+_HIDDEN_OWNERS = {"liz", "troy"}
+
+
 def _slug(name: str) -> str:
-    """'*Kyle' -> 'kyle'. The value the UI posts back as the owner."""
-    return name.lstrip("*").strip().lower().replace(" ", "_")
+    """'*Kyle' -> 'kyle', '$Gyp Estimates' -> 'gyp_estimates'. The value the UI
+    posts back."""
+    return name.lstrip("*$").strip().lower().replace(" ", "_").replace("&", "and")
+
+
+def _legacy_key(path: str) -> Optional[str]:
+    """The stable key an existing destination has always used. /api/to-dropbox
+    looks paths up by these, so a live-listed folder MUST keep its old key or
+    filing breaks."""
+    for k, p in ESTIMATING_DESTINATIONS.items():
+        if p == path:
+            return k
+    return None
+
+
+def destination_path(key: str) -> Optional[str]:
+    """Absolute path for a destination key. Checks the live listing first so a
+    folder added in Dropbox is filable immediately, then the constants."""
+    if not key:
+        return None
+    try:
+        for d in (list_estimating_folders().get("destinations") or []):
+            if d.get("key") == key:
+                return d.get("path")
+    except Exception:  # noqa: BLE001 — fall through to the constants
+        pass
+    return ESTIMATING_DESTINATIONS.get(key)
 
 
 def list_estimating_folders() -> dict[str, Any]:
@@ -90,15 +126,21 @@ def list_estimating_folders() -> dict[str, Any]:
             res = dbx.files_list_folder_continue(res.cursor)
         return out
 
-    cats = _subfolders(ESTIMATING_ROOT)
-    destinations = [{"key": _slug(n), "label": n.lstrip("$").strip(),
-                     "path": f"{ESTIMATING_ROOT}/{n}"}
-                    for n in sorted(cats) if n.startswith("$")]
+    destinations = []
+    for n in sorted(_subfolders(ESTIMATING_ROOT)):
+        if not n.startswith("$") or n.strip().lower() in _NOT_DESTINATIONS:
+            continue
+        path = f"{ESTIMATING_ROOT}/{n}"
+        # Keep the legacy key where one exists — /api/to-dropbox resolves paths by
+        # key, so renaming them would break filing for every existing destination.
+        destinations.append({"key": _legacy_key(path) or _slug(n),
+                             "label": n.lstrip("$").strip(), "path": path})
     commercial = next((d for d in destinations if "commercial" in d["key"]), None)
     owners = []
     if commercial:
         owners = [{"key": _slug(n), "label": n.lstrip("*").strip(), "folder": n}
-                  for n in sorted(_subfolders(commercial["path"])) if n.startswith("*")]
+                  for n in sorted(_subfolders(commercial["path"]))
+                  if n.startswith("*") and _slug(n) not in _HIDDEN_OWNERS]
     data = {"destinations": destinations, "commercial_key": commercial["key"] if commercial else None,
             "owners": owners}
     _FOLDER_CACHE.update(at=now, data=data)
