@@ -336,7 +336,10 @@
     if (_modalCssDone) return; _modalCssDone = true;
     const s = document.createElement("style");
     s.textContent = [
-      ".tw-ov{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;",
+      // Above EVERY other layer: the Customer Portal scrim/drawer (10000/10001 in
+      // portal.html) and the notification panel (10001 in auth.js). At 10000 the
+      // confirm rendered *behind* the drawer that opened it.
+      ".tw-ov{position:fixed;inset:0;z-index:10100;display:flex;align-items:center;justify-content:center;padding:20px;",
       "background:rgba(20,18,18,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);opacity:0;transition:opacity .16s ease;}",
       ".tw-ov.tw-in{opacity:1;}",
       ".tw-dlg{background:#fff;color:#1b1c1c;width:100%;max-width:420px;border-radius:16px;padding:26px 24px 20px;",

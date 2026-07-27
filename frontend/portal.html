@@ -69,6 +69,16 @@
   a.link { color:var(--red-dark); word-break:break-all; }
   .note { color:var(--ink-v); font-size:12px; }
   .note.sys { text-align:center; background:var(--surf-low); border-radius:6px; padding:5px 10px; margin:6px 0; }
+  /* Chat cards — same shape/classes the CUSTOMER portal uses, so staff read the
+     thread exactly as the customer sees it. Left border colour keys the type. */
+  .chat-card { background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--red);
+    border-radius:10px; padding:11px 13px; margin-bottom:8px; }
+  .chat-card.deposit { border-left-color:var(--ok); }
+  .chat-card.system  { border-left-color:var(--ink-v); }
+  .chat-card .cc-title { font-weight:800; font-size:13px; margin-bottom:3px; }
+  .chat-card .cc-meta { color:var(--ink-v); font-size:11px; margin-bottom:5px; }
+  .chat-card .cc-body { color:var(--ink-v); font-size:12px; }
+  .chat-card .cc-amt { color:var(--ok); }
 </style>
 </head>
 <body>

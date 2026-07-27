@@ -102,13 +102,38 @@
     return `<span class="pill ${done ? "done" : "pend"}">${label}: ${done ? doneText : pendText}</span>`;
   }
 
+  // System lines read "Heading — detail"; split so they render as a card. Length
+  // guard stops a long sentence containing a dash becoming a giant title.
+  function splitSystem(body) {
+    const s = String(body == null ? "" : body);
+    const i = s.indexOf(" — ");
+    if (i > 0 && i <= 60) return { title: s.slice(0, i), body: s.slice(i + 3) };
+    return { title: "Update", body: s };
+  }
+
   function msgHtml(m) {
     const t = when(m.created_at);
-    if (m.msg_type === "system") return `<div class="note sys">${esc(m.body)}</div>`;
-    if (m.msg_type === "proposal_card") return `<div class="note sys">📄 Proposal shared — ${esc(m.body)}</div>`;
+    // These three render as CARDS, matching the customer portal exactly, so staff
+    // see the thread the same way the customer does.
+    if (m.msg_type === "system") {
+      const s = splitSystem(m.body);
+      return `<div class="chat-card system"><div class="cc-title">${esc(s.title)}</div>
+        <div class="cc-body">${esc(s.body)}</div></div>`;
+    }
+    if (m.msg_type === "proposal_card") {
+      return `<div class="chat-card proposal"><div class="cc-title">Your proposal is ready</div>
+        <div class="cc-body">${esc(m.body)}</div></div>`;
+    }
     if (m.msg_type === "deposit_request") {
-      const amt = m.meta && m.meta.amount != null ? " " + money(m.meta.amount) : "";
-      return `<div class="note sys">💳 Deposit requested${amt}</div>`;
+      const meta = m.meta || {};
+      const amt = meta.amount != null ? money(meta.amount) : "";
+      const line = meta.invoice_no
+        ? `Invoice ${esc(meta.invoice_no)}${meta.reference ? ` · Reference ${esc(meta.reference)}` : ""}`
+        : "";
+      return `<div class="chat-card deposit">
+        <div class="cc-title">Deposit invoice${amt ? ` — <span class="cc-amt">${amt}</span>` : ""}</div>
+        ${line ? `<div class="cc-meta">${line}</div>` : ""}
+        <div class="cc-body">${esc(m.body)}</div></div>`;
     }
     const staff = m.author_kind === "staff";
     const viaEmail = m.meta && m.meta.source === "email";
