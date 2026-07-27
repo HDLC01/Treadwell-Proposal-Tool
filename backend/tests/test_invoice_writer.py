@@ -119,3 +119,40 @@ def test_unrecognised_template_raises_rather_than_shipping_a_blank():
             iw.build_invoice_docx(SRC, tmp)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+# ── shrink-to-fit ────────────────────────────────────────────────────────────
+# LibreOffice ignores docx text-box autofit, so a value longer than the
+# placeholder clips or wraps out of its box. The first real render showed
+# "TW-INV-01001" printing as "TW-" and "$19,767.50" breaking across two lines.
+def test_fit_scale_only_ever_shrinks():
+    assert iw._fit_scale("23.150-01", "26.114-01") == 1.0        # same length → untouched
+    assert iw._fit_scale("23.150-01", "26.1") == 1.0             # shorter → never grows
+    assert iw._fit_scale("23.150-01", "TW-INV-01001") < 1.0
+
+
+def test_fit_scale_has_a_readability_floor():
+    """Past ~65% the field is genuinely too long and should be shortened
+    upstream — shrinking further just produces unreadable print."""
+    assert iw._fit_scale("xxxxxx", "x" * 200) == 0.65
+
+
+def test_long_values_get_smaller_runs_so_they_do_not_clip():
+    """Compare like for like: every field short except the one under test, so the
+    only difference in run sizes is the shrink applied to the long value."""
+    short = {k: "1" for k in ("customer_name", "customer_address", "city_state",
+                              "job_name", "job_number", "invoice_no")}
+    short.update(deposit_line="D", deposit_amount_text="$1", total_due_text="$1",
+                 invoice_date_text="1/1/26")
+    sizes = lambda src: [int(m) for m in re.findall(r'<w:sz w:val="(\d+)"/>',
+                                                    _xml(iw.build_invoice_docx(src, TEMPLATE)))]
+    base = sizes(short)
+    long_no = sizes({**short, "invoice_no": "TW-INV-01001-EXTRA-LONG-NUMBER"})
+    assert min(long_no) < min(base), "an overflowing value must shrink its runs"
+
+
+def test_shrinking_never_produces_a_vanishing_font():
+    x = _xml(iw.build_invoice_docx({**SRC, "job_name": "J" * 300}, TEMPLATE))
+    import re
+    for hp in (int(m) for m in re.findall(r'<w:sz w:val="(\d+)"/>', x)):
+        assert hp >= 10, "half-points floor keeps text legible"
