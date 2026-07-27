@@ -212,11 +212,14 @@
     if (m.msg_type === "deposit_request") {
       const meta = m.meta || {};
       const amt = meta.amount != null ? money(meta.amount) : "";
+      const dead = !!meta.superseded;   // replaced by a later resend
       const line = meta.invoice_no
         ? `Invoice ${esc(meta.invoice_no)}${meta.reference ? ` · Reference ${esc(meta.reference)}` : ""}`
+          + (dead && meta.superseded_by ? ` · replaced by ${esc(meta.superseded_by)}` : "")
         : "";
-      return `<div class="chat-card deposit">
-        <div class="cc-title">Deposit invoice${amt ? ` — <span class="cc-amt">${amt}</span>` : ""}</div>
+      return `<div class="chat-card deposit${dead ? " is-superseded" : ""}">
+        <div class="cc-title">Deposit invoice${amt ? ` — <span class="cc-amt">${amt}</span>` : ""}${
+          dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
         ${line ? `<div class="cc-meta">${line}</div>` : ""}
         <div class="cc-body">${esc(m.body)}</div></div>`;
     }

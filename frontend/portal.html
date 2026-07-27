@@ -79,6 +79,9 @@
   .chat-card .cc-meta { color:var(--ink-v); font-size:11px; margin-bottom:5px; }
   .chat-card .cc-body { color:var(--ink-v); font-size:12px; }
   .chat-card .cc-amt { color:var(--ok); }
+  .chat-card.is-superseded { opacity:.6; border-left-color:var(--line); }
+  .chat-card .cc-tag { font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.05em;
+    border:1px solid currentColor; border-radius:999px; padding:1px 6px; margin-left:5px; color:var(--ink-v); }
   /* Review-the-invoice dialog. Sits above the drawer (10001) — a blocking review
      must never render behind the thing that opened it. */
   .inv-ov { position:fixed; inset:0; z-index:10100; background:rgba(20,18,18,.55);
