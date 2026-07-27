@@ -558,6 +558,30 @@ async def api_portal_deposit_request(proposal_id: str, request: Request) -> Dict
     return _portal(f"/api/admin/proposal/{proposal_id}/deposit-request", "POST", payload)
 
 
+@app.get("/api/dropbox/folders")
+def api_dropbox_folders() -> Dict[str, Any]:
+    """The Estimating destinations + Commercial owner sub-folders, read live from
+    Dropbox so adding or deleting a folder there shows up without a deploy.
+
+    Falls back to the built-in constants when Dropbox is unreachable — step 5 must
+    never dead-end on a bad minute."""
+    try:
+        data = dropbox_client.list_estimating_folders()
+        if data.get("destinations"):
+            return {"ok": True, "live": True, **data}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("dropbox folder listing failed, using fallback: %s", exc)
+    return {
+        "ok": True, "live": False,
+        "destinations": [{"key": k, "label": dropbox_client.DESTINATION_LABELS.get(k, k),
+                          "path": p}
+                         for k, p in dropbox_client.ESTIMATING_DESTINATIONS.items()],
+        "commercial_key": "commercial",
+        "owners": [{"key": k, "label": v.lstrip("*"), "folder": v}
+                   for k, v in dropbox_client.COMMERCIAL_OWNER_SUBFOLDERS.items()],
+    }
+
+
 @app.post("/api/portal/proposal/{proposal_id}/invoice-preview")
 async def api_portal_invoice_preview(proposal_id: str, request: Request) -> Response:
     """Render the deposit invoice from the staff review form WITHOUT sending it.
