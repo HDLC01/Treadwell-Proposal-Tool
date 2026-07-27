@@ -13,7 +13,12 @@
   let ALL = [];
 
   function api(path, opts) {
-    return fetch(TW.resolveApiBase() + path, Object.assign({ headers: TW.authHeaders() }, opts || {}));
+    // MERGE headers — a caller passing its own `headers` used to replace the auth
+    // ones wholesale via Object.assign, so any request that set Content-Type
+    // silently lost its bearer token and came back 401.
+    opts = opts || {};
+    return fetch(TW.resolveApiBase() + path,
+                 Object.assign({}, opts, { headers: TW.authHeaders(opts.headers) }));
   }
   async function tokenReady() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
@@ -115,13 +120,32 @@
   /** Show the invoice fields for review. Resolves to {amount, invoice} when the
    *  user sends, or null if they cancel. The customer receives this exact
    *  document, so nothing goes out unseen. */
+  // Kyle numbers invoices off the job: 23.150-01, then -02 on each resend. So the
+  // job no. is recoverable from the last invoice we issued, and the next number is
+  // just a bump — no second place to type it. The portal's own TW-INV-##### seq is
+  // NOT job-based, so it's excluded.
+  function splitInvoiceNo(no) {
+    const s = String(no || "").trim();
+    const m = /^(.+)-(\d+)$/.exec(s);
+    if (!m || /^TW-INV/i.test(s)) return { job: "", seq: 0 };
+    return { job: m[1], seq: Number(m[2]) };
+  }
+  function jobInvoiceNo(job, seq) {
+    return job ? job + "-" + String((seq || 0) + 1).padStart(2, "0") : "";
+  }
+
   function editInvoiceDialog(pid, data, depAmt) {
     const p = (data && data.proposal) || {};
     const today = new Date();
+    // Prefilled, not blank: an existing job number bumps its own sequence,
+    // otherwise fall back to the number the portal would assign anyway.
+    const prior = splitInvoiceNo(p.deposit_invoice_no);
+    const invoiceNo = jobInvoiceNo(prior.job, prior.seq)
+      || p.deposit_invoice_no || (data && data.next_invoice_no) || "";
     const f = [
-      ["invoice_no", "Invoice no.", p.deposit_invoice_no || ""],
+      ["invoice_no", "Invoice no.", invoiceNo],
       ["invoice_date_text", "Date", `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`],
-      ["job_number", "Job no.", ""],
+      ["job_number", "Job no.", prior.job],
       ["job_name", "Job name", p.project_name || ""],
       ["customer_name", "Bill to", p.customer_name || p.customer_email || ""],
       ["customer_address", "Address", ""],
@@ -180,7 +204,7 @@
         try {
           const out = collect();
           const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/invoice-preview", {
-            method: "POST", headers: { "Content-Type": "application/json" },
+            method: "POST",
             body: JSON.stringify({ amount: out.amount, invoice: out.invoice }),
           });
           if (!r.ok) throw new Error("HTTP " + r.status);
@@ -191,6 +215,20 @@
           alert("Couldn't render the preview. " + (err.message || ""));
         } finally { b.disabled = false; b.textContent = orig; }
       });
+      // Typing the job no. renumbers the invoice in Kyle's format — until staff
+      // edit the invoice box themselves, at which point their value stands.
+      const jobIn = ov.querySelector('input[data-k="job_number"]');
+      const noIn = ov.querySelector('input[data-k="invoice_no"]');
+      let noTouched = false;
+      if (noIn) noIn.addEventListener("input", () => { noTouched = true; });
+      const syncNo = () => {
+        if (noTouched || !jobIn || !noIn) return;
+        const job = jobIn.value.trim();
+        noIn.value = jobInvoiceNo(job, job === prior.job ? prior.seq : 0)
+          || p.deposit_invoice_no || (data && data.next_invoice_no) || "";
+      };
+      if (jobIn) jobIn.addEventListener("input", syncNo);
+
       const first = ov.querySelector("input");
       if (first) first.focus();
 
@@ -209,6 +247,7 @@
           put("customer_address", d.address);
           put("city_state", d.city_state);
           put("job_number", d.job_number);
+          syncNo();
         } catch { /* leave blank → server derives it */ }
       })();
     });
@@ -369,7 +408,6 @@
       const edits = await editInvoiceDialog(pid, data, depAmt);
       if (!edits) return;
       act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", btn, {
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount: edits.amount, invoice: edits.invoice }),
       });
     });
