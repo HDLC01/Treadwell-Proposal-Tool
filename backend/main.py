@@ -558,6 +558,45 @@ async def api_portal_deposit_request(proposal_id: str, request: Request) -> Dict
     return _portal(f"/api/admin/proposal/{proposal_id}/deposit-request", "POST", payload)
 
 
+@app.post("/api/portal/proposal/{proposal_id}/invoice-preview")
+async def api_portal_invoice_preview(proposal_id: str, request: Request) -> Response:
+    """Render the deposit invoice from the staff review form WITHOUT sending it.
+    Same fields, same renderer as the real thing, so what staff approve on screen
+    is exactly what the customer receives. Nothing is written or emailed."""
+    proposal_id = _safe_id(proposal_id)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    inv = body.get("invoice") if isinstance(body, dict) else None
+    payload: Dict[str, Any] = dict(inv) if isinstance(inv, dict) else {}
+    amount = (body or {}).get("amount")
+    if amount is not None:
+        payload.setdefault("deposit_amount", amount)
+        payload.setdefault("total_due", amount)
+    # Fill the gaps the form doesn't collect (contract value, %) from the portal.
+    try:
+        detail = _portal(f"/api/admin/proposal/{proposal_id}")
+        p = (detail or {}).get("proposal") or {}
+        payload.setdefault("contract_value", p.get("approved_total"))
+        payload.setdefault("job_name", p.get("project_name") or "")
+        payload.setdefault("customer_name", p.get("customer_name") or p.get("customer_email") or "")
+    except Exception as exc:  # noqa: BLE001 — a preview must still render
+        log.info("invoice preview: portal lookup failed for %s: %s", proposal_id, exc)
+
+    template = proposal_writer.TEMPLATES_ROOT / invoice_writer.TEMPLATE_NAME
+    if not template.is_file():
+        raise HTTPException(500, f"{invoice_writer.TEMPLATE_NAME} is missing from templates/.")
+    try:
+        with _PDF_RENDER_SEM:
+            pdf = invoice_writer.build_invoice_pdf(payload, template)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Invoice preview render failed")
+        raise HTTPException(500, "Failed to render the invoice preview.") from exc
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="invoice-preview.pdf"'})
+
+
 @app.post("/api/portal/proposal/{proposal_id}/deposit-received")
 def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})

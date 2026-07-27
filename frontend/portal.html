@@ -79,6 +79,22 @@
   .chat-card .cc-meta { color:var(--ink-v); font-size:11px; margin-bottom:5px; }
   .chat-card .cc-body { color:var(--ink-v); font-size:12px; }
   .chat-card .cc-amt { color:var(--ok); }
+  /* Review-the-invoice dialog. Sits above the drawer (10001) — a blocking review
+     must never render behind the thing that opened it. */
+  .inv-ov { position:fixed; inset:0; z-index:10100; background:rgba(20,18,18,.55);
+    display:flex; align-items:center; justify-content:center; padding:20px; }
+  .inv-dlg { background:#fff; border-radius:14px; padding:22px 22px 18px; width:min(620px,96vw);
+    max-height:92vh; overflow:auto; box-shadow:0 24px 60px rgba(0,0,0,.3); }
+  .inv-h { font-size:17px; font-weight:800; }
+  .inv-sub { color:var(--ink-v); font-size:12.5px; margin:4px 0 16px; }
+  .inv-grid { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  .inv-f { display:flex; flex-direction:column; gap:4px; font-size:11px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
+  .inv-f input { font:400 14px system-ui; text-transform:none; letter-spacing:0; color:var(--ink);
+    padding:8px 10px; border:1px solid var(--line); border-radius:7px; }
+  .inv-f input:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+  .inv-act { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+  @media (max-width:560px) { .inv-grid { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>

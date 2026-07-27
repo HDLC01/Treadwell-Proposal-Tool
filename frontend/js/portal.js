@@ -111,6 +111,91 @@
     return { title: "Update", body: s };
   }
 
+  // ── edit the invoice before sending ────────────────────────────────────────
+  /** Show the invoice fields for review. Resolves to {amount, invoice} when the
+   *  user sends, or null if they cancel. The customer receives this exact
+   *  document, so nothing goes out unseen. */
+  function editInvoiceDialog(pid, data, depAmt) {
+    const p = (data && data.proposal) || {};
+    const today = new Date();
+    const f = [
+      ["invoice_no", "Invoice no.", p.deposit_invoice_no || ""],
+      ["invoice_date_text", "Date", `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`],
+      ["job_number", "Job no.", ""],
+      ["job_name", "Job name", p.project_name || ""],
+      ["customer_name", "Bill to", p.customer_name || p.customer_email || ""],
+      ["customer_address", "Address", ""],
+      ["city_state", "City, State ZIP", ""],
+    ];
+    const amt = depAmt != null ? Number(depAmt).toFixed(2) : "";
+
+    return new Promise((resolve) => {
+      const ov = document.createElement("div");
+      ov.className = "inv-ov";
+      ov.innerHTML =
+        `<div class="inv-dlg" role="dialog" aria-modal="true" aria-label="Review the invoice">
+           <div class="inv-h">Review the deposit invoice</div>
+           <p class="inv-sub">This is the document the customer receives. Correct anything before it goes out.</p>
+           <div class="inv-grid">
+             ${f.map(([k, label, v]) =>
+               `<label class="inv-f"><span>${esc(label)}</span>
+                  <input data-k="${k}" type="text" value="${esc(v)}"></label>`).join("")}
+             <label class="inv-f"><span>Deposit amount</span>
+               <input data-k="__amount" type="number" step="0.01" min="0.01" value="${esc(amt)}"></label>
+           </div>
+           <div class="inv-act">
+             <button type="button" class="btn btn-s" data-x>Cancel</button>
+             <button type="button" class="btn btn-s" data-preview>Preview PDF</button>
+             <button type="button" class="btn btn-p" data-go>Send to customer</button>
+           </div>
+         </div>`;
+      document.body.appendChild(ov);
+
+      const collect = () => {
+        const inv = {};
+        let amount = null;
+        ov.querySelectorAll("input[data-k]").forEach((i) => {
+          const v = i.value.trim();
+          if (i.dataset.k === "__amount") { amount = v ? Number(v) : null; return; }
+          if (v) inv[i.dataset.k] = v;
+        });
+        return { amount, invoice: inv };
+      };
+      const close = (val) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(val); };
+      const onKey = (e) => { if (e.key === "Escape") close(null); };
+      document.addEventListener("keydown", onKey);
+
+      ov.querySelector("[data-x]").addEventListener("click", () => close(null));
+      ov.addEventListener("click", (e) => { if (e.target === ov) close(null); });
+      ov.querySelector("[data-go]").addEventListener("click", () => {
+        const out = collect();
+        if (!(out.amount > 0)) { alert("Enter a deposit amount."); return; }
+        close(out);
+      });
+      // Preview renders the REAL document from the same fields, so what staff
+      // approve here is exactly what the customer gets.
+      ov.querySelector("[data-preview]").addEventListener("click", async (e) => {
+        const b = e.target; const orig = b.textContent;
+        b.disabled = true; b.textContent = "Rendering…";
+        try {
+          const out = collect();
+          const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/invoice-preview", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ amount: out.amount, invoice: out.invoice }),
+          });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const url = URL.createObjectURL(await r.blob());
+          window.open(url, "_blank");
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch (err) {
+          alert("Couldn't render the preview. " + (err.message || ""));
+        } finally { b.disabled = false; b.textContent = orig; }
+      });
+      const first = ov.querySelector("input");
+      if (first) first.focus();
+    });
+  }
+
   function msgHtml(m) {
     const t = when(m.created_at);
     // These three render as CARDS, matching the customer portal exactly, so staff
@@ -257,14 +342,14 @@
     $("send-deposit-req").addEventListener("click", async (e) => {
       const btn = e.target;
       if (btn.disabled) return;
-      const amt = depAmt != null ? money(depAmt) : "the deposit";
-      const ok = await TW.confirmDanger({
-        title: "Send deposit request?",
-        message: `Send a deposit request for ${amt} to the customer? They'll get a chat message and an email.`,
-        confirmText: "Send request", tone: "warn", icon: "💳",
+      // Review + edit the actual invoice before it goes out — the customer sees
+      // this document, so staff get the last word on every field.
+      const edits = await editInvoiceDialog(pid, d, depAmt);
+      if (!edits) return;
+      act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", btn, {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: edits.amount, invoice: edits.invoice }),
       });
-      if (!ok) return;
-      act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", btn);
     });
     $("mark-deposit").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", e.target));
     $("mark-scheduled").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/scheduled", e.target));
