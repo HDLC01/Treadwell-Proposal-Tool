@@ -193,6 +193,24 @@
       });
       const first = ov.querySelector("input");
       if (first) first.focus();
+
+      // The drawer payload has no address — those live on the draft, and the
+      // portal's proposal_id IS the draft id. Fill them in so staff review what
+      // will actually print. A blank box just means "use the derived value", so a
+      // failure here is harmless.
+      (async () => {
+        try {
+          const r = await api("/api/draft/" + encodeURIComponent(pid));
+          const d = ((await r.json()) || {}).data || {};
+          const put = (k, v) => {
+            const i = ov.querySelector(`input[data-k="${k}"]`);
+            if (i && !i.value && v) i.value = v;
+          };
+          put("customer_address", d.address);
+          put("city_state", d.city_state);
+          put("job_number", d.job_number);
+        } catch { /* leave blank → server derives it */ }
+      })();
     });
   }
 
@@ -347,7 +365,8 @@
       if (btn.disabled) return;
       // Review + edit the actual invoice before it goes out — the customer sees
       // this document, so staff get the last word on every field.
-      const edits = await editInvoiceDialog(pid, d, depAmt);
+      // `data`, not `d` — `d` is the drawer ELEMENT; passing it left every field blank.
+      const edits = await editInvoiceDialog(pid, data, depAmt);
       if (!edits) return;
       act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-request", btn, {
         headers: { "Content-Type": "application/json" },
