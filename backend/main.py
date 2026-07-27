@@ -2672,7 +2672,10 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     Regenerates the files from the saved proposal_payload (same pipeline as the
     portal PDF path) so the Dropbox copy always matches the latest estimate +
     proposal. Best-effort — never raises to the user; degrades to a message."""
-    base_path = dropbox_client.ESTIMATING_DESTINATIONS.get(payload.destination)
+    # Resolve via the LIVE listing first (a folder added in Dropbox is filable
+    # right away), falling back to the constants. Looking the key up only in
+    # ESTIMATING_DESTINATIONS would reject any newly-listed folder.
+    base_path = dropbox_client.destination_path(payload.destination)
     if not base_path:
         return {"ok": False, "error": "Unknown destination folder."}
     # Commercial Sales can file into a per-person sub-folder (*Liz, *Kyle, …); a

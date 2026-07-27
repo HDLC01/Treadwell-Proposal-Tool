@@ -91,3 +91,73 @@ def test_listing_calls_the_client_the_way_the_rest_of_the_module_does(monkeypatc
     assert [x["label"] for x in d["destinations"]] == ["Commercial Sales Estimates", "Gyp Estimates"]
     assert [o["label"] for o in d["owners"]] == ["Hanz", "Kyle"]
     assert calls[0].endswith("/Estimating")
+
+
+# ── what the FIRST live run against real Dropbox exposed ─────────────────────
+def _stub_live(monkeypatch, cats, owners):
+    from dropbox.files import FolderMetadata
+
+    class _Res:
+        def __init__(self, names):
+            self.entries = [FolderMetadata(name=n) for n in names]
+            self.has_more = False
+
+    class _Client:
+        def files_list_folder(self, path):
+            return _Res(cats if path.endswith("Estimating") else owners)
+
+    monkeypatch.setattr(dropbox_client, "_build_client", lambda: _Client())
+    dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)
+
+
+def test_existing_destinations_keep_their_legacy_keys(monkeypatch):
+    """/api/to-dropbox resolves paths BY KEY. The live listing first emitted
+    '$commercial_sales_estimates' instead of 'commercial', which would have made
+    every filing request fail with "Unknown destination folder"."""
+    _stub_live(monkeypatch, ["$Gyp Estimates", "$Commercial Sales Estimates",
+                             "$Plans Specs Estimates"], ["*Kyle"])
+    try:
+        keys = {d["key"] for d in dropbox_client.list_estimating_folders()["destinations"]}
+    finally:
+        dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)
+    assert keys == {"gyp", "commercial", "plans_specs"}      # unchanged, not slugified
+
+
+def test_the_bid_template_is_never_offered_as_a_destination(monkeypatch):
+    """$$ Bid Template is what each project folder is COPIED FROM — filing a job
+    into it would corrupt the template for everyone."""
+    _stub_live(monkeypatch, ["$$ Bid Template", "$Gyp Estimates"], [])
+    try:
+        labels = [d["label"] for d in dropbox_client.list_estimating_folders()["destinations"]]
+    finally:
+        dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)
+    assert labels == ["Gyp Estimates"]
+
+
+def test_liz_and_troy_are_hidden_even_though_the_folders_exist(monkeypatch):
+    """Will asked for them off the picker; we don't delete anyone's Dropbox
+    folders, so the live listing still returns them and we filter here."""
+    _stub_live(monkeypatch, ["$Commercial Sales Estimates"],
+               ["*Liz", "*Kyle", "*Troy", "*Hanz", "*RJ"])
+    try:
+        owners = [o["label"] for o in dropbox_client.list_estimating_folders()["owners"]]
+    finally:
+        dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)
+    assert owners == ["Hanz", "Kyle", "RJ"]
+
+
+def test_a_new_folder_is_filable_immediately(monkeypatch):
+    _stub_live(monkeypatch, ["$Gyp Estimates", "$Service Work Estimates"], [])
+    try:
+        assert dropbox_client.destination_path("service_work_estimates") == \
+            "/2023 Treadwell Team Folder/Estimating/$Service Work Estimates"
+    finally:
+        dropbox_client._FOLDER_CACHE.update(at=0.0, data=None)
+
+
+def test_destination_path_falls_back_when_dropbox_is_down(monkeypatch):
+    monkeypatch.setattr(dropbox_client, "list_estimating_folders",
+                        lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert dropbox_client.destination_path("gyp") == dropbox_client.ESTIMATING_DESTINATIONS["gyp"]
+    assert dropbox_client.destination_path("nope") is None
+    assert dropbox_client.destination_path("") is None
