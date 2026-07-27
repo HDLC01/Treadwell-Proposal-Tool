@@ -1,4 +1,9 @@
 // Externalized from dropbox.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+// Wrapped in an IIFE: this now loads on done.html ALONGSIDE done.js, and both
+// declare top-level `const state` / `const result`. Sharing global scope threw
+// "Identifier 'state' has already been declared", so this file never ran and
+// the Dropbox section stayed hidden.
+(function () {
   const state = TW.getState();
   // Something must have been estimated/generated before there's anything to file:
   // a Screen-3 proposal_payload, a prior generate_result, OR estimate cell_values
@@ -103,7 +108,7 @@
           method: "POST",
           headers: TW.authHeaders(),
           body: JSON.stringify({ draft_id: draftId, destination: dest.value,
-            folder_owner: (dest.value === "commercial" && owner) ? owner.value : "" }),
+            folder_owner: (dest.value === COMMERCIAL_KEY && owner) ? owner.value : "" }),
         });
         const j = await resp.json().catch(() => ({}));
         if (!resp.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + resp.status));
@@ -114,7 +119,7 @@
         try {
           TW.setState({ dropbox_result: {
             destination: dest.value,
-            folder_owner: (dest.value === "commercial" && owner) ? owner.value : "",
+            folder_owner: (dest.value === COMMERCIAL_KEY && owner) ? owner.value : "",
             folder_path: j.folder_path, folder_url: j.folder_url,
             xlsx_url: j.xlsx_url, docx_url: j.docx_url, pdf_url: j.pdf_url } });
         } catch {}
@@ -127,3 +132,4 @@
   }
 
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+})();
