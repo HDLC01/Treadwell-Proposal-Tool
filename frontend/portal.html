@@ -21,6 +21,10 @@
   .col { flex:0 0 270px; background:var(--surf-low); border:1px solid var(--line); border-radius:10px; padding:10px; }
   .col h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-v);
     margin:2px 4px 10px; display:flex; justify-content:space-between; }
+  /* "Deposit submitted" — the customer has paid and nobody has confirmed it yet,
+     so this column is the one that needs a human. Flagged only when occupied. */
+  .col.col-attn { border-color:var(--red); background:#fdf3f3; }
+  .col.col-attn h2 { color:var(--red-dark); }
   .deal { position:relative; background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; cursor:pointer;
     transition:border-color .15s,box-shadow .15s; }
   .deal:hover { border-color:var(--red); box-shadow:0 2px 8px rgba(0,0,0,.05); }
@@ -59,6 +63,27 @@
   .btn-p { background:var(--red-dark); color:#fff; } .btn-p:hover { background:var(--red); }
   .btn-s { background:#fff; color:var(--ink); border-color:var(--line); } .btn-s:hover { background:var(--surf-low); }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
+  /* Deposit submissions — what the CUSTOMER sent, rendered directly above the
+     deposit buttons so staff read it before they act. The account number ships
+     masked; .dep-show swaps in the full value on click (wired in portal.js). */
+  .dep { border:1px solid var(--line); border-left:3px solid var(--ok); border-radius:8px;
+    background:var(--surf-low); padding:9px 11px; margin-top:6px; }
+  .dep-lbl { margin-top:14px; }
+  .dep-none { margin:8px 0 0; }
+  .dep-h { display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+    flex-wrap:wrap; margin-bottom:6px; }
+  .dep-m { font-size:12.5px; font-weight:800; }
+  .dep-t { font-size:11px; color:var(--ink-v); }
+  .dep-f { display:flex; align-items:baseline; gap:6px; font-size:12px; margin-top:3px; }
+  .dep-k { flex:0 0 92px; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--ink-v); }
+  .dep-v { color:var(--ink); word-break:break-word; }
+  .dep-num { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.03em; }
+  .dep-show { border:1px solid var(--line); background:#fff; color:var(--ink-v); border-radius:999px;
+    padding:1px 8px; font-size:10px; font-weight:700; line-height:1.7; text-transform:uppercase;
+    letter-spacing:.04em; cursor:pointer; }
+  .dep-show:hover { background:var(--surf-high); color:var(--ink); }
+  .dep-s { font-size:11px; color:var(--ink-v); margin-top:6px; }
   .msg { padding:9px 12px; border-radius:8px; margin-bottom:8px; max-width:90%; }
   .msg.customer { background:var(--surf-high); }
   .msg.staff { background:#fdeaec; margin-left:auto; }
