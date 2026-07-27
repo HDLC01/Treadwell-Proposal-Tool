@@ -224,7 +224,10 @@
 
   function editInvoiceDialog(pid, data, depAmt) {
     const p = (data && data.proposal) || {};
-    const today = new Date();
+    // Central, not the browser's clock: an invoice dated a day ahead because the
+    // person raising it is east of Kansas is a document Kyle has to reissue.
+    const todayBiz = (window.TW && TW.fmtBizDate)
+      ? TW.fmtBizDate(new Date().toISOString()) : new Date().toLocaleDateString("en-US");
     // Prefilled, not blank: an existing job number bumps its own sequence,
     // otherwise fall back to the number the portal would assign anyway.
     const prior = splitInvoiceNo(p.deposit_invoice_no);
@@ -232,7 +235,7 @@
       || p.deposit_invoice_no || (data && data.next_invoice_no) || "";
     const f = [
       ["invoice_no", "Invoice no.", invoiceNo],
-      ["invoice_date_text", "Date", `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`],
+      ["invoice_date_text", "Date", todayBiz],
       ["job_number", "Job no.", prior.job],
       ["job_name", "Job name", p.project_name || ""],
       ["customer_name", "Bill to", p.customer_name || p.customer_email || ""],
