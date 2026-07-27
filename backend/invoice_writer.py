@@ -27,6 +27,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 TEMPLATE_NAME = "Invoice_Deposit.docx"
@@ -122,6 +123,48 @@ def _set_p_text(p_elem, text: str) -> None:
         t.set(qn("xml:space"), "preserve")
 
 
+def _scale_runs(p_elem, scale: float) -> None:
+    """Shrink a paragraph's runs by `scale`.
+
+    LibreOffice-headless (our docx→PDF engine) ignores DrawingML text autofit, so
+    a value longer than the placeholder just clips or wraps out of its box — the
+    first real render showed "TW-INV-01001" rendering as "TW-" and "$19,767.50"
+    breaking across two lines. It DOES honour explicit run sizes, so scale those
+    directly. Same technique the proposal writer uses for WORK overflow.
+    """
+    sizes = [int(v) for sz in p_elem.iter(qn("w:sz"))
+             if (v := sz.get(qn("w:val"))) and v.isdigit()]
+    default_hp = max(set(sizes), key=sizes.count) if sizes else 20   # half-points
+    for r in p_elem.iter(qn("w:r")):
+        rpr = r.find(qn("w:rPr"))
+        cur = None
+        if rpr is not None:
+            sz = rpr.find(qn("w:sz"))
+            v = sz.get(qn("w:val")) if sz is not None else None
+            if v and v.isdigit():
+                cur = int(v)
+        new_hp = max(10, int(round((cur if cur is not None else default_hp) * scale)))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            r.insert(0, rpr)
+        for tag in ("w:sz", "w:szCs"):
+            el = rpr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                rpr.append(el)
+            el.set(qn("w:val"), str(new_hp))
+
+
+def _fit_scale(placeholder: str, value: str) -> float:
+    """How much to shrink so `value` occupies roughly the placeholder's width.
+    Only ever shrinks, never grows, and stops at 65% so nothing becomes unreadable
+    (past that the field is genuinely too long and should be shortened upstream)."""
+    old, new = len(placeholder.strip()), len(value.strip())
+    if new <= old or old == 0:
+        return 1.0
+    return max(0.65, old / new)
+
+
 def _fill(doc: Document, values: dict[str, str]) -> int:
     """Replace every placeholder paragraph, in BOTH the mc:Choice and the VML
     mc:Fallback copy of each shape. Returns how many paragraphs were rewritten
@@ -136,6 +179,9 @@ def _fill(doc: Document, values: dict[str, str]) -> int:
                 continue
             val = values.get(field, "")
             _set_p_text(p_elem, val)
+            scale = _fit_scale(key, val)
+            if scale < 1.0:
+                _scale_runs(p_elem, scale)
             hits += 1
     return hits
 

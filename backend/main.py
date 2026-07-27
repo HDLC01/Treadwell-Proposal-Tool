@@ -551,6 +551,10 @@ async def api_portal_deposit_request(proposal_id: str, request: Request) -> Dict
     payload: Dict[str, Any] = {"by": _user_email(request)}
     if isinstance(body, dict) and body.get("amount") is not None:
         payload["amount"] = body["amount"]
+    # Whatever staff edited on the review form, forwarded verbatim — the portal
+    # layers it over the derived invoice fields so the document says what they saw.
+    if isinstance(body, dict) and isinstance(body.get("invoice"), dict):
+        payload["invoice"] = body["invoice"]
     return _portal(f"/api/admin/proposal/{proposal_id}/deposit-request", "POST", payload)
 
 
