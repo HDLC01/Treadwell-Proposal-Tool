@@ -27,9 +27,37 @@
     const ownerField = document.getElementById("dbx-owner-field");
 
     // The per-person "Store in" picker only applies to Commercial Sales.
+    let COMMERCIAL_KEY = "commercial";
     function syncOwner() {
-      if (ownerField) ownerField.style.display = (dest.value === "commercial") ? "" : "none";
+      if (ownerField) ownerField.style.display = (dest.value === COMMERCIAL_KEY) ? "" : "none";
     }
+
+    /** Fill both pickers from the LIVE Dropbox listing, so a folder added or
+     *  removed there shows up without a deploy. The endpoint falls back to the
+     *  server's constants if Dropbox is unreachable, so this never empties the
+     *  form; on a total failure we simply keep the markup's defaults. */
+    async function loadFolders() {
+      try {
+        const r = await fetch("/api/dropbox/folders", { headers: TW.authHeaders() });
+        const j = await r.json();
+        if (!j || !j.ok || !Array.isArray(j.destinations) || !j.destinations.length) return;
+        COMMERCIAL_KEY = j.commercial_key || COMMERCIAL_KEY;
+        const keep = dest.value;
+        dest.innerHTML = '<option value="">Choose a folder…</option>'
+          + j.destinations.map((d) => `<option value="${esc(d.key)}">${esc(d.label)}</option>`).join("");
+        if (keep && dest.querySelector(`option[value="${CSS.escape(keep)}"]`)) dest.value = keep;
+        if (owner) {
+          const keepOwner = owner.value;
+          const catLabel = (j.destinations.find((d) => d.key === COMMERCIAL_KEY) || {}).label
+            || "Commercial Sales Estimates";
+          owner.innerHTML = `<option value="">${esc(catLabel)}</option>`
+            + (j.owners || []).map((o) => `<option value="${esc(o.key)}">${esc(o.label)}</option>`).join("");
+          if (keepOwner && owner.querySelector(`option[value="${CSS.escape(keepOwner)}"]`)) owner.value = keepOwner;
+        }
+        syncOwner();
+      } catch { /* keep the markup defaults */ }
+    }
+    loadFolders();
 
     function renderResult(j) {
       const link = (url, label) => url

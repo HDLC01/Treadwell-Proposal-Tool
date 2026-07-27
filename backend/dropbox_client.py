@@ -19,7 +19,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 log = logging.getLogger("proposal_tool.dropbox_client")
 
@@ -45,19 +45,78 @@ DESTINATION_LABELS: dict[str, str] = {
 # read-only files_list_folder 2026-07-24). A blank/unknown owner files into the
 # category folder itself. Only Commercial Sales has these; Gyp / Plans & Specs
 # always use their category folder.
+# Fallback only — the live list comes from list_estimating_folders() below. Kept
+# so step 5 still works when Dropbox is unreachable. Liz and Troy removed per Will.
 COMMERCIAL_OWNER_SUBFOLDERS: dict[str, str] = {
-    "liz":  "*Liz",
     "kyle": "*Kyle",
-    "troy": "*Troy",
     "hanz": "*Hanz",
     "rj":   "*RJ",
 }
 
+ESTIMATING_ROOT = "/2023 Treadwell Team Folder/Estimating"
+_FOLDER_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
+_FOLDER_TTL_S = 300          # 5 min: new folders show up promptly without hammering Dropbox
+
+
+def _slug(name: str) -> str:
+    """'*Kyle' -> 'kyle'. The value the UI posts back as the owner."""
+    return name.lstrip("*").strip().lower().replace(" ", "_")
+
+
+def list_estimating_folders() -> dict[str, Any]:
+    """The live Estimating destinations + Commercial owner sub-folders, read from
+    Dropbox so adding or removing a folder there is reflected without a deploy.
+
+    Cached briefly. On any failure the caller falls back to the constants above —
+    step 5 must never dead-end because Dropbox had a bad minute.
+    """
+    import time
+    now = time.monotonic()
+    if _FOLDER_CACHE["data"] is not None and (now - _FOLDER_CACHE["at"]) < _FOLDER_TTL_S:
+        return _FOLDER_CACHE["data"]
+
+    dbx, FolderMetadata = _build_client()
+    def _subfolders(path: str) -> list[str]:
+        out = []
+        res = dbx.files_list_folder(path)
+        while True:
+            out += [e.name for e in res.entries if isinstance(e, FolderMetadata)]
+            if not res.has_more:
+                break
+            res = dbx.files_list_folder_continue(res.cursor)
+        return out
+
+    cats = _subfolders(ESTIMATING_ROOT)
+    destinations = [{"key": _slug(n), "label": n.lstrip("$").strip(),
+                     "path": f"{ESTIMATING_ROOT}/{n}"}
+                    for n in sorted(cats) if n.startswith("$")]
+    commercial = next((d for d in destinations if "commercial" in d["key"]), None)
+    owners = []
+    if commercial:
+        owners = [{"key": _slug(n), "label": n.lstrip("*").strip(), "folder": n}
+                  for n in sorted(_subfolders(commercial["path"])) if n.startswith("*")]
+    data = {"destinations": destinations, "commercial_key": commercial["key"] if commercial else None,
+            "owners": owners}
+    _FOLDER_CACHE.update(at=now, data=data)
+    return data
+
 
 def commercial_owner_subfolder(owner: str | None) -> str:
     """Sub-folder under $Commercial Sales Estimates for the chosen owner.
-    Blank/unknown owner → "" (file into the category folder itself)."""
-    return COMMERCIAL_OWNER_SUBFOLDERS.get((owner or "").strip().lower(), "")
+    Blank/unknown owner → "" (file into the category folder itself).
+
+    Checks the LIVE listing first so a folder added in Dropbox works immediately;
+    falls back to the built-in map when the listing isn't available."""
+    key = (owner or "").strip().lower()
+    if not key:
+        return ""
+    try:
+        for o in (list_estimating_folders().get("owners") or []):
+            if o.get("key") == key:
+                return o.get("folder") or ""
+    except Exception:  # noqa: BLE001 — fall through to the constants
+        pass
+    return COMMERCIAL_OWNER_SUBFOLDERS.get(key, "")
 
 
 # Every project folder is a COPY of this bid template (Docs/ + Numbers 5.7.26/
