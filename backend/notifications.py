@@ -219,6 +219,17 @@ def _refresh_portal_messages(state: Dict[str, Any]) -> None:
     state["portal_msgs_synced_at"] = _now_iso()
 
 
+# The portal feed carries more than chat: submitting a deposit posts its own row.
+# Give each type an icon + a body fallback so a payment never reads as "New
+# message". `kind` deliberately stays `portal_message` for all of them — the
+# toast filter in auth.js keys on it, and a deposit absolutely deserves a toast.
+# msg_type -> (icon, empty-body fallback)
+_PORTAL_MSG_TYPES = {
+    "deposit_submitted": ("💵", "Submitted deposit details"),
+}
+_PORTAL_MSG_DEFAULT = ("💬", "New message")
+
+
 def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Map the cached portal messages onto bell items. `sort:-1` floats them above
     every other section; the id (`pmsg:<row id>`) lets the frontend dedupe toasts."""
@@ -230,11 +241,12 @@ def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]
         who = r.get("customer_name") or r.get("author_email") or "A customer"
         proj = r.get("project_name") or "a project"
         pid = r.get("proposal_id")
+        icon, empty_body = _PORTAL_MSG_TYPES.get(r.get("msg_type") or "", _PORTAL_MSG_DEFAULT)
         out.append({
-            "id": f"pmsg:{rid}", "kind": "portal_message", "icon": "💬",
+            "id": f"pmsg:{rid}", "kind": "portal_message", "icon": icon,
             "severity": "high", "sort": -1, "ts": r.get("created_at") or _EPOCH,
             "title": f"{who} · {proj}",
-            "body": r.get("body") or "New message",
+            "body": r.get("body") or empty_body,
             "link": f"/portal.html?open={pid}" if pid else "/portal.html",
         })
     return out

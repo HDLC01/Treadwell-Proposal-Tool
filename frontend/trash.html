@@ -21,6 +21,20 @@
     .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
     .trashed { color:#9e001f; font-weight:600; }
     .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    /* Bulk actions — select several, or empty the whole trash in one go. */
+    .bulkbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px;
+      padding:10px 14px; background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:10px; }
+    .bulk-all { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:600; cursor:pointer; }
+    .bulk-count { font-size:12px; color:#5c403f; }
+    .bulk-spacer { flex:1; }
+    .bulk-btn { border:1px solid rgba(27,28,28,.15); background:#fff; color:#1b1c1c; border-radius:8px;
+      padding:7px 13px; font:600 13px system-ui; cursor:pointer; }
+    .bulk-btn:hover:not(:disabled) { background:#f5f3f3; }
+    .bulk-btn:disabled { opacity:.45; cursor:not-allowed; }
+    .bulk-danger { border-color:rgba(158,0,31,.35); color:#9e001f; }
+    .bulk-danger:hover:not(:disabled) { background:#ffdad8; }
+    .card-pick { display:inline-flex; align-items:center; gap:7px; font-size:12px; color:#5c403f; cursor:pointer; margin-bottom:8px; }
+    .card.is-picked { border-color:#9e001f; box-shadow:0 0 0 2px rgba(158,0,31,.12); opacity:1; }
     .restore-btn { background:#1a7f37; color:#fff; border:none; border-radius:7px; padding:7px 14px; font:600 13px system-ui; cursor:pointer; }
     .restore-btn:hover { background:#156a2d; }
     .purge-btn { background:transparent; color:var(--red); border:1px solid rgba(200,16,46,.4); border-radius:7px; padding:7px 12px; font:600 13px system-ui; cursor:pointer; }
@@ -34,7 +48,16 @@
     <h1>Trash</h1>
   </div>
   <p class="hint">Deleted projects land here first. <b>Restore</b> puts one back in the active Projects list; <b>Delete forever</b> removes it permanently (can't be undone).</p>
-  <div class="wrap"><div id="list" class="loading">Loading trash…</div></div>
+  <div class="wrap">
+    <div id="bulkbar" class="bulkbar" hidden>
+      <label class="bulk-all"><input type="checkbox" id="select-all"> Select all</label>
+      <span id="bulk-count" class="bulk-count"></span>
+      <span class="bulk-spacer"></span>
+      <button type="button" id="purge-selected" class="bulk-btn" disabled>Delete selected</button>
+      <button type="button" id="purge-all" class="bulk-btn bulk-danger">Empty trash</button>
+    </div>
+    <div id="list" class="loading">Loading trash…</div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/auth.js"></script>

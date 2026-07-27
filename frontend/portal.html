@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Customer Portal · Treadwell Proposal Generator</title>
+<title>Customer Portal CRM · Treadwell Proposal Generator</title>
 <style>
   :root { --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
     --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34; }
@@ -21,6 +21,10 @@
   .col { flex:0 0 270px; background:var(--surf-low); border:1px solid var(--line); border-radius:10px; padding:10px; }
   .col h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-v);
     margin:2px 4px 10px; display:flex; justify-content:space-between; }
+  /* "Deposit submitted" — the customer has paid and nobody has confirmed it yet,
+     so this column is the one that needs a human. Flagged only when occupied. */
+  .col.col-attn { border-color:var(--red); background:#fdf3f3; }
+  .col.col-attn h2 { color:var(--red-dark); }
   .deal { position:relative; background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; cursor:pointer;
     transition:border-color .15s,box-shadow .15s; }
   .deal:hover { border-color:var(--red); box-shadow:0 2px 8px rgba(0,0,0,.05); }
@@ -30,10 +34,6 @@
   .deal .meta { color:var(--ink-v); font-size:12px; margin-top:3px; }
   .deal .val { color:var(--red-dark); font-weight:700; font-variant-numeric:tabular-nums; margin-top:4px; }
   .empty { color:var(--ink-v); font-size:12px; padding:8px 4px; }
-  .pill { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:700; }
-  .pill.warn { background:#ffdad8; color:var(--red-dark); }
-  .pill.done { background:#e3f3e6; color:var(--ok); }
-  .pill.pend { background:var(--surf-high); color:var(--ink-v); }
   /* detail — centered modal pop-up (dimmed backdrop; Esc / backdrop / × to close) */
   #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10000; display:none; }
   #drawer { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
@@ -51,6 +51,36 @@
   .dhead h2 { margin:0; font-size:18px; }
   .dclose { border:none; background:none; font-size:22px; cursor:pointer; color:var(--ink-v); line-height:1; }
   .dbody { flex:1 1 auto; min-height:0; overflow-y:auto; padding:18px 20px; }
+  /* drawer section tabs — a third flex item between .dhead and .dbody, so it
+     pins without position:sticky (#drawer is a flex column; .dhead is flex:0 0 auto).
+     Every attention state is carried by WORDS and a badge as well as colour: the
+     rep's browser synthesizes dark mode over this page, so tint can be rewritten. */
+  .dtabs { flex:0 0 auto; display:grid; grid-template-columns:repeat(5,1fr); gap:6px;
+    padding:10px 20px 12px; border-bottom:1px solid var(--line); background:#fff; }
+  .dtabs .step { position:relative; display:block; width:100%; text-align:left; font:inherit; cursor:pointer;
+    border:1px solid var(--line); border-radius:8px; padding:8px 9px; background:var(--surf-low); }
+  .dtabs .step .lbl { margin-bottom:2px; }
+  .dtabs .step .val { display:block; font-size:11.5px; font-weight:700; color:var(--ink-v); }
+  .dtabs .step.is-done { border-color:#bfe3c8; background:#e3f3e6; }
+  .dtabs .step.is-done .val { color:var(--ok); }
+  .dtabs .step.needs { border-color:var(--red); background:#fdf3f3; }
+  .dtabs .step.needs .lbl, .dtabs .step.needs .val { color:var(--red-dark); }
+  .dtabs .step[aria-selected="true"] { background:#fff; border-color:var(--red-dark);
+    box-shadow:inset 0 -3px 0 0 var(--red-dark); }
+  .dtabs .step[aria-selected="true"] .lbl { color:var(--ink); }
+  .dtabs .step:focus-visible { outline:2px solid var(--red); outline-offset:1px; }
+  .tab-badge { display:inline-block; min-width:16px; height:16px; padding:0 4px; margin-left:4px; border-radius:999px;
+    background:var(--red); color:#fff; font-size:10px; font-weight:800; line-height:16px; text-align:center; }
+  .dpanel:focus { outline:none; }
+  .hidden { display:none !important; }
+  @media (max-width:520px) { .dtabs { grid-template-columns:repeat(3,1fr); } }
+  /* Chat owns its own scroll so a long thread never pushes the composer away. */
+  .dbody[data-sec="chat"] { display:flex; flex-direction:column; overflow:hidden; padding-bottom:0; }
+  .dbody[data-sec="chat"] #dpanel-chat,
+  .dbody[data-sec="chat"] #dsec-chat { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; margin-bottom:0; }
+  .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  .dbody[data-sec="chat"] #chat-compose { flex:0 0 auto; padding:10px 0 16px; background:#fff;
+    border-top:1px solid var(--line); }
   .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); margin-bottom:4px; }
   .sec { margin-bottom:20px; }
   .row3 { display:flex; gap:8px; flex-wrap:wrap; }
@@ -59,6 +89,27 @@
   .btn-p { background:var(--red-dark); color:#fff; } .btn-p:hover { background:var(--red); }
   .btn-s { background:#fff; color:var(--ink); border-color:var(--line); } .btn-s:hover { background:var(--surf-low); }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
+  /* Deposit submissions — what the CUSTOMER sent, rendered directly above the
+     deposit buttons so staff read it before they act. The account number ships
+     masked; .dep-show swaps in the full value on click (wired in portal.js). */
+  .dep { border:1px solid var(--line); border-left:3px solid var(--ok); border-radius:8px;
+    background:var(--surf-low); padding:9px 11px; margin-top:6px; }
+  .dep-lbl { margin-top:14px; }
+  .dep-none { margin:8px 0 0; }
+  .dep-h { display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+    flex-wrap:wrap; margin-bottom:6px; }
+  .dep-m { font-size:12.5px; font-weight:800; }
+  .dep-t { font-size:11px; color:var(--ink-v); }
+  .dep-f { display:flex; align-items:baseline; gap:6px; font-size:12px; margin-top:3px; }
+  .dep-k { flex:0 0 92px; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--ink-v); }
+  .dep-v { color:var(--ink); word-break:break-word; }
+  .dep-num { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.03em; }
+  .dep-show { border:1px solid var(--line); background:#fff; color:var(--ink-v); border-radius:999px;
+    padding:1px 8px; font-size:10px; font-weight:700; line-height:1.7; text-transform:uppercase;
+    letter-spacing:.04em; cursor:pointer; }
+  .dep-show:hover { background:var(--surf-high); color:var(--ink); }
+  .dep-s { font-size:11px; color:var(--ink-v); margin-top:6px; }
   .msg { padding:9px 12px; border-radius:8px; margin-bottom:8px; max-width:90%; }
   .msg.customer { background:var(--surf-high); }
   .msg.staff { background:#fdeaec; margin-left:auto; }
@@ -69,11 +120,40 @@
   a.link { color:var(--red-dark); word-break:break-all; }
   .note { color:var(--ink-v); font-size:12px; }
   .note.sys { text-align:center; background:var(--surf-low); border-radius:6px; padding:5px 10px; margin:6px 0; }
+  /* Chat cards — same shape/classes the CUSTOMER portal uses, so staff read the
+     thread exactly as the customer sees it. Left border colour keys the type. */
+  .chat-card { background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--red);
+    border-radius:10px; padding:11px 13px; margin-bottom:8px; }
+  .chat-card.deposit { border-left-color:var(--ok); }
+  .chat-card.system  { border-left-color:var(--ink-v); }
+  .chat-card .cc-title { font-weight:800; font-size:13px; margin-bottom:3px; }
+  .chat-card .cc-meta { color:var(--ink-v); font-size:11px; margin-bottom:5px; }
+  .chat-card .cc-body { color:var(--ink-v); font-size:12px; }
+  .chat-card .cc-amt { color:var(--ok); }
+  .chat-card.is-superseded { opacity:.6; border-left-color:var(--line); }
+  .chat-card .cc-tag { font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.05em;
+    border:1px solid currentColor; border-radius:999px; padding:1px 6px; margin-left:5px; color:var(--ink-v); }
+  /* Review-the-invoice dialog. Sits above the drawer (10001) — a blocking review
+     must never render behind the thing that opened it. */
+  .inv-ov { position:fixed; inset:0; z-index:10100; background:rgba(20,18,18,.55);
+    display:flex; align-items:center; justify-content:center; padding:20px; }
+  .inv-dlg { background:#fff; border-radius:14px; padding:22px 22px 18px; width:min(620px,96vw);
+    max-height:92vh; overflow:auto; box-shadow:0 24px 60px rgba(0,0,0,.3); }
+  .inv-h { font-size:17px; font-weight:800; }
+  .inv-sub { color:var(--ink-v); font-size:12.5px; margin:4px 0 16px; }
+  .inv-grid { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  .inv-f { display:flex; flex-direction:column; gap:4px; font-size:11px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
+  .inv-f input { font:400 14px system-ui; text-transform:none; letter-spacing:0; color:var(--ink);
+    padding:8px 10px; border:1px solid var(--line); border-radius:7px; }
+  .inv-f input:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+  .inv-act { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+  @media (max-width:560px) { .inv-grid { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Customer Portal</h1>
+    <h1>Customer Portal CRM</h1>
     <p class="sub">Proposals sent to customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
     <div class="toolbar">
       <input id="search" type="search" placeholder="Search by project or email…" />
