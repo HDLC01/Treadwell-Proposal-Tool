@@ -133,15 +133,22 @@
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
       '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
       '<nav class="tw-nav">' +
-      '<div class="tw-section">Workspace</div>' +
-      navItem("/projects.html", "▣", "Projects") +
+      // Grouped in the order the job actually happens: work comes in, you price
+      // it and send it, then it's a record. Seven items under one "Workspace"
+      // heading said nothing about which page did what — and buried Notification
+      // Sending, a setting, in the middle of the daily pages.
+      '<div class="tw-section">Leads &amp; bids</div>' +
       navItem("/leads.html", "▤", "Lead Inbox") +
-      navItem("/crm.html", "▦", "Pipeline") +
+      navItem("/crm.html", "▦", "Bid Pipeline") +
+      '<div class="tw-section">Proposals</div>' +
+      navItem("/projects.html", "▣", "Projects") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
-      navItem("/notifications.html", "✉", "Notification Sending") +
+      '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
-      (isAdmin ? '<div class="tw-section">System</div>' + navItem("/admin.html", "◇", "Admin") : "") +
+      '<div class="tw-section">Settings</div>' +
+      navItem("/notifications.html", "✉", "Notification Sending") +
+      (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar">' + esc(initials(u.name, u.email)) + '</div>' +
       '<div class="tw-userinfo"><div class="tw-userline">' +
