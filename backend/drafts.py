@@ -75,6 +75,19 @@ def load_draft(draft_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def draft_is_active(draft_id: str) -> bool:
+    """True when the id resolves to a project that is NOT in the Trash.
+
+    load_draft() deliberately still returns trashed rows — Trash has to read
+    them to restore them. Callers asking "did this already become a usable
+    project?" need the narrower question, or a trashed draft answers yes
+    forever."""
+    sb = get_client()
+    res = (sb.table("drafts").select("id")
+           .eq("id", draft_id).is_("deleted_at", "null").limit(1).execute())
+    return bool(res.data)
+
+
 def delete_draft(draft_id: str) -> bool:
     """Permanently remove a project (hard delete — 'Delete forever' from Trash).
     For normal deletes use trash_draft() so it lands in Trash first. Returns
