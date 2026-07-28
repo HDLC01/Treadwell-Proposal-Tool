@@ -4,15 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <style>
     :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
     * { box-sizing:border-box; }
     body { margin:0; background:#f4f4f5; color:var(--ink); font:400 13.5px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:26px 22px 90px; }
     .wrap { max-width:1200px; margin:0 auto; }
     .top { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
-    .logo { width:32px;height:32px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    .logo { width:51px;height:32px;display:block;flex:none; }
     h1 { font-size:20px; margin:0; } .tag { background:#7a5c00;color:#ffe9a8;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:800;letter-spacing:.04em; }
-    .sub { color:var(--ink-v); margin:0 0 20px 44px; }
+    .sub { color:var(--ink-v); margin:0 0 20px 64px; }   /* clears .logo + .top's 12px gap so it lines up under the h1 */
     .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
     .stat { background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:11px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
     .stat .k { color:var(--ink-v); font-size:11px; text-transform:uppercase; letter-spacing:.05em; } .stat .v { font-size:26px; font-weight:800; margin-top:4px; }

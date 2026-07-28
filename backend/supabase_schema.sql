@@ -83,3 +83,37 @@ create trigger on_auth_user_created after insert on auth.users
 alter table public.drafts   enable row level security;
 alter table public.events   enable row level security;
 alter table public.profiles enable row level security;
+
+-- 4) Lead inbox -------------------------------------------------------
+-- BasisBoard owns the messages and is READ-ONLY to us (we never PATCH, link,
+-- or delete over there). This table is OUR state for each of their messages:
+-- how we triaged it, what the AI made of it, and which estimate it became.
+-- Rows are created lazily on first action, so a message we've never touched
+-- simply isn't here and reads as 'new'.
+create table if not exists public.leads (
+  id           text primary key,                  -- BasisBoard message id
+  lead_status  text not null default 'new'
+               check (lead_status in ('new','qualified','passed','estimate_created','trash')),
+  category     text,                              -- work-type guess: epoxy|polish|combo|gyp|other
+  ai           jsonb not null default '{}'::jsonb,-- cached prequalification (run once per lead)
+  extract      jsonb not null default '{}'::jsonb,-- cached intake extraction
+  draft_id     text,                              -- the estimate this lead became (drafts.id)
+  notes        text,                              -- estimator notes
+  meta         jsonb not null default '{}'::jsonb,-- BasisBoard fields snapshotted at decision time
+  status_by    text,                              -- who last moved it
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists leads_status_idx  on public.leads (lead_status);
+create index if not exists leads_updated_idx on public.leads (updated_at desc);
+-- One estimate per lead: the autopilot checks this before creating another.
+create index if not exists leads_draft_idx   on public.leads (draft_id) where draft_id is not null;
+
+drop trigger if exists leads_updated_at on public.leads;
+create trigger leads_updated_at before update on public.leads
+  for each row execute function public.set_updated_at();
+
+-- Same posture as drafts/events: RLS on, no policies. The backend holds the
+-- service-role key; browsers can never reach this table directly.
+alter table public.leads enable row level security;
+grant select, insert, update, delete on public.leads to service_role;

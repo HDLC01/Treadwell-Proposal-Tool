@@ -4,12 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>History · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <style>
     :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
     * { box-sizing:border-box; }
     body { margin:0; background:#f4f4f5; color:var(--ink); font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 90px; }
     .top { display:flex; align-items:center; gap:14px; max-width:900px; margin:0 auto 20px; }
-    .logo { width:34px;height:34px;border-radius:9px;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
+    .logo { width:54px;height:34px;display:block;flex:none; }
     h1 { font-size:20px; margin:0; flex:1; }
     .wrap { max-width:900px; margin:0 auto; }
     .row { display:flex; gap:12px; padding:12px 14px; background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:10px; margin-bottom:8px; align-items:baseline; box-shadow:0 1px 3px rgba(0,0,0,.04); }
@@ -22,7 +23,7 @@
   </style>
 </head>
 <body>
-  <div class="top"><div class="logo">T</div><h1>History</h1><a href="/projects.html" style="color:var(--red);text-decoration:none;font-weight:600;">← Projects</a></div>
+  <div class="top"><img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" /><h1>History</h1><a href="/projects.html" style="color:var(--red);text-decoration:none;font-weight:600;">← Projects</a></div>
   <div class="wrap"><div id="feed" class="loading">Loading activity…</div></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
