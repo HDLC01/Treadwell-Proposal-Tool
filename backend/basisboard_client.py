@@ -26,6 +26,20 @@ Read contract (https://api.basisboard.com/v1, `Authorization: Bearer <key>`):
                                          -> {"projectIds":[...], "paging":{"total"}}
   GET /projects?filter[projectIds][]=... -> {"projects":[{id,name,location,quote,
                                               stageId,estimatorIds,awardedAt,archivedAt,deletedAt}]}
+  GET /messages?filter[status]=unlinked&limit&offset
+                                         -> {"messages":[{id,subject,fromEmail,createdAt,
+                                              platformId,communicationType,status,isSpam,
+                                              project{name,location,region,addressLine,city},
+                                              company{name},bidDeadlineAt,distance,travelTime,
+                                              scrapedIndicator{},groupedMessages[],
+                                              suggestedGroupedMessages[],duplicateMessagesCount}],
+                                             "paging":{"total"}}
+                                            (most sub-objects/fields are frequently null)
+  GET /messages/stats?timeFrame=this-month
+                                         -> {received,automaticallyProcessed,duplicatesProcessed}
+  GET /messages/{id}/detail              -> {"message":{id,subject,fromEmail,createdAt,
+                                              communicationType,body:"<full HTML email>"}}
+  GET /messages/{id}                     -> {"url": "<signed .eml URL, expires in 15 min>"}
 """
 from __future__ import annotations
 
@@ -51,9 +65,15 @@ _TRANSIENT = {429, 500, 502, 503, 504}
 # stages/users change rarely; the assembled pipeline is cached briefly so a page
 # refresh doesn't re-fetch everything. _BUILD_LOCK coalesces concurrent cold
 # builds so 10 simultaneous loads trigger ONE fetch, not 10.
-_meta_cache = cachetools.TTLCache(maxsize=4, ttl=300)
+_meta_cache = cachetools.TTLCache(maxsize=8, ttl=300)
 _pipeline_cache = cachetools.TTLCache(maxsize=1, ttl=60)
 _BUILD_LOCK = threading.Lock()
+
+# The lead inbox is a separate read with its own cadence, so it gets its own
+# cache + lock: a slow inbox build must never block (or be blocked by) the CRM
+# board, and one view going stale shouldn't evict the other.
+_inbox_cache = cachetools.TTLCache(maxsize=4, ttl=60)
+_INBOX_LOCK = threading.Lock()
 
 
 # ── config ────────────────────────────────────────────────────────────
@@ -72,6 +92,15 @@ def _max_projects() -> int:
         return max(1, min(500, int(os.environ.get("BASISBOARD_MAX_PROJECTS") or 300)))
     except (TypeError, ValueError):
         return 300
+
+
+def _max_messages() -> int:
+    """How many (most-recent) inbox messages to pull. The org receives ~700 a
+    month; the lead inbox shows a recent, capped window like the pipeline does."""
+    try:
+        return max(1, min(500, int(os.environ.get("BASISBOARD_MAX_MESSAGES") or 200)))
+    except (TypeError, ValueError):
+        return 200
 
 
 def is_configured() -> bool:
@@ -184,6 +213,45 @@ def _fetch_projects(client, ids: List[str], ex: Optional[ThreadPoolExecutor] = N
     return out
 
 
+def _messages_page(client, status: str, offset: int) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"limit": _PAGE, "offset": offset}
+    if status:
+        params["filter[status]"] = status
+    return _get(client, "/messages", params)
+
+
+def _fetch_messages(client, status: str = "unlinked", cap: Optional[int] = None,
+                    ex: Optional[ThreadPoolExecutor] = None):
+    """Inbox messages for `status`, in Basisboard's own order, up to `cap`
+    (default `_max_messages()`). The first page is sequential because it carries
+    `paging.total`; the rest fetch in parallel when an executor is given.
+    Returns (messages, total)."""
+    cap = _max_messages() if cap is None else max(1, cap)
+    first = _messages_page(client, status, 0)
+    msgs: List[Dict[str, Any]] = list(first.get("messages") or [])
+    total = (first.get("paging") or {}).get("total", len(msgs))
+    offsets = list(range(_PAGE, min(cap, total), _PAGE))
+    if offsets:
+        if ex is not None:
+            pages = [f.result() for f in [ex.submit(_messages_page, client, status, o) for o in offsets]]
+        else:
+            pages = [_messages_page(client, status, o) for o in offsets]
+        for pg in pages:
+            msgs.extend(pg.get("messages") or [])
+    return msgs[:cap], total
+
+
+def _fetch_message_stats(client, time_frame: str = "this-month") -> Dict[str, Any]:
+    """Inbox counters (received / automaticallyProcessed / duplicatesProcessed).
+    Meta-cached — they're a header stat, not something worth re-fetching per load."""
+    key = f"msg_stats:{time_frame}"
+    cached = _meta_cache.get(key)
+    if cached is None:
+        cached = _get(client, "/messages/stats", {"timeFrame": time_frame}) or {}
+        _meta_cache[key] = cached
+    return cached
+
+
 # ── shaping + assembly ────────────────────────────────────────────────
 def _shape_project(p: Dict[str, Any], stages: Dict[str, Dict[str, Any]],
                    users: Dict[str, str]) -> Dict[str, Any]:
@@ -245,3 +313,70 @@ def get_pipeline() -> Dict[str, Any]:
             return {"ok": False, "configured": True, "error": "Couldn't reach Basisboard"}
         _pipeline_cache["pipeline"] = result
         return result
+
+
+# ── inbox (lead messages) ─────────────────────────────────────────────
+def _build_inbox(status: str) -> Dict[str, Any]:
+    """Fetch the message pages + the stats header over one pooled client."""
+    with _session() as client, ThreadPoolExecutor(max_workers=_CONCURRENCY) as ex:
+        f_stats = ex.submit(_fetch_message_stats, client)
+        messages, total = _fetch_messages(client, status, _max_messages(), ex)
+        try:
+            stats = f_stats.result()
+        except Exception as exc:  # noqa: BLE001 — a header counter is not worth failing the inbox
+            log.info("Basisboard message stats unavailable: %s", exc)
+            stats = {}
+    return {"ok": True, "configured": True, "messages": messages, "stats": stats,
+            "shown": len(messages), "total": total}
+
+
+def get_inbox(status: str = "unlinked") -> Dict[str, Any]:
+    """Read-only lead inbox: raw Basisboard messages (unshaped — `leads.merge_inbox`
+    owns the row shape) plus the month-to-date stats. Cached 60 s; concurrent cold
+    builds are coalesced. Returns {"ok": True, ...} or {"ok": False, ...} — never
+    raises, and always carries `messages`/`stats` so callers can iterate blindly."""
+    if not is_configured():
+        return {"ok": False, "configured": False, "messages": [], "stats": {},
+                "error": "Basisboard is not configured"}
+    cached = _inbox_cache.get(status)
+    if cached is not None:
+        return cached
+    with _INBOX_LOCK:
+        cached = _inbox_cache.get(status)            # another thread may have built it
+        if cached is not None:
+            return cached
+        try:
+            result = _build_inbox(status)
+        except Exception as exc:  # noqa: BLE001 — read view must never 500 the page
+            log.warning("Basisboard get_inbox failed: %s", exc)
+            return {"ok": False, "configured": True, "messages": [], "stats": {},
+                    "error": "Couldn't reach Basisboard"}
+        _inbox_cache[status] = result
+        return result
+
+
+def get_message_detail(message_id: str) -> Optional[Dict[str, Any]]:
+    """One message WITH its full HTML body (`{"message": {..., "body": "<html>"}}`).
+    Deliberately uncached: bodies run tens of KB and are read once, when a lead
+    drawer opens. Returns None on any failure — never raises."""
+    if not (is_configured() and message_id):
+        return None
+    try:
+        with _session() as client:
+            return _get(client, f"/messages/{message_id}/detail")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Basisboard message detail %s failed: %s", message_id, exc)
+        return None
+
+
+def get_message_url(message_id: str) -> Optional[str]:
+    """Signed URL to the raw .eml. NEVER cached — it expires after 15 minutes, so
+    every read mints a fresh one. Returns None on any failure — never raises."""
+    if not (is_configured() and message_id):
+        return None
+    try:
+        with _session() as client:
+            return (_get(client, f"/messages/{message_id}") or {}).get("url") or None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Basisboard message url %s failed: %s", message_id, exc)
+        return None

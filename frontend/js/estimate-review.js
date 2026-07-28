@@ -3054,7 +3054,10 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
       project_name: state.project_name,
       address:      state.address,
       city_state:   state.city_state,
-      notes:        state.notes || "",
+      // Intake renamed its textarea to contact_notes, so `notes` has been empty
+      // since — autofill was reading name+address only. Lead-created drafts write
+      // the raw email into `notes`, so keep both.
+      notes:        state.notes || state.contact_notes || "",
     });
     if (j.ok && j.cell_values) {
       const FLAG_LABELS = {

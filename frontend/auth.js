@@ -135,6 +135,7 @@
       '<nav class="tw-nav">' +
       '<div class="tw-section">Workspace</div>' +
       navItem("/projects.html", "▣", "Projects") +
+      navItem("/leads.html", "▤", "Lead Inbox") +
       navItem("/crm.html", "▦", "Pipeline") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
       navItem("/notifications.html", "✉", "Notification Sending") +
