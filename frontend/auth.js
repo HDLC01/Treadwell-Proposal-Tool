@@ -128,7 +128,8 @@
     const aside = document.createElement("aside");
     aside.id = "tw-sidebar";
     aside.innerHTML =
-      '<div class="tw-brand"><div class="tw-logo">T</div>' +
+      '<div class="tw-brand">' +
+      '<img class="tw-bison" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell">' +
       '<div class="tw-brandtext"><div class="tw-brandname">Treadwell</div>' +
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
       '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
@@ -363,8 +364,8 @@ padding:18px 14px;z-index:9998;transform:translateX(-100%);transition:transform 
 font:400 14px/1.4 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--tw-ink);box-sizing:border-box;}
 html.tw-nav-open #tw-sidebar{transform:translateX(0);}
 .tw-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;}
-.tw-logo{width:34px;height:34px;border-radius:9px;background:var(--tw-red);color:#fff;
-font-weight:800;font-size:17px;display:flex;align-items:center;justify-content:center;flex:none;}
+/* block kills the inline baseline gap; flex:none stops the 240px rail squeezing the mark */
+.tw-bison{width:54px;height:34px;display:block;flex:none;}
 .tw-brandname{font-size:18px;font-weight:600;line-height:1.1;}
 .tw-brandsub{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--tw-ink-v);}
 .tw-collapse{margin-left:auto;border:none;background:none;color:var(--tw-ink-v);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:6px;}
