@@ -43,6 +43,7 @@ _LOCK = threading.Lock()
 _MEM_STATE: Dict[str, Any] = {}        # fallback when the volume isn't writable
 _PIPELINE_TTL_S = 55                   # don't re-diff Basisboard more often than this
 _PIPELINE_KEEP_DAYS = 30               # prune pipeline change events older than this
+_LEADS_TTL_S = 55                      # same cadence for the lead-inbox diff
 _PORTAL_MSG_TTL_S = 55                 # don't re-poll the portal for messages more often than this
 _MAX_ITEMS = 60
 _TZ_NAME = "America/Chicago"
@@ -182,6 +183,100 @@ def _refresh_pipeline(state: Dict[str, Any]) -> None:
             state["pipeline_events"] = _prune_events(events)
     state["pipeline_snapshot"] = _snapshot(projects)
     state["pipeline_synced_at"] = now_iso
+
+
+# ── lead inbox ─────────────────────────────────────────────────────────
+# Same snapshot-diff shape as the pipeline: Basisboard has no webhook we trust
+# yet, so "a new lead arrived" is "an id we hadn't seen before". Only non-spam
+# bid invites count — addenda, replies and platform noise are a page to browse,
+# not something worth a bell.
+_LEADS_SNAPSHOT_CAP = 500
+
+
+def _lead_ids(messages: List[Dict[str, Any]]) -> List[str]:
+    return [str(m.get("id")) for m in messages
+            if m.get("id") and not m.get("isSpam")
+            and str(m.get("communicationType") or "") == "bid_invite"]
+
+
+def _lead_events(messages: List[Dict[str, Any]], now_iso: str) -> List[Dict[str, Any]]:
+    """Bell items for newly arrived leads. `ts` is when we noticed, not the
+    email's own timestamp — a message Basisboard backfills a day late still
+    deserves to read as unread."""
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        proj = m.get("project") or {}
+        company = ((m.get("company") or {}).get("name") or "").strip()
+        out.append({
+            "id": f"lead:new:{m.get('id')}", "kind": "lead_new", "icon": "📥",
+            "severity": "info", "sort": 3, "ts": now_iso, "link": "/leads.html",
+            "title": str(proj.get("name") or m.get("subject") or "New lead"),
+            "body": "New lead" + (f" · {company}" if company else ""),
+        })
+    return out
+
+
+def _refresh_leads(state: Dict[str, Any]) -> None:
+    """Diff the lead inbox against the stored snapshot and record what's new.
+    Throttled + best-effort; mutates `state` in place.
+
+    The FIRST run only records the baseline — the inbox holds a couple of weeks
+    of invites, and announcing all of them at once is a flood, not news."""
+    if not basisboard_client.is_configured():
+        return
+    synced_at = state.get("leads_synced_at")
+    if synced_at:
+        try:
+            if (_now() - datetime.fromisoformat(synced_at)).total_seconds() < _LEADS_TTL_S:
+                return
+        except Exception:              # noqa: BLE001 - bad stored value → refresh anyway
+            pass
+    data = basisboard_client.get_inbox()
+    if not data.get("ok"):
+        return
+    messages = data.get("messages") or []
+    ids = _lead_ids(messages)
+    now_iso = _now_iso()
+    prev = state.get("leads_snapshot")
+    # `is not None`, not truthiness: an empty inbox on the first run is still a
+    # baseline, and treating it as "no baseline" would flood on the next sweep.
+    if prev is not None:
+        arrived = set(ids) - set(prev)
+        fresh = [m for m in messages if str(m.get("id")) in arrived]
+        if fresh:
+            events = list(state.get("lead_events") or [])
+            events.extend(_lead_events(fresh, now_iso))
+            state["lead_events"] = _prune_events(events)
+    state["leads_snapshot"] = ids[:_LEADS_SNAPSHOT_CAP]
+    state["leads_synced_at"] = now_iso
+
+
+def add_lead_estimate(draft_id: str, title: str, body: str = "") -> None:
+    """Record the autopilot's "I drafted an estimate from a lead" item.
+
+    Pushed rather than diffed: nothing about the Basisboard inbox changes when
+    we create a draft, so there's no snapshot that would ever notice. Called
+    from the worker thread — best-effort, and never raises into the sweep."""
+    did = str(draft_id or "").strip()
+    if not did:
+        return
+    event = {
+        "id": f"lead:est:{did}", "kind": "lead_estimate", "icon": "📐",
+        "severity": "high", "sort": 3, "ts": _now_iso(),
+        "link": f"/?d={did}&edit=1",
+        "title": title or "A lead", "body": body or "Estimate drafted from a lead",
+    }
+    try:
+        with _LOCK:
+            state = _load_state()
+            events = list(state.get("lead_events") or [])
+            if any(e.get("id") == event["id"] for e in events):
+                return
+            events.append(event)
+            state["lead_events"] = _prune_events(events)
+            _save_state(state)
+    except Exception as exc:           # noqa: BLE001 - a bell item is not worth a retry
+        log.warning("lead estimate notification failed: %s", exc)
 
 
 # ── customer portal messages ───────────────────────────────────────────
@@ -348,6 +443,10 @@ def get_notifications() -> Dict[str, Any]:
         except Exception as exc:       # noqa: BLE001 - never let the pipeline break the bell
             log.warning("pipeline refresh failed: %s", exc)
         try:
+            _refresh_leads(state)
+        except Exception as exc:       # noqa: BLE001 - never let the lead inbox break the bell
+            log.warning("lead refresh failed: %s", exc)
+        try:
             _refresh_portal_messages(state)
         except Exception as exc:       # noqa: BLE001 - never let the portal break the bell
             log.warning("portal messages refresh failed: %s", exc)
@@ -363,6 +462,7 @@ def get_notifications() -> Dict[str, Any]:
     items = _deadline_notifications(projects, _biz_today())
     for e in (state.get("pipeline_events") or []):
         items.append(e)
+    items.extend(state.get("lead_events") or [])
     items.extend(_dropbox_notifications())
     items.extend(_portal_message_notifications(state))
 

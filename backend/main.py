@@ -64,6 +64,8 @@ import drafts
 import dropbox_client
 import estimate_writer
 import invoice_writer
+import leads
+import leads_worker
 import notifications
 import pdf_writer
 import pricing
@@ -1085,13 +1087,19 @@ _AUTOFILL_SYSTEM_PROMPT = (
 )
 
 
-def _autofill_via_cli(user_input: str) -> Dict[str, Any]:
+def _autofill_via_cli(user_input: str,
+                      system_prompt: str = _AUTOFILL_SYSTEM_PROMPT) -> Dict[str, Any]:
     """Run the `claude -p` CLI subprocess and parse its JSON response.
 
     This is the ONLY autofill path. We deliberately don't call the
     Anthropic API directly — all Claude calls go through the CLI
     subprocess. The CLI uses the user's logged-in Pro/Max session
     (no API key needed).
+
+    `system_prompt` picks the job: intake autofill by default, or one of the
+    lead-inbox prompts in leads.py. Every strict-JSON Claude call in this app
+    runs through here so the subprocess flags, fence stripping and error
+    handling exist exactly once.
     """
     import json
     import subprocess
@@ -1107,7 +1115,7 @@ def _autofill_via_cli(user_input: str) -> Dict[str, Any]:
             # we keep Sonnet's extraction accuracy). Override via AUTOFILL_MODEL.
             "--model", os.environ.get("AUTOFILL_MODEL", "sonnet"),
             "--output-format", "text",
-            "--append-system-prompt", _AUTOFILL_SYSTEM_PROMPT,
+            "--append-system-prompt", system_prompt,
         ],
         input=user_input,
         capture_output=True,
@@ -1180,6 +1188,22 @@ def _autofill_rate_refund(bucket: str) -> None:
     burn the project's budget."""
     if _AUTOFILL_HITS.get(bucket):
         _AUTOFILL_HITS[bucket].pop()
+
+
+def _ai_rate_limited(retry: int, what: str) -> JSONResponse:
+    """The 429 body for the other AI-backed buttons (lead prequalify). Same
+    limiter and constants as autofill; `what` names the button the estimator
+    actually pressed so the message isn't about a feature they didn't use."""
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": str(retry)},
+        content={
+            "ok": False, "rate_limited": True, "retry_after_seconds": retry,
+            "error": f"{what} limit reached (max {_AUTOFILL_RATE_MAX} per "
+                     f"{_AUTOFILL_RATE_WINDOW // 60} min). "
+                     f"Try again in ~{math.ceil(retry / 60)} min.",
+        },
+    )
 
 
 @app.post("/api/autofill")
@@ -2640,6 +2664,11 @@ def api_history() -> Dict[str, Any]:
 def api_notifications() -> Dict[str, Any]:
     """Notification-bell feed: proposal deadlines (overdue / due today / due soon /
     no deadline) + Basisboard pipeline changes, with a global unread count."""
+    # Every page polls the bell, so this is where the lead autopilot wakes up
+    # after a deploy — no cron, and nothing running while the office is empty
+    # and nobody has opened the app. Starts once; a no-op on every later poll.
+    leads_worker.ensure_started(create_estimate=_create_estimate_from_lead,
+                                prequalify=_prequalify_lead)
     try:
         return {"ok": True, **notifications.get_notifications()}
     except Exception as exc:  # noqa: BLE001
@@ -2895,6 +2924,266 @@ def api_admin_delete_project(project_id: str, request: Request) -> Dict[str, Any
     actor = _require_admin(request)
     existed = drafts.trash_draft(project_id, actor.get("email"))
     return {"ok": True, "existed": existed, "trashed": True}
+
+
+# ─── Lead inbox (Basisboard messages + OUR state) ─────────────────────
+# Company-wide like the CRM board — every signed-in estimator works the same
+# queue, so none of these are admin-gated. Basisboard stays READ-ONLY: the
+# messages come from its API and every decision we make about them lands in our
+# own `leads` table (backend/leads.py).
+class LeadStatusIn(BaseModel):
+    lead_status: str                    # new|qualified|passed|estimate_created|trash
+    category: Optional[str] = None      # epoxy|polish|combo|gyp|other
+    notes: Optional[str] = None
+
+
+# Mirrors the DB check constraint. Kept here too so a bad value fails as a 400
+# with a readable message instead of a PostgREST constraint error.
+_LEAD_STATUSES = {"new", "qualified", "passed", "estimate_created", "trash"}
+
+
+def _lead_message(message_id: str) -> Optional[Dict[str, Any]]:
+    """The raw Basisboard message behind `message_id`, from the 60s-cached inbox.
+
+    Reading it out of the cached list (rather than fetching the message again)
+    keeps a drawer action off Basisboard's rate limiter and guarantees the
+    handler sees exactly the row the page is showing."""
+    mid = (message_id or "").strip()
+    if not mid:
+        return None
+    for msg in (basisboard_client.get_inbox().get("messages") or []):
+        if str(msg.get("id") or "") == mid:
+            return msg
+    return None
+
+
+def _draft_exists(draft_id: str) -> bool:
+    """Whether a draft id still resolves to a LIVE project. Trashed doesn't
+    count: binning a bad auto-draft is the documented remedy for a misread
+    email, and it has to actually free the lead to try again. A DB blip answers
+    True — a duplicate project is worse than a stale link."""
+    try:
+        return drafts.draft_is_active(draft_id)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _existing_lead_draft(msg: Dict[str, Any]) -> Optional[str]:
+    """The draft already created from this lead — or from any message Basisboard
+    grouped with it. Bid invites arrive two and three times (the GC's platform,
+    a forward, a resend); each copy is its own message id, and none of them
+    should become a second project."""
+    ids = [str(msg.get("id") or "")]
+    ids += [str(g.get("id") or "") for g in (msg.get("groupedMessages") or [])]
+    ids = [i for i in ids if i]
+    states = leads.get_lead_states(ids)
+    for mid in ids:                      # the lead's own draft wins over a sibling's
+        did = str((states.get(mid) or {}).get("draft_id") or "")
+        if did and _draft_exists(did):
+            return did
+    return None
+
+
+def _prequalify_lead(msg: Dict[str, Any],
+                     actor_email: Optional[str] = None) -> Dict[str, Any]:
+    """Score one lead and store the result on its row. Raises if the AI leg
+    fails — the caller decides whether that's a refunded error (the button) or a
+    logged skip (the autopilot).
+
+    Shared by `/api/leads/{id}/prequalify` and leads_worker, so a staff-pressed
+    score and an autopilot score are the same computation."""
+    mid = str(msg.get("id") or "")
+    text = (leads.fetch_email_text(mid).get("text") or "")
+    ai = _autofill_via_cli(leads.build_prompt_input(msg, text),
+                           leads._PREQUAL_SYSTEM_PROMPT)
+    if not isinstance(ai, dict):
+        raise ValueError("Prequalify returned a non-object.")
+
+    patch: Dict[str, Any] = {"ai": ai}
+    guess = str(ai.get("work_type_guess") or "").strip().lower()
+    row = leads.get_lead_states([mid]).get(mid) or {}
+    # The AI's work-type guess seeds the category, but never overwrites one a
+    # human already chose.
+    if guess and guess != "none" and not (row.get("category") or ""):
+        patch["category"] = guess
+    leads.upsert_lead(mid, patch, actor_email=actor_email)
+    return ai
+
+
+def _create_estimate_from_lead(msg: Dict[str, Any], actor_email: Optional[str] = None,
+                               auto: bool = False, skip_ai_reason: str = "") -> Dict[str, Any]:
+    """Turn one lead into a prefilled intake draft. Returns
+    {ok, draft_id, ai_used, existing, warning}.
+
+    THE implementation — the drawer button and the autopilot both call this, so
+    "how a lead becomes a project" can never mean two different things.
+
+    Metadata first: the scraped blob always succeeds, and the AI only ever
+    overlays whitelisted keys on top of it. A dead AI costs the estimator some
+    typing; it never costs them the draft."""
+    mid = str(msg.get("id") or "")
+    existing = _existing_lead_draft(msg)
+    if existing:
+        # No `ai_used` key on this path — we don't know how the first one was
+        # built, and the page reads ai_used === false as "thin draft, warn me".
+        return {"ok": True, "draft_id": existing, "existing": True}
+
+    draft_id = str(uuid.uuid4())
+    text = (leads.fetch_email_text(mid).get("text") or "")
+    blob = leads.build_base_blob(msg, text, draft_id)
+    blob["lead_auto"] = bool(auto)       # labels the drafts nobody asked for
+
+    ai: Dict[str, Any] = {}
+    ai_ran = False
+    warning = skip_ai_reason
+    if not skip_ai_reason:
+        try:
+            result = _autofill_via_cli(leads.build_prompt_input(msg, text),
+                                       leads._EXTRACT_SYSTEM_PROMPT)
+            if not isinstance(result, dict):
+                raise ValueError("Extract returned a non-object.")
+            ai, ai_ran = result, True
+            blob = leads.apply_ai_overlay(blob, ai)
+        except Exception as exc:  # noqa: BLE001 — the draft ships regardless
+            log.warning("Lead %s: intake extract failed: %s", mid, exc)
+            warning = ("Prefilled from the scraped fields only — the AI couldn't "
+                       "read this email.")
+
+    drafts.save_draft(draft_id, blob, owner_email=actor_email)
+    leads.upsert_lead(mid, {"lead_status": "estimate_created", "draft_id": draft_id,
+                            "extract": ai}, actor_email=actor_email)
+    drafts.log_event(draft_id, actor_email,
+                     "auto_created_from_lead" if auto else "created_from_lead",
+                     {"lead_id": mid, "project_name": blob.get("project_name"),
+                      "subject": str(msg.get("subject") or ""), "ai_used": bool(ai)})
+    # `ai_ran` is not `ai_used`: the extract prompt is told to omit anything it
+    # can't find, so an honest empty answer still cost a 20-30s paid call and
+    # must not be refunded as a failure.
+    return {"ok": True, "draft_id": draft_id, "existing": False,
+            "ai_used": bool(ai), "ai_ran": ai_ran, "warning": warning or None}
+
+
+@app.get("/api/leads")
+def api_leads() -> Dict[str, Any]:
+    """The lead inbox: live Basisboard messages LEFT-merged with our lead rows.
+
+    Always HTTP 200. An unset key or an unreachable Basisboard comes back as
+    {ok: false} with the reason, because the page renders its own empty state
+    (and keeps its stale-while-revalidate list) — a 500 would blank a work queue
+    over someone else's outage."""
+    leads_worker.ensure_started(create_estimate=_create_estimate_from_lead,
+                                prequalify=_prequalify_lead)
+    data = basisboard_client.get_inbox()
+    if not data.get("ok"):
+        return {"ok": False, "configured": bool(data.get("configured")),
+                "error": data.get("error") or "Couldn't reach Basisboard.",
+                "leads": [], "stats": {}}
+    messages = data.get("messages") or []
+    states = leads.get_lead_states([str(m.get("id")) for m in messages if m.get("id")])
+    return {"ok": True, "configured": True,
+            "leads": leads.merge_inbox(messages, states),
+            "stats": data.get("stats") or {},
+            "shown": data.get("shown"), "total": data.get("total")}
+
+
+@app.get("/api/leads/{message_id}/body")
+def api_lead_body(message_id: str) -> Dict[str, Any]:
+    """The readable text of one lead email. Text only — a bid invite is foreign
+    HTML from a platform we don't control, and it is never rendered as markup."""
+    return leads.fetch_email_text(message_id)
+
+
+@app.post("/api/leads/{message_id}/status")
+def api_lead_status(message_id: str, payload: LeadStatusIn,
+                    request: Request) -> Dict[str, Any]:
+    """Qualify / Pass / Trash a lead (and optionally set its category + notes)."""
+    status = (payload.lead_status or "").strip().lower()
+    if status not in _LEAD_STATUSES:
+        raise HTTPException(400, "Unknown lead status.")
+    patch: Dict[str, Any] = {"lead_status": status}
+    if payload.category is not None:
+        patch["category"] = payload.category.strip().lower()
+    if payload.notes is not None:
+        patch["notes"] = payload.notes
+    # upsert_lead logs `lead_status_changed` itself — logging here too would
+    # double every status change in History.
+    row = leads.upsert_lead(message_id, patch, actor_email=_user_email(request))
+    if row is None:
+        return {"ok": False, "error": "Couldn't save that lead. Try again."}
+    return {"ok": True, "lead": row}
+
+
+@app.post("/api/leads/{message_id}/prequalify")
+def api_lead_prequalify(message_id: str, request: Request,
+                        force: bool = False) -> Any:
+    """Score a lead for fit. The result is cached on the row forever: reopening
+    the drawer re-reads it, and only `?force=1` spends another AI run."""
+    row = leads.get_lead_states([message_id]).get(message_id) or {}
+    cached = row.get("ai") if isinstance(row.get("ai"), dict) else {}
+    if cached and not force:
+        return {"ok": True, "ai": cached, "cached": True}
+
+    msg = _lead_message(message_id)
+    if msg is None:
+        raise HTTPException(404, "That lead isn't in the current inbox.")
+
+    bucket = f"prequal|{_user_email(request) or 'anon'}"
+    retry = _autofill_rate_retry(bucket)
+    if retry is not None:
+        return _ai_rate_limited(retry, "Prequalify")
+    _autofill_rate_record(bucket)       # reserve up front, refund on failure
+    try:
+        ai = _prequalify_lead(msg, actor_email=_user_email(request))
+    except FileNotFoundError:
+        _autofill_rate_refund(bucket)
+        return {"ok": False, "error": "`claude` CLI not on PATH — AI scoring is off."}
+    except Exception as exc:  # noqa: BLE001
+        _autofill_rate_refund(bucket)
+        log.warning("Prequalify %s failed: %s", message_id, exc)
+        return {"ok": False, "error": "Couldn't score this lead. Please try again."}
+    return {"ok": True, "ai": ai, "cached": False}
+
+
+@app.post("/api/leads/{message_id}/create-estimate")
+def api_lead_create_estimate(message_id: str, request: Request) -> Dict[str, Any]:
+    """Create the prefilled project for a lead and hand back its draft id."""
+    msg = _lead_message(message_id)
+    if msg is None:
+        raise HTTPException(404, "That lead isn't in the current inbox.")
+
+    # Idempotency BEFORE anything expensive: a double-click, a second estimator,
+    # or a grouped duplicate must reopen the existing draft, not spend an AI run.
+    existing = _existing_lead_draft(msg)
+    if existing:
+        return {"ok": True, "draft_id": existing, "existing": True}
+
+    actor = _user_email(request)
+    bucket = f"leadest|{actor or 'anon'}"
+    retry = _autofill_rate_retry(bucket)
+    skip = ""
+    if retry is None:
+        _autofill_rate_record(bucket)   # reserve up front, refund if the read fails
+    else:
+        # A spent AI budget downgrades the prefill — it never blocks the project.
+        # The estimator still lands on intake with everything Basisboard scraped,
+        # which is the whole reason the blob is built metadata-first.
+        skip = ("Prefilled from the scraped fields only — the AI prefill limit is "
+                f"reached (max {_AUTOFILL_RATE_MAX} per "
+                f"{_AUTOFILL_RATE_WINDOW // 60} min). Try again in "
+                f"~{math.ceil(retry / 60)} min for a full read.")
+    try:
+        out = _create_estimate_from_lead(msg, actor_email=actor, skip_ai_reason=skip)
+    except Exception as exc:  # noqa: BLE001 — save_draft / DB failure
+        if retry is None:
+            _autofill_rate_refund(bucket)
+        log.warning("Create estimate from lead %s failed: %s", message_id, exc)
+        return {"ok": False, "error": "Couldn't create the estimate. Please try again."}
+    # Refund only when the call never happened. An empty-but-successful extract
+    # still burned a 20-30s paid run; refunding it would let a thin invite be
+    # retried without limit.
+    if retry is None and not out.get("ai_ran"):
+        _autofill_rate_refund(bucket)
+    return out
 
 
 # ─── Static frontend ──────────────────────────────────────────────────
