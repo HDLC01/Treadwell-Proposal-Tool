@@ -38,7 +38,7 @@
   /* detail — centered modal pop-up (dimmed backdrop; Esc / backdrop / × to close) */
   #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10000; display:none; }
   #drawer { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
-    width:min(560px,94vw); max-height:88vh; background:#fff; z-index:10001;
+    width:min(780px,95vw); max-height:92vh; background:#fff; z-index:10001;
     border-radius:12px; box-shadow:0 16px 48px rgba(0,0,0,.30); overflow:hidden;
     display:none; flex-direction:column; }
   #drawer.open { display:flex; }
@@ -111,9 +111,12 @@
     letter-spacing:.04em; cursor:pointer; }
   .dep-show:hover { background:var(--surf-high); color:var(--ink); }
   .dep-s { font-size:11px; color:var(--ink-v); margin-top:6px; }
-  .msg { padding:9px 12px; border-radius:8px; margin-bottom:8px; max-width:90%; }
-  .msg.customer { background:var(--surf-high); }
-  .msg.staff { background:#fdeaec; margin-left:auto; }
+  .msg { padding:9px 12px; border-radius:12px; margin-bottom:8px; max-width:72%; width:fit-content; }
+  /* Who said it should be obvious without reading the label, so the two sides sit
+     well apart and each bubble squares off the corner on its own side. */
+  .msg.customer { background:var(--surf-high); margin-right:auto; border-bottom-left-radius:3px; }
+  .msg.staff { background:#fdeaec; margin-left:auto; border-bottom-right-radius:3px; }
+  .msg.staff .who, .msg.staff .when { text-align:right; }
   .msg .who { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
   .msg .via-email { border:1px solid var(--ink-v); border-radius:999px; padding:0 5px; margin-left:4px; font-size:9px; }
   .msg .when { font-size:10px; color:var(--ink-v); margin-top:3px; }
