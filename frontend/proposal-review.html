@@ -7,6 +7,7 @@
      auto-dark so it doesn't invert the white page + letterhead artwork. -->
 <meta name="color-scheme" content="only light">
 <title>Treadwell Proposal Generator — Proposal Review</title>
+<link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg">
 <link rel="stylesheet" href="/styles.css">
 <style>
   /* ─── Microsoft Word-style chrome ──────────────────────────────── */
@@ -94,31 +95,6 @@
     line-height: 1.35;
     position: relative;
   }
-  /* Logo top-right */
-  .doc-logo {
-    position: absolute;
-    top: 0.55in;
-    right: 0.85in;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .doc-logo .logo-mark {
-    width: 36px; height: 36px;
-    background: #c8102e;
-    color: white;
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 3px;
-    font-weight: 900;
-    font-size: 22px;
-  }
-  .doc-logo .logo-text {
-    font-weight: 900;
-    color: #c8102e;
-    letter-spacing: 0.5px;
-    font-size: 22px;
-  }
-
   /* DATE / JOB NAME header table */
   .doc-header {
     margin-top: 8pt;
@@ -262,13 +238,6 @@
       box-shadow: none;
     }
     .word-canvas { padding: 12px 8px 36px; }
-
-    /* Logo is decorative; tuck it into the header flow on small viewports */
-    .doc-logo {
-      position: static;
-      justify-content: center;
-      margin-bottom: 12pt;
-    }
 
     /* Header label/date grid stacks */
     .doc-header {

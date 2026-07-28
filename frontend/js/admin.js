@@ -18,7 +18,7 @@
 
     function shell(){
       document.getElementById("root").innerHTML = `
-        <div class="top"><div class="logo">T</div><h1>Admin</h1>
+        <div class="top"><img class="logo" src="/img/treadwell-bison.svg" width="51" height="32" alt="Treadwell" /><h1>Admin</h1>
           <span class="tag">${ME.role==="super_admin"?"SUPER ADMIN":"ADMIN"}</span></div>
         <p class="sub">User & project management + system overview</p>
         <div class="cards" id="cards"></div>
