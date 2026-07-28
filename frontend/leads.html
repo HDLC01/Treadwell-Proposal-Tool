@@ -60,11 +60,14 @@
   .score.rec-pursue { background:#e3f3e6; border-color:#bfe3c8; color:var(--ok); }
   .score.rec-review { background:var(--surf-high); border-color:var(--line); color:var(--ink-v); }
   .score.rec-pass { background:#f3f2f2; border-color:var(--line); color:#8d8b8b; }
-  /* detail — right-side drawer, full height: lead email bodies are long, and the
-     list stays visible behind so a scan isn't lost on every open. */
+  /* detail — centered modal pop-up, matching the Customer Portal CRM drawer so
+     both staff surfaces open the same way. Wider than that one (720px): a lead
+     is mostly a long email body, and 560px turns it into a column of slivers. */
   #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10000; display:none; }
-  #drawer { position:fixed; top:0; right:0; height:100vh; width:min(720px,96vw); background:#fff;
-    z-index:10001; box-shadow:-16px 0 48px rgba(0,0,0,.28); display:none; flex-direction:column; }
+  #drawer { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:min(720px,94vw); max-height:88vh; background:#fff; z-index:10001;
+    border-radius:12px; box-shadow:0 16px 48px rgba(0,0,0,.30); overflow:hidden;
+    display:none; flex-direction:column; }
   #drawer.open { display:flex; }
   .dhead { flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
     padding:18px 20px; border-bottom:1px solid var(--line); }
