@@ -218,6 +218,37 @@ def test_areas_come_from_the_sheet_and_fall_back_to_intake():
     assert old["B42"] == 5000 and old["D42"] == 40
 
 
+def test_a_combo_job_fills_the_sheets_second_system_block():
+    """Epoxy + polish prices two base tabs. Only one can be block one, so the
+    other has to land in rows 45-49 or it never reaches the hand-off."""
+    d = _draft(work_type="combo", system_name="Treadwell MACRO Flake",
+               sheet_area={"epoxy_sf": 8000, "cove_lf": 120},
+               priced_tabs=[
+                   {"id": "Epoxy", "kind": "base", "role": "epoxy",
+                    "sf": {"epoxy_sf": 8000, "cove_lf": 120}},
+                   {"id": "Polish", "kind": "base", "role": "polish",
+                    "system_desc": "Treadwell Polished Concrete",
+                    "sf": {"polish_sf": 4200}},
+               ])
+    pf = isw.build_prefill(d)
+    assert (pf["B40"], pf["B42"], pf["D42"]) == ("Treadwell MACRO Flake", 8000, 120)
+    assert (pf["B46"], pf["B48"]) == ("Treadwell Polished Concrete", 4200)
+
+
+def test_a_single_system_job_leaves_the_second_block_empty():
+    pf = isw.build_prefill(_draft(sheet_area={"epoxy_sf": 8000}))
+    for addr in ("B46", "B48", "D48"):
+        assert addr not in pf
+
+
+def test_cove_is_not_reported_against_a_polish_floor():
+    """Cove base belongs to the resin systems; carrying an epoxy tab's LF onto a
+    polish-only hand-off would have ops order material for work nobody bid."""
+    pf = isw.build_prefill(_draft(work_type="polish",
+                                  sheet_area={"polish_sf": 4200, "cove_lf": 120}))
+    assert pf["B42"] == 4200 and "D42" not in pf
+
+
 def test_costs_and_man_hours_come_from_the_snapshot_and_are_optional():
     filled = isw.build_prefill(_draft(cost_snapshot={"costs": 49614, "man_hours": 392}))
     assert filled["B58"] == 49614 and filled["I58"] == 392

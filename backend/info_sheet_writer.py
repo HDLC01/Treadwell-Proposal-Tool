@@ -334,31 +334,51 @@ def _primary_floor(data: Dict[str, Any]) -> str:
     return ""
 
 
-def _areas(data: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
-    """(floor SF, cove LF). Sheet-resolved areas first — those follow the
-    estimator's takeoff edits — then the intake numbers for drafts saved before
-    the sheet snapshot existed."""
+# Which takeoff fields make up a floor area, per layout. The sheet-resolved
+# names come first; the second tuple is what intake called them, for drafts
+# saved before the sheet snapshot existed.
+_SF_KEYS = {
+    "epoxy":  (("epoxy_sf", "epoxy_sf_2"), ("system_1_sf", "system_2_sf")),
+    "polish": (("polish_sf",), ("polish_sf",)),
+    "gyp":    (("gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"),) * 2,
+}
+_LF_KEYS = (("cove_lf", "cove_lf_2"), ("cove_1_lf", "cove_2_lf"))
+
+
+def _sum_area(source: Dict[str, Any], keys) -> Optional[float]:
+    vals = [v for v in (_num(source.get(k)) for k in keys) if v]
+    return sum(vals) if vals else None
+
+
+def _areas(data: Dict[str, Any], role: str) -> tuple[Optional[float], Optional[float]]:
+    """(floor SF, cove LF) for one layout. Sheet-resolved areas win, because
+    they follow the estimator's takeoff edits on the grid."""
     area = data.get("sheet_area") if isinstance(data.get("sheet_area"), dict) else {}
+    sheet_keys, intake_keys = _SF_KEYS.get(role, _SF_KEYS["epoxy"])
+    sf = _sum_area(area, sheet_keys) or _sum_area(data, intake_keys)
+    lf = _sum_area(area, _LF_KEYS[0]) or _sum_area(data, _LF_KEYS[1])
+    return sf, (lf if role != "polish" else None)   # cove belongs to the resin systems
 
-    def pick(*keys):
-        vals = [_num(area.get(k)) for k in keys]
-        vals = [v for v in vals if v]
-        if vals:
-            return sum(vals)
-        vals = [_num(data.get(k)) for k in keys]
-        vals = [v for v in vals if v]
-        return sum(vals) if vals else None
 
-    role = _base_role(data)
-    if role == "gyp":
-        sf = pick("gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf")
-    elif role == "polish":
-        sf = pick("polish_sf")
-    else:
-        sf = pick("epoxy_sf", "epoxy_sf_2") or pick("system_1_sf", "system_2_sf")
-        if role == "combo":
-            sf = (sf or 0) + (pick("polish_sf") or 0) or None
-    return sf, pick("cove_lf", "cove_lf_2") or pick("cove_1_lf", "cove_2_lf")
+def _second_system(data: Dict[str, Any], base_role: str):
+    """The other half of a combo bid, for the sheet's second system block.
+
+    An epoxy+polish job prices two base-kind tabs. Only one can be the block-one
+    system, so without this the polish half never reaches the hand-off at all —
+    which is the exact re-typing this page exists to remove.
+    """
+    for tab in data.get("priced_tabs") or []:
+        if not isinstance(tab, dict) or tab.get("kind") != "base":
+            continue
+        role = _txt(tab.get("role")).lower()
+        if not role or role == base_role:
+            continue
+        sf_src = tab.get("sf") if isinstance(tab.get("sf"), dict) else {}
+        sheet_keys, _ = _SF_KEYS.get(role, _SF_KEYS["epoxy"])
+        return (_txt(tab.get("system_desc")),
+                _sum_area(sf_src, sheet_keys),
+                _sum_area(sf_src, _LF_KEYS[0]))
+    return None
 
 
 def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
@@ -427,10 +447,17 @@ def build_prefill(draft: Dict[str, Any], *, deposit_requested: bool = False) -> 
     put("B30", _txt(data.get("contact_phone")))
     put("B31", _txt(data.get("contact_email")))
 
+    role = _base_role(data)
     put("B40", _txt(data.get("system_name")))
-    sf, lf = _areas(data)
+    sf, lf = _areas(data, role)
     put("B42", sf)
     put("D42", lf)
+
+    second = _second_system(data, role)
+    if second:
+        put("B46", second[0])
+        put("B48", second[1])
+        put("D48", second[2])
 
     put("B57", _num(data.get("proposal_lump_sum")))
     costs = data.get("cost_snapshot") if isinstance(data.get("cost_snapshot"), dict) else {}
