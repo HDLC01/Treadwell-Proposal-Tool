@@ -38,7 +38,6 @@ from typing import Any, Dict, Optional
 import openpyxl
 
 from estimate_writer import (
-    _cell_borders,      # noqa: F401 — used via _serialize_cell
     _coerce,
     _fill_hex,
     _font_color,
