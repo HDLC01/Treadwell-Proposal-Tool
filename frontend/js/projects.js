@@ -222,7 +222,7 @@
             <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
             <div class="foot-actions">
               <button type="button" class="files-btn" title="Generate + download the files (no need to re-walk intake)">📄 Files</button>
-              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info sheet</button>
+              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info</button>
               <button type="button" class="open-btn">Open / Edit →</button>
             </div>
           </div>

@@ -21,12 +21,16 @@
     .meta { color:var(--ink-v); font-size:12.5px; display:flex; flex-wrap:wrap; gap:8px 14px; }
     .total { color:#1a7f37; font-weight:700; }
     .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
-    .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:space-between; align-items:center; gap:8px; }
-    .foot-actions { display:flex; gap:8px; align-items:center; }
+    /* Four actions no longer fit across a 280px card, so the row wraps rather
+       than pushing "Open / Edit" off the edge. */
+    .card-foot { margin-top:12px; padding-top:10px; border-top:1px solid rgba(27,28,28,.07); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+    .foot-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .open-btn { background:var(--red); color:#fff; border:none; border-radius:7px; padding:7px 14px; font:600 13px system-ui; cursor:pointer; }
     .open-btn:hover { background:#a4232b; }
     .files-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 12px; font:600 13px system-ui; cursor:pointer; }
     .files-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
+    .info-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 12px; font:600 13px system-ui; cursor:pointer; }
+    .info-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .trash-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 11px; font:600 13px system-ui; cursor:pointer; }
     .trash-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
