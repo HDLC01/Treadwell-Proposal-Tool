@@ -20,6 +20,43 @@
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
 
+  // ── what a card says about time ────────────────────────────────────────────
+  // The newest milestone that actually happened. `sent_at` is never null (a
+  // proposal row can't exist before the email goes out), so every card dates.
+  // Note "Viewed" is the FIRST view — the portal coalesces viewed_at and never
+  // moves it, so a customer re-reading the proposal doesn't refresh this.
+  const MILESTONES = [
+    ["sent_at", "Sent"],
+    ["viewed_at", "Viewed"],
+    ["approved_at", "Approved"],
+    ["deposit_requested_at", "Invoiced"],
+  ];
+  function lastActivity(p) {
+    let best = null;
+    for (const [key, label] of MILESTONES) {
+      const ts = p[key];
+      if (ts && (!best || String(ts) > String(best.ts))) best = { ts: ts, label: label };
+    }
+    return best;
+  }
+  const activityTs = (p) => { const a = lastActivity(p); return a ? a.ts : ""; };
+
+  // ── filter / sort state ────────────────────────────────────────────────────
+  // Module-level and mirrored to sessionStorage: renderBoard re-runs after every
+  // staff action (act() calls load()), and the controls live in static HTML, so
+  // a scan survives both a re-render and a return visit.
+  const EST_KEY = "tw_crm_est", MONTH_KEY = "tw_crm_month";
+  const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
+  const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
+  const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
+  const SORT_FIELDS = ["activity", "estimator", "total"];
+  // Each field opens the way you'd want to read it first.
+  const NATURAL_DIR = { activity: "desc", estimator: "asc", total: "desc" };
+  let EST = ss(EST_KEY, "");
+  let MONTH = ss(MONTH_KEY, "");
+  let SORTFIELD = SORT_FIELDS.includes(ss(SORTFIELD_KEY, "")) ? ss(SORTFIELD_KEY, "") : "activity";
+  let SORTDIR = ss(SORTDIR_KEY, "") === "asc" ? "asc" : (ss(SORTDIR_KEY, "") === "desc" ? "desc" : NATURAL_DIR[SORTFIELD]);
+
   function api(path, opts) {
     // MERGE headers — a caller passing its own `headers` used to replace the auth
     // ones wholesale via Object.assign, so any request that set Content-Type
@@ -48,28 +85,121 @@
     return "Sent";
   }
 
-  function renderBoard() {
+  // Pure, composed in renderBoard. Search is read live from the DOM (the input
+  // is static markup, so it survives every re-render) — the rest read state.
+  const applySearch = (list) => {
     const q = ($("search").value || "").toLowerCase().trim();
-    const items = ALL.filter((p) => !q ||
-      (p.project_name || "").toLowerCase().includes(q) || (p.customer_email || "").toLowerCase().includes(q));
-    $("count").textContent = items.length + " proposal" + (items.length === 1 ? "" : "s");
+    if (!q) return list;
+    const tokens = q.split(/\s+/);
+    return list.filter((p) => {
+      const hay = [p.project_name, p.customer_email, p.customer_name, p.estimator_email]
+        .filter(Boolean).join(" ").toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+  };
+  const applyEstimator = (list) => (EST
+    ? list.filter((p) => String(p.estimator_email || "").toLowerCase() === EST)
+    : list);
+  const applyMonth = (list) => (MONTH
+    ? list.filter((p) => TW.bizYM(activityTs(p)) === MONTH)   // the month the card shows
+    : list);
+
+  function applySort(list) {
+    const a = list.slice();
+    const dir = SORTDIR === "asc" ? 1 : -1;
+    // The dir multiplier never touches the null branches, so blanks stay last in
+    // BOTH directions — flipping the sort must not surface empty cards first.
+    if (SORTFIELD === "estimator") a.sort((x, y) => {
+      const nx = nameOf(x.estimator_email || "").toLowerCase();
+      const ny = nameOf(y.estimator_email || "").toLowerCase();
+      if (!nx && !ny) return 0; if (!nx) return 1; if (!ny) return -1;
+      return dir * nx.localeCompare(ny);
+    });
+    else if (SORTFIELD === "total") a.sort((x, y) => {
+      const tx = typeof x.approved_total === "number" ? x.approved_total : null;
+      const ty = typeof y.approved_total === "number" ? y.approved_total : null;
+      if (tx == null && ty == null) return 0; if (tx == null) return 1; if (ty == null) return -1;
+      return dir * (tx - ty);
+    });
+    else a.sort((x, y) => {                                   // activity (default)
+      const tx = activityTs(x), ty = activityTs(y);
+      if (!tx && !ty) return 0; if (!tx) return 1; if (!ty) return -1;
+      return dir * String(tx).localeCompare(String(ty));
+    });
+    return a;
+  }
+
+  function renderBoard() {
+    const items = applySort(applyMonth(applySearch(applyEstimator(ALL))));
+    populateEstimators();
+    populateMonths();
+    $("count").textContent = items.length === ALL.length
+      ? ALL.length + " proposal" + (ALL.length === 1 ? "" : "s")
+      : items.length + " of " + ALL.length;
+    const clear = $("crm-clear");
+    if (clear) clear.hidden = !(EST || MONTH || SORTFIELD !== "activity" || SORTDIR !== "desc");
     const byStage = {};
     STAGES.forEach((s) => (byStage[s] = []));
     items.forEach((p) => byStage[stageOf(p)].push(p));
     $("board").innerHTML = STAGES.map((s) => {
-      const cards = byStage[s].map((p) => `
+      const cards = byStage[s].map((p) => {
+        const act = lastActivity(p);
+        // Who owns it and when it last moved, on one line — the column is only
+        // 224px of usable width, so this is the whole budget for both facts.
+        // Labelled, on its own line each: a bare "Hanz · Invoiced 7/27" reads as
+        // one fact, and it isn't obvious which name that is on a board where the
+        // line above is already an email.
+        const who = p.estimator_email ? esc(nameOf(p.estimator_email)) : "—";
+        const lines = '<div class="meta who"><span class="k">Estimator:</span> ' + who + "</div>"
+          + (act ? '<div class="meta act"><span class="k">' + esc(act.label)
+                 + ':</span> ' + esc(TW.fmtBizDate(act.ts)) + "</div>" : "");
+        return `
         <div class="deal" data-id="${esc(p.proposal_id)}">
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           <div class="meta">${esc(p.customer_email || "")}</div>
+          ${lines}
           ${p.approved_total != null ? `<div class="val">${money(p.approved_total)}</div>` : ""}
-        </div>`).join("") || '<div class="empty">—</div>';
+        </div>`;
+      }).join("") || '<div class="empty">—</div>';
       // Money is in and unconfirmed → flag the column, it's the one needing a human.
       const attn = s === STAGE_SUBMITTED && byStage[s].length ? " col-attn" : "";
       return `<div class="col${attn}"><h2>${s}<span>${byStage[s].length}</span></h2>${cards}</div>`;
     }).join("");
     $("board").querySelectorAll(".deal").forEach((el) =>
       el.addEventListener("click", () => openDetail(el.dataset.id)));
+  }
+
+  /** Options come from the data, so the list can't offer an estimator with no
+   *  cards. A stale selection is dropped rather than leaving the board blank. */
+  function populateEstimators() {
+    const sel = $("crm-est");
+    if (!sel) return;
+    const counts = {};
+    ALL.forEach((p) => {
+      const e = String(p.estimator_email || "").toLowerCase();
+      if (e) counts[e] = (counts[e] || 0) + 1;
+    });
+    if (EST && !counts[EST]) { EST = ""; ssSet(EST_KEY, ""); }
+    const emails = Object.keys(counts).sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+    sel.innerHTML = '<option value="">Any estimator</option>'
+      + emails.map((e) => `<option value="${esc(e)}">${esc(nameOf(e))} (${counts[e]})</option>`).join("");
+    sel.value = EST;
+  }
+
+  function populateMonths() {
+    const sel = $("crm-month");
+    if (!sel) return;
+    const counts = {};
+    ALL.forEach((p) => {
+      const ym = TW.bizYM(activityTs(p));
+      if (ym) counts[ym] = (counts[ym] || 0) + 1;
+    });
+    if (MONTH && !counts[MONTH]) { MONTH = ""; ssSet(MONTH_KEY, ""); }
+    const months = Object.keys(counts).sort().reverse();
+    sel.innerHTML = '<option value="">Any month</option>'
+      + months.map((ym) => `<option value="${esc(ym)}">${esc(TW.bizMonthLabel(ym))} (${counts[ym]})</option>`).join("");
+    sel.value = MONTH;
   }
 
   async function load() {
@@ -809,6 +939,52 @@
   // (The global notification roster moved to its own page — /notifications.html.
   //  Per-project overrides live in the detail drawer above.)
 
-  $("search").addEventListener("input", renderBoard);
+  // Wired ONCE — the controls live in static markup, not in renderBoard, so they
+  // keep their focus and value while the board repaints after a staff action.
+  (function wireToolbar() {
+    const est = $("crm-est"), month = $("crm-month");
+    const sort = $("crm-sort"), dir = $("crm-dir"), clear = $("crm-clear");
+    const syncDir = () => {
+      if (!dir) return;
+      dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+      dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
+      dir.title = SORTDIR === "asc"
+        ? "Ascending (oldest · A→Z · low→high) — click for descending"
+        : "Descending (newest · Z→A · high→low) — click for ascending";
+    };
+    $("search").addEventListener("input", renderBoard);
+    $("search").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.target.value = ""; renderBoard(); }
+    });
+    if (est) est.addEventListener("change", () => {
+      EST = est.value; ssSet(EST_KEY, EST); renderBoard();
+    });
+    if (month) month.addEventListener("change", () => {
+      MONTH = month.value; ssSet(MONTH_KEY, MONTH); renderBoard();
+    });
+    if (sort) {
+      sort.value = SORTFIELD;
+      sort.addEventListener("change", () => {
+        SORTFIELD = sort.value;
+        SORTDIR = NATURAL_DIR[SORTFIELD] || "desc";   // open each field its natural way
+        ssSet(SORTFIELD_KEY, SORTFIELD); ssSet(SORTDIR_KEY, SORTDIR);
+        syncDir(); renderBoard();
+      });
+    }
+    if (dir) {
+      syncDir();
+      dir.addEventListener("click", () => {
+        SORTDIR = SORTDIR === "asc" ? "desc" : "asc";
+        ssSet(SORTDIR_KEY, SORTDIR); syncDir(); renderBoard();
+      });
+    }
+    if (clear) clear.addEventListener("click", () => {
+      EST = ""; MONTH = ""; SORTFIELD = "activity"; SORTDIR = "desc";
+      [EST_KEY, MONTH_KEY, SORTFIELD_KEY, SORTDIR_KEY].forEach((k) => ssSet(k, ""));
+      $("search").value = "";
+      if (sort) sort.value = "activity";
+      syncDir(); renderBoard();
+    });
+  })();
   load();
 })();
