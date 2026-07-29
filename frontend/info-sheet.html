@@ -137,6 +137,9 @@
   </div>
 </main>
 
+<!-- auth.js bails out (and never mints a token) unless the Supabase SDK is
+     already on the page, so this has to come before it. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
 <script src="/shared.js"></script>
 <script src="/auth.js"></script>
 <script src="/js/info-sheet.js"></script>
