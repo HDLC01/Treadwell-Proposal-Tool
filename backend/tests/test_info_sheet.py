@@ -140,6 +140,14 @@ def test_a_typed_estimator_name_beats_the_account_it_was_saved_under():
     assert pf["B13"] == "Troy Holmes"
 
 
+def test_an_autopilot_draft_has_no_estimator_yet():
+    """The lead autopilot creates drafts before anyone owns them. Printing
+    "Autopilot" in the Estimator / Sales Rep box reads as a person's name on a
+    document accounting files."""
+    d = {"owner_email": "autopilot", "data": _draft()["data"]}
+    assert "B13" not in isw.build_prefill(d)
+
+
 def test_gc_jobs_bill_the_contractor_direct_jobs_bill_the_owner():
     assert isw.build_prefill(_draft())["B23"] == "Westport Commons"
     gc = isw.build_prefill(_draft(audience="GC", architect="Titan Construction"))
