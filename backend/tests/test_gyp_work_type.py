@@ -111,6 +111,8 @@ def test_total_cells_gyp_parity_and_no_phase_key():
     assert gyp == {
         "total": "E87", "psf": "E18", "material": "E41", "labor": "E52",
         "tooling": "E61", "sales_tax": "E79", "remodel": "E80",
+        # Read by the Project Info Sheet hand-off, not the total bar.
+        "costs": "G71", "man_hours": "G72",
     }
     # Gyp is mobilization-based — it must NOT carry a phase cell (unlike Epoxy/Polish).
     assert "phase" not in gyp
