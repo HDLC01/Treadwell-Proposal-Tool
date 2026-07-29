@@ -373,6 +373,25 @@ def test_a_typed_formula_trigger_is_neutralized():
     assert str(ws["B14"].value).startswith("'@")
 
 
+def test_the_download_keeps_the_treadwell_logo():
+    """openpyxl needs Pillow to write back images it read; without it every logo
+    is dropped on save with no warning. The template carries the Treadwell mark on
+    three tabs — one of them the Invoice — and staging shipped a 27 KB file with
+    all three missing because Pillow was only ever a transitive local dependency.
+
+    Asserted on the zip parts rather than on openpyxl's view, because that is what
+    Excel actually opens.
+    """
+    import zipfile
+    out = isw.fill_info_sheet({"B15": "Westport"})
+    media = [n for n in zipfile.ZipFile(io.BytesIO(out)).namelist()
+             if n.startswith("xl/media/")]
+    assert len(media) == 3, f"lost the logo — is Pillow installed? parts: {media}"
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    for tab in ("Info Sheet", "Invoice", "Deposit"):
+        assert wb[tab]._images, f"{tab} lost its logo"
+
+
 def test_the_download_keeps_its_dropdowns_and_its_other_tabs():
     wb = openpyxl.load_workbook(io.BytesIO(isw.fill_info_sheet({"B15": "Westport"})))
     assert wb.sheetnames == ["Info Sheet", "SOV", "Foundation Import",
