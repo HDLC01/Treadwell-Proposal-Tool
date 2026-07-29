@@ -97,7 +97,12 @@
     }
     for (const cell of grid.cells) {
       if (cell.row > grid.max_row || cell.col > grid.max_col) continue;
-      rows[cell.row - 1][cell.col - 1] = cell.isFormula ? cell.formula : effective(cell);
+      if (cell.isFormula) { rows[cell.row - 1][cell.col - 1] = cell.formula; continue; }
+      // Empty has to reach the engine as null, not "". Excel ranks any text
+      // above any number, so an empty-string B57 made `=IF(B57>149000,…)` say a
+      // Risk Management Plan was REQUIRED on every job with no contract amount.
+      const v = effective(cell);
+      rows[cell.row - 1][cell.col - 1] = v === "" ? null : v;
     }
     hf = HyperFormula.buildFromSheets({ [SHEET]: rows }, { licenseKey: "gpl-v3" });
     hfSheet = hf.getSheetId(SHEET);

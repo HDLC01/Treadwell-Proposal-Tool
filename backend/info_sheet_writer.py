@@ -37,6 +37,7 @@ from typing import Any, Dict, Optional
 
 import openpyxl
 
+import leads
 from estimate_writer import (
     _coerce,
     _fill_hex,
@@ -289,8 +290,15 @@ def _yn(v) -> str:
 def _person(email: str) -> str:
     """"kyle@wetreadwell.com" → "Kyle". The same shorthand the CRM board and
     the Projects list show; real full names live in `profiles`, which this
-    service does not read."""
+    service does not read.
+
+    A draft the lead autopilot created has no human owner yet — printing
+    "Autopilot" as the Estimator / Sales Rep on an accounting document would
+    read as a name. Blank, so whoever picks the job up fills it in.
+    """
     local = (email or "").split("@")[0]
+    if local.strip().lower() == leads.AUTOPILOT_ACTOR:
+        return ""
     return " ".join(p.capitalize() for p in re.split(r"[._-]+", local) if p)
 
 
