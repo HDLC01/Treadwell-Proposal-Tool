@@ -146,14 +146,19 @@
         const act = lastActivity(p);
         // Who owns it and when it last moved, on one line — the column is only
         // 224px of usable width, so this is the whole budget for both facts.
+        // Labelled, on its own line each: a bare "Hanz · Invoiced 7/27" reads as
+        // one fact, and it isn't obvious which name that is on a board where the
+        // line above is already an email.
         const who = p.estimator_email ? esc(nameOf(p.estimator_email)) : "—";
-        const line = act ? who + " · " + esc(act.label) + " " + esc(TW.fmtBizDate(act.ts)) : who;
+        const lines = '<div class="meta who"><span class="k">Estimator:</span> ' + who + "</div>"
+          + (act ? '<div class="meta act"><span class="k">' + esc(act.label)
+                 + ':</span> ' + esc(TW.fmtBizDate(act.ts)) + "</div>" : "");
         return `
         <div class="deal" data-id="${esc(p.proposal_id)}">
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           <div class="meta">${esc(p.customer_email || "")}</div>
-          <div class="meta who">${line}</div>
+          ${lines}
           ${p.approved_total != null ? `<div class="val">${money(p.approved_total)}</div>` : ""}
         </div>`;
       }).join("") || '<div class="empty">—</div>';
