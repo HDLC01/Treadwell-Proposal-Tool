@@ -222,6 +222,7 @@
             <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
             <div class="foot-actions">
               <button type="button" class="files-btn" title="Generate + download the files (no need to re-walk intake)">📄 Files</button>
+              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info</button>
               <button type="button" class="open-btn">Open / Edit →</button>
             </div>
           </div>
@@ -241,6 +242,11 @@
           // c.dataset.id is already encodeURIComponent'd. files=1 → done.html
           // generates + shows downloads without the intake walk.
           window.location.assign("/done.html?d=" + c.dataset.id + "&files=1");
+        });
+        const ib = c.querySelector(".info-btn");
+        if (ib) ib.addEventListener("click", (e) => {
+          e.stopPropagation();
+          window.location.assign("/info-sheet.html?d=" + c.dataset.id);
         });
       });
     }
