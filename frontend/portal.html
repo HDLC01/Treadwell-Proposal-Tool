@@ -17,7 +17,18 @@
   .toolbar { display:flex; gap:10px; align-items:center; margin-bottom:16px; }
   .toolbar input { flex:1; max-width:340px; min-height:40px; padding:8px 12px; border:1px solid var(--line);
     border-radius:6px; font:inherit; }
-  .count { color:var(--ink-v); font-size:12px; }
+  .count { color:var(--ink-v); font-size:12px; margin-left:auto; }
+  /* sort/filter controls — same shapes as the Projects toolbar so the two pages
+     don't feel like different apps. Palette vars are already compatible. */
+  .toolbar { flex-wrap:wrap; }
+  .tw-select { background:#fff; color:var(--ink-v); border:1px solid var(--line); border-radius:6px;
+    min-height:40px; padding:7px 10px; font:600 12.5px system-ui; cursor:pointer; }
+  .tw-select:hover, .tw-select:focus { border-color:var(--red); outline:none; }
+  .tw-dir { min-width:76px; text-align:center; font-variant-numeric:tabular-nums; }
+  .tw-dir[aria-pressed="true"] { color:var(--red); border-color:var(--red); }
+  .tw-clear { background:#fff; color:var(--ink-v); border:1px solid var(--line); border-radius:999px;
+    min-height:40px; padding:0 14px; font:600 12.5px system-ui; cursor:pointer; }
+  .tw-clear:hover { border-color:var(--red); color:var(--red); }
   .board { display:flex; gap:14px; align-items:flex-start; overflow-x:auto; padding-bottom:8px; }
   .col { flex:0 0 270px; background:var(--surf-low); border:1px solid var(--line); border-radius:10px; padding:10px; }
   .col h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-v);
@@ -32,7 +43,9 @@
   .deal .name { font-weight:700; padding-right:26px; }
   .deal .unread { position:absolute; top:8px; right:8px; min-width:20px; height:20px; padding:0 6px; border-radius:999px;
     background:var(--red); color:#fff; font-size:11px; font-weight:800; line-height:20px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.25); }
-  .deal .meta { color:var(--ink-v); font-size:12px; margin-top:3px; }
+  .deal .meta { color:var(--ink-v); font-size:12px; margin-top:3px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .deal .meta.who { color:var(--ink); font-weight:600; }
   .deal .val { color:var(--red-dark); font-weight:700; font-variant-numeric:tabular-nums; margin-top:4px; }
   .empty { color:var(--ink-v); font-size:12px; padding:8px 4px; }
   /* detail — centered modal pop-up (dimmed backdrop; Esc / backdrop / × to close) */
@@ -160,7 +173,20 @@
     <h1>Customer Portal CRM</h1>
     <p class="sub">Proposals sent to customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
     <div class="toolbar">
-      <input id="search" type="search" placeholder="Search by project or email…" />
+      <input id="search" type="search" placeholder="Search project, customer, estimator…" />
+      <select id="crm-est" class="tw-select" aria-label="Filter by estimator">
+        <option value="">Any estimator</option>
+      </select>
+      <select id="crm-month" class="tw-select" aria-label="Filter by activity month">
+        <option value="">Any month</option>
+      </select>
+      <select id="crm-sort" class="tw-select" aria-label="Sort cards by">
+        <option value="activity">Last activity</option>
+        <option value="estimator">Estimator</option>
+        <option value="total">Total</option>
+      </select>
+      <button type="button" id="crm-dir" class="tw-select tw-dir" aria-label="Toggle sort direction">↓ Desc</button>
+      <button type="button" id="crm-clear" class="tw-clear" hidden>✕ Clear</button>
       <span id="count" class="count"></span>
       <a href="/notifications.html" class="btn btn-s" style="min-height:40px;display:inline-flex;align-items:center;text-decoration:none">Notification Sending →</a>
     </div>
