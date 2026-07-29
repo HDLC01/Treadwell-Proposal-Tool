@@ -226,27 +226,75 @@ def test_areas_come_from_the_sheet_and_fall_back_to_intake():
     assert old["B42"] == 5000 and old["D42"] == 40
 
 
+# Every real draft carries all seven priced tabs, all of them `kind: "base"`, with
+# the five gyp variants sitting at zero square feet. Tests that invent a tidier
+# shape pass while production does the wrong thing, so this mirrors what staging
+# actually stores.
+def _real_priced_tabs(*, epoxy_sf=0, cove_lf=0, polish_sf=0, polish_desc=""):
+    gyp_zero = {"gyp_soft_sf": 0, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}
+    return [
+        {"id": "Epoxy", "kind": "base", "role": "epoxy", "system_desc": "",
+         "sf": {"epoxy_sf": epoxy_sf, "epoxy_sf_2": 0, "cove_lf": cove_lf, "cove_lf_2": 0}},
+        {"id": "Polish", "kind": "base", "role": "polish", "system_desc": polish_desc,
+         "sf": {"polish_sf": polish_sf}},
+        {"id": 'Gyp (USG 1-8")', "kind": "base", "role": "gyp",
+         "system_desc": 'N12 1/8"', "sf": dict(gyp_zero)},
+        {"id": "Gyp (USG N12ULTRA)", "kind": "base", "role": "gyp",
+         "system_desc": "N12 ULTRA", "sf": dict(gyp_zero)},
+        {"id": "Gyp (FR)", "kind": "base", "role": "gyp",
+         "system_desc": "Gyp (FR)", "sf": dict(gyp_zero)},
+    ]
+
+
 def test_a_combo_job_fills_the_sheets_second_system_block():
-    """Epoxy + polish prices two base tabs. Only one can be block one, so the
-    other has to land in rows 45-49 or it never reaches the hand-off."""
+    """Epoxy + polish prices both a resin and a polish tab. Only one can be block
+    one, so the other has to land in rows 45-49 or it never reaches the hand-off."""
     d = _draft(work_type="combo", system_name="Treadwell MACRO Flake",
-               sheet_area={"epoxy_sf": 8000, "cove_lf": 120},
-               priced_tabs=[
-                   {"id": "Epoxy", "kind": "base", "role": "epoxy",
-                    "sf": {"epoxy_sf": 8000, "cove_lf": 120}},
-                   {"id": "Polish", "kind": "base", "role": "polish",
-                    "system_desc": "Treadwell Polished Concrete",
-                    "sf": {"polish_sf": 4200}},
-               ])
+               sheet_area={"epoxy_sf": 8000, "cove_lf": 120, "polish_sf": 4200},
+               priced_tabs=_real_priced_tabs(epoxy_sf=8000, cove_lf=120, polish_sf=4200,
+                                             polish_desc="Treadwell Polished Concrete"))
     pf = isw.build_prefill(d)
     assert (pf["B40"], pf["B42"], pf["D42"]) == ("Treadwell MACRO Flake", 8000, 120)
     assert (pf["B46"], pf["B48"]) == ("Treadwell Polished Concrete", 4200)
+    assert "D48" not in pf                       # cove is not a polish quantity
+
+
+def test_the_second_block_skips_the_unpriced_gyp_variants():
+    """The five gyp variants ride along on every draft at zero SF. Taking one by
+    tab order would print 'N12 1/8"' on the sheet as if somebody had bid it."""
+    d = _draft(work_type="epoxy", sheet_area={"epoxy_sf": 8000},
+               priced_tabs=_real_priced_tabs(epoxy_sf=8000))   # polish at 0 too
+    pf = isw.build_prefill(d)
+    for addr in ("B46", "B48", "D48"):
+        assert addr not in pf, f"{addr} came from a tab nobody priced"
+
+
+def test_the_second_block_names_a_system_that_has_area_but_no_derived_name():
+    """Real combo drafts carry `system_desc: ""` on the polish tab. An SF with no
+    system beside it reads as a data-entry slip."""
+    d = _draft(work_type="combo", sheet_area={"epoxy_sf": 8000, "polish_sf": 3000},
+               priced_tabs=_real_priced_tabs(epoxy_sf=8000, polish_sf=3000))
+    pf = isw.build_prefill(d)
+    assert pf["B46"] == "Polished Concrete" and pf["B48"] == 3000
 
 
 def test_a_single_system_job_leaves_the_second_block_empty():
     pf = isw.build_prefill(_draft(sheet_area={"epoxy_sf": 8000}))
     for addr in ("B46", "B48", "D48"):
         assert addr not in pf
+
+
+def test_work_type_decides_the_base_when_no_tab_is_nominated():
+    """`kind == "base"` does not discriminate — every priced tab has it. Reading
+    the first one answered "epoxy" for every job, which sent a polish bid's SF
+    looking for epoxy cells."""
+    d = _draft(work_type="polish", base_tab_id=None,
+               system_name="Polished Concrete - Cream",
+               sheet_area={"polish_sf": 4070},
+               priced_tabs=_real_priced_tabs(polish_sf=4070))
+    pf = isw.build_prefill(d)
+    assert pf["B42"] == 4070
+    assert pf["B17"] == "Polish - Cream"
 
 
 def test_cove_is_not_reported_against_a_polish_floor():

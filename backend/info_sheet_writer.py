@@ -303,17 +303,32 @@ def _person(email: str) -> str:
 
 
 def _base_role(data: Dict[str, Any]) -> str:
-    """Which layout the bid was priced on. The estimator can designate any tab
-    as the base, so `work_type` (an intake answer) is only the fallback."""
+    """Which layout the bid was priced on.
+
+    The estimator's nominated base tab wins. Failing that, `work_type` decides —
+    NOT "the first base-kind tab". On real drafts every priced tab carries
+    `kind: "base"` (all seven of them, including the five gyp variants nobody
+    priced), so picking the first would answer "epoxy" for every job.
+    """
+    tabs = [t for t in (data.get("priced_tabs") or []) if isinstance(t, dict)]
     base_id = data.get("base_tab_id")
-    for tab in data.get("priced_tabs") or []:
-        if not isinstance(tab, dict):
-            continue
-        if (base_id and tab.get("id") == base_id) or (not base_id and tab.get("kind") == "base"):
-            role = _txt(tab.get("role")).lower()
-            if role:
-                return role
-    return _txt(data.get("work_type")).lower() or "epoxy"
+    if base_id:
+        for tab in tabs:
+            if tab.get("id") == base_id:
+                role = _txt(tab.get("role")).lower()
+                if role:
+                    return role
+
+    work_type = _txt(data.get("work_type")).lower()
+    if work_type in ("epoxy", "polish", "gyp"):
+        return work_type
+    if work_type == "combo":
+        return "epoxy"        # block one of a combo is the resin system
+    for tab in tabs:          # unknown work type: fall back to the first priced tab
+        role = _txt(tab.get("role")).lower()
+        if role:
+            return role
+    return "epoxy"
 
 
 def _system_text(data: Dict[str, Any]) -> str:
@@ -368,24 +383,36 @@ def _areas(data: Dict[str, Any], role: str) -> tuple[Optional[float], Optional[f
     return sf, (lf if role != "polish" else None)   # cove belongs to the resin systems
 
 
+# Fallback wording for the second system block when a tab carries real area but
+# no derived name — the sheet's own vocabulary for each layout.
+_ROLE_LABELS = {"epoxy": "Epoxy", "polish": "Polished Concrete",
+                "gyp": "Gypsum Underlayment"}
+
+
 def _second_system(data: Dict[str, Any], base_role: str):
     """The other half of a combo bid, for the sheet's second system block.
 
-    An epoxy+polish job prices two base-kind tabs. Only one can be the block-one
-    system, so without this the polish half never reaches the hand-off at all —
-    which is the exact re-typing this page exists to remove.
+    An epoxy+polish job prices both a resin and a polish tab. Only one can be
+    block one, so without this the polish half never reaches the hand-off at all
+    — the exact re-typing this page exists to remove.
+
+    A tab only counts if it has FLOOR AREA. Every draft carries all five gyp
+    variants as priced tabs at zero square feet; picking one of those by tab order
+    would put "N12 1/8"" on the sheet as if somebody had bid it.
     """
     for tab in data.get("priced_tabs") or []:
-        if not isinstance(tab, dict) or tab.get("kind") != "base":
+        if not isinstance(tab, dict):
             continue
         role = _txt(tab.get("role")).lower()
         if not role or role == base_role:
             continue
         sf_src = tab.get("sf") if isinstance(tab.get("sf"), dict) else {}
         sheet_keys, _ = _SF_KEYS.get(role, _SF_KEYS["epoxy"])
-        return (_txt(tab.get("system_desc")),
-                _sum_area(sf_src, sheet_keys),
-                _sum_area(sf_src, _LF_KEYS[0]))
+        sf = _sum_area(sf_src, sheet_keys)
+        if not sf:
+            continue
+        lf = _sum_area(sf_src, _LF_KEYS[0]) if role != "polish" else None
+        return (_txt(tab.get("system_desc")) or _ROLE_LABELS.get(role, ""), sf, lf)
     return None
 
 
