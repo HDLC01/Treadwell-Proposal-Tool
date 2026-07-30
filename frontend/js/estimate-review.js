@@ -1489,13 +1489,18 @@ function refreshDomFromHF(data, grid) {
 // Per user direction: lump sum is based on Epoxy + Polish only. Other
 // sheets (Seal, Gyp, Leveling, etc.) are reference tabs — the Total
 // Bar shows the same bid totals regardless of which tab is active.
+// `costs` / `man_hours` are the sheet's own summary cells, labelled on the
+// template as Total "Estimated Costs" w/taxes + fees and Man Hour Budget
+// (Raken) — the two figures the Project Info Sheet asks for. Reading Kyle's
+// cells rather than re-adding the components keeps the hand-off matching the
+// estimate even if he changes what rolls into either one.
 const TOTAL_CELLS = {
-  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62", sales_tax: "D80", remodel: "D81", phase: "C91" },
-  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75", phase: "C85" },
+  Epoxy:  { total: "D88", psf: "D16", material: "D43", labor: "D53", tooling: "D62", sales_tax: "D80", remodel: "D81", phase: "C91", costs: "F72", man_hours: "F73" },
+  Polish: { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75", phase: "C85", costs: "F66", man_hours: "F67" },
   // Gyp totals live in column E; mobilization-based → NO phase cell (phase_price
   // snapshots 0). All 5 gyp variants share this layout, so it's keyed by role,
   // not sheet name (see totalCellsFor / updateTotalBar's gyp-aware guards).
-  Gyp:    { total: "E87", psf: "E18", material: "E41", labor: "E52", tooling: "E61", sales_tax: "E79", remodel: "E80" },
+  Gyp:    { total: "E87", psf: "E18", material: "E41", labor: "E52", tooling: "E61", sales_tax: "E79", remodel: "E80", costs: "G71", man_hours: "G72" },
 };
 
 function updateTotalBar(data, byAddr) {
@@ -3182,6 +3187,25 @@ function snapshotLumpSumsToState() {
     state.proposal_remodel_tax = pick(num("Epoxy", totalCellsFor("Epoxy").remodel),
                                       num("Polish", totalCellsFor("Polish").remodel));
   }
+
+  // Cost side + crew budget for the Project Info Sheet (its B58 / I58). Follows
+  // the same tab the lump sum came from, so the hand-off describes the bid the
+  // customer was actually given. Combo with no designated base sums both tabs,
+  // matching how proposal_lump_sum is derived just above.
+  const costAt = (id) => {
+    const c = totalCellsFor(id);
+    return { costs: num(id, c.costs), mh: num(id, c.man_hours) };
+  };
+  let _cs;
+  if (wt === "gyp" || (state.base_tab_id && baseTab)) {
+    _cs = costAt(baseTab ? baseTab.id : GYP_BASE);
+  } else if (wt === "combo") {
+    const e = costAt("Epoxy"), p = costAt("Polish");
+    _cs = { costs: e.costs + p.costs, mh: e.mh + p.mh };
+  } else {
+    _cs = costAt(wt === "polish" ? "Polish" : "Epoxy");
+  }
+  state.cost_snapshot = { costs: _cs.costs || 0, man_hours: Math.round(_cs.mh || 0) };
 
   // Per-phase surcharge ("Add for additional phase" cell) — INFORMATIONAL: it
   // drives the proposal NOTES bullet only, never the bid total. Read the base

@@ -63,6 +63,7 @@ import basisboard_client
 import drafts
 import dropbox_client
 import estimate_writer
+import info_sheet_writer
 import invoice_writer
 import leads
 import leads_worker
@@ -1014,6 +1015,110 @@ def api_get_sheet(sheet_name: str, request: Request) -> Response:
     except KeyError:
         raise HTTPException(404, f"Sheet {sheet_name!r} not found")
     return _versioned_json(request, payload, version=f"{sheet_name}:{_template_version()}")
+
+
+# ─── Project Info Sheet (the ops hand-off workbook) ────────────────────
+def _deposit_requested(draft_id: str) -> bool:
+    """Has the customer been invoiced a deposit on this job?
+
+    Deposits live in the portal's tables, not ours, so this is a proxy call —
+    and a best-effort one. The estimator can flip B59 in the grid, so an
+    unreachable portal must not stop the sheet from rendering.
+    """
+    try:
+        rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
+    except Exception as exc:  # noqa: BLE001
+        log.info("info sheet: deposit lookup skipped (%s)", exc)
+        return False
+    for row in rows:
+        if row.get("proposal_id") == draft_id:
+            return bool(row.get("deposit_requested_at")
+                        or (row.get("deposit_status") or "").lower() in
+                        ("requested", "invoiced", "submitted", "received", "paid"))
+    return False
+
+
+def _info_sheet_prefill(draft_id: str) -> Dict[str, Any]:
+    draft = drafts.load_draft(draft_id)
+    if not draft:
+        raise HTTPException(404, "Draft not found")
+    return info_sheet_writer.build_prefill(
+        draft, deposit_requested=_deposit_requested(draft_id))
+
+
+@app.get("/api/info-sheet/{draft_id}")
+def api_info_sheet(draft_id: str, request: Request) -> Dict[str, Any]:
+    """The hand-off sheet for one project: the blank grid plus the cells we can
+    answer from the estimate.
+
+    The grid is template-derived and identical for every project, so it carries
+    the ETag; the prefill is per-draft and changes as the estimate does, which
+    is why this is one payload without a conditional GET rather than two.
+    """
+    draft_id = _safe_id(draft_id)
+    return {
+        "grid": info_sheet_writer.read_grid(),
+        "prefill": _info_sheet_prefill(draft_id),
+        "template_version": info_sheet_writer.template_version(),
+    }
+
+
+class InfoSheetIn(BaseModel):
+    draft_id: str
+    # What the estimator has on screen RIGHT NOW. The page also autosaves these
+    # onto the draft, but that PUT is debounced 2.5 s and every keystroke restarts
+    # the timer — so a download one second after the last edit would rebuild from
+    # a draft that has not caught up, and hand over a workbook missing the market
+    # segment and job number just typed. Sending them with the request removes the
+    # race; `None` (an older page build) falls back to the saved draft.
+    info_cell_values: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/info-sheet/generate")
+def api_info_sheet_generate(payload: InfoSheetIn, request: Request) -> Dict[str, Any]:
+    """Build the .xlsx: prefill, then whatever the estimator typed over it."""
+    draft_id = _safe_id(payload.draft_id)
+    draft = drafts.load_draft(draft_id)
+    if not draft:
+        raise HTTPException(404, "Draft not found")
+    data = draft.get("data") or {}
+
+    prefill = info_sheet_writer.build_prefill(
+        draft, deposit_requested=_deposit_requested(draft_id))
+    overrides = payload.info_cell_values
+    if not isinstance(overrides, dict):
+        saved = data.get("info_cell_values")
+        overrides = saved if isinstance(saved, dict) else {}
+    content = info_sheet_writer.fill_info_sheet(prefill, overrides)
+
+    name = str(data.get("project_name") or "project").replace(" ", "_")[:80]
+    token = _cache_file(
+        content, f"{name}_info_sheet.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # The job number is typed here for the first time in the whole tool, but the
+    # deposit invoice already reads `job_number` off the draft. Mirror it back so
+    # accounting's two documents agree without anyone re-typing it.
+    #
+    # Persist the cells alongside it. `save_draft` replaces the whole `data` blob,
+    # so writing job_number on its own would be undone moments later by the page's
+    # own debounced PUT of a localStorage copy that predates this call — and the
+    # returned `job_number` lets the page adopt it so its next PUT carries it too.
+    job_no = str(overrides.get("Info Sheet!B14") or prefill.get("B14") or "").strip()
+    merged = {**data}
+    if isinstance(payload.info_cell_values, dict):
+        merged["info_cell_values"] = payload.info_cell_values
+    if job_no:
+        merged["job_number"] = job_no
+    if merged != data:
+        try:
+            drafts.save_draft(draft_id, merged, owner_email=_user_email(request))
+        except Exception as exc:  # noqa: BLE001 — never block the download
+            log.warning("info sheet: draft write-back failed: %s", exc)
+
+    drafts.log_event(draft_id, _user_email(request), "info_sheet_generated",
+                     {"job_number": job_no})
+    return {"xlsx_download_url": f"/api/file/{token}", "job_number": job_no}
 
 
 _AUTOFILL_SYSTEM_PROMPT = (
