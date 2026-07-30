@@ -34,25 +34,26 @@
   .info-toolbar .saved { font-size: 11px; color: var(--ink-variant); min-width: 88px; }
 
   /* Without this, the empty market/terms cells read as a bug rather than as the
-     decisions they are. Matches the two marks the grid actually draws. */
+     decisions they are. The two swatches are the exact fills the grid paints
+     and the download carries, so the legend and the sheet cannot drift. */
   .swatches { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--ink-variant); }
-  .swatches i { display: inline-block; margin-right: 4px; }
-  .swatches .tick i {
-    width: 0; height: 0; vertical-align: 1px;
-    border: 4px solid transparent;
-    border-top-color: var(--treadwell-red); border-left-color: var(--treadwell-red);
-  }
-  .swatches .choose i { color: #777; font-style: normal; }
+  .swatches i { display: inline-block; width: 10px; height: 10px; margin-right: 4px;
+    border: 1px solid rgba(0,0,0,.25); vertical-align: -1px; }
+  .swatches .sw-fill i { background: #B3FF00; }
+  .swatches .sw-pick i { background: #FFB0FF; }
+  .swatches .sw-hint { opacity: .75; }
 
-  .info-scroll { flex: 1 1 auto; overflow: auto; background: #f7f7f7; padding: 10px 14px 24px; }
+  /* The grid vocabulary, shared with the estimate sheet so the two screens read
+     as the same tool. Kept inline rather than moved into styles.css: that file
+     loads first, so relocating these would drop them below the lock and
+     selection rules that currently rely on winning ties. */
+  .xl-viewport { flex: 1 1 auto; overflow: auto; background: #f7f7f7; padding: 0 0 24px; position: relative; }
+  .sheet-loading { padding: 40px 14px; font-size: 13px; color: var(--ink-variant); }
 
-  /* Same grid vocabulary as the estimate sheet so the two screens feel like
-     the same tool. Only the parts this page uses are repeated here. */
   .xl-grid {
     display: grid; width: max-content; background: white;
     font-family: "Calibri", "Inter", -apple-system, sans-serif;
     font-size: 11px; color: var(--ink);
-    box-shadow: 0 1px 3px rgba(0,0,0,.12);
     contain: layout style;
   }
   .xl-grid .gridcell {
@@ -86,21 +87,63 @@
     background: white !important; z-index: 2;
   }
   .xl-grid .gridcell input:focus, .xl-grid .gridcell select:focus { outline: none; }
-
-  /* Derived cells. Italic grey is the same signal Excel users already read as
-     "this is calculated", and the input is absent so there is nothing to type into. */
-  .xl-grid .gridcell.derived { color: #5c403f; font-style: italic; background: #fbfbfb; }
-  /* A cell the tool answered from the estimate — a corner tick, not a fill,
-     so the sheet still prints in Kyle's colours. */
-  .xl-grid .gridcell.prefilled::after {
-    content: ""; position: absolute; top: 0; right: 0;
-    border: 4px solid transparent; border-top-color: var(--treadwell-red); border-right-color: var(--treadwell-red);
-  }
+  /* A derived cell reads italic at rest and turns plain while you edit it, so
+     it is obvious that typing here replaces the formula. */
+  .xl-grid .gridcell.formula-cell input { color: #5c403f; font-style: italic; }
+  .xl-grid .gridcell.formula-cell:focus-within input { color: var(--ink); font-style: normal; }
   .xl-grid .gridcell.haslist::after {
     content: "▾"; position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
     font-size: 8px; color: #999; pointer-events: none;
   }
   .xl-grid .gridcell.haslist:has(select:focus)::after { display: none; }
+
+  /* Draggable column / row edges. */
+  .xl-grid .resize-h, .xl-grid .resize-v { position: absolute; background: transparent; z-index: 4; }
+  .xl-grid .resize-h { width: 6px; top: 0; bottom: 0; right: -3px; cursor: col-resize; }
+  .xl-grid .resize-v { height: 6px; left: 0; right: 0; bottom: -3px; cursor: row-resize; }
+  .xl-grid .resize-h:hover, .xl-grid .resize-v:hover,
+  .xl-grid .resize-h.dragging, .xl-grid .resize-v.dragging {
+    background: var(--treadwell-red); opacity: .6;
+  }
+
+  /* Tab bar. */
+  .xl-tab-bar { flex: 0 0 auto; }
+  .xl-tab-bar button { white-space: nowrap; }
+
+  /* Formula bar. */
+  .formula-bar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px; background: #fff; border-bottom: 1px solid var(--xl-border, #d4d4d4);
+  }
+  .formula-bar .fbar-name {
+    width: 84px; flex: 0 0 auto; font: 600 11px "Calibri", sans-serif;
+    border: 1px solid var(--xl-border, #d4d4d4); border-radius: 4px; padding: 3px 6px;
+    background: #fafafa; color: var(--ink-variant); text-align: center;
+  }
+  .formula-bar .fbar-fx { font: italic 700 12px Georgia, serif; color: var(--ink-variant); }
+  .formula-bar .fbar-input {
+    flex: 1 1 auto; font: 12px "Calibri", sans-serif;
+    border: 1px solid var(--xl-border, #d4d4d4); border-radius: 4px; padding: 4px 8px;
+  }
+  .formula-bar .fbar-input:focus { outline: 2px solid var(--treadwell-red); outline-offset: -2px; }
+  .formula-bar .fbar-input:disabled { background: #fafafa; }
+
+  /* Right-click menu for insert / delete. */
+  .ctx-menu {
+    position: fixed; z-index: 10050; min-width: 208px; padding: 4px;
+    background: #fff; border: 1px solid var(--xl-border, #d4d4d4); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.16);
+  }
+  .ctx-menu .ctx-item {
+    display: flex; width: 100%; align-items: center; gap: 8px;
+    background: none; border: 0; border-radius: 5px; padding: 7px 10px;
+    font: 13px system-ui; color: var(--ink); text-align: left; cursor: pointer;
+  }
+  .ctx-menu .ctx-item:hover:not(:disabled) { background: var(--surface-dim, #f0eeee); }
+  .ctx-menu .ctx-item:disabled { opacity: .45; cursor: default; }
+  .ctx-menu .ctx-item.danger { color: var(--treadwell-red); }
+  .ctx-menu .ctx-sep { height: 1px; margin: 4px 6px; background: var(--xl-border, #e0dede); }
+
 
   .info-msg { padding: 40px 14px; font-size: 13px; color: var(--ink-variant); }
   .info-msg a { color: var(--treadwell-red); }
@@ -130,8 +173,9 @@
     <h1>Project Info Sheet</h1>
     <span class="proj" id="proj-name">—</span>
     <div class="swatches">
-      <span class="tick"><i></i>filled from the estimate</span>
-      <span class="choose"><i>▾</i>pick from the list</span>
+      <span class="sw-fill"><i></i>filled from the estimate</span>
+      <span class="sw-pick"><i></i>your call</span>
+      <span class="sw-hint">right-click a row or column to insert or delete</span>
     </div>
     <span class="spacer"></span>
     <span class="saved" id="save-state"></span>
@@ -139,8 +183,16 @@
     <button type="button" id="dl-btn" class="btn-primary" style="padding:5px 12px;font-size:12px;">Download .xlsx</button>
   </div>
 
-  <div class="info-scroll" id="sheet-host">
-    <div class="info-msg" id="loading">Loading the info sheet…</div>
+  <div class="xl-tab-bar full" id="tab-bar"></div>
+
+  <div class="formula-bar" id="formula-bar">
+    <input id="fbar-name" class="fbar-name" readonly aria-label="Selected cell">
+    <span class="fbar-fx">fx</span>
+    <input id="fbar-input" class="fbar-input" disabled aria-label="Cell contents">
+  </div>
+
+  <div class="xl-viewport" id="xl-viewport">
+    <div id="sheet-grid" class="sheet-loading">Loading the info sheet…</div>
   </div>
 </main>
 
@@ -149,6 +201,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
 <script src="/shared.js"></script>
 <script src="/auth.js"></script>
+<script src="/js/xl-core.js"></script>
 <script src="/js/info-sheet.js"></script>
 </body>
 </html>
