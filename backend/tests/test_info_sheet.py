@@ -175,6 +175,39 @@ def test_an_untouched_flag_leaves_the_templates_default_alone():
         assert addr not in pf
 
 
+def test_a_gyp_job_never_inherits_epoxys_taxable_answer():
+    """In the estimate template `Gyp (USG 1-8")!B8` (Taxable) is its own literal
+    "Yes", while D7/D8 (prevailing wage, remodel) really are `=Epoxy!…` mirrors.
+    The gyp bid's sales tax comes from `=IF($B$8="no",…)` on the gyp tab, and
+    nothing there reads Epoxy!B6 — but AI Autofill writes every flag to hardcoded
+    `Epoxy!` keys whatever the work type. Falling through printed "Tax Exempt? Y"
+    on a job that was priced WITH tax, and told Foundation the same."""
+    d = _draft(work_type="gyp", base_tab_id='Gyp (USG 1-8")',
+               cell_values={"Epoxy!B6": "No"})          # autofill's epoxy answer
+    assert "B66" not in isw.build_prefill(d)
+    # The gyp tab's own answer is still honoured when somebody set it.
+    d2 = _draft(work_type="gyp", base_tab_id='Gyp (USG 1-8")',
+                cell_values={'Gyp (USG 1-8")!B8': "No", "Epoxy!B6": "Yes"})
+    assert isw.build_prefill(d2)["B66"] == "Y"
+
+
+def test_a_gyp_job_does_inherit_the_two_flags_that_are_real_mirrors():
+    """D7/D8 on the gyp tab are literally `=Epoxy!D5` / `=Epoxy!D6`, so reading
+    epoxy for those is reading the same cell, not guessing."""
+    d = _draft(work_type="gyp", base_tab_id='Gyp (USG 1-8")',
+               cell_values={"Epoxy!D5": "Yes", "Epoxy!D6": "Yes"})
+    pf = isw.build_prefill(d)
+    assert pf["B63"] == "Y" and pf["B67"] == "Y"
+
+
+def test_the_gyp_tabs_own_wage_and_remodel_answers_win():
+    d = _draft(work_type="gyp", base_tab_id='Gyp (USG 1-8")',
+               cell_values={'Gyp (USG 1-8")!D7': "Yes", 'Gyp (USG 1-8")!D8': "No",
+                            "Epoxy!D5": "No", "Epoxy!D6": "Yes"})
+    pf = isw.build_prefill(d)
+    assert pf["B63"] == "Y" and pf["B67"] == "N"
+
+
 def test_gyp_reads_its_own_taxable_cell_and_falls_back_to_epoxy():
     """The gyp layout sits two rows lower and keeps its own Taxable cell, but
     mirrors Prevailing Wage off epoxy by formula — so an unset gyp key legitimately
@@ -187,6 +220,23 @@ def test_gyp_reads_its_own_taxable_cell_and_falls_back_to_epoxy():
     assert pf["B66"] == "Y"            # exempt
     assert pf["B63"] == "Y"            # prevailing wage found on epoxy
     assert pf["B17"] == "Gypsum Cement Underlayment"
+
+
+def test_an_option_tabs_product_name_cannot_decide_primary_floor():
+    """B17 drives B18 Division, which is how the job is filed in Foundation.
+    Pooling every tab's product names let a quartz alternate outrank the flake
+    system that was actually sold."""
+    d = _draft(work_type="epoxy", base_tab_id="Epoxy",
+               system_name="", sheet_area={"epoxy_sf": 8000},
+               priced_tabs=[
+                   {"id": "Epoxy", "kind": "base", "role": "epoxy",
+                    "sys_names": ["MACRO Flake Single Broadcast", ""],
+                    "sf": {"epoxy_sf": 8000}},
+                   {"id": "Epoxy-2", "kind": "copy", "role": "epoxy",
+                    "sys_names": ["Decorative Quartz Double Broadcast", ""],
+                    "sf": {"epoxy_sf": 8000}},
+               ])
+    assert isw.build_prefill(d)["B17"] == "Epoxy - Flake"
 
 
 @pytest.mark.parametrize("system,expected", [
@@ -257,6 +307,35 @@ def test_a_combo_job_fills_the_sheets_second_system_block():
     assert (pf["B40"], pf["B42"], pf["D42"]) == ("Treadwell MACRO Flake", 8000, 120)
     assert (pf["B46"], pf["B48"]) == ("Treadwell Polished Concrete", 4200)
     assert "D48" not in pf                       # cove is not a polish quantity
+
+
+def test_the_second_block_ignores_a_tab_the_customer_did_not_buy():
+    """An option is an alternate that was quoted and declined; B57 covers the base
+    scope only. Listing it as a second system would have ops order material and
+    book crews for work nobody sold."""
+    d = _draft(work_type="epoxy", base_tab_id="Epoxy",
+               sheet_area={"epoxy_sf": 8000},
+               priced_tabs=_real_priced_tabs(epoxy_sf=8000, polish_sf=4200,
+                                             polish_desc="Treadwell Polished Concrete"),
+               tab_opts={"Polish": {"is_option": True, "show": True,
+                                    "price_mode": "total"}})
+    pf = isw.build_prefill(d)
+    for addr in ("B46", "B48", "D48"):
+        assert addr not in pf, f"{addr} reported an option as sold scope"
+    # Same draft without the option flag DOES report it — proves the guard is the
+    # thing doing the work, not an unrelated skip.
+    d2 = dict(d)
+    d2["data"] = {**d["data"], "tab_opts": {}}
+    assert isw.build_prefill(d2)["B48"] == 4200
+
+
+def test_cove_is_not_reported_on_a_gypsum_handoff():
+    """Gyp is a mobilization-based underlayment with no cove product, and its
+    sheet snapshot has no cove cells — so any cove figure is a leftover intake
+    number from a different scope."""
+    pf = isw.build_prefill(_draft(work_type="gyp", base_tab_id='Gyp (USG 1-8")',
+                                  gyp_soft_sf=20000, cove_1_lf=40))
+    assert pf["B42"] == 20000 and "D42" not in pf
 
 
 def test_the_second_block_skips_the_unpriced_gyp_variants():
@@ -373,6 +452,29 @@ def test_a_typed_formula_trigger_is_neutralized():
     assert str(ws["B14"].value).startswith("'@")
 
 
+def test_every_prefilled_cell_actually_survives_into_the_workbook():
+    """EDITABLE is the only gate deciding which prefilled values reach the file.
+    A cell missing from it is dropped SILENTLY and still renders on screen, so the
+    estimator would download a sheet whose contract amount or tax flag had
+    vanished. Round-trips the whole prefill rather than the handful of cells the
+    other fill tests poke at."""
+    draft = _draft(job_number="26.153", estimator_name="Troy Holmes",
+                   audience="Direct",
+                   sheet_area={"epoxy_sf": 8000, "cove_lf": 120, "polish_sf": 4200},
+                   priced_tabs=_real_priced_tabs(epoxy_sf=8000, cove_lf=120,
+                                                 polish_sf=4200,
+                                                 polish_desc="Treadwell Polished Concrete"),
+                   work_type="combo", base_tab_id="Epoxy",
+                   cost_snapshot={"costs": 49614, "man_hours": 392},
+                   cell_values={"Epoxy!B6": "No", "Epoxy!D5": "Yes", "Epoxy!D6": "Yes"},
+                   source="google_lead")
+    prefill = isw.build_prefill(draft, deposit_requested=True)
+    assert len(prefill) >= 25, "prefill got thinner — is this test still meaningful?"
+    ws = _filled(prefill)
+    missing = [a for a, v in prefill.items() if v != "" and ws[a].value in (None, "")]
+    assert not missing, f"prefilled but absent from the .xlsx: {missing}"
+
+
 def test_the_download_keeps_the_treadwell_logo():
     """openpyxl needs Pillow to write back images it read; without it every logo
     is dropped on save with no warning. The template carries the Treadwell mark on
@@ -435,6 +537,40 @@ def test_generate_returns_a_download_and_mirrors_the_job_number(one_draft, monke
     url = r.json()["xlsx_download_url"]
     assert client.get(url).status_code == 200
     assert one_draft["data"]["job_number"] == "26.153"
+
+
+def test_generate_uses_the_cells_sent_with_the_request(one_draft, monkeypatch):
+    """The page autosaves onto the draft, but that PUT is debounced 2.5 s and every
+    keystroke restarts the timer. Rebuilding from the saved draft handed over a
+    workbook missing whatever was typed in the last few seconds — the market
+    segment and job number — while the button still said "Downloaded". The cells
+    now travel with the request."""
+    stale = _draft(info_cell_values={"Info Sheet!B16": "Retail"})
+    monkeypatch.setattr(main.drafts, "load_draft", lambda i: stale)
+    r = client.post("/api/info-sheet/generate", json={
+        "draft_id": "d1",
+        "info_cell_values": {"Info Sheet!B16": "Religious", "Info Sheet!B14": "26.153"}})
+    assert r.status_code == 200
+    ws = openpyxl.load_workbook(
+        io.BytesIO(client.get(r.json()["xlsx_download_url"]).content))["Info Sheet"]
+    assert ws["B16"].value == "Religious"      # not the draft's stale "Retail"
+    assert ws["B14"].value == "26.153"
+    # The write-back carries the cells too, so the page's own later PUT of a
+    # localStorage copy cannot silently revert the job number.
+    assert one_draft["data"]["job_number"] == "26.153"
+    assert one_draft["data"]["info_cell_values"]["Info Sheet!B16"] == "Religious"
+
+
+def test_generate_still_works_for_a_page_that_sends_no_cells(one_draft, monkeypatch):
+    """An older cached page build posts only draft_id; it must keep working off
+    the saved draft rather than losing every edit."""
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: _draft(info_cell_values={"Info Sheet!B16": "Retail"}))
+    r = client.post("/api/info-sheet/generate", json={"draft_id": "d1"})
+    assert r.status_code == 200
+    ws = openpyxl.load_workbook(
+        io.BytesIO(client.get(r.json()["xlsx_download_url"]).content))["Info Sheet"]
+    assert ws["B16"].value == "Retail"
 
 
 def test_generate_survives_an_unreachable_portal(one_draft, monkeypatch):

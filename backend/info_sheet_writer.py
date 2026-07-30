@@ -331,17 +331,40 @@ def _base_role(data: Dict[str, Any]) -> str:
     return "epoxy"
 
 
-def _system_text(data: Dict[str, Any]) -> str:
-    """Everything we know about what is being installed, lowercased, so the
-    Primary Floor match can look at the product names the estimator actually
-    picked on the sheet rather than just the marketing name."""
+def _base_tab(data: Dict[str, Any], role: str) -> Optional[Dict[str, Any]]:
+    """The priced tab the bid actually came off, so its own product names can be
+    read without the other tabs' names mixed in."""
+    tabs = [t for t in (data.get("priced_tabs") or []) if isinstance(t, dict)]
+    base_id = data.get("base_tab_id")
+    if base_id:
+        for tab in tabs:
+            if tab.get("id") == base_id:
+                return tab
+    for tab in tabs:
+        if _txt(tab.get("role")).lower() == role:
+            return tab
+    return None
+
+
+def _system_text(data: Dict[str, Any], role: str) -> str:
+    """What the BASE bid installs, lowercased, for the Primary Floor match.
+
+    Scoped to the base tab on purpose. Pooling every priced tab's `sys_names`
+    let an alternate the customer never bought decide the answer: an epoxy job
+    carrying a quartz option matched "quartz" before its own flake system, and
+    B17 drives B18 Division, which is how the job is filed in Foundation.
+    """
     parts = [_txt(data.get("system_name"))]
-    for sysrow in data.get("sheet_systems") or []:
-        if isinstance(sysrow, dict):
-            parts.append(_txt(sysrow.get("name")))
-    for tab in data.get("priced_tabs") or []:
-        if isinstance(tab, dict):
-            parts.extend(_txt(n) for n in (tab.get("sys_names") or []))
+    tab = _base_tab(data, role)
+    if tab:
+        parts.append(_txt(tab.get("system_desc")))
+        parts.extend(_txt(n) for n in (tab.get("sys_names") or []))
+    elif not data.get("priced_tabs"):
+        # No sheet snapshot at all (an older draft) — the proposal's system list
+        # is the only description there is.
+        for sysrow in data.get("sheet_systems") or []:
+            if isinstance(sysrow, dict):
+                parts.append(_txt(sysrow.get("name")))
     return " ".join(p for p in parts if p).lower()
 
 
@@ -349,7 +372,7 @@ def _primary_floor(data: Dict[str, Any]) -> str:
     role = _base_role(data)
     if role == "gyp":
         return "Gypsum Cement Underlayment"
-    text = _system_text(data)
+    text = _system_text(data, role)
     table = _POLISH_FLOORS if role == "polish" else _FLOORS
     for keywords, label in table:
         if any(k in text for k in keywords):
@@ -373,14 +396,23 @@ def _sum_area(source: Dict[str, Any], keys) -> Optional[float]:
     return sum(vals) if vals else None
 
 
+# Cove base is a resin product. Polish and gypsum underlayment do not carry it,
+# and neither layout has cove cells on its estimate tab — so any cove figure on
+# such a job is a leftover intake number from a different scope. Reporting it
+# would have ops order material for work nobody bid.
+_COVE_ROLES = {"epoxy", "combo"}
+
+
 def _areas(data: Dict[str, Any], role: str) -> tuple[Optional[float], Optional[float]]:
     """(floor SF, cove LF) for one layout. Sheet-resolved areas win, because
     they follow the estimator's takeoff edits on the grid."""
     area = data.get("sheet_area") if isinstance(data.get("sheet_area"), dict) else {}
     sheet_keys, intake_keys = _SF_KEYS.get(role, _SF_KEYS["epoxy"])
     sf = _sum_area(area, sheet_keys) or _sum_area(data, intake_keys)
+    if role not in _COVE_ROLES:
+        return sf, None
     lf = _sum_area(area, _LF_KEYS[0]) or _sum_area(data, _LF_KEYS[1])
-    return sf, (lf if role != "polish" else None)   # cove belongs to the resin systems
+    return sf, lf
 
 
 # Fallback wording for the second system block when a tab carries real area but
@@ -396,22 +428,31 @@ def _second_system(data: Dict[str, Any], base_role: str):
     block one, so without this the polish half never reaches the hand-off at all
     — the exact re-typing this page exists to remove.
 
-    A tab only counts if it has FLOOR AREA. Every draft carries all five gyp
-    variants as priced tabs at zero square feet; picking one of those by tab order
-    would put "N12 1/8"" on the sheet as if somebody had bid it.
+    Two things disqualify a tab:
+
+    * **No floor area.** Every draft carries all five gyp variants as priced tabs
+      at zero square feet; picking one by tab order would put 'N12 1/8"' on the
+      sheet as if somebody had bid it.
+    * **Marked as a proposal OPTION.** An option is an alternate the customer was
+      quoted and did not buy; B57 covers the base scope only. Listing it here
+      would have ops order material and book crews for scope that was never sold.
     """
+    opts = data.get("tab_opts") if isinstance(data.get("tab_opts"), dict) else {}
     for tab in data.get("priced_tabs") or []:
         if not isinstance(tab, dict):
             continue
         role = _txt(tab.get("role")).lower()
         if not role or role == base_role:
             continue
+        opt = opts.get(tab.get("id"))
+        if isinstance(opt, dict) and opt.get("is_option"):
+            continue
         sf_src = tab.get("sf") if isinstance(tab.get("sf"), dict) else {}
         sheet_keys, _ = _SF_KEYS.get(role, _SF_KEYS["epoxy"])
         sf = _sum_area(sf_src, sheet_keys)
         if not sf:
             continue
-        lf = _sum_area(sf_src, _LF_KEYS[0]) if role != "polish" else None
+        lf = _sum_area(sf_src, _LF_KEYS[0]) if role in _COVE_ROLES else None
         return (_txt(tab.get("system_desc")) or _ROLE_LABELS.get(role, ""), sf, lf)
     return None
 
@@ -419,10 +460,24 @@ def _second_system(data: Dict[str, Any], base_role: str):
 def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
     """Read a Yes/No estimate flag out of the saved grid edits.
 
-    Gyp keeps its own Taxable cell but mirrors Prevailing Wage and Remodel from
-    the epoxy tab by formula, so an unset gyp key legitimately falls through to
-    epoxy. An answer that is nowhere means nobody touched the flag, and the
-    template default (taxable, not prevailing wage) stands.
+    On a gyp job two of the three flags may be read off the epoxy tab and one may
+    NOT, and the difference is in the estimate template:
+
+        Gyp (USG 1-8")!D7  =  '=Epoxy!D5'   Prevailing Wage — a mirror
+        Gyp (USG 1-8")!D8  =  '=Epoxy!D6'   Remodel Tax     — a mirror
+        Gyp (USG 1-8")!B8  =  'Yes'         Taxable         — its OWN literal
+
+    So falling through to epoxy is right for the two mirrors and wrong for
+    Taxable: the gyp bid's sales tax comes from `=IF($B$8="no",0,0.09475)` on the
+    gyp tab, and nothing on the gyp tab reads Epoxy!B6. AI Autofill writes all
+    seven flags to hardcoded `Epoxy!…` keys whatever the work type, so a gyp job
+    for a school could hold Epoxy!B6="No" while the gyp tab still said "Yes" and
+    the bid was priced WITH tax. Falling through then printed "Tax Exempt? Y" on
+    a taxable job, fired the request-a-certificate instruction, and told
+    Foundation the job was exempt.
+
+    An untouched gyp Taxable cell means the template default stands (taxable), so
+    returning None here leaves B66 alone rather than inventing an exemption.
     """
     cells = data.get("cell_values") if isinstance(data.get("cell_values"), dict) else {}
     epoxy_addr, gyp_addr = _FLAG_CELLS[flag]
@@ -430,6 +485,8 @@ def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
         v = cells.get(f"{_GYP_BASE}!{gyp_addr}")
         if v not in (None, ""):
             return str(v)
+        if flag == "taxable":
+            return None          # gyp owns this cell; epoxy's answer is not it
     v = cells.get(f"Epoxy!{epoxy_addr}")
     return None if v in (None, "") else str(v)
 
@@ -468,15 +525,21 @@ def build_prefill(draft: Dict[str, Any], *, deposit_requested: bool = False) -> 
 
     # Who gets billed. On a GC job that is the general contractor; direct work
     # is billed to the owner, whose name is the project name.
-    gc = _txt(data.get("architect"))
-    put("B23", gc if _txt(data.get("audience")).upper() == "GC" and gc
-               else _txt(data.get("project_name")))
-    put("B24", _txt(data.get("address")))
-    city_line = ", ".join(p for p in (_txt(data.get("city")),
-                                      " ".join(p for p in (state, _txt(data.get("zip"))) if p))
-                          if p)
-    put("B25", city_line)
-    put("B26", _txt(data.get("contact_phone")))
+    is_gc = _txt(data.get("audience")).upper() == "GC" and bool(_txt(data.get("architect")))
+    put("B23", _txt(data.get("architect")) if is_gc else _txt(data.get("project_name")))
+
+    # The address block beneath B23 is the BILL-TO — the Invoice and Deposit tabs
+    # print it. For direct work the customer is the owner of the site, so the job
+    # address is right. On a GC job it is the contractor's office, which the draft
+    # does not hold: filling the job site there would address an invoice to the GC
+    # at the building they are constructing, and the prefill tick would tell the
+    # estimator it had been checked. Left blank for a human instead.
+    if not is_gc:
+        put("B24", _txt(data.get("address")))
+        put("B25", ", ".join(p for p in (
+            _txt(data.get("city")),
+            " ".join(p for p in (state, _txt(data.get("zip"))) if p)) if p))
+        put("B26", _txt(data.get("contact_phone")))
 
     put("B29", _txt(data.get("contact_name")))
     put("B30", _txt(data.get("contact_phone")))

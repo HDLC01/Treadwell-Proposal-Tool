@@ -59,10 +59,17 @@
     return cell.value == null ? "" : cell.value;
   }
 
+  // Excel stores a percent-formatted cell as a fraction: 0.05 renders as 5%.
+  const isPct = (fmt) => (fmt || "").indexOf("%") >= 0;
+
   function fmtDisplay(v, fmt) {
     if (v == null || v === "") return "";
     if (typeof v !== "number") return String(v);
     const f = fmt || "";
+    // Percent first — its format string ("0%") also contains "0", so a later
+    // branch would claim it and print Retainage 0.05 as "0.05" while Excel showed
+    // 5%. Screen and workbook have to agree.
+    if (isPct(f)) return +(v * 100).toFixed(4) + "%";
     if (f.indexOf("$") >= 0) {
       return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
@@ -76,11 +83,19 @@
   // Invoice tab's arithmetic quietly stops working. The exceptions are the cells
   // the server flags as text: a job number is "26.100", and as a number that is
   // 26.1 — which is then what the Invoice and Foundation Import tabs print.
-  function parseTyped(addr, raw) {
+  function parseTyped(addr, raw, fmt) {
     const s = String(raw == null ? "" : raw).trim();
     if (s === "") return "";
     if (s[0] === "=") return s;
     if (textCells.has(addr)) return s;
+    // Retainage is the one percent cell. "5" and "5%" both mean five percent, and
+    // both have to be stored as 0.05 — stored as 5 Excel shows 500%. A value
+    // already below 1 is taken as the fraction it looks like.
+    if (isPct(fmt)) {
+      const pct = Number(s.replace(/[%\s,]/g, ""));
+      if (!Number.isFinite(pct)) return s;
+      return s.indexOf("%") >= 0 || Math.abs(pct) >= 1 ? pct / 100 : pct;
+    }
     const bare = s.replace(/[$,\s]/g, "");
     const n = Number(bare);
     return (bare !== "" && Number.isFinite(n)) ? n : s;
@@ -290,7 +305,7 @@
               inp.value = raw == null ? "" : String(raw);
             });
             inp.addEventListener("blur", () => {
-              const typed = parseTyped(addr, inp.value);
+              const typed = parseTyped(addr, inp.value, cell.fmt);
               el.classList.remove("prefilled");
               record(cell, typed);
               inp.value = fmtDisplay(typed, cell.fmt);
@@ -319,13 +334,19 @@
     dlBtn.disabled = true;
     dlBtn.textContent = "Building…";
     try {
-      // Flush the debounce first: the server rebuilds from the saved draft, so
-      // an edit still sitting in the timer would be missing from the file.
+      // Send the cells WITH the request. Waiting for the autosave to land does
+      // not work: shared.js debounces the PUT by 2.5 s and every setState
+      // restarts that timer, so a download moments after an edit rebuilt the file
+      // from a draft that had not caught up — the market segment and job number
+      // just typed came back blank, with the button still saying "Downloaded".
       clearTimeout(saveTimer);
       TW.setState({ info_cell_values: overrides });
-      await new Promise((r) => setTimeout(r, 250));
 
-      const res = await TW.postJSON("/api/info-sheet/generate", { draft_id: draftId });
+      const res = await TW.postJSON("/api/info-sheet/generate",
+                                    { draft_id: draftId, info_cell_values: overrides });
+      // The server mints the job number onto the draft; adopt it so this page's
+      // own next PUT carries it instead of overwriting it back to nothing.
+      if (res.job_number) TW.setState({ job_number: res.job_number });
       const file = await fetch(TW.absoluteUrl(res.xlsx_download_url), { headers: TW.authHeaders() });
       if (!file.ok) throw new Error("HTTP " + file.status);
       const blob = new Blob([await file.arrayBuffer()], { type: "application/octet-stream" });
