@@ -584,3 +584,81 @@ def test_a_requested_deposit_reaches_the_sheet(one_draft, monkeypatch):
     monkeypatch.setattr(main, "_portal", lambda *a, **kw: {"proposals": [
         {"proposal_id": "d1", "deposit_requested_at": "2026-07-27T10:00:00Z"}]})
     assert client.get("/api/info-sheet/d1").json()["prefill"]["B59"] == "Y"
+
+
+# ── The shared reader serves two workbooks ────────────────────────────
+# estimate_writer's caches were keyed by (sheet name, mtime) with no path, so
+# once a second workbook started reading through them one template's sheet
+# could be handed back for the other's request. That failure looks like real
+# data, which is why it needs a behavioural test and not a key-shape one.
+@pytest.fixture
+def _cold_caches():
+    ew._WB_CACHE.clear(); ew._SHEET_GRID_CACHE.clear()
+    yield
+    ew._WB_CACHE.clear(); ew._SHEET_GRID_CACHE.clear()
+
+
+def test_the_workbook_cache_keeps_the_two_templates_apart(_cold_caches):
+    est = ew._load_template(data_only=False)
+    info = ew._load_template(data_only=False, path=isw.TEMPLATE_PATH)
+    assert est is not info
+    assert "Epoxy" in est.sheetnames and "Epoxy" not in info.sheetnames
+    assert "Info Sheet" in info.sheetnames
+    assert ew._load_template(data_only=False) is est, "the estimate was evicted"
+
+
+def test_the_grid_cache_cannot_serve_one_templates_sheet_out_of_another(_cold_caches):
+    """Warm Epoxy, then ask the info workbook for it. A path-less cache hands
+    back the warmed Epoxy grid; a correct one has never heard of the sheet."""
+    ew.read_sheet_grid("Epoxy")
+    with pytest.raises(KeyError):
+        ew.read_sheet_grid("Epoxy", path=isw.TEMPLATE_PATH)
+    ew.read_sheet_grid("Info Sheet", path=isw.TEMPLATE_PATH)
+    with pytest.raises(KeyError):
+        ew.read_sheet_grid("Info Sheet")
+
+
+def test_a_defined_name_dropdown_resolves(_cold_caches):
+    """Every picker on the Info Sheet points at a workbook-level name, because
+    that is the only cross-sheet source form Excel and openpyxl both keep. The
+    shared resolver could not follow one, so reusing it dropped all six."""
+    wb = openpyxl.load_workbook(isw.TEMPLATE_PATH)
+    opts = ew._resolve_range_to_options(wb, wb["Info Sheet"], "MarketList",
+                                        path=isw.TEMPLATE_PATH)
+    assert len(opts) == 19 and opts[0] == "-Select-" and "Religious" in opts
+
+
+def test_the_estimates_own_dropdowns_still_resolve(_cold_caches):
+    """The defined-name branch must not disturb literal ranges."""
+    wb = ew._load_template(data_only=False)
+    opts = ew._resolve_range_to_options(wb, wb["Epoxy"], "$B$161:$B$165")
+    assert len(opts) == 5 and opts[0] == "Primer Options"
+
+
+def test_a_row_insert_moves_the_info_sheets_dropdowns_with_their_cells(_cold_caches):
+    """The headline case. Insert above the Y/N block and every picker below it
+    has to come along, or the estimator gets free-text where a list should be
+    and Foundation gets a category nobody can report on."""
+    wb = openpyxl.load_workbook(isw.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Info Sheet", "kind": "insert_rows", "at": 20, "count": 2}]))
+    ws = wb["Info Sheet"]
+    by_src = {d.formula1: str(d.sqref) for d in ws.data_validations.dataValidation}
+    assert by_src["YNList"] == "B61 B63 B65:B66 B68:B70"   # was B59 B61 B63:B64 B66:B68
+    assert by_src["TermsList"] == "B62"                    # was B60
+    assert by_src["LeadSourceList"] == "B64"               # was B62
+    assert by_src["MarketList"] == "B16"                   # above the insert, unmoved
+    # And the payroll formula that slid into the old Y/N territory did not
+    # inherit a Y/N picker.
+    assert "B67" not in " ".join(by_src.values())
+    assert str(ws["B67"].value).startswith("=IF(")
+
+
+def test_a_row_insert_keeps_the_other_tabs_pointing_at_the_right_cells(_cold_caches):
+    """Foundation Import, Invoice and Deposit read this sheet by address."""
+    wb = openpyxl.load_workbook(isw.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Info Sheet", "kind": "insert_rows", "at": 20, "count": 2}]))
+    assert wb["Foundation Import"]["A1"].value == "='Info Sheet'!B14"   # above, unmoved
+    assert wb["Invoice"]["C11"].value == "='Info Sheet'!B62"            # B60 pushed down 2
+    assert wb["Invoice"]["C14"].value == "='Info Sheet'!B15"            # above, unmoved

@@ -375,7 +375,16 @@
 
     const draftId = TW.getDraftId();
     if (!draftId) {
-      fail('No project selected. Open one from <a href="/projects.html">Projects</a>.');
+      // Reachable from the sidebar now, not only from a project card, so this
+      // is a landing page rather than an error — give it somewhere to go.
+      host.innerHTML =
+        '<div class="info-empty">' +
+        '<div class="info-empty-mark">📋</div>' +
+        "<h2>Pick a project first</h2>" +
+        "<p>The info sheet fills itself in from a project's estimate, so it needs " +
+        "to know which job you mean.</p>" +
+        '<a class="btn-primary" href="/projects.html">Choose a project →</a>' +
+        "</div>";
       dlBtn.disabled = true;
       return;
     }

@@ -185,3 +185,105 @@ def test_output_reloads_clean_after_mixed_ops():
     wb = _wb(data)          # loads without exceptions = zip + XML intact
     assert "Grooming" in wb.sheetnames
     assert wb["Grooming"].protection.sheet is True
+
+
+# ── Data validations + conditional formatting move with their cells ──────
+# openpyxl shifts neither, and the header comment used to claim the bid
+# template had none to shift. It has ten validations and twenty-eight
+# conditional-format ranges across Epoxy/Polish/Gyp, all below the row-10
+# guard the UI enforces — so every estimator who inserted a row shipped a
+# workbook whose dropdowns pointed at the wrong cells. Nothing failed
+# loudly: the file opened, filled and downloaded exactly as before.
+def _sqrefs(ws):
+    return (sorted(str(d.sqref) for d in ws.data_validations.dataValidation),
+            sorted(str(c.sqref) for c in ws.conditional_formatting))
+
+
+def test_data_validations_move_with_an_inserted_row():
+    wb = load_workbook(ew.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Epoxy", "kind": "insert_rows", "at": 30, "count": 1}]))
+    dv, _ = _sqrefs(wb["Epoxy"])
+    assert "A36" in dv and "A38" in dv and "D42" in dv    # were A35 / A37 / D41
+    assert "A35" not in dv and "A37" not in dv
+    assert "A21" in dv and "A22" in dv                    # above the boundary, still put
+
+
+def test_a_validations_source_range_shifts_too():
+    """The list a dropdown reads from is a formula, and it moves like one."""
+    wb = load_workbook(ew.TEMPLATE_PATH)
+    before = {str(d.sqref): d.formula1 for d in wb["Epoxy"].data_validations.dataValidation}
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Epoxy", "kind": "insert_rows", "at": 100, "count": 1}]))
+    after = {str(d.sqref): d.formula1 for d in wb["Epoxy"].data_validations.dataValidation}
+    assert before["A21"] == "$B$161:$B$165"
+    assert after["A21"] == "$B$162:$B$166"
+
+
+def test_conditional_formatting_moves_with_an_inserted_row():
+    wb = load_workbook(ew.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Epoxy", "kind": "insert_rows", "at": 30, "count": 1}]))
+    _, cf = _sqrefs(wb["Epoxy"])
+    assert "D42" in cf and "D41" not in cf
+    assert "D5" in cf and "D6" in cf                      # above the boundary
+
+
+def test_column_ops_move_validations_too():
+    wb = load_workbook(ew.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Epoxy", "kind": "insert_cols", "at": 1, "count": 1}]))
+    dv, _ = _sqrefs(wb["Epoxy"])
+    assert "B21" in dv and "A21" not in dv                # A → B
+
+
+def test_a_validation_whose_cells_were_all_deleted_is_dropped():
+    """An empty sqref is not valid XML — the whole validation has to go, and
+    the file still has to reload.
+
+    Deleting row 21 drops the primer picker that lived there AND slides the
+    system picker up from A22 into A21, so the address surviving at A21 is a
+    different validation. Assert on the source list, not the address.
+    """
+    wb = load_workbook(ew.TEMPLATE_PATH)
+    before = {str(d.sqref): d.formula1 for d in wb["Epoxy"].data_validations.dataValidation}
+    assert before["A21"] == "$B$161:$B$165"          # primer options
+    assert before["A22"] == "$R$180:$R$195"          # system 1 options
+
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Epoxy", "kind": "delete_rows", "at": 21, "count": 1}]))
+    after = {str(d.sqref): d.formula1 for d in wb["Epoxy"].data_validations.dataValidation}
+
+    assert len(after) == len(before) - 1, "the deleted row's validation should be gone"
+    assert after["A21"] == "$R$179:$R$194", "A22's picker moved up, and its source with it"
+    assert "$B$161:$B$165" not in after.values(), "the primer picker outlived its cell"
+    assert all(s for s in after), "a validation was left with an empty sqref"
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    load_workbook(buf)
+
+
+def test_a_partially_deleted_conditional_format_clamps():
+    """Deleting inside a multi-row range shrinks it rather than dropping it.
+
+    Documented imprecision: when the delete takes the range's anchor row,
+    Excel re-anchors the rule formula and we emit #REF! instead, so that one
+    highlight stops firing. Pinned here so it stays a decision, not a
+    surprise — the exact fix is a third regex pass for a cosmetic gain.
+    """
+    wb = load_workbook(ew.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Epoxy", "kind": "delete_rows", "at": 81, "count": 1}]))
+    _, cf = _sqrefs(wb["Epoxy"])
+    assert not any("A81" in s for s in cf)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    load_workbook(buf)
+
+
+def test_the_bid_download_keeps_its_dropdowns_after_a_row_insert():
+    """End to end through fill_estimate, which is what an estimator gets."""
+    data = ew.fill_estimate(
+        {"project_name": "DV survives", "sqft": 4000},
+        tab_structs=[{"sheet": "Epoxy", "kind": "insert_rows", "at": 30, "count": 2}])
+    dv, cf = _sqrefs(_wb(data)["Epoxy"])
+    assert "A37" in dv and "A39" in dv          # A35 / A37 pushed down two
+    assert "D43" in cf                          # D41 pushed down two
