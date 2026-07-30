@@ -316,6 +316,11 @@
     document.getElementById("project-line").textContent =
       `${state.project_name} · ${wt} · ${audience}`;
 
+    // Carry the draft across so the info sheet opens on THIS project rather than
+    // whichever one the browser last held.
+    const infoLink = document.getElementById("info-sheet-link");
+    if (infoLink) infoLink.href = TW.withDraft("/info-sheet.html");
+
     const safeName = (state.project_name || "proposal")
       .replace(/[^A-Za-z0-9._-]+/g, "_")
       .slice(0, 60);

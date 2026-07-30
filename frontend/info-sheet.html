@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — Project Info Sheet</title>
+<link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg">
+<link rel="stylesheet" href="/styles.css">
+<!-- HyperFormula — so Division, Payroll Tax Group and the accounting prompts
+     recalculate as the estimator types, exactly as they would in Excel. -->
+<script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+<style>
+  html, body { height: 100%; overflow: hidden; margin: 0; }
+  .info-app { display: flex; flex-direction: column; height: 100vh; width: auto; overflow: hidden; }
+  .info-app .topbar { flex: 0 0 auto; padding: 4px 12px; min-height: 0; }
+  .info-app main {
+    flex: 1 1 auto; display: flex; flex-direction: column;
+    min-height: 0; padding: 0; max-width: none; margin: 0;
+  }
+
+  .info-toolbar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 14px;
+    padding: 7px 14px;
+    background: var(--surface, #fff);
+    border-bottom: 1px solid var(--xl-border, #d4d4d4);
+  }
+  .info-toolbar h1 { margin: 0; font-size: 15px; line-height: 1.2; }
+  .info-toolbar .proj {
+    font-size: 12px; color: var(--ink-variant); font-weight: 600;
+    max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .info-toolbar .spacer { flex: 1 1 auto; }
+  .info-toolbar .saved { font-size: 11px; color: var(--ink-variant); min-width: 88px; }
+
+  /* Without this, the empty market/terms cells read as a bug rather than as the
+     decisions they are. Matches the two marks the grid actually draws. */
+  .swatches { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--ink-variant); }
+  .swatches i { display: inline-block; margin-right: 4px; }
+  .swatches .tick i {
+    width: 0; height: 0; vertical-align: 1px;
+    border: 4px solid transparent;
+    border-top-color: var(--treadwell-red); border-left-color: var(--treadwell-red);
+  }
+  .swatches .choose i { color: #777; font-style: normal; }
+
+  .info-scroll { flex: 1 1 auto; overflow: auto; background: #f7f7f7; padding: 10px 14px 24px; }
+
+  /* Same grid vocabulary as the estimate sheet so the two screens feel like
+     the same tool. Only the parts this page uses are repeated here. */
+  .xl-grid {
+    display: grid; width: max-content; background: white;
+    font-family: "Calibri", "Inter", -apple-system, sans-serif;
+    font-size: 11px; color: var(--ink);
+    box-shadow: 0 1px 3px rgba(0,0,0,.12);
+    contain: layout style;
+  }
+  .xl-grid .gridcell {
+    border-right: 1px solid #d4d4d4; border-bottom: 1px solid #d4d4d4;
+    padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-height: 18px; display: flex; align-items: center; position: relative;
+  }
+  .xl-grid .gridcell.row-header,
+  .xl-grid .gridcell.col-header,
+  .xl-grid .gridcell.corner {
+    background: #f3f3f3; color: var(--ink-variant); font-weight: 600; font-size: 10px;
+    justify-content: center; position: sticky; z-index: 2; user-select: none;
+  }
+  .xl-grid .gridcell.row-header { left: 0; }
+  .xl-grid .gridcell.col-header { top: 0; }
+  .xl-grid .gridcell.corner     { top: 0; left: 0; z-index: 3; }
+  .xl-grid .gridcell.bold    { font-weight: 700; }
+  .xl-grid .gridcell.italic  { font-style: italic; }
+  .xl-grid .gridcell.numeric { justify-content: flex-end; font-variant-numeric: tabular-nums; }
+  .xl-grid .gridcell input,
+  .xl-grid .gridcell select {
+    width: 100%; height: 100%; border: none; background: transparent;
+    font: inherit; color: inherit; padding: 0 3px; margin: 0; min-height: 0;
+    border-radius: 0; text-align: inherit; caret-color: var(--treadwell-red);
+  }
+  .xl-grid .gridcell.numeric input { text-align: right; }
+  .xl-grid .gridcell select { cursor: pointer; appearance: none; -webkit-appearance: none; }
+  .xl-grid .gridcell:has(input:focus),
+  .xl-grid .gridcell:has(select:focus) {
+    outline: 2px solid var(--treadwell-red); outline-offset: -2px;
+    background: white !important; z-index: 2;
+  }
+  .xl-grid .gridcell input:focus, .xl-grid .gridcell select:focus { outline: none; }
+
+  /* Derived cells. Italic grey is the same signal Excel users already read as
+     "this is calculated", and the input is absent so there is nothing to type into. */
+  .xl-grid .gridcell.derived { color: #5c403f; font-style: italic; background: #fbfbfb; }
+  /* A cell the tool answered from the estimate — a corner tick, not a fill,
+     so the sheet still prints in Kyle's colours. */
+  .xl-grid .gridcell.prefilled::after {
+    content: ""; position: absolute; top: 0; right: 0;
+    border: 4px solid transparent; border-top-color: var(--treadwell-red); border-right-color: var(--treadwell-red);
+  }
+  .xl-grid .gridcell.haslist::after {
+    content: "▾"; position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+    font-size: 8px; color: #999; pointer-events: none;
+  }
+  .xl-grid .gridcell.haslist:has(select:focus)::after { display: none; }
+
+  .info-msg { padding: 40px 14px; font-size: 13px; color: var(--ink-variant); }
+  .info-msg a { color: var(--treadwell-red); }
+</style>
+</head>
+<body class="info-app">
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-mark" src="/img/treadwell-bison.svg" width="57" height="36" alt="Treadwell">
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="info-toolbar">
+    <h1>Project Info Sheet</h1>
+    <span class="proj" id="proj-name">—</span>
+    <div class="swatches">
+      <span class="tick"><i></i>filled from the estimate</span>
+      <span class="choose"><i>▾</i>pick from the list</span>
+    </div>
+    <span class="spacer"></span>
+    <span class="saved" id="save-state"></span>
+    <a class="btn-secondary" id="back-link" href="/projects.html" style="padding:5px 12px;font-size:12px;">← Projects</a>
+    <button type="button" id="dl-btn" class="btn-primary" style="padding:5px 12px;font-size:12px;">Download .xlsx</button>
+  </div>
+
+  <div class="info-scroll" id="sheet-host">
+    <div class="info-msg" id="loading">Loading the info sheet…</div>
+  </div>
+</main>
+
+<!-- auth.js bails out (and never mints a token) unless the Supabase SDK is
+     already on the page, so this has to come before it. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script src="/shared.js"></script>
+<script src="/auth.js"></script>
+<script src="/js/info-sheet.js"></script>
+</body>
+</html>
