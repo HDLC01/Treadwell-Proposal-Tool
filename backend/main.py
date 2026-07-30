@@ -1065,6 +1065,13 @@ def api_info_sheet(draft_id: str, request: Request) -> Dict[str, Any]:
 
 class InfoSheetIn(BaseModel):
     draft_id: str
+    # What the estimator has on screen RIGHT NOW. The page also autosaves these
+    # onto the draft, but that PUT is debounced 2.5 s and every keystroke restarts
+    # the timer — so a download one second after the last edit would rebuild from
+    # a draft that has not caught up, and hand over a workbook missing the market
+    # segment and job number just typed. Sending them with the request removes the
+    # race; `None` (an older page build) falls back to the saved draft.
+    info_cell_values: Optional[Dict[str, Any]] = None
 
 
 @app.post("/api/info-sheet/generate")
@@ -1078,8 +1085,10 @@ def api_info_sheet_generate(payload: InfoSheetIn, request: Request) -> Dict[str,
 
     prefill = info_sheet_writer.build_prefill(
         draft, deposit_requested=_deposit_requested(draft_id))
-    overrides = data.get("info_cell_values")
-    overrides = overrides if isinstance(overrides, dict) else {}
+    overrides = payload.info_cell_values
+    if not isinstance(overrides, dict):
+        saved = data.get("info_cell_values")
+        overrides = saved if isinstance(saved, dict) else {}
     content = info_sheet_writer.fill_info_sheet(prefill, overrides)
 
     name = str(data.get("project_name") or "project").replace(" ", "_")[:80]
@@ -1090,17 +1099,26 @@ def api_info_sheet_generate(payload: InfoSheetIn, request: Request) -> Dict[str,
     # The job number is typed here for the first time in the whole tool, but the
     # deposit invoice already reads `job_number` off the draft. Mirror it back so
     # accounting's two documents agree without anyone re-typing it.
+    #
+    # Persist the cells alongside it. `save_draft` replaces the whole `data` blob,
+    # so writing job_number on its own would be undone moments later by the page's
+    # own debounced PUT of a localStorage copy that predates this call — and the
+    # returned `job_number` lets the page adopt it so its next PUT carries it too.
     job_no = str(overrides.get("Info Sheet!B14") or prefill.get("B14") or "").strip()
-    if job_no and job_no != str(data.get("job_number") or "").strip():
+    merged = {**data}
+    if isinstance(payload.info_cell_values, dict):
+        merged["info_cell_values"] = payload.info_cell_values
+    if job_no:
+        merged["job_number"] = job_no
+    if merged != data:
         try:
-            drafts.save_draft(draft_id, {**data, "job_number": job_no},
-                              owner_email=_user_email(request))
+            drafts.save_draft(draft_id, merged, owner_email=_user_email(request))
         except Exception as exc:  # noqa: BLE001 — never block the download
-            log.warning("info sheet: job_number mirror failed: %s", exc)
+            log.warning("info sheet: draft write-back failed: %s", exc)
 
     drafts.log_event(draft_id, _user_email(request), "info_sheet_generated",
                      {"job_number": job_no})
-    return {"xlsx_download_url": f"/api/file/{token}"}
+    return {"xlsx_download_url": f"/api/file/{token}", "job_number": job_no}
 
 
 _AUTOFILL_SYSTEM_PROMPT = (
