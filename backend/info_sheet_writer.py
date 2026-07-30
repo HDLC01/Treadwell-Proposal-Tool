@@ -36,38 +36,26 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import openpyxl
+from openpyxl.styles import PatternFill
 
+import estimate_writer as ew
 import leads
-from estimate_writer import (
-    _coerce,
-    _fill_hex,
-    _font_color,
-    _normalize_cell_value,
-    _serialize_cell,
-)
+from estimate_writer import _coerce
 
 log = logging.getLogger("proposal_tool.info_sheet")
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "project_info_sheet.xlsx"
 SHEET = "Info Sheet"
 
-_WB_CACHE: Dict[str, tuple[float, Any]] = {}
-_GRID_CACHE: Dict[float, Dict[str, Any]] = {}
+# `Lists` holds the dropdown source columns. It is hidden in the workbook and
+# stays hidden here — it is never served, never written, and never the target
+# of a structural op. Deleting rows from it would empty MarketList and friends,
+# and every picker would silently go free-text again.
+HIDDEN_SHEETS = frozenset({"Lists"})
 
-
-# ─── The template's own formulas ───────────────────────────────────────
-# Derived cells. The estimator sees their live result in the grid but cannot
-# type over them: overwriting one silently breaks a downstream tab (B65 feeds
-# payroll, B69 feeds the workers'-comp state, the C column prints the
-# accounting instructions people act on).
-READ_ONLY = frozenset({
-    "B18",   # Division, derived from Primary Floor
-    "F21",   # State, mirrors B19
-    "B65",   # Payroll Tax Group (KC/MO special case)
-    "B69",   # Workers' Comp State
-    "B71",   # Risk Management Plan (required over $149k)
-    "C59", "C61", "C62", "C63", "C66", "C67", "C68", "G63",   # action prompts
-})
+# Excel caps an op list long before this; the bound just stops a malformed
+# payload from replaying forever.
+MAX_STRUCT_OPS = 500
 
 
 # ─── Where each answer comes from ──────────────────────────────────────
@@ -117,157 +105,94 @@ _POLISH_FLOORS = [
 
 
 # ─── Template access ───────────────────────────────────────────────────
-def _load(*, data_only: bool):
-    key = f"data_only={data_only}"
-    mtime = TEMPLATE_PATH.stat().st_mtime
-    hit = _WB_CACHE.get(key)
-    if hit and hit[0] == mtime:
-        return hit[1]
-    wb = openpyxl.load_workbook(TEMPLATE_PATH, data_only=data_only)
-    _WB_CACHE[key] = (mtime, wb)
-    return wb
-
-
+# The grid reader lives in estimate_writer and is shared, not forked. It was
+# forked once and the copy immediately drifted: it lacked the border-symmetry
+# pass, which on SOV alone decides 189 of 323 cells. SOV is a bordered table,
+# so without it the tab renders visibly wrong.
 def template_version() -> str:
     """ETag seed — changes whenever the committed template is replaced."""
     return str(TEMPLATE_PATH.stat().st_mtime_ns)
 
 
-def _named_range_options(wb, formula: str) -> list[str]:
-    """Resolve a validation's `formula1` into its option strings.
+def visible_sheets() -> list[str]:
+    """The tabs a user may see and edit, in workbook order.
 
-    Every dropdown on this sheet except F33 points at a workbook-level name
-    (`MarketList`, `YNList`, …) that resolves to a column on the hidden `Lists`
-    tab. That indirection is not decoration — it is the only construction that
-    both openpyxl and every Excel version round-trip for a cross-sheet list.
+    Derived from the file rather than hardcoded so the read gate and the write
+    gate can never disagree about what was on screen. A test pins the exact
+    five, so a master that unhides `Lists` or adds a tab fails CI instead of
+    quietly exposing the dropdown source.
     """
-    name = formula.lstrip("=").strip()
-    defn = wb.defined_names.get(name)
-    if defn is None:
-        return []
-    opts: list[str] = []
-    for sheet_name, ref in defn.destinations:
-        if sheet_name not in wb.sheetnames:
-            continue
-        cells = wb[sheet_name][ref.replace("$", "")]
-        if not isinstance(cells, tuple):
-            cells = ((cells,),)
-        elif cells and not isinstance(cells[0], tuple):
-            cells = (cells,)
-        for row in cells:
-            for cell in row:
-                if cell.value is not None and str(cell.value).strip():
-                    opts.append(str(cell.value))
-    return opts
+    wb = ew._load_template(data_only=False, path=TEMPLATE_PATH)
+    return [ws.title for ws in wb.worksheets
+            if ws.sheet_state == "visible" and ws.title not in HIDDEN_SHEETS]
 
 
-def read_grid() -> Dict[str, Any]:
-    """The Info Sheet as the JSON the grid UI renders.
+def read_sheet(sheet_name: str) -> Dict[str, Any]:
+    """One tab as the JSON the grid renders. KeyError if it isn't a real tab.
 
-    Same shape as `estimate_writer.read_sheet_grid` so the frontend can reuse
-    the estimate grid's rendering rules, plus `readOnly` — this sheet is mostly
-    labels and derived cells, and marking them server-side keeps the client
-    from having to know which is which.
+    `parse_x14=False`: this workbook has no extension validations at all —
+    `prepare_info_sheet_template.py` converted every one of them to a plain
+    validation over a defined name — and the parser guesses a sheet's zip
+    member by position, so there is nothing to gain by running it.
     """
-    mtime = TEMPLATE_PATH.stat().st_mtime
-    if mtime in _GRID_CACHE:
-        return _GRID_CACHE[mtime]
+    if sheet_name not in visible_sheets():
+        raise KeyError(sheet_name)
+    return ew.read_sheet_grid(sheet_name, path=TEMPLATE_PATH, parse_x14=False)
 
-    wb = _load(data_only=False)
-    ws = wb[SHEET]
-    ws_vals = _load(data_only=True)[SHEET]
 
-    merged, merged_inner = [], set()
-    for mr in ws.merged_cells.ranges:
-        anchor = mr.coord.split(":")[0]
-        merged.append({
-            "anchor": anchor, "range": mr.coord,
-            "minRow": mr.min_row, "maxRow": mr.max_row,
-            "minCol": mr.min_col, "maxCol": mr.max_col,
-            "rowSpan": mr.max_row - mr.min_row + 1,
-            "colSpan": mr.max_col - mr.min_col + 1,
-        })
-        for row in ws[mr.coord]:
-            for cell in row:
-                if cell.coordinate != anchor:
-                    merged_inner.add(cell.coordinate)
+def read_workbook(prefill: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Every visible tab, with the prefill already merged into the cells.
 
-    cells: list[Dict[str, Any]] = []
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
-        for cell in row:
-            if cell.coordinate in merged_inner:
-                continue
-            value = cell.value
-            fill_hex = _fill_hex(cell)
-            is_formula = isinstance(value, str) and value.startswith("=")
-            # Skip the blank filler, but never an input cell: the template ships
-            # most of them empty, and dropping them would take their number
-            # format with them — the contract amount would render as 82496
-            # instead of $82,496.00.
-            if (value is None and not fill_hex and not cell.font.bold
-                    and cell.coordinate not in EDITABLE):
-                continue
-            if is_formula:
-                cached = ws_vals[cell.coordinate].value
-                display = None if (cached is None or (
-                    isinstance(cached, str) and cached.startswith("="))) else cached
-            else:
-                display = value
-            out = _serialize_cell(
-                cell, display_value=_normalize_cell_value(display),
-                is_formula=is_formula, fill_hex=fill_hex,
-                font_color=_font_color(cell),
-            )
-            if is_formula:
-                # The estimate grid hands formulas to HyperFormula so they
-                # recalculate live; same here, so B18/B65/B71 react as the
-                # estimator types. Editing them is still blocked.
-                out["readOnly"] = True
-            cells.append(out)
-
-    dropdowns: Dict[str, list[str]] = {}
-    for dv in ws.data_validations.dataValidation:
-        if dv.type != "list" or not dv.formula1:
-            continue
-        f = dv.formula1.strip()
-        opts = ([s.strip() for s in f.strip('"').split(",")]
-                if f.startswith('"') and f.endswith('"')
-                else _named_range_options(wb, f))
-        if not opts:
-            log.warning("info sheet: dropdown %s resolved to nothing", f)
-            continue
-        for rng in dv.sqref.ranges:
-            got = ws[rng.coord]
-            if not isinstance(got, tuple):
-                got = ((got,),)
-            elif got and not isinstance(got[0], tuple):
-                got = (got,)
-            for r in got:
-                for cell in r:
-                    dropdowns[cell.coordinate] = opts
-
-    by_addr = {c["addr"]: c for c in cells}
-    for addr in READ_ONLY:
-        if addr in by_addr:
-            by_addr[addr]["readOnly"] = True
-
-    result = {
-        "sheet": SHEET,
-        "max_row": ws.max_row,
-        "max_col": ws.max_column,
-        "cells": cells,
-        "merged": merged,
-        "col_widths": {k: v.width for k, v in ws.column_dimensions.items() if v.width},
-        "row_heights": {int(k): v.height for k, v in ws.row_dimensions.items() if v.height},
-        "dropdowns": dropdowns,
-        "editable": sorted(EDITABLE),
-        # The browser has to know these too: it parses what the estimator types
-        # before sending it, so "26.100" would arrive here as the number 26.1 and
-        # no server-side guard could get the trailing zero back.
-        "text_cells": sorted(TEXT_CELLS),
+    Merging server-side means the grid shows exactly what the download will
+    write — there is no second source of truth for the client to reconcile, and
+    a cell's `role` travels with it so a row insert shifts the colour key for
+    free.
+    """
+    names = visible_sheets()
+    sheets = {n: read_sheet(n) for n in names}
+    _overlay_prefill(sheets.get(SHEET), prefill or {})
+    return {
+        "order": names,
+        "sheets": sheets,
+        "text_cells": sorted(f"{SHEET}!{a}" for a in TEXT_CELLS),
+        "template_version": template_version(),
     }
-    _GRID_CACHE[mtime] = result
-    return result
+
+
+def _overlay_prefill(grid: Optional[Dict[str, Any]], prefill: Dict[str, Any]) -> None:
+    """Stamp the prefill onto the Info Sheet grid, tagging provenance.
+
+    `role` is the colour key the estimator reads: chartreuse for an answer the
+    tool supplied, pink for a decision it deliberately left alone. Attaching it
+    to the cell rather than shipping a parallel address list means the client's
+    insert/delete transform carries it along with everything else.
+    """
+    if not grid:
+        return
+    by_addr = {c["addr"]: c for c in grid["cells"]}
+
+    def slot(addr: str) -> Dict[str, Any]:
+        cell = by_addr.get(addr)
+        if cell is None:
+            m = re.match(r"^([A-Z]+)([0-9]+)$", addr)
+            col = 0
+            for ch in m.group(1):
+                col = col * 26 + (ord(ch) - 64)
+            cell = {"addr": addr, "row": int(m.group(2)), "col": col}
+            grid["cells"].append(cell)
+            by_addr[addr] = cell
+        return cell
+
+    for addr, value in (prefill or {}).items():
+        cell = slot(addr)
+        cell["role"] = "prefill"
+        if value == "" or value is None:
+            cell.pop("value", None)          # deliberately cleared a default
+        else:
+            cell["value"] = value
+    for addr in PINK_CELLS:
+        slot(addr)["role"] = "decision"
+
 
 
 # ─── Prefill ───────────────────────────────────────────────────────────
@@ -582,60 +507,152 @@ def build_prefill(draft: Dict[str, Any], *, deposit_requested: bool = False) -> 
 
 # Cells the estimator may type into: everything the prefill can write, plus the
 # pink decisions and the free-text blocks the sheet leaves for a human.
-EDITABLE = frozenset({
-    "B13", "B14", "B15", "B16", "B17", "B19", "B20", "B21", "D21",
-    "B23", "B24", "B25", "B26", "B27",
-    "B29", "B30", "B31", "B33", "B34", "B35",
-    "F23", "F24", "F25", "F28", "F32", "F33", "F34", "F35", "F36",
-    "B37", "B38",
-    "B39", "B40", "B41", "B42", "D42", "B43",
-    "B45", "B46", "B47", "B48", "D48", "B49",
-    "B51", "B52", "B53", "B54", "B55",
-    "B57", "B58", "I57", "I58",
-    "B59", "B60", "B61", "B62", "B63", "B64", "B66", "B67", "B68", "B70",
-    "B73", "B75", "B76",
+# Cells the sheet deliberately leaves to a human — the pink half of the colour
+# key on Hanz's marked-up FBC Oak Grove sheet. Pink is a property of the CELL,
+# not of whether we happened to write it: B16 is pink there *and* holds
+# "Religious", because a person chose that. An estimator's entry never repaints
+# one. `test_nothing_pink_is_prefilled` asserts the same set from the other
+# side, so the test and the colour key are two views of one constant.
+PINK_CELLS = frozenset({
+    "B16",   # Market / Project Class
+    "B39",   # Manufacturer
+    "B41",   # Colour / Blend
+    "B43",   # Special transition detail
+    "B60",   # Payment terms
+    "B61",   # New customer over $10k
+    "B68",   # CCIP
+    "B70",   # Retainage
+    "F33",   # Bill platform / pay app
 })
 
 # Cells that must stay text even when they look numeric. A job number is the
 # clearest case: "26.100" cast to a float is 26.1, and the Invoice and
 # Foundation Import tabs both print it straight from B14. Phones lose their
-# shape the same way.
+# shape the same way. Info Sheet only — SOV has its own text columns, which the
+# grid detects from the `@` number format instead.
 TEXT_CELLS = frozenset({"B14", "B26", "B30", "F35", "B27"})
+
+CHARTREUSE = "FFB3FF00"
+PINK = "FFFFB0FF"
+_FILL_PREFILL = PatternFill(fill_type="solid", start_color=CHARTREUSE, end_color=CHARTREUSE)
+_FILL_DECISION = PatternFill(fill_type="solid", start_color=PINK, end_color=PINK)
+
+
+# The characters Excel reads as the start of a formula or a DDE call. Same set
+# `_coerce` guards; kept here because a text cell must skip _coerce's numeric
+# casting and so cannot borrow its guard wholesale.
+_INJECTION_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _as_text(v) -> str:
     """Keep the string, keep the injection guard `_coerce` would have applied."""
     s = "" if v is None else str(v)
-    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+    return "'" + s if s[:1] in _INJECTION_TRIGGERS else s
+
+
+def _norm_ops(tab_structs, visible) -> list[dict]:
+    """Validated structural ops, restricted to tabs the user can actually see.
+
+    The `visible` filter is a security gate, not tidiness. `_apply_tab_structs`
+    skips only sheets absent from the workbook, and `Lists` is present — so a
+    crafted `{"sheet": "Lists", "kind": "delete_rows", "at": 4, "count": 20}`
+    would wipe the dropdown source ranges. MarketList would resolve to blanks
+    and every picker would go free-text: exactly the failure
+    `prepare_info_sheet_template.py` exists to prevent, arriving through the
+    front door.
+    """
+    ops = ew._norm_structs(tab_structs)[:MAX_STRUCT_OPS]
+    return [op for op in ops if op["sheet"] in visible]
+
+
+def resolve_addr(addr: str, tab_structs=None, sheet: str = SHEET) -> Optional[str]:
+    """Where a template address ended up after the user's row/column edits.
+
+    `None` if they deleted it. Callers outside this module need this because a
+    hardcoded address stops meaning what it used to the moment a row goes in
+    above it — the job-number mirror is the live example.
+    """
+    ops = [op for op in _norm_ops(tab_structs, {sheet}) if op["sheet"] == sheet]
+    return ew._translate_addr(addr, ops)
+
+
+def _apply_colour_key(ws, prefilled, ops) -> None:
+    """Paint the provenance key Hanz colours by hand today.
+
+    Chartreuse is *the set of addresses the prefill answered*, not "cells that
+    ended up non-empty" — on the FBC sheet D42 is chartreuse and blank, because
+    we knew the field and the job simply had no cove. Deriving it from emptiness
+    would drop that and would also tick template defaults nobody chose.
+
+    Runs after the structural replay, so every address has to be translated;
+    pink goes on last so it wins any overlap (a test asserts there is none).
+    Only ~35 addresses are ever stamped and none of them is a label, so the
+    template's own header fills survive untouched. Assigning `.fill` replaces
+    only that facet, so B57 keeps its currency format and B14 its `@`.
+    """
+    for addrs, fill in ((prefilled, _FILL_PREFILL), (PINK_CELLS, _FILL_DECISION)):
+        for addr in addrs:
+            moved = ew._translate_addr(addr, ops)
+            if moved:
+                ws[moved].fill = fill
 
 
 # ─── Fill ──────────────────────────────────────────────────────────────
 def fill_info_sheet(prefill: Dict[str, Any],
-                    overrides: Optional[Dict[str, Any]] = None) -> bytes:
-    """Render the workbook. Overrides are what the estimator typed, so they win.
+                    overrides: Optional[Dict[str, Any]] = None,
+                    *, tab_structs=None) -> bytes:
+    """Render the workbook.
 
-    Only cells on `EDITABLE` are written, from either source: a stray key can
-    otherwise land on a label or blow away one of the derived formulas the other
-    tabs read.
+    The ordering is the same invariant `fill_estimate` documents, and it is
+    load-bearing: everything written in TEMPLATE coordinates goes down BEFORE
+    the structural replay, and everything arriving in CURRENT coordinates after
+    it. The prefill was authored against the pristine template, so it rides the
+    shift like any other cell value; the estimator's overrides were typed
+    against the grid they were looking at, so they are already current.
+
+    Every cell is writable. The old EDITABLE whitelist is gone — a formula cell
+    that gets typed over is replaced, exactly as in Excel.
     """
     wb = openpyxl.load_workbook(TEMPLATE_PATH)   # fresh — never the cached copy
+    visible = set(visible_sheets())
+    ops = _norm_ops(tab_structs, visible)
     ws = wb[SHEET]
 
-    values: Dict[str, Any] = {k: v for k, v in (prefill or {}).items()}
-    for key, val in (overrides or {}).items():
-        addr = key.split("!", 1)[1] if "!" in key else key
-        values[addr] = val
+    # Pass A — template coordinates.
+    for addr, val in (prefill or {}).items():
+        _write(ws, addr, val, text_cells=TEXT_CELLS)
 
-    for addr, val in values.items():
-        if addr not in EDITABLE or addr in READ_ONLY:
+    # Replay the user's row/column edits.
+    ew._apply_tab_structs(wb, ops)
+    info_ops = [op for op in ops if op["sheet"] == SHEET]
+
+    # Pass B — current coordinates, whatever the estimator typed.
+    for key, val in (overrides or {}).items():
+        if "!" not in key:
             continue
-        if val == "" or val is None:
-            ws[addr] = None
-        elif addr in TEXT_CELLS:
-            ws[addr] = _as_text(val)
-        else:
-            ws[addr] = _coerce(val)
+        sheet_name, addr = key.split("!", 1)
+        if sheet_name not in visible or not ew._CELL_SHAPE_RE.fullmatch(addr):
+            log.info("info sheet: skipped override %r", key)
+            continue
+        _write(wb[sheet_name], addr, val,
+               text_cells=TEXT_CELLS if sheet_name == SHEET else frozenset())
+
+    # Pass C — the colour key, over the shifted addresses.
+    _apply_colour_key(ws, list((prefill or {}).keys()), info_ops)
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _write(ws, addr: str, val, *, text_cells) -> None:
+    """One cell, with the text rule and the formula-injection guard."""
+    try:
+        if val == "" or val is None:
+            ws[addr] = None
+        elif addr in text_cells:
+            ws[addr] = _as_text(val)
+        else:
+            ws[addr] = _coerce(val)
+    except Exception as exc:  # noqa: BLE001 — one bad address must not lose the file
+        log.warning("info sheet: could not write %s!%s: %s", ws.title, addr, exc)
