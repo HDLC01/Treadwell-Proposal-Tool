@@ -45,6 +45,7 @@
   let activeInput = null;
   let fbarDirty = false;
 
+  const SHEET_INFO = "Info Sheet";   // the one tab the prefill and colour key apply to
   const keyOf = (sheet, addr) => sheet + "!" + addr;
   const isTextCell = (sheet, addr, fmt) =>
     textCells.has(keyOf(sheet, addr)) || X.isTextFmt(fmt);
@@ -491,6 +492,14 @@
     order = payload.order || [];
     grids = payload.sheets || {};
     textCells = new Set(payload.text_cells || []);
+
+    // The local blob can be a fresh hydration that has not been through the
+    // wizard, so fall back to the sheet's own project name rather than showing
+    // an unlabelled workbook.
+    if (!projLabel.textContent) {
+      const b15 = (grids[SHEET_INFO] || { cells: [] }).cells.find((c) => c.addr === "B15");
+      projLabel.textContent = (b15 && b15.value) || "";
+    }
 
     // Structural edits are recorded against a particular template. If the
     // committed workbook has been rebuilt since, the offsets no longer describe
