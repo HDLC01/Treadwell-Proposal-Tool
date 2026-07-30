@@ -491,7 +491,7 @@
   // Rewrite static wizard step-nav anchors to carry ?d=. Skips the "/" home and
   // "?new" (a fresh start must NOT inherit a draft id); leaves cross-origin and
   // non-wizard links alone.
-  const _WIZARD_PATH = /^\/(estimate-review|proposal-review|done|dropbox)\.html$|^\/$/;
+  const _WIZARD_PATH = /^\/(estimate-review|proposal-review|done|dropbox|info-sheet)\.html$|^\/$/;
   document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll("a[href]").forEach((a) => {
       try {

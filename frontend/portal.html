@@ -5,8 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Customer Portal CRM · Treadwell Proposal Generator</title>
 <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+<!-- This page styles itself and does not link styles.css, so it needs its own
+     opt-out. Without it Chromium synthesizes a dark theme over the whole drawer
+     and flattens every near-white surface to the same grey — which is what made
+     the two chat sides indistinguishable. There is no dark theme in this repo. -->
+<meta name="color-scheme" content="only light" />
 <style>
-  :root { --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
+  :root { color-scheme: only light;
+    --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
     --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--surf); color:var(--ink);
@@ -94,7 +100,10 @@
   .dbody[data-sec="chat"] { display:flex; flex-direction:column; overflow:hidden; padding-bottom:0; }
   .dbody[data-sec="chat"] #dpanel-chat,
   .dbody[data-sec="chat"] #dsec-chat { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; margin-bottom:0; }
-  .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  /* A flex column, so each row can choose its own side with align-self and the
+     gap does the spacing. Auto-margins can't centre a system note. */
+  .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto;
+    display:flex; flex-direction:column; gap:10px; }
   .dbody[data-sec="chat"] #chat-compose { flex:0 0 auto; padding:10px 0 16px; background:#fff;
     border-top:1px solid var(--line); }
   .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); margin-bottom:4px; }
@@ -126,23 +135,34 @@
     letter-spacing:.04em; cursor:pointer; }
   .dep-show:hover { background:var(--surf-high); color:var(--ink); }
   .dep-s { font-size:11px; color:var(--ink-v); margin-top:6px; }
-  .msg { padding:9px 12px; border-radius:12px; margin-bottom:8px; max-width:72%; width:fit-content; }
+  .msg { padding:9px 12px; border-radius:12px; max-width:85%; width:fit-content; }
   /* Who said it should be obvious without reading the label, so the two sides sit
-     well apart and each bubble squares off the corner on its own side. */
-  .msg.customer { background:var(--surf-high); margin-right:auto; border-bottom-left-radius:3px; }
-  .msg.staff { background:#fdeaec; margin-left:auto; border-bottom-right-radius:3px; }
-  .msg.staff .who, .msg.staff .when { text-align:right; }
+     well apart and each bubble squares off the corner on its own side. Ours is a
+     SOLID red rather than a pink tint: two near-white backgrounds three percent
+     apart in lightness read as one colour, and any renderer that adjusts contrast
+     collapses them completely. Mirrors the customer portal's own bubbles. */
+  .msg.customer { align-self:flex-start; background:var(--surf-high); border-bottom-left-radius:3px; }
+  .msg.staff { align-self:flex-end; background:var(--red-dark); color:#fff; border-bottom-right-radius:3px; }
+  .msg.staff .who, .msg.staff .when { text-align:right; color:rgba(255,255,255,.8); }
+  .msg.staff .via-email { border-color:rgba(255,255,255,.6); }
   .msg .who { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
   .msg .via-email { border:1px solid var(--ink-v); border-radius:999px; padding:0 5px; margin-left:4px; font-size:9px; }
   .msg .when { font-size:10px; color:var(--ink-v); margin-top:3px; }
   textarea { width:100%; min-height:74px; padding:10px; border:1px solid var(--line); border-radius:7px; font:inherit; resize:vertical; }
   a.link { color:var(--red-dark); word-break:break-all; }
   .note { color:var(--ink-v); font-size:12px; }
-  .note.sys { text-align:center; background:var(--surf-low); border-radius:6px; padding:5px 10px; margin:6px 0; }
+  /* margin:0 so the thread's gap is the only spacing — a <p>'s default 1em
+     would otherwise stack on top of it and float the note away from its event. */
+  .note.sys { align-self:center; margin:0; text-align:center; background:var(--surf-low);
+    border-radius:6px; padding:5px 10px; }
   /* Chat cards — same shape/classes the CUSTOMER portal uses, so staff read the
-     thread exactly as the customer sees it. Left border colour keys the type. */
-  .chat-card { background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--red);
-    border-radius:10px; padding:11px 13px; margin-bottom:8px; }
+     thread exactly as the customer sees it. Left border colour keys the type.
+     They are events, not speech, so they sit on the incoming side and stop short
+     of the full width; stretched edge to edge they made the panel read as a list
+     of notices rather than a conversation. */
+  .chat-card { align-self:flex-start; max-width:92%;
+    background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--red);
+    border-radius:10px; padding:11px 13px; }
   .chat-card.deposit { border-left-color:var(--ok); }
   .chat-card.system  { border-left-color:var(--ink-v); }
   .chat-card .cc-title { font-weight:800; font-size:13px; margin-bottom:3px; }
