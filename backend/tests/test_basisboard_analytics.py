@@ -94,6 +94,22 @@ def _clear():
     bb._meta_cache.clear()
     bb._analytics_cache.clear()
     bb._analytics_last_good.clear()
+    bb._analytics_state.update({"building": False, "error": ""})
+    try:                                        # a failed test can leave it held
+        bb._ANALYTICS_REFRESH_LOCK.release()
+    except RuntimeError:
+        pass
+    bb._PACER._interval = bb._PACER._floor
+    bb._PACER._next_at = 0.0
+
+
+def build(monkeypatch):
+    """The dataset, built synchronously.
+
+    `get_analytics()` deliberately never blocks — reading the whole history is
+    dozens of paced requests — so it hands the work to a thread. Tests want the
+    answer, not the concurrency, so they run the build inline."""
+    return bb._build_analytics()
 
 
 def _rows(payload):
@@ -114,7 +130,7 @@ def test_money_is_converted_from_cents(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    p1 = _rows(bb.get_analytics())["p1"]
+    p1 = _rows(build(monkeypatch))["p1"]
     assert p1["quote"] == 21200.0
     assert p1["won_amount"] == 24000.0
     assert p1["submitted_amount"] == 21200.0
@@ -126,7 +142,7 @@ def test_trades_handle_single_multiple_and_untagged(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    rows = _rows(bb.get_analytics())
+    rows = _rows(build(monkeypatch))
     assert rows["p1"]["trades"] == ["Epoxy"]
     assert rows["p2"]["trades"] == ["Epoxy", "Polish"]
     assert rows["p3"]["trades"] == []             # the field is "" on untagged jobs
@@ -145,7 +161,7 @@ def test_companies_and_deadline_come_from_the_bid_invites(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    rows = _rows(bb.get_analytics())
+    rows = _rows(build(monkeypatch))
     assert rows["p1"]["company_ids"] == ["c1"]
     assert rows["p2"]["company_ids"] == ["c2", "c3"]
     assert rows["p3"]["company_ids"] == []                  # no invites
@@ -159,7 +175,7 @@ def test_awarded_by_is_passed_through_and_may_be_missing(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    rows = _rows(bb.get_analytics())
+    rows = _rows(build(monkeypatch))
     assert rows["p1"]["awarded_by_id"] == "c1"
     assert rows["p3"]["awarded_by_id"] == ""                # awarded, no awarding company
 
@@ -170,7 +186,7 @@ def test_archived_rows_are_kept_but_deleted_are_dropped(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    rows = _rows(bb.get_analytics())
+    rows = _rows(build(monkeypatch))
     assert "parch" in rows and rows["parch"]["archived"] is True
     assert "pdel" not in rows
 
@@ -179,7 +195,7 @@ def test_null_dates_survive_as_null(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    rows = _rows(bb.get_analytics())
+    rows = _rows(build(monkeypatch))
     assert rows["p2"]["awarded_at"] is None                 # never awarded
     assert rows["p1"]["lost_at"] == "2025-06-01T16:01:15.149Z"
 
@@ -188,12 +204,14 @@ def test_dimensions_are_derived_from_the_rows(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    r = bb.get_analytics()
+    r = build(monkeypatch)
     assert r["trades"] == ["Epoxy", "Gyp", "Polish"]        # untagged contributes nothing
     assert [e["name"] for e in r["estimators"]] == ["Greg Hoss", "Kyle Loseke"]
     names = {c["id"]: c["name"] for c in r["companies"]}
     assert names["c1"] == "JE Dunn"
-    assert names["c9"] == "Unknown company"                 # id with no map entry
+    # An id with no record behind it still owns real history, so it gets a
+    # bucket — tagged with the id so two unknowns don't collapse into one line.
+    assert names["c9"] == "Unknown company (c9)"
     # Every stage, including one no row is in: the filter list shouldn't flicker
     # as the date window moves.
     assert [s["name"] for s in r["stages"]] == ["Undecided", "Submitted", "Awarded", "Lost"]
@@ -224,11 +242,69 @@ def test_cap_marks_the_payload_truncated(monkeypatch):
     monkeypatch.setenv("ANALYTICS_MAX_PROJECTS", "2")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
-    r = bb.get_analytics()
+    r = build(monkeypatch)
     assert r["shown"] == 2 and r["total"] == 5 and r["truncated"] is True
 
 
-def test_second_read_is_served_from_cache(monkeypatch):
+def run_pending(monkeypatch):
+    """Capture the background build so a test can run it itself.
+
+    Patches the module's own `_spawn`, NOT threading.Thread: the latter also
+    replaces the workers inside ThreadPoolExecutor, and the build then waits
+    forever on futures no thread will complete."""
+    jobs = []
+    monkeypatch.setattr(bb, "_spawn", lambda fn, name: jobs.append(fn))
+    return jobs
+
+
+def test_a_cold_read_never_blocks_and_says_it_is_building(monkeypatch):
+    """Reading the whole history is dozens of paced requests; a page load can't
+    wait on it. The first caller starts the work and gets a state it can
+    render."""
+    monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(bb, "_get", _fake_get)
+    _clear()
+    jobs = run_pending(monkeypatch)
+
+    r = bb.get_analytics()
+    assert r["ok"] is True and r["building"] is True and r["projects"] == []
+    assert len(jobs) == 1
+
+    # A second reader arriving mid-build must not start a second one.
+    r2 = bb.get_analytics()
+    assert r2["building"] is True and len(jobs) == 1
+
+    jobs[0]()                                    # the build finishes
+    done = bb.get_analytics()
+    assert done["ok"] is True and not done.get("building")
+    assert len(done["projects"]) == 4
+
+
+def test_the_history_is_read_in_big_pages(monkeypatch):
+    """Page size is what keeps this fast. At 50 rows a page the full history is
+    ~136 requests — a big enough burst that Basisboard starts answering 429, and
+    the backed-off build takes two minutes instead of ten seconds."""
+    monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
+    seen = {"ids": [], "detail": []}
+
+    def watched(client, path, params=None):
+        if path == "/projects/ids":
+            seen["ids"].append(int((params or {}).get("limit", 0)))
+        if path == "/projects":
+            seen["detail"].append(len((params or {}).get("filter[projectIds][]", [])))
+        return _fake_get(client, path, params)
+
+    monkeypatch.setattr(bb, "_get", watched)
+    _clear()
+    build(monkeypatch)
+    assert seen["ids"] and set(seen["ids"]) == {bb._ANALYTICS_ID_PAGE}
+    assert bb._ANALYTICS_ID_PAGE >= 200 and bb._ANALYTICS_DETAIL_PAGE >= 100
+    assert max(seen["detail"]) <= bb._ANALYTICS_DETAIL_PAGE
+    # The pipeline board keeps its own smaller page — this must not have moved it.
+    assert bb._PAGE == 50
+
+
+def test_a_warm_read_costs_no_requests(monkeypatch):
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     calls = {"n": 0}
 
@@ -238,40 +314,30 @@ def test_second_read_is_served_from_cache(monkeypatch):
 
     monkeypatch.setattr(bb, "_get", counted)
     _clear()
+    jobs = run_pending(monkeypatch)
     bb.get_analytics()
-    after_first = calls["n"]
-    assert after_first > 0
+    jobs[0]()
+    after_build = calls["n"]
+    assert after_build > 0
     bb.get_analytics()
-    assert calls["n"] == after_first          # no second fetch
+    bb.get_analytics()
+    assert calls["n"] == after_build                    # served from cache
 
 
-def test_expired_cache_serves_the_last_snapshot_immediately(monkeypatch):
-    """A full history is 40-60 requests. Nobody should wait for it when numbers
-    from five minutes ago are sitting right there."""
+def test_an_expired_cache_serves_the_last_snapshot_immediately(monkeypatch):
+    """Nobody should wait two minutes for numbers when the ones from five
+    minutes ago are sitting right there."""
     monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
     monkeypatch.setattr(bb, "_get", _fake_get)
     _clear()
+    jobs = run_pending(monkeypatch)
     bb.get_analytics()
-    bb._analytics_cache.clear()               # simulate the TTL lapsing
+    jobs[0]()
 
-    started = {"n": 0}
-
-    class FakeThread:
-        def __init__(self, *a, **k):
-            started["n"] += 1
-
-        def start(self):
-            pass
-
-    monkeypatch.setattr(bb.threading, "Thread", FakeThread)
+    bb._analytics_cache.clear()                         # the TTL lapses
     r = bb.get_analytics()
     assert r["stale"] is True and len(r["projects"]) == 4
-    assert started["n"] == 1                  # refreshed behind the reader
-    # The lock the (faked) thread never released must not wedge the next reader.
-    try:
-        bb._ANALYTICS_REFRESH_LOCK.release()
-    except RuntimeError:
-        pass
+    assert len(jobs) == 2                               # refreshing behind the reader
 
 
 def test_a_basisboard_outage_degrades_instead_of_raising(monkeypatch):
@@ -282,5 +348,30 @@ def test_a_basisboard_outage_degrades_instead_of_raising(monkeypatch):
 
     monkeypatch.setattr(bb, "_get", boom)
     _clear()
+    jobs = run_pending(monkeypatch)
+    assert bb.get_analytics()["building"] is True
+    jobs[0]()                                    # the build fails
+
+    # It tries again — but says the last one failed, so an outage doesn't read
+    # as a build that simply never finishes.
     r = bb.get_analytics()
-    assert r["ok"] is False and r["configured"] is True and "error" in r
+    assert r["ok"] is True and r["building"] is True
+    assert r["last_error"]
+    assert len(jobs) == 2
+
+
+def test_the_build_lock_is_released_even_when_the_build_fails(monkeypatch):
+    """A held lock would wedge the page on 'building' forever."""
+    monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
+
+    def boom(client, path, params=None):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(bb, "_get", boom)
+    _clear()
+    jobs = run_pending(monkeypatch)
+    bb.get_analytics()
+    jobs[0]()
+    assert bb._analytics_state["building"] is False
+    assert bb._ANALYTICS_REFRESH_LOCK.acquire(blocking=False) is True
+    bb._ANALYTICS_REFRESH_LOCK.release()
