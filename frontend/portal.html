@@ -156,20 +156,26 @@
   .note.sys { align-self:center; margin:0; text-align:center; background:var(--surf-low);
     border-radius:6px; padding:5px 10px; }
   /* Chat cards — same shape/classes the CUSTOMER portal uses, so staff read the
-     thread exactly as the customer sees it. Left border colour keys the type.
-     They are events, not speech, so they sit on the incoming side and stop short
-     of the full width; stretched edge to edge they made the panel read as a list
-     of notices rather than a conversation. */
-  .chat-card { align-self:flex-start; max-width:92%;
-    background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--red);
+     thread exactly as the customer sees it. The accent bar colour keys the type.
+     An event is not speech, but it still belongs to whoever caused it, so it takes
+     that party's side and squares off the corner there exactly like a bubble. The
+     bar swaps to the right edge on our side so it always hugs the gutter the card
+     is anchored to. Type is a custom property, not a border override, so the two
+     rule groups can't fight over which one paints the bar. */
+  .chat-card { --cc-accent:var(--red); align-self:flex-start; max-width:88%; width:fit-content;
+    background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--cc-accent);
     border-radius:10px; padding:11px 13px; }
-  .chat-card.deposit { border-left-color:var(--ok); }
-  .chat-card.system  { border-left-color:var(--ink-v); }
+  .chat-card.deposit { --cc-accent:var(--ok); }
+  .chat-card.system  { --cc-accent:var(--ink-v); }
+  .chat-card.is-superseded { opacity:.6; --cc-accent:var(--line); }
+  .chat-card.customer { border-bottom-left-radius:3px; }
+  .chat-card.staff { align-self:flex-end; border-bottom-right-radius:3px;
+    border-left-width:1px; border-left-color:var(--line);
+    border-right:3px solid var(--cc-accent); }
   .chat-card .cc-title { font-weight:800; font-size:13px; margin-bottom:3px; }
   .chat-card .cc-meta { color:var(--ink-v); font-size:11px; margin-bottom:5px; }
   .chat-card .cc-body { color:var(--ink-v); font-size:12px; }
   .chat-card .cc-amt { color:var(--ok); }
-  .chat-card.is-superseded { opacity:.6; border-left-color:var(--line); }
   .chat-card .cc-tag { font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.05em;
     border:1px solid currentColor; border-radius:999px; padding:1px 6px; margin-left:5px; color:var(--ink-v); }
   /* Review-the-invoice dialog. Sits above the drawer (10001) — a blocking review
