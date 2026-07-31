@@ -880,15 +880,26 @@
   // running, what it has already sent, what a human did personally, and what the
   // customer said about their timeline. The digest reads the same log, so a logged
   // call here is what stops tomorrow morning recommending this proposal again.
+  // The portal STORES the staff kinds prefixed (`staff_call`), and accepts the short
+  // form the drawer posts. Both are mapped, because the log renders what came back
+  // from the server, not what we sent.
   const FU_KIND_LABEL = {
+    staff_call: "Call", staff_email: "Email", staff_text: "Text", staff_note: "Note",
     call: "Call", email: "Email", text: "Text", note: "Note",
-    auto_email: "Automatic email", customer_status: "Customer update", staff_note: "System",
+    auto_email: "Automatic email", customer_status: "Customer update",
   };
-  const FU_RULE_LABEL = {
+  // `template`, not `rule` — the worker records what it SENT. The rule key that
+  // deduped it is scheduling bookkeeping and means nothing to an estimator.
+  const FU_TEMPLATE_LABEL = {
     not_viewed: "Nudge — not opened yet",
     next_steps: "Next steps after viewing",
     second_nudge: "Second nudge",
     checkin: "Check-in",
+  };
+  // Bookkeeping the portal writes as a `staff_note` with an `action` key.
+  const FU_ACTION = {
+    reassigned: "Reassigned", automation_on: "Automation on", automation_off: "Automation off",
+    paused: "Paused", closed_lost: "Closed lost", reactivated: "Reactivated",
   };
   const STATUS_LABEL = { delayed: "Delayed", not_moving_forward: "Not moving forward", resume: "Back on" };
 
@@ -901,18 +912,21 @@
     let what = FU_KIND_LABEL[kind] || kind;
     let detail = d.note || "";
     if (kind === "auto_email") {
-      what = FU_RULE_LABEL[d.rule] || "Automatic email";
+      what = FU_TEMPLATE_LABEL[d.template] || "Automatic email";
       detail = d.audience === "staff" ? "sent to the estimator" : "sent to the customer";
     } else if (kind === "customer_status") {
       what = "Customer: " + (STATUS_LABEL[d.status] || d.status || "update");
       detail = [d.months ? d.months + " month" + (d.months === 1 ? "" : "s") : "",
                 d.reason ? (C.LOST_REASON[d.reason] || d.reason) : "",
                 d.note || ""].filter(Boolean).join(" · ");
-    } else if (kind === "staff_note" && d.action) {
-      what = d.action === "reassigned" ? "Reassigned" : d.action === "automation" ? "Automation" : "System";
+    } else if (d.action) {
+      // Bookkeeping, not outreach. Named so the log reads as a history of the
+      // project rather than a row saying "System" with nothing after it.
+      what = FU_ACTION[d.action] || "System";
       detail = d.action === "reassigned" ? "to " + (d.to || "?")
-        : d.action === "automation" ? (d.enabled ? "switched on" : "switched off")
-        : (d.note || "");
+        : d.action === "paused" ? (d.until ? "until " + TW.fmtBizDay(d.until) : "")
+        : d.action === "closed_lost" ? (C.LOST_REASON[d.reason] || d.reason || "")
+        : "";
     }
     return `<div class="fu-row">
       <span class="fu-k">${esc(what)}</span>

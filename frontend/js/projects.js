@@ -212,6 +212,12 @@
      *  before that the only honest answer is whoever built it. */
     const estimatorOf = (p) => String(p.assigned_estimator || p.owner_email || "");
     const isAssigned = (p) => !!p.assigned_estimator;
+    /** "hanz@wetreadwell.com" → "Hanz". A column headed "Estimator" says a name on the
+     *  CRM board, so it says a name here too — the two pages shouldn't render the same
+     *  field two different ways. The full address stays in the cell's title. The CARDS
+     *  keep showing "by <address>", which is provenance rather than a column of data. */
+    const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
+      .filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
 
     function cardsHtml(shown) {
       return shown.map(p => `
@@ -274,8 +280,9 @@
           <td class="t-name">${esc(p.project_name||"(untitled)")}</td>
           <td>${p.work_type?esc(p.work_type):""}</td>
           <td class="num">${p.total!=null?money(p.total):""}</td>
-          <td${isAssigned(p)?"":' class="soft" title="Nobody is assigned yet — this is whoever built the estimate"'}>${
-            email?esc(email):"—"}</td>
+          <td${isAssigned(p)?` title="${esc(email)}"`
+              :` class="soft" title="${esc(email)} — nobody is assigned yet, this is whoever built the estimate"`}>${
+            email?esc(nameOf(email)):"—"}</td>
           <td>${p.sent_revision>0?`Rev ${p.sent_revision}`:""}</td>
           <td>${p.deadline?esc(p.deadline):""}</td>
           <td>${fmtDate(p.updated_at)}</td>

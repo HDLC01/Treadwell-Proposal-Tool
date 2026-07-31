@@ -125,3 +125,49 @@ def test_an_unassigned_proposal_says_the_digest_will_skip_it():
     """The digest skips unassigned proposals by design, so the panel has to say so —
     otherwise "assigned to nobody" reads as harmless."""
     assert "digest skips unassigned" in PANEL
+
+
+# ── the history log's labels ─────────────────────────────────────────────────
+# Every one of these was wrong the first time and only showed up on staging: the log
+# renders what the SERVER stored, not what the drawer posted, and the two vocabularies
+# differ. A miss here isn't an error — it's a row reading "staff_call" or "System" with
+# nothing after it, in the one place an estimator looks to see what already happened.
+ROW = _block("followupRow")
+
+
+def test_it_labels_the_kinds_the_portal_actually_stores():
+    """`main.py` prefixes them: `kind = "staff_" + kind`. Mapping only the short form
+    the drawer posts left the log printing the raw `staff_call`."""
+    import re as _re
+    labels = PORTAL_JS[PORTAL_JS.index("const FU_KIND_LABEL"):PORTAL_JS.index("FU_TEMPLATE_LABEL")]
+    for stored in ("staff_call", "staff_email", "staff_text", "staff_note"):
+        assert _re.search(r"\b" + stored + r":", labels), f"no label for {stored}"
+
+
+def test_it_names_every_bookkeeping_action_the_portal_writes():
+    """These are the exact `detail.action` values in the portal's add_followup calls.
+    An unmapped one renders as a bare "System" with an empty detail."""
+    actions = PORTAL_JS[PORTAL_JS.index("const FU_ACTION"):PORTAL_JS.index("const STATUS_LABEL")]
+    for a in ("reassigned", "automation_on", "automation_off",
+              "paused", "closed_lost", "reactivated"):
+        assert a + ":" in actions, f"no label for detail.action={a}"
+
+
+def test_an_automatic_send_is_labelled_by_its_template_not_its_rule_key():
+    """The worker records `template` (what it sent) and `rule_key` (how it deduped).
+    Reading `rule` got neither, so every automatic send said just "Automatic email"."""
+    assert "FU_TEMPLATE_LABEL[d.template]" in ROW
+    assert "d.rule]" not in ROW
+
+
+def test_the_four_automatic_templates_are_all_named():
+    """Straight from followup_rules — an estimator should see WHICH nudge went out."""
+    tl = PORTAL_JS[PORTAL_JS.index("const FU_TEMPLATE_LABEL"):PORTAL_JS.index("const FU_ACTION")]
+    for t in ("not_viewed", "next_steps", "second_nudge", "checkin"):
+        assert t + ":" in tl, f"no label for template {t}"
+
+
+def test_bookkeeping_is_detected_by_the_action_key_not_the_kind():
+    """`staff_note` carries both a typed note and the system's bookkeeping. Branching
+    on the kind put every reassignment through the note path and lost its detail."""
+    assert "} else if (d.action) {" in ROW
