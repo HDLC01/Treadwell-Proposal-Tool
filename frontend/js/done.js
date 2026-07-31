@@ -112,6 +112,118 @@
   // methods on `portalRecip` for the button handler below.
   const portalRecip = { intake: "", hasIntake: false, extras: [], ready: false };
 
+  // ── Require deposit ─────────────────────────────────────────────────────────
+  // Ticked → the customer must pay the 25% deposit after approving (today's
+  // behaviour). Unticked → the portal requests no deposit at all: no invoice, no
+  // Deposit step. Direct work defaults to requiring one, GC work does not, but
+  // either can be overridden per send for edge cases.
+  //
+  // Read state fresh rather than trusting a module-level snapshot: the Files page
+  // is reachable both straight after generating and via ?files=1 on a reload.
+  function mountRequireDeposit() {
+    const el = document.getElementById("portal-require-deposit");
+    if (!el) return;
+    let st = {};
+    try { st = TW.getState() || {}; } catch {}
+    const isGC = String(st.audience || "Direct").trim().toUpperCase() === "GC";
+    // A previously-sent choice wins over the audience default.
+    el.checked = (typeof st.require_deposit === "boolean") ? st.require_deposit : !isGC;
+    const hint = document.getElementById("portal-require-deposit-hint");
+    if (hint) hint.textContent = isGC ? "(off by default for GC work)" : "(25% on approval)";
+  }
+
+  // ── Sent versions (revisions) ───────────────────────────────────────────────
+  // Each send snapshots the estimate, so a revised price reuses this project rather
+  // than forcing a duplicate — and every version stays downloadable. Documents are
+  // rebuilt from the snapshot on demand (nothing binary is stored per revision).
+  async function mountRevisions() {
+    const box = document.getElementById("revisions-box");
+    const list = document.getElementById("revisions-list");
+    if (!box || !list) return;
+    const draftId = TW.getDraftId();
+    if (!draftId) return;
+    let revs = [];
+    try {
+      const r = await fetch(TW.absoluteUrl("/api/draft/" + encodeURIComponent(draftId) + "/revisions"),
+                            { headers: TW.authHeaders() });
+      if (!r.ok) return;                       // never block the page on history
+      revs = (await r.json()).revisions || [];
+    } catch { return; }
+    if (!revs.length) { box.style.display = "none"; return; }
+    const fmtDate = (s) => (window.TW && TW.fmtBizDate) ? TW.fmtBizDate(s)
+      : new Date(s).toLocaleDateString("en-US");
+    const money = (n) => n == null ? "—"
+      : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    list.innerHTML = revs.map((rv, i) => `
+      <div class="rev-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--surface-dim,#eee);">
+        <strong style="min-width:64px;">Rev ${rv.revision_no}</strong>
+        ${i === 0 ? '<span class="hint" style="color:var(--success,#137333);font-weight:600;">current</span>' : ""}
+        <span class="hint">${fmtDate(rv.created_at)}</span>
+        <span class="hint">${rv.created_by ? String(rv.created_by).split("@")[0] : "—"}</span>
+        <strong style="margin-left:auto;">${money(rv.total)}</strong>
+        ${rv.has_documents ? `
+          <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="xlsx" style="padding:4px 10px;">.xlsx</button>
+          <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="docx" style="padding:4px 10px;">.docx</button>
+          <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="pdf" style="padding:4px 10px;">PDF</button>`
+        : '<span class="hint">no documents</span>'}
+      </div>`).join("");
+    box.style.display = "";
+    // Delegated: the list is re-rendered after every send.
+    if (!list.dataset.wired) {
+      list.dataset.wired = "1";
+      list.addEventListener("click", (e) => {
+        const b = e.target.closest(".rev-dl");
+        if (b) downloadRevision(b.dataset.rev, b.dataset.kind, b);
+      });
+    }
+  }
+
+  /** Rebuild one revision's documents and download the requested one. Separate
+   *  from the main downloadAs(): that one reads generate_result off the live draft,
+   *  which is exactly what an old revision must NOT be rendered from. */
+  async function downloadRevision(revNo, kind, button) {
+    const draftId = TW.getDraftId();
+    if (!draftId) return;
+    const orig = button.textContent;
+    button.disabled = true; button.textContent = "…";
+    try {
+      const out = await TW.postJSON(
+        "/api/draft/" + encodeURIComponent(draftId) + "/revisions/" + encodeURIComponent(revNo) + "/files", {});
+      const key = kind === "xlsx" ? "xlsx_download_url"
+        : kind === "docx" ? "docx_download_url" : "pdf_download_url";
+      const url = out && out[key];
+      if (!url) throw new Error("That document isn't available for this revision.");
+      const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const safe = String((out.project_name || TW.getState().project_name || "proposal"))
+        .replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+      const ext = kind === "pdf" ? "pdf" : kind;
+      const name = `${safe}_rev${revNo}_${kind === "xlsx" ? "estimate" : "proposal"}.${ext}`;
+      // octet-stream so the browser saves under our name instead of letting the
+      // inline PDF viewer hijack the click (same reason as the main downloads).
+      const blobUrl = URL.createObjectURL(new Blob([await resp.arrayBuffer()],
+                                                  { type: "application/octet-stream" }));
+      const a = document.createElement("a");
+      a.href = blobUrl; a.download = name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+      button.textContent = "✓";
+    } catch (err) {
+      console.error("Revision download failed", err);
+      button.textContent = "failed";
+    }
+    setTimeout(() => { button.textContent = orig; button.disabled = false; }, 1800);
+  }
+
+  function readRequireDeposit() {
+    const el = document.getElementById("portal-require-deposit");
+    // Missing element (older cached page) → fall back to the audience default so a
+    // Direct customer never silently loses their deposit requirement.
+    if (el) return !!el.checked;
+    try { return String((TW.getState() || {}).audience || "Direct").trim().toUpperCase() !== "GC"; }
+    catch { return true; }
+  }
+
   function mountPortalRecipients() {
     const box = document.getElementById("portal-recipients");
     if (!box) return;
@@ -388,9 +500,12 @@
     // Restore a previously-typed customer message (so a re-send keeps it).
     const _msgEl = document.getElementById("portal-message");
     if (_msgEl) { try { _msgEl.value = TW.getState().portal_message || ""; } catch {} }
+    mountRequireDeposit();
+    mountRevisions();
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
+        const requireDeposit = readRequireDeposit();
         const draftId = TW.getDraftId();
         if (!draftId) { alert("Save the project first (open it from Projects), then send."); return; }
         if (portalRecip.commitEdit && !portalRecip.commitEdit()) return;   // flush a pending intake edit
@@ -404,9 +519,13 @@
         const msgEl = document.getElementById("portal-message");
         const message = (msgEl && msgEl.value || "").trim();
         try {
-          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), { emails, message });
+          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
+                                      { emails, message, require_deposit: requireDeposit });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
-          TW.setState({ portal_message: message });   // remember for a re-send
+          // Remember both for a re-send. require_deposit persists so a deliberate
+          // GC-with-deposit (or Direct-without) choice survives a reload instead of
+          // snapping back to the audience default.
+          TW.setState({ portal_message: message, require_deposit: requireDeposit });
           // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
           // The intake is restored from contact_email on the next mount; persisting it
           // here would re-add an edited/retargeted intake as a stray extra on reload.
@@ -414,6 +533,7 @@
           TW.setState({ portal_emails: persistExtras });
           if (portalRecip.setBusy) portalRecip.setBusy(false);
           portalBtn.textContent = "\u2713 Sent to customer portal";
+          mountRevisions();   // the send just created a new version \u2014 show it
           const r = document.getElementById("portal-result");
           if (r) {
             r.style.display = "";

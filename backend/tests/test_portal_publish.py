@@ -18,6 +18,15 @@ def _wire(monkeypatch, role="admin"):
     # _require_admin / _caller_is_admin resolve the caller's role via profiles;
     # stub it so the admin-gated notify endpoints don't hit Supabase in CI.
     monkeypatch.setattr(main.profiles, "get_by_email", lambda e: {"email": e, "role": role})
+    # Every publish snapshots the draft as a revision (the portal pins the customer
+    # view to it). Recorded LAZILY — several tests assert `cap == {}` to mean "the
+    # request never reached the portal", so pre-seeding keys here would break them.
+    monkeypatch.setattr(main.drafts, "create_revision",
+                        lambda did, data, by=None:
+                        captured.setdefault("revisions", []).append((did, by)) or 1)
+    monkeypatch.setattr(main.drafts, "delete_revision",
+                        lambda did, no: captured.setdefault("deleted", []).append((did, no)))
+    monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
 
     def fake_portal(path, method="GET", body=None):
         captured.update(path=path, method=method, body=body)
@@ -28,12 +37,70 @@ def _wire(monkeypatch, role="admin"):
     return captured
 
 
-def test_no_body_is_legacy(monkeypatch):
+def test_no_body_sends_only_the_essentials(monkeypatch):
+    """A body-less call must still forward nothing optional — no emails key, no
+    require_deposit — so the portal's own defaults apply. `revision_no` is not
+    optional: every send snapshots what it sent, which is what the customer's view
+    is then pinned to."""
     cap = _wire(monkeypatch)
     r = client.post(URL)
     assert r.status_code == 200, r.text
     assert cap["path"] == "/api/admin/publish" and cap["method"] == "POST"
-    assert cap["body"] == {"draft_id": "d1", "by": "tester@wetreadwell.com"}   # no emails key
+    assert cap["body"] == {"draft_id": "d1", "by": "tester@wetreadwell.com", "revision_no": 1}
+
+
+def test_snapshot_is_taken_before_the_portal_call(monkeypatch):
+    cap = _wire(monkeypatch)
+    assert client.post(URL).status_code == 200
+    assert cap.get("revisions") == [("d1", "tester@wetreadwell.com")]
+    assert cap["body"]["revision_no"] == 1
+    assert cap.get("deleted", []) == []
+
+
+def test_snapshot_is_rolled_back_when_the_send_fails(monkeypatch):
+    """A snapshot represents a version the customer RECEIVED. If the portal call
+    fails, nothing was received, so the revision must not survive and misreport the
+    history to staff."""
+    cap = _wire(monkeypatch)
+
+    def boom(path, method="GET", body=None):
+        raise main.HTTPException(502, "portal down")
+
+    monkeypatch.setattr(main, "_portal", boom)
+    r = client.post(URL)
+    assert r.status_code == 502
+    assert cap.get("revisions") == [("d1", "tester@wetreadwell.com")]
+    assert cap.get("deleted") == [("d1", 1)]
+
+
+def test_no_snapshot_when_validation_rejects_the_request(monkeypatch):
+    """A 400 must not mint a revision — otherwise a typo in an email address would
+    leave a phantom "sent" version in the project's history."""
+    cap = _wire(monkeypatch)
+    r = client.post(URL, json={"emails": ["not-an-email"]})
+    assert r.status_code == 400
+    assert cap.get("revisions", []) == [] and cap.get("deleted", []) == []
+
+
+def test_forwards_require_deposit_both_ways(monkeypatch):
+    """The Files-page checkbox. False is the interesting one — it must survive as an
+    explicit False rather than being dropped as falsy, or a GC job would silently
+    get a deposit invoice on approval."""
+    cap = _wire(monkeypatch)
+    assert client.post(URL, json={"require_deposit": True}).status_code == 200
+    assert cap["body"]["require_deposit"] is True
+    cap2 = _wire(monkeypatch)
+    assert client.post(URL, json={"require_deposit": False}).status_code == 200
+    assert cap2["body"]["require_deposit"] is False
+
+
+def test_require_deposit_omitted_when_not_specified(monkeypatch):
+    """A body without the field must not send one: the portal reads a missing field
+    as "keep what you have", so a re-send from an older page can't flip a job that
+    was deliberately sent without a deposit."""
+    cap = _wire(monkeypatch)
+    assert client.post(URL, json={"emails": ["a@x.com"]}).status_code == 200
+    assert "require_deposit" not in cap["body"]
 
 
 def test_forwards_valid_emails(monkeypatch):

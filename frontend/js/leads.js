@@ -549,4 +549,10 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && CUR) closeDrawer(); });
 
   load();
+  // New bid invites arrive without anyone reloading. 60s matches the server-side
+  // cache in front of /api/leads, so a tighter interval would return identical
+  // bytes. Skipped while a tab is hidden or a drawer is open (a repaint mid-triage
+  // would move the row out from under the rep).
+  setInterval(() => { if (!document.hidden && !CUR) load(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !CUR) load(); });
 })();

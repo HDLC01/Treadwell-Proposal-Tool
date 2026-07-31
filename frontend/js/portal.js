@@ -70,12 +70,20 @@
     for (let i = 0; i < 200 && !window.__TW_TOKEN; i++) await new Promise((r) => setTimeout(r, 40));
   }
 
+  /** No deposit stage stands between approval and contacts when this job doesn't
+   *  collect one — otherwise a GC project would sit in "Approved" forever, unable
+   *  to reach Contact info or Scheduled. An issued invoice means a deposit is
+   *  genuinely outstanding, flag or not, so it still gates. */
+  const depositSatisfied = (p) =>
+    p.deposit_status === "received" ||
+    (p.deposit_required === false && !p.deposit_requested_at);
+
   function stageOf(p) {
     if (p.schedule_status === "scheduled") return "Scheduled";
     // Deposit is a prerequisite for advancing past it: a customer may submit
     // contacts right after approval (portal allows it), but an unpaid deal must
     // NOT read as further along than a paid one, so gate "Contact info" on deposit.
-    if (p.deposit_status === "received" && p.contacts_status === "received") return "Contact info";
+    if (depositSatisfied(p) && p.contacts_status === "received") return "Contact info";
     if (p.deposit_status === "received") return "Deposit received";
     // Checked AFTER "received" so a confirmed deposit can never fall back into
     // the submitted column if the portal ever sends both signals.
@@ -217,6 +225,58 @@
     // Deep-link from a staff notification email: ?open=<proposal_id>.
     const openId = new URLSearchParams(location.search).get("open");
     if (openId) openDetail(openId);
+  }
+
+  // ── keeping the board live ──────────────────────────────────────────────────
+  // The board is a screen reps leave open all day, and until now it only refreshed
+  // on page load or after the viewer's OWN action — so a colleague's reply, a
+  // customer approval or a deposit landing stayed invisible behind an F5. Filters,
+  // sort and search survive a repaint (they live in sessionStorage and the DOM), so
+  // re-running load() is safe at any moment.
+  const BOARD_POLL_MS = 25000;
+  const DRAWER_POLL_MS = 12000;
+
+  /** True when repainting the drawer would interrupt something the rep is doing.
+   *
+   *  renderDetail rebuilds the drawer's innerHTML. The reply TEXT already survives
+   *  that (REPLY_DRAFT), but focus and caret position do not — so refreshing under
+   *  someone's hands mid-sentence throws them out of the box. The invoice review
+   *  dialog is worse: it would be torn down with half-entered numbers in it.
+   *  Staleness for a few seconds beats either. */
+  function drawerBusy() {
+    if (document.querySelector(".inv-dlg")) return true;   // invoice review is open
+    const a = document.activeElement;
+    if (!a) return false;
+    const tag = (a.tagName || "").toLowerCase();
+    return tag === "textarea" || tag === "input" || tag === "select" || a.isContentEditable;
+  }
+
+  /** Refresh the board, and the open drawer with it. */
+  async function refreshLive() {
+    if (document.hidden) return;
+    await load();
+    if (!CUR_PID || drawerBusy()) return;
+    const scroller = document.getElementById("thread");
+    const wasAtBottom = scroller
+      ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40 : false;
+    const scrollTop = scroller ? scroller.scrollTop : null;
+    await openDetail(CUR_PID);
+    const s2 = document.getElementById("thread");
+    if (s2 && scrollTop != null) {
+      // Reading older messages? Hold position. Already at the bottom? Follow the
+      // new message down, which is what a live thread should do.
+      s2.scrollTop = wasAtBottom ? s2.scrollHeight : scrollTop;
+    }
+  }
+
+  function startLiveUpdates() {
+    setInterval(() => { if (!document.hidden && !drawerBusy()) load(); }, BOARD_POLL_MS);
+    setInterval(() => { if (!document.hidden && CUR_PID) refreshLive(); }, DRAWER_POLL_MS);
+    // Switching back to the tab should show current state at once, not up to 25s
+    // later. This is the moment a rep actually looks at the screen.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) { CUR_PID ? refreshLive() : load(); }
+    });
   }
 
   // ── modal pop-up (detail drawer) ────────────────────────────────────────────
@@ -372,7 +432,10 @@
     if (ACTIVE_SEC) return ACTIVE_SEC;
     if (unread > 0) return "chat";
     if (p.deposit_status === "submitted") return "deposit";        // money in, unconfirmed
-    if (p.proposal_status === "approved" && !p.deposit_requested_at) return "deposit";
+    // Don't park on Deposit for a job that doesn't collect one — there's nothing
+    // to action there. Contacts/schedule is the real next step.
+    if (p.proposal_status === "approved" && !p.deposit_requested_at
+        && p.deposit_required !== false) return "deposit";
     if (p.contacts_status === "received" && p.schedule_status !== "scheduled") return "schedule";
     return "proposal";
   }
@@ -458,8 +521,12 @@
   }
 
   function renderSecTabs(s) {
+    // "Not required" is a resting state, not a to-do: no needs-attention flag, so
+    // the tab doesn't nag about work that isn't wanted. Staff can still open it and
+    // send a request manually.
     const dep = s.depositDone ? { done: true, val: "Received" }
       : s.depositSubmitted ? { needs: true, val: "Confirm it" }
+      : (s.depositNotRequired && !s.requested) ? { val: "Not required" }
       : (s.approved && !s.requested) ? { needs: true, val: "Send request" }
       : { val: s.requested ? "Requested" : "Pending" };
     return `<div class="dtabs" role="tablist" aria-label="Project sections">` +
@@ -731,7 +798,15 @@
         <div class="cc-body">${esc(s.body)}</div></div>`;
     }
     if (m.msg_type === "proposal_card") {
-      return `<div class="chat-card proposal ${sideOf(m)}"><div class="cc-title">Your proposal is ready</div>
+      // A revised estimate posts a new card and retires the old one, so the thread
+      // shows which version is current instead of two identical-looking cards.
+      const meta = m.meta || {};
+      const dead = !!meta.superseded;
+      const rev = meta.revision_no;
+      const title = (rev && rev > 1) ? `Revision ${esc(rev)} of the proposal` : "Your proposal is ready";
+      return `<div class="chat-card proposal ${sideOf(m)}${dead ? " is-superseded" : ""}">
+        <div class="cc-title">${title}${dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
+        ${dead && meta.superseded_by ? `<div class="cc-meta">Replaced by revision ${esc(meta.superseded_by)}</div>` : ""}
         <div class="cc-body">${esc(m.body)}</div></div>`;
     }
     if (m.msg_type === "deposit_request") {
@@ -762,6 +837,8 @@
     const approved = p.proposal_status === "approved";
     const depositDone = p.deposit_status === "received";
     const depositSubmitted = p.deposit_status === "submitted";
+    // Sent without a deposit (typical for GC). Manual invoicing is still offered.
+    const depositNotRequired = p.deposit_required === false && !p.deposit_requested_at;
     const contactsDone = p.contacts_status === "received";
     const scheduledDone = p.schedule_status === "scheduled";
 
@@ -796,7 +873,8 @@
         <h2>${esc(p.project_name || "Proposal")}</h2>
         <button class="dclose" aria-label="Close">&times;</button>
       </div>
-      ${renderSecTabs({ approved, depositDone, depositSubmitted, contactsDone, scheduledDone,
+      ${renderSecTabs({ approved, depositDone, depositSubmitted, depositNotRequired,
+                        contactsDone, scheduledDone,
                         requested: !!p.deposit_requested_at, unread })}
       <div class="dbody">
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
@@ -816,7 +894,9 @@
        <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
         <div class="sec" id="dsec-deposit">
           <div class="lbl">Deposit</div>
-          <div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${data.deposit_ref ? ` · match ref <strong>${esc(data.deposit_ref)}</strong> on the statement` : ""}${p.deposit_requested_at ? ` · requested ${when(p.deposit_requested_at)}` : ""}</div>
+          ${depositNotRequired
+            ? `<div class="note">Sent without a deposit — nothing was invoiced and the customer sees no Deposit step. You can still send a request below if the terms change (25% would be ${depAmt != null ? money(depAmt) : "—"}).</div>`
+            : `<div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${data.deposit_ref ? ` · match ref <strong>${esc(data.deposit_ref)}</strong> on the statement` : ""}${p.deposit_requested_at ? ` · requested ${when(p.deposit_requested_at)}` : ""}</div>`}
           ${deposits
             ? `<div class="lbl dep-lbl">Deposit submissions</div>${deposits}`
             : '<p class="note dep-none">Nothing submitted by the customer yet.</p>'}
@@ -1005,4 +1085,5 @@
     });
   })();
   load();
+  startLiveUpdates();
 })();
