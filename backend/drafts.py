@@ -230,6 +230,10 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 "work_type:data->>work_type,"
                 "deadline:data->>deadline,"
                 "archived:data->>archived,"
+                # Who owns the follow-up. Persisted on the draft when staff send,
+                # so the Projects list can say who is chasing each bid without
+                # asking the portal for every row.
+                "assigned_estimator:data->>assigned_estimator,"
                 "computed_bid:data->computed_bid")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
@@ -248,6 +252,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
             "owner_email": r.get("owner_email"),
+            "assigned_estimator": r.get("assigned_estimator"),
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -417,6 +422,7 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "archived": _truthy(data.get("archived")),
         "lump_sum_display": data.get("lump_sum_display"),
         "owner_email": row.get("owner_email"),
+        "assigned_estimator": data.get("assigned_estimator"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

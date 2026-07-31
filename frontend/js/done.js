@@ -215,6 +215,45 @@
     setTimeout(() => { button.textContent = orig; button.disabled = false; }, 1800);
   }
 
+  // ── Assigned estimator ──────────────────────────────────────────────────────
+  // Required at send: the assignee owns the follow-up cadence, gets the "not viewed"
+  // and "make it personal" notes, and appears in their morning digest. Unassigned
+  // means nobody chases it, which is the failure this whole system exists to fix.
+  let _estimatorsPromise = null;
+
+  // Names come from `profiles`, i.e. from whatever people typed into SSO — escape
+  // before building option markup.
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  async function mountEstimatorPicker() {
+    const sel = document.getElementById("portal-estimator");
+    if (!sel) return;
+    let st = {};
+    try { st = TW.getState() || {}; } catch {}
+    // Memoised: showPostGenerate can run more than once per page.
+    if (!_estimatorsPromise) {
+      _estimatorsPromise = fetch(TW.absoluteUrl("/api/estimators"), { headers: TW.authHeaders() })
+        .then(r => r.ok ? r.json() : { estimators: [] })
+        .catch(() => ({ estimators: [] }));
+    }
+    const list = ((await _estimatorsPromise) || {}).estimators || [];
+    const prev = String(st.assigned_estimator || "").toLowerCase();
+    sel.innerHTML = '<option value="">Choose the estimator…</option>'
+      + list.map(e => `<option value="${esc(e.email)}">${esc(e.name)} (${esc(e.email)})</option>`).join("");
+    // A re-send remembers the last explicit choice; a first send starts blank on
+    // purpose, so nobody assigns a colleague by accident.
+    if (prev && list.some(e => String(e.email).toLowerCase() === prev)) sel.value = prev;
+    if (!list.length) {
+      // Couldn't reach the list. Fail visibly rather than letting the send 400 with
+      // a bare error the estimator can't act on.
+      sel.innerHTML = '<option value="">Estimator list unavailable — reload the page</option>';
+    }
+  }
+
+  const readAssignedEstimator = () =>
+    (document.getElementById("portal-estimator") || {}).value || "";
+
   function readRequireDeposit() {
     const el = document.getElementById("portal-require-deposit");
     // Missing element (older cached page) → fall back to the audience default so a
@@ -501,17 +540,25 @@
     const _msgEl = document.getElementById("portal-message");
     if (_msgEl) { try { _msgEl.value = TW.getState().portal_message || ""; } catch {} }
     mountRequireDeposit();
+    mountEstimatorPicker();
     mountRevisions();
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
         const requireDeposit = readRequireDeposit();
+        const assignedEstimator = readAssignedEstimator();
         const draftId = TW.getDraftId();
         if (!draftId) { alert("Save the project first (open it from Projects), then send."); return; }
         if (portalRecip.commitEdit && !portalRecip.commitEdit()) return;   // flush a pending intake edit
         if (portalRecip.tryAdd && !portalRecip.tryAdd()) return;   // invalid residual text blocks the send
         const emails = portalRecip.allEmails ? portalRecip.allEmails() : [];
         if (!emails.length) { if (portalRecip.setErr) portalRecip.setErr("Add at least one recipient email."); return; }
+        if (!assignedEstimator) {
+          if (portalRecip.setErr) portalRecip.setErr("Choose the assigned estimator before sending.");
+          const sel = document.getElementById("portal-estimator");
+          if (sel) sel.focus();
+          return;
+        }
         const orig = portalBtn.textContent;
         portalBtn.disabled = true; portalBtn.textContent = "Sending\u2026";
         if (portalRecip.setBusy) portalRecip.setBusy(true);
@@ -520,12 +567,14 @@
         const message = (msgEl && msgEl.value || "").trim();
         try {
           const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
-                                      { emails, message, require_deposit: requireDeposit });
+                                      { emails, message, require_deposit: requireDeposit,
+                                        assigned_estimator: assignedEstimator });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
           // Remember both for a re-send. require_deposit persists so a deliberate
           // GC-with-deposit (or Direct-without) choice survives a reload instead of
           // snapping back to the audience default.
-          TW.setState({ portal_message: message, require_deposit: requireDeposit });
+          TW.setState({ portal_message: message, require_deposit: requireDeposit,
+                        assigned_estimator: assignedEstimator });
           // Persist only the EXTRAS (never the intake row) so they pre-fill next time.
           // The intake is restored from contact_email on the next mount; persisting it
           // here would re-add an edited/retargeted intake as a stray extra on reload.

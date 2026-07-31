@@ -60,6 +60,36 @@
     .status-toggle.is-active { background:#dcf5e3; color:#0f7b34; }
     .status-toggle.is-inactive { background:#e9e8e7; color:#6b6b6b; }
     .pname { padding-right:78px; }   /* leave room for the pill */
+    .tw-view[aria-pressed="true"] { color:var(--red); border-color:var(--red); }
+    /* ── table view ─────────────────────────────────────────────────────────
+       Cards are for browsing a handful; the table is for reading sixty at once
+       and comparing one column down the page. Scrolls inside its own box so the
+       page body never scrolls sideways. */
+    .tablewrap { overflow-x:auto; }
+    .ptable { width:100%; min-width:820px; border-collapse:separate; border-spacing:0; background:#fff;
+      border:1px solid rgba(27,28,28,.1); border-radius:12px; overflow:hidden; font-size:13px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05); }
+    .ptable th, .ptable td { text-align:left; padding:9px 12px; border-bottom:1px solid rgba(27,28,28,.08); white-space:nowrap; }
+    .ptable thead th { position:sticky; top:0; z-index:1; background:#faf9f9; font-size:10.5px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.05em; color:var(--ink-v); }
+    .ptable tbody tr:last-child td { border-bottom:none; }
+    .ptable tbody tr { cursor:pointer; }
+    .ptable tbody tr:hover { background:#faf9f9; }
+    .ptable tbody tr:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
+    .ptable .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .ptable .t-name { font-weight:700; white-space:normal; min-width:200px; }
+    .ptable .soft { color:var(--ink-v); font-style:italic; }
+    .ptable .th-sort { padding:0; }
+    .ptable .th-sort button { width:100%; text-align:inherit; background:none; border:none; cursor:pointer;
+      font:inherit; color:inherit; padding:9px 12px; }
+    .ptable .th-sort button:hover { color:var(--red); }
+    .ptable .th-sort.is-sorted { color:var(--ink); }
+    .ptable .num.th-sort button { text-align:right; }
+    /* The row's own actions. The status pill is absolutely positioned for cards, so
+       it has to be put back in the flow here. */
+    .ptable .t-act { display:flex; gap:5px; align-items:center; justify-content:flex-end; }
+    .ptable .t-act .status-toggle { position:static; }
+    .ptable .t-act button { padding:4px 8px; font-size:12px; }
   </style>
 </head>
 <body>
@@ -83,6 +113,7 @@
         <option value="total">Total</option>
       </select>
       <button type="button" id="dir" class="tw-select tw-dir" aria-label="Toggle sort direction">↓ Desc</button>
+      <button type="button" id="view" class="tw-select tw-view" aria-label="Switch between cards and a table">☰ Table</button>
       <span id="count" class="tw-count" aria-live="polite"></span>
       <button type="button" id="clear" class="chip" hidden>✕ Clear</button>
     </div>

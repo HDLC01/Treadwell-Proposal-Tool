@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 
 import audit
 import basisboard_client
+import digest_worker
 import drafts
 import dropbox_client
 import estimate_writer
@@ -490,10 +491,47 @@ class PortalPublishIn(BaseModel):
     25% deposit on approval (today's behaviour), False → no deposit at all. It is
     deliberately Optional/None so a caller that omits it forwards nothing and the
     portal keeps whatever it already had — that also preserves the exact legacy
-    request body when no options are sent."""
+    request body when no options are sent.
+
+    `assigned_estimator` is REQUIRED (Hanz: always explicit). Whoever is named owns
+    the follow-up — they get the "not viewed" and "make it personal" notes and the
+    morning digest — so a proposal sent without an owner is a proposal nobody chases."""
     emails: list[str] = Field(default_factory=list)
     message: str = ""
     require_deposit: Optional[bool] = None
+    assigned_estimator: str = ""
+
+
+def _clean_estimator(raw: str) -> str:
+    """The assigned estimator's address, or a 400.
+
+    Shape check only — the portal re-validates, and a round-trip to `profiles` on the
+    publish path would add a network hop to the one action that must not be slow."""
+    email = str(raw or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "missing_estimator")
+    if not _PORTAL_EMAIL_RE.match(email):
+        raise HTTPException(400, "invalid_estimator")
+    return email
+
+
+@app.get("/api/estimators")
+def api_estimators(request: Request) -> Dict[str, Any]:
+    """Who can be assigned a proposal. Bearer-gated but deliberately NOT admin-only —
+    every estimator publishes, so every estimator needs to fill this picker.
+
+    Sourced from `profiles`, which SSO populates on first sign-in, so the list is
+    complete by construction. Only active accounts, and only the two fields the
+    picker renders."""
+    try:
+        users = profiles.list_users()
+    except Exception as exc:  # noqa: BLE001 — never break the Files page over this
+        log.warning("estimator list unavailable: %s", exc)
+        return {"ok": True, "estimators": []}
+    out = [{"email": u["email"], "name": u.get("full_name") or u["email"]}
+           for u in users if (u.get("status") or "active") == "active" and u.get("email")]
+    out.sort(key=lambda u: (u["name"] or "").lower())
+    return {"ok": True, "estimators": out}
 
 
 def _clean_portal_emails(raw: list) -> list:
@@ -546,6 +584,9 @@ def api_portal_publish(draft_id: str, request: Request,
     # a legacy caller should do.
     if payload is not None and payload.require_deposit is not None:
         body["require_deposit"] = bool(payload.require_deposit)
+    # Checked after the recipients (their errors are more specific and predate this)
+    # but still BEFORE the snapshot below — a 400 must never mint a revision.
+    body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
 
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
@@ -708,6 +749,116 @@ def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
 @app.post("/api/portal/proposal/{proposal_id}/scheduled")
 def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
+
+
+# ── follow-up automation (drawer actions) ─────────────────────────────────────
+class AssignIn(BaseModel):
+    estimator_email: str = ""
+
+
+class AutomationIn(BaseModel):
+    enabled: bool = True
+
+
+class LogFollowupIn(BaseModel):
+    kind: str = ""
+    note: str = ""
+
+
+class StatusIn(BaseModel):
+    status: str = ""
+    months: Optional[int] = None
+    reason: str = ""
+
+
+@app.post("/api/portal/proposal/{proposal_id}/assign")
+def api_portal_assign(proposal_id: str, request: Request,
+                      payload: Optional[AssignIn] = None) -> Dict[str, Any]:
+    """Hand a proposal to a different estimator. They inherit the follow-up notes and
+    the morning digest entry, which is the point of reassigning."""
+    email = _clean_estimator(payload.estimator_email if payload else "")
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/assign", "POST",
+                   {"estimator_email": email, "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followup-automation")
+def api_portal_followup_automation(proposal_id: str, request: Request,
+                                   payload: Optional[AutomationIn] = None) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-automation", "POST",
+                   {"enabled": bool(payload.enabled) if payload else True,
+                    "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followups")
+def api_portal_log_followup(proposal_id: str, request: Request,
+                            payload: Optional[LogFollowupIn] = None) -> Dict[str, Any]:
+    """Log that someone chased this personally — a call, an email, a text, a note.
+
+    The digest reads these: a logged follow-up stops the recommendation repeating, and
+    their absence is what "no follow-up logged in nine days" measures."""
+    kind = str((payload.kind if payload else "") or "").strip().lower()
+    if kind not in ("call", "email", "text", "note"):
+        raise HTTPException(400, "invalid_kind")
+    note = str((payload.note if payload else "") or "").strip()[:2000]
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/followups", "POST",
+                   {"kind": kind, "note": note or None, "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/status")
+def api_portal_set_status(proposal_id: str, request: Request,
+                          payload: Optional[StatusIn] = None) -> Dict[str, Any]:
+    """Pause, close-lost or reactivate on the customer's behalf — for when they tell
+    an estimator by phone rather than clicking the link in the email."""
+    status = str((payload.status if payload else "") or "").strip().lower()
+    if status not in ("delayed", "closed_lost", "active"):
+        raise HTTPException(400, "invalid_status")
+    body: Dict[str, Any] = {"status": status, "by": _user_email(request)}
+    if status == "delayed":
+        months = (payload.months if payload else None) or 0
+        if int(months) not in (1, 2, 3, 4):
+            raise HTTPException(400, "invalid_months")
+        body["months"] = int(months)
+    reason = str((payload.reason if payload else "") or "").strip().lower()
+    if reason:
+        body["reason"] = reason
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
+
+
+@app.post("/api/admin/digest/run")
+def api_run_digest(request: Request) -> Dict[str, Any]:
+    """Send the morning digest now. Admin-only, and the only way to see it before
+    6 AM — which is how it gets QA'd on staging without waiting a day.
+
+    Deliberately NOT idempotent-guarded: an admin asking for it again means they
+    want another copy. The 6 AM thread stays guarded by `last_run`, and running this
+    stamps today, so a manual send before six replaces the scheduled one rather than
+    doubling it."""
+    _require_admin(request)
+    digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
+    try:
+        return digest_worker.run_once()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — report it, don't 500 the page
+        log.warning("Manual digest run failed: %s", exc)
+        raise HTTPException(502, f"Digest failed: {exc}") from exc
+
+
+@app.get("/api/admin/digest/preview")
+def api_preview_digest(request: Request) -> Dict[str, Any]:
+    """What the digest WOULD say, without emailing anyone or stamping the day.
+
+    The scoring is arithmetic, so "why is this one first?" has an answer — this is
+    where you read it. Returns each estimator's list with the score and the facts
+    behind it, so a weight that ranks something wrongly is visible before a customer
+    ever gets phoned about it."""
+    _require_admin(request)
+    digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
+    rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
+    by = digest_worker.build(rows, state=digest_worker.load_state())
+    return {"ok": True, "estimators": by,
+            "considered": len(rows),
+            "would_send": sorted(by.keys())}
 
 
 # ─── Notification Sending: roster + per-project overrides (proxied to the portal) ─
@@ -2767,6 +2918,18 @@ def _init_drafts_db() -> None:
         log.info("Drafts DB ready")
     except Exception as exc:  # noqa: BLE001
         log.warning("Drafts DB init failed (drafts disabled): %s", exc)
+
+
+@app.on_event("startup")
+def _start_digest() -> None:
+    """The morning digest runs from a startup hook, not lazily on first request like
+    the lead autopilot — nobody opens a page at 6 AM, so a lazy start would mean the
+    digest only went out once somebody signed in, by which point it's redundant.
+
+    The hooks are set either way: the manual trigger has to work on staging whether
+    or not the schedule is enabled."""
+    digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
+    digest_worker.ensure_started(portal=_portal, run_claude=_autofill_via_cli)
 
 
 @app.on_event("startup")
