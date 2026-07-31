@@ -1106,24 +1106,29 @@ def api_get_sheet(sheet_name: str, request: Request) -> Response:
 
 
 # ─── Project Info Sheet (the ops hand-off workbook) ────────────────────
-def _deposit_requested(draft_id: str) -> bool:
+def _deposit_requested(draft_id: str) -> Optional[bool]:
     """Has the customer been invoiced a deposit on this job?
 
     Deposits live in the portal's tables, not ours, so this is a proxy call —
     and a best-effort one. The estimator can flip B59 in the grid, so an
     unreachable portal must not stop the sheet from rendering.
+
+    Returns None when we genuinely don't know (portal unreachable, or no portal
+    row yet). That is NOT the same as "no deposit": returning False there wrote a
+    hard "N" into B59, so a portal blip between opening the sheet and downloading
+    it silently flipped a Y the estimator had seen. Unknown → leave B59 alone.
     """
     try:
         rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
     except Exception as exc:  # noqa: BLE001
         log.info("info sheet: deposit lookup skipped (%s)", exc)
-        return False
+        return None
     for row in rows:
         if row.get("proposal_id") == draft_id:
             return bool(row.get("deposit_requested_at")
                         or (row.get("deposit_status") or "").lower() in
                         ("requested", "invoiced", "submitted", "received", "paid"))
-    return False
+    return None      # never published to the portal — no deposit answer to give
 
 
 def _info_sheet_prefill(draft_id: str) -> Dict[str, Any]:
