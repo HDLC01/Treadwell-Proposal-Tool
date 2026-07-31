@@ -52,6 +52,30 @@ def test_page_loads_shared(page):
 
 
 @pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
+def test_every_local_script_it_pulls_in_exists(page):
+    """A typo'd src is a silent 404 — the page renders and then the first click does
+    nothing, which is indistinguishable from a logic bug."""
+    html = page.read_text(encoding="utf-8")
+    for chunk in html.split("<script")[1:]:
+        head = chunk.partition(">")[0]
+        if 'src="/' not in head:
+            continue
+        src = head.split('src="', 1)[1].split('"', 1)[0]
+        path = src.split("?", 1)[0]        # some pages cache-bust with ?v=<date>
+        assert (FRONTEND / path.lstrip("/")).is_file(), \
+            f"{page.name} loads {src}, which does not exist"
+
+
+def test_the_crm_board_loads_its_logic_module_first():
+    """portal.js reads window.TWCrm at module scope — stages, dates and ordering all
+    come from crm-core.js. Loading it second throws on boot and the board never
+    renders at all, so the order is pinned rather than left to whoever edits the page."""
+    html = (FRONTEND / "portal.html").read_text(encoding="utf-8")
+    assert html.index("/js/crm-core.js") < html.index("/js/portal.js")
+    assert "/shared.js" in html and html.index("/shared.js") < html.index("/js/portal.js")
+
+
+@pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
 def test_page_has_no_inline_script(page):
     """The CSP blocks inline <script> and onclick=. An inline handler silently
     does nothing in production while working fine from a file:// preview."""

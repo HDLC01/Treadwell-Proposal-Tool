@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 client = TestClient(main.app)
 
 URL = "/api/portal/publish?draft_id=d1"
+# Publishing now requires an owner for the follow-up cadence.
+EST = "kyle@wetreadwell.com"
 
 
 def _wire(monkeypatch, role="admin"):
@@ -43,15 +45,16 @@ def test_no_body_sends_only_the_essentials(monkeypatch):
     optional: every send snapshots what it sent, which is what the customer's view
     is then pinned to."""
     cap = _wire(monkeypatch)
-    r = client.post(URL)
+    r = client.post(URL, json={"assigned_estimator": EST})
     assert r.status_code == 200, r.text
     assert cap["path"] == "/api/admin/publish" and cap["method"] == "POST"
-    assert cap["body"] == {"draft_id": "d1", "by": "tester@wetreadwell.com", "revision_no": 1}
+    assert cap["body"] == {"draft_id": "d1", "by": "tester@wetreadwell.com",
+                       "assigned_estimator": EST, "revision_no": 1}
 
 
 def test_snapshot_is_taken_before_the_portal_call(monkeypatch):
     cap = _wire(monkeypatch)
-    assert client.post(URL).status_code == 200
+    assert client.post(URL, json={"assigned_estimator": EST}).status_code == 200
     assert cap.get("revisions") == [("d1", "tester@wetreadwell.com")]
     assert cap["body"]["revision_no"] == 1
     assert cap.get("deleted", []) == []
@@ -67,7 +70,7 @@ def test_snapshot_is_rolled_back_when_the_send_fails(monkeypatch):
         raise main.HTTPException(502, "portal down")
 
     monkeypatch.setattr(main, "_portal", boom)
-    r = client.post(URL)
+    r = client.post(URL, json={"assigned_estimator": EST})
     assert r.status_code == 502
     assert cap.get("revisions") == [("d1", "tester@wetreadwell.com")]
     assert cap.get("deleted") == [("d1", 1)]
@@ -82,15 +85,49 @@ def test_no_snapshot_when_validation_rejects_the_request(monkeypatch):
     assert cap.get("revisions", []) == [] and cap.get("deleted", []) == []
 
 
+def test_publishing_without_an_owner_is_refused(monkeypatch):
+    """Hanz: always explicit. An unassigned proposal is one nobody chases — no
+    reminder notes, no digest entry — which is the exact failure the follow-up system
+    exists to fix. Critically it must fail BEFORE the snapshot, or a rejected send
+    would leave a phantom "sent" version in the project's history."""
+    cap = _wire(monkeypatch)
+    r = client.post(URL, json={"emails": ["a@x.com"]})
+    assert r.status_code == 400 and "missing_estimator" in r.text
+    assert cap.get("revisions", []) == []
+    assert "path" not in cap                       # the portal was never called
+
+
+def test_a_malformed_estimator_address_is_refused(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post(URL, json={"assigned_estimator": "not-an-email"})
+    assert r.status_code == 400 and "invalid_estimator" in r.text
+    assert cap.get("revisions", []) == []
+
+
+def test_the_owner_is_normalised_and_forwarded(monkeypatch):
+    cap = _wire(monkeypatch)
+    r = client.post(URL, json={"assigned_estimator": "  KYLE@WeTreadwell.com  "})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["assigned_estimator"] == "kyle@wetreadwell.com"
+
+
+def test_recipient_errors_still_win_over_the_owner_check(monkeypatch):
+    """Both are missing here. The recipient message is the more specific and the
+    older contract, so it is the one the estimator should see."""
+    cap = _wire(monkeypatch)
+    r = client.post(URL, json={"emails": ["not-an-email"]})
+    assert r.status_code == 400 and "invalid_email" in r.text
+
+
 def test_forwards_require_deposit_both_ways(monkeypatch):
     """The Files-page checkbox. False is the interesting one — it must survive as an
     explicit False rather than being dropped as falsy, or a GC job would silently
     get a deposit invoice on approval."""
     cap = _wire(monkeypatch)
-    assert client.post(URL, json={"require_deposit": True}).status_code == 200
+    assert client.post(URL, json={"require_deposit": True, "assigned_estimator": EST}).status_code == 200
     assert cap["body"]["require_deposit"] is True
     cap2 = _wire(monkeypatch)
-    assert client.post(URL, json={"require_deposit": False}).status_code == 200
+    assert client.post(URL, json={"require_deposit": False, "assigned_estimator": EST}).status_code == 200
     assert cap2["body"]["require_deposit"] is False
 
 
@@ -99,13 +136,13 @@ def test_require_deposit_omitted_when_not_specified(monkeypatch):
     as "keep what you have", so a re-send from an older page can't flip a job that
     was deliberately sent without a deposit."""
     cap = _wire(monkeypatch)
-    assert client.post(URL, json={"emails": ["a@x.com"]}).status_code == 200
+    assert client.post(URL, json={"emails": ["a@x.com"], "assigned_estimator": EST}).status_code == 200
     assert "require_deposit" not in cap["body"]
 
 
 def test_forwards_valid_emails(monkeypatch):
     cap = _wire(monkeypatch)
-    r = client.post(URL, json={"emails": [" A@x.com ", "b@y.co"]})
+    r = client.post(URL, json={"emails": [" A@x.com ", "b@y.co"], "assigned_estimator": EST})
     assert r.status_code == 200, r.text
     assert cap["body"]["emails"] == ["A@x.com", "b@y.co"]        # trimmed, casing preserved
     assert cap["body"]["draft_id"] == "d1"
@@ -113,16 +150,16 @@ def test_forwards_valid_emails(monkeypatch):
 
 def test_dedupes_case_insensitively(monkeypatch):
     cap = _wire(monkeypatch)
-    r = client.post(URL, json={"emails": ["a@x.com", "A@X.COM", "b@y.co"]})
+    r = client.post(URL, json={"emails": ["a@x.com", "A@X.COM", "b@y.co"], "assigned_estimator": EST})
     assert r.status_code == 200
     assert cap["body"]["emails"] == ["a@x.com", "b@y.co"]
 
 
 def test_empty_or_blank_list_is_legacy(monkeypatch):
     cap = _wire(monkeypatch)
-    assert client.post(URL, json={"emails": []}).status_code == 200
+    assert client.post(URL, json={"emails": [], "assigned_estimator": EST}).status_code == 200
     assert "emails" not in cap["body"]
-    assert client.post(URL, json={"emails": ["", "  "]}).status_code == 200
+    assert client.post(URL, json={"emails": ["", "  "], "assigned_estimator": EST}).status_code == 200
     assert "emails" not in cap["body"]
 
 
@@ -151,7 +188,7 @@ def test_garbage_body_never_500s(monkeypatch):
 def test_404_when_draft_missing(monkeypatch):
     _wire(monkeypatch)
     monkeypatch.setattr(main.drafts, "load_draft", lambda i: None)
-    assert client.post(URL, json={"emails": ["a@x.com"]}).status_code == 404
+    assert client.post(URL, json={"emails": ["a@x.com"], "assigned_estimator": EST}).status_code == 404
 
 
 def test_rejects_unsafe_draft_id(monkeypatch):

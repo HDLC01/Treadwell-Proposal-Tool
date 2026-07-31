@@ -239,6 +239,17 @@
       <!-- Whether this job collects the 25% deposit. Defaults from the intake
            audience (Direct yes, GC no) but is free to toggle either way — done.js
            sets it and reads it on send. No inline handler (CSP). -->
+      <!-- Who owns the follow-up. Required: an unassigned proposal is one nobody
+           chases, and the assignee receives the reminder notes and the daily digest.
+           Populated by done.js from /api/estimators. -->
+      <label for="portal-estimator" class="hint" style="display:block;margin:12px 0 4px;font-weight:600;">
+        Assigned estimator <span style="font-weight:400;">(required — owns the follow-up)</span>
+      </label>
+      <select id="portal-estimator"
+              style="width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--surface-dim,#ccc);border-radius:6px;background:#fff;">
+        <option value="">Choose the estimator…</option>
+      </select>
+
       <label for="portal-require-deposit" class="hint"
              style="display:flex;gap:8px;align-items:center;margin:12px 0 0;font-weight:600;cursor:pointer;">
         <input type="checkbox" id="portal-require-deposit" style="width:16px;height:16px;cursor:pointer;">
