@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 
 import audit
 import basisboard_client
+import digest_worker
 import drafts
 import dropbox_client
 import estimate_writer
@@ -484,9 +485,53 @@ class PortalPublishIn(BaseModel):
     """Optional body for /api/portal/publish — extra portal recipients typed on
     the Files screen (the intake contact is always included by the portal), plus an
     optional custom `message` the estimator types on the Done page (shown in the
-    customer's proposal-ready email)."""
+    customer's proposal-ready email).
+
+    `require_deposit` is the Files-page checkbox: True → the portal collects the
+    25% deposit on approval (today's behaviour), False → no deposit at all. It is
+    deliberately Optional/None so a caller that omits it forwards nothing and the
+    portal keeps whatever it already had — that also preserves the exact legacy
+    request body when no options are sent.
+
+    `assigned_estimator` is REQUIRED (Hanz: always explicit). Whoever is named owns
+    the follow-up — they get the "not viewed" and "make it personal" notes and the
+    morning digest — so a proposal sent without an owner is a proposal nobody chases."""
     emails: list[str] = Field(default_factory=list)
     message: str = ""
+    require_deposit: Optional[bool] = None
+    assigned_estimator: str = ""
+
+
+def _clean_estimator(raw: str) -> str:
+    """The assigned estimator's address, or a 400.
+
+    Shape check only — the portal re-validates, and a round-trip to `profiles` on the
+    publish path would add a network hop to the one action that must not be slow."""
+    email = str(raw or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "missing_estimator")
+    if not _PORTAL_EMAIL_RE.match(email):
+        raise HTTPException(400, "invalid_estimator")
+    return email
+
+
+@app.get("/api/estimators")
+def api_estimators(request: Request) -> Dict[str, Any]:
+    """Who can be assigned a proposal. Bearer-gated but deliberately NOT admin-only —
+    every estimator publishes, so every estimator needs to fill this picker.
+
+    Sourced from `profiles`, which SSO populates on first sign-in, so the list is
+    complete by construction. Only active accounts, and only the two fields the
+    picker renders."""
+    try:
+        users = profiles.list_users()
+    except Exception as exc:  # noqa: BLE001 — never break the Files page over this
+        log.warning("estimator list unavailable: %s", exc)
+        return {"ok": True, "estimators": []}
+    out = [{"email": u["email"], "name": u.get("full_name") or u["email"]}
+           for u in users if (u.get("status") or "active") == "active" and u.get("email")]
+    out.sort(key=lambda u: (u["name"] or "").lower())
+    return {"ok": True, "estimators": out}
 
 
 def _clean_portal_emails(raw: list) -> list:
@@ -522,9 +567,11 @@ def api_portal_publish(draft_id: str, request: Request,
     wrong-typed `emails` yields FastAPI's 422 — never a 500 — keeping the sync
     handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop."""
     draft_id = _safe_id(draft_id)
-    if not drafts.load_draft(draft_id):
+    row = drafts.load_draft(draft_id)
+    if not row:
         raise HTTPException(404, "Draft not found")
-    body: Dict[str, Any] = {"draft_id": draft_id, "by": _user_email(request)}
+    by = _user_email(request)
+    body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
     emails = _clean_portal_emails(payload.emails if payload else [])
     if emails:
         body["emails"] = emails
@@ -532,7 +579,66 @@ def api_portal_publish(draft_id: str, request: Request,
     msg = (payload.message if payload else "").strip()
     if msg:
         body["message"] = msg[:2000]
-    return _portal("/api/admin/publish", "POST", body)
+    # Only forwarded when the caller actually expressed a choice — omitting it tells
+    # the portal "leave it as it is", which is what a re-send from an older page or
+    # a legacy caller should do.
+    if payload is not None and payload.require_deposit is not None:
+        body["require_deposit"] = bool(payload.require_deposit)
+    # Checked after the recipients (their errors are more specific and predate this)
+    # but still BEFORE the snapshot below — a 400 must never mint a revision.
+    body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
+
+    # Snapshot what we are about to send, AFTER every validation above — a 400 must
+    # never mint a revision. The portal pins the customer's view to this exact
+    # snapshot, so from here on editing the draft cannot change a proposal that has
+    # already gone out, and the previous version stays readable.
+    rev_no = drafts.create_revision(draft_id, row.get("data") or {}, by)
+    body["revision_no"] = rev_no
+    try:
+        out = _portal("/api/admin/publish", "POST", body)
+    except Exception:
+        # The send failed, so this snapshot represents nothing that was sent. Drop
+        # it: the portal pins by explicit number, so an orphan would never be shown
+        # to anyone, but leaving one would still misreport the history to staff.
+        try:
+            drafts.delete_revision(draft_id, rev_no)
+        except Exception as exc:  # noqa: BLE001 — a stranded snapshot is cosmetic
+            log.warning("could not roll back revision %s of %s: %s", rev_no, draft_id, exc)
+        raise
+    drafts.log_event(draft_id, by, "published", {"revision_no": rev_no,
+                                                 "recipients": len(emails) or None})
+    if isinstance(out, dict):
+        out.setdefault("revision_no", rev_no)
+    return out
+
+
+@app.get("/api/draft/{draft_id}/revisions")
+def api_draft_revisions(draft_id: str) -> Dict[str, Any]:
+    """Every version of this project that has been sent to the customer, newest
+    first — the Files-page history. No blobs, just what the table renders."""
+    draft_id = _safe_id(draft_id)
+    return {"ok": True, "revisions": drafts.list_revisions(draft_id)}
+
+
+@app.post("/api/draft/{draft_id}/revisions/{revision_no}/files")
+def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) -> GenerateOut:
+    """Regenerate the estimate + proposal for an OLD revision.
+
+    Nothing is stored per revision except the inputs, so the documents are rebuilt
+    from that snapshot's `proposal_payload` on demand — the same in-memory path a
+    fresh generate takes, returning the same short-lived download tokens. This is
+    what makes "what did we send them in March" answerable with a real file rather
+    than a number in a list."""
+    draft_id = _safe_id(draft_id)
+    rev = drafts.get_revision(draft_id, revision_no)
+    if not rev:
+        raise HTTPException(404, "Revision not found")
+    payload = (rev.get("data") or {}).get("proposal_payload")
+    if not payload:
+        # Sent before the estimator ever generated documents — there is nothing to
+        # replay, and inventing defaults would produce a file we never sent.
+        raise HTTPException(422, "That revision has no generated documents to rebuild.")
+    return api_generate(GenerateIn(**payload), request)
 
 
 @app.get("/api/portal/pipeline")
@@ -645,6 +751,116 @@ def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
 
 
+# ── follow-up automation (drawer actions) ─────────────────────────────────────
+class AssignIn(BaseModel):
+    estimator_email: str = ""
+
+
+class AutomationIn(BaseModel):
+    enabled: bool = True
+
+
+class LogFollowupIn(BaseModel):
+    kind: str = ""
+    note: str = ""
+
+
+class StatusIn(BaseModel):
+    status: str = ""
+    months: Optional[int] = None
+    reason: str = ""
+
+
+@app.post("/api/portal/proposal/{proposal_id}/assign")
+def api_portal_assign(proposal_id: str, request: Request,
+                      payload: Optional[AssignIn] = None) -> Dict[str, Any]:
+    """Hand a proposal to a different estimator. They inherit the follow-up notes and
+    the morning digest entry, which is the point of reassigning."""
+    email = _clean_estimator(payload.estimator_email if payload else "")
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/assign", "POST",
+                   {"estimator_email": email, "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followup-automation")
+def api_portal_followup_automation(proposal_id: str, request: Request,
+                                   payload: Optional[AutomationIn] = None) -> Dict[str, Any]:
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-automation", "POST",
+                   {"enabled": bool(payload.enabled) if payload else True,
+                    "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followups")
+def api_portal_log_followup(proposal_id: str, request: Request,
+                            payload: Optional[LogFollowupIn] = None) -> Dict[str, Any]:
+    """Log that someone chased this personally — a call, an email, a text, a note.
+
+    The digest reads these: a logged follow-up stops the recommendation repeating, and
+    their absence is what "no follow-up logged in nine days" measures."""
+    kind = str((payload.kind if payload else "") or "").strip().lower()
+    if kind not in ("call", "email", "text", "note"):
+        raise HTTPException(400, "invalid_kind")
+    note = str((payload.note if payload else "") or "").strip()[:2000]
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/followups", "POST",
+                   {"kind": kind, "note": note or None, "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/status")
+def api_portal_set_status(proposal_id: str, request: Request,
+                          payload: Optional[StatusIn] = None) -> Dict[str, Any]:
+    """Pause, close-lost or reactivate on the customer's behalf — for when they tell
+    an estimator by phone rather than clicking the link in the email."""
+    status = str((payload.status if payload else "") or "").strip().lower()
+    if status not in ("delayed", "closed_lost", "active"):
+        raise HTTPException(400, "invalid_status")
+    body: Dict[str, Any] = {"status": status, "by": _user_email(request)}
+    if status == "delayed":
+        months = (payload.months if payload else None) or 0
+        if int(months) not in (1, 2, 3, 4):
+            raise HTTPException(400, "invalid_months")
+        body["months"] = int(months)
+    reason = str((payload.reason if payload else "") or "").strip().lower()
+    if reason:
+        body["reason"] = reason
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
+
+
+@app.post("/api/admin/digest/run")
+def api_run_digest(request: Request) -> Dict[str, Any]:
+    """Send the morning digest now. Admin-only, and the only way to see it before
+    6 AM — which is how it gets QA'd on staging without waiting a day.
+
+    Deliberately NOT idempotent-guarded: an admin asking for it again means they
+    want another copy. The 6 AM thread stays guarded by `last_run`, and running this
+    stamps today, so a manual send before six replaces the scheduled one rather than
+    doubling it."""
+    _require_admin(request)
+    digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
+    try:
+        return digest_worker.run_once()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — report it, don't 500 the page
+        log.warning("Manual digest run failed: %s", exc)
+        raise HTTPException(502, f"Digest failed: {exc}") from exc
+
+
+@app.get("/api/admin/digest/preview")
+def api_preview_digest(request: Request) -> Dict[str, Any]:
+    """What the digest WOULD say, without emailing anyone or stamping the day.
+
+    The scoring is arithmetic, so "why is this one first?" has an answer — this is
+    where you read it. Returns each estimator's list with the score and the facts
+    behind it, so a weight that ranks something wrongly is visible before a customer
+    ever gets phoned about it."""
+    _require_admin(request)
+    digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
+    rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
+    by = digest_worker.build(rows, state=digest_worker.load_state())
+    return {"ok": True, "estimators": by,
+            "considered": len(rows),
+            "would_send": sorted(by.keys())}
+
+
 # ─── Notification Sending: roster + per-project overrides (proxied to the portal) ─
 # Access (Hanz: "admins edit, staff self-serve"): the GLOBAL roster (add / remove /
 # toggle) is ADMIN-only, enforced here server-side (not just hidden buttons); the
@@ -737,17 +953,29 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
 
 
 @app.get("/api/admin/proposal-pdf")
-def api_admin_proposal_pdf(draft_id: str, request: Request) -> Response:
+def api_admin_proposal_pdf(draft_id: str, request: Request,
+                           revision_no: Optional[int] = None) -> Response:
     """Render a draft's proposal to its real Treadwell PDF, on demand. Called
     server-to-server by the customer portal (SERVICE_TOKEN-gated; this path is in
     _AUTH_PUBLIC_PATHS so it skips the Google gate). Reuses the full /api/generate
-    pipeline + LibreOffice render, so the customer sees the exact branded document."""
+    pipeline + LibreOffice render, so the customer sees the exact branded document.
+
+    `revision_no` renders the snapshot that was SENT rather than the live draft.
+    The portal passes the revision it pinned, so the PDF a customer downloads can
+    never disagree with the prices on the page above it — which is what happened
+    while both were rendered from whatever the estimator had most recently saved."""
     import hmac
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
         raise HTTPException(401, "unauthorized")
-    row = drafts.load_draft(draft_id)
+    if revision_no is not None:
+        rev = drafts.get_revision(draft_id, revision_no)
+        if not rev:
+            raise HTTPException(404, "Revision not found")
+        row = {"data": rev.get("data") or {}}
+    else:
+        row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
     pp = (row.get("data") or {}).get("proposal_payload")
@@ -1029,24 +1257,29 @@ def api_get_sheet(sheet_name: str, request: Request) -> Response:
 
 
 # ─── Project Info Sheet (the ops hand-off workbook) ────────────────────
-def _deposit_requested(draft_id: str) -> bool:
+def _deposit_requested(draft_id: str) -> Optional[bool]:
     """Has the customer been invoiced a deposit on this job?
 
     Deposits live in the portal's tables, not ours, so this is a proxy call —
     and a best-effort one. The estimator can flip B59 in the grid, so an
     unreachable portal must not stop the sheet from rendering.
+
+    Returns None when we genuinely don't know (portal unreachable, or no portal
+    row yet). That is NOT the same as "no deposit": returning False there wrote a
+    hard "N" into B59, so a portal blip between opening the sheet and downloading
+    it silently flipped a Y the estimator had seen. Unknown → leave B59 alone.
     """
     try:
         rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
     except Exception as exc:  # noqa: BLE001
         log.info("info sheet: deposit lookup skipped (%s)", exc)
-        return False
+        return None
     for row in rows:
         if row.get("proposal_id") == draft_id:
             return bool(row.get("deposit_requested_at")
                         or (row.get("deposit_status") or "").lower() in
                         ("requested", "invoiced", "submitted", "received", "paid"))
-    return False
+    return None      # never published to the portal — no deposit answer to give
 
 
 def _info_sheet_prefill(draft_id: str) -> Dict[str, Any]:
@@ -2685,6 +2918,18 @@ def _init_drafts_db() -> None:
         log.info("Drafts DB ready")
     except Exception as exc:  # noqa: BLE001
         log.warning("Drafts DB init failed (drafts disabled): %s", exc)
+
+
+@app.on_event("startup")
+def _start_digest() -> None:
+    """The morning digest runs from a startup hook, not lazily on first request like
+    the lead autopilot — nobody opens a page at 6 AM, so a lazy start would mean the
+    digest only went out once somebody signed in, by which point it's redundant.
+
+    The hooks are set either way: the manual trigger has to work on staging whether
+    or not the schedule is enabled."""
+    digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
+    digest_worker.ensure_started(portal=_portal, run_claude=_autofill_via_cli)
 
 
 @app.on_event("startup")

@@ -38,6 +38,7 @@
     const SORT_KEY  = "tw_projects_sort";          // legacy single-key (migrated below)
     const SORTFIELD_KEY = "tw_projects_sortfield";
     const SORTDIR_KEY   = "tw_projects_sortdir";
+    const VIEW_KEY      = "tw_projects_view";      // cards or one sortable table
     const _ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
     let SEARCH = _ss(QUERY_KEY, "");
     let MONTH  = _ss(MONTH_KEY, "");
@@ -58,6 +59,7 @@
       if (d !== "asc" && d !== "desc") d = NATURAL_DIR[f];
       SORTFIELD = f; SORTDIR = d;
     })();
+    let VIEW = _ss(VIEW_KEY, "") === "table" ? "table" : "cards";
     let ALL_PROJECTS = [];
     // Default to "active" so the working list isn't cluttered by finished jobs;
     // existing projects have no `archived` flag → treated as active (nothing
@@ -202,8 +204,23 @@
             : "No projects match your search.";   // tab has rows, but search/month filtered them out
         return;
       }
-      el.className = "grid";
-      el.innerHTML = shown.map(p => `
+      el.className = VIEW === "table" ? "tablewrap" : "grid";
+      el.innerHTML = VIEW === "table" ? tableHtml(shown) : cardsHtml(shown);
+    }
+
+    /** The person chasing this bid. `assigned_estimator` is chosen at send time;
+     *  before that the only honest answer is whoever built it. */
+    const estimatorOf = (p) => String(p.assigned_estimator || p.owner_email || "");
+    const isAssigned = (p) => !!p.assigned_estimator;
+    /** "hanz@wetreadwell.com" → "Hanz". A column headed "Estimator" says a name on the
+     *  CRM board, so it says a name here too — the two pages shouldn't render the same
+     *  field two different ways. The full address stays in the cell's title. The CARDS
+     *  keep showing "by <address>", which is provenance rather than a column of data. */
+    const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
+      .filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
+
+    function cardsHtml(shown) {
+      return shown.map(p => `
         <div class="card" data-id="${encodeURIComponent(p.id)}">
           <button type="button" class="status-toggle ${p.archived?"is-inactive":"is-active"}"
                   data-archived="${p.archived?1:0}"
@@ -212,6 +229,7 @@
           <div class="meta">
             ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
             ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
+            ${p.sent_revision>0?`<span class="badge badge-sent" title="The customer has this version. Open it, change what you need, then re-send from the Files page to create the next revision.">Sent · Rev ${p.sent_revision}</span>`:""}
             ${p.deadline?`<span>due ${esc(p.deadline)}</span>`:""}
           </div>
           <div class="meta" style="margin-top:8px;">
@@ -221,35 +239,104 @@
           <div class="card-foot">
             <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
             <div class="foot-actions">
-              <button type="button" class="files-btn" title="Generate + download the files (no need to re-walk intake)">📄 Files</button>
+              <button type="button" class="files-btn" title="${p.sent_revision>0?"Files, sent versions, and re-send to the customer":"Generate + download the files (no need to re-walk intake)"}">📄 Files</button>
               <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info</button>
-              <button type="button" class="open-btn">Open / Edit →</button>
+              <!-- Already sent: say "Revise", because opening and changing it is
+                   exactly what produces the next revision. Same destination — the
+                   label is what was unclear, not the route. -->
+              <button type="button" class="open-btn" title="${p.sent_revision>0?"Change the estimate, then re-send from the Files page to create revision "+(p.sent_revision+1):""}">${p.sent_revision>0?"Revise →":"Open / Edit →"}</button>
             </div>
           </div>
         </div>`).join("");
-      const open = (c) => window.location.assign("/?d=" + c.dataset.id + "&edit=1");   // ?edit = open intake for this project
-      el.querySelectorAll(".card").forEach(c => {
-        c.addEventListener("click", () => open(c));
-        const btn = c.querySelector(".open-btn");
-        if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); open(c); });
-        const tb = c.querySelector(".trash-btn");
-        if (tb) tb.addEventListener("click", (e) => { e.stopPropagation(); trashCard(c); });
-        const st = c.querySelector(".status-toggle");
-        if (st) st.addEventListener("click", (e) => { e.stopPropagation(); toggleStatus(c, st); });
-        const fb = c.querySelector(".files-btn");
-        if (fb) fb.addEventListener("click", (e) => {
-          e.stopPropagation();
-          // c.dataset.id is already encodeURIComponent'd. files=1 → done.html
-          // generates + shows downloads without the intake walk.
-          window.location.assign("/done.html?d=" + c.dataset.id + "&files=1");
-        });
-        const ib = c.querySelector(".info-btn");
-        if (ib) ib.addEventListener("click", (e) => {
-          e.stopPropagation();
-          window.location.assign("/info-sheet.html?d=" + c.dataset.id);
-        });
-      });
     }
+
+    // ── the same projects as one table ────────────────────────────────────────
+    // Cards are for browsing a handful; a table is for reading sixty at once and
+    // comparing a column down the page. Headers re-sort using the SAME state the
+    // toolbar drives, so the two views can never disagree on order.
+    const TCOLS = [
+      { label: "Project",   sort: "name" },
+      { label: "Type",      sort: null },
+      { label: "Total",     sort: "total", num: true },
+      { label: "Estimator", sort: null },
+      { label: "Sent",      sort: null },
+      { label: "Due",       sort: "deadline" },
+      { label: "Updated",   sort: "updated" },
+      { label: "",          sort: null },
+    ];
+
+    function tableHtml(shown) {
+      const head = TCOLS.map(c => {
+        const cls = c.num ? "num" : "";
+        if (!c.sort) return `<th class="${cls}">${esc(c.label)}</th>`;
+        const on = SORTFIELD === c.sort;
+        return `<th class="${cls} th-sort${on?" is-sorted":""}" aria-sort="${
+          on ? (SORTDIR==="asc"?"ascending":"descending") : "none"}">` +
+          `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${on?(SORTDIR==="asc"?" ↑":" ↓"):""}</button></th>`;
+      }).join("");
+      const rows = shown.map(p => {
+        const email = estimatorOf(p);
+        return `<tr class="trow" data-id="${encodeURIComponent(p.id)}" tabindex="0">
+          <td class="t-name">${esc(p.project_name||"(untitled)")}</td>
+          <td>${p.work_type?esc(p.work_type):""}</td>
+          <td class="num">${p.total!=null?money(p.total):""}</td>
+          <td${isAssigned(p)?` title="${esc(email)}"`
+              :` class="soft" title="${esc(email)} — nobody is assigned yet, this is whoever built the estimate"`}>${
+            email?esc(nameOf(email)):"—"}</td>
+          <td>${p.sent_revision>0?`Rev ${p.sent_revision}`:""}</td>
+          <td>${p.deadline?esc(p.deadline):""}</td>
+          <td>${fmtDate(p.updated_at)}</td>
+          <td class="t-act">
+            <button type="button" class="status-toggle ${p.archived?"is-inactive":"is-active"}"
+                    data-archived="${p.archived?1:0}"
+                    title="Click to mark ${p.archived?"active":"inactive"}">${p.archived?"Inactive":"Active"}</button>
+            <button type="button" class="files-btn" title="Files + re-send">📄</button>
+            <button type="button" class="info-btn" title="Project Info Sheet">📋</button>
+            <button type="button" class="trash-btn" title="Move to Trash">🗑</button>
+          </td>
+        </tr>`;
+      }).join("");
+      return `<table class="ptable"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // ── one delegated listener for both views ────────────────────────────────
+    // paint() replaces #list's innerHTML on a 60s poll as well as on every action,
+    // so per-card listeners were being re-bound dozens of times an hour. Delegation
+    // binds once for the life of the page and covers whichever view is rendered.
+    (function wireList() {
+      const el = document.getElementById("list");
+      if (!el) return;
+      const open = (id) => window.location.assign("/?d=" + id + "&edit=1");   // ?edit = open intake
+      el.addEventListener("click", (e) => {
+        const th = e.target.closest("[data-sortby]");
+        if (th) {
+          const f = th.dataset.sortby;
+          // Clicking the sorted column flips it; a new column opens its natural way.
+          SORTDIR = SORTFIELD === f ? (SORTDIR === "asc" ? "desc" : "asc") : (NATURAL_DIR[f] || "desc");
+          SORTFIELD = f;
+          try { sessionStorage.setItem(SORTFIELD_KEY, SORTFIELD); sessionStorage.setItem(SORTDIR_KEY, SORTDIR); } catch {}
+          syncToolbar(); paint();
+          return;
+        }
+        const row = e.target.closest(".card, .trow");
+        if (!row) return;
+        const id = row.dataset.id;                      // already encodeURIComponent'd
+        if (e.target.closest(".trash-btn")) { e.stopPropagation(); trashCard(row); return; }
+        const st = e.target.closest(".status-toggle");
+        if (st) { e.stopPropagation(); toggleStatus(row, st); return; }
+        // files=1 → done.html generates + shows downloads without the intake walk.
+        if (e.target.closest(".files-btn")) { e.stopPropagation(); window.location.assign("/done.html?d=" + id + "&files=1"); return; }
+        if (e.target.closest(".info-btn")) { e.stopPropagation(); window.location.assign("/info-sheet.html?d=" + id); return; }
+        open(id);
+      });
+      el.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        const row = e.target.closest && e.target.closest(".trow");
+        if (!row) return;
+        e.preventDefault();
+        open(row.dataset.id);
+      });
+    })();
 
     function cacheProjects() { try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(ALL_PROJECTS)); } catch {} }
 
@@ -272,7 +359,9 @@
 
     async function trashCard(c) {
       const id = decodeURIComponent(c.dataset.id);
-      const name = (c.querySelector(".pname")||{}).textContent || id;
+      // .pname on a card, .t-name in a table row — the confirmation must name the
+      // project in both views, or it asks about a UUID.
+      const name = (c.querySelector(".pname") || c.querySelector(".t-name") || {}).textContent || id;
       const ok = await TW.confirmDanger({
         title: "Move to Trash?",
         name: name, after: " will leave the active list.",
@@ -315,6 +404,28 @@
     }
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
+    /** Push sort + view state back into the toolbar. A table header can change the
+     *  sort now, so the select and the arrow have to be able to catch up — a toolbar
+     *  reading "Updated" over a list sorted by total is a lie. */
+    function syncToolbar() {
+      const sort = document.getElementById("sort");
+      const dir = document.getElementById("dir");
+      const view = document.getElementById("view");
+      if (sort) sort.value = SORTFIELD;
+      if (dir) {
+        dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+        dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
+        dir.title = SORTDIR === "asc"
+          ? "Ascending (A→Z · oldest · soonest · low→high) — click for descending"
+          : "Descending (Z→A · newest · latest · high→low) — click for ascending";
+      }
+      if (view) {
+        view.textContent = VIEW === "table" ? "▦ Cards" : "☰ Table";
+        view.title = VIEW === "table" ? "Back to project cards" : "Show every project as one sortable list";
+        view.setAttribute("aria-pressed", VIEW === "table" ? "true" : "false");
+      }
+    }
+
     // Wire the toolbar ONCE (it lives in static HTML, not paint(), so the search
     // box keeps focus/value while the grid re-renders). Each control updates state,
     // persists it, then repaints.
@@ -323,15 +434,14 @@
       const month = document.getElementById("month");
       const sort = document.getElementById("sort");
       const dir = document.getElementById("dir");
+      const view = document.getElementById("view");
       const clearBtn = document.getElementById("clear");
-      const syncDir = () => {
-        if (!dir) return;
-        dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
-        dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
-        dir.title = SORTDIR === "asc"
-          ? "Ascending (A→Z · oldest · soonest · low→high) — click for descending"
-          : "Descending (Z→A · newest · latest · high→low) — click for ascending";
-      };
+      const syncDir = syncToolbar;
+      if (view) view.addEventListener("click", () => {
+        VIEW = VIEW === "table" ? "cards" : "table";
+        try { VIEW === "table" ? sessionStorage.setItem(VIEW_KEY, "table") : sessionStorage.removeItem(VIEW_KEY); } catch {}
+        syncToolbar(); paint();
+      });
       if (q) {
         q.value = SEARCH;
         let _t;
@@ -366,12 +476,20 @@
         paint();
       });
       if (clearBtn) clearBtn.addEventListener("click", () => {
+        // Leaves the chip (tab) AND the view alone: those are how you're looking at
+        // the list, not a filter narrowing what's in it.
         SEARCH = ""; MONTH = ""; SORTFIELD = "updated"; SORTDIR = "desc";
         try { sessionStorage.removeItem(QUERY_KEY); sessionStorage.removeItem(MONTH_KEY); sessionStorage.removeItem(SORTFIELD_KEY); sessionStorage.removeItem(SORTDIR_KEY); } catch {}
-        if (q) q.value = ""; if (sort) sort.value = "updated"; if (month) month.value = "";
+        if (q) q.value = ""; if (month) month.value = "";
         syncDir();
-        paint();   // leaves the chip (tab) selection intact
+        paint();
       });
+      syncToolbar();
     })();
     load();
+    // Another estimator's new, renamed or archived project should appear without an
+    // F5. The list sits behind a 60s server cache, so match it; filters and the
+    // active chip survive a repaint (paint() reads them from the DOM/sessionStorage).
+    setInterval(() => { if (!document.hidden) load(); }, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
   

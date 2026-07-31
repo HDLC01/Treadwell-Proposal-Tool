@@ -32,6 +32,12 @@ services:
       # DATA store = the local PostgREST proxy (NOT cloud Supabase).
       - SUPABASE_DATA_URL=http://rest
       - SUPABASE_DATA_KEY=staging-local
+      # The morning digest is SCHEDULE-off on staging and on-demand only. Staging
+      # shares prod's Resend account, so a 6 AM run here would email the real
+      # estimating team from a test box with test data in it. QA it with
+      # POST /api/admin/digest/run (sends now) or GET /api/admin/digest/preview
+      # (shows the ranking and the reasons, emails nobody).
+      - DIGEST_ENABLED=off
     env_file:
       - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
     volumes:

@@ -457,6 +457,23 @@
     const m = (parts.find(p => p.type === "month") || {}).value;
     return (y && m) ? y + "-" + m : "";
   }
+  // Today's date in Central as "YYYY-MM-DD" — the form the server sends plain dates
+  // in (a follow-up pause, a bid date). Comparing those as strings against this is
+  // exact and needs no Date parsing; comparing against the VIEWER's today is what
+  // makes a pause look expired to someone an hour east of Kansas.
+  function bizToday() {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: BIZ_TZ, year: "numeric",
+      month: "2-digit", day: "2-digit" }).format(new Date());
+  }
+  // A bare "YYYY-MM-DD" → "9/1/2026". Not fmtBizDate: that parses the string as UTC
+  // midnight and then shifts it BACK into Central, so every date-only value would
+  // render a day early. Anchoring at noon UTC leaves no room for the shift to cross
+  // a day boundary in either direction.
+  function fmtBizDay(d) {
+    const s = String(d || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return fmtBizDate(d);
+    return new Date(s + "T12:00:00Z").toLocaleDateString("en-US", { timeZone: BIZ_TZ });
+  }
   // "2026-07" → "July 2026" (rendered in the business timezone; noon-UTC anchor
   // avoids any date rollover when shifting to Central).
   function bizMonthLabel(ym) {
@@ -518,6 +535,8 @@
     fmtBizDate,
     fmtBizDateTime,
     bizYM,
+    bizToday,
+    fmtBizDay,
     bizMonthLabel,
     fmtUsd,
     absoluteUrl,
