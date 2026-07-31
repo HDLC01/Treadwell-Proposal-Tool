@@ -33,9 +33,11 @@
                  "#4a3aa7", "#eda100", "#e87ba4", "#008300"];
   var SERIES = "#c8102e";          // the single-series hue
   var SURFACE = "#ffffff";         // card background — the gaps and rings are cut in this
-  var GRID = "#e4e2e2";
-  var AXIS_INK = "#8a8785";
-  var LABEL_INK = "#5c403f";
+  // Warm neutrals to match the page. Gridlines sit one step off the card so they
+  // stay behind the data instead of competing with it.
+  var GRID = "#ece8e0";
+  var AXIS_INK = "#8a857c";
+  var LABEL_INK = "#57534a";
   var BAR_MAX = 24;                // never fill the slot; the leftover is air
   var BAR_GAP = 2;                 // surface gap between touching bars
   var RADIUS = 4;                  // rounded data-end
@@ -79,6 +81,35 @@
 
   function emptyNote(msg) {
     return '<p class="chart-empty">' + esc(msg || "Nothing to show for these filters.") + "</p>";
+  }
+
+  /** A bar giving a percentage a shape. Over 100% fills the track rather than
+   *  overflowing it — the figure beside it already says the real number, and a
+   *  meter that ran past its own end would read as a rendering fault. */
+  function meter(ratio) {
+    if (ratio === null || ratio === undefined) return "";
+    var pct = Math.max(0, Math.min(1, ratio)) * 100;
+    return '<div class="meter"><i style="width:' + pct.toFixed(1) + '%"></i></div>';
+  }
+
+  /** `hex` at `alpha`, for a tinted pill behind its own solid dot. */
+  function tint(hex, alpha) {
+    var h = String(hex || "").replace("#", "");
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    if (h.length !== 6) return "rgba(0,0,0," + alpha + ")";
+    var n = parseInt(h, 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + alpha + ")";
+  }
+
+  /** A darker step of `hex`, so text on a tint of it still clears contrast. */
+  function darken(hex, amount) {
+    var h = String(hex || "").replace("#", "");
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    if (h.length !== 6) return "#000";
+    var n = parseInt(h, 16), k = 1 - (amount === undefined ? 0.45 : amount);
+    var r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k),
+        b = Math.round((n & 255) * k);
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
   }
 
   /** A bar with a rounded data-end and a square baseline. */
@@ -254,7 +285,9 @@
     for (var i = 0; i < items.length; i++) {
       var d = items[i], frac = (d.value || 0) / total;
       var sweep = frac * 360;
-      var color = PALETTE[i % PALETTE.length];
+      // An item can bring its own colour — an estimator keeps the same one in
+      // every chart, so the eye can follow a person across the page.
+      var color = d.color || PALETTE[i % PALETTE.length];
       var a0 = a + GAP_DEG / 2, a1 = a + sweep - GAP_DEG / 2;
       if (a1 > a0) {
         slices += '<g class="ch-mark" data-idx="' + i + '" data-key="' + esc(d.key) + '">' +
@@ -305,6 +338,10 @@
     }).join("");
     var body = rows.map(function (r, i) {
       var tds = cols.map(function (c) {
+        // A row may hand over a ready-made cell — an estimator's coloured chip,
+        // a stage pill — for the column the caller marks as `html`.
+        var pre = c.html && r[c.html];
+        if (pre) return '<td' + (c.align === "right" ? ' class="r"' : "") + ">" + pre + "</td>";
         var raw = r[c.key];
         var text = c.fmt ? (FMT[c.fmt] || String)(raw) : raw;
         var dot = (c.dot && r.color)
@@ -330,6 +367,6 @@
     esc: esc, fmtMoney: fmtMoney, fmtMoneyShort: fmtMoneyShort,
     fmtInt: fmtInt, fmtPct: fmtPct, niceMax: niceMax, truncate: truncate,
     bar: bar, hbar: hbar, line: line, donut: donut, listTable: listTable,
-    emptyNote: emptyNote,
+    emptyNote: emptyNote, meter: meter, tint: tint, darken: darken,
   };
 });

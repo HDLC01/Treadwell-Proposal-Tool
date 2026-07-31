@@ -78,6 +78,49 @@
 
   function filtered() { return X.applyFilters(ROWS, STATE); }
 
+  // ── identity: a colour per estimator, a pill per stage ──────────────
+  // Colour is a shortcut, never the message: every chip carries the initials and
+  // the name, every pill carries the stage's word. Someone who can't tell two
+  // hues apart loses nothing.
+  var EST_IX = {};                     // estimator id -> palette slot
+
+  function indexEstimators(list) {
+    EST_IX = {};
+    // Keyed by position in the name-sorted list, so a person's colour is the
+    // same on every tab and doesn't shuffle when a filter changes the counts.
+    (list || []).forEach(function (e, i) { EST_IX[e.id] = i % C.PALETTE.length; });
+  }
+
+  function estColor(id) { return C.PALETTE[EST_IX[id] || 0]; }
+
+  function initials(name) {
+    var parts = String(name || "?").replace(/\(.*\)/, "").trim().split(/\s+/);
+    var a = (parts[0] || "?").charAt(0);
+    var b = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
+    return (a + b).toUpperCase();
+  }
+
+  /** An estimator, as a coloured initial + their name. */
+  function estChip(id) {
+    var name = NAMES.estimator[id] || "Unknown";
+    return '<span class="who"><span class="av" style="background:' + estColor(id) + '">' +
+      esc(initials(name)) + "</span>" + esc(name) + "</span>";
+  }
+
+  function estChips(ids) {
+    if (!ids || !ids.length) return '<span class="fnote">—</span>';
+    return '<span class="whos">' + ids.map(estChip).join("") + "</span>";
+  }
+
+  /** A stage, as a pill in its own colour. */
+  function stagePill(id) {
+    var s = STAGES.filter(function (x) { return x.id === id; })[0] ||
+            { name: "Unstaged", color: "#8a857c" };
+    return '<span class="pill" style="background:' + C.tint(s.color, 0.14) + ";color:" +
+      C.darken(s.color, 0.35) + '"><span class="dot" style="background:' + esc(s.color) +
+      '"></span>' + esc(s.name) + "</span>";
+  }
+
   // ── tabs ────────────────────────────────────────────────────────────
   var TABS = [
     { id: "overview", label: "Overview" },
@@ -138,7 +181,8 @@
       var n = (STATE[d.key] || []).length;
       return '<div class="msel" data-dim="' + d.key + '">' +
         '<button class="chip' + (n ? " sel" : "") + '" data-pop="' + d.key + '">' +
-        esc(d.label) + (n ? ' <span class="n">' + n + "</span>" : "") + " ▾</button></div>";
+        esc(d.label) + (n ? ' <span class="n">' + n + "</span>" : "") +
+        '<span class="caret">▼</span></button></div>';
     }).join("");
 
     $("filterbar").innerHTML =
@@ -153,13 +197,25 @@
     }
   }
 
+  /** The colour that belongs to one filter option, if it has one. */
+  function optDot(dimKey, id) {
+    if (dimKey === "estimators") {
+      return '<span class="dot" style="background:' + estColor(id) + '"></span>';
+    }
+    if (dimKey === "stages") {
+      var s = STAGES.filter(function (x) { return x.id === id; })[0];
+      if (s) return '<span class="dot" style="background:' + esc(s.color) + '"></span>';
+    }
+    return "";
+  }
+
   function renderActiveFilters() {
     var out = [];
     DIMENSIONS.forEach(function (d) {
       var opts = options(d.key);
       (STATE[d.key] || []).forEach(function (id) {
         var hit = opts.filter(function (o) { return o.id === id; })[0];
-        out.push('<span class="fchip">' + esc(hit ? hit.name : id) +
+        out.push('<span class="fchip">' + optDot(d.key, id) + esc(hit ? hit.name : id) +
           '<button data-clear-one="' + d.key + '" data-id="' + esc(id) +
           '" aria-label="Remove filter">×</button></span>');
       });
@@ -188,8 +244,8 @@
       '<input class="psearch search" type="search" placeholder="Filter…" aria-label="Filter options" />' +
       '<div class="plist">' + opts.map(function (o) {
         return '<label><input type="checkbox" value="' + esc(o.id) + '"' +
-          (sel.indexOf(o.id) !== -1 ? " checked" : "") + " /><span>" + esc(o.name) +
-          "</span></label>";
+          (sel.indexOf(o.id) !== -1 ? " checked" : "") + " />" + optDot(dimKey, o.id) +
+          "<span>" + esc(o.name) + "</span></label>";
       }).join("") + "</div>" +
       '<div class="pfoot"><button class="linkbtn" data-all="1">Select all</button>' +
       '<button class="linkbtn" data-none="1">Clear</button></div>';
@@ -217,37 +273,46 @@
     });
   }
 
+  /** The Overview.
+   *
+   *  Each side leads with ONE number — the money, with the project count folded
+   *  into its subline rather than given a card of its own. Ten equal cards meant
+   *  nothing was the headline; the eye had to read all of them to find out which
+   *  mattered. The two win rates then sit as a pair of small tiles, each with a
+   *  meter, so a percentage has a shape as well as a value. */
   function overviewCards(m) {
     var s = m._sets;
     return [
-      { id: "won_amount", side: "won", kind: "kpi", title: "Won Amount",
-        value: C.fmtMoney(m.wonAmount), cap: CAP.won, rows: s.aw, dateKey: "awarded_at" },
-      { id: "n_awarded", side: "won", kind: "kpi", title: "# Awarded Projects",
-        value: C.fmtInt(m.nAwarded) + " projects", cap: CAP.won, rows: s.aw, dateKey: "awarded_at" },
-      { id: "win_proj_aw", side: "won", kind: "kpi", title: "Win rate by projects (of what was awarded)",
-        value: C.fmtPct(m.winProjAw.ratio),
-        sub: C.fmtInt(m.winProjAw.num) + " awarded of " + C.fmtInt(m.winProjAw.den) + " that were also submitted",
+      { id: "won_amount", side: "won", kind: "hero", title: "Won",
+        value: C.fmtMoney(m.wonAmount),
+        sub: "across " + C.fmtInt(m.nAwarded) + " awarded " +
+             (m.nAwarded === 1 ? "project" : "projects"),
         cap: CAP.won, rows: s.aw, dateKey: "awarded_at" },
-      { id: "win_amt_aw", side: "won", kind: "kpi", title: "Win rate by amount (of what was awarded)",
-        value: C.fmtPct(m.winAmtAw.ratio),
-        sub: C.fmtMoney(m.winAmtAw.num) + " won of " + C.fmtMoney(m.winAmtAw.den) + " bid",
+      { id: "win_proj_aw", side: "won", kind: "tile", title: "Win rate · projects",
+        value: C.fmtPct(m.winProjAw.ratio), ratio: m.winProjAw.ratio,
+        sub: C.fmtInt(m.winProjAw.num) + " of " + C.fmtInt(m.winProjAw.den) + " also submitted",
+        cap: CAP.won, rows: s.aw, dateKey: "awarded_at" },
+      { id: "win_amt_aw", side: "won", kind: "tile", title: "Win rate · amount",
+        value: C.fmtPct(m.winAmtAw.ratio), ratio: m.winAmtAw.ratio,
+        sub: C.fmtMoney(m.winAmtAw.num) + " of " + C.fmtMoney(m.winAmtAw.den) + " bid",
         cap: CAP.won, rows: s.aw, dateKey: "awarded_at" },
       { id: "awarded_by_month", side: "won", kind: "chart", title: "Awarded by month",
         charts: ["bar", "line", "list"], def: "bar", fmt: "moneyShort", noun: "Month",
         data: function () { return months("_aw", "won_amount"); },
         cap: CAP.won, rows: s.aw, dateKey: "awarded_at" },
 
-      { id: "submitted_amount", side: "sub", kind: "kpi", title: "Total Submitted Amount",
-        value: C.fmtMoney(m.submittedAmount), cap: CAP.sub, rows: s.sub, dateKey: "submitted_at" },
-      { id: "n_submitted", side: "sub", kind: "kpi", title: "# Submitted Projects",
-        value: C.fmtInt(m.nSubmitted) + " projects", cap: CAP.sub, rows: s.sub, dateKey: "submitted_at" },
-      { id: "win_proj_sub", side: "sub", kind: "kpi", title: "Win rate by projects",
-        value: C.fmtPct(m.winProjSub.ratio),
-        sub: C.fmtInt(m.winProjSub.num) + " awarded of " + C.fmtInt(m.winProjSub.den) + " submitted",
+      { id: "submitted_amount", side: "sub", kind: "hero", title: "Submitted",
+        value: C.fmtMoney(m.submittedAmount),
+        sub: "across " + C.fmtInt(m.nSubmitted) + " submitted " +
+             (m.nSubmitted === 1 ? "project" : "projects"),
+        cap: CAP.sub, rows: s.sub, dateKey: "submitted_at" },
+      { id: "win_proj_sub", side: "sub", kind: "tile", title: "Win rate · projects",
+        value: C.fmtPct(m.winProjSub.ratio), ratio: m.winProjSub.ratio,
+        sub: C.fmtInt(m.winProjSub.num) + " won of " + C.fmtInt(m.winProjSub.den),
         cap: CAP.sub, rows: m._subAwarded, dateKey: "submitted_at" },
-      { id: "win_amt_sub", side: "sub", kind: "kpi", title: "Win rate by amount",
-        value: C.fmtPct(m.winAmtSub.ratio),
-        sub: C.fmtMoney(m.winAmtSub.num) + " won of " + C.fmtMoney(m.winAmtSub.den) + " submitted",
+      { id: "win_amt_sub", side: "sub", kind: "tile", title: "Win rate · amount",
+        value: C.fmtPct(m.winAmtSub.ratio), ratio: m.winAmtSub.ratio,
+        sub: C.fmtMoney(m.winAmtSub.num) + " of " + C.fmtMoney(m.winAmtSub.den),
         cap: CAP.sub, rows: m._subAwarded, dateKey: "submitted_at" },
       { id: "submitted_by_month", side: "sub", kind: "chart", title: "Submitted by month",
         charts: ["bar", "line", "list"], def: "bar", fmt: "moneyShort", noun: "Month",
@@ -279,7 +344,10 @@
         charts: ["bar", "pie", "list"], def: "bar", fmt: fmt,
         items: X.sortBy(groups, valueKey).filter(function (g) { return g[valueKey] > 0; })
           .map(function (g) {
-            return { key: g.key, label: g.label, value: g[valueKey], rows: g[rowsKey] };
+            return { key: g.key, label: g.label, value: g[valueKey], rows: g[rowsKey],
+                     // On the Estimators tab each person keeps their own colour,
+                     // so the eye can follow one of them across every card.
+                     color: t.dim === "estimator" && g.key ? estColor(g.key) : null };
           }),
         cap: cap, dateKey: dateKey,
         rows: groups.reduce(function (a, g) { return a.concat(g[rowsKey]); }, []),
@@ -295,10 +363,11 @@
       mk("n_submitted_by", "sub", "# Submitted by " + t.noun.toLowerCase(), "nSubmitted", "int",
          "rowsSub", "submitted_at", CAP.sub),
       { id: "win_ratio", side: "won", kind: "winlist", title: "Win rate by amount", groups: groups,
-        mode: "amount", cap: CAP.sub, noun: t.noun, dateKey: "submitted_at",
+        mode: "amount", cap: CAP.sub, noun: t.noun, dim: t.dim, dateKey: "submitted_at",
         rows: groups.reduce(function (a, g) { return a.concat(g.rowsSub); }, []) },
       { id: "win_ratio_proj", side: "sub", kind: "winlist", title: "Win rate by # projects",
-        groups: groups, mode: "count", cap: CAP.sub, noun: t.noun, dateKey: "submitted_at",
+        groups: groups, mode: "count", cap: CAP.sub, noun: t.noun, dim: t.dim,
+        dateKey: "submitted_at",
         rows: groups.reduce(function (a, g) { return a.concat(g.rowsSub); }, []) },
     ];
   }
@@ -311,24 +380,28 @@
   }
 
   function cardBody(card, mode) {
-    if (card.kind === "kpi") {
+    if (card.kind === "hero" || card.kind === "tile" || card.kind === "kpi") {
       return '<div class="kpi">' + esc(card.value) + "</div>" +
+        (card.kind === "tile" ? C.meter(card.ratio) : "") +
         (card.sub ? '<div class="kpi-sub">' + esc(card.sub) + "</div>" : "");
     }
     if (card.kind === "winlist") {
       var amount = card.mode === "amount";
+      var byEst = card.dim === "estimator";
       var rows = X.sortBy(card.groups, amount ? "submittedAmount" : "nSubmitted")
         .filter(function (g) { return (amount ? g.winAmt.den : g.winProj.den) > 0; })
         .map(function (g) {
           var r = amount ? g.winAmt : g.winProj;
           return { key: g.key, label: g.label,
+                   labelHtml: byEst && g.key ? estChip(g.key) : null,
                    sub: amount ? C.fmtMoney(r.den) : C.fmtInt(r.den),
                    aw: amount ? C.fmtMoney(r.num) : C.fmtInt(r.num),
                    pct: C.fmtPct(r.ratio) };
         });
       return C.listTable({
         rows: rows, empty: "No bids match these filters.",
-        columns: [{ key: "label", label: card.noun }, { key: "sub", label: "Submitted", align: "right" },
+        columns: [{ key: "label", label: card.noun, html: "labelHtml" },
+                  { key: "sub", label: "Submitted", align: "right" },
                   { key: "aw", label: "Awarded", align: "right" },
                   { key: "pct", label: "Win %", align: "right" }],
       });
@@ -344,11 +417,11 @@
       if (mode === "list") {
         return C.listTable({
           rows: items.map(function (i) {
-            return { key: i.key, label: i.label, color: i.color,
+            return { key: i.key, label: i.label, color: i.color, labelHtml: stagePill(i.key),
                      val: key === "amount" ? C.fmtMoney(i.value) : C.fmtInt(i.value), pct: i.pct };
           }),
           empty: "No bids match these filters.",
-          columns: [{ key: "label", label: "Stage", dot: true },
+          columns: [{ key: "label", label: "Stage", html: "labelHtml" },
                     { key: "val", label: key === "amount" ? "Amount" : "Count", align: "right" },
                     { key: "pct", label: "% of total", align: "right" }],
         });
@@ -363,10 +436,11 @@
       return C.listTable({
         rows: data.map(function (d) {
           return { key: d.key, label: d.label,
+                   labelHtml: tab().dim === "estimator" && d.key ? estChip(d.key) : null,
                    val: card.fmt === "int" ? C.fmtInt(d.value) : C.fmtMoney(d.value) };
         }),
         empty: "Nothing in this window.",
-        columns: [{ key: "label", label: card.noun || "" },
+        columns: [{ key: "label", label: card.noun || "", html: "labelHtml" },
                   { key: "val", label: card.fmt === "int" ? "Projects" : "Amount", align: "right" }],
       });
     }
@@ -385,17 +459,42 @@
       // A trend needs a time axis; on a dimension card there isn't one.
       var off = t === "line" && !card.data;
       return '<button class="ctype' + (t === mode ? " sel" : "") + '" data-chart="' + t +
-        '" data-card="' + card.id + '"' + (off ? " disabled title=\"A line needs a time axis\"" : "") +
-        ' style="' + (t === mode ? "border-color:var(--red);color:var(--red-dark);font-weight:800" : "") +
-        '">' + CHART_LABEL[t] + "</button>";
+        '" data-card="' + card.id + '"' +
+        (off ? ' disabled title="A line needs a time axis"' : "") +
+        ">" + CHART_LABEL[t] + "</button>";
     }).join("");
 
-    return '<section class="acard" data-card="' + card.id + '">' +
+    // The small tiles skip the window caption: it's two lines of the same
+    // sentence already sitting on the hero card directly above them, and on a
+    // tile it out-weighs the number it's supposed to footnote.
+    var caption = card.kind === "tile" ? ""
+      : '<p class="caption">' + esc(winText(card.cap)) + "</p>";
+
+    return '<section class="acard clickable' + (card.kind === "tile" ? " tile" : "") +
+      '" data-card="' + card.id + '">' +
       '<div class="ah"><h4>' + esc(card.title) + "</h4>" +
       (types ? '<div class="ctypes">' + types + "</div>" : "") + "</div>" +
       cardBody(card, mode) +
       '<button class="brk" data-breakdown="' + card.id + '">See breakdown →</button>' +
-      '<p class="caption">' + esc(winText(card.cap)) + "</p></section>";
+      caption + "</section>";
+  }
+
+  /** Cards down a column, with consecutive small tiles paired into one row so a
+   *  half-height card doesn't leave a half-width hole beside it. */
+  function column(cards) {
+    var out = [], run = [];
+    var flush = function () {
+      if (!run.length) return;
+      out.push(run.length > 1 ? '<div class="tiles">' + run.join("") + "</div>" : run[0]);
+      run = [];
+    };
+    cards.forEach(function (c) {
+      if (c.kind === "tile") { run.push(cardHtml(c)); if (run.length === 2) flush(); return; }
+      flush();
+      out.push(cardHtml(c));
+    });
+    flush();
+    return out.join("");
   }
 
   function render() {
@@ -412,26 +511,22 @@
       cards = dimensionCards(t);
     }
 
-    var left = cards.filter(function (c) { return c.side === "won"; }).map(cardHtml).join("");
-    var right = cards.filter(function (c) { return c.side === "sub"; }).map(cardHtml).join("");
+    var side = function (s) {
+      return column(cards.filter(function (c) { return c.side === s; }));
+    };
     var note = t.dim
-      ? '<p class="fnote" style="margin:-6px 0 12px">A project with two ' +
+      ? '<p class="fnote" style="margin:-10px 0 16px">A project with two ' +
         esc(t.noun.toLowerCase()) + "s counts under each, so these add up to more than the " +
         "overview total.</p>"
       : "";
 
     $("cards").innerHTML = note +
       '<div class="grid2">' +
-      '<div class="col"><div class="colhead">Won</div>' + left + "</div>" +
-      '<div class="col"><div class="colhead">Submitted</div>' + right + "</div></div>";
+      '<div class="col"><div class="colhead">Won</div>' + side("won") + "</div>" +
+      '<div class="col"><div class="colhead">Submitted</div>' + side("sub") + "</div></div>";
   }
 
   // ── breakdown drawer ────────────────────────────────────────────────
-  function stageName(id) {
-    var s = STAGES.filter(function (x) { return x.id === id; })[0];
-    return s || { name: "Unstaged", color: "#5c403f" };
-  }
-
   function openBreakdown(title, rows, dateKey) {
     var seen = {}, uniq = [];
     rows.forEach(function (r) { if (!seen[r.id]) { seen[r.id] = 1; uniq.push(r); } });
@@ -440,28 +535,29 @@
     var dateLabel = dateKey === "awarded_at" ? "Awarded"
       : dateKey === "bid_deadline_at" ? "Bid deadline" : "Submitted";
     var body = uniq.map(function (r) {
-      var st = stageName(r.stage_id);
       var cos = r.company_ids.map(function (c) { return NAMES.company[c] || "—"; });
       if (r.awarded_by_id && cos.indexOf(NAMES.company[r.awarded_by_id]) === -1) {
         cos.unshift(NAMES.company[r.awarded_by_id] || "—");
       }
-      var ests = r.estimator_ids.map(function (e) { return NAMES.estimator[e] || "—"; });
-      return "<tr><td>" + esc(r.name) +
-        (r.city ? '<div class="fnote">' + esc(r.city) + (r.region ? ", " + esc(r.region) : "") + "</div>" : "") +
+      var coText = cos.join(", ") || "—";
+      return '<tr><td><div class="pname">' + esc(r.name) + "</div>" +
+        (r.city ? '<div class="ploc">' + esc(r.city) +
+          (r.region ? ", " + esc(r.region) : "") + "</div>" : "") +
         '</td><td class="nowrap">' +
         esc(TW.fmtBizDate ? (TW.fmtBizDate(r[dateKey]) || "—") : (r[dateKey] || "—")) +
-        "</td><td>" + esc(cos.join(", ") || "—") +
-        "</td><td>" + esc(ests.join(", ") || "—") +
-        '</td><td class="nowrap"><span class="stagedot" style="background:' + esc(st.color) +
-        '"></span>' + esc(st.name) + '</td><td class="r">' + C.fmtMoney(r.submitted_amount) +
+        '</td><td><span class="cos" title="' + esc(coText) + '">' + esc(coText) + "</span>" +
+        "</td><td>" + estChips(r.estimator_ids) +
+        '</td><td class="nowrap">' + stagePill(r.stage_id) +
+        '</td><td class="r">' + C.fmtMoney(r.submitted_amount) +
         '</td><td class="r">' + C.fmtMoney(r.won_amount) + "</td></tr>";
     }).join("");
 
     var totSub = X.sum(uniq, "submitted_amount"), totWon = X.sum(uniq, "won_amount");
     $("drawer").innerHTML =
       '<div class="dhead"><div><h2>' + esc(title) + "</h2>" +
-      '<div class="dsub">' + C.fmtInt(uniq.length) + " project" + (uniq.length === 1 ? "" : "s") +
-      " · " + esc(winText("").trim().replace(/^\.?\s*/, "")) + "</div></div>" +
+      '<div class="dsub"><span class="dcount">' + C.fmtInt(uniq.length) + " project" +
+      (uniq.length === 1 ? "" : "s") + "</span>" +
+      esc(winText("").trim().replace(/^\.?\s*/, "")) + "</div></div>" +
       '<button class="dclose" aria-label="Close">&times;</button></div>' +
       '<div class="dbody">' + (uniq.length
         ? '<div class="tablewrap"><table><thead><tr><th>Project</th><th>' + dateLabel +
@@ -490,6 +586,7 @@
     (payload.stages || []).forEach(function (s) { NAMES.stage[s.id] = s.name; });
     // trades are their own label
     NAMES.trade = {};
+    indexEstimators(payload.estimators);
 
     var bits = [];
     if (payload.truncated) {
