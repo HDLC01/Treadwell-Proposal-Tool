@@ -71,8 +71,16 @@ log = logging.getLogger("proposal_tool.basisboard")
 _DEFAULT_BASE = "https://api.basisboard.com/v1"
 _TIMEOUT = 15.0
 _PAGE = 50                # ids per /projects/ids page AND ids per /projects fetch
+# Analytics reads the whole history, so it asks for bigger pages. At 50 that is
+# ~136 requests, enough of a burst to earn 429s and back off into a two-minute
+# build; at these sizes it's ~45 requests and about ten seconds. Basisboard
+# serves 500 ids and 150 detail rows happily — 100 detail rows keeps the query
+# string well clear of the length a gateway will refuse.
+_ANALYTICS_ID_PAGE = 500
+_ANALYTICS_DETAIL_PAGE = 100
 _CONCURRENCY = 8          # max parallel requests per build
-_RETRIES = 1              # extra attempts on a transient (429 / 5xx / transport) error
+_RETRIES = 4              # extra attempts on a transient (429 / 5xx / transport) error
+_BACKOFF_BASE = 0.5       # seconds; doubles per attempt unless the server says otherwise
 _TRANSIENT = {429, 500, 502, 503, 504}
 _USER_PAGE_CAP = 40       # /users has no total; stop asking eventually regardless
 
@@ -93,7 +101,7 @@ _BUILD_LOCK = threading.Lock()
 _inbox_cache = cachetools.TTLCache(maxsize=4, ttl=60)
 _INBOX_LOCK = threading.Lock()
 
-# Analytics reads the whole bid history — 40-60 requests — so it gets a longer
+# Analytics reads the whole bid history — ~45 requests — so it gets a longer
 # TTL and keeps its last good snapshot past expiry: a reader gets those numbers
 # instantly while one background thread fetches the new ones. The TTL is fixed
 # at import; ANALYTICS_TTL_S is a deploy-time knob, not a per-request one.
@@ -105,13 +113,49 @@ def _env_int(name: str, default: int, lo: int, hi: int) -> int:
 
 
 _analytics_cache = cachetools.TTLCache(maxsize=1, ttl=_env_int("ANALYTICS_TTL_S", 300, 60, 3600))
-_ANALYTICS_LOCK = threading.Lock()
 _ANALYTICS_REFRESH_LOCK = threading.Lock()
 _analytics_last_good: Dict[str, Any] = {}
+_analytics_state: Dict[str, Any] = {"building": False, "error": ""}
 
 # Whatever custom field currently holds the trades. Resolved by name at runtime;
 # this is the id observed in Treadwell's account, kept as the fallback.
 _TRADE_FIELD_FALLBACK = "8674aa0e-5dba-45d3-bad1-bf857e60c2d2"
+
+
+class _Pacer:
+    """A shared minimum gap between requests, so we stay under Basisboard's rate
+    limit instead of discovering it.
+
+    Retrying a 429 is the cure; not causing it is the treatment. Reading the full
+    bid history is ~45 requests and a thread pool will fire them as fast as it
+    can, which Basisboard answers with 429s. Every request waits its turn here,
+    and a 429 widens the gap for everyone (recovering slowly afterwards) so the
+    limit is found once rather than on every page."""
+
+    def __init__(self, min_interval: float = 0.05, max_interval: float = 0.6):
+        self._lock = threading.Lock()
+        self._floor = min_interval
+        self._ceiling = max_interval
+        self._interval = min_interval
+        self._next_at = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            due = max(now, self._next_at)
+            self._next_at = due + self._interval
+            # Ease back toward the floor while things are going well.
+            self._interval = max(self._floor, self._interval * 0.98)
+        delay = due - now
+        if delay > 0:
+            time.sleep(delay)
+
+    def back_off(self) -> None:
+        with self._lock:
+            self._interval = min(self._ceiling, max(self._floor, self._interval) * 2)
+
+
+_PACER = _Pacer()
 
 
 # ── config ────────────────────────────────────────────────────────────
@@ -144,8 +188,9 @@ def _max_messages() -> int:
 def _analytics_max_projects() -> int:
     """How much bid history the dashboard totals. Separate knob from the board's:
     the pipeline shows a recent window on purpose, while "All time" here means
-    all time, and the org has thousands of bids."""
-    return _env_int("ANALYTICS_MAX_PROJECTS", 3000, 1, 5000)
+    all time, and the org has ~3,400 bids. The default clears that with room —
+    a truncated history would quietly understate every past year."""
+    return _env_int("ANALYTICS_MAX_PROJECTS", 6000, 1, 20000)
 
 
 def is_configured() -> bool:
@@ -168,24 +213,44 @@ def _session():
         client.close()
 
 
+def _retry_after(resp) -> Optional[float]:
+    """The server's own instruction on when to come back, if it sent one."""
+    raw = (resp.headers.get("retry-after") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(30.0, float(raw)))              # seconds form
+    except ValueError:
+        return None                                          # HTTP-date form; back off normally
+
+
 def _get(client, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Authenticated GET with a small retry on transient errors. Raises otherwise
-    (the assembler wraps everything). `client` is a pooled httpx.Client."""
+    """Authenticated GET, retrying transient errors with exponential backoff.
+    Raises otherwise (the assembler wraps everything).
+
+    The backoff matters: a burst of parallel reads earns a 429, and asking for
+    the whole bid history is exactly such a burst. We are a guest on their rate
+    limit, so we wait as long as they ask and give up slowly rather than
+    hammering. `client` is a pooled httpx.Client."""
     import httpx
     last: Exception = RuntimeError("no attempt")
     for attempt in range(_RETRIES + 1):
+        _PACER.wait()
         try:
             resp = client.get(_api_base() + path, params=params)
         except httpx.TransportError as exc:                 # network blip / timeout
-            last = exc
+            last, pause = exc, None
         else:
             if resp.status_code not in _TRANSIENT:
                 resp.raise_for_status()
                 return resp.json()
+            if resp.status_code == 429:
+                _PACER.back_off()
             last = httpx.HTTPStatusError(f"transient {resp.status_code}",
                                          request=resp.request, response=resp)
+            pause = _retry_after(resp)
         if attempt < _RETRIES:
-            time.sleep(0.4 * (attempt + 1))
+            time.sleep(pause if pause is not None else _BACKOFF_BASE * (2 ** attempt))
     raise last
 
 
@@ -229,30 +294,32 @@ def _fetch_users(client) -> Dict[str, str]:
     return cached
 
 
-def _ids_page(client, offset: int, sort: bool) -> Dict[str, Any]:
-    params: Dict[str, Any] = {"limit": _PAGE, "offset": offset}
+def _ids_page(client, offset: int, sort: bool, page: int = _PAGE) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"limit": page, "offset": offset}
     if sort:
         params["sort[bidDeadline]"] = "DESC"
     return _get(client, "/projects/ids", params)
 
 
-def _fetch_project_ids(client, cap: int, ex: Optional[ThreadPoolExecutor] = None):
+def _fetch_project_ids(client, cap: int, ex: Optional[ThreadPoolExecutor] = None,
+                       page: int = _PAGE):
     """Most-recent project ids up to `cap`. The first page (needed for `total`)
     is sequential; the rest fetch in parallel. Falls back to unsorted if the
     sort param is rejected. Returns (ids, total)."""
     sort = True
     try:
-        first = _ids_page(client, 0, True)
+        first = _ids_page(client, 0, True, page)
     except Exception:                                   # noqa: BLE001 — retry unsorted
-        sort, first = False, _ids_page(client, 0, False)
+        sort, first = False, _ids_page(client, 0, False, page)
     ids: List[str] = list(first.get("projectIds") or first.get("ids") or [])
     total = (first.get("paging") or {}).get("total", len(ids))
-    offsets = list(range(_PAGE, min(cap, total), _PAGE))
+    offsets = list(range(page, min(cap, total), page))
     if offsets:
         if ex is not None:
-            pages = [f.result() for f in [ex.submit(_ids_page, client, o, sort) for o in offsets]]
+            pages = [f.result() for f in
+                     [ex.submit(_ids_page, client, o, sort, page) for o in offsets]]
         else:
-            pages = [_ids_page(client, o, sort) for o in offsets]
+            pages = [_ids_page(client, o, sort, page) for o in offsets]
         for pg in pages:
             ids.extend(pg.get("projectIds") or pg.get("ids") or [])
     return ids[:cap], total
@@ -494,12 +561,13 @@ def _fetch_trade_field_id(client) -> str:
     return field_id
 
 
-def _fetch_projects_full(client, ids: List[str], ex: Optional[ThreadPoolExecutor] = None):
+def _fetch_projects_full(client, ids: List[str], ex: Optional[ThreadPoolExecutor] = None,
+                         page: int = _PAGE):
     """Like `_fetch_projects`, but keeps the sidecar maps the plain fetch throws
     away. A project doesn't name its companies or carry a bid deadline — both
     live on the bid invites, which arrive alongside the rows.
     Returns (projects, bid_invites, companies)."""
-    chunks = [ids[i:i + _PAGE] for i in range(0, len(ids), _PAGE)]
+    chunks = [ids[i:i + page] for i in range(0, len(ids), page)]
 
     def fetch(chunk):
         return _get(client, "/projects", {"filter[projectIds][]": chunk}) or {}
@@ -574,6 +642,15 @@ def _shape_analytics_row(p: Dict[str, Any], invites: Dict[str, Any],
     }
 
 
+def _unnamed(kind: str, ident: str) -> str:
+    """A label for an id we can't resolve. /users lists the ACTIVE users, so a
+    bid an ex-estimator owned has an id with no record behind it; the same goes
+    for a company that's been merged away. They still own real history, so they
+    get a bucket — tagged with the id so two different unknowns don't collapse
+    into one line in the filter."""
+    return "Unknown " + kind + " (" + str(ident)[:8] + ")"
+
+
 def _analytics_dimensions(rows: List[Dict[str, Any]], stages: Dict[str, Dict[str, Any]],
                           users: Dict[str, str], companies: Dict[str, Any]) -> Dict[str, Any]:
     """The filter vocabularies, derived from the rows themselves so a filter can
@@ -588,7 +665,10 @@ def _analytics_dimensions(rows: List[Dict[str, Any]], stages: Dict[str, Dict[str
 
     def company_name(cid: str) -> str:
         c = companies.get(cid)
-        return (c.get("name") if isinstance(c, dict) else None) or "Unknown company"
+        return (c.get("name") if isinstance(c, dict) else None) or _unnamed("company", cid)
+
+    def estimator_name(uid: str) -> str:
+        return users.get(uid) or _unnamed("estimator", uid)
 
     return {
         # Every stage, including the empty ones: the board's columns shouldn't
@@ -600,7 +680,7 @@ def _analytics_dimensions(rows: List[Dict[str, Any]], stages: Dict[str, Dict[str
             key=lambda s: (s["order"], s["name"]),
         ),
         "estimators": sorted(
-            ({"id": uid, "name": users.get(uid) or "Unknown"} for uid in est_ids),
+            ({"id": uid, "name": estimator_name(uid)} for uid in est_ids),
             key=lambda u: u["name"].lower(),
         ),
         "companies": sorted(
@@ -617,8 +697,10 @@ def _build_analytics() -> Dict[str, Any]:
         f_stages = ex.submit(_fetch_stages, client)
         f_users = ex.submit(_fetch_users, client)
         f_trade = ex.submit(_fetch_trade_field_id, client)
-        pids, total = _fetch_project_ids(client, _analytics_max_projects(), ex)
-        raw, invites, companies = _fetch_projects_full(client, pids, ex)
+        pids, total = _fetch_project_ids(client, _analytics_max_projects(), ex,
+                                         page=_ANALYTICS_ID_PAGE)
+        raw, invites, companies = _fetch_projects_full(client, pids, ex,
+                                                       page=_ANALYTICS_DETAIL_PAGE)
         stages, users, trade_field = f_stages.result(), f_users.result(), f_trade.result()
 
     # Analytics is the HISTORY, so archived bids stay — dropping them (as the
@@ -637,50 +719,82 @@ def _build_analytics() -> Dict[str, Any]:
 
 
 def _refresh_analytics() -> None:
-    """Rebuild in the background so an expired cache costs a reader nothing."""
+    """Rebuild off the request thread.
+
+    Reading the whole history is ~45 paced requests over about ten seconds — fast
+    for what it is, still far too slow to hold a page load open, and slower again
+    whenever Basisboard asks us to back off. No reader ever waits on it."""
     try:
         result = _build_analytics()
         _analytics_cache["analytics"] = result
         _analytics_last_good["snapshot"] = result
-    except Exception as exc:  # noqa: BLE001 — the stale snapshot is still serving
-        log.warning("Basisboard analytics refresh failed: %s", exc)
+        _analytics_state["error"] = ""
+        log.info("Basisboard analytics ready: %d of %d bids",
+                 result.get("shown", 0), result.get("total", 0))
+    except Exception as exc:  # noqa: BLE001 — a stale snapshot may still be serving
+        _analytics_state["error"] = "Couldn't reach Basisboard"
+        log.warning("Basisboard analytics build failed: %s", exc)
     finally:
+        _analytics_state["building"] = False
         try:
             _ANALYTICS_REFRESH_LOCK.release()
         except RuntimeError:                                # already released
             pass
 
 
+def _spawn(fn, name: str) -> None:
+    """Run `fn` off the request thread. A seam of its own so a test can take the
+    job and run it itself — patching threading.Thread wholesale also replaces the
+    workers inside ThreadPoolExecutor, and the build then waits on futures no
+    thread will ever complete."""
+    threading.Thread(target=fn, name=name, daemon=True).start()
+
+
+def _start_refresh() -> bool:
+    """Kick off one background build. False if one is already running."""
+    if not _ANALYTICS_REFRESH_LOCK.acquire(blocking=False):
+        return False
+    _analytics_state["building"] = True
+    try:
+        _spawn(_refresh_analytics, "bb-analytics-build")
+    except Exception:                       # noqa: BLE001 — never leave it "building"
+        _analytics_state["building"] = False
+        _ANALYTICS_REFRESH_LOCK.release()
+        raise
+    return True
+
+
 def get_analytics() -> Dict[str, Any]:
     """Read-only analytics dataset: every (capped) bid as a flat row, plus the
     filter vocabularies. Cached ~5 min.
 
-    A full history is 40-60 requests, so an expired cache serves the last good
-    snapshot IMMEDIATELY and refreshes behind the reader — nobody waits ten
-    seconds for numbers that were correct five minutes ago. Returns
-    {"ok": True, ...} or {"ok": False, ...} — never raises."""
+    Never blocks. A cold build reads the entire bid history — ~45 requests paced
+    under Basisboard's rate limit, ten seconds or so when they're feeling
+    generous — so the first caller starts it and gets `building: true`,
+    and an expired cache serves the last good snapshot while the new one is
+    fetched behind it. Returns {"ok": True, ...} or {"ok": False, ...} — never
+    raises."""
     if not is_configured():
         return {"ok": False, "configured": False, "error": "Basisboard is not configured"}
+
     cached = _analytics_cache.get("analytics")
     if cached is not None:
         return cached
 
     stale = _analytics_last_good.get("snapshot")
     if stale is not None:
-        if _ANALYTICS_REFRESH_LOCK.acquire(blocking=False):
-            threading.Thread(target=_refresh_analytics, name="bb-analytics-refresh",
-                             daemon=True).start()
+        _start_refresh()
         return dict(stale, stale=True)
 
-    with _ANALYTICS_LOCK:
-        cached = _analytics_cache.get("analytics")      # another thread may have built it
-        if cached is not None:
-            return cached
-        try:
-            result = _build_analytics()
-        except Exception as exc:  # noqa: BLE001 — read view must never 500 the page
-            log.warning("Basisboard get_analytics failed: %s", exc)
-            return {"ok": False, "configured": True, "error": "Couldn't reach Basisboard"}
-        _analytics_cache["analytics"] = result
-        _analytics_last_good["snapshot"] = result
-        return result
+    # Nothing to serve yet. Start (or join) a build and say so, carrying forward
+    # any previous failure: a Basisboard outage would otherwise read as a build
+    # that just never finishes, and the reader would never learn why.
+    _start_refresh()
+    out: Dict[str, Any] = {
+        "ok": True, "configured": True, "building": True, "stale": False,
+        "generated_at": None, "projects": [], "stages": [], "estimators": [],
+        "companies": [], "trades": [], "shown": 0, "total": 0, "truncated": False,
+    }
+    if _analytics_state.get("error"):
+        out["last_error"] = _analytics_state["error"]
+    return out

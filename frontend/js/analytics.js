@@ -12,7 +12,6 @@
 
   var X = window.TWAgg, C = window.TWCharts;
   var STATE_KEY = "tw_analytics_state";
-  var CACHE_KEY = "tw_analytics_cache";
 
   var DATA = null;        // the decoded payload
   var ROWS = [];          // decorated rows
@@ -509,16 +508,39 @@
 
   function showEmpty(html) { $("cards").innerHTML = '<div class="empty">' + html + "</div>"; }
 
-  function load() {
-    var cached = null;
-    try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null"); } catch (e) { /* ignore */ }
-    if (cached && cached.ok) { adopt(cached); render(); }
+  var POLL_MS = 4000, POLL_MAX = 75;      // ~5 minutes of patience
+  var polls = 0;
 
+  function showBuilding(lastError) {
+    $("tabs").innerHTML = "";
+    $("filterbar").innerHTML = "";
+    $("active-filters").innerHTML = "";
+    $("alert").innerHTML = lastError
+      ? '<div class="alert">' + esc(lastError) + " — trying again.</div>" : "";
+    showEmpty("<h2>Reading your bid history…</h2><p>First load pulls every bid from " +
+      "BasisBoard — a few thousand of them, at a pace their API is happy with. " +
+      "Usually a few seconds. After this it's instant.</p>" +
+      '<p class="fnote">This page will fill itself in — no need to refresh.</p>');
+  }
+
+  // No sessionStorage copy of the payload: the full history is ~2MB of JSON, and
+  // mirroring it per tab risks the quota to save a request the server already
+  // answers from its own cache. Only the filter state is worth persisting.
+  function load(quiet) {
     tokenSoon().then(function () {
       return api("/api/analytics");
     }).then(function (r) {
       return r.json();
     }).then(function (j) {
+      // The server builds off the request thread; poll until it has something.
+      if (j && j.ok && j.building) {
+        if (!DATA) showBuilding(j.last_error);
+        if (++polls <= POLL_MAX) setTimeout(function () { load(true); }, POLL_MS);
+        else showEmpty("<h2>Still building</h2><p>" +
+          (j.last_error ? "BasisBoard keeps refusing the read. " : "This is taking longer " +
+           "than expected. ") + "Reload the page to pick it back up.</p>");
+        return;
+      }
       if (!j || !j.ok) {
         if (j && j.configured === false) {
           $("tabs").innerHTML = "";
@@ -529,18 +551,25 @@
           return;
         }
         $("alert").innerHTML = '<div class="alert">Couldn\'t refresh from BasisBoard' +
-          (cached && cached.ok ? " — showing the last numbers this browser loaded." : ".") + "</div>";
-        if (!cached || !cached.ok) showEmpty("<h2>No data</h2><p>BasisBoard didn't answer. " +
-          "Try again in a moment.</p>");
+          (DATA ? " — showing the last numbers this browser loaded." : ".") + "</div>";
+        // The server starts a fresh attempt when a read finds nothing cached;
+        // keep watching rather than making someone reload to find out.
+        if (j && j.retrying && ++polls <= POLL_MAX) {
+          if (!DATA) showBuilding();
+          setTimeout(function () { load(true); }, POLL_MS);
+          return;
+        }
+        if (!DATA) showEmpty("<h2>No data</h2><p>BasisBoard didn't answer. " +
+          "Reload to try again.</p>");
         return;
       }
       $("alert").innerHTML = "";
+      polls = 0;
       adopt(j);
-      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(j)); } catch (e) { /* too big / private */ }
       render();
     }).catch(function () {
       $("alert").innerHTML = '<div class="alert">Couldn\'t reach the server.</div>';
-      if (!cached || !cached.ok) showEmpty("<h2>No data</h2><p>Couldn't reach the server.</p>");
+      if (!DATA) showEmpty("<h2>No data</h2><p>Couldn't reach the server.</p>");
     });
   }
 
