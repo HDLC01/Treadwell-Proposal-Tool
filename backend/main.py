@@ -484,9 +484,16 @@ class PortalPublishIn(BaseModel):
     """Optional body for /api/portal/publish — extra portal recipients typed on
     the Files screen (the intake contact is always included by the portal), plus an
     optional custom `message` the estimator types on the Done page (shown in the
-    customer's proposal-ready email)."""
+    customer's proposal-ready email).
+
+    `require_deposit` is the Files-page checkbox: True → the portal collects the
+    25% deposit on approval (today's behaviour), False → no deposit at all. It is
+    deliberately Optional/None so a caller that omits it forwards nothing and the
+    portal keeps whatever it already had — that also preserves the exact legacy
+    request body when no options are sent."""
     emails: list[str] = Field(default_factory=list)
     message: str = ""
+    require_deposit: Optional[bool] = None
 
 
 def _clean_portal_emails(raw: list) -> list:
@@ -522,9 +529,11 @@ def api_portal_publish(draft_id: str, request: Request,
     wrong-typed `emails` yields FastAPI's 422 — never a 500 — keeping the sync
     handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop."""
     draft_id = _safe_id(draft_id)
-    if not drafts.load_draft(draft_id):
+    row = drafts.load_draft(draft_id)
+    if not row:
         raise HTTPException(404, "Draft not found")
-    body: Dict[str, Any] = {"draft_id": draft_id, "by": _user_email(request)}
+    by = _user_email(request)
+    body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
     emails = _clean_portal_emails(payload.emails if payload else [])
     if emails:
         body["emails"] = emails
@@ -532,7 +541,63 @@ def api_portal_publish(draft_id: str, request: Request,
     msg = (payload.message if payload else "").strip()
     if msg:
         body["message"] = msg[:2000]
-    return _portal("/api/admin/publish", "POST", body)
+    # Only forwarded when the caller actually expressed a choice — omitting it tells
+    # the portal "leave it as it is", which is what a re-send from an older page or
+    # a legacy caller should do.
+    if payload is not None and payload.require_deposit is not None:
+        body["require_deposit"] = bool(payload.require_deposit)
+
+    # Snapshot what we are about to send, AFTER every validation above — a 400 must
+    # never mint a revision. The portal pins the customer's view to this exact
+    # snapshot, so from here on editing the draft cannot change a proposal that has
+    # already gone out, and the previous version stays readable.
+    rev_no = drafts.create_revision(draft_id, row.get("data") or {}, by)
+    body["revision_no"] = rev_no
+    try:
+        out = _portal("/api/admin/publish", "POST", body)
+    except Exception:
+        # The send failed, so this snapshot represents nothing that was sent. Drop
+        # it: the portal pins by explicit number, so an orphan would never be shown
+        # to anyone, but leaving one would still misreport the history to staff.
+        try:
+            drafts.delete_revision(draft_id, rev_no)
+        except Exception as exc:  # noqa: BLE001 — a stranded snapshot is cosmetic
+            log.warning("could not roll back revision %s of %s: %s", rev_no, draft_id, exc)
+        raise
+    drafts.log_event(draft_id, by, "published", {"revision_no": rev_no,
+                                                 "recipients": len(emails) or None})
+    if isinstance(out, dict):
+        out.setdefault("revision_no", rev_no)
+    return out
+
+
+@app.get("/api/draft/{draft_id}/revisions")
+def api_draft_revisions(draft_id: str) -> Dict[str, Any]:
+    """Every version of this project that has been sent to the customer, newest
+    first — the Files-page history. No blobs, just what the table renders."""
+    draft_id = _safe_id(draft_id)
+    return {"ok": True, "revisions": drafts.list_revisions(draft_id)}
+
+
+@app.post("/api/draft/{draft_id}/revisions/{revision_no}/files")
+def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) -> GenerateOut:
+    """Regenerate the estimate + proposal for an OLD revision.
+
+    Nothing is stored per revision except the inputs, so the documents are rebuilt
+    from that snapshot's `proposal_payload` on demand — the same in-memory path a
+    fresh generate takes, returning the same short-lived download tokens. This is
+    what makes "what did we send them in March" answerable with a real file rather
+    than a number in a list."""
+    draft_id = _safe_id(draft_id)
+    rev = drafts.get_revision(draft_id, revision_no)
+    if not rev:
+        raise HTTPException(404, "Revision not found")
+    payload = (rev.get("data") or {}).get("proposal_payload")
+    if not payload:
+        # Sent before the estimator ever generated documents — there is nothing to
+        # replay, and inventing defaults would produce a file we never sent.
+        raise HTTPException(422, "That revision has no generated documents to rebuild.")
+    return api_generate(GenerateIn(**payload), request)
 
 
 @app.get("/api/portal/pipeline")
@@ -737,17 +802,29 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
 
 
 @app.get("/api/admin/proposal-pdf")
-def api_admin_proposal_pdf(draft_id: str, request: Request) -> Response:
+def api_admin_proposal_pdf(draft_id: str, request: Request,
+                           revision_no: Optional[int] = None) -> Response:
     """Render a draft's proposal to its real Treadwell PDF, on demand. Called
     server-to-server by the customer portal (SERVICE_TOKEN-gated; this path is in
     _AUTH_PUBLIC_PATHS so it skips the Google gate). Reuses the full /api/generate
-    pipeline + LibreOffice render, so the customer sees the exact branded document."""
+    pipeline + LibreOffice render, so the customer sees the exact branded document.
+
+    `revision_no` renders the snapshot that was SENT rather than the live draft.
+    The portal passes the revision it pinned, so the PDF a customer downloads can
+    never disagree with the prices on the page above it — which is what happened
+    while both were rendered from whatever the estimator had most recently saved."""
     import hmac
     presented = request.headers.get("x-service-token") or ""
     token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
     if not token_env or not hmac.compare_digest(presented, token_env):
         raise HTTPException(401, "unauthorized")
-    row = drafts.load_draft(draft_id)
+    if revision_no is not None:
+        rev = drafts.get_revision(draft_id, revision_no)
+        if not rev:
+            raise HTTPException(404, "Revision not found")
+        row = {"data": rev.get("data") or {}}
+    else:
+        row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
     pp = (row.get("data") or {}).get("proposal_payload")

@@ -374,4 +374,9 @@
       });
     })();
     load();
+    // Another estimator's new, renamed or archived project should appear without an
+    // F5. The list sits behind a 60s server cache, so match it; filters and the
+    // active chip survive a repaint (paint() reads them from the DOM/sessionStorage).
+    setInterval(() => { if (!document.hidden) load(); }, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
   

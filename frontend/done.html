@@ -236,9 +236,26 @@
       <textarea id="portal-message" rows="3" maxlength="2000"
                 placeholder="e.g. Thanks for meeting today — here's your proposal. Let me know if you have any questions."
                 style="width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--surface-dim,#ccc);border-radius:6px;resize:vertical;"></textarea>
+      <!-- Whether this job collects the 25% deposit. Defaults from the intake
+           audience (Direct yes, GC no) but is free to toggle either way — done.js
+           sets it and reads it on send. No inline handler (CSP). -->
+      <label for="portal-require-deposit" class="hint"
+             style="display:flex;gap:8px;align-items:center;margin:12px 0 0;font-weight:600;cursor:pointer;">
+        <input type="checkbox" id="portal-require-deposit" style="width:16px;height:16px;cursor:pointer;">
+        <span>Require deposit <span id="portal-require-deposit-hint" style="font-weight:400;"></span></span>
+      </label>
       <button id="portal-btn" class="btn-primary" type="button" style="padding:12px 20px;margin-top:10px;">↗ Send to customer portal</button>
       <p id="portal-result" class="hint" style="display:none;margin-top:12px;"></p>
       <p class="hint" style="margin-top:8px;">Each recipient gets a secure link to view, ask questions, and approve online.</p>
+
+      <!-- Every send snapshots the estimate, so a revised price reuses this project
+           instead of needing a new one — and the earlier versions stay downloadable
+           for basis and transparency. Populated by done.js (mountRevisions). -->
+      <div id="revisions-box" style="display:none;margin-top:18px;padding-top:14px;border-top:1px dashed var(--surface-dim);">
+        <div class="hint" style="font-weight:600;margin-bottom:6px;">Sent versions</div>
+        <div id="revisions-list"></div>
+        <p class="hint" style="margin-top:6px;">The customer always sees the newest version. Older ones stay here so you can show what was quoted before.</p>
+      </div>
     </div>
 
     <!-- Filing to Dropbox used to be a separate step 5; it belongs with the files
