@@ -140,22 +140,70 @@
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
   }
 
+  var LAB_SIZE = 9.5;
+  var CHAR_W = 5.3;                 // ~advance per character at LAB_SIZE
+  var LAB_ROT = 40;                 // degrees; shallow enough to stay readable
+
+  /** How the x axis should carry its labels for this many bands.
+   *
+   *  Horizontal while they fit, diagonal when they don't, and thinned when even
+   *  diagonal would collide — "All time" is ninety-odd months, and at that width
+   *  every label drawn is a label unread. */
+  function xAxisPlan(items, band) {
+    var longest = 0;
+    for (var i = 0; i < items.length; i++) {
+      longest = Math.max(longest, String(items[i].label || "").length);
+    }
+    var flat = longest * CHAR_W + 8;              // width a horizontal label needs
+    var rotated = band < flat;
+    // Turned on the diagonal a label only has to clear its neighbour's baseline,
+    // which costs a line height rather than a whole word — but that clearance is
+    // measured perpendicular to the text, so the horizontal room it needs is the
+    // line height divided by sin(angle).
+    var pitch = rotated
+      ? (LAB_SIZE * 1.15) / Math.sin(LAB_ROT * Math.PI / 180)
+      : flat;
+    return {
+      rotated: rotated,
+      step: Math.max(1, Math.ceil(pitch / band)),
+      chars: rotated ? 12 : Math.max(4, Math.floor(band / CHAR_W)),
+      // Room under the axis for the diagonal to descend into.
+      bottom: rotated ? 56 : 26,
+    };
+  }
+
+  function xLabel(text, cx, baseY, plan) {
+    var t = esc(truncate(text, plan.chars));
+    if (!plan.rotated) {
+      return '<text x="' + cx + '" y="' + baseY + '" text-anchor="middle" font-size="' +
+        LAB_SIZE + '" fill="' + AXIS_INK + '">' + t + "</text>";
+    }
+    // Anchored at its end so the text runs up-and-left from the band it labels.
+    return '<text x="' + cx + '" y="' + baseY + '" text-anchor="end" font-size="' + LAB_SIZE +
+      '" fill="' + AXIS_INK + '" transform="rotate(-' + LAB_ROT + " " + cx + " " + baseY +
+      ')">' + t + "</text>";
+  }
+
   /** Vertical bars — a measure over months. Single series, so no legend. */
   function bar(opts) {
     var items = opts.items || [];
     if (!items.length) return emptyNote(opts.empty);
     var fmt = FMT[opts.fmt] || fmtMoneyShort;
     var axisFmt = opts.fmt === "int" ? fmtInt : fmtMoneyShort;
-    var W = 640, H = opts.height || 200, PAD = 54, TOP = 18, BOT = 26;
-    var plotH = H - TOP - BOT, plotW = W - PAD;
-    var max = niceMax(Math.max.apply(null, items.map(function (d) { return d.value || 0; })));
+    var W = 640, PAD = 54, TOP = 18;
+    var plotW = W - PAD;
     var band = plotW / items.length;
+    var plan = xAxisPlan(items, band);
+    // The plot keeps its height; the chart grows to make room for a diagonal.
+    var plotH = (opts.height || 200) - TOP - 26;
+    var H = TOP + plotH + plan.bottom;
+    var max = niceMax(Math.max.apply(null, items.map(function (d) { return d.value || 0; })));
     var bw = Math.max(2, Math.min(BAR_MAX, band - BAR_GAP - Math.min(10, band * 0.25)));
     // A value only sits on the cap when it fits the BAND (it's centred on the
     // bar and may be wider than it). ~6 units per character at this size;
     // otherwise the gridlines carry it and the hover gives the exact figure.
     var labelCaps = band >= 48 && items.length <= 14;
-    var labChars = Math.max(4, Math.floor(band / 6));
+    var labelY = TOP + plotH + (plan.rotated ? 13 : 17);
 
     var marks = "";
     for (var i = 0; i < items.length; i++) {
@@ -163,6 +211,7 @@
       var h = max ? (Math.max(0, d.value || 0) / max) * plotH : 0;
       var x = PAD + band * i + (band - bw) / 2;
       var y = TOP + plotH - h;
+      var cx = PAD + band * i + band / 2;
       marks += '<g class="ch-mark" data-idx="' + i + '">' +
         '<title>' + esc(d.label) + " · " + esc(fmt(d.value)) + "</title>" +
         '<rect x="' + (PAD + band * i) + '" y="' + TOP + '" width="' + band +
@@ -172,8 +221,7 @@
           ? '<text x="' + (x + bw / 2) + '" y="' + (y - 5) + '" text-anchor="middle" ' +
             'font-size="9.5" fill="' + LABEL_INK + '">' + esc(fmt(d.value)) + "</text>"
           : "") +
-        '<text x="' + (PAD + band * i + band / 2) + '" y="' + (H - 9) + '" text-anchor="middle" ' +
-          'font-size="9.5" fill="' + AXIS_INK + '">' + esc(truncate(d.label, labChars)) + "</text>" +
+        (i % plan.step ? "" : xLabel(d.label, cx, labelY, plan)) +
         "</g>";
     }
     return svg(W, H, opts.aria || "Bar chart", gridlines(W, TOP, plotH, max, axisFmt, PAD) + marks);
@@ -233,8 +281,11 @@
     if (!items.length) return emptyNote(opts.empty);
     var fmt = FMT[opts.fmt] || fmtMoneyShort;
     var axisFmt = opts.fmt === "int" ? fmtInt : fmtMoneyShort;
-    var W = 640, H = opts.height || 200, PAD = 54, TOP = 18, BOT = 26;
-    var plotH = H - TOP - BOT, plotW = W - PAD;
+    var W = 640, PAD = 54, TOP = 18;
+    var plotW = W - PAD;
+    var plan = xAxisPlan(items, plotW / items.length);
+    var plotH = (opts.height || 200) - TOP - 26;
+    var H = TOP + plotH + plan.bottom;
     var max = niceMax(Math.max.apply(null, items.map(function (d) { return d.value || 0; })));
     var step = items.length > 1 ? plotW / (items.length - 1) : 0;
     var xs = items.map(function (_, i) { return PAD + (items.length > 1 ? step * i : plotW / 2); });
@@ -257,10 +308,10 @@
         '" text-anchor="end" font-size="9.5" fill="' + LABEL_INK + '">' +
         esc(fmt(items[last].value)) + "</text>";
     }
+    var labelY = TOP + plotH + (plan.rotated ? 13 : 17);
     for (var j = 0; j < items.length; j++) {
-      if (items.length > 10 && j % 2) continue;                 // thin the x labels
-      marks += '<text x="' + xs[j] + '" y="' + (H - 9) + '" text-anchor="middle" font-size="9.5" ' +
-        'fill="' + AXIS_INK + '">' + esc(truncate(items[j].label, 9)) + "</text>";
+      if (j % plan.step) continue;
+      marks += xLabel(items[j].label, xs[j], labelY, plan);
     }
     return svg(W, H, opts.aria || "Line chart", gridlines(W, TOP, plotH, max, axisFmt, PAD) + marks);
   }
