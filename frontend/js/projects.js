@@ -212,6 +212,7 @@
           <div class="meta">
             ${p.total!=null?`<span class="total">${money(p.total)}</span>`:""}
             ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
+            ${p.sent_revision>0?`<span class="badge badge-sent" title="The customer has this version. Open it, change what you need, then re-send from the Files page to create the next revision.">Sent · Rev ${p.sent_revision}</span>`:""}
             ${p.deadline?`<span>due ${esc(p.deadline)}</span>`:""}
           </div>
           <div class="meta" style="margin-top:8px;">
@@ -221,9 +222,12 @@
           <div class="card-foot">
             <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
             <div class="foot-actions">
-              <button type="button" class="files-btn" title="Generate + download the files (no need to re-walk intake)">📄 Files</button>
+              <button type="button" class="files-btn" title="${p.sent_revision>0?"Files, sent versions, and re-send to the customer":"Generate + download the files (no need to re-walk intake)"}">📄 Files</button>
               <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info</button>
-              <button type="button" class="open-btn">Open / Edit →</button>
+              <!-- Already sent: say "Revise", because opening and changing it is
+                   exactly what produces the next revision. Same destination — the
+                   label is what was unclear, not the route. -->
+              <button type="button" class="open-btn" title="${p.sent_revision>0?"Change the estimate, then re-send from the Files page to create revision "+(p.sent_revision+1):""}">${p.sent_revision>0?"Revise →":"Open / Edit →"}</button>
             </div>
           </div>
         </div>`).join("");
