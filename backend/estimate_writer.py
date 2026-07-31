@@ -28,8 +28,10 @@ from typing import Any, Dict, Mapping
 log = logging.getLogger("proposal_tool.estimate_writer")
 
 from openpyxl import load_workbook
+from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.styles import Protection
 from openpyxl.workbook import Workbook
+from openpyxl.worksheet.cell_range import CellRange
 
 
 TEMPLATE_PATH = (
@@ -49,7 +51,8 @@ PROJECT_INFO_DROPDOWNS: Dict[str, list] = {
 }
 
 
-def _parse_x14_data_validations(sheet_name: str) -> list[tuple[list[str], list]]:
+def _parse_x14_data_validations(sheet_name: str, *,
+                                path: Path = TEMPLATE_PATH) -> list[tuple[list[str], list]]:
     """Parse Excel-extension (x14 namespace) data validations that
     openpyxl drops with a warning. Returns a list of (cell_addresses,
     options) tuples.
@@ -72,13 +75,13 @@ def _parse_x14_data_validations(sheet_name: str) -> list[tuple[list[str], list]]
     from openpyxl import load_workbook as _load_workbook
 
     # Find the worksheet's relative path in the xlsx
-    wb = _load_template(data_only=False)
+    wb = _load_template(data_only=False, path=path)
     if sheet_name not in wb.sheetnames:
         return []
     sheet_index = wb.sheetnames.index(sheet_name)
     sheet_xml_name = f"xl/worksheets/sheet{sheet_index + 1}.xml"
 
-    with zipfile.ZipFile(TEMPLATE_PATH, "r") as z:
+    with zipfile.ZipFile(path, "r") as z:
         if sheet_xml_name not in z.namelist():
             return []
         xml = z.read(sheet_xml_name).decode("utf-8", errors="replace")
@@ -150,7 +153,8 @@ def _parse_x14_data_validations(sheet_name: str) -> list[tuple[list[str], list]]
     return out
 
 
-def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
+def _resolve_range_to_options(wb, current_ws, formula: str, *,
+                              path: Path = TEMPLATE_PATH) -> list:
     """Resolve a data-validation range reference (like `$B$161:$B$165`
     or `'Stnd Alts'!$A$1:$A$10`) into a list of option strings.
 
@@ -168,6 +172,26 @@ def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
     import re as _re
 
     f = formula.lstrip("=").strip()
+
+    # A bare workbook-level NAME, e.g. `MarketList`. Excel needs this form
+    # whenever a dropdown's source lives on another sheet, so it is how every
+    # picker on the Project Info Sheet is wired. Without this branch the name
+    # falls through to the range parser below, becomes `MarketList:MarketList`,
+    # raises, and the dropdown silently disappears.
+    if "!" not in f and ":" not in f and "$" not in f:
+        try:
+            defn = wb.defined_names.get(f)
+        except Exception:
+            defn = None
+        if defn is not None:
+            out: list = []
+            for dest_sheet, dest_ref in defn.destinations:
+                for opt in _resolve_range_to_options(
+                        wb, current_ws, f"'{dest_sheet}'!{dest_ref}", path=path):
+                    if opt not in out:
+                        out.append(opt)
+            return out
+
     # Optional sheet prefix — either quoted ('Sheet Name'!range) or bare
     # (validation!$A$1:$A$10).
     sheet_match = _re.match(r"^'([^']+)'!(.+)$", f) or _re.match(r"^([A-Za-z_][\w\s\(\)\.\-]*)!(.+)$", f)
@@ -187,7 +211,10 @@ def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
 
     try:
         cells_f = wb[sheet_name][cell_range]                       # formulas
-        cells_v = _load_template(data_only=True)[sheet_name][cell_range]  # cached values
+        # `path` must match the workbook `wb` came from — reaching for the
+        # default here would resolve one workbook's options against another's
+        # cached values, and the except below would swallow the mismatch.
+        cells_v = _load_template(data_only=True, path=path)[sheet_name][cell_range]
     except Exception:
         return []
 
@@ -226,25 +253,29 @@ def _resolve_range_to_options(wb, current_ws, formula: str) -> list:
 # between 16 tabs back and forth. Cache both reads as module globals,
 # invalidated by file mtime so a manual swap of the template still works.
 
-_WB_CACHE: Dict[str, tuple[float, Any]] = {}
-# Per-sheet JSON-response cache, keyed by (sheet_name, file_mtime).
+# Both caches are keyed by PATH as well as the obvious key. This module serves
+# more than one workbook now (the Project Info Sheet reads through the same
+# functions), and a path-less key silently hands one workbook's sheet back for
+# the other's request — a failure that looks like correct data.
+_WB_CACHE: Dict[tuple[str, bool], tuple[float, Any]] = {}
+# Per-sheet JSON-response cache, keyed by (path, sheet_name, file_mtime).
 # Building one Epoxy response takes ~80ms over 5K cells; caching brings
 # repeat tab visits to ~1ms.
-_SHEET_GRID_CACHE: Dict[tuple[str, float], Dict[str, Any]] = {}
+_SHEET_GRID_CACHE: Dict[tuple[str, str, float], Dict[str, Any]] = {}
 
 
-def _load_template(*, data_only: bool):
-    """Load + cache the template workbook. Re-loads if the file mtime
+def _load_template(*, data_only: bool, path: Path = TEMPLATE_PATH):
+    """Load + cache a template workbook. Re-loads if the file mtime
     on disk changed (so swapping a new template still works without
     restarting the server)."""
-    key = f"data_only={data_only}"
-    mtime = TEMPLATE_PATH.stat().st_mtime
+    key = (str(path), data_only)
+    mtime = path.stat().st_mtime
     if key in _WB_CACHE:
         cached_mtime, wb = _WB_CACHE[key]
         if cached_mtime == mtime:
             return wb
     wb = load_workbook(
-        TEMPLATE_PATH,
+        path,
         keep_vba=False,
         data_only=data_only,
     )
@@ -448,9 +479,12 @@ ALT_MATERIAL_ROW = 29          # first "MATERIAL - Extras" =B*C row on the blank
 # (single cells) or clamp (range endpoints). $-absolute refs shift exactly
 # like relative ones (the $ only matters for copy/paste). Cross-sheet refs
 # shift only when they target the edited sheet. Defined names get the same
-# pass; merged ranges are moved/grown manually. Whole-column (D:D) and
-# whole-row (18:20) refs and conditional-formatting ranges are left alone —
-# none exist in the bid template's calculation paths.
+# pass; merged ranges, data-validation sqrefs and conditional-formatting
+# sqrefs (with their formulas) are moved manually — openpyxl shifts none of
+# the three. Whole-column (D:D) and whole-row (18:20) refs are still left
+# alone; none exist in either template's calculation paths. Conditional-format
+# `cfvo` values are not shifted either — neither template uses colour scales,
+# data bars or icon sets.
 #
 # Everything downstream that thinks in TEMPLATE coordinates (LOCK_MAP,
 # EPOXY_EXTRA_ROWS, the alternate-tab cells) is translated through the same
@@ -628,36 +662,111 @@ def _shift_refs_in_formula(formula: str, own_sheet: str, op: dict) -> str:
     return "".join(parts)
 
 
+def _shift_span(lo: int, hi: int, op: dict) -> tuple[int, int] | None:
+    """Move/grow/shrink one [lo, hi] index span for an op.
+
+    Returns None when the span is entirely inside a deleted range. Shared by
+    everything that stores a rectangle rather than a formula: merged ranges,
+    data-validation sqrefs and conditional-formatting sqrefs.
+    """
+    insert = op["kind"].startswith("insert")
+    at, count = op["at"], op["count"]
+    if insert:
+        return (lo + count if lo >= at else lo,
+                hi + count if hi >= at else hi)
+    new_lo = _shift_index(lo, at, count, False)
+    new_hi = _shift_index(hi, at, count, False)
+    if new_lo is None and new_hi is None:
+        return None                                   # span fully deleted
+    if new_lo is None:
+        new_lo = at
+    if new_hi is None:
+        new_hi = at - 1
+    return None if new_lo > new_hi else (new_lo, new_hi)
+
+
 def _shift_merged_ranges(ws, op: dict) -> None:
     """Move/grow/shrink merged ranges for one op (openpyxl doesn't)."""
     rows = op["kind"].endswith("_rows")
-    insert = op["kind"].startswith("insert")
-    at, count = op["at"], op["count"]
-    old = list(ws.merged_cells.ranges)
-    for rng in old:
+    for rng in list(ws.merged_cells.ranges):
         lo = rng.min_row if rows else rng.min_col
         hi = rng.max_row if rows else rng.max_col
-        if insert:
-            new_lo = lo + count if lo >= at else lo
-            new_hi = hi + count if hi >= at else hi
-        else:
-            new_lo = _shift_index(lo, at, count, False)
-            new_hi = _shift_index(hi, at, count, False)
-            if new_lo is None and new_hi is None:
-                ws.merged_cells.ranges.remove(rng)      # merge fully deleted
-                continue
-            if new_lo is None:
-                new_lo = at
-            if new_hi is None:
-                new_hi = at - 1
-            if new_lo > new_hi:
-                ws.merged_cells.ranges.remove(rng)
-                continue
-        if (new_lo, new_hi) != (lo, hi):
+        moved = _shift_span(lo, hi, op)
+        if moved is None:
+            ws.merged_cells.ranges.remove(rng)
+            continue
+        if moved != (lo, hi):
             if rows:
-                rng.min_row, rng.max_row = new_lo, new_hi
+                rng.min_row, rng.max_row = moved
             else:
-                rng.min_col, rng.max_col = new_lo, new_hi
+                rng.min_col, rng.max_col = moved
+
+
+def _shift_sqref(sqref, op: dict) -> str:
+    """Shift every sub-range of a `sqref` ("B59 B61 B63:B64"), dropping the
+    ones an op deleted outright. Returns "" when nothing survives."""
+    rows = op["kind"].endswith("_rows")
+    out: list[str] = []
+    for rng in sorted(sqref.ranges, key=lambda r: (r.min_row, r.min_col)):
+        lo = rng.min_row if rows else rng.min_col
+        hi = rng.max_row if rows else rng.max_col
+        moved = _shift_span(lo, hi, op)
+        if moved is None:
+            continue
+        new = CellRange(rng.coord)
+        if rows:
+            new.min_row, new.max_row = moved
+        else:
+            new.min_col, new.max_col = moved
+        out.append(str(new))
+    return " ".join(out)
+
+
+def _shift_dv_and_cf(ws, op: dict) -> None:
+    """Move data validations and conditional formatting with their cells.
+
+    openpyxl shifts neither. Left alone, a single inserted row silently
+    detaches every dropdown and highlight below it: the file still opens, still
+    fills and still downloads, but the pickers now point at whatever moved into
+    the old addresses. On the Info Sheet that is all six rebuilt dropdowns; on
+    Epoxy it is seven, including the system pickers.
+
+    Both structures are rebuilt rather than edited in place. `MultiCellRange`
+    holds its ranges in a `set` and `ConditionalFormatting.__hash__` is
+    `hash(self.sqref)` keying an OrderedDict — mutating either corrupts the
+    container's invariants while still appearing to save correctly.
+
+    Known imprecision, accepted: when a delete removes the anchor row of a
+    range that is only partly deleted, Excel re-anchors the rule's formula and
+    we emit `#REF!` instead, so that one highlight stops firing. Pinned by a
+    test so it stays a decision. `cfvo` values (colour scales, data bars, icon
+    sets) are not shifted; neither template uses them.
+    """
+    for dv in list(ws.data_validations.dataValidation):
+        moved = _shift_sqref(dv.sqref, op)
+        if not moved:
+            ws.data_validations.dataValidation.remove(dv)   # empty sqref is invalid
+            continue
+        dv.sqref = moved
+        for attr in ("formula1", "formula2"):
+            f = getattr(dv, attr, None)
+            if isinstance(f, str) and f:
+                setattr(dv, attr, _shift_refs_in_formula(f, ws.title, op))
+
+    existing = [(cf.sqref, list(cf.rules)) for cf in ws.conditional_formatting]
+    if not existing:
+        return
+    rebuilt = ConditionalFormattingList()
+    for sqref, rules in existing:
+        moved = _shift_sqref(sqref, op)
+        if not moved:
+            continue
+        for rule in rules:
+            if getattr(rule, "formula", None):
+                rule.formula = [_shift_refs_in_formula(f, ws.title, op)
+                                if isinstance(f, str) else f for f in rule.formula]
+            rebuilt.add(moved, rule)
+    ws.conditional_formatting = rebuilt
 
 
 def _apply_tab_structs(wb, structs: list[dict]) -> None:
@@ -680,6 +789,7 @@ def _apply_tab_structs(wb, structs: list[dict]) -> None:
             log.warning("estimate_writer: struct op %r skipped: %s", op, exc)
             continue
         _shift_merged_ranges(ws, op)
+        _shift_dv_and_cf(ws, op)
         # Formula pass over the WHOLE workbook — the edited sheet's own
         # formulas moved without being rewritten, and any other sheet may
         # reference the edited one.
@@ -1386,7 +1496,8 @@ def _normalize_cell_value(v):
     return v
 
 
-def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
+def read_sheet_grid(sheet_name: str, *, path: Path = TEMPLATE_PATH,
+                    parse_x14: bool = True) -> Dict[str, Any]:
     """Return every used cell on `sheet_name` as a flat list.
 
     Used by `GET /api/sheet/{name}` to power the cell-for-cell UI. We
@@ -1402,19 +1513,27 @@ def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
 
     Cells that have neither value nor distinguishing formatting are
     omitted (keeps the payload manageable for huge sheets like Takeoff).
+
+    `path` selects the workbook — the Project Info Sheet reads through here
+    too. `parse_x14=False` skips the extension-validation parser for workbooks
+    that have none (it guesses the sheet's zip member by position, so it is
+    worth not running when there is nothing to find).
+
+    Formula cells carry BOTH their cached value and their `formula` text; the
+    grid shows the value and reveals the formula when the cell is focused.
     """
-    mtime = TEMPLATE_PATH.stat().st_mtime
-    cache_key = (sheet_name, mtime)
+    mtime = path.stat().st_mtime
+    cache_key = (str(path), sheet_name, mtime)
     if cache_key in _SHEET_GRID_CACHE:
         return _SHEET_GRID_CACHE[cache_key]
 
-    wb = _load_template(data_only=False)
+    wb = _load_template(data_only=False, path=path)
     if sheet_name not in wb.sheetnames:
         raise KeyError(sheet_name)
     ws = wb[sheet_name]
 
     # Second workbook just for the cached values
-    wb_vals = _load_template(data_only=True)
+    wb_vals = _load_template(data_only=True, path=path)
     ws_vals = wb_vals[sheet_name]
 
     # Merged ranges — structured for the frontend:
@@ -1509,7 +1628,7 @@ def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
         else:
             # Range reference, e.g. '$B$161:$B$165' or "'Stnd Alts'!$A$1:$A$10"
             # Strip leading '=' and resolve via openpyxl
-            opts = _resolve_range_to_options(wb, ws, formula)
+            opts = _resolve_range_to_options(wb, ws, formula, path=path)
         if not opts:
             continue
         for cell_range in dv.sqref.ranges:
@@ -1528,7 +1647,7 @@ def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
     # openpyxl strips these and logs a warning — we parse them ourselves
     # from the raw XML. These are where most of Kyle's dropdowns live.
     try:
-        x14_dvs = _parse_x14_data_validations(sheet_name)
+        x14_dvs = _parse_x14_data_validations(sheet_name, path=path) if parse_x14 else []
         for cells_addrs, opts in x14_dvs:
             for addr in cells_addrs:
                 if addr not in dropdowns:
@@ -1544,7 +1663,7 @@ def read_sheet_grid(sheet_name: str) -> Dict[str, Any]:
     # the user can toggle them from any tab. Limited to the canonical
     # source sheet (Epoxy) — the mirror cells on other tabs are formula
     # references and editing them is canonicalised by the frontend.
-    if sheet_name == "Epoxy":
+    if sheet_name == "Epoxy" and path == TEMPLATE_PATH:
         for addr, options in PROJECT_INFO_DROPDOWNS.items():
             dropdowns.setdefault(addr, options)
 
@@ -1651,9 +1770,9 @@ def read_named_expressions() -> list[Dict[str, Any]]:
     return out
 
 
-def list_sheet_names() -> list[str]:
+def list_sheet_names(*, path: Path = TEMPLATE_PATH) -> list[str]:
     """List every sheet in the template (used by tab bar)."""
-    wb = load_workbook(TEMPLATE_PATH, read_only=True)
+    wb = load_workbook(path, read_only=True)
     try:
         return list(wb.sheetnames)
     finally:

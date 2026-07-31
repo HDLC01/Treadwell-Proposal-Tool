@@ -426,6 +426,17 @@ def api_basisboard_projects() -> Dict[str, Any]:
     return basisboard_client.get_pipeline()
 
 
+@app.get("/api/analytics")
+def api_analytics() -> Dict[str, Any]:
+    """The whole (capped) bid history as flat rows, plus the filter vocabularies.
+
+    Deliberately one payload rather than a query-per-chart: the browser holds the
+    rows and re-totals them locally, so combining trades with estimators with a
+    date range is instant and costs nothing. Always HTTP 200 — a Basisboard
+    outage degrades to ok:false and the page keeps its cached numbers."""
+    return basisboard_client.get_analytics()
+
+
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
 # The portal owns the portal_* tables; here we just call its SERVICE_TOKEN-gated
 # admin API. PORTAL_ADMIN_URL + SERVICE_TOKEN live in the env (not committed).
@@ -1048,19 +1059,21 @@ def _info_sheet_prefill(draft_id: str) -> Dict[str, Any]:
 
 @app.get("/api/info-sheet/{draft_id}")
 def api_info_sheet(draft_id: str, request: Request) -> Dict[str, Any]:
-    """The hand-off sheet for one project: the blank grid plus the cells we can
-    answer from the estimate.
+    """The hand-off workbook for one project: every visible tab, with the cells
+    we can answer from the estimate already merged in.
 
-    The grid is template-derived and identical for every project, so it carries
-    the ETag; the prefill is per-draft and changes as the estimate does, which
-    is why this is one payload without a conditional GET rather than two.
+    All five tabs ship in one response rather than a tab at a time. They are
+    ~630 cells in total, and the grid has to register them all with its formula
+    engine before first paint anyway — the Invoice alone holds twenty
+    references into SOV and six into the Info Sheet, so a lazily-fetched tab
+    would compute wrong until its neighbours arrived.
+
+    No ETag: the payload mixes a template-derived grid with a per-draft prefill,
+    so a whole-response ETag would be wrong. If it ever needs one, the split is
+    a cacheable /template endpoint plus a small per-draft prefill.
     """
     draft_id = _safe_id(draft_id)
-    return {
-        "grid": info_sheet_writer.read_grid(),
-        "prefill": _info_sheet_prefill(draft_id),
-        "template_version": info_sheet_writer.template_version(),
-    }
+    return info_sheet_writer.read_workbook(_info_sheet_prefill(draft_id))
 
 
 class InfoSheetIn(BaseModel):
@@ -1072,6 +1085,9 @@ class InfoSheetIn(BaseModel):
     # segment and job number just typed. Sending them with the request removes the
     # race; `None` (an older page build) falls back to the saved draft.
     info_cell_values: Optional[Dict[str, Any]] = None
+    # The estimator's insert/delete row and column edits, same three-state
+    # contract: None means an older page build sent nothing, so fall back.
+    info_tab_structs: Optional[list] = None
 
 
 @app.post("/api/info-sheet/generate")
@@ -1089,7 +1105,11 @@ def api_info_sheet_generate(payload: InfoSheetIn, request: Request) -> Dict[str,
     if not isinstance(overrides, dict):
         saved = data.get("info_cell_values")
         overrides = saved if isinstance(saved, dict) else {}
-    content = info_sheet_writer.fill_info_sheet(prefill, overrides)
+    structs = payload.info_tab_structs
+    if not isinstance(structs, list):
+        saved_ops = data.get("info_tab_structs")
+        structs = saved_ops if isinstance(saved_ops, list) else []
+    content = info_sheet_writer.fill_info_sheet(prefill, overrides, tab_structs=structs)
 
     name = str(data.get("project_name") or "project").replace(" ", "_")[:80]
     token = _cache_file(
@@ -1104,10 +1124,19 @@ def api_info_sheet_generate(payload: InfoSheetIn, request: Request) -> Dict[str,
     # so writing job_number on its own would be undone moments later by the page's
     # own debounced PUT of a localStorage copy that predates this call — and the
     # returned `job_number` lets the page adopt it so its next PUT carries it too.
-    job_no = str(overrides.get("Info Sheet!B14") or prefill.get("B14") or "").strip()
+    #
+    # B14 only means "job number" in the pristine template. Insert a row above
+    # it and the estimator's entry lives at B15, so a hardcoded lookup misses,
+    # `job_number` never reaches the draft, and the deposit invoice ships blank
+    # while the button still says "Downloaded".
+    b14 = info_sheet_writer.resolve_addr("B14", structs)
+    typed = overrides.get(f"Info Sheet!{b14}") if b14 else None
+    job_no = str(typed or prefill.get("B14") or "").strip()
     merged = {**data}
     if isinstance(payload.info_cell_values, dict):
         merged["info_cell_values"] = payload.info_cell_values
+    if isinstance(payload.info_tab_structs, list):
+        merged["info_tab_structs"] = payload.info_tab_structs
     if job_no:
         merged["job_number"] = job_no
     if merged != data:

@@ -5,8 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Customer Portal CRM · Treadwell Proposal Generator</title>
 <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+<!-- This page styles itself and does not link styles.css, so it needs its own
+     opt-out. Without it Chromium synthesizes a dark theme over the whole drawer
+     and flattens every near-white surface to the same grey — which is what made
+     the two chat sides indistinguishable. There is no dark theme in this repo. -->
+<meta name="color-scheme" content="only light" />
 <style>
-  :root { --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
+  :root { color-scheme: only light;
+    --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
     --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--surf); color:var(--ink);
@@ -94,7 +100,10 @@
   .dbody[data-sec="chat"] { display:flex; flex-direction:column; overflow:hidden; padding-bottom:0; }
   .dbody[data-sec="chat"] #dpanel-chat,
   .dbody[data-sec="chat"] #dsec-chat { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; margin-bottom:0; }
-  .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  /* A flex column, so each row can choose its own side with align-self and the
+     gap does the spacing. Auto-margins can't centre a system note. */
+  .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto;
+    display:flex; flex-direction:column; gap:10px; }
   .dbody[data-sec="chat"] #chat-compose { flex:0 0 auto; padding:10px 0 16px; background:#fff;
     border-top:1px solid var(--line); }
   .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); margin-bottom:4px; }
@@ -126,30 +135,47 @@
     letter-spacing:.04em; cursor:pointer; }
   .dep-show:hover { background:var(--surf-high); color:var(--ink); }
   .dep-s { font-size:11px; color:var(--ink-v); margin-top:6px; }
-  .msg { padding:9px 12px; border-radius:12px; margin-bottom:8px; max-width:72%; width:fit-content; }
+  .msg { padding:9px 12px; border-radius:12px; max-width:85%; width:fit-content; }
   /* Who said it should be obvious without reading the label, so the two sides sit
-     well apart and each bubble squares off the corner on its own side. */
-  .msg.customer { background:var(--surf-high); margin-right:auto; border-bottom-left-radius:3px; }
-  .msg.staff { background:#fdeaec; margin-left:auto; border-bottom-right-radius:3px; }
-  .msg.staff .who, .msg.staff .when { text-align:right; }
+     well apart and each bubble squares off the corner on its own side. Ours is a
+     SOLID red rather than a pink tint: two near-white backgrounds three percent
+     apart in lightness read as one colour, and any renderer that adjusts contrast
+     collapses them completely. Mirrors the customer portal's own bubbles. */
+  .msg.customer { align-self:flex-start; background:var(--surf-high); border-bottom-left-radius:3px; }
+  .msg.staff { align-self:flex-end; background:var(--red-dark); color:#fff; border-bottom-right-radius:3px; }
+  .msg.staff .who, .msg.staff .when { text-align:right; color:rgba(255,255,255,.8); }
+  .msg.staff .via-email { border-color:rgba(255,255,255,.6); }
   .msg .who { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
   .msg .via-email { border:1px solid var(--ink-v); border-radius:999px; padding:0 5px; margin-left:4px; font-size:9px; }
   .msg .when { font-size:10px; color:var(--ink-v); margin-top:3px; }
   textarea { width:100%; min-height:74px; padding:10px; border:1px solid var(--line); border-radius:7px; font:inherit; resize:vertical; }
   a.link { color:var(--red-dark); word-break:break-all; }
   .note { color:var(--ink-v); font-size:12px; }
-  .note.sys { text-align:center; background:var(--surf-low); border-radius:6px; padding:5px 10px; margin:6px 0; }
+  /* margin:0 so the thread's gap is the only spacing — a <p>'s default 1em
+     would otherwise stack on top of it and float the note away from its event. */
+  .note.sys { align-self:center; margin:0; text-align:center; background:var(--surf-low);
+    border-radius:6px; padding:5px 10px; }
   /* Chat cards — same shape/classes the CUSTOMER portal uses, so staff read the
-     thread exactly as the customer sees it. Left border colour keys the type. */
-  .chat-card { background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--red);
-    border-radius:10px; padding:11px 13px; margin-bottom:8px; }
-  .chat-card.deposit { border-left-color:var(--ok); }
-  .chat-card.system  { border-left-color:var(--ink-v); }
+     thread exactly as the customer sees it. The accent bar colour keys the type.
+     An event is not speech, but it still belongs to whoever caused it, so it takes
+     that party's side and squares off the corner there exactly like a bubble. The
+     bar swaps to the right edge on our side so it always hugs the gutter the card
+     is anchored to. Type is a custom property, not a border override, so the two
+     rule groups can't fight over which one paints the bar. */
+  .chat-card { --cc-accent:var(--red); align-self:flex-start; max-width:88%; width:fit-content;
+    background:var(--surf-low); border:1px solid var(--line); border-left:3px solid var(--cc-accent);
+    border-radius:10px; padding:11px 13px; }
+  .chat-card.deposit { --cc-accent:var(--ok); }
+  .chat-card.system  { --cc-accent:var(--ink-v); }
+  .chat-card.is-superseded { opacity:.6; --cc-accent:var(--line); }
+  .chat-card.customer { border-bottom-left-radius:3px; }
+  .chat-card.staff { align-self:flex-end; border-bottom-right-radius:3px;
+    border-left-width:1px; border-left-color:var(--line);
+    border-right:3px solid var(--cc-accent); }
   .chat-card .cc-title { font-weight:800; font-size:13px; margin-bottom:3px; }
   .chat-card .cc-meta { color:var(--ink-v); font-size:11px; margin-bottom:5px; }
   .chat-card .cc-body { color:var(--ink-v); font-size:12px; }
   .chat-card .cc-amt { color:var(--ok); }
-  .chat-card.is-superseded { opacity:.6; border-left-color:var(--line); }
   .chat-card .cc-tag { font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.05em;
     border:1px solid currentColor; border-radius:999px; padding:1px 6px; margin-left:5px; color:var(--ink-v); }
   /* Review-the-invoice dialog. Sits above the drawer (10001) — a blocking review

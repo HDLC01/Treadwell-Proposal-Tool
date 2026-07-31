@@ -700,6 +700,23 @@
     });
   }
 
+  // Our server writes every system row as author_kind 'staff', including the two
+  // that record something the CUSTOMER did — so on author_kind alone a customer's
+  // own approval would sit on Treadwell's side of the thread. The row carries no
+  // actor field, so these prefixes are the only signal available. Reword one in
+  // the portal and the card simply falls back to author_kind: it loses its side,
+  // nothing breaks.
+  const CUSTOMER_EVENTS = ["Approved by", "Project contacts received"];
+
+  /** Which side of the thread a row sits on. Cards are events rather than speech,
+   *  but each one still belongs to whoever caused it, so it takes that party's
+   *  side — same discriminator the bubbles use. */
+  const sideOf = (m) => {
+    const body = String(m.body == null ? "" : m.body);
+    if (m.msg_type === "system" && CUSTOMER_EVENTS.some((p) => body.startsWith(p))) return "customer";
+    return m.author_kind === "staff" ? "staff" : "customer";
+  };
+
   function msgHtml(m) {
     const t = when(m.created_at);
     // These three render as CARDS, matching the customer portal exactly, so staff
@@ -707,13 +724,14 @@
     // 'deposit_submitted' is customer-authored (that's what routes it to the bell),
     // but it's a status line, not something they typed — card it like the portal
     // does, or it renders as a speech bubble putting our words in their mouth.
+    // It still lands on their side, because they are the ones who did it.
     if (m.msg_type === "system" || m.msg_type === "deposit_submitted") {
       const s = splitSystem(m.body);
-      return `<div class="chat-card system"><div class="cc-title">${esc(s.title)}</div>
+      return `<div class="chat-card system ${sideOf(m)}"><div class="cc-title">${esc(s.title)}</div>
         <div class="cc-body">${esc(s.body)}</div></div>`;
     }
     if (m.msg_type === "proposal_card") {
-      return `<div class="chat-card proposal"><div class="cc-title">Your proposal is ready</div>
+      return `<div class="chat-card proposal ${sideOf(m)}"><div class="cc-title">Your proposal is ready</div>
         <div class="cc-body">${esc(m.body)}</div></div>`;
     }
     if (m.msg_type === "deposit_request") {
@@ -724,7 +742,7 @@
         ? `Invoice ${esc(meta.invoice_no)}${meta.reference ? ` · Reference ${esc(meta.reference)}` : ""}`
           + (dead && meta.superseded_by ? ` · replaced by ${esc(meta.superseded_by)}` : "")
         : "";
-      return `<div class="chat-card deposit${dead ? " is-superseded" : ""}">
+      return `<div class="chat-card deposit ${sideOf(m)}${dead ? " is-superseded" : ""}">
         <div class="cc-title">Deposit invoice${amt ? ` — <span class="cc-amt">${amt}</span>` : ""}${
           dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
         ${line ? `<div class="cc-meta">${line}</div>` : ""}
