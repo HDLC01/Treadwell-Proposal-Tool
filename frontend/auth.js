@@ -324,6 +324,10 @@
       ).join("");
     }
     async function poll() {
+      // A background tab has nothing to show and every call takes a server-side
+      // lock plus a state-file read/write, so hidden tabs used to hammer the box
+      // pointlessly all day. Staff keep this open on several tabs at once.
+      if (document.hidden) return;
       try {
         const r = await fetch(apiBase() + "/api/notifications",
           { headers: { Authorization: "Bearer " + (window.__TW_TOKEN || "") } });
@@ -369,6 +373,9 @@
 
     poll();
     setInterval(poll, 60000);   // refresh the badge every minute
+    // Coming back to the tab should show current state immediately rather than up
+    // to a minute later — and it catches up whatever was skipped while hidden.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
   }
 
   function injectSidebarStyles() {

@@ -187,6 +187,27 @@ def _list_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _sent_revisions(ids: List[str]) -> Dict[str, int]:
+    """{project_id: highest revision_no} for the given projects, 0 when never sent.
+
+    One extra query for the whole page rather than per card. Best-effort: the
+    projects list must still render if draft_revisions is missing (a database that
+    hasn't had the DDL applied yet) — the badge just won't appear."""
+    if not ids:
+        return {}
+    try:
+        res = (get_client().table("draft_revisions").select("project_id, revision_no")
+               .in_("project_id", ids).execute())
+    except Exception:  # noqa: BLE001 — table absent / PostgREST cache cold
+        return {}
+    out: Dict[str, int] = {}
+    for r in res.data or []:
+        pid, no = r.get("project_id"), int(r.get("revision_no") or 0)
+        if pid and no > out.get(pid, 0):
+            out[pid] = no
+    return out
+
+
 def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
     """Shared list builder; `trashed` selects deleted vs active via deleted_at.
 
@@ -209,6 +230,10 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 "work_type:data->>work_type,"
                 "deadline:data->>deadline,"
                 "archived:data->>archived,"
+                # Who owns the follow-up. Persisted on the draft when staff send,
+                # so the Projects list can say who is chasing each bid without
+                # asking the portal for every row.
+                "assigned_estimator:data->>assigned_estimator,"
                 "computed_bid:data->computed_bid")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
@@ -217,6 +242,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             if trashed:
                 return []
             res = sb.table("drafts").select(cols).order("updated_at", desc=True).limit(limit).execute()
+        rows = res.data or []
+        sent = _sent_revisions([r["id"] for r in rows])
         return [{
             "id": r["id"],
             "project_name": r.get("project_name") or "(untitled)",
@@ -225,10 +252,15 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
             "owner_email": r.get("owner_email"),
+            "assigned_estimator": r.get("assigned_estimator"),
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
-        } for r in (res.data or [])]
+            # Which version the customer has, or 0 if this was never sent. Lets the
+            # card say so, instead of every project looking like a fresh draft and
+            # nobody knowing which ones are live with a customer.
+            "sent_revision": sent.get(r["id"], 0),
+        } for r in rows]
     except Exception:  # noqa: BLE001 — fall back to the full-blob read
         try:
             res = _filtered(
@@ -256,6 +288,93 @@ def log_event(project_id: Optional[str], actor_email: Optional[str],
         }).execute()
     except Exception:  # noqa: BLE001 — logging must not break save/generate
         pass
+
+
+# ── revisions ─────────────────────────────────────────────────────────
+# A project keeps ONE id, one portal row, one token and one chat thread for its
+# whole life. When staff send it to the customer we snapshot the entire `data`
+# blob as revision N, so a changed estimate reuses the project instead of forcing
+# a duplicate — and every version that was ever sent stays readable for basis and
+# transparency. The customer's portal view is pinned to the snapshot they were
+# actually sent, which also means editing a draft can no longer silently rewrite
+# a proposal somebody has already received.
+#
+# The blob is 5-35 kB, so a full copy per send is cheaper than one PDF.
+
+def create_revision(draft_id: str, data: Dict[str, Any],
+                    created_by: Optional[str] = None) -> int:
+    """Snapshot `data` as the next revision and return its number.
+
+    Numbering is per project and gapless-by-intent (max + 1). A unique constraint
+    on (project_id, revision_no) makes a concurrent double-send collide rather
+    than silently share a number; we retry once, which is enough for two clicks."""
+    sb = get_client()
+    for attempt in range(2):
+        prev = (sb.table("draft_revisions").select("revision_no")
+                .eq("project_id", draft_id).order("revision_no", desc=True)
+                .limit(1).execute())
+        next_no = int((prev.data or [{}])[0].get("revision_no") or 0) + 1 + attempt
+        try:
+            sb.table("draft_revisions").insert({
+                "project_id": draft_id, "revision_no": next_no,
+                "data": data, "created_by": created_by, "created_at": _now_iso(),
+            }).execute()
+            return next_no
+        except Exception:  # noqa: BLE001 — unique violation on a concurrent send
+            if attempt:
+                raise
+    raise RuntimeError("could not allocate a revision number")
+
+
+def list_revisions(draft_id: str) -> List[Dict[str, Any]]:
+    """Every revision of a project, newest first — the Files-page history.
+
+    Deliberately does NOT return the blobs: the list is a UI table, and shipping
+    N × 35 kB to render four rows would be gratuitous. The total is derived the
+    same way the projects list derives it, so the two always agree."""
+    sb = get_client()
+    res = (sb.table("draft_revisions").select("revision_no, created_by, created_at, data")
+           .eq("project_id", draft_id).order("revision_no", desc=True).execute())
+    out: List[Dict[str, Any]] = []
+    for r in res.data or []:
+        data = r.get("data") or {}
+        out.append({
+            "revision_no": r["revision_no"],
+            "created_by": r.get("created_by"),
+            "created_at": r.get("created_at"),
+            "total": _bid_total(data),
+            "project_name": data.get("project_name"),
+            # Whether this snapshot can regenerate documents. A project sent
+            # before the estimator ever hit Generate has no payload to replay.
+            "has_documents": bool(data.get("proposal_payload")),
+        })
+    return out
+
+
+def get_revision(draft_id: str, revision_no: int) -> Optional[Dict[str, Any]]:
+    """One revision including its full `data` blob, or None."""
+    sb = get_client()
+    res = (sb.table("draft_revisions").select("*")
+           .eq("project_id", draft_id).eq("revision_no", int(revision_no))
+           .limit(1).execute())
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def delete_revision(draft_id: str, revision_no: int) -> None:
+    """Remove a snapshot. Used to compensate when the publish call that the
+    snapshot was taken FOR then fails — better a gap in the numbering than a
+    revision the customer was never sent."""
+    (get_client().table("draft_revisions").delete()
+     .eq("project_id", draft_id).eq("revision_no", int(revision_no)).execute())
+
+
+def latest_revision_no(draft_id: str) -> Optional[int]:
+    sb = get_client()
+    res = (sb.table("draft_revisions").select("revision_no")
+           .eq("project_id", draft_id).order("revision_no", desc=True).limit(1).execute())
+    rows = res.data or []
+    return int(rows[0]["revision_no"]) if rows else None
 
 
 def list_events(limit: int = 100) -> List[Dict[str, Any]]:
@@ -303,6 +422,7 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "archived": _truthy(data.get("archived")),
         "lump_sum_display": data.get("lump_sum_display"),
         "owner_email": row.get("owner_email"),
+        "assigned_estimator": data.get("assigned_estimator"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

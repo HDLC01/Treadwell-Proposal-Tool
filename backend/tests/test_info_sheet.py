@@ -401,8 +401,13 @@ def test_costs_and_man_hours_come_from_the_snapshot_and_are_optional():
 
 
 def test_deposit_answers_the_portal_not_the_draft():
+    """The portal owns whether a deposit was invoiced, so the draft can never
+    supply it. Three states, not two: Y, N, and "we couldn't ask" — the default is
+    unknown, which leaves B59 alone rather than asserting "N". Writing N on an
+    unreachable portal used to contradict a Y the estimator had already seen."""
     assert isw.build_prefill(_draft(), deposit_requested=True)["B59"] == "Y"
-    assert isw.build_prefill(_draft())["B59"] == "N"
+    assert isw.build_prefill(_draft(), deposit_requested=False)["B59"] == "N"
+    assert "B59" not in isw.build_prefill(_draft())
 
 
 def test_an_unknown_lead_source_clears_the_templates_guess():
@@ -443,6 +448,36 @@ def test_the_job_number_stays_text():
     Foundation Import both print."""
     ws = _filled({"B14": "26.100"})
     assert ws["B14"].value == "26.100"
+
+
+_INS13 = [{"sheet": "Info Sheet", "kind": "insert_rows", "at": 13, "count": 1}]
+
+
+def test_the_job_number_stays_text_after_a_row_is_inserted_above_it():
+    """The text rule is authored in TEMPLATE coordinates but overrides are written
+    in CURRENT ones, so it has to be translated like every other address.
+
+    Untranslated, the rule stayed on the now-blank B14 while the job number — at
+    B15 after the shift — was coerced to the float 26.1. Foundation Import and the
+    Invoice print it straight from there, so accounting received 26.1. main.py
+    already translated for the job-number mirror, so the two disagreed about where
+    the job number even lived."""
+    wb = openpyxl.load_workbook(io.BytesIO(
+        isw.fill_info_sheet({}, {"Info Sheet!B15": "26.100"}, tab_structs=_INS13)))
+    ws = wb["Info Sheet"]
+    assert isw.resolve_addr("B14", _INS13) == "B15"      # the rule's target moved
+    assert ws["B15"].value == "26.100"                   # still text, not 26.1
+    assert ws["B15"].number_format == "@"
+
+
+def test_a_deleted_text_cell_does_not_break_the_rule():
+    """Deleting the job-number row drops it from the translated set rather than
+    leaving a stale address that would apply the text rule to whatever slid up."""
+    ops = [{"sheet": "Info Sheet", "kind": "delete_rows", "at": 14, "count": 1}]
+    assert isw.resolve_addr("B14", ops) is None
+    wb = openpyxl.load_workbook(io.BytesIO(
+        isw.fill_info_sheet({}, {"Info Sheet!B20": 1234.5}, tab_structs=ops)))
+    assert wb["Info Sheet"]["B20"].value == 1234.5       # a number stays a number
 
 
 def test_typing_over_a_formula_or_a_label_replaces_it():
@@ -705,6 +740,55 @@ def test_the_hidden_lists_tab_is_never_served():
     assert "Lists" not in body["order"] and "Lists" not in body["sheets"]
     with pytest.raises(KeyError):
         isw.read_sheet("Lists")
+
+
+def _info_cell(body, addr):
+    for c in body["sheets"]["Info Sheet"]["cells"]:
+        if c["addr"] == addr:
+            return c
+    return None
+
+
+def test_one_projects_prefill_never_leaks_into_the_next():
+    """read_sheet_grid MEMOISES and returns the same dict to every caller, and
+    _overlay_prefill writes the prefill into it. Without a per-request copy,
+    project A's address and contact appeared in project B's grid — painted
+    chartreuse, as though the tool had filled them.
+
+    That is the nastiest possible shape for this bug: those cells are not in B's
+    prefill, so the download writes nothing there. The estimator saw a populated
+    sheet on screen and got a workbook missing exactly those fields."""
+    a = isw.read_workbook({"B15": "PROJECT A", "B20": "111 A St", "B29": "Alice"})
+    b = isw.read_workbook({"B15": "PROJECT B"})
+
+    assert _info_cell(a, "B20")["value"] == "111 A St"
+    for addr in ("B20", "B29"):
+        leaked = _info_cell(b, addr)
+        assert leaked is None or leaked.get("value") in (None, ""), addr
+    assert _info_cell(b, "B15")["value"] == "PROJECT B"
+    # Distinct objects, so neither call can ever see the other's edits.
+    assert _info_cell(a, "B15") is not _info_cell(b, "B15")
+
+
+def test_reading_twice_does_not_accumulate_cells():
+    """The leak also grew the grid: absent prefill addresses were appended to the
+    cached cell list, so every request made the payload bigger."""
+    n1 = len(isw.read_workbook({"B15": "A"})["sheets"]["Info Sheet"]["cells"])
+    isw.read_workbook({"B15": "B", "B20": "somewhere", "B29": "someone"})
+    n2 = len(isw.read_workbook({"B15": "A"})["sheets"]["Info Sheet"]["cells"])
+    assert n1 == n2
+
+
+def test_an_unknown_deposit_state_leaves_the_deposit_flag_alone():
+    """B59 is Y/N "deposit invoiced". The portal owns that fact, so an unreachable
+    portal means we do not know it — and writing "N" then silently contradicted a
+    "Y" the estimator had already seen on screen. Absent key = leave the
+    template's own value."""
+    draft = {"data": {"project_name": "X"}}
+    assert "B59" not in isw.build_prefill(draft)                       # unknown
+    assert "B59" not in isw.build_prefill(draft, deposit_requested=None)
+    assert isw.build_prefill(draft, deposit_requested=True)["B59"] == "Y"
+    assert isw.build_prefill(draft, deposit_requested=False)["B59"] == "N"
 
 
 def test_the_sov_grid_gets_the_border_symmetry_pass():

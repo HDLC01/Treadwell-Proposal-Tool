@@ -117,3 +117,39 @@ create trigger leads_updated_at before update on public.leads
 -- service-role key; browsers can never reach this table directly.
 alter table public.leads enable row level security;
 grant select, insert, update, delete on public.leads to service_role;
+
+-- ── 6) draft_revisions: what was actually SENT, and when ─────────────────────
+-- A project keeps ONE id for life (drafts.id == portal_proposals.proposal_id ==
+-- the ?d= URL param), so a revised estimate must reuse it rather than spawning a
+-- duplicate project. Each send snapshots the whole `data` blob here.
+--
+-- Two problems this solves at once:
+--   1. Staff can produce a changed estimate on the same project and still show the
+--      customer (and each other) exactly what the earlier version said.
+--   2. The portal renders the customer's proposal LIVE from drafts.data, so any
+--      mid-edit save silently rewrote a proposal that had already been sent —
+--      including, after approval, the numbers they agreed to. The portal now pins
+--      to the snapshot it sent (portal_proposals.current_revision_no).
+--
+-- `data` is a full copy on purpose: 5-35 kB per row measured on production, which
+-- is smaller than a single generated PDF. No diffing, no partial state to rebuild.
+create table if not exists public.draft_revisions (
+  id           uuid primary key default gen_random_uuid(),
+  project_id   text not null references public.drafts(id) on delete cascade,
+  revision_no  int  not null,
+  data         jsonb not null,
+  created_by   text,
+  created_at   timestamptz not null default now(),
+  -- Makes a concurrent double-send collide instead of quietly sharing a number.
+  unique (project_id, revision_no)
+);
+-- Serves both "latest revision for this project" and the Files-page history list.
+create index if not exists draft_revisions_project_idx
+  on public.draft_revisions (project_id, revision_no desc);
+
+-- Same posture as drafts/events/leads: RLS on, no policies here. The proposal
+-- tool holds the service-role key. The PORTAL reads this table as its own
+-- least-privilege role, so prod also needs the grant + policy in the portal's
+-- security_prod.sql (portal_app_read_draft_revisions).
+alter table public.draft_revisions enable row level security;
+grant select, insert, update, delete on public.draft_revisions to service_role;

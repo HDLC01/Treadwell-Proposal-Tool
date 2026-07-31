@@ -29,6 +29,7 @@ fed from an API needs.
 """
 from __future__ import annotations
 
+import copy
 import io
 import logging
 import re
@@ -149,7 +150,15 @@ def read_workbook(prefill: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     free.
     """
     names = visible_sheets()
-    sheets = {n: read_sheet(n) for n in names}
+    # DEEP COPY, always. read_sheet_grid memoises its result and hands back the
+    # SAME dict to every caller (estimate_writer._SHEET_GRID_CACHE), and
+    # _overlay_prefill writes the prefill straight into `cells`. Without a copy,
+    # project A's address and contact leak into project B's grid, painted
+    # chartreuse as though the tool had filled them — and because they are not in
+    # B's prefill, fill_info_sheet writes nothing there. The estimator sees a
+    # populated sheet on screen and downloads a workbook missing exactly those
+    # fields. Grids are a few hundred cells; a per-request copy is nothing.
+    sheets = {n: copy.deepcopy(read_sheet(n)) for n in names}
     _overlay_prefill(sheets.get(SHEET), prefill or {})
     return {
         "order": names,
@@ -416,7 +425,7 @@ def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
     return None if v in (None, "") else str(v)
 
 
-def build_prefill(draft: Dict[str, Any], *, deposit_requested: bool = False) -> Dict[str, Any]:
+def build_prefill(draft: Dict[str, Any], *, deposit_requested: Optional[bool] = None) -> Dict[str, Any]:
     """Info Sheet cells we can answer from the draft, keyed by address.
 
     An empty string means "clear the template's default" — used where the
@@ -487,7 +496,13 @@ def build_prefill(draft: Dict[str, Any], *, deposit_requested: bool = False) -> 
     put("B58", _num(costs.get("costs")))
     put("I58", _num(costs.get("man_hours")))
 
-    out["B59"] = "Y" if deposit_requested else "N"
+    # None = we couldn't reach the portal (or the job was never published), so we
+    # have no answer. Writing "N" there would silently overwrite a "Y" the
+    # estimator had already seen on screen, and `unchanged()` on the client means
+    # retyping the Y they can see would be discarded as a no-op. Absent key =
+    # leave the template's own value alone.
+    if deposit_requested is not None:
+        out["B59"] = "Y" if deposit_requested else "N"
 
     # Blank beats a plausible guess here — see _LEAD_SOURCES.
     out["B62"] = _LEAD_SOURCES.get(_txt(data.get("source")).lower(), "")
@@ -576,6 +591,18 @@ def resolve_addr(addr: str, tab_structs=None, sheet: str = SHEET) -> Optional[st
     return ew._translate_addr(addr, ops)
 
 
+def _translate_text_cells(info_ops) -> frozenset:
+    """TEXT_CELLS in CURRENT coordinates, after the user's row/column edits.
+
+    A cell the estimator deleted drops out; everything else follows its shift, so
+    "must be stored as text" keeps pointing at the job number rather than at
+    whatever slid into its old address."""
+    if not info_ops:
+        return TEXT_CELLS
+    moved = {ew._translate_addr(a, info_ops) for a in TEXT_CELLS}
+    return frozenset(a for a in moved if a)
+
+
 def _apply_colour_key(ws, prefilled, ops) -> None:
     """Paint the provenance key Hanz colours by hand today.
 
@@ -626,6 +653,15 @@ def fill_info_sheet(prefill: Dict[str, Any],
     ew._apply_tab_structs(wb, ops)
     info_ops = [op for op in ops if op["sheet"] == SHEET]
 
+    # The text rule is authored in TEMPLATE coordinates but Pass B writes in
+    # CURRENT ones, so it has to be translated like every other address. Without
+    # this, inserting a row above 14 leaves the rule on the now-blank B14 while
+    # the job number — moved to B15 — gets coerced: "26.100" becomes the float
+    # 26.1, and Foundation Import and the Invoice print it straight from there.
+    # main.py already translates for the job-number mirror, so the two disagreed
+    # about where the job number lives.
+    text_now = _translate_text_cells(info_ops)
+
     # Pass B — current coordinates, whatever the estimator typed.
     for key, val in (overrides or {}).items():
         if "!" not in key:
@@ -635,7 +671,7 @@ def fill_info_sheet(prefill: Dict[str, Any],
             log.info("info sheet: skipped override %r", key)
             continue
         _write(wb[sheet_name], addr, val,
-               text_cells=TEXT_CELLS if sheet_name == SHEET else frozenset())
+               text_cells=text_now if sheet_name == SHEET else frozenset())
 
     # Pass C — the colour key, over the shifted addresses.
     _apply_colour_key(ws, list((prefill or {}).keys()), info_ops)

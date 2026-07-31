@@ -4,8 +4,6 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
-    .filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
   const money = (n) => (n == null ? "" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   // Central, not viewer-local: "submitted 7/27 10:04 PM" must mean the same day to
   // Kyle in Kansas and to anyone testing from another timezone. Falls back to the
@@ -13,33 +11,17 @@
   const when = (s) => (s
     ? ((window.TW && TW.fmtBizDateTime) ? TW.fmtBizDateTime(s) : new Date(s).toLocaleString())
     : "");
-  // The customer has sent money but nobody has confirmed it landed — its own
-  // column, so a paid deal never sits in "Approved" looking like an unpaid one.
-  const STAGE_SUBMITTED = "Deposit submitted";
-  const STAGES = ["Sent", "Viewed", "Approved", STAGE_SUBMITTED, "Deposit received", "Contact info", "Scheduled"];
+  // Which column, what date, whose it is — all in crm-core.js, which has no DOM
+  // and is exercised under node. See the header there for why each answer is what
+  // it is. This file owns rendering and nothing else about the board's meaning.
+  const C = window.TWCrm;
+  const { STAGES, STAGE_SUBMITTED, STAGE_LOST, NATURAL_DIR, SORT_FIELDS } = C;
+  const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
+          isLost, lostReason, followupOff, nameOf } = C;
+  const fu = C.followup;
+  const pausedUntil = (p) => C.pausedUntil(p, TW.bizToday());
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
-
-  // ── what a card says about time ────────────────────────────────────────────
-  // The newest milestone that actually happened. `sent_at` is never null (a
-  // proposal row can't exist before the email goes out), so every card dates.
-  // Note "Viewed" is the FIRST view — the portal coalesces viewed_at and never
-  // moves it, so a customer re-reading the proposal doesn't refresh this.
-  const MILESTONES = [
-    ["sent_at", "Sent"],
-    ["viewed_at", "Viewed"],
-    ["approved_at", "Approved"],
-    ["deposit_requested_at", "Invoiced"],
-  ];
-  function lastActivity(p) {
-    let best = null;
-    for (const [key, label] of MILESTONES) {
-      const ts = p[key];
-      if (ts && (!best || String(ts) > String(best.ts))) best = { ts: ts, label: label };
-    }
-    return best;
-  }
-  const activityTs = (p) => { const a = lastActivity(p); return a ? a.ts : ""; };
 
   // ── filter / sort state ────────────────────────────────────────────────────
   // Module-level and mirrored to sessionStorage: renderBoard re-runs after every
@@ -47,15 +29,15 @@
   // a scan survives both a re-render and a return visit.
   const EST_KEY = "tw_crm_est", MONTH_KEY = "tw_crm_month";
   const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
+  const LOST_KEY = "tw_crm_lost", VIEW_KEY = "tw_crm_view";
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
-  const SORT_FIELDS = ["activity", "estimator", "total"];
-  // Each field opens the way you'd want to read it first.
-  const NATURAL_DIR = { activity: "desc", estimator: "asc", total: "desc" };
   let EST = ss(EST_KEY, "");
   let MONTH = ss(MONTH_KEY, "");
   let SORTFIELD = SORT_FIELDS.includes(ss(SORTFIELD_KEY, "")) ? ss(SORTFIELD_KEY, "") : "activity";
   let SORTDIR = ss(SORTDIR_KEY, "") === "asc" ? "asc" : (ss(SORTDIR_KEY, "") === "desc" ? "desc" : NATURAL_DIR[SORTFIELD]);
+  let SHOW_LOST = ss(LOST_KEY, "") === "1";
+  let VIEW = ss(VIEW_KEY, "") === "table" ? "table" : "board";
 
   function api(path, opts) {
     // MERGE headers — a caller passing its own `headers` used to replace the auth
@@ -68,21 +50,6 @@
   async function tokenReady() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     for (let i = 0; i < 200 && !window.__TW_TOKEN; i++) await new Promise((r) => setTimeout(r, 40));
-  }
-
-  function stageOf(p) {
-    if (p.schedule_status === "scheduled") return "Scheduled";
-    // Deposit is a prerequisite for advancing past it: a customer may submit
-    // contacts right after approval (portal allows it), but an unpaid deal must
-    // NOT read as further along than a paid one, so gate "Contact info" on deposit.
-    if (p.deposit_status === "received" && p.contacts_status === "received") return "Contact info";
-    if (p.deposit_status === "received") return "Deposit received";
-    // Checked AFTER "received" so a confirmed deposit can never fall back into
-    // the submitted column if the portal ever sends both signals.
-    if (p.deposit_status === "submitted") return STAGE_SUBMITTED;
-    if (p.proposal_status === "approved") return "Approved";
-    if (p.proposal_status === "viewed") return "Viewed";
-    return "Sent";
   }
 
   // Pure, composed in renderBoard. Search is read live from the DOM (the input
@@ -98,77 +65,156 @@
     });
   };
   const applyEstimator = (list) => (EST
-    ? list.filter((p) => String(p.estimator_email || "").toLowerCase() === EST)
+    ? list.filter((p) => estimatorOf(p).toLowerCase() === EST)
     : list);
   const applyMonth = (list) => (MONTH
     ? list.filter((p) => TW.bizYM(activityTs(p)) === MONTH)   // the month the card shows
     : list);
 
-  function applySort(list) {
-    const a = list.slice();
-    const dir = SORTDIR === "asc" ? 1 : -1;
-    // The dir multiplier never touches the null branches, so blanks stay last in
-    // BOTH directions — flipping the sort must not surface empty cards first.
-    if (SORTFIELD === "estimator") a.sort((x, y) => {
-      const nx = nameOf(x.estimator_email || "").toLowerCase();
-      const ny = nameOf(y.estimator_email || "").toLowerCase();
-      if (!nx && !ny) return 0; if (!nx) return 1; if (!ny) return -1;
-      return dir * nx.localeCompare(ny);
-    });
-    else if (SORTFIELD === "total") a.sort((x, y) => {
-      const tx = typeof x.approved_total === "number" ? x.approved_total : null;
-      const ty = typeof y.approved_total === "number" ? y.approved_total : null;
-      if (tx == null && ty == null) return 0; if (tx == null) return 1; if (ty == null) return -1;
-      return dir * (tx - ty);
-    });
-    else a.sort((x, y) => {                                   // activity (default)
-      const tx = activityTs(x), ty = activityTs(y);
-      if (!tx && !ty) return 0; if (!tx) return 1; if (!ty) return -1;
-      return dir * String(tx).localeCompare(String(ty));
-    });
-    return a;
+  const applySort = (list) => C.sort(list, SORTFIELD, SORTDIR);
+
+  /** Everything the current filters allow, in the current order. Both views read
+   *  this, so a filter can never mean two different things depending on the view. */
+  function visible() {
+    const rows = applySort(applyMonth(applySearch(applyEstimator(ALL))));
+    return SHOW_LOST ? rows : rows.filter((p) => !isLost(p));
+  }
+
+  /** The state chips a card and a row both carry. Words, not colour alone: this page
+   *  gets a synthesized dark theme in some browsers, which rewrites tint. */
+  function chipsHtml(p) {
+    const out = [];
+    if (isLost(p)) {
+      const why = lostReason(p);
+      out.push(`<span class="chip chip-lost" title="${esc(why ? "Reason: " + why : "No reason recorded")}">Closed lost${
+        why ? " · " + esc(why) : ""}</span>`);
+    } else {
+      const until = pausedUntil(p);
+      if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
+      // Only worth saying when it's OFF: automation being on is the norm, and a chip
+      // on every card would say nothing.
+      else if (followupOff(p)) out.push('<span class="chip chip-off" title="Automatic follow-up emails are switched off for this project">Follow-up off</span>');
+    }
+    return out.join("");
   }
 
   function renderBoard() {
-    const items = applySort(applyMonth(applySearch(applyEstimator(ALL))));
     populateEstimators();
     populateMonths();
-    $("count").textContent = items.length === ALL.length
-      ? ALL.length + " proposal" + (ALL.length === 1 ? "" : "s")
-      : items.length + " of " + ALL.length;
+    const items = visible();
+    const shown = SHOW_LOST ? ALL.length : ALL.filter((p) => !isLost(p)).length;
+    $("count").textContent = items.length === shown
+      ? shown + " proposal" + (shown === 1 ? "" : "s")
+      : items.length + " of " + shown;
     const clear = $("crm-clear");
     if (clear) clear.hidden = !(EST || MONTH || SORTFIELD !== "activity" || SORTDIR !== "desc");
-    const byStage = {};
-    STAGES.forEach((s) => (byStage[s] = []));
-    items.forEach((p) => byStage[stageOf(p)].push(p));
-    $("board").innerHTML = STAGES.map((s) => {
+    syncLostChip();
+    const board = $("board");
+    board.classList.toggle("as-table", VIEW === "table");
+    board.innerHTML = VIEW === "table" ? tableHtml(items) : kanbanHtml(items);
+  }
+
+  function kanbanHtml(items) {
+    const cols = SHOW_LOST ? STAGES.concat([STAGE_LOST]) : STAGES;
+    const byStage = C.group(items, cols);
+    return cols.map((s) => {
       const cards = byStage[s].map((p) => {
         const act = lastActivity(p);
-        // Who owns it and when it last moved, on one line — the column is only
+        // Who owns it and when it last moved, on one line each — the column is only
         // 224px of usable width, so this is the whole budget for both facts.
-        // Labelled, on its own line each: a bare "Hanz · Invoiced 7/27" reads as
-        // one fact, and it isn't obvious which name that is on a board where the
-        // line above is already an email.
-        const who = p.estimator_email ? esc(nameOf(p.estimator_email)) : "—";
-        const lines = '<div class="meta who"><span class="k">Estimator:</span> ' + who + "</div>"
-          + (act ? '<div class="meta act"><span class="k">' + esc(act.label)
-                 + ':</span> ' + esc(TW.fmtBizDate(act.ts)) + "</div>" : "");
+        // Labelled: a bare "Hanz · Invoiced 7/27" reads as one fact, and it isn't
+        // obvious which name that is on a board where the line above is an email.
+        const email = estimatorOf(p);
+        const who = email
+          ? `<span${isAssigned(p) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
+              esc(nameOf(email))}${isAssigned(p) ? "" : "?"}</span>`
+          : '<span class="unassigned" title="Nobody is assigned">—</span>';
+        const chips = chipsHtml(p);
         return `
         <div class="deal" data-id="${esc(p.proposal_id)}">
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           <div class="meta">${esc(p.customer_email || "")}</div>
-          ${lines}
+          <div class="meta who"><span class="k">Estimator:</span> ${who}</div>
+          ${act ? `<div class="meta act"><span class="k">${esc(act.label)}:</span> ${esc(TW.fmtBizDate(act.ts))}</div>` : ""}
+          ${chips ? `<div class="chips">${chips}</div>` : ""}
           ${p.approved_total != null ? `<div class="val">${money(p.approved_total)}</div>` : ""}
         </div>`;
       }).join("") || '<div class="empty">—</div>';
       // Money is in and unconfirmed → flag the column, it's the one needing a human.
       const attn = s === STAGE_SUBMITTED && byStage[s].length ? " col-attn" : "";
-      return `<div class="col${attn}"><h2>${s}<span>${byStage[s].length}</span></h2>${cards}</div>`;
+      return `<div class="col${attn}${s === STAGE_LOST ? " col-lost" : ""}"><h2>${esc(s)}<span>${byStage[s].length}</span></h2>${cards}</div>`;
     }).join("");
-    $("board").querySelectorAll(".deal").forEach((el) =>
-      el.addEventListener("click", () => openDetail(el.dataset.id)));
   }
+
+  // ── the same pipeline as one table ─────────────────────────────────────────
+  // A kanban answers "what's the shape of the pipeline"; a table answers "show me
+  // all 60 in one order". Kyle asked for both. Headers re-sort using the SAME
+  // COMPARE map the board uses, so the two views can never disagree on ordering.
+  const COLS = [
+    { key: "project", label: "Project", sort: null },
+    { key: "customer", label: "Customer", sort: null },
+    { key: "stage", label: "Stage", sort: "stage" },
+    { key: "stageDate", label: "In stage since", sort: "stage" },
+    { key: "estimator", label: "Estimator", sort: "estimator" },
+    { key: "total", label: "Value", sort: "total", num: true },
+    { key: "activity", label: "Last activity", sort: "activity" },
+  ];
+
+  function tableHtml(items) {
+    if (!items.length) return '<div class="empty">Nothing matches those filters.</div>';
+    const head = COLS.map((c) => {
+      if (!c.sort) return `<th class="${c.num ? "num" : ""}">${esc(c.label)}</th>`;
+      const on = SORTFIELD === c.sort;
+      const arrow = on ? (SORTDIR === "asc" ? " ↑" : " ↓") : "";
+      return `<th class="${c.num ? "num " : ""}th-sort${on ? " is-sorted" : ""}" aria-sort="${
+        on ? (SORTDIR === "asc" ? "ascending" : "descending") : "none"}">` +
+        `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${arrow}</button></th>`;
+    }).join("");
+    const rows = items.map((p) => {
+      const act = lastActivity(p);
+      const email = estimatorOf(p);
+      const chips = chipsHtml(p);
+      return `<tr class="trow" data-id="${esc(p.proposal_id)}" tabindex="0">
+        <td class="t-name">${esc(p.project_name || "Proposal")}${
+          p.unread ? ` <span class="unread-dot" title="${p.unread} unread customer message${p.unread === 1 ? "" : "s"}">${p.unread}</span>` : ""}</td>
+        <td>${esc(p.customer_name || p.customer_email || "")}</td>
+        <td>${esc(stageOf(p))}${chips ? `<div class="chips">${chips}</div>` : ""}</td>
+        <td>${esc(TW.fmtBizDate(stageTs(p)))}</td>
+        <td${isAssigned(p) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
+          email ? esc(nameOf(email)) + (isAssigned(p) ? "" : "?") : "—"}</td>
+        <td class="num">${p.approved_total != null ? money(p.approved_total) : ""}</td>
+        <td>${act ? esc(act.label) + " " + esc(TW.fmtBizDate(act.ts)) : ""}</td>
+      </tr>`;
+    }).join("");
+    return `<table class="ptable"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  // One delegated listener on #board, wired once — renderBoard replaces the node's
+  // innerHTML on every poll (every 25s), so per-element listeners would be re-bound
+  // dozens of times an hour and leak with each repaint.
+  $("board").addEventListener("click", (e) => {
+    const th = e.target.closest("[data-sortby]");
+    if (th) {
+      const f = th.dataset.sortby;
+      // Clicking the column already sorted flips it; a new column opens its natural way.
+      SORTDIR = SORTFIELD === f ? (SORTDIR === "asc" ? "desc" : "asc") : (NATURAL_DIR[f] || "desc");
+      SORTFIELD = f;
+      ssSet(SORTFIELD_KEY, SORTFIELD); ssSet(SORTDIR_KEY, SORTDIR);
+      syncSortControls();
+      renderBoard();
+      return;
+    }
+    const row = e.target.closest(".deal, .trow");
+    if (row && row.dataset.id) openDetail(row.dataset.id);
+  });
+  $("board").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest && e.target.closest(".trow");
+    if (!row) return;
+    e.preventDefault();
+    openDetail(row.dataset.id);
+  });
 
   /** Options come from the data, so the list can't offer an estimator with no
    *  cards. A stale selection is dropped rather than leaving the board blank. */
@@ -177,7 +223,7 @@
     if (!sel) return;
     const counts = {};
     ALL.forEach((p) => {
-      const e = String(p.estimator_email || "").toLowerCase();
+      const e = estimatorOf(p).toLowerCase();
       if (e) counts[e] = (counts[e] || 0) + 1;
     });
     if (EST && !counts[EST]) { EST = ""; ssSet(EST_KEY, ""); }
@@ -217,6 +263,58 @@
     // Deep-link from a staff notification email: ?open=<proposal_id>.
     const openId = new URLSearchParams(location.search).get("open");
     if (openId) openDetail(openId);
+  }
+
+  // ── keeping the board live ──────────────────────────────────────────────────
+  // The board is a screen reps leave open all day, and until now it only refreshed
+  // on page load or after the viewer's OWN action — so a colleague's reply, a
+  // customer approval or a deposit landing stayed invisible behind an F5. Filters,
+  // sort and search survive a repaint (they live in sessionStorage and the DOM), so
+  // re-running load() is safe at any moment.
+  const BOARD_POLL_MS = 25000;
+  const DRAWER_POLL_MS = 12000;
+
+  /** True when repainting the drawer would interrupt something the rep is doing.
+   *
+   *  renderDetail rebuilds the drawer's innerHTML. The reply TEXT already survives
+   *  that (REPLY_DRAFT), but focus and caret position do not — so refreshing under
+   *  someone's hands mid-sentence throws them out of the box. The invoice review
+   *  dialog is worse: it would be torn down with half-entered numbers in it.
+   *  Staleness for a few seconds beats either. */
+  function drawerBusy() {
+    if (document.querySelector(".inv-dlg")) return true;   // invoice review is open
+    const a = document.activeElement;
+    if (!a) return false;
+    const tag = (a.tagName || "").toLowerCase();
+    return tag === "textarea" || tag === "input" || tag === "select" || a.isContentEditable;
+  }
+
+  /** Refresh the board, and the open drawer with it. */
+  async function refreshLive() {
+    if (document.hidden) return;
+    await load();
+    if (!CUR_PID || drawerBusy()) return;
+    const scroller = document.getElementById("thread");
+    const wasAtBottom = scroller
+      ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40 : false;
+    const scrollTop = scroller ? scroller.scrollTop : null;
+    await openDetail(CUR_PID);
+    const s2 = document.getElementById("thread");
+    if (s2 && scrollTop != null) {
+      // Reading older messages? Hold position. Already at the bottom? Follow the
+      // new message down, which is what a live thread should do.
+      s2.scrollTop = wasAtBottom ? s2.scrollHeight : scrollTop;
+    }
+  }
+
+  function startLiveUpdates() {
+    setInterval(() => { if (!document.hidden && !drawerBusy()) load(); }, BOARD_POLL_MS);
+    setInterval(() => { if (!document.hidden && CUR_PID) refreshLive(); }, DRAWER_POLL_MS);
+    // Switching back to the tab should show current state at once, not up to 25s
+    // later. This is the moment a rep actually looks at the screen.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) { CUR_PID ? refreshLive() : load(); }
+    });
   }
 
   // ── modal pop-up (detail drawer) ────────────────────────────────────────────
@@ -297,6 +395,7 @@
     contacts: ["dsec-contacts"],
     schedule: ["dsec-schedule"],
     chat:     ["dsec-chat"],
+    followup: ["dsec-followup"],
   };
   const ALL_SEC_CARDS = Object.values(SEC_TABS).flat();
   const SEC_ELIGIBLE = new Set();
@@ -372,7 +471,10 @@
     if (ACTIVE_SEC) return ACTIVE_SEC;
     if (unread > 0) return "chat";
     if (p.deposit_status === "submitted") return "deposit";        // money in, unconfirmed
-    if (p.proposal_status === "approved" && !p.deposit_requested_at) return "deposit";
+    // Don't park on Deposit for a job that doesn't collect one — there's nothing
+    // to action there. Contacts/schedule is the real next step.
+    if (p.proposal_status === "approved" && !p.deposit_requested_at
+        && p.deposit_required !== false) return "deposit";
     if (p.contacts_status === "received" && p.schedule_status !== "scheduled") return "schedule";
     return "proposal";
   }
@@ -458,8 +560,12 @@
   }
 
   function renderSecTabs(s) {
+    // "Not required" is a resting state, not a to-do: no needs-attention flag, so
+    // the tab doesn't nag about work that isn't wanted. Staff can still open it and
+    // send a request manually.
     const dep = s.depositDone ? { done: true, val: "Received" }
       : s.depositSubmitted ? { needs: true, val: "Confirm it" }
+      : (s.depositNotRequired && !s.requested) ? { val: "Not required" }
       : (s.approved && !s.requested) ? { needs: true, val: "Send request" }
       : { val: s.requested ? "Requested" : "Pending" };
     return `<div class="dtabs" role="tablist" aria-label="Project sections">` +
@@ -472,6 +578,10 @@
         hint: "Book the job once the deposit clears" }) +
       secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
         badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
+      // Closed-lost is "done" in the sense the tab means it: nothing left to chase.
+      // Paused isn't flagged either — the customer asked for the quiet.
+      secTab("followup", "Follow-up", { done: s.lost, val: s.fuVal,
+        hint: "Automatic follow-ups, what you've chased personally, and the customer's timeline" }) +
       `</div>`;
   }
 
@@ -731,7 +841,15 @@
         <div class="cc-body">${esc(s.body)}</div></div>`;
     }
     if (m.msg_type === "proposal_card") {
-      return `<div class="chat-card proposal ${sideOf(m)}"><div class="cc-title">Your proposal is ready</div>
+      // A revised estimate posts a new card and retires the old one, so the thread
+      // shows which version is current instead of two identical-looking cards.
+      const meta = m.meta || {};
+      const dead = !!meta.superseded;
+      const rev = meta.revision_no;
+      const title = (rev && rev > 1) ? `Revision ${esc(rev)} of the proposal` : "Your proposal is ready";
+      return `<div class="chat-card proposal ${sideOf(m)}${dead ? " is-superseded" : ""}">
+        <div class="cc-title">${title}${dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
+        ${dead && meta.superseded_by ? `<div class="cc-meta">Replaced by revision ${esc(meta.superseded_by)}</div>` : ""}
         <div class="cc-body">${esc(m.body)}</div></div>`;
     }
     if (m.msg_type === "deposit_request") {
@@ -757,11 +875,279 @@
     </div>`;
   }
 
+  // ── follow-up section ──────────────────────────────────────────────────────
+  // Everything about chasing this proposal in one place: whether the automation is
+  // running, what it has already sent, what a human did personally, and what the
+  // customer said about their timeline. The digest reads the same log, so a logged
+  // call here is what stops tomorrow morning recommending this proposal again.
+  // The portal STORES the staff kinds prefixed (`staff_call`), and accepts the short
+  // form the drawer posts. Both are mapped, because the log renders what came back
+  // from the server, not what we sent.
+  const FU_KIND_LABEL = {
+    staff_call: "Call", staff_email: "Email", staff_text: "Text", staff_note: "Note",
+    call: "Call", email: "Email", text: "Text", note: "Note",
+    auto_email: "Automatic email", customer_status: "Customer update",
+  };
+  // `template`, not `rule` — the worker records what it SENT. The rule key that
+  // deduped it is scheduling bookkeeping and means nothing to an estimator.
+  const FU_TEMPLATE_LABEL = {
+    not_viewed: "Nudge — not opened yet",
+    next_steps: "Next steps after viewing",
+    second_nudge: "Second nudge",
+    checkin: "Check-in",
+  };
+  // Bookkeeping the portal writes as a `staff_note` with an `action` key.
+  const FU_ACTION = {
+    reassigned: "Reassigned", automation_on: "Automation on", automation_off: "Automation off",
+    paused: "Paused", closed_lost: "Closed lost", reactivated: "Reactivated",
+  };
+  const STATUS_LABEL = { delayed: "Delayed", not_moving_forward: "Not moving forward", resume: "Back on" };
+
+  /** One line of the follow-up log. Every kind renders — including the automation's
+   *  own sends, because "the system already emailed them twice this week" is exactly
+   *  what an estimator needs before picking up the phone. */
+  function followupRow(f) {
+    const d = f.detail || {};
+    const kind = String(f.kind || "");
+    let what = FU_KIND_LABEL[kind] || kind;
+    let detail = d.note || "";
+    if (kind === "auto_email") {
+      what = FU_TEMPLATE_LABEL[d.template] || "Automatic email";
+      detail = d.audience === "staff" ? "sent to the estimator" : "sent to the customer";
+    } else if (kind === "customer_status") {
+      what = "Customer: " + (STATUS_LABEL[d.status] || d.status || "update");
+      detail = [d.months ? d.months + " month" + (d.months === 1 ? "" : "s") : "",
+                d.reason ? (C.LOST_REASON[d.reason] || d.reason) : "",
+                d.note || ""].filter(Boolean).join(" · ");
+    } else if (d.action) {
+      // Bookkeeping, not outreach. Named so the log reads as a history of the
+      // project rather than a row saying "System" with nothing after it.
+      what = FU_ACTION[d.action] || "System";
+      detail = d.action === "reassigned" ? "to " + (d.to || "?")
+        : d.action === "paused" ? (d.until ? "until " + TW.fmtBizDay(d.until) : "")
+        : d.action === "closed_lost" ? (C.LOST_REASON[d.reason] || d.reason || "")
+        : "";
+    }
+    return `<div class="fu-row">
+      <span class="fu-k">${esc(what)}</span>
+      <span class="fu-d">${esc(detail)}</span>
+      <span class="fu-t">${esc(TW.fmtBizDate(f.created_at))}${f.by ? " · " + esc(nameOf(f.by)) : ""}</span>
+    </div>`;
+  }
+
+  /** How the follow-up tab summarises itself, and what the panel leads with. One
+   *  sentence — an estimator opening this tab is asking "is anything chasing this?" */
+  function followupState(p) {
+    const f = fu(p);
+    if (isLost(p)) {
+      const why = lostReason(p);
+      return { val: "Closed lost", lead: "The customer said they aren't moving forward"
+        + (why ? " — " + why.toLowerCase() : "") + ". Nothing is being sent." };
+    }
+    const until = pausedUntil(p);
+    if (until) return { val: "Paused", lead: "The customer asked us to come back to this. Follow-ups resume "
+      + TW.fmtBizDay(until) + "." };
+    if (!f.enrolled) return { val: "Not automated", lead:
+      "This proposal was sent before automatic follow-ups existed. Switch them on to start the cadence from today." };
+    if (!f.enabled) return { val: "Off", lead:
+      "Automatic follow-ups are off for this project. Nothing is sent to the customer unless you send it." };
+    return { val: "On", lead:
+      "Following up automatically until the customer approves, replies, or tells us their timeline changed." };
+  }
+
+  function followupPanelHtml(p, data) {
+    const f = fu(p), st = followupState(p), enabled = !!f.enabled && !isLost(p);
+    const log = (data.followups || []).map(followupRow).join("")
+      || '<p class="note">Nothing logged yet.</p>';
+    const assignee = p.assigned_estimator || "";
+    return `
+      <div class="sec" id="dsec-followup">
+        <div class="lbl">Follow-up</div>
+        <p class="note" id="fu-lead">${esc(st.lead)}</p>
+        <div id="fu-alert" class="note fu-alert"></div>
+
+        <div class="fu-line">
+          <button class="btn btn-s" id="fu-toggle" ${isLost(p) ? "disabled" : ""}
+            title="${isLost(p) ? "This proposal is closed — reactivate it first"
+                   : enabled ? "Stop sending automatic follow-ups for this project"
+                             : "Start the follow-up cadence from today"}">${
+            enabled ? "Turn automation off" : "Turn automation on"}</button>
+        </div>
+
+        <div class="lbl fu-lbl">Log what you did</div>
+        <p class="note">Recording a call or a text keeps this proposal out of tomorrow's digest — and tells whoever picks it up next what already happened.</p>
+        <div class="fu-line">
+          <select id="fu-kind" class="tw-select" aria-label="What you did">
+            <option value="call">Call</option>
+            <option value="email">Email</option>
+            <option value="text">Text</option>
+            <option value="note">Note</option>
+          </select>
+          <input id="fu-note" type="text" class="fu-note" maxlength="2000"
+                 placeholder="Left a voicemail with Dave — will try Thursday" aria-label="Note" />
+          <button class="btn btn-s" id="fu-log">Log it</button>
+        </div>
+
+        <div class="lbl fu-lbl">Assigned to</div>
+        <div class="fu-line">
+          <select id="fu-assign" class="tw-select" aria-label="Assigned estimator">
+            <option value="${esc(assignee)}">${assignee ? esc(nameOf(assignee)) : "Loading…"}</option>
+          </select>
+          <button class="btn btn-s" id="fu-reassign" disabled>Reassign</button>
+        </div>
+        <p class="note">${assignee
+          ? "They get this project's follow-up emails and its line in the morning digest."
+          : "Nobody is assigned. The digest skips unassigned proposals, so this one is being chased by nobody."}</p>
+
+        <div class="lbl fu-lbl">The customer's timeline</div>
+        <p class="note">Use these when a customer tells you by phone instead of clicking the link in their email. The customer is not emailed.</p>
+        <div class="fu-line">
+          ${isLost(p)
+            ? '<button class="btn btn-s" id="fu-reopen">Reactivate this proposal</button>'
+            : `<select id="fu-months" class="tw-select" aria-label="Delay by">
+                 <option value="1">1 month</option><option value="2">2 months</option>
+                 <option value="3">3 months</option><option value="4">4+ months</option>
+               </select>
+               <button class="btn btn-s" id="fu-delay">Mark delayed</button>
+               <button class="btn btn-s" id="fu-lost">Mark closed lost</button>`}
+        </div>
+
+        <div class="lbl fu-lbl">History</div>
+        <div class="fu-log">${log}</div>
+      </div>`;
+  }
+
+  /** Wire the follow-up panel. Called from renderDetail, so every handler is bound
+   *  against the CURRENT render — `act` already re-opens the drawer on success. */
+  function wireFollowup(pid, p, act) {
+    const alert = (msg) => { const el = $("fu-alert"); if (el) el.textContent = msg || ""; };
+    const path = (suffix) => "/api/portal/proposal/" + encodeURIComponent(pid) + suffix;
+
+    const toggle = $("fu-toggle");
+    if (toggle) toggle.addEventListener("click", (e) => {
+      const on = !(fu(p).enabled && !isLost(p));
+      act(path("/followup-automation"), e.target, { body: JSON.stringify({ enabled: on }) });
+    });
+
+    const logBtn = $("fu-log");
+    if (logBtn) logBtn.addEventListener("click", (e) => {
+      alert("");
+      const kind = $("fu-kind").value, note = $("fu-note").value.trim();
+      // A bare "Call" with no note is still worth logging — it's the timestamp that
+      // suppresses the digest — so an empty note is not an error.
+      act(path("/followups"), e.target, { body: JSON.stringify({ kind, note }) });
+    });
+    const noteIn = $("fu-note");
+    if (noteIn) noteIn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); logBtn.click(); }
+    });
+
+    const delay = $("fu-delay");
+    if (delay) delay.addEventListener("click", async (e) => {
+      const months = Number($("fu-months").value) || 1;
+      const ok = await TW.confirmDanger({
+        title: "Pause follow-ups?",
+        before: "Stop chasing ", name: p.project_name || "this project",
+        after: " for " + months + " month" + (months === 1 ? "" : "s") + "?",
+        detail: "Nothing is sent to the customer until then. They aren't emailed about this.",
+        confirmText: "Pause", cancelText: "Keep chasing", tone: "warn", icon: "⏸",
+      });
+      if (!ok) return;
+      act(path("/status"), e.target, { body: JSON.stringify({ status: "delayed", months }) });
+    });
+
+    const lost = $("fu-lost");
+    if (lost) lost.addEventListener("click", async (e) => {
+      const why = await lostReasonDialog(p);
+      if (!why) return;
+      act(path("/status"), e.target, { body: JSON.stringify({ status: "closed_lost", reason: why }) });
+    });
+
+    const reopen = $("fu-reopen");
+    if (reopen) reopen.addEventListener("click", (e) =>
+      act(path("/status"), e.target, { body: JSON.stringify({ status: "active" }) }));
+
+    // The estimator list is a separate fetch, so the control starts disabled and
+    // opens only once there is something real to pick.
+    const sel = $("fu-assign"), btn = $("fu-reassign");
+    if (sel && btn) {
+      const cur = String(p.assigned_estimator || "").toLowerCase();
+      loadEstimators().then((people) => {
+        if (!$("fu-assign")) return;                       // re-rendered mid-fetch
+        if (!people.length) { sel.innerHTML = '<option value="">Unavailable</option>'; return; }
+        const known = people.some((x) => String(x.email).toLowerCase() === cur);
+        sel.innerHTML = (!cur ? '<option value="">Choose an estimator…</option>' : "")
+          // Whoever is assigned stays listed even if they've since left the roster —
+          // silently dropping them would make the control read as "unassigned".
+          + (cur && !known ? `<option value="${esc(cur)}">${esc(nameOf(cur))} (no longer listed)</option>` : "")
+          + people.map((x) => `<option value="${esc(x.email)}">${esc(x.name)}</option>`).join("");
+        sel.value = p.assigned_estimator || "";
+        btn.disabled = true;
+        sel.addEventListener("change", () => {
+          btn.disabled = !sel.value || sel.value.toLowerCase() === cur;
+        });
+      });
+      btn.addEventListener("click", (e) => {
+        if (!sel.value) return;
+        act(path("/assign"), e.target, { body: JSON.stringify({ estimator_email: sel.value }) });
+      });
+    }
+  }
+
+  /** Why we lost it. Free text would make the reasons uncountable, so this offers
+   *  the same six the customer's own form does — the two have to agree for a
+   *  "why do we lose bids?" question to have an answer. */
+  function lostReasonDialog(p) {
+    return new Promise((resolve) => {
+      const ov = document.createElement("div");
+      ov.className = "inv-ov";
+      ov.innerHTML = `<div class="inv-dlg" role="dialog" aria-modal="true" aria-label="Mark closed lost">
+        <div class="inv-h">Mark this closed lost?</div>
+        <p class="inv-sub">${esc(p.project_name || "This project")} moves out of the pipeline and all follow-ups stop.
+          The customer is not emailed. You can reactivate it later.</p>
+        <label class="inv-f" style="text-transform:none;letter-spacing:0;font-size:12.5px">
+          <span>Why?</span>
+          <select data-why>${Object.keys(C.LOST_REASON).map((k) =>
+            `<option value="${esc(k)}">${esc(C.LOST_REASON[k])}</option>`).join("")}</select>
+        </label>
+        <div class="inv-act">
+          <button type="button" class="btn btn-s" data-x>Cancel</button>
+          <button type="button" class="btn btn-p" data-go>Mark closed lost</button>
+        </div></div>`;
+      document.body.appendChild(ov);
+      const close = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+      const onKey = (e) => { if (e.key === "Escape") close(null); };
+      document.addEventListener("keydown", onKey);
+      ov.querySelector("[data-x]").addEventListener("click", () => close(null));
+      ov.addEventListener("click", (e) => { if (e.target === ov) close(null); });
+      ov.querySelector("[data-go]").addEventListener("click", () =>
+        close(ov.querySelector("[data-why]").value || "other"));
+      ov.querySelector("[data-why]").focus();
+    });
+  }
+
+  /** The active roster, fetched once per page. Reassign is rare and the list barely
+   *  changes, so re-fetching it on every drawer open would be pure waste. */
+  let EST_LIST = null;
+  function loadEstimators() {
+    if (EST_LIST) return EST_LIST;
+    EST_LIST = api("/api/estimators")
+      .then((r) => r.json())
+      .then((j) => (j && j.estimators) || [])
+      .catch(() => {
+        EST_LIST = null;                 // a blip must not poison the page for good
+        return [];
+      });
+    return EST_LIST;
+  }
+
   function renderDetail(pid, data) {
     const p = data.proposal, a = data.approval;
     const approved = p.proposal_status === "approved";
     const depositDone = p.deposit_status === "received";
     const depositSubmitted = p.deposit_status === "submitted";
+    // Sent without a deposit (typical for GC). Manual invoicing is still offered.
+    const depositNotRequired = p.deposit_required === false && !p.deposit_requested_at;
     const contactsDone = p.contacts_status === "received";
     const scheduledDone = p.schedule_status === "scheduled";
 
@@ -796,8 +1182,10 @@
         <h2>${esc(p.project_name || "Proposal")}</h2>
         <button class="dclose" aria-label="Close">&times;</button>
       </div>
-      ${renderSecTabs({ approved, depositDone, depositSubmitted, contactsDone, scheduledDone,
-                        requested: !!p.deposit_requested_at, unread })}
+      ${renderSecTabs({ approved, depositDone, depositSubmitted, depositNotRequired,
+                        contactsDone, scheduledDone,
+                        requested: !!p.deposit_requested_at, unread,
+                        lost: isLost(p), fuVal: followupState(p).val })}
       <div class="dbody">
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
         <div class="sec" id="dsec-customer"><div class="lbl">Customer</div>${esc(p.customer_name || "")} &lt;${esc(p.customer_email)}&gt;<br>
@@ -816,7 +1204,9 @@
        <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
         <div class="sec" id="dsec-deposit">
           <div class="lbl">Deposit</div>
-          <div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${data.deposit_ref ? ` · match ref <strong>${esc(data.deposit_ref)}</strong> on the statement` : ""}${p.deposit_requested_at ? ` · requested ${when(p.deposit_requested_at)}` : ""}</div>
+          ${depositNotRequired
+            ? `<div class="note">Sent without a deposit — nothing was invoiced and the customer sees no Deposit step. You can still send a request below if the terms change (25% would be ${depAmt != null ? money(depAmt) : "—"}).</div>`
+            : `<div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${data.deposit_ref ? ` · match ref <strong>${esc(data.deposit_ref)}</strong> on the statement` : ""}${p.deposit_requested_at ? ` · requested ${when(p.deposit_requested_at)}` : ""}</div>`}
           ${deposits
             ? `<div class="lbl dep-lbl">Deposit submissions</div>${deposits}`
             : '<p class="note dep-none">Nothing submitted by the customer yet.</p>'}
@@ -855,6 +1245,10 @@
           </div>
         </div>
        </div>
+
+       <div class="dpanel" id="dpanel-followup" role="tabpanel" aria-labelledby="dtab-followup" tabindex="-1">
+        ${followupPanelHtml(p, data)}
+       </div>
       </div>`;
 
     const gen = ++RENDER_GEN;
@@ -867,6 +1261,7 @@
     setSecEligible("dsec-contacts", true);
     setSecEligible("dsec-schedule", true);
     setSecEligible("dsec-chat", true);
+    setSecEligible("dsec-followup", true);
 
     const d = $("drawer");
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
@@ -931,6 +1326,7 @@
       act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", btn);
     });
     $("mark-scheduled").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/scheduled", e.target));
+    wireFollowup(pid, p, act);
 
     $("reply-body").addEventListener("input", (e) => { REPLY_DRAFT[pid] = e.target.value; });
 
@@ -957,19 +1353,47 @@
   // (The global notification roster moved to its own page — /notifications.html.
   //  Per-project overrides live in the detail drawer above.)
 
+  /** Push SORTFIELD/SORTDIR back into the toolbar. The table's own headers can
+   *  change the sort, so the select and the arrow must be able to catch up — a
+   *  toolbar reading "Last activity" over a board sorted by value is a lie. */
+  function syncSortControls() {
+    const sort = $("crm-sort"), dir = $("crm-dir");
+    if (sort) sort.value = SORTFIELD;
+    if (!dir) return;
+    dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+    dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
+    dir.title = SORTDIR === "asc"
+      ? "Ascending (oldest · A→Z · low→high) — click for descending"
+      : "Descending (newest · Z→A · high→low) — click for ascending";
+  }
+
+  /** The closed-lost toggle carries its own count, so the number of dead deals is
+   *  readable without revealing them. */
+  function syncLostChip() {
+    const b = $("crm-lost");
+    if (!b) return;
+    const n = ALL.filter(isLost).length;
+    b.hidden = n === 0;                       // nothing lost yet → no control at all
+    b.textContent = (SHOW_LOST ? "Hide" : "Show") + " closed lost (" + n + ")";
+    b.setAttribute("aria-pressed", SHOW_LOST ? "true" : "false");
+    b.classList.toggle("on", SHOW_LOST);
+  }
+
+  function syncViewToggle() {
+    const b = $("crm-view");
+    if (!b) return;
+    b.textContent = VIEW === "table" ? "▦ Board" : "☰ Table";
+    b.title = VIEW === "table" ? "Switch back to the pipeline columns" : "Show every proposal as one sortable list";
+    b.setAttribute("aria-pressed", VIEW === "table" ? "true" : "false");
+  }
+
   // Wired ONCE — the controls live in static markup, not in renderBoard, so they
   // keep their focus and value while the board repaints after a staff action.
   (function wireToolbar() {
     const est = $("crm-est"), month = $("crm-month");
     const sort = $("crm-sort"), dir = $("crm-dir"), clear = $("crm-clear");
-    const syncDir = () => {
-      if (!dir) return;
-      dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
-      dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
-      dir.title = SORTDIR === "asc"
-        ? "Ascending (oldest · A→Z · low→high) — click for descending"
-        : "Descending (newest · Z→A · high→low) — click for ascending";
-    };
+    const lost = $("crm-lost"), view = $("crm-view");
+    const syncDir = syncSortControls;
     $("search").addEventListener("input", renderBoard);
     $("search").addEventListener("keydown", (e) => {
       if (e.key === "Escape") { e.target.value = ""; renderBoard(); }
@@ -996,13 +1420,24 @@
         ssSet(SORTDIR_KEY, SORTDIR); syncDir(); renderBoard();
       });
     }
+    if (lost) lost.addEventListener("click", () => {
+      SHOW_LOST = !SHOW_LOST; ssSet(LOST_KEY, SHOW_LOST ? "1" : ""); renderBoard();
+    });
+    if (view) view.addEventListener("click", () => {
+      VIEW = VIEW === "table" ? "board" : "table";
+      ssSet(VIEW_KEY, VIEW === "table" ? "table" : "");
+      syncViewToggle(); renderBoard();
+    });
     if (clear) clear.addEventListener("click", () => {
+      // Deliberately NOT the view or the closed-lost toggle: those are how the rep
+      // wants to look at the board, not a filter narrowing what's on it.
       EST = ""; MONTH = ""; SORTFIELD = "activity"; SORTDIR = "desc";
       [EST_KEY, MONTH_KEY, SORTFIELD_KEY, SORTDIR_KEY].forEach((k) => ssSet(k, ""));
       $("search").value = "";
-      if (sort) sort.value = "activity";
       syncDir(); renderBoard();
     });
+    syncViewToggle();
   })();
   load();
+  startLiveUpdates();
 })();
