@@ -187,6 +187,27 @@ def _list_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _sent_revisions(ids: List[str]) -> Dict[str, int]:
+    """{project_id: highest revision_no} for the given projects, 0 when never sent.
+
+    One extra query for the whole page rather than per card. Best-effort: the
+    projects list must still render if draft_revisions is missing (a database that
+    hasn't had the DDL applied yet) — the badge just won't appear."""
+    if not ids:
+        return {}
+    try:
+        res = (get_client().table("draft_revisions").select("project_id, revision_no")
+               .in_("project_id", ids).execute())
+    except Exception:  # noqa: BLE001 — table absent / PostgREST cache cold
+        return {}
+    out: Dict[str, int] = {}
+    for r in res.data or []:
+        pid, no = r.get("project_id"), int(r.get("revision_no") or 0)
+        if pid and no > out.get(pid, 0):
+            out[pid] = no
+    return out
+
+
 def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
     """Shared list builder; `trashed` selects deleted vs active via deleted_at.
 
@@ -217,6 +238,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             if trashed:
                 return []
             res = sb.table("drafts").select(cols).order("updated_at", desc=True).limit(limit).execute()
+        rows = res.data or []
+        sent = _sent_revisions([r["id"] for r in rows])
         return [{
             "id": r["id"],
             "project_name": r.get("project_name") or "(untitled)",
@@ -228,7 +251,11 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
-        } for r in (res.data or [])]
+            # Which version the customer has, or 0 if this was never sent. Lets the
+            # card say so, instead of every project looking like a fresh draft and
+            # nobody knowing which ones are live with a customer.
+            "sent_revision": sent.get(r["id"], 0),
+        } for r in rows]
     except Exception:  # noqa: BLE001 — fall back to the full-blob read
         try:
             res = _filtered(
