@@ -144,6 +144,14 @@
       '<div class="tw-section">Proposals</div>' +
       navItem("/projects.html", "▣", "Projects") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
+      // Same glyph as the "📋 Info" button on the project cards, so the two
+      // entry points read as one destination. shared.js appends ?d= for the
+      // project in hand; with none it lands on its own choose-a-project state.
+      navItem("/info-sheet.html", "📋", "Info Sheet") +
+      // Its own heading rather than a third item under Leads & bids: those two
+      // are the daily queue, this is the look back over all of it.
+      '<div class="tw-section">Analytics</div>' +
+      navItem("/analytics.html", "◫", "Analytics") +
       '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
@@ -158,6 +166,17 @@
       '<div class="tw-useremail">' + esc(u.email || "") + '</div></div>' +
       '<button class="tw-signout" id="tw-signout" title="Sign out">⏻</button></div>';
     document.body.appendChild(aside);
+
+    // The sidebar is injected after sign-in resolves, which is long after
+    // shared.js's DOMContentLoaded pass that appends ?d= to project-scoped
+    // links — so any nav item that needs a draft has to carry it itself.
+    try {
+      if (window.TW && TW.getDraftId()) {
+        aside.querySelectorAll('a[href="/info-sheet.html"]').forEach((a) => {
+          a.setAttribute("href", TW.withDraft("/info-sheet.html"));
+        });
+      }
+    } catch {}
 
     const backdrop = document.createElement("div"); backdrop.id = "tw-backdrop";
     document.body.appendChild(backdrop);

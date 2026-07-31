@@ -51,7 +51,7 @@ def _draft(**data):
 def test_every_dropdown_survived_the_template_rebuild():
     """openpyxl drops the master's x14 validations on save. If these six are
     missing, the sheet still works and every picker is silently free-text."""
-    drops = isw.read_grid()["dropdowns"]
+    drops = isw.read_sheet(isw.SHEET)["dropdowns"]
     for addr in ("B16", "B17", "B19", "B60", "B62", "B59", "B61", "B63", "B64",
                  "B66", "B67", "B68", "F33"):
         assert drops.get(addr), f"{addr} lost its dropdown"
@@ -61,7 +61,7 @@ def test_every_dropdown_survived_the_template_rebuild():
 def test_market_segments_are_kyles_list_verbatim():
     """Hanz: do not add, delete or reword the Project Class options. The
     "Industial" typo is in the master and stays until he fixes it there."""
-    market = isw.read_grid()["dropdowns"]["B16"]
+    market = isw.read_sheet(isw.SHEET)["dropdowns"]["B16"]
     assert market[0] == "-Select-"
     assert len(market) == 19
     for segment in ("Animal Care", "Correctional", "Food & Bev Manufacturing",
@@ -87,11 +87,20 @@ def test_the_other_tabs_still_read_the_info_sheet():
     assert wb["Invoice"]["C14"].value == "='Info Sheet'!B15"            # project
 
 
-def test_derived_cells_are_marked_read_only():
-    cells = {c["addr"]: c for c in isw.read_grid()["cells"]}
+def test_no_cell_is_marked_read_only():
+    """Every cell is editable now, like the estimate grid. A derived cell is
+    signalled by shipping its formula, not by being locked out."""
+    cells = {c["addr"]: c for c in isw.read_sheet(isw.SHEET)["cells"]}
+    assert not any(c.get("readOnly") for c in cells.values())
+
+
+def test_formula_cells_ship_their_formula_text():
+    """The grid shows the computed value at rest and the formula on focus, so
+    tabbing through a derived cell cannot flatten it into a constant."""
+    cells = {c["addr"]: c for c in isw.read_sheet(isw.SHEET)["cells"]}
     for addr in ("B18", "F21", "B65", "B69", "B71"):
-        assert cells[addr].get("readOnly"), f"{addr} is editable"
-    assert not cells["B15"].get("readOnly")     # project name is typed
+        assert cells[addr].get("isFormula"), f"{addr} lost its formula flag"
+        assert str(cells[addr].get("formula", "")).startswith("="), addr
 
 
 # ── 1b. Where the cost figures come from ──────────────────────────────
@@ -436,13 +445,22 @@ def test_the_job_number_stays_text():
     assert ws["B14"].value == "26.100"
 
 
-def test_derived_cells_and_labels_are_never_written():
-    ws = _filled({}, {"Info Sheet!B18": "Epoxy - Commercial",   # derived
-                      "Info Sheet!A15": "hacked",              # a label
-                      "Info Sheet!B71": "N/A"})                # derived
+def test_typing_over_a_formula_or_a_label_replaces_it():
+    """Hanz asked for the estimate grid's behaviour: any cell, including the
+    derived ones and the labels. The formula-injection guard still applies."""
+    ws = _filled({}, {"Info Sheet!B18": "Epoxy - Commercial",   # was derived
+                      "Info Sheet!A15": "Job Name",             # was a label
+                      "Info Sheet!B71": "N/A"})                 # was derived
+    assert ws["B18"].value == "Epoxy - Commercial"
+    assert ws["A15"].value == "Job Name"
+    assert ws["B71"].value == "N/A"
+
+
+def test_an_untouched_formula_is_left_alone():
+    """Only cells the estimator actually sent are written."""
+    ws = _filled({"B15": "Westport"})
     assert str(ws["B18"].value).startswith("=IF(")
     assert ws["A15"].value == "Project Name (Description):"
-    assert str(ws["B71"].value).startswith("=IF(")
 
 
 def test_a_typed_formula_trigger_is_neutralized():
@@ -518,9 +536,15 @@ def one_draft(monkeypatch):
 
 def test_get_returns_the_grid_and_the_prefill(one_draft):
     body = client.get("/api/info-sheet/d1").json()
-    assert body["grid"]["sheet"] == "Info Sheet"
-    assert body["prefill"]["B15"] == "Westport Commons"
+    assert body["order"] == ["Info Sheet", "SOV", "Foundation Import", "Invoice", "Deposit"]
+    assert body["sheets"]["Info Sheet"]["sheet"] == "Info Sheet"
     assert body["template_version"]
+    # The prefill is merged into the cells, so the grid shows exactly what the
+    # download will write — no second source of truth to reconcile.
+    cells = {c["addr"]: c for c in body["sheets"]["Info Sheet"]["cells"]}
+    assert cells["B15"]["value"] == "Westport Commons"
+    assert cells["B15"]["role"] == "prefill"
+    assert cells["B16"]["role"] == "decision"        # pink, left for a human
 
 
 def test_get_404s_on_an_unknown_draft(one_draft):
@@ -583,4 +607,254 @@ def test_generate_survives_an_unreachable_portal(one_draft, monkeypatch):
 def test_a_requested_deposit_reaches_the_sheet(one_draft, monkeypatch):
     monkeypatch.setattr(main, "_portal", lambda *a, **kw: {"proposals": [
         {"proposal_id": "d1", "deposit_requested_at": "2026-07-27T10:00:00Z"}]})
-    assert client.get("/api/info-sheet/d1").json()["prefill"]["B59"] == "Y"
+    body = client.get("/api/info-sheet/d1").json()
+    cells = {c["addr"]: c for c in body["sheets"]["Info Sheet"]["cells"]}
+    assert cells["B59"]["value"] == "Y"
+
+
+# ── The shared reader serves two workbooks ────────────────────────────
+# estimate_writer's caches were keyed by (sheet name, mtime) with no path, so
+# once a second workbook started reading through them one template's sheet
+# could be handed back for the other's request. That failure looks like real
+# data, which is why it needs a behavioural test and not a key-shape one.
+@pytest.fixture
+def _cold_caches():
+    ew._WB_CACHE.clear(); ew._SHEET_GRID_CACHE.clear()
+    yield
+    ew._WB_CACHE.clear(); ew._SHEET_GRID_CACHE.clear()
+
+
+def test_the_workbook_cache_keeps_the_two_templates_apart(_cold_caches):
+    est = ew._load_template(data_only=False)
+    info = ew._load_template(data_only=False, path=isw.TEMPLATE_PATH)
+    assert est is not info
+    assert "Epoxy" in est.sheetnames and "Epoxy" not in info.sheetnames
+    assert "Info Sheet" in info.sheetnames
+    assert ew._load_template(data_only=False) is est, "the estimate was evicted"
+
+
+def test_the_grid_cache_cannot_serve_one_templates_sheet_out_of_another(_cold_caches):
+    """Warm Epoxy, then ask the info workbook for it. A path-less cache hands
+    back the warmed Epoxy grid; a correct one has never heard of the sheet."""
+    ew.read_sheet_grid("Epoxy")
+    with pytest.raises(KeyError):
+        ew.read_sheet_grid("Epoxy", path=isw.TEMPLATE_PATH)
+    ew.read_sheet_grid("Info Sheet", path=isw.TEMPLATE_PATH)
+    with pytest.raises(KeyError):
+        ew.read_sheet_grid("Info Sheet")
+
+
+def test_a_defined_name_dropdown_resolves(_cold_caches):
+    """Every picker on the Info Sheet points at a workbook-level name, because
+    that is the only cross-sheet source form Excel and openpyxl both keep. The
+    shared resolver could not follow one, so reusing it dropped all six."""
+    wb = openpyxl.load_workbook(isw.TEMPLATE_PATH)
+    opts = ew._resolve_range_to_options(wb, wb["Info Sheet"], "MarketList",
+                                        path=isw.TEMPLATE_PATH)
+    assert len(opts) == 19 and opts[0] == "-Select-" and "Religious" in opts
+
+
+def test_the_estimates_own_dropdowns_still_resolve(_cold_caches):
+    """The defined-name branch must not disturb literal ranges."""
+    wb = ew._load_template(data_only=False)
+    opts = ew._resolve_range_to_options(wb, wb["Epoxy"], "$B$161:$B$165")
+    assert len(opts) == 5 and opts[0] == "Primer Options"
+
+
+def test_a_row_insert_moves_the_info_sheets_dropdowns_with_their_cells(_cold_caches):
+    """The headline case. Insert above the Y/N block and every picker below it
+    has to come along, or the estimator gets free-text where a list should be
+    and Foundation gets a category nobody can report on."""
+    wb = openpyxl.load_workbook(isw.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Info Sheet", "kind": "insert_rows", "at": 20, "count": 2}]))
+    ws = wb["Info Sheet"]
+    by_src = {d.formula1: str(d.sqref) for d in ws.data_validations.dataValidation}
+    assert by_src["YNList"] == "B61 B63 B65:B66 B68:B70"   # was B59 B61 B63:B64 B66:B68
+    assert by_src["TermsList"] == "B62"                    # was B60
+    assert by_src["LeadSourceList"] == "B64"               # was B62
+    assert by_src["MarketList"] == "B16"                   # above the insert, unmoved
+    # And the payroll formula that slid into the old Y/N territory did not
+    # inherit a Y/N picker.
+    assert "B67" not in " ".join(by_src.values())
+    assert str(ws["B67"].value).startswith("=IF(")
+
+
+def test_a_row_insert_keeps_the_other_tabs_pointing_at_the_right_cells(_cold_caches):
+    """Foundation Import, Invoice and Deposit read this sheet by address."""
+    wb = openpyxl.load_workbook(isw.TEMPLATE_PATH)
+    ew._apply_tab_structs(wb, ew._norm_structs(
+        [{"sheet": "Info Sheet", "kind": "insert_rows", "at": 20, "count": 2}]))
+    assert wb["Foundation Import"]["A1"].value == "='Info Sheet'!B14"   # above, unmoved
+    assert wb["Invoice"]["C11"].value == "='Info Sheet'!B62"            # B60 pushed down 2
+    assert wb["Invoice"]["C14"].value == "='Info Sheet'!B15"            # above, unmoved
+
+
+# ── Five tabs, every cell writable ────────────────────────────────────
+def test_the_visible_tabs_are_exactly_the_five_we_expect():
+    """Derived from the workbook, so a master that unhides a tab or adds one
+    fails here rather than quietly putting it on screen."""
+    assert isw.visible_sheets() == ["Info Sheet", "SOV", "Foundation Import",
+                                    "Invoice", "Deposit"]
+
+
+def test_the_hidden_lists_tab_is_never_served():
+    """It holds the dropdown source columns. Showing it invites someone to edit
+    the options out from under every picker."""
+    body = isw.read_workbook()
+    assert "Lists" not in body["order"] and "Lists" not in body["sheets"]
+    with pytest.raises(KeyError):
+        isw.read_sheet("Lists")
+
+
+def test_the_sov_grid_gets_the_border_symmetry_pass():
+    """The reason the read path is shared rather than forked. SOV is a bordered
+    table; Excel defines each wall on one side only, so without the mirror pass
+    half its cells render with missing edges."""
+    cells = isw.read_sheet("SOV")["cells"]
+    assert sum(1 for c in cells if c.get("borders")) > 150
+
+
+def test_every_visible_tab_accepts_a_write():
+    ws = None
+    wb = openpyxl.load_workbook(io.BytesIO(isw.fill_info_sheet({}, {
+        "Info Sheet!B15": "Westport", "SOV!B7": "Submittals edit",
+        "Foundation Import!C1": "CUST-9", "Invoice!C9": "26.153-01",
+        "Deposit!C9": "26.153-02"})))
+    assert wb["Info Sheet"]["B15"].value == "Westport"
+    assert wb["SOV"]["B7"].value == "Submittals edit"
+    assert wb["Foundation Import"]["C1"].value == "CUST-9"
+    assert wb["Invoice"]["C9"].value == "26.153-01"
+    assert wb["Deposit"]["C9"].value == "26.153-02"
+
+
+def test_a_write_to_the_hidden_lists_tab_is_refused():
+    wb = openpyxl.load_workbook(io.BytesIO(
+        isw.fill_info_sheet({}, {"Lists!A4": "HACKED"})))
+    assert wb["Lists"]["A4"].value == "-Select-"
+
+
+def test_a_malformed_override_address_is_skipped_not_fatal():
+    wb = openpyxl.load_workbook(io.BytesIO(isw.fill_info_sheet({}, {
+        "B15": "no sheet prefix", "Info Sheet!B1:B9": "a range",
+        "Info Sheet!MarketList": "a defined name", "Nope!B1": "unknown sheet",
+        "Info Sheet!B15": "the good one"})))
+    assert wb["Info Sheet"]["B15"].value == "the good one"
+
+
+# ── Structural edits ──────────────────────────────────────────────────
+_INS20 = [{"sheet": "Info Sheet", "kind": "insert_rows", "at": 20, "count": 2}]
+
+
+def test_the_prefill_rides_a_structural_shift():
+    """Prefill is authored in template coordinates, so it is written BEFORE the
+    replay and moves with its cell — the same invariant fill_estimate keeps."""
+    wb = openpyxl.load_workbook(io.BytesIO(
+        isw.fill_info_sheet({"B57": 82496, "B15": "Westport"}, {}, tab_structs=_INS20)))
+    ws = wb["Info Sheet"]
+    assert ws["B59"].value == 82496          # B57 pushed down two
+    assert ws["B15"].value == "Westport"     # above the insert, unmoved
+
+
+def test_overrides_arrive_in_current_coordinates():
+    """The estimator typed against the grid in front of them, which already had
+    the inserted rows — so their addresses are written AFTER the replay, as-is."""
+    wb = openpyxl.load_workbook(io.BytesIO(
+        isw.fill_info_sheet({}, {"Info Sheet!B62": "Net 10"}, tab_structs=_INS20)))
+    assert wb["Info Sheet"]["B62"].value == "Net 10"
+
+
+def test_a_structural_edit_keeps_the_other_tabs_pointing_at_the_right_cells():
+    wb = openpyxl.load_workbook(io.BytesIO(isw.fill_info_sheet({}, {}, tab_structs=_INS20)))
+    assert wb["Invoice"]["C11"].value == "='Info Sheet'!B62"     # B60 moved
+    assert wb["Foundation Import"]["A1"].value == "='Info Sheet'!B14"   # above, unmoved
+
+
+def test_a_structural_edit_on_another_tab_replays_too():
+    wb = openpyxl.load_workbook(io.BytesIO(isw.fill_info_sheet(
+        {}, {}, tab_structs=[{"sheet": "SOV", "kind": "insert_rows", "at": 7, "count": 1}])))
+    assert wb["Invoice"]["C21"].value == "=SOV!B8"               # was =SOV!B7
+
+
+def test_a_structural_op_on_the_hidden_lists_tab_is_refused():
+    """_apply_tab_structs only skips sheets absent from the workbook, and Lists
+    is present — so without the visible-sheets gate this wipes the dropdown
+    source and every picker silently goes free-text."""
+    wb = openpyxl.load_workbook(io.BytesIO(isw.fill_info_sheet(
+        {}, {}, tab_structs=[{"sheet": "Lists", "kind": "delete_rows",
+                              "at": 4, "count": 20}])))
+    market = [c[0].value for c in wb["Lists"]["A4":"A22"] if c[0].value]
+    assert len(market) == 19 and market[0] == "-Select-"
+
+
+def test_resolve_addr_follows_the_edits():
+    assert isw.resolve_addr("B57", _INS20) == "B59"
+    assert isw.resolve_addr("B14", _INS20) == "B14"          # above the insert
+    assert isw.resolve_addr("B21", [{"sheet": "Info Sheet", "kind": "delete_rows",
+                                     "at": 21, "count": 1}]) is None
+
+
+# ── The colour key ────────────────────────────────────────────────────
+def _fill_of(ws, addr):
+    f = ws[addr].fill
+    rgb = f.fgColor.rgb if f and f.patternType == "solid" else None
+    return rgb if isinstance(rgb, str) else None
+
+
+def test_prefilled_cells_come_out_chartreuse():
+    ws = _filled({"B15": "Westport", "B57": 82496})
+    assert _fill_of(ws, "B15") == isw.CHARTREUSE
+    assert _fill_of(ws, "B57") == isw.CHARTREUSE
+
+
+def test_a_field_we_knew_but_the_job_did_not_have_is_still_ticked():
+    """On the marked-up FBC sheet D42 is chartreuse and blank — we knew the cove
+    field, the job simply had none. Deriving the key from "cells that ended up
+    non-empty" would lose that."""
+    ws = _filled({"D42": None})
+    assert ws["D42"].value is None
+    assert _fill_of(ws, "D42") == isw.CHARTREUSE
+
+
+def test_the_decisions_are_pink_even_when_a_human_filled_them():
+    """Pink means "a person chose this", permanently. On FBC, B16 is pink and
+    holds "Religious"."""
+    ws = _filled({}, {"Info Sheet!B16": "Religious"})
+    assert ws["B16"].value == "Religious"
+    assert _fill_of(ws, "B16") == isw.PINK
+
+
+def test_a_cell_the_tool_could_not_answer_is_not_ticked():
+    ws = _filled({"B15": "Westport"})          # no cost_snapshot -> no B58 key
+    assert _fill_of(ws, "B58") != isw.CHARTREUSE
+
+
+def test_the_colour_key_leaves_the_labels_alone():
+    ws = _filled({"B15": "Westport"})
+    tpl = openpyxl.load_workbook(isw.TEMPLATE_PATH)["Info Sheet"]
+    for addr in ("A15", "A57", "A20", "H5"):
+        assert _fill_of(ws, addr) == _fill_of(tpl, addr), addr
+
+
+def test_the_colour_key_keeps_the_number_format():
+    ws = _filled({"B57": 82496, "B14": "26.100"})
+    assert ws["B57"].number_format.startswith('"$"')
+    assert ws["B14"].number_format == "@"
+
+
+def test_the_colour_key_follows_a_structural_edit():
+    wb = openpyxl.load_workbook(io.BytesIO(
+        isw.fill_info_sheet({"B57": 82496}, {}, tab_structs=_INS20)))
+    ws = wb["Info Sheet"]
+    assert _fill_of(ws, "B59") == isw.CHARTREUSE     # prefill moved
+    assert _fill_of(ws, "B62") == isw.PINK           # B60 pink moved
+
+
+def test_the_prefill_and_the_pink_set_never_overlap():
+    """Pink is painted last and would win. A test rather than a footnote."""
+    draft = _draft(job_number="26.153", estimator_name="Troy",
+                   sheet_area={"epoxy_sf": 8000, "cove_lf": 120},
+                   cost_snapshot={"costs": 1, "man_hours": 1},
+                   cell_values={"Epoxy!B6": "No", "Epoxy!D5": "Yes"},
+                   source="google_lead")
+    assert not (set(isw.build_prefill(draft, deposit_requested=True)) & isw.PINK_CELLS)
