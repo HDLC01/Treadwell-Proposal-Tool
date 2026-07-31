@@ -426,6 +426,17 @@ def api_basisboard_projects() -> Dict[str, Any]:
     return basisboard_client.get_pipeline()
 
 
+@app.get("/api/analytics")
+def api_analytics() -> Dict[str, Any]:
+    """The whole (capped) bid history as flat rows, plus the filter vocabularies.
+
+    Deliberately one payload rather than a query-per-chart: the browser holds the
+    rows and re-totals them locally, so combining trades with estimators with a
+    date range is instant and costs nothing. Always HTTP 200 — a Basisboard
+    outage degrades to ok:false and the page keeps its cached numbers."""
+    return basisboard_client.get_analytics()
+
+
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
 # The portal owns the portal_* tables; here we just call its SERVICE_TOKEN-gated
 # admin API. PORTAL_ADMIN_URL + SERVICE_TOKEN live in the env (not committed).

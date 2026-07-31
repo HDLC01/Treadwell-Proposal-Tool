@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- The app ships one theme. Without this a browser is free to auto-darken the
+     page and flatten the chart colours into each other. -->
+<meta name="color-scheme" content="only light" />
+<title>Analytics · Treadwell Proposal Generator</title>
+<link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+<style>
+  :root { color-scheme: only light;
+    --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
+    --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--surf); color:var(--ink);
+    font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .wrap { padding:24px 28px 64px; }
+  .top { display:flex; align-items:center; gap:12px; margin:0 0 4px; }
+  .logo { width:54px;height:34px; flex:none; display:block; }
+  h1 { font-size:22px; font-weight:700; letter-spacing:-.01em; margin:0; }
+  .sub { color:var(--ink-v); margin:0 0 16px; font-size:13px; }
+  .alert { border:1px solid var(--line); border-left:3px solid var(--red); background:#fdf3f3;
+    border-radius:8px; padding:9px 12px; color:var(--red-dark); font-size:12.5px; margin-bottom:12px; }
+
+  /* ── tabs ── */
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  .tab { border:0; background:none; padding:9px 14px; font:600 13.5px system-ui; color:var(--ink-v);
+    cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tab:hover { color:var(--ink); }
+  .tab.sel { color:var(--red-dark); border-bottom-color:var(--red); }
+
+  /* ── filter bar ── */
+  .filterbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .fb-lab { font:700 10.5px system-ui; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-v); margin-right:2px; }
+  select, input[type=date] { min-height:34px; padding:6px 10px; border:1px solid var(--line);
+    border-radius:7px; font:inherit; font-size:13px; background:#fff; color:var(--ink); }
+  select:focus, input[type=date]:focus { outline:none; border-color:var(--red); }
+  .msel { position:relative; }
+  .msel > .chip { min-height:34px; }
+  .chip { border:1px solid var(--line); background:#fff; color:var(--ink-v); border-radius:999px;
+    padding:6px 12px; font:600 12.5px system-ui; cursor:pointer; display:inline-flex;
+    align-items:center; gap:6px; }
+  .chip:hover { background:var(--surf-low); }
+  .chip.sel { background:var(--red-dark); border-color:var(--red-dark); color:#fff; }
+  .chip .n { background:var(--surf-high); color:var(--ink-v); border-radius:999px; padding:0 6px;
+    font:800 11px system-ui; }
+  .chip.sel .n { background:rgba(255,255,255,.24); color:#fff; }
+  .pop { position:absolute; z-index:40; top:calc(100% + 6px); left:0; width:262px; background:#fff;
+    border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.14);
+    padding:8px; }
+  .pop .psearch { width:100%; margin-bottom:6px; }
+  .pop .plist { max-height:262px; overflow-y:auto; }
+  .pop label { display:flex; gap:8px; align-items:center; padding:5px 6px; border-radius:6px;
+    font-size:13px; cursor:pointer; }
+  .pop label:hover { background:var(--surf-low); }
+  .pop input[type=checkbox] { accent-color:var(--red); width:15px; height:15px; flex:none; }
+  .pop .pfoot { display:flex; gap:10px; border-top:1px solid var(--line); margin-top:6px;
+    padding-top:7px; }
+  .linkbtn { border:0; background:none; padding:0; color:var(--red-dark); font:600 12px system-ui;
+    cursor:pointer; text-decoration:underline; }
+  .active-filters { display:flex; gap:6px; flex-wrap:wrap; align-items:center;
+    margin:0 0 14px; min-height:0; }
+  .fchip { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line);
+    background:#fff; border-radius:999px; padding:3px 6px 3px 10px; font:600 12px system-ui;
+    color:var(--ink-v); }
+  .fchip button { border:0; background:none; cursor:pointer; color:var(--ink-v); font-size:14px;
+    line-height:1; padding:0 3px; }
+  .fchip button:hover { color:var(--red); }
+  .fnote { color:var(--ink-v); font-size:11.5px; }
+
+  /* ── cards ──
+     Won on the left, Submitted on the right: the two halves of the same question,
+     read side by side. They stack on a narrow screen, keeping that pairing. */
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  @media (max-width:900px) { .grid2 { grid-template-columns:1fr; } }
+  .col { display:flex; flex-direction:column; gap:14px; min-width:0; }
+  .colhead { font:700 10.5px system-ui; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-v); padding-bottom:2px; }
+  .acard { background:#fff; border:1px solid var(--line); border-radius:11px; padding:14px 16px;
+    box-shadow:0 1px 3px rgba(0,0,0,.04); min-width:0; }
+  .ah { display:flex; align-items:flex-start; gap:8px; margin-bottom:6px; }
+  .ah h4 { margin:0; font-size:13px; font-weight:700; flex:1 1 auto; }
+  .ah .spacer { flex:1 1 auto; }
+  .kpi { font-size:26px; font-weight:800; letter-spacing:-.02em; line-height:1.15; }
+  .kpi-sub { color:var(--ink-v); font-size:12px; margin-top:1px; }
+  .caption { color:var(--ink-v); font-size:11px; margin:8px 0 0; }
+  .brk { border:0; background:none; padding:0; margin-top:6px; color:var(--red-dark);
+    font:600 12px system-ui; cursor:pointer; }
+  .brk:hover { text-decoration:underline; }
+  .chart-empty { color:var(--ink-v); font-size:12.5px; text-align:center; padding:26px 8px; margin:0; }
+  .ctype { border:1px solid var(--line); background:#fff; border-radius:7px; color:var(--ink-v);
+    font:600 11.5px system-ui; padding:3px 8px; cursor:pointer; }
+  .ctype:hover { background:var(--surf-low); }
+  .ctype[disabled] { opacity:.4; cursor:default; }
+  .ctypes { display:flex; gap:4px; flex:none; }
+
+  /* ── chart marks ── */
+  .ch-svg { display:block; overflow:visible; }
+  .ch-mark { cursor:pointer; }
+  .ch-mark:hover path, .ch-mark:hover circle { filter:brightness(1.12); }
+  .ch-donut { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .ch-legend { list-style:none; margin:0; padding:0; flex:1 1 190px; min-width:0; }
+  .ch-legend li { display:flex; align-items:center; gap:7px; font-size:12px; padding:2px 0; }
+  .ch-legend .lg-l { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ch-legend .lg-v { color:var(--ink-v); font-variant-numeric:tabular-nums; }
+  .ch-legend .lg-p { color:var(--ink-v); width:42px; text-align:right;
+    font-variant-numeric:tabular-nums; }
+  .sw { width:10px; height:10px; border-radius:3px; flex:none; display:inline-block; }
+
+  /* ── tables ── */
+  .tablewrap { background:#fff; border-radius:8px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font:700 10.5px system-ui; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-v); padding:7px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:7px 8px; border-bottom:1px solid var(--line); font-size:12.5px; }
+  th.r, td.r { text-align:right; font-variant-numeric:tabular-nums; }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr.ch-mark:hover td { background:var(--surf-low); }
+  td .sw { margin-right:6px; vertical-align:-1px; }
+
+  /* ── breakdown drawer ── */
+  #scrim { position:fixed; inset:0; background:rgba(20,18,18,.42); z-index:10000; display:none; }
+  #scrim.open { display:block; }
+  #drawer { position:fixed; top:0; right:0; bottom:0; width:min(940px,96vw); background:#fff;
+    z-index:10001; box-shadow:-14px 0 40px rgba(0,0,0,.2); display:none;
+    flex-direction:column; }
+  #drawer.open { display:flex; }
+  .dhead { display:flex; align-items:flex-start; gap:12px; padding:16px 20px;
+    border-bottom:1px solid var(--line); flex:none; }
+  .dhead h2 { margin:0; font-size:16px; }
+  .dhead .dsub { color:var(--ink-v); font-size:12.5px; margin-top:2px; }
+  .dclose { margin-left:auto; border:0; background:none; font-size:24px; line-height:1;
+    color:var(--ink-v); cursor:pointer; padding:0 4px; }
+  .dbody { padding:0 20px 24px; overflow-y:auto; flex:1 1 auto; }
+  .dbody table { min-width:820px; }
+  .dbody tfoot td { font-weight:800; border-top:2px solid var(--line); border-bottom:none; }
+  .stagedot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .nowrap { white-space:nowrap; }
+
+  .empty { background:#fff; border:1px solid var(--line); border-radius:11px; padding:44px 20px;
+    text-align:center; color:var(--ink-v); }
+  .empty h2 { color:var(--ink); font-size:17px; margin:0 0 6px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
+    <h1>Analytics</h1>
+  </div>
+  <p class="sub" id="sub">Your BasisBoard bids — won and submitted, sliced any way you like.</p>
+
+  <div id="alert"></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="filterbar" id="filterbar"></div>
+  <div class="active-filters" id="active-filters"></div>
+  <div id="cards"></div>
+</div>
+
+<div id="scrim"></div>
+<aside id="drawer" aria-label="Breakdown"></aside>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script src="/auth.js"></script>
+<script src="/shared.js"></script>
+<script src="/js/analytics-core.js"></script>
+<script src="/js/charts.js"></script>
+<script src="/js/analytics.js"></script>
+</body>
+</html>

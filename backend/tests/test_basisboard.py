@@ -15,6 +15,14 @@ _PROJECTS = {
     "pdel": {"id": "pdel", "name": "Deleted Job", "stageId": "s1", "deletedAt": "2026-02-02"},
 }
 
+# Basisboard serves /users 13 at a time. The client used to read only the first
+# page, so anyone past the thirteenth lost their name — u14 is here to catch that.
+_USER_PAGE = 13
+_USERS = [{"id": "u1", "firstName": "Kyle", "lastName": "Loseke", "email": "kyle@wetreadwell.com"}]
+_USERS += [{"id": f"u{i}", "firstName": f"Filler{i}", "lastName": "X"} for i in range(2, 14)]
+_USERS += [{"id": "u14", "firstName": "Greg", "lastName": "Page-Two"},
+           {"id": "u15", "firstName": "", "lastName": "", "email": "nameless@wetreadwell.com"}]
+
 
 def _fake_get(client, path, params=None):    # client arg ignored in tests
     if path == "/stages":
@@ -23,8 +31,9 @@ def _fake_get(client, path, params=None):    # client arg ignored in tests
             {"id": "s2", "name": "Won", "color": "#0a6b2c", "order": 2, "code": "won"},
         ]}
     if path == "/users":
-        return {"users": [{"id": "u1", "firstName": "Kyle", "lastName": "Loseke",
-                           "email": "kyle@wetreadwell.com"}]}
+        # Basisboard pages this endpoint and sends no total, so the fake pages too.
+        off = int((params or {}).get("offset", 0))
+        return {"users": _USERS[off:off + _USER_PAGE]}
     if path == "/projects/ids":
         off = int((params or {}).get("offset", 0))
         lim = int((params or {}).get("limit", 50))
@@ -72,7 +81,9 @@ def test_pipeline_shapes_filters_and_sorts(monkeypatch):
 
     p1 = next(p for p in r["projects"] if p["id"] == "p1")
     assert p1["stage_name"] == "Estimating" and p1["stage_color"] == "#c8102e"
-    assert p1["estimators"] == ["Kyle Loseke"] and p1["value"] == 50000
+    # 50000 CENTS is $500. The board rendered the raw field as dollars and showed
+    # every bid at a hundred times its real value.
+    assert p1["estimators"] == ["Kyle Loseke"] and p1["value"] == 500.0
 
     p2 = next(p for p in r["projects"] if p["id"] == "p2")
     assert p2["location"] == "" and p2["awarded"] is True and p2["value"] is None  # "N/A" blanked
@@ -81,6 +92,42 @@ def test_pipeline_shapes_filters_and_sorts(monkeypatch):
     assert p3["stage_name"] == "Unstaged"               # unknown stage id
 
     assert [s["name"] for s in r["stages"]] == ["Estimating", "Won"]   # ordered columns
+
+
+def test_money_fields_are_cents(monkeypatch):
+    """Every money field Basisboard sends is an integer count of cents."""
+    assert bb._dollars(50000) == 500.0
+    assert bb._dollars(123) == 1.23
+    assert bb._dollars(-280000) == -2800.0      # pendingAmount goes negative
+    assert bb._dollars(None) is None
+    assert bb._dollars("nope") is None
+
+
+def test_users_paging_reads_past_the_first_page(monkeypatch):
+    monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(bb, "_get", _fake_get)
+    _clear()
+    users = bb._fetch_users(None)               # client unused (mocked _get)
+    assert users["u1"] == "Kyle Loseke"
+    assert users["u14"] == "Greg Page-Two"      # page two — silently missing before
+    assert users["u15"] == "nameless@wetreadwell.com"   # falls back to the email
+    assert len(users) == len(_USERS)
+
+
+def test_users_paging_stops_on_an_offset_ignoring_endpoint(monkeypatch):
+    """An endpoint that ignores `offset` would hand back page one forever."""
+    monkeypatch.setenv("BASISBOARD_API_KEY", "test-key")
+    calls = {"n": 0}
+
+    def stuck(client, path, params=None):
+        calls["n"] += 1
+        return {"users": _USERS[:_USER_PAGE]}
+
+    monkeypatch.setattr(bb, "_get", stuck)
+    _clear()
+    users = bb._fetch_users(None)
+    assert len(users) == _USER_PAGE
+    assert calls["n"] == 2                      # one real page, one that added nothing
 
 
 def test_id_paging_respects_cap(monkeypatch):
