@@ -148,6 +148,10 @@
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
       navItem("/info-sheet.html", "📋", "Info Sheet") +
+      // Its own heading rather than a third item under Leads & bids: those two
+      // are the daily queue, this is the look back over all of it.
+      '<div class="tw-section">Analytics</div>' +
+      navItem("/analytics.html", "◫", "Analytics") +
       '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +

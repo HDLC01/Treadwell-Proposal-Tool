@@ -1,12 +1,16 @@
 """Read-only Basisboard client.
 
 Scope (deliberately): READ the projects/bids that already exist in Basisboard so
-the proposal tool can show a simple pipeline CRM. No writes — nothing here
-creates, updates, or deletes anything in Basisboard.
+the proposal tool can show a pipeline CRM, a lead inbox, and an analytics
+dashboard. No writes — nothing here creates, updates, or deletes anything in
+Basisboard.
 
 Conventions (mirrors dropbox_client.py): env-gated `is_configured()`, public
-`get_pipeline()` returns a dict and never raises, generic client-facing errors
-(detail goes to the server log only), inert when `BASISBOARD_API_KEY` is unset.
+getters return a dict and never raise, generic client-facing errors (detail goes
+to the server log only), inert when `BASISBOARD_API_KEY` is unset.
+
+Money: every amount Basisboard sends is an integer count of CENTS. `_dollars()`
+converts at the shaping boundary so no caller has to remember.
 
 Architecture / performance:
   - One pooled `httpx.Client` per build (keep-alive connection reuse) shared
@@ -21,11 +25,20 @@ Architecture / performance:
 
 Read contract (https://api.basisboard.com/v1, `Authorization: Bearer <key>`):
   GET /stages                            -> {"stages":[{id,name,color,order}]}
-  GET /users                             -> {"users":[{id,firstName,lastName,email}]}
+  GET /users?offset=N                    -> {"users":[{id,firstName,lastName,email}]}
+                                            (paged ~13 at a time, no total — read
+                                             until a page comes back empty)
+  GET /custom-field-settings             -> the custom fields, incl. the one holding
+                                            a project's trades
   GET /projects/ids?limit&offset&sort[bidDeadline]=DESC
                                          -> {"projectIds":[...], "paging":{"total"}}
-  GET /projects?filter[projectIds][]=... -> {"projects":[{id,name,location,quote,
-                                              stageId,estimatorIds,awardedAt,archivedAt,deletedAt}]}
+  GET /projects?filter[projectIds][]=... -> {"projects":[{id,name,location,city,region,
+                                              quote,stageId,estimatorIds,customFields,
+                                              bidInviteIds,awardedById,awardedAt,submittedAt,
+                                              lostAt,createdAt,wonAmount,submittedAmount,
+                                              pendingAmount,lostAmount,archivedAt,deletedAt}],
+                                             "bidInvitesMap":{id:{companyId,bidDeadlineAt}},
+                                             "companiesMap":{id:{name,...}}}
   GET /messages?filter[status]=unlinked&limit&offset
                                          -> {"messages":[{id,subject,fromEmail,createdAt,
                                               platformId,communicationType,status,isSpam,
@@ -61,6 +74,11 @@ _PAGE = 50                # ids per /projects/ids page AND ids per /projects fet
 _CONCURRENCY = 8          # max parallel requests per build
 _RETRIES = 1              # extra attempts on a transient (429 / 5xx / transport) error
 _TRANSIENT = {429, 500, 502, 503, 504}
+_USER_PAGE_CAP = 40       # /users has no total; stop asking eventually regardless
+
+# Basisboard stores every money field as integer CENTS. Nothing outside this
+# module should ever see one, so the conversion happens in the shapers.
+_CENTS = 100.0
 
 # stages/users change rarely; the assembled pipeline is cached briefly so a page
 # refresh doesn't re-fetch everything. _BUILD_LOCK coalesces concurrent cold
@@ -74,6 +92,26 @@ _BUILD_LOCK = threading.Lock()
 # board, and one view going stale shouldn't evict the other.
 _inbox_cache = cachetools.TTLCache(maxsize=4, ttl=60)
 _INBOX_LOCK = threading.Lock()
+
+# Analytics reads the whole bid history — 40-60 requests — so it gets a longer
+# TTL and keeps its last good snapshot past expiry: a reader gets those numbers
+# instantly while one background thread fetches the new ones. The TTL is fixed
+# at import; ANALYTICS_TTL_S is a deploy-time knob, not a per-request one.
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(os.environ.get(name) or default)))
+    except (TypeError, ValueError):
+        return default
+
+
+_analytics_cache = cachetools.TTLCache(maxsize=1, ttl=_env_int("ANALYTICS_TTL_S", 300, 60, 3600))
+_ANALYTICS_LOCK = threading.Lock()
+_ANALYTICS_REFRESH_LOCK = threading.Lock()
+_analytics_last_good: Dict[str, Any] = {}
+
+# Whatever custom field currently holds the trades. Resolved by name at runtime;
+# this is the id observed in Treadwell's account, kept as the fallback.
+_TRADE_FIELD_FALLBACK = "8674aa0e-5dba-45d3-bad1-bf857e60c2d2"
 
 
 # ── config ────────────────────────────────────────────────────────────
@@ -101,6 +139,13 @@ def _max_messages() -> int:
         return max(1, min(500, int(os.environ.get("BASISBOARD_MAX_MESSAGES") or 200)))
     except (TypeError, ValueError):
         return 200
+
+
+def _analytics_max_projects() -> int:
+    """How much bid history the dashboard totals. Separate knob from the board's:
+    the pipeline shows a recent window on purpose, while "All time" here means
+    all time, and the org has thousands of bids."""
+    return _env_int("ANALYTICS_MAX_PROJECTS", 3000, 1, 5000)
 
 
 def is_configured() -> bool:
@@ -154,14 +199,32 @@ def _fetch_stages(client) -> Dict[str, Dict[str, Any]]:
 
 
 def _fetch_users(client) -> Dict[str, str]:
+    """id -> display name for every user, paging until the list runs out.
+
+    /users pages (13 at a time in the accounts we've seen) and this used to read
+    only the first page, so estimators past the thirteenth silently lost their
+    name — they'd show as blank on the board and would be missing from the
+    analytics estimator filter entirely. Page size isn't hardcoded: keep asking
+    until a page comes back empty or short."""
     cached = _meta_cache.get("users")
     if cached is None:
         cached = {}
-        for u in (_get(client, "/users").get("users") or []):
-            if not u.get("id"):
-                continue
-            name = " ".join(p for p in (u.get("firstName"), u.get("lastName")) if p).strip()
-            cached[u["id"]] = name or (u.get("email") or "")
+        offset = 0
+        for _ in range(_USER_PAGE_CAP):
+            batch = _get(client, "/users", {"offset": offset}).get("users") or []
+            if not batch:
+                break
+            before = len(cached)
+            for u in batch:
+                if not u.get("id"):
+                    continue
+                name = " ".join(p for p in (u.get("firstName"), u.get("lastName")) if p).strip()
+                cached[u["id"]] = name or (u.get("email") or "")
+            # An endpoint that ignored `offset` would hand back page one forever;
+            # no new ids means we're going in circles, so stop.
+            if len(cached) == before:
+                break
+            offset += len(batch)
         _meta_cache["users"] = cached
     return cached
 
@@ -253,6 +316,18 @@ def _fetch_message_stats(client, time_frame: str = "this-month") -> Dict[str, An
 
 
 # ── shaping + assembly ────────────────────────────────────────────────
+def _dollars(cents: Any) -> Optional[float]:
+    """Basisboard money fields are integer cents. Convert at the boundary so no
+    caller can forget: the CRM board rendered `quote` straight through and showed
+    every bid at a hundred times its real value."""
+    if cents is None:
+        return None
+    try:
+        return round(float(cents) / _CENTS, 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def _shape_project(p: Dict[str, Any], stages: Dict[str, Dict[str, Any]],
                    users: Dict[str, str]) -> Dict[str, Any]:
     st = stages.get(p.get("stageId")) or {}
@@ -260,7 +335,7 @@ def _shape_project(p: Dict[str, Any], stages: Dict[str, Dict[str, Any]],
         "id": p.get("id"),
         "name": p.get("name") or "Untitled",
         "location": p.get("location") if (p.get("location") and p.get("location") != "N/A") else "",
-        "value": p.get("quote"),
+        "value": _dollars(p.get("quote")),
         "stage_id": p.get("stageId"),
         "stage_name": st.get("name") or "Unstaged",
         "stage_color": st.get("color") or "#5c403f",
@@ -380,3 +455,232 @@ def get_message_url(message_id: str) -> Optional[str]:
     except Exception as exc:  # noqa: BLE001
         log.warning("Basisboard message url %s failed: %s", message_id, exc)
         return None
+
+
+# ── analytics dataset ─────────────────────────────────────────────────
+# The third view, alongside the pipeline board and the lead inbox. It ships the
+# whole (capped) bid history as flat rows so the BROWSER can filter and total
+# them — which is the entire point of the feature. Basisboard's own analytics
+# offers four fixed groupings and no way to cross them; ours lets an estimator
+# ask for epoxy + gyp, Greg + Troy, awarded this quarter, in one go, and get an
+# answer without a round trip.
+def _fetch_trade_field_id(client) -> str:
+    """UUID of the custom field holding a project's trades.
+
+    Resolved by NAME rather than pinned, because a custom field is a customer
+    setting and Kyle can recreate one. The pinned id is the fallback so a settings
+    outage costs us nothing."""
+    cached = _meta_cache.get("trade_field")
+    if cached:
+        return cached
+    field_id = _TRADE_FIELD_FALLBACK
+    try:
+        payload = _get(client, "/custom-field-settings") or {}
+        fields = payload.get("customFieldSettings") or payload.get("customFields") \
+            or payload.get("settings") or []
+        if isinstance(fields, dict):
+            fields = list(fields.values())
+        for f in fields:
+            if not isinstance(f, dict) or not f.get("id"):
+                continue
+            name = str(f.get("name") or "").strip().lower()
+            if name in ("trade", "trades", "system type", "system types"):
+                field_id = f["id"]
+                break
+    except Exception as exc:  # noqa: BLE001 — the fallback id is a fine answer
+        log.info("Basisboard custom-field settings unavailable, using the pinned "
+                 "trade field: %s", exc)
+    _meta_cache["trade_field"] = field_id
+    return field_id
+
+
+def _fetch_projects_full(client, ids: List[str], ex: Optional[ThreadPoolExecutor] = None):
+    """Like `_fetch_projects`, but keeps the sidecar maps the plain fetch throws
+    away. A project doesn't name its companies or carry a bid deadline — both
+    live on the bid invites, which arrive alongside the rows.
+    Returns (projects, bid_invites, companies)."""
+    chunks = [ids[i:i + _PAGE] for i in range(0, len(ids), _PAGE)]
+
+    def fetch(chunk):
+        return _get(client, "/projects", {"filter[projectIds][]": chunk}) or {}
+
+    if ex is not None:
+        results = [f.result() for f in [ex.submit(fetch, c) for c in chunks]]
+    else:
+        results = [fetch(c) for c in chunks]
+
+    projects: List[Dict[str, Any]] = []
+    invites: Dict[str, Any] = {}
+    companies: Dict[str, Any] = {}
+    for r in results:
+        projects.extend(r.get("projects") or [])
+        invites.update(r.get("bidInvitesMap") or {})
+        companies.update(r.get("companiesMap") or {})
+    return projects, invites, companies
+
+
+def _parse_trades(value: Any) -> List[str]:
+    """A project's trades. The field is normally a list of short tags
+    (["Epoxy"], ["Epoxy","Polish"]) but comes back as "" on untagged projects."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v or "").strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+def _shape_analytics_row(p: Dict[str, Any], invites: Dict[str, Any],
+                         trade_field_id: str) -> Dict[str, Any]:
+    """One project, flattened to what the dashboard totals. Ids stay ids — the
+    browser joins them against the dimension lists, which keeps the payload small
+    and the filters exact."""
+    company_ids: List[str] = []
+    deadlines: List[str] = []
+    for bid in (p.get("bidInviteIds") or []):
+        inv = invites.get(bid)
+        if not isinstance(inv, dict):
+            continue
+        cid = inv.get("companyId")
+        if cid and cid not in company_ids:
+            company_ids.append(cid)
+        due = inv.get("bidDeadlineAt") or inv.get("scrapedBidDeadlineAt")
+        if due:
+            deadlines.append(due)
+
+    loc = p.get("location")
+    return {
+        "id": p.get("id"),
+        "name": p.get("name") or "Untitled",
+        "city": p.get("city") or "",
+        "region": p.get("region") or "",
+        "location": loc if (loc and loc != "N/A") else "",
+        "stage_id": p.get("stageId") or "",
+        "estimator_ids": [u for u in (p.get("estimatorIds") or []) if u],
+        "company_ids": company_ids,
+        "awarded_by_id": p.get("awardedById") or "",
+        "trades": _parse_trades((p.get("customFields") or {}).get(trade_field_id)),
+        "awarded_at": p.get("awardedAt"),
+        "submitted_at": p.get("submittedAt"),
+        "lost_at": p.get("lostAt"),
+        "created_at": p.get("createdAt"),
+        # Projects carry no deadline of their own; the latest invite's is the one
+        # the estimating team works to.
+        "bid_deadline_at": max(deadlines) if deadlines else None,
+        "quote": _dollars(p.get("quote")),
+        "won_amount": _dollars(p.get("wonAmount")),
+        "pending_amount": _dollars(p.get("pendingAmount")),
+        "submitted_amount": _dollars(p.get("submittedAmount")),
+        "lost_amount": _dollars(p.get("lostAmount")),
+        "archived": bool(p.get("archivedAt")),
+    }
+
+
+def _analytics_dimensions(rows: List[Dict[str, Any]], stages: Dict[str, Dict[str, Any]],
+                          users: Dict[str, str], companies: Dict[str, Any]) -> Dict[str, Any]:
+    """The filter vocabularies, derived from the rows themselves so a filter can
+    never offer an option that matches nothing (or miss one that does)."""
+    est_ids, co_ids, trades = set(), set(), set()
+    for r in rows:
+        est_ids.update(r["estimator_ids"])
+        co_ids.update(r["company_ids"])
+        if r["awarded_by_id"]:
+            co_ids.add(r["awarded_by_id"])
+        trades.update(r["trades"])
+
+    def company_name(cid: str) -> str:
+        c = companies.get(cid)
+        return (c.get("name") if isinstance(c, dict) else None) or "Unknown company"
+
+    return {
+        # Every stage, including the empty ones: the board's columns shouldn't
+        # appear and vanish as the date window moves.
+        "stages": sorted(
+            ({"id": s.get("id"), "name": s.get("name") or "Unstaged",
+              "color": s.get("color") or "#5c403f", "order": s.get("order", 9999)}
+             for s in stages.values()),
+            key=lambda s: (s["order"], s["name"]),
+        ),
+        "estimators": sorted(
+            ({"id": uid, "name": users.get(uid) or "Unknown"} for uid in est_ids),
+            key=lambda u: u["name"].lower(),
+        ),
+        "companies": sorted(
+            ({"id": cid, "name": company_name(cid)} for cid in co_ids),
+            key=lambda c: c["name"].lower(),
+        ),
+        "trades": sorted(trades, key=lambda t: t.lower()),
+    }
+
+
+def _build_analytics() -> Dict[str, Any]:
+    """Fetch the bid history concurrently over one pooled client, then shape."""
+    with _session() as client, ThreadPoolExecutor(max_workers=_CONCURRENCY) as ex:
+        f_stages = ex.submit(_fetch_stages, client)
+        f_users = ex.submit(_fetch_users, client)
+        f_trade = ex.submit(_fetch_trade_field_id, client)
+        pids, total = _fetch_project_ids(client, _analytics_max_projects(), ex)
+        raw, invites, companies = _fetch_projects_full(client, pids, ex)
+        stages, users, trade_field = f_stages.result(), f_users.result(), f_trade.result()
+
+    # Analytics is the HISTORY, so archived bids stay — dropping them (as the
+    # pipeline board does, to show only live work) would quietly erase closed
+    # years from every total.
+    rows = [_shape_analytics_row(p, invites, trade_field)
+            for p in raw if not p.get("deletedAt")]
+    rows.sort(key=lambda r: (r.get("created_at") or ""), reverse=True)
+
+    out = {"ok": True, "configured": True,
+           "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "stale": False, "projects": rows,
+           "shown": len(rows), "total": total, "truncated": total > len(rows)}
+    out.update(_analytics_dimensions(rows, stages, users, companies))
+    return out
+
+
+def _refresh_analytics() -> None:
+    """Rebuild in the background so an expired cache costs a reader nothing."""
+    try:
+        result = _build_analytics()
+        _analytics_cache["analytics"] = result
+        _analytics_last_good["snapshot"] = result
+    except Exception as exc:  # noqa: BLE001 — the stale snapshot is still serving
+        log.warning("Basisboard analytics refresh failed: %s", exc)
+    finally:
+        try:
+            _ANALYTICS_REFRESH_LOCK.release()
+        except RuntimeError:                                # already released
+            pass
+
+
+def get_analytics() -> Dict[str, Any]:
+    """Read-only analytics dataset: every (capped) bid as a flat row, plus the
+    filter vocabularies. Cached ~5 min.
+
+    A full history is 40-60 requests, so an expired cache serves the last good
+    snapshot IMMEDIATELY and refreshes behind the reader — nobody waits ten
+    seconds for numbers that were correct five minutes ago. Returns
+    {"ok": True, ...} or {"ok": False, ...} — never raises."""
+    if not is_configured():
+        return {"ok": False, "configured": False, "error": "Basisboard is not configured"}
+    cached = _analytics_cache.get("analytics")
+    if cached is not None:
+        return cached
+
+    stale = _analytics_last_good.get("snapshot")
+    if stale is not None:
+        if _ANALYTICS_REFRESH_LOCK.acquire(blocking=False):
+            threading.Thread(target=_refresh_analytics, name="bb-analytics-refresh",
+                             daemon=True).start()
+        return dict(stale, stale=True)
+
+    with _ANALYTICS_LOCK:
+        cached = _analytics_cache.get("analytics")      # another thread may have built it
+        if cached is not None:
+            return cached
+        try:
+            result = _build_analytics()
+        except Exception as exc:  # noqa: BLE001 — read view must never 500 the page
+            log.warning("Basisboard get_analytics failed: %s", exc)
+            return {"ok": False, "configured": True, "error": "Couldn't reach Basisboard"}
+        _analytics_cache["analytics"] = result
+        _analytics_last_good["snapshot"] = result
+        return result
