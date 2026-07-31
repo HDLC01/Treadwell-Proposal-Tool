@@ -230,12 +230,18 @@
     inp.addEventListener("input", () => {
       if (!fbarDirty) fbarInput.value = inp.value;
     });
-    inp.addEventListener("blur", () => {
+    const commit = () => {
       const typed = X.parseTyped(inp.value, fmt, asText);
       record(sheet, cell, typed);
       inp.value = resting(typed);
       refreshDerived();
-    });
+    };
+    inp.addEventListener("blur", commit);
+    // The formula bar commits by firing `change` on this input. Without a listener
+    // for it, anything typed in the bar was shown in the grid but never recorded:
+    // the cell's own blur had already fired when focus moved to the bar, so it
+    // could not fire again, and the download went out without the value.
+    inp.addEventListener("change", commit);
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") inp.blur(); });
     el.appendChild(inp);
     engine.registerDom(sheet, cell.addr, inp);
