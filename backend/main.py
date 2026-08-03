@@ -683,8 +683,16 @@ def api_portal_followups() -> Dict[str, Any]:
         item["reason"] = (digest_worker.fallback_reason(
             {"unread": p.get("unread") or 0, "facts": facts}) if item["eligible"] else "")
         out.append(item)
-    # Worst first: the point of the page is who has been left longest.
-    out.sort(key=lambda x: (-x["followup_score"], (x.get("project_name") or "").lower()))
+    # Actionable first, THEN worst-first within that.
+    #
+    # Sorting on the score alone looked right and was wrong, which only showed up against
+    # real data: `score()` exists for the digest, which filters by `eligible()` before
+    # ranking ever matters, so it happily awards age and silence points to a proposal that
+    # was approved months ago. On staging that put four approved jobs — scoring 100, 94, 90
+    # and 87, none of them actionable — above the two live ones a human could actually ring.
+    # A column headed "needs attention" has to lead with what needs attention.
+    out.sort(key=lambda x: (not x["eligible"], -x["followup_score"],
+                            (x.get("project_name") or "").lower()))
     return {"ok": True, "proposals": out}
 
 
