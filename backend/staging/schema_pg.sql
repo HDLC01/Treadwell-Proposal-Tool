@@ -68,6 +68,17 @@ drop trigger if exists profiles_updated_at on public.profiles;
 create trigger profiles_updated_at before update on public.profiles
   for each row execute function public.set_updated_at();
 
+-- ⚠ AFTER APPLYING ANY DDL TO A RUNNING STAGING STACK, RELOAD POSTGREST'S SCHEMA CACHE:
+--     docker exec treadwell-staging-db psql -U postgres -d treadwell --       -c "notify pgrst, 'reload schema';"
+--
+-- This file only runs on a FRESH database (docker-entrypoint-initdb.d), so a new table
+-- added to an existing staging stack has to be applied by hand — and PostgREST caches the
+-- schema at start-up. The failure is genuinely confusing: reads of the new table return
+-- 200 while writes return 404 with an empty body, which reads like a routing or
+-- permissions problem rather than a stale cache. Cost a round of debugging on
+-- 2026-08-03 with calendar_events. Cloud Supabase reloads automatically on migration, so
+-- this is a staging-only trap.
+
 -- ── Bid Calendar: Treadwell's own entries ───────────────────────────────
 -- Mirror of the prod table in supabase_schema.sql. Staging keeps DATA in this
 -- self-hosted Postgres (cloud Supabase is AUTH only), so the DDL has to be applied
