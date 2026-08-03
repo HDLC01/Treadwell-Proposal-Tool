@@ -407,7 +407,18 @@ def detect_work_type(epoxy_sf: float, polish_sf: float) -> str:
 
 # ─── Endpoints ────────────────────────────────────────────────────────
 @app.get("/healthz")
-def healthz() -> Dict[str, Any]:
+async def healthz() -> Dict[str, Any]:
+    """ASYNC on purpose, and it matters more than it looks.
+
+    FastAPI runs a `def` handler in the shared threadpool; an `async def` one runs on the
+    event loop and needs no thread at all. This used to be sync, so when a Basisboard
+    rate-limit spell filled the pool with sleeping retries, the healthcheck starved along
+    with every page — and the container sat there reporting "unhealthy" for eleven hours
+    while nobody noticed. A liveness probe that can be blocked by application load is a
+    probe that lies exactly when you need it.
+
+    Deliberately does no I/O: it answers "is this process serving requests at all". The
+    dependency detail lives on /api/admin/health."""
     return {"ok": True}
 
 
@@ -821,6 +832,28 @@ def api_portal_set_status(proposal_id: str, request: Request,
     if reason:
         body["reason"] = reason
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
+
+
+@app.get("/api/admin/health")
+def api_admin_health(request: Request) -> Dict[str, Any]:
+    """Are we currently skipping any upstream, and why.
+
+    Exists because the last outage was invisible: Basisboard rate-limited us, the retries
+    ate the request threadpool, and the only symptom anyone could have seen was the whole
+    site being slow. The breaker now sheds that load — but shedding it silently would
+    just make the Lead Inbox quietly wrong instead, so its state is readable here."""
+    _require_admin(request)
+    bb = basisboard_client.breaker_state()
+    return {
+        "ok": True,
+        "basisboard": dict(bb, configured=basisboard_client.is_configured(),
+                           # Plain English, because the person reading this at 7am is
+                           # deciding whether to worry, not debugging a state machine.
+                           note=("Skipping Basisboard for now — it rate-limited us. The Lead "
+                                 "Inbox, Bid Pipeline and Analytics show the last good copy; "
+                                 "everything else is unaffected."
+                                 if bb.get("open") else "Basisboard is answering normally.")),
+    }
 
 
 @app.post("/api/admin/digest/run")
