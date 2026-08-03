@@ -45,6 +45,16 @@ create table if not exists public.profiles (
 create index if not exists profiles_role_idx  on public.profiles (role);
 create index if not exists profiles_email_idx on public.profiles (email);
 
+-- ── Who can be assigned a proposal ───────────────────────────────────────────
+-- A separate flag rather than a `role` value, because `role` is single-valued and a
+-- Treadwell employee can be a member, an admin AND an estimator at the same time.
+-- Grants nothing: it only decides who appears in the assign pickers.
+--
+-- Defaults FALSE, and profiles.list_estimators() falls back to every active profile
+-- while nobody is flagged — publishing requires an estimator, so an empty picker would
+-- block every send. Ticking the first person switches the list over.
+alter table public.profiles add column if not exists is_estimator boolean not null default false;
+
 -- updated_at auto-bump --------------------------------------------------
 create or replace function public.set_updated_at() returns trigger as $$
 begin new.updated_at = now(); return new; end; $$ language plpgsql;

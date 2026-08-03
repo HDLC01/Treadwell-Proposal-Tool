@@ -19,6 +19,7 @@
   const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
           isLost, lostReason, followupOff, nameOf } = C;
   const fu = C.followup;
+  const avatar = C.avatarHtml;
   const pausedUntil = (p) => C.pausedUntil(p, TW.bizToday());
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
@@ -125,8 +126,12 @@
         // Labelled: a bare "Hanz · Invoiced 7/27" reads as one fact, and it isn't
         // obvious which name that is on a board where the line above is an email.
         const email = estimatorOf(p);
+        // The avatar is the scannable half and the name is the readable half. The
+        // chip alone would fail anyone who can't tell the colours apart, so the
+        // name and the "?" stay exactly as they were.
         const who = email
-          ? `<span${isAssigned(p) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
+          ? avatar(email, !isAssigned(p))
+            + `<span${isAssigned(p) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
               esc(nameOf(email))}${isAssigned(p) ? "" : "?"}</span>`
           : '<span class="unassigned" title="Nobody is assigned">—</span>';
         const chips = chipsHtml(p);
@@ -182,7 +187,7 @@
         <td>${esc(stageOf(p))}${chips ? `<div class="chips">${chips}</div>` : ""}</td>
         <td>${esc(TW.fmtBizDate(stageTs(p)))}</td>
         <td${isAssigned(p) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
-          email ? esc(nameOf(email)) + (isAssigned(p) ? "" : "?") : "—"}</td>
+          email ? avatar(email, !isAssigned(p)) + esc(nameOf(email)) + (isAssigned(p) ? "" : "?") : "—"}</td>
         <td class="num">${p.approved_total != null ? money(p.approved_total) : ""}</td>
         <td>${act ? esc(act.label) + " " + esc(TW.fmtBizDate(act.ts)) : ""}</td>
       </tr>`;
@@ -510,7 +515,8 @@
         const eff = mode === "add" ? true : mode === "mute" ? false : p.base;
         const canEdit = isAdmin || e === myEmail;
         return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
-             + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">${esc(nameOf(p.email))}</button>`;
+             + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">`
+             + `${avatar(p.email)}${esc(nameOf(p.email))}</button>`;
       }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
       wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
         if (b.disabled) return;
@@ -923,7 +929,7 @@
       // Bookkeeping, not outreach. Named so the log reads as a history of the
       // project rather than a row saying "System" with nothing after it.
       what = FU_ACTION[d.action] || "System";
-      detail = d.action === "reassigned" ? "to " + (d.to || "?")
+      detail = d.action === "reassigned" ? "to " + (d.to ? nameOf(d.to) : "?")
         : d.action === "paused" ? (d.until ? "until " + TW.fmtBizDay(d.until) : "")
         : d.action === "closed_lost" ? (C.LOST_REASON[d.reason] || d.reason || "")
         : "";
@@ -990,6 +996,7 @@
 
         <div class="lbl fu-lbl">Assigned to</div>
         <div class="fu-line">
+          ${assignee ? avatar(assignee) : ""}
           <select id="fu-assign" class="tw-select" aria-label="Assigned estimator">
             <option value="${esc(assignee)}">${assignee ? esc(nameOf(assignee)) : "Loading…"}</option>
           </select>

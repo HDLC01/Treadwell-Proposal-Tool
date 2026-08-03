@@ -66,13 +66,56 @@ def test_every_local_script_it_pulls_in_exists(page):
             f"{page.name} loads {src}, which does not exist"
 
 
-def test_the_crm_board_loads_its_logic_module_first():
-    """portal.js reads window.TWCrm at module scope — stages, dates and ordering all
-    come from crm-core.js. Loading it second throws on boot and the board never
-    renders at all, so the order is pinned rather than left to whoever edits the page."""
-    html = (FRONTEND / "portal.html").read_text(encoding="utf-8")
-    assert html.index("/js/crm-core.js") < html.index("/js/portal.js")
-    assert "/shared.js" in html and html.index("/shared.js") < html.index("/js/portal.js")
+# Names, initials and avatar colours all come from crm-core.js. Every page that renders a
+# person reads `window.TWCrm` as its own script runs, so the order is load-bearing: get it
+# wrong and the page throws on boot and renders nothing at all.
+PERSON_PAGES = ["portal.html", "projects.html", "admin.html", "analytics.html", "crm.html",
+                "notifications.html", "trash.html", "done.html", "proposal-review.html"]
+
+
+@pytest.mark.parametrize("name", PERSON_PAGES)
+def test_a_page_that_names_a_person_loads_crm_core_first(name):
+    html = (FRONTEND / name).read_text(encoding="utf-8")
+    assert "/js/crm-core.js" in html, (
+        f"{name} renders a person but never loads crm-core.js — window.TWCrm will be "
+        f"undefined and the page's own script will throw as it runs.")
+    page_js = "/js/" + name.replace(".html", ".js")
+    if page_js in html:
+        assert html.index("/js/crm-core.js") < html.index(page_js), (
+            f"{name} loads crm-core.js AFTER {page_js}; the page reads window.TWCrm as it runs.")
+
+
+def test_the_person_chip_is_styled_in_exactly_one_place():
+    """`.tw-av` lives in auth.js's injected stylesheet, which every page loads. A second
+    copy in a page's own <style> is how one person ends up a different size or a
+    different shape on one screen."""
+    import re as _re
+    assert ".tw-av{" in (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    # A RULE, not a mention: both pages carry a comment pointing at auth.js, and that
+    # comment is the thing telling the next person where the chip lives.
+    rule = _re.compile(r"\.tw-av(-dim)?\s*(,[^{}]*)?\{")
+    dupes = [p.name for p in FRONTEND.glob("*.html")
+             if rule.search(p.read_text(encoding="utf-8"))]
+    assert not dupes, f"these pages re-define the .tw-av chip: {dupes}"
+
+
+def test_there_is_one_implementation_of_a_person_name():
+    """Four separate copies of email-to-display-name existed, and three of initials —
+    including one in auth.js whose paren placement made it return a SINGLE letter for
+    every two-word name. One source of truth or the app disagrees with itself."""
+    import re as _re
+    offenders = []
+    for js in sorted(FRONTEND.glob("*.js")) + sorted((FRONTEND / "js").glob("*.js")):
+        if js.name == "crm-core.js":
+            continue
+        body = js.read_text(encoding="utf-8")
+        # A local definition, not a `const nameOf = window.TWCrm.nameOf` alias.
+        for m in _re.finditer(r"(?:function|const|let|var)\s+(nameOf|initialsOf)(.*)", body):
+            if "TWCrm" not in m.group(2):
+                offenders.append(f"{js.name}: {m.group(0)[:60]}")
+    # auth.js keeps a guarded fallback for login.html, which loads no page modules.
+    offenders = [o for o in offenders if not o.startswith("auth.js")]
+    assert not offenders, "re-implemented person naming: " + "; ".join(offenders)
 
 
 @pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
