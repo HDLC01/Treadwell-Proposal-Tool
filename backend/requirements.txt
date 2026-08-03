@@ -1,4 +1,4 @@
-fastapi==0.137.1
+fastapi==0.138.0
 # starlette is FastAPI's ASGI core; pinned (>=1.0.1) to clear CVE-2024-47874,
 # CVE-2025-54121 + PYSEC-2026-161. Kept in lockstep with the fastapi pin above.
 starlette==1.3.1
