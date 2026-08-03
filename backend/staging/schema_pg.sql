@@ -68,6 +68,46 @@ drop trigger if exists profiles_updated_at on public.profiles;
 create trigger profiles_updated_at before update on public.profiles
   for each row execute function public.set_updated_at();
 
+-- ⚠ AFTER APPLYING ANY DDL TO A RUNNING STAGING STACK, RELOAD POSTGREST'S SCHEMA CACHE:
+--     docker exec treadwell-staging-db psql -U postgres -d treadwell --       -c "notify pgrst, 'reload schema';"
+--
+-- This file only runs on a FRESH database (docker-entrypoint-initdb.d), so a new table
+-- added to an existing staging stack has to be applied by hand — and PostgREST caches the
+-- schema at start-up. The failure is genuinely confusing: reads of the new table return
+-- 200 while writes return 404 with an empty body, which reads like a routing or
+-- permissions problem rather than a stale cache. Cost a round of debugging on
+-- 2026-08-03 with calendar_events. Cloud Supabase reloads automatically on migration, so
+-- this is a staging-only trap.
+
+-- ── Bid Calendar: Treadwell's own entries ───────────────────────────────
+-- Mirror of the prod table in supabase_schema.sql. Staging keeps DATA in this
+-- self-hosted Postgres (cloud Supabase is AUTH only), so the DDL has to be applied
+-- here too — it is a genuinely separate database, not a copy.
+create table if not exists public.calendar_events (
+  id               text primary key,
+  title            text not null,
+  deadline_at      timestamptz,          -- UTC instant; rendered Central by the frontend
+  kind             text not null default 'bid',
+  customer         text,
+  location         text,
+  value            numeric(14,2),        -- dollars, never cents
+  estimator_email  text,
+  stage            text,
+  notes            text,
+  project_id       text,                 -- optional link to drafts.id; deliberately not an FK
+  owner_email      text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  deleted_at       timestamptz           -- soft delete: a lost bid deadline costs a job
+);
+create index if not exists calendar_events_live_deadline_idx
+  on public.calendar_events (deadline_at) where deleted_at is null;
+create index if not exists calendar_events_estimator_idx
+  on public.calendar_events (estimator_email) where deleted_at is null;
+create index if not exists calendar_events_project_idx
+  on public.calendar_events (project_id)
+  where deleted_at is null and project_id is not null;
+
 -- ── Grants so PostgREST (service_role) can read/write ───────────────────
 grant usage on schema public to service_role;
 grant all on all tables in schema public to service_role;

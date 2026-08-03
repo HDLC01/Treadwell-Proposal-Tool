@@ -16,6 +16,13 @@
   // person on this roster looks the same as they do on a CRM card or a Projects row.
   const nameOf = window.TWCrm.nameOf;
   const avatar = window.TWCrm.avatarHtml;
+  /** The same chip, but with the identity colour taken OUT — for the per-project toggles
+   *  below, where green already means "receives this project's email". A purple Alejandro
+   *  next to a green Hanz leaves "green" ambiguous: is it the state or is it just him? So
+   *  state owns colour on that control and the initials carry who it is. esc() because
+   *  initials follow whatever string we were handed, not a whitelist. */
+  const plainAvatar = (who) =>
+    '<span class="nt-av" aria-hidden="true">' + (esc(window.TWCrm.initialsOf(who)) || "—") + "</span>";
 
   let ADMIN = false, MY_EMAIL = "";
   let ROSTER = [];                 // [{email, enabled}] — the global base
@@ -190,7 +197,7 @@
         return '<button class="nt-chip ' + (eff ? "on" : "") + '" data-pid="' + esc(pid) + '" data-email="' + esc(person.email) + '"'
              + ' data-base="' + (person.base ? 1 : 0) + '" data-eff="' + (eff ? 1 : 0) + '"'
              + (canEdit ? "" : " disabled") + ' title="' + esc(person.email) + '">'
-             + avatar(person.email) + esc(nameOf(person.email)) + '</button>';
+             + plainAvatar(person.email) + esc(nameOf(person.email)) + '</button>';
       }).join("");
       return '<div class="pp-row">' +
         '<div class="pp-head"><span class="pp-name">' + esc(p.project_name || "Proposal") + '</span>' +

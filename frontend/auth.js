@@ -154,6 +154,10 @@
       '<div class="tw-section">Leads &amp; bids</div>' +
       navItem("/leads.html", "▤", "Lead Inbox") +
       navItem("/crm.html", "▦", "Bid Pipeline") +
+      // Right after the board, because they answer the two halves of the same
+      // question: the board is "where does each bid stand", the calendar is "what is
+      // due, and when". Both read the Basisboard bids; neither writes to them.
+      navItem("/calendar.html", "▧", "Bid Calendar") +
       '<div class="tw-section">Proposals</div>' +
       navItem("/projects.html", "▣", "Projects") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
@@ -430,10 +434,23 @@ font-weight:800;font-size:12.5px;letter-spacing:.02em;display:flex;align-items:c
 /* THE estimator/person chip, defined once here because this stylesheet is injected on
    every page. Colour rides inline (per person, from crm-core's colorOf) since the CSP
    forbids an inline <style> block. Any page that names a person uses this class, so one
-   person looks identical on the CRM board, Projects, Analytics and the Bid Pipeline. */
+   person looks identical on the CRM board, Projects, Analytics and the Bid Pipeline.
+
+   NOTE: this whole stylesheet is a JS template literal, so it must never contain a
+   backtick — one in a comment silently ends the string and the entire file stops parsing.
+   That took auth.js out on staging once, and because auth.js is what mints the bearer
+   token, every page then answered 401 with no clue as to why.
+
+   vertical-align:middle, not a pixel offset: the chip is a fixed 20px riding in text that
+   ranges from 11px (Bid Pipeline card foot) to 14px (drawer body), and an offset like
+   -4px is an ABSOLUTE shift of the chip's own baseline — which, since align-items:center
+   already parks the initials near the middle of the disc, sits low to begin with. Tuned
+   once at one font-size it can only be right there; on the 12px "Estimator:" line it
+   dropped the disc ~5px below the name's optical centre. middle is measured against the
+   PARENT's x-height, so it re-centres itself at every size. */
 .tw-av{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;
 border-radius:50%;margin-right:5px;flex:0 0 auto;font:800 9.5px/1 system-ui;letter-spacing:.02em;
-color:#fff;vertical-align:-4px;text-transform:uppercase;}
+color:#fff;vertical-align:middle;text-transform:uppercase;}
 /* An inherited owner nobody actually chose. The "?" beside the name says so too — the
    dimming is reinforcement, never the only signal. */
 .tw-av-dim{opacity:.5;}

@@ -114,6 +114,18 @@
     cursor:pointer; background:var(--surf-high); color:var(--ink-v); }
   .nt-chip.on { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
   .nt-chip:disabled { cursor:not-allowed; opacity:.7; }
+  /* The avatar inside a toggle chip, deliberately colourless — NOT the shared .tw-av.
+     On this control colour IS the state (green = receives this project's email), so an
+     identity colour would compete with the one signal that matters: a purple Alejandro
+     beside a green Hanz leaves "green" ambiguous. It borrows the chip's own on/off tint
+     instead of carrying its own, and keeps .tw-av's geometry so a name still sits at the
+     same height as everywhere else. Same class and same reasoning as notifications.html,
+     which hosts the global version of this control. */
+  .nt-chip .nt-av { display:inline-flex; align-items:center; justify-content:center;
+    width:20px; height:20px; border-radius:50%; margin-right:5px; flex:0 0 auto;
+    font:800 9.5px/1 system-ui; letter-spacing:.02em; vertical-align:middle; text-transform:uppercase;
+    background:rgba(27,28,28,.09); color:var(--ink-v); }
+  .nt-chip.on .nt-av { background:rgba(31,122,52,.15); color:var(--ok); }
   .dhead { flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:18px 20px; border-bottom:1px solid var(--line); }
   .dhead h2 { margin:0; font-size:18px; }
   .dclose { border:none; background:none; font-size:22px; cursor:pointer; color:var(--ink-v); line-height:1; }

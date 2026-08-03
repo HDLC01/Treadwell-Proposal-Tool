@@ -163,3 +163,52 @@ create index if not exists draft_revisions_project_idx
 -- security_prod.sql (portal_app_read_draft_revisions).
 alter table public.draft_revisions enable row level security;
 grant select, insert, update, delete on public.draft_revisions to service_role;
+
+-- 7) Bid Calendar — Treadwell's own entries ---------------------------
+-- The calendar draws two sources on one grid. Basisboard bids are a READ-ONLY mirror:
+-- our integration never writes upstream, so an edit there could not be pushed and would
+-- silently revert on the next 5-minute sync. This table is the other half — entries
+-- created in the tool, fully editable, and the only ones left once Treadwell moves off
+-- Basisboard. There is deliberately no route that edits a mirrored bid.
+create table if not exists public.calendar_events (
+  id               text primary key,
+  title            text not null,
+  -- A full timestamp, not a date: the cut-off TIME is most of what a bid deadline is.
+  -- Stored UTC, rendered in America/Chicago by the frontend — the same contract the
+  -- Basisboard rows use, so one render path serves both.
+  deadline_at      timestamptz,
+  kind             text not null default 'bid',
+  customer         text,
+  location         text,
+  -- Dollars, not cents. The Basisboard client converts at its boundary, and two money
+  -- units in one codebase is how a bid ends up 100x too big.
+  value            numeric(14,2),
+  estimator_email  text,
+  stage            text,
+  notes            text,
+  -- Optional link to a project in `drafts`. Deliberately NOT a foreign key: a deadline is
+  -- often on the calendar before anyone has started the estimate, and an FK forbids
+  -- exactly that.
+  project_id       text,
+  owner_email      text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  -- Soft delete. A calendar is a work queue; a delete that truly destroyed a bid deadline
+  -- could cost a job, and every other destructive action here is recoverable.
+  deleted_at       timestamptz
+);
+-- The calendar's only real query: live rows in deadline order.
+create index if not exists calendar_events_live_deadline_idx
+  on public.calendar_events (deadline_at) where deleted_at is null;
+-- "What's on Kyle's plate" — the estimator filter, over live rows only.
+create index if not exists calendar_events_estimator_idx
+  on public.calendar_events (estimator_email) where deleted_at is null;
+-- Jumping from a project to its calendar entries.
+create index if not exists calendar_events_project_idx
+  on public.calendar_events (project_id)
+  where deleted_at is null and project_id is not null;
+
+-- Same posture as drafts/events/leads: RLS on, no policies here; the proposal tool holds
+-- the service-role key.
+alter table public.calendar_events enable row level security;
+grant select, insert, update, delete on public.calendar_events to service_role;

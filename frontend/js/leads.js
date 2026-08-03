@@ -143,7 +143,18 @@
       '<span class="n">' + ALL.filter(v.test).length + '</span></button>').join("");
   }
 
+  // Same guard as the Bid Pipeline board, for the same reason: `load()` paints once
+  // from the cache and again when the fetch lands, and `paint()` replaces the list's
+  // innerHTML wholesale — so an unchanged refresh blinked the whole queue and threw
+  // away your scroll position. VIEW and QUERY are in the signature because they change
+  // what is rendered, so switching tab or typing still repaints immediately.
+  let LAST_SIG = "";
+
   function paint() {
+    const sig = JSON.stringify([ALL, VIEW, QUERY]);
+    if (sig === LAST_SIG) return;
+    LAST_SIG = sig;
+
     paintChips();
     const list = shownRows();
     const total = inView().length;

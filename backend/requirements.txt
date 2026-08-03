@@ -1,10 +1,10 @@
-fastapi==0.137.1
+fastapi==0.138.0
 # starlette is FastAPI's ASGI core; pinned (>=1.0.1) to clear CVE-2024-47874,
 # CVE-2025-54121 + PYSEC-2026-161. Kept in lockstep with the fastapi pin above.
 starlette==1.3.1
 uvicorn[standard]==0.49.0
 # 0.0.31 clears CVE-2026-53538/53539/53540 (DoS in multipart parsing).
-python-multipart==0.0.31
+python-multipart==0.0.32
 openpyxl==3.1.5
 # openpyxl needs Pillow to WRITE the images it read — without it, every logo in
 # a workbook is silently dropped on save. The Project Info Sheet template carries
@@ -13,13 +13,13 @@ openpyxl==3.1.5
 # transitively in local venvs, which is why this went unnoticed until staging.
 # Pinned by test_info_sheet.py::test_the_download_keeps_the_treadwell_logo.
 Pillow>=10.4.0
-python-docx==1.1.2
+python-docx==1.2.0
 dropbox==12.0.2
 pydantic>=2.13.4
-anthropic>=0.109.1
+anthropic>=0.111.0
 supabase>=2.4
 PyJWT[crypto]>=2.13.0
-cachetools>=5.3.0
+cachetools>=7.1.4
 # Read-only Basisboard API client (backend/basisboard_client.py). Ships
 # transitively via supabase today; pinned explicitly so it's first-class.
 httpx>=0.27.0
