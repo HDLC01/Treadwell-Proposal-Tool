@@ -172,6 +172,97 @@
     return parts.join(" ") || s;
   }
 
+  // ── estimator avatars ──────────────────────────────────────────────────────
+  // A coloured circle of initials, the way BasisBoard shows an assignee. The point
+  // is scanning: "whose are these?" answered down a column without reading a single
+  // name, because one person is always the same colour.
+
+  /** "kyle.loseke@…" → "KL"; "Kyle Loseke" → "KL"; "troy@…" → "T"; "" → "".
+   *
+   *  Takes an address OR a display name, because half the app has one and half has the
+   *  other. First and LAST word, not first and second: "Marisoll Monserrat Ontiveros"
+   *  reads as MO to the person who owns it, not MM. Two letters at most — a third stops
+   *  fitting a 20px circle at a legible weight.
+   *
+   *  KNOWN SEAM. Initials follow whatever string the page has, so a one-word address
+   *  yields one letter: Troy is `T` on the CRM board (which knows only
+   *  troy@wetreadwell.com) and `TH` on the Bid Pipeline (where BasisBoard supplies "Troy
+   *  Holmes"). His COLOUR is identical on both, because that keys on the first name — and
+   *  colour is what makes a column scannable. Making the initials agree too would mean
+   *  every page fetching the roster before it could draw a chip, trading a correct-but-
+   *  terse label for a flash of the wrong one. */
+  function initialsOf(who) {
+    var words = nameOf(who).split(/\s+/).filter(Boolean);
+    if (!words.length) return "";
+    var first = words[0].charAt(0);
+    return (words.length > 1 ? first + words[words.length - 1].charAt(0) : first).toUpperCase();
+  }
+
+  // Every one of these clears 4.5:1 against white text (worst is 4.92:1), and none is
+  // near the unread badge's red — an avatar must never read as an alert.
+  //
+  // WHY FOURTEEN. Hashing cannot promise two people different colours, and no hash we
+  // tried separates a ten-person roster at any palette size. Fourteen is about the limit
+  // at which a human still tells 20px circles apart, so a wider palette would trade hash
+  // collisions for perceptual ones and gain nothing. A clash is therefore possible and
+  // harmless: the NAME is rendered beside the chip everywhere, so two people sharing a
+  // colour costs a little scanning speed and never shows anybody the wrong owner.
+  var AVATAR_COLORS = [
+    "#0F766E", "#4F46E5", "#7C3AED", "#BE185D", "#C2410C", "#15803D", "#1D4ED8",
+    "#9F1239", "#92400E", "#475569", "#0E7490", "#6D28D9", "#A16207", "#166534",
+  ];
+
+  // "Nobody", and deliberately NOT a palette member, so no real person can ever wear
+  // the colour that means unassigned. (Carving a colour OUT of the palette to free this
+  // one cost three roster separations — a modulo over a shorter list reshuffles
+  // everybody — so it lives outside the list instead.)
+  var AVATAR_NONE = "#4B5563";
+
+  /** What we hash: the person's FIRST NAME, lowercased and stripped to letters.
+   *
+   *  Different pages know the same person by different strings. Our own screens have
+   *  `kyle.loseke@wetreadwell.com`; the Bid Pipeline and Analytics read BasisBoard,
+   *  which only ever says `Kyle Loseke`. Hashing either string whole gives that person
+   *  TWO colours across the app, which defeats the point of colour-coding them at all.
+   *  Reducing both to `kyle` makes them agree, and a first name is the only key the two
+   *  sources actually share.
+   *
+   *  The cost, stated plainly: two people with the same first name always draw the same
+   *  colour. Nobody on the roster collides today, and the NAME is rendered beside every
+   *  chip, so if it ever happens it costs a little scanning speed and never misattributes
+   *  a project. Better trade than one person being purple here and teal there. */
+  function identityKey(who) {
+    var s = String(who || "").split("@")[0].toLowerCase();
+    return s.split(/[^a-z0-9]+/).filter(Boolean)[0] || "";
+  }
+
+  /** A stable colour for one person, from their address OR their display name.
+   *
+   *  Derived, never stored, never assigned by position in a list: the same person is the
+   *  same colour on every page, in every session, on everyone's machine, and a new hire
+   *  needs no setup and repaints nobody. (Roster position would guarantee distinctness,
+   *  but the roster is a lazy fetch and a chip has to render at once.)
+   *  djb2; `|0` keeps it in int32 so the arithmetic can't drift into floats. */
+  function colorOf(who) {
+    var s = identityKey(who);
+    if (!s) return AVATAR_NONE;
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) | 0;
+    return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+  }
+
+  /** The chip, ready to interpolate. Takes an address or a display name.
+   *
+   *  Safe without escaping by construction: the initials are letters pulled out by regex
+   *  and the colour is one of our constants, so a hostile value can't reach the output.
+   *  `dim` marks an inherited owner nobody actually chose. aria-hidden because the name
+   *  is always rendered right beside it — a reader announcing "K L Kyle Loseke" is noise. */
+  function avatarHtml(who, dim) {
+    var ini = initialsOf(who);
+    return '<span class="tw-av' + (dim ? " tw-av-dim" : "") + '" aria-hidden="true"'
+      + ' style="background:' + colorOf(who) + '">' + (ini || "—") + "</span>";
+  }
+
   var COMPARE = {
     stage: byTs(stageTs),
     activity: byTs(activityTs),
@@ -222,6 +313,8 @@
     stage: stage, lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, pausedUntil: pausedUntil,
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,
+    initialsOf: initialsOf, colorOf: colorOf, avatarHtml: avatarHtml, identityKey: identityKey,
+    AVATAR_COLORS: AVATAR_COLORS, AVATAR_NONE: AVATAR_NONE,
     sort: sort, group: group,
   };
 });

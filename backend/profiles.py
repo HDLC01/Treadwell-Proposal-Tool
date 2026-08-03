@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional
 
 from supabase_client import get_client, get_auth_client
 
-_PROFILE_COLS = "id,email,full_name,role,status,banned_at,banned_until,ban_reason,created_at,updated_at"
+_PROFILE_COLS = ("id,email,full_name,role,status,is_estimator,"
+                 "banned_at,banned_until,ban_reason,created_at,updated_at")
 _BAN_FOREVER = "876000h"  # ~100 years ≈ permanent (Supabase Admin API ban_duration)
 SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
 
@@ -87,6 +88,40 @@ def list_users(search: str = "", role: str = "") -> List[Dict[str, Any]]:
         if safe:
             q = q.or_(f"email.ilike.%{safe}%,full_name.ilike.%{safe}%")
     return q.execute().data or []
+
+
+def list_estimators() -> List[Dict[str, Any]]:
+    """Who can be ASSIGNED a proposal — the picker's list.
+
+    `is_estimator` is independent of `role` on purpose: a Treadwell employee can be a
+    member, an admin and an estimator at once, which a single-valued role column cannot
+    express. Paused and banned accounts are excluded; deactivating somebody in Admin is
+    the quickest way to take them off every picker.
+
+    FALLBACK, and it matters: if nobody has been flagged yet — a fresh deploy, before
+    anyone has ticked the boxes — this returns every active profile rather than an empty
+    list. Publishing REQUIRES an estimator, so an empty picker would block every send in
+    the building. Ticking one person switches the list over.
+    """
+    rows = [u for u in list_users() if (u.get("status") or "active") == "active"
+            and u.get("email") and not u.get("banned_at")]
+    flagged = [u for u in rows if u.get("is_estimator")]
+    return flagged or rows
+
+
+def set_estimator(actor: Dict[str, Any], target_id: str, on: bool) -> Dict[str, Any]:
+    """Add or remove somebody from the estimator roster.
+
+    Deliberately NOT gated by `_can_act`: that guard protects role, status, ban and
+    delete, where acting on an admin or on yourself is dangerous. Being assignable is not
+    a privilege — an admin who also estimates has to be able to tick their own box, and
+    the super admin has to be flaggable like anyone else. The endpoint is admin-only.
+    """
+    target = get_by_id(target_id)
+    if not target:
+        return {"ok": False, "error": "User not found."}
+    get_client().table("profiles").update({"is_estimator": bool(on)}).eq("id", target_id).execute()
+    return {"ok": True, "is_estimator": bool(on), "email": target.get("email")}
 
 
 def stats() -> Dict[str, int]:
