@@ -7,6 +7,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # The image is BUILT IN CI and pulled from the registry — never built on the VPS.
+    # That box is 1 core / 2 GB and runs ~13 containers for other Treadwell sites; a
+    # `docker compose up --build` there spikes load to ~60 and browns out every one of
+    # them, which is how production went down on 2026-06-24. `TW_IMAGE` is set by the
+    # deploy workflow to an immutable per-commit tag, so a rollback is one variable.
+    #
+    # The `build:` block stays deliberately: `deploy/ship.sh` and a local `up --build`
+    # still work when the registry or CI is unavailable. Compose only builds when asked.
+    image: ${TW_IMAGE:-ghcr.io/hdlc01/treadwell-proposal-tool:prod}
     container_name: treadwell-proposal-tool
     restart: unless-stopped
     ports:
