@@ -17,6 +17,23 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / ".github" / "workflows" / "deploy.yml"
 COMPOSES = [ROOT / "docker-compose.yml", ROOT / "docker-compose.staging.yml"]
+IMAGE = "ghcr.io/hdlc01/treadwell-proposal-tool"
+
+
+def _workflow_image() -> str:
+    """The `IMAGE:` env value from the workflow, exactly.
+
+    Compared by EQUALITY rather than `"ghcr.io" in text`: CodeQL rightly flags a
+    substring test against something URL-shaped, because that is the shape of a real
+    vulnerability (`if "example.com" in url` is defeated by
+    evil-example.com.attacker.net). Harmless in a test, but an exact match is a stronger
+    assertion anyway — it would catch a typo'd or repointed registry, which a substring
+    check would wave through."""
+    for line in DEPLOY.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("IMAGE:"):
+            return stripped.split(":", 1)[1].strip()
+    raise AssertionError("the workflow declares no IMAGE")
 
 
 def test_the_deploy_workflow_exists():
@@ -39,7 +56,7 @@ def test_the_image_is_built_on_a_runner_and_pushed():
     text = DEPLOY.read_text(encoding="utf-8")
     assert "docker/build-push-action" in text
     assert "push: true" in text
-    assert "ghcr.io" in text
+    assert _workflow_image() == IMAGE
 
 
 def test_both_deploys_wait_for_the_build():
@@ -70,7 +87,7 @@ def test_no_long_lived_registry_credential():
     on the VPS's docker config after the first deploy."""
     text = DEPLOY.read_text(encoding="utf-8")
     assert "secrets.GITHUB_TOKEN" in text
-    assert "docker logout ghcr.io" in text, "the box keeps a registry login after deploying"
+    assert "docker logout" in text, "the box keeps a registry login after deploying"
 
 
 def test_the_build_runs_before_the_approval_gate():
@@ -83,9 +100,13 @@ def test_the_build_runs_before_the_approval_gate():
 @pytest.mark.parametrize("path", COMPOSES, ids=lambda p: p.name)
 def test_compose_resolves_a_registry_image(path):
     text = path.read_text(encoding="utf-8")
-    assert "ghcr.io/hdlc01/treadwell-proposal-tool" in text
-    # Overridable, so a rollback is `TW_IMAGE=... docker compose up -d` on the box.
-    assert "${TW_IMAGE:-" in text
+    # Exact default, not a substring: the point is that compose resolves the image the
+    # workflow actually pushes. A near-miss would start something else, or nothing.
+    default = re.search(r"image: \$\{TW_IMAGE:-([^}]+)\}", text)
+    assert default, "compose does not resolve an overridable image"
+    repo, _, tag = default.group(1).rpartition(":")
+    assert repo == IMAGE
+    assert tag in ("prod", "staging")
 
 
 @pytest.mark.parametrize("path", COMPOSES, ids=lambda p: p.name)
@@ -100,5 +121,5 @@ def test_the_manual_fallback_still_exists_and_says_what_it_is_for():
     ship = (ROOT / "deploy" / "ship.sh").read_text(encoding="utf-8")
     assert "MANUAL FALLBACK" in ship
     # It must tag what compose will start, or `up -d` quietly runs the old image.
-    assert "ghcr.io/hdlc01/treadwell-proposal-tool" in ship
+    assert IMAGE in ship
     assert "up -d" in ship and "--build" not in ship.split("docker compose")[-1]
