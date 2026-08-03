@@ -23,6 +23,11 @@
     .hint { color:var(--ink-v); font-size:13px; margin:0 auto 16px; max-width:1360px; }
     /* toolbar — same shapes as Projects and the CRM board */
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 14px; }
+    /* Both toolbars ship with the `hidden` attribute so they don't appear empty before the
+       data lands — but the UA stylesheet's `[hidden]{display:none}` loses to the author
+       `display:flex` directly above, so they showed anyway. Re-asserting it as an author
+       rule is what makes `hidden` mean hidden. */
+    .toolbar[hidden] { display:none; }
     .tw-search { flex:1; min-width:180px; max-width:300px; background:#fff; color:var(--ink);
       border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 12px; font:600 12.5px system-ui; }
     .tw-select { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15);

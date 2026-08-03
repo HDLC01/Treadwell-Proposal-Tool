@@ -17,13 +17,25 @@
 //   4. Bids with no deadline are hidden entirely. Those are exactly the ones that go
 //      quiet and get forgotten, so they get a tray instead of oblivion.
 //
-// DATA. /api/analytics, the same dataset the dashboard uses — it is the only one carrying
-// bid_deadline_at, the GC companies and the estimator ids. No new endpoint. All the date
-// arithmetic lives in calendar-core.js, which is pure and tested under node.
+// TWO SOURCES, ONE GRID. This is the calendar Treadwell staff are meant to use as they
+// move off Basisboard, so it has to accept work that never came from Basisboard at all:
 //
-// READ-ONLY. Our whole Basisboard integration is read-only, so there is no "Add bid"
-// here: that button would write to their system. "Open in BasisBoard ↗" links out, and
-// every card links to the bid in Basisboard rather than pretending to be editable.
+//   * Basisboard bids — read from /api/analytics (the only dataset carrying
+//     bid_deadline_at, the GC companies and the estimator ids). MIRRORED and READ-ONLY:
+//     our integration never writes upstream, so an edit could not be saved there and
+//     would silently revert on the next sync. Their cards are LINKS OUT — there is no
+//     edit affordance on something we can't save, so nobody discovers the limit by
+//     losing work to it.
+//   * Treadwell's own entries — /api/calendar/events, full add/edit/delete, in our own
+//     Postgres. Their cards are BUTTONS that open the editor. Once Basisboard is gone,
+//     only these remain and nothing here has to change.
+//
+// A Basisboard outage therefore degrades to "ours only" rather than an empty page.
+//
+// All the date arithmetic lives in calendar-core.js, which is pure and tested under node.
+// Deadlines are entered and shown as Central wall-clock and stored as UTC instants; the
+// conversion measures the zone's offset AT THAT DATE, so a deadline typed either side of a
+// DST change is stored correctly.
 (function () {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
@@ -50,7 +62,9 @@
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
 
-  let ROWS = [];
+  let ROWS = [];               // both sources, merged — what the grid draws
+  let BB = [];                 // Basisboard's bids: mirrored, read-only
+  let MINE = [];               // Treadwell's own entries: editable
   let NAMES = {};              // estimator id -> display name
   let COMPANIES = {};          // company id  -> name
   let STAGES = [];
@@ -112,17 +126,31 @@
     });
   }
 
+  /** One card, from either source.
+   *
+   *  Ours renders as a <button> and opens the editor; a mirrored Basisboard bid renders as
+   *  a link out to Basisboard. That difference is the whole read-only story made visible:
+   *  there is no edit affordance on something we cannot save, so nobody discovers the
+   *  limitation by losing work to it. */
   function card(r, urg) {
-    const href = "https://app.basisboard.com/projects/" + encodeURIComponent(r.id || "");
     const val = money(r.quote);
-    return '<a class="card u-' + urg + '" href="' + esc(href) + '"'
-      + ' target="_blank" rel="noopener noreferrer"'
-      + ' title="' + esc(r.name || "") + (val ? " — " + moneyFull(r.quote) : "") + '">'
-      + '<p class="cname">' + esc(r.name || "Untitled") + "</p>"
+    const mine = r.source === "treadwell";
+    const inner = '<p class="cname">' + esc(r.name || "Untitled") + "</p>"
       + '<div class="cmeta">' + estimatorChip(r)
       + '<span class="when">' + esc(timeLabel(r)) + "</span>"
       + (val ? '<span class="amt">' + val + "</span>" : "")
-      + "</div>" + gcLine(r) + "</a>";
+      + "</div>" + gcLine(r);
+    const cls = "card u-" + urg + (mine ? " mine" : "");
+    if (mine) {
+      return '<button type="button" class="' + cls + '" data-edit="' + esc(r.id) + '"'
+        + ' title="' + esc(r.name || "") + (val ? " — " + moneyFull(r.quote) : "")
+        + ' · click to edit">' + inner + "</button>";
+    }
+    const href = "https://app.basisboard.com/projects/" + encodeURIComponent(r.id || "");
+    return '<a class="' + cls + '" href="' + esc(href) + '"'
+      + ' target="_blank" rel="noopener noreferrer"'
+      + ' title="' + esc(r.name || "") + (val ? " — " + moneyFull(r.quote) : "")
+      + ' · lives in BasisBoard, opens there">' + inner + "</a>";
   }
 
   function dayCell(day, rows) {
@@ -261,25 +289,66 @@
 
   // ── load ──────────────────────────────────────────────────────────
   function applyData(j) {
-    ROWS = Array.isArray(j.projects) ? j.projects : [];
+    BB = Array.isArray(j.projects) ? j.projects.map(markMirror) : [];
     STAGES = Array.isArray(j.stages) ? j.stages : [];
     NAMES = {};
     (j.estimators || []).forEach((e) => { NAMES[e.id] = e.name || e.id; });
     COMPANIES = {};
     (j.companies || []).forEach((c) => { COMPANIES[c.id] = c.name || ""; });
     TODAY = A.today();
+    recombine();
     fillFilters();
     paint();
   }
 
+  /** Basisboard's rows don't carry a source, so stamp one rather than inferring it later
+   *  from the absence of a field — "no `source` key" and "source is basisboard" must not be
+   *  the same test, or a shape change upstream silently makes their bids editable. */
+  function markMirror(r) {
+    return Object.assign({}, r, { source: "basisboard", editable: false });
+  }
+
+  /** Both sources, one list. Ours last so a same-day tie sorts predictably by deadline
+   *  rather than by which fetch happened to finish first. */
+  function recombine() {
+    ROWS = BB.concat(MINE);
+  }
+
+  async function loadMine(first) {
+    try {
+      const r = await api("/api/calendar/events");
+      const j = await r.json();
+      if (!j || j.ok === false) return;
+      MINE = Array.isArray(j.events) ? j.events : [];
+      recombine();
+      if (!first || MINE.length) { fillFilters(); paint(); }
+    } catch {
+      // Ours failing must not blank the Basisboard half — it is the larger dataset and the
+      // page is still useful without the editable rows.
+    }
+  }
+
   async function load(first) {
     try {
+      // Wait for auth.js to mint the bearer token before the first read. Without this the
+      // page fires its fetch as it parses, beats the token into existence, and renders
+      // "Missing bearer token." on a screen that has nothing wrong with it — the same race
+      // that hit /api/default-notes. The poll is per-call and resolves immediately once
+      // the token exists, so the 2-minute refresh pays nothing for it.
+      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
       const r = await api("/api/analytics");
       const j = await r.json();
       if (!j || j.ok === false) {
-        if (first) {
+        // Basisboard being unavailable (or simply unconfigured) must not blank OUR rows —
+        // they're the half that always works, and this page has to stay usable as the
+        // calendar Treadwell owns. Only say nothing loaded when nothing did.
+        if (first && !ROWS.length) {
           $("grid").className = "empty";
           $("grid").textContent = (j && j.error) || "Couldn't load the bid calendar.";
+        } else if (MINE.length) {
+          showAlert("Showing Treadwell's own entries only — BasisBoard's bids couldn't be "
+            + "loaded just now.", true);
+          paint();
         }
         return;
       }
@@ -287,9 +356,11 @@
       // being fetched for the first time on a brand-new container. Anything else — a
       // restored snapshot, a live build — has rows to draw immediately.
       if (j.building && !(j.projects || []).length) {
-        if (first) {
+        if (first && !ROWS.length) {
           $("grid").className = "loading";
           $("grid").textContent = "Reading the bid history from BasisBoard…";
+        } else if (MINE.length) {
+          paint();                       // ours are ready; don't hide them behind a spinner
         }
         return;
       }
@@ -298,12 +369,170 @@
         ? "Showing the last saved copy of the bid data while a fresh read finishes."
         : "", true);
     } catch (err) {
-      if (first) {
+      if (first && !ROWS.length) {
         $("grid").className = "empty";
         $("grid").textContent = "Couldn't reach the server. " + (err.message || "");
       }
     }
   }
+
+  // ── add / edit / delete ───────────────────────────────────────────
+  // Only ever operates on OUR rows. A Basisboard bid has no edit affordance at all (its
+  // card is a link out), so the read-only boundary is visible in the UI rather than
+  // enforced by a message after somebody has already typed.
+  let EDITING = null;          // id being edited, or null when adding
+
+  /** A Central wall-clock value for <input type="datetime-local">.
+   *
+   *  The input has no timezone, so it must be fed Central digits or the picker shows a
+   *  deadline in the viewer's zone — an estimator in another state would open a 2pm bid and
+   *  see 3pm, then "save" it an hour off. Built from the formatted Central parts rather than
+   *  the raw Date, which is the only way to get this right without a tz library. */
+  function toLocalInput(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const p = {};
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: A.BIZ_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(d).forEach((x) => { p[x.type] = x.value; });
+    // Central midnight formats as hour "24" in some ICU versions, which the input rejects.
+    const hh = p.hour === "24" ? "00" : p.hour;
+    return p.year + "-" + p.month + "-" + p.day + "T" + hh + ":" + p.minute;
+  }
+
+  /** The inverse: Central wall-clock digits -> a real UTC instant.
+   *
+   *  Computed by measuring Central's offset AT THAT DATE rather than assuming one, so a
+   *  deadline entered either side of a DST change is stored correctly. */
+  function fromLocalInput(v) {
+    if (!v) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(v.trim());
+    if (!m) return null;
+    const asUTC = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+    // What those same digits mean in Central: shift by the zone's offset on that date.
+    const probe = new Date(asUTC);
+    const parts = {};
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: A.BIZ_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(probe).forEach((x) => { parts[x.type] = x.value; });
+    const seenUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day,
+                             parts.hour === "24" ? 0 : +parts.hour, +parts.minute);
+    return new Date(asUTC + (asUTC - seenUTC)).toISOString();
+  }
+
+  function fillEstimatorPicker() {
+    const sel = $("f-est");
+    const chosen = sel.value;
+    const seen = {};
+    MINE.forEach((r) => { if (r.estimator_email) seen[r.estimator_email] = r.estimator_email; });
+    Object.keys(NAMES).forEach((id) => { if (id.includes("@")) seen[id] = NAMES[id]; });
+    sel.innerHTML = ['<option value="">Unassigned</option>'].concat(
+      Object.keys(seen).sort().map((e) =>
+        '<option value="' + esc(e) + '">' + esc(C.nameOf(seen[e]) || e) + "</option>")).join("");
+    sel.value = chosen;
+  }
+
+  function openDialog(row) {
+    EDITING = row ? row.id : null;
+    $("dlg-title").textContent = row ? "Edit calendar entry" : "Add to the calendar";
+    $("dlg-err").hidden = true;
+    fillEstimatorPicker();
+    $("f-title").value = row ? (row.name || "") : "";
+    $("f-deadline").value = row ? toLocalInput(row.bid_deadline_at) : "";
+    $("f-kind").value = (row && row.kind) || "bid";
+    $("f-customer").value = row ? (row.customer || "") : "";
+    $("f-value").value = row && typeof row.quote === "number" ? String(row.quote) : "";
+    $("f-location").value = row ? (row.location || "") : "";
+    $("f-est").value = row ? (row.estimator_email || "") : "";
+    $("f-notes").value = row ? (row.notes || "") : "";
+    $("f-del").hidden = !row;
+    $("dlg").showModal();
+    $("f-title").focus();
+  }
+
+  function dialogError(msg) {
+    const el = $("dlg-err");
+    el.textContent = msg;
+    el.hidden = !msg;
+  }
+
+  async function save(ev) {
+    ev.preventDefault();
+    const title = $("f-title").value.trim();
+    if (!title) { dialogError("Give it a name so it can be found later."); return; }
+    const body = {
+      title: title,
+      deadline_at: fromLocalInput($("f-deadline").value),
+      kind: $("f-kind").value,
+      customer: $("f-customer").value.trim(),
+      value: $("f-value").value.trim(),
+      location: $("f-location").value.trim(),
+      estimator_email: $("f-est").value,
+      notes: $("f-notes").value.trim(),
+    };
+    const btn = $("f-save");
+    btn.disabled = true;
+    try {
+      const r = await api(EDITING ? "/api/calendar/events/" + encodeURIComponent(EDITING)
+                                  : "/api/calendar/events",
+        { method: EDITING ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // The server's message is written for a person, so show it rather than a generic
+        // failure — "That value isn't a number" is actionable, "Save failed" isn't.
+        dialogError(j.detail || j.error || ("Couldn't save (HTTP " + r.status + ")."));
+        return;
+      }
+      $("dlg").close();
+      await loadMine(false);
+    } catch (err) {
+      dialogError("Couldn't reach the server. " + (err.message || ""));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function remove() {
+    if (!EDITING) return;
+    const row = MINE.find((r) => r.id === EDITING);
+    if (!window.confirm("Delete “" + ((row && row.name) || "this entry")
+        + "” from the calendar?")) return;
+    try {
+      const r = await api("/api/calendar/events/" + encodeURIComponent(EDITING),
+                          { method: "DELETE" });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        dialogError(j.detail || "Couldn't delete that entry.");
+        return;
+      }
+      $("dlg").close();
+      await loadMine(false);
+    } catch (err) {
+      dialogError("Couldn't reach the server. " + (err.message || ""));
+    }
+  }
+
+  $("add").addEventListener("click", () => openDialog(null));
+  $("dlg-form").addEventListener("submit", save);
+  $("f-cancel").addEventListener("click", () => $("dlg").close());
+  $("f-del").addEventListener("click", remove);
+  // Delegated because the grid is re-rendered wholesale on every paint.
+  $("grid").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-edit]");
+    if (!b) return;
+    const row = MINE.find((r) => r.id === b.dataset.edit);
+    if (row) openDialog(row);
+  });
+  $("tray").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-edit]");
+    if (!b) return;
+    const row = MINE.find((r) => r.id === b.dataset.edit);
+    if (row) openDialog(row);
+  });
 
   // ── events (delegated; CSP forbids inline handlers) ───────────────
   $("modes").addEventListener("click", (e) => {
@@ -341,10 +570,12 @@
 
   // The dataset is rebuilt server-side on a clock, so re-reading it on the same cadence
   // keeps the page current without anybody pressing F5. Cheap: it's a cached read.
-  load(true);
-  setInterval(() => load(false), 120000);
+  // Ours first: it's a small, fast read and it means a brand-new install with no
+  // Basisboard key still shows a working, editable calendar rather than an error.
+  loadMine(true).then(() => load(true));
+  setInterval(() => { loadMine(false); load(false); }, 120000);
   // Coming back to a tab left open overnight must not leave "Today" on yesterday.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) { TODAY = A.today(); load(false); }
+    if (!document.hidden) { TODAY = A.today(); loadMine(false); load(false); }
   });
 })();
