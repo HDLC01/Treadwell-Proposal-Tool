@@ -3009,6 +3009,51 @@ def api_archive_draft(draft_id: str, payload: ArchiveIn, request: Request) -> Di
         return {"ok": False, "error": str(exc)}
 
 
+class AssignDraftIn(BaseModel):
+    estimator_email: str = ""
+
+
+@app.post("/api/draft/{draft_id}/assign")
+def api_assign_draft(draft_id: str, payload: AssignDraftIn, request: Request) -> Dict[str, Any]:
+    """Hand a project to an estimator from the Projects tab.
+
+    Projects rows are DRAFTS, most of them never sent, so this writes the draft's own
+    copy — which is what pre-fills the Files-page picker on the next send. A project
+    the customer already has ALSO carries the assignment on its portal row, and that
+    is the copy the CRM board and the morning digest read, so a sent project is
+    forwarded on to the portal as well.
+
+    A portal failure does not fail the request. The draft write already succeeded, and
+    reporting `portal_updated: false` lets the page say "also reassign it from the CRM
+    drawer" instead of pretending nothing happened or losing the draft-side change."""
+    email = _clean_estimator(payload.estimator_email)
+    try:
+        existed = drafts.set_assigned_estimator(draft_id, email, _user_email(request))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_assigned_estimator failed: %s", exc)
+        raise HTTPException(502, "Could not save the assignment.") from exc
+    if not existed:
+        raise HTTPException(404, "project_not_found")
+
+    # Never sent → there is no portal row to update, so skip the round-trip entirely.
+    try:
+        sent = bool(drafts.latest_revision_no(draft_id))
+    except Exception as exc:  # noqa: BLE001 — a revisions read must not undo the assign
+        log.warning("revision lookup failed for %s: %s", draft_id, exc)
+        sent = False
+    if not sent:
+        return {"ok": True, "assigned_estimator": email, "portal_updated": False, "sent": False}
+
+    try:
+        _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/assign", "POST",
+                {"estimator_email": email, "by": _user_email(request)})
+        portal_ok = True
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        log.warning("portal assign failed for %s: %s", draft_id, exc)
+        portal_ok = False
+    return {"ok": True, "assigned_estimator": email, "portal_updated": portal_ok, "sent": True}
+
+
 @app.get("/api/drafts")
 def api_list_drafts() -> Dict[str, Any]:
     """Unified ACTIVE project list (all users) for the Projects dashboard."""
