@@ -207,9 +207,11 @@
   // collisions for perceptual ones and gain nothing. A clash is therefore possible and
   // harmless: the NAME is rendered beside the chip everywhere, so two people sharing a
   // colour costs a little scanning speed and never shows anybody the wrong owner.
+  // No near-greys: an earlier slate entry sat two hex digits from AVATAR_NONE, so a real
+  // person could look like the "unassigned" chip beside them.
   var AVATAR_COLORS = [
     "#0F766E", "#4F46E5", "#7C3AED", "#BE185D", "#C2410C", "#15803D", "#1D4ED8",
-    "#9F1239", "#92400E", "#475569", "#0E7490", "#6D28D9", "#A16207", "#166534",
+    "#9F1239", "#92400E", "#86198F", "#0E7490", "#6D28D9", "#A16207", "#166534",
   ];
 
   // "Nobody", and deliberately NOT a palette member, so no real person can ever wear
@@ -242,12 +244,17 @@
    *  same colour on every page, in every session, on everyone's machine, and a new hire
    *  needs no setup and repaints nobody. (Roster position would guarantee distinctness,
    *  but the roster is a lazy fetch and a chip has to render at once.)
-   *  djb2; `|0` keeps it in int32 so the arithmetic can't drift into floats. */
+   *
+   *  sdbm, not djb2, and measured rather than assumed: the keys here are SHORT first
+   *  names, where djb2 clusters badly. Across the roster plus a dozen common first names
+   *  sdbm separated 12 where djb2 managed 10 — and djb2 put Kyle and a demo account on
+   *  the same colour on the same board, which is what sent me looking. `|0` keeps the
+   *  arithmetic in int32 so it can't drift into floats. */
   function colorOf(who) {
     var s = identityKey(who);
     if (!s) return AVATAR_NONE;
-    var h = 5381;
-    for (var i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) | 0;
+    var h = 0;
+    for (var i = 0; i < s.length; i++) h = (s.charCodeAt(i) + (h << 6) + (h << 16) - h) | 0;
     return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
   }
 

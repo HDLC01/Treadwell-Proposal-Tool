@@ -377,7 +377,37 @@ def test_a_wider_cast_still_mostly_separates():
               "'rj.urzendowski@x.com','marisoll.monserrat.ontiveros@x.com',"
               "'liz@wetreadwell.com','autopilot','will@wetreadwell.com'];"
               "out(new Set(r.map(C.colorOf)).size);")
-    assert got >= 8, f"only {got} distinct colours across ten names — palette or hash regressed"
+    assert got >= 9, f"only {got} distinct colours across ten names — palette or hash regressed"
+
+
+def test_two_people_on_one_board_do_not_share_a_colour():
+    """Caught on staging, not in a test: with djb2 the assigned Kyle and a demo account
+    drew the same colour on the same board. sdbm separates short first names far better —
+    12 distinct across a wide cast where djb2 managed 10."""
+    got = run("out(new Set(['kyle.loseke@wetreadwell.com','demo@example.com',"
+              "'hanz@wetreadwell.com','autopilot'].map(C.colorOf)).size);")
+    assert got == 4
+
+
+def test_no_palette_colour_can_be_mistaken_for_the_nobody_grey():
+    """An earlier slate entry sat two hex digits from AVATAR_NONE, so a real person could
+    look like the unassigned chip sitting next to them."""
+    # The real property is SATURATION, not the leading hex digit: #6D28D9 starts with a
+    # 6 and is plainly violet. A grey is anything whose channels sit close together.
+    got = run("""
+      const sat = (h) => {
+        const [r,g,b] = [1,3,5].map(i => parseInt(h.substr(i,2),16)/255);
+        const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+        return mx === 0 ? 0 : (mx - mn) / mx;
+      };
+      out({ dullest: Math.min(...C.AVATAR_COLORS.map(sat)),
+            noneSat: sat(C.AVATAR_NONE),
+            greyish: C.AVATAR_COLORS.filter(c => sat(c) < 0.35) });
+    """)
+    assert got["greyish"] == [], f"near-grey palette entries: {got['greyish']}"
+    # And the neutral itself really is grey, so "nobody" reads as absence of a person.
+    assert got["noneSat"] < 0.25
+    assert got["dullest"] > 0.5
 
 
 def test_the_palette_is_sized_for_the_eye_not_the_hash():
