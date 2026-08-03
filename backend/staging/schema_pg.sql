@@ -68,6 +68,35 @@ drop trigger if exists profiles_updated_at on public.profiles;
 create trigger profiles_updated_at before update on public.profiles
   for each row execute function public.set_updated_at();
 
+-- ── Bid Calendar: Treadwell's own entries ───────────────────────────────
+-- Mirror of the prod table in supabase_schema.sql. Staging keeps DATA in this
+-- self-hosted Postgres (cloud Supabase is AUTH only), so the DDL has to be applied
+-- here too — it is a genuinely separate database, not a copy.
+create table if not exists public.calendar_events (
+  id               text primary key,
+  title            text not null,
+  deadline_at      timestamptz,          -- UTC instant; rendered Central by the frontend
+  kind             text not null default 'bid',
+  customer         text,
+  location         text,
+  value            numeric(14,2),        -- dollars, never cents
+  estimator_email  text,
+  stage            text,
+  notes            text,
+  project_id       text,                 -- optional link to drafts.id; deliberately not an FK
+  owner_email      text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  deleted_at       timestamptz           -- soft delete: a lost bid deadline costs a job
+);
+create index if not exists calendar_events_live_deadline_idx
+  on public.calendar_events (deadline_at) where deleted_at is null;
+create index if not exists calendar_events_estimator_idx
+  on public.calendar_events (estimator_email) where deleted_at is null;
+create index if not exists calendar_events_project_idx
+  on public.calendar_events (project_id)
+  where deleted_at is null and project_id is not null;
+
 -- ── Grants so PostgREST (service_role) can read/write ───────────────────
 grant usage on schema public to service_role;
 grant all on all tables in schema public to service_role;

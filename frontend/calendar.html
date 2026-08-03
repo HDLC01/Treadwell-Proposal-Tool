@@ -147,10 +147,48 @@
       border-radius:10px; padding:10px 13px; color:var(--red-dark); font-size:12.5px;
       margin:0 0 14px; }
     .alert[hidden] { display:none; }
+    /* The `hidden` ATTRIBUTE only works while nothing outcompetes it. The UA stylesheet's
+       `[hidden]{display:none}` loses to any author rule that sets `display`, so every one
+       of these — each of which sets flex or grid above — rendered as an empty toolbar and
+       an empty summary strip on first paint, before any data existed. Re-asserting it here
+       as an author rule is what makes `hidden` mean hidden. */
+    .toolbar[hidden], .sum[hidden], .dows[hidden], .legend[hidden], .grid[hidden] { display:none; }
     .stale { border-color:#e8dcc0; border-left-color:var(--warn); background:#fdf9ee;
       color:var(--warn); }
     .loading, .empty { background:var(--card); border:1px solid var(--line); border-radius:14px;
       padding:34px; text-align:center; color:var(--ink-v); box-shadow:var(--shadow); }
+    /* ── add/edit dialog ── */
+    dialog { border:0; border-radius:16px; padding:0; max-width:560px; width:calc(100% - 32px);
+      box-shadow:0 10px 50px rgba(27,28,28,.28); color:var(--ink); background:var(--card); }
+    dialog::backdrop { background:rgba(27,28,28,.42); }
+    dialog form { padding:20px 22px 18px; display:flex; flex-direction:column; gap:4px; }
+    dialog h2 { font:400 20px var(--display); margin:0 0 12px; }
+    dialog label { font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-mut); margin-top:9px; }
+    dialog .fhint { text-transform:none; letter-spacing:0; font-weight:500; color:var(--ink-mut); }
+    dialog input, dialog select, dialog textarea { font:inherit; font-size:13.5px; padding:8px 10px;
+      border:1px solid var(--line); border-radius:9px; background:var(--card); color:var(--ink);
+      width:100%; }
+    dialog textarea { resize:vertical; min-height:58px; }
+    dialog input:focus, dialog select:focus, dialog textarea:focus { outline:none;
+      border-color:var(--red); box-shadow:0 0 0 3px var(--red-tint); }
+    .frow { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .dlg-foot { display:flex; align-items:center; gap:8px; margin-top:18px;
+      padding-top:14px; border-top:1px solid var(--line-soft); }
+    .btn.danger { border-color:#e6c9c9; color:var(--late); background:var(--card); }
+    .btn.danger:hover { background:var(--late-bg); }
+    .ferr { border:1px solid #f0d9dd; border-left:3px solid var(--red); background:var(--red-wash);
+      border-radius:9px; padding:9px 12px; color:var(--red-dark); font-size:12.5px; margin:0 0 4px; }
+    .ferr[hidden] { display:none; }
+    /* Ours are editable, so they invite a click. The mirrored Basisboard ones open in
+       Basisboard instead, and the dotted underline on the source dot is the only hint
+       needed at this size. */
+    .card.mine { cursor:pointer; }
+    .src { font:700 8px system-ui; letter-spacing:.05em; text-transform:uppercase;
+      padding:1px 4px; border-radius:4px; background:var(--surf-high); color:var(--ink-v);
+      flex:none; }
+    .card.mine .src { background:var(--red-tint); color:var(--red-dark); }
+    @media (max-width:640px) { .frow { grid-template-columns:1fr; } }
     @media (max-width:1000px) {
       .grid { grid-template-columns:repeat(2,1fr); }
       .dows { display:none; }
@@ -191,8 +229,9 @@
       <select id="stage" class="tw-select" aria-label="Filter by stage">
         <option value="">Any stage</option>
       </select>
-      <a id="bb" class="btn primary" href="https://app.basisboard.com/calendar"
-         target="_blank" rel="noopener noreferrer">Open in BasisBoard ↗</a>
+      <a id="bb" class="btn" href="https://app.basisboard.com/calendar"
+         target="_blank" rel="noopener noreferrer">BasisBoard ↗</a>
+      <button type="button" id="add" class="btn primary">+ Add</button>
     </div>
 
     <div id="sum" class="sum" hidden></div>
@@ -201,6 +240,62 @@
     <section id="tray" class="tray" hidden></section>
     <div id="legend" class="legend" hidden></div>
   </div>
+
+  <!-- One dialog for add and edit. <dialog> gives focus trapping, Esc and the backdrop
+       for free; hand-rolling those is where keyboard access quietly goes missing. -->
+  <dialog id="dlg" aria-labelledby="dlg-title">
+    <form id="dlg-form" method="dialog">
+      <h2 id="dlg-title">Add to the calendar</h2>
+      <p id="dlg-err" class="ferr" hidden></p>
+      <label for="f-title">Name</label>
+      <input id="f-title" name="title" type="text" required maxlength="500"
+             placeholder="e.g. Monticello Trails Middle School" />
+      <div class="frow">
+        <div>
+          <label for="f-deadline">Deadline <span class="fhint">Central</span></label>
+          <input id="f-deadline" name="deadline_at" type="datetime-local" />
+        </div>
+        <div>
+          <label for="f-kind">Kind</label>
+          <select id="f-kind" name="kind">
+            <option value="bid">Bid due</option>
+            <option value="site_visit">Site visit</option>
+            <option value="submission">Submission</option>
+            <option value="reminder">Reminder</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label for="f-customer">Customer / GC</label>
+          <input id="f-customer" name="customer" type="text" maxlength="500" />
+        </div>
+        <div>
+          <label for="f-value">Value</label>
+          <input id="f-value" name="value" type="text" inputmode="decimal" placeholder="$" />
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label for="f-location">Location</label>
+          <input id="f-location" name="location" type="text" maxlength="500" />
+        </div>
+        <div>
+          <label for="f-est">Estimator</label>
+          <select id="f-est" name="estimator_email"><option value="">Unassigned</option></select>
+        </div>
+      </div>
+      <label for="f-notes">Notes</label>
+      <textarea id="f-notes" name="notes" rows="3" maxlength="4000"></textarea>
+      <div class="dlg-foot">
+        <button type="button" id="f-del" class="btn danger" hidden>Delete</button>
+        <span class="grow"></span>
+        <button type="button" id="f-cancel" class="btn">Cancel</button>
+        <button type="submit" id="f-save" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/auth.js"></script>
