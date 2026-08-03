@@ -3005,6 +3005,24 @@ def _start_digest() -> None:
 
 
 @app.on_event("startup")
+def _start_basisboard_refresher() -> None:
+    """Keep the Basisboard analytics dataset warm in the background.
+
+    Reading the whole bid history is ~45 paced requests, and it used to happen on
+    somebody's page load — so the first person to open Analytics after a deploy paid
+    for it, or watched an empty "building…" page. Now a clock pays for it, the
+    snapshot on the data volume survives the restart, and both Analytics and the Bid
+    Calendar open on real numbers immediately.
+
+    Cheap and safe to call when Basisboard isn't configured: it returns without
+    starting a thread."""
+    try:
+        basisboard_client.ensure_refresher_started()
+    except Exception as exc:  # noqa: BLE001 — a warm cache is never worth a failed boot
+        log.warning("Basisboard analytics refresher failed to start: %s", exc)
+
+
+@app.on_event("startup")
 def _warm_sheet_cache() -> None:
     """Pre-build + cache the heavy grids in a background thread so the first
     real user after a deploy doesn't pay the ~7 s cold serialization cost.
