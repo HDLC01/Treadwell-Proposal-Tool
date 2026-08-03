@@ -157,6 +157,9 @@
       '<div class="tw-section">Proposals</div>' +
       navItem("/projects.html", "▣", "Projects") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
+      // Sits after the CRM board on purpose: the board is "what's the shape of the
+      // pipeline", this is "who have we left waiting". Same data, different question.
+      navItem("/followups.html", "⏱", "Follow-ups") +
       // Same glyph as the "📋 Info" button on the project cards, so the two
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.

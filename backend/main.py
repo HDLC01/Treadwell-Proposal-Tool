@@ -656,6 +656,38 @@ def api_portal_pipeline() -> Dict[str, Any]:
     return _portal("/api/admin/pipeline", "GET")
 
 
+@app.get("/api/portal/followups")
+def api_portal_followups() -> Dict[str, Any]:
+    """The Follow-ups page: every proposal ever sent, with where its chase stands.
+
+    Server-side rather than shaped in the browser, because the ranking and the "why it's
+    here" sentence come from `digest_worker` — the same code that writes the 6 AM email.
+    Computing them twice, in two languages, is how a page ends up disagreeing with the
+    email it is supposed to explain.
+
+    Deliberately uses the TEMPLATED reason, not the Claude one: this endpoint is hit on
+    every page load and a poll, and an AI call per row per refresh would be absurd. The
+    written-out sentence stays in the digest, where it is worth the spend."""
+    data = _portal("/api/admin/pipeline", "GET") or {}
+    rows = data.get("proposals") or []
+    now = digest_worker.now_utc()
+    out = []
+    for p in rows:
+        score, facts = digest_worker.score(p, now)
+        item = dict(p)
+        item["followup_score"] = score
+        item["followup_facts"] = facts
+        # Why it is worth a call, in one line. `eligible` is the digest's own filter, so
+        # a paused or already-chased proposal reads as such instead of being nagged about.
+        item["eligible"] = digest_worker.eligible(p, now)
+        item["reason"] = (digest_worker.fallback_reason(
+            {"unread": p.get("unread") or 0, "facts": facts}) if item["eligible"] else "")
+        out.append(item)
+    # Worst first: the point of the page is who has been left longest.
+    out.sort(key=lambda x: (-x["followup_score"], (x.get("project_name") or "").lower()))
+    return {"ok": True, "proposals": out}
+
+
 @app.get("/api/portal/proposal/{proposal_id}")
 def api_portal_proposal(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}", "GET")
