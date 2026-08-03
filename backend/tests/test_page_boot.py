@@ -70,7 +70,8 @@ def test_every_local_script_it_pulls_in_exists(page):
 # person reads `window.TWCrm` as its own script runs, so the order is load-bearing: get it
 # wrong and the page throws on boot and renders nothing at all.
 PERSON_PAGES = ["portal.html", "projects.html", "admin.html", "analytics.html", "crm.html",
-                "notifications.html", "trash.html", "done.html", "proposal-review.html"]
+                "notifications.html", "trash.html", "done.html", "proposal-review.html",
+                "calendar.html"]
 
 
 @pytest.mark.parametrize("name", PERSON_PAGES)
@@ -97,6 +98,60 @@ def test_the_person_chip_is_styled_in_exactly_one_place():
     dupes = [p.name for p in FRONTEND.glob("*.html")
              if rule.search(p.read_text(encoding="utf-8"))]
     assert not dupes, f"these pages re-define the .tw-av chip: {dupes}"
+
+
+def test_the_per_project_notify_chips_carry_no_identity_colour():
+    """On that control green already means "receives this project's email", so a
+    per-person avatar colour makes green ambiguous — is the chip on, or is that just
+    Alejandro? State owns colour there; the initials say who it is. The rest of the page
+    (the global roster) keeps the shared coloured chip."""
+    js = (FRONTEND / "js" / "notifications.js").read_text(encoding="utf-8")
+    chip = next(ln for ln in js.splitlines() if "esc(nameOf(person.email))" in ln)
+    assert "plainAvatar(" in chip and "avatar(" not in chip.replace("plainAvatar(", ""), (
+        "the per-project chip is back on TWCrm.avatarHtml — its identity colour fights the "
+        "green/not-green state the chip is there to show")
+    assert "avatar(x.email)" in js, "the global roster chips should still be colour-coded"
+    # Neutral by construction, not by overriding the shared class: .tw-av rides an inline
+    # background, so re-tinting it would take an !important a page must not own — and
+    # test_the_person_chip_is_styled_in_exactly_one_place forbids the rule outright.
+    css = (FRONTEND / "notifications.html").read_text(encoding="utf-8")
+    assert ".nt-chip .nt-av" in css
+    assert "!important" not in css
+
+
+def test_the_drawer_notify_chips_carry_no_identity_colour():
+    """The CRM drawer hosts the per-project half of the same control, with the same help
+    text ("Green = receives this project's emails"), so it has to make the same trade:
+    state owns colour, the initials say who. Every OTHER person on that page — the board
+    cards, the table, the follow-up assignee — keeps their identity colour."""
+    js = (FRONTEND / "js" / "portal.js").read_text(encoding="utf-8")
+    chip = next(ln for ln in js.splitlines() if "esc(nameOf(p.email))" in ln)
+    assert "plainAvatar(" in chip and "avatar(" not in chip.replace("plainAvatar(", ""), (
+        "the drawer's notification chip is back on TWCrm.avatarHtml — its identity colour "
+        "fights the green/not-green state the chip exists to show")
+    # The board still colour-codes people; only this one control opts out.
+    assert "avatar(email, !isAssigned(p))" in js
+    css = (FRONTEND / "portal.html").read_text(encoding="utf-8")
+    assert ".nt-chip .nt-av" in css
+    # Neutral by construction, not by re-tinting the shared chip: .tw-av's colour rides an
+    # inline background, so overriding it would take an !important on a class this page
+    # does not own — and test_the_person_chip_is_styled_in_exactly_one_place forbids the
+    # rule outright.
+    av = [rule for rule in css.split("}") if ".nt-av" in rule]
+    assert av and not any("!important" in rule for rule in av)
+
+
+def test_the_person_chip_aligns_against_its_own_line():
+    """`vertical-align` in px is an absolute shift, so one tuned value is correct at one
+    font-size only — a 20px chip nudged -4px sat ~5px low in the 12px "Estimator:" line on
+    the portal cards while looking fine in a 13px table. `middle` is measured against the
+    parent's x-height, so it re-centres itself everywhere the chip is used."""
+    css = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    rule = css[css.index(".tw-av{"):]
+    rule = rule[:rule.index("}")]
+    assert "vertical-align:middle" in rule, (
+        "the shared person chip is back on a pixel baseline offset; it can only be right "
+        "at one font-size and the app renders it at 11, 12, 12.5, 13 and 14px")
 
 
 def test_there_is_one_implementation_of_a_person_name():

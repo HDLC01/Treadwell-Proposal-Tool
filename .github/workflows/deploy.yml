@@ -1,15 +1,33 @@
 name: Deploy
 
-# Continuous deployment: a hosted runner SSHes into the Bluehost VPS and runs
-# the same `git pull && docker compose up -d --build` you'd run by hand. The
-# image is built ON the VPS (no registry), so the runner only needs SSH.
+# Continuous deployment. The image is BUILT ON A GITHUB RUNNER, pushed to GHCR, and the
+# VPS only pulls and restarts it.
 #
-#   push to `staging` -> deploys the staging stack automatically
-#   push to `main`    -> deploys prod, but the `production` environment requires
-#                        a manual approval (HDLC01) before the job runs
+# WHY, because the previous arrangement looks simpler and cost us an outage. The VPS used
+# to run `docker compose up -d --build` itself. It is 1 core / 2 GB and hosts ~13
+# containers for other Treadwell sites (portal, roadmap, assess, profiles, newsfeed,
+# KBID), and this image bakes in Node, the Claude CLI and LibreOffice — so building it
+# there spikes load to ~60 and browns out every site on the box. That is how production
+# went down on 2026-06-24, and retrying the deploy made it worse.
 #
-# Auth = the dedicated `VPS_SSH_KEY` deploy secret (revocable, separate from any
-# personal key). Host/user come from the VPS_HOST / VPS_USER secrets.
+#   push to `staging` -> build, push, deploy staging automatically
+#   push to `main`    -> build and push, then WAIT for the `production` environment's
+#                        required reviewer (HDLC01) before touching prod
+#
+# The build runs BEFORE the approval gate on purpose: a broken build should fail while
+# nobody is waiting on it, and the reviewer should only ever be asked to approve an
+# artifact that already exists.
+#
+# Rollback is one variable: every build is tagged with its commit SHA, so
+#   TW_IMAGE=ghcr.io/<owner>/treadwell-proposal-tool:sha-<old> docker compose up -d
+# on the box puts the previous image back without a build or a revert commit.
+#
+# `deploy/ship.sh` remains the manual fallback for when CI or the registry is unavailable
+# (it builds locally and ships the tarball over SSH). The compose `build:` blocks are
+# kept for the same reason.
+#
+# Auth: `VPS_SSH_KEY` / `VPS_HOST` / `VPS_USER` secrets for the box; the built-in
+# `GITHUB_TOKEN` for GHCR — no long-lived registry credential exists anywhere.
 on:
   push:
     branches: [staging, main]
@@ -20,54 +38,119 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # lowercase: GHCR rejects a repository path containing capitals, and the owner here
+  # is `HDLC01`.
+  IMAGE: ghcr.io/hdlc01/treadwell-proposal-tool
+
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write         # push to GHCR with the built-in token
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Work out the tags
+        id: meta
+        run: |
+          # An immutable per-commit tag is what makes rollback trivial; the moving
+          # staging/prod tag is what a bare `docker compose up -d` on the box resolves.
+          echo "sha_tag=${IMAGE}:sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "move_tag=${IMAGE}:${{ github.ref_name == 'main' && 'prod' || 'staging' }}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}:sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.sha_tag }}
+            ${{ steps.meta.outputs.move_tag }}
+          # The layer cache is what keeps this off the critical path: LibreOffice and the
+          # Claude CLI are the slow layers and they almost never change.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   staging:
     if: github.ref_name == 'staging'
+    needs: build
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - name: Deploy staging over SSH
+      - name: Pull + restart staging over SSH
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true          # abort on the first failing command
+          envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
             set -euo pipefail
             cd /opt/treadwell-staging
             git pull --ff-only origin staging
-            docker compose -f docker-compose.staging.yml up -d --build
-            # wait until the container reports healthy, else fail the deploy
+            # The token is short-lived and job-scoped; logging out again means no registry
+            # credential is ever left sitting on the box.
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+            docker compose -f docker-compose.staging.yml pull app
+            docker compose -f docker-compose.staging.yml up -d     # NO --build
             for i in $(seq 1 24); do
               if curl -fsS http://localhost:8889/healthz >/dev/null; then
-                echo "staging healthy"; exit 0
+                echo "staging healthy on $TW_IMAGE"; exit 0
               fi
               sleep 5
             done
             echo "staging post-deploy healthcheck failed"; exit 1
+        env:
+          TW_IMAGE: ${{ needs.build.outputs.image }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
 
   production:
     if: github.ref_name == 'main'
+    needs: build
     runs-on: ubuntu-latest
     environment: production          # required reviewer -> waits for approval
     steps:
-      - name: Deploy production over SSH
+      - name: Pull + restart production over SSH
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
+          envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
           script: |
             set -euo pipefail
             cd /opt/treadwell
             git pull --ff-only
-            docker compose up -d --build
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+            docker compose pull proposal-tool
+            docker compose up -d                                   # NO --build
             for i in $(seq 1 24); do
               if curl -fsS http://localhost:8888/healthz >/dev/null; then
-                echo "prod healthy"; exit 0
+                echo "prod healthy on $TW_IMAGE"; exit 0
               fi
               sleep 5
             done
             echo "prod post-deploy healthcheck failed"; exit 1
+        env:
+          TW_IMAGE: ${{ needs.build.outputs.image }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}

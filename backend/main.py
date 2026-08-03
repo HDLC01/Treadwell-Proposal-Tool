@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 
 import audit
 import basisboard_client
+import calendar_events
 import digest_worker
 import drafts
 import dropbox_client
@@ -447,6 +448,79 @@ def api_analytics() -> Dict[str, Any]:
     date range is instant and costs nothing. Always HTTP 200 — a Basisboard
     outage degrades to ok:false and the page keeps its cached numbers."""
     return basisboard_client.get_analytics()
+
+
+# ─── Bid Calendar: Treadwell's own entries ─────────────────────────────────────
+# The calendar draws two sources on one grid. Basisboard bids arrive via /api/analytics
+# and are READ-ONLY — our Basisboard integration never writes, so an edit there could not
+# be pushed upstream and would silently revert on the next sync. These endpoints own the
+# other half: entries created in this tool, fully editable, and the only ones that remain
+# once Treadwell is off Basisboard.
+#
+# There is deliberately no endpoint that edits a Basisboard bid. The refusal lives in the
+# absence of a route rather than in a check that could be bypassed.
+class CalendarEventIn(BaseModel):
+    """Loose on purpose — calendar_events.validate() is the single authority on what is
+    acceptable, so the rules can't drift between a Pydantic model and the writer."""
+    title: Optional[str] = None
+    deadline_at: Optional[str] = None
+    kind: Optional[str] = None
+    customer: Optional[str] = None
+    location: Optional[str] = None
+    value: Optional[Any] = None
+    estimator_email: Optional[str] = None
+    stage: Optional[str] = None
+    notes: Optional[str] = None
+    project_id: Optional[str] = None
+
+
+@app.get("/api/calendar/events")
+def api_calendar_events() -> Dict[str, Any]:
+    """Treadwell's own calendar entries. Always 200 with a list — the calendar's
+    Basisboard half has to keep rendering even if this table is unreachable."""
+    return {"ok": True, "events": calendar_events.list_events()}
+
+
+@app.post("/api/calendar/events")
+def api_calendar_create(payload: CalendarEventIn, request: Request) -> Dict[str, Any]:
+    email = _user_email(request)
+    try:
+        row = calendar_events.create_event(payload.model_dump(exclude_unset=True), email)
+    except calendar_events.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    drafts.log_event(row.get("project_id") or None, email, "calendar_event_created",
+                     {"title": row.get("name"), "deadline_at": row.get("bid_deadline_at")})
+    return {"ok": True, "event": row}
+
+
+@app.patch("/api/calendar/events/{event_id}")
+def api_calendar_update(event_id: str, payload: CalendarEventIn,
+                        request: Request) -> Dict[str, Any]:
+    email = _user_email(request)
+    try:
+        row = calendar_events.update_event(event_id, payload.model_dump(exclude_unset=True))
+    except calendar_events.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        # 404 rather than a cheerful 200: the entry may have been deleted in another tab,
+        # and reporting a successful write to nothing is how two people overwrite silently.
+        raise HTTPException(404, "That calendar entry no longer exists.")
+    drafts.log_event(row.get("project_id") or None, email, "calendar_event_updated",
+                     {"title": row.get("name"), "deadline_at": row.get("bid_deadline_at")})
+    return {"ok": True, "event": row}
+
+
+@app.delete("/api/calendar/events/{event_id}")
+def api_calendar_delete(event_id: str, request: Request) -> Dict[str, Any]:
+    email = _user_email(request)
+    existing = calendar_events.get_event(event_id)
+    if not calendar_events.delete_event(event_id):
+        raise HTTPException(404, "That calendar entry no longer exists.")
+    drafts.log_event((existing or {}).get("project_id") or None, email,
+                     "calendar_event_deleted", {"title": (existing or {}).get("name")})
+    # Soft delete — a calendar is a work queue, and a destroyed bid deadline could cost a
+    # job. The row keeps its deleted_at and can be brought back by hand.
+    return {"ok": True, "deleted": event_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
@@ -3002,6 +3076,24 @@ def _start_digest() -> None:
     or not the schedule is enabled."""
     digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
     digest_worker.ensure_started(portal=_portal, run_claude=_autofill_via_cli)
+
+
+@app.on_event("startup")
+def _start_basisboard_refresher() -> None:
+    """Keep the Basisboard analytics dataset warm in the background.
+
+    Reading the whole bid history is ~45 paced requests, and it used to happen on
+    somebody's page load — so the first person to open Analytics after a deploy paid
+    for it, or watched an empty "building…" page. Now a clock pays for it, the
+    snapshot on the data volume survives the restart, and both Analytics and the Bid
+    Calendar open on real numbers immediately.
+
+    Cheap and safe to call when Basisboard isn't configured: it returns without
+    starting a thread."""
+    try:
+        basisboard_client.ensure_refresher_started()
+    except Exception as exc:  # noqa: BLE001 — a warm cache is never worth a failed boot
+        log.warning("Basisboard analytics refresher failed to start: %s", exc)
 
 
 @app.on_event("startup")

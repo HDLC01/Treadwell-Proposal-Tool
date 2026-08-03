@@ -58,7 +58,28 @@
     return '<div class="col">' + head + body + '</div>';
   }
 
+  // What the board currently shows. `paint()` replaces the board's entire innerHTML,
+  // so painting data that hasn't changed destroys and rebuilds every column and card
+  // for no reason — which the eye sees as the whole board blinking.
+  //
+  // It blinked on every visit because the load path paints TWICE by design: once
+  // instantly from the sessionStorage cache, then again when the fetch lands. The
+  // second paint is usually pixel-identical, so all it did was flash the board and
+  // throw away however far you had scrolled a column.
+  //
+  // The signature lives in `paint()` rather than in the fetch path so it always
+  // describes what is actually rendered — including QUERY, so typing in the search
+  // box still repaints, and including anything a future local edit changes.
+  let LAST_SIG = "";
+
   function paint() {
+    // Compared against the whole shaped dataset rather than a count or a timestamp:
+    // a bid moving between stages leaves the count identical, and `generated_at`
+    // changes on every build even when nothing about the board did.
+    const sig = JSON.stringify([STAGES, ALL, QUERY]);
+    if (sig === LAST_SIG) return;
+    LAST_SIG = sig;
+
     const list = filtered();
     const byStage = {};
     list.forEach(p => { const k = p.stage_id || "_unstaged"; (byStage[k] = byStage[k] || []).push(p); });
