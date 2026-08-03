@@ -56,12 +56,15 @@ Read contract (https://api.basisboard.com/v1, `Authorization: Bearer <key>`):
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import cachetools
@@ -112,10 +115,40 @@ def _env_int(name: str, default: int, lo: int, hi: int) -> int:
         return default
 
 
-_analytics_cache = cachetools.TTLCache(maxsize=1, ttl=_env_int("ANALYTICS_TTL_S", 300, 60, 3600))
+_ANALYTICS_TTL_S = _env_int("ANALYTICS_TTL_S", 300, 60, 3600)
+_analytics_cache = cachetools.TTLCache(maxsize=1, ttl=_ANALYTICS_TTL_S)
 _ANALYTICS_REFRESH_LOCK = threading.Lock()
 _analytics_last_good: Dict[str, Any] = {}
 _analytics_state: Dict[str, Any] = {"building": False, "error": ""}
+
+# ── the snapshot on disk ──────────────────────────────────────────────
+# The dataset above is expensive to build (~45 paced requests over the whole bid
+# history) and it used to live only in this process. So every container
+# restart — every deploy — threw it away, and the next person to open Analytics
+# either waited out a cold build or got an empty "building…" page. The dashboard
+# felt slow for a reason that had nothing to do with the dashboard.
+#
+# Now each successful build is also written to the data volume, and a fresh
+# process loads it before it has fetched anything. The page paints immediately
+# from the last known numbers while the refresher (below) fetches today's.
+#
+# A restored snapshot is deliberately NOT put in the TTL cache: the cache means
+# "fresh", and a file could have been written days ago if the box was down. It
+# goes into last-good, which is served flagged `stale: true` — so the page says
+# what it is instead of quietly presenting old totals as current.
+_DATA_DIR = Path(os.environ.get("DRAFTS_DB_PATH", "/app/data/drafts.db")).parent
+_SNAPSHOT_FILE = _DATA_DIR / "basisboard_analytics.json"
+# Past this, old numbers stop being a useful head start and start being
+# misleading. A refresh is always already in flight when we serve one, so the
+# cost of dropping it is a few seconds of empty state, once.
+_SNAPSHOT_MAX_AGE_S = _env_int("ANALYTICS_SNAPSHOT_MAX_AGE_H", 168, 1, 8760) * 3600
+_snapshot_loaded = False                    # disk is read once per process, not per request
+_SNAPSHOT_LOCK = threading.Lock()
+
+# The refresher keeps the snapshot warm on a clock instead of on a page load.
+_REFRESHER_BOOT_DELAY_S = 15                # let startup finish before the first fetch
+_refresher_thread: Optional[threading.Thread] = None
+_REFRESHER_START_LOCK = threading.Lock()
 
 # Whatever custom field currently holds the trades. Resolved by name at runtime;
 # this is the id observed in Treadwell's account, kept as the fallback.
@@ -859,6 +892,104 @@ def _build_analytics() -> Dict[str, Any]:
     return out
 
 
+def _save_snapshot(result: Dict[str, Any]) -> None:
+    """Write the freshly built dataset to the volume, atomically.
+
+    Best-effort by design: the volume may be read-only or missing (local dev, a
+    test, a misconfigured mount). Losing the snapshot costs a slow first page
+    load, so it must never be able to fail a build that already succeeded."""
+    try:
+        if not (_DATA_DIR.is_dir() and os.access(_DATA_DIR, os.W_OK)):
+            return
+        payload = {"saved_at": time.time(), "snapshot": result}
+        tmp = _SNAPSHOT_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(_SNAPSHOT_FILE)          # atomic: a reader sees old or new, never half
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Basisboard analytics snapshot write failed: %s", exc)
+
+
+def _load_snapshot() -> Optional[Dict[str, Any]]:
+    """The last snapshot from the volume, or None.
+
+    Returns None for every kind of unusable — absent, unreadable, garbled,
+    truncated, wrong shape, or simply too old. A corrupt file must read as "no
+    snapshot" and let the normal cold build happen, never raise into a page."""
+    try:
+        if not _SNAPSHOT_FILE.is_file():
+            return None
+        payload = json.loads(_SNAPSHOT_FILE.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        snap = payload.get("snapshot")
+        # Shape check, not just a type check: a half-written or hand-edited file
+        # that happens to parse would otherwise reach the dashboard as a dataset
+        # with no rows and be indistinguishable from "the org has no bids".
+        if not isinstance(snap, dict) or not isinstance(snap.get("projects"), list):
+            return None
+        age = time.time() - float(payload.get("saved_at") or 0)
+        if age < 0 or age > _SNAPSHOT_MAX_AGE_S:
+            log.info("Basisboard analytics snapshot ignored: %.1f h old", age / 3600.0)
+            return None
+        log.info("Basisboard analytics snapshot restored: %d bids, %.1f h old",
+                 len(snap.get("projects") or []), age / 3600.0)
+        return snap
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Basisboard analytics snapshot read failed: %s", exc)
+        return None
+
+
+def _hydrate_from_snapshot() -> None:
+    """Seed last-good from disk, once per process, before anything has been fetched."""
+    global _snapshot_loaded
+    with _SNAPSHOT_LOCK:
+        if _snapshot_loaded:
+            return
+        _snapshot_loaded = True
+        if _analytics_last_good.get("snapshot") is not None:
+            return                           # a live build already beat us to it
+        snap = _load_snapshot()
+        if snap is not None:
+            _analytics_last_good["snapshot"] = snap
+
+
+def _refresher_loop() -> None:
+    """Keep the snapshot warm on a clock rather than on somebody's page load.
+
+    The point is that no reader ever pays for a build. One tick per TTL also means
+    Basisboard sees a steady one-build-per-interval regardless of how many people
+    have Analytics open, which is the opposite of the old behaviour where the API
+    load scaled with staff activity."""
+    time.sleep(_REFRESHER_BOOT_DELAY_S)
+    while True:
+        try:
+            if is_configured() and not _BREAKER.state()["open"]:
+                # state() rather than allow(): allow() spends the single probe
+                # request that a cooling breaker lets through, and a background
+                # tick has no business consuming it ahead of a real reader.
+                _start_refresh()
+        except Exception as exc:  # noqa: BLE001 — this thread must outlive any one failure
+            log.warning("Basisboard analytics refresher tick failed: %s", exc)
+        time.sleep(_ANALYTICS_TTL_S)
+
+
+def ensure_refresher_started() -> bool:
+    """Start the refresher once. True if this call started it."""
+    global _refresher_thread
+    # Under pytest a background thread that reaches for Basisboard turns an
+    # offline test run into a slow one and pollutes it with network warnings.
+    if "pytest" in sys.modules or not is_configured():
+        return False
+    with _REFRESHER_START_LOCK:
+        if _refresher_thread is not None and _refresher_thread.is_alive():
+            return False
+        _refresher_thread = threading.Thread(
+            target=_refresher_loop, name="bb-analytics-refresher", daemon=True)
+        _refresher_thread.start()
+        log.info("Basisboard analytics refresher started (every %ss)", _ANALYTICS_TTL_S)
+        return True
+
+
 def _refresh_analytics() -> None:
     """Rebuild off the request thread.
 
@@ -870,6 +1001,7 @@ def _refresh_analytics() -> None:
         _analytics_cache["analytics"] = result
         _analytics_last_good["snapshot"] = result
         _analytics_state["error"] = ""
+        _save_snapshot(result)
         log.info("Basisboard analytics ready: %d of %d bids",
                  result.get("shown", 0), result.get("total", 0))
     except Exception as exc:  # noqa: BLE001 — a stale snapshot may still be serving
@@ -922,6 +1054,7 @@ def get_analytics() -> Dict[str, Any]:
     if cached is not None:
         return cached
 
+    _hydrate_from_snapshot()
     stale = _analytics_last_good.get("snapshot")
     if stale is not None:
         _start_refresh()

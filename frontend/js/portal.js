@@ -20,6 +20,12 @@
           isLost, lostReason, followupOff, nameOf } = C;
   const fu = C.followup;
   const avatar = C.avatarHtml;
+  /** The same chip with the identity colour taken OUT — for the drawer's notification
+   *  toggles, where green already means "receives this project's email". State owns
+   *  colour on that one control and the initials carry who it is. esc() because the
+   *  initials follow whatever string the roster handed us, not a whitelist. */
+  const plainAvatar = (who) =>
+    '<span class="nt-av" aria-hidden="true">' + (esc(C.initialsOf(who)) || "—") + "</span>";
   const pausedUntil = (p) => C.pausedUntil(p, TW.bizToday());
   const ROLE_LABEL = { primary: "Primary", accounts_payable: "Accounts payable", other: "Other" };
   let ALL = [];
@@ -516,7 +522,7 @@
         const canEdit = isAdmin || e === myEmail;
         return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
              + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">`
-             + `${avatar(p.email)}${esc(nameOf(p.email))}</button>`;
+             + `${plainAvatar(p.email)}${esc(nameOf(p.email))}</button>`;
       }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
       wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
         if (b.disabled) return;
