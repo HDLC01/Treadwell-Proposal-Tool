@@ -148,6 +148,31 @@ def set_archived(draft_id: str, archived: bool,
     return True
 
 
+def set_assigned_estimator(draft_id: str, email: str,
+                           actor_email: Optional[str] = None) -> bool:
+    """Name the estimator who owns this project's follow-up.
+
+    Same posture as `set_archived` above: inside the `data` blob, no migration, and
+    NO `updated_at` bump — handing a project to a colleague isn't work on the
+    estimate and must not shuffle it to the top of the Projects list.
+
+    This is the DRAFT's copy, which is what pre-fills the Files-page picker on the
+    next send. A project the customer already has also keeps a copy on its portal
+    row (that's the one the CRM board and the digest read), so the caller forwards
+    there too — see `api_assign_draft`. Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    data["assigned_estimator"] = email
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "assigned",
+              {"project_name": data.get("project_name"), "id": draft_id, "to": email})
+    _cache_clear()
+    return True
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)

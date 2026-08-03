@@ -219,6 +219,99 @@
     const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
       .filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
 
+    /** The Estimator cell's edit affordance. Assignment used to happen only at send
+     *  time or in the CRM drawer, which left this page showing an owner nobody had
+     *  actually chosen and no way to choose one — including for the drafts that were
+     *  never sent and so have no CRM card at all. */
+    const estBtn = (p) => `<button type="button" class="est-btn" title="${
+      isAssigned(p) ? "Reassign this project" : "Assign an estimator"}"` +
+      ` aria-label="Assign an estimator to ${esc(p.project_name||"this project")}">✎</button>`;
+
+    /** The active roster, fetched once per page. Assigning is occasional and the list
+     *  barely changes, so re-fetching it per dialog would be waste. A failed fetch
+     *  clears the memo so a blip doesn't disable the button for the whole session. */
+    let EST_LIST = null;
+    function loadEstimators() {
+      if (EST_LIST) return EST_LIST;
+      EST_LIST = fetch("/api/estimators", { headers: TW.authHeaders() })
+        .then(r => r.ok ? r.json() : { estimators: [] })
+        .then(j => (j && j.estimators) || [])
+        .catch(() => { EST_LIST = null; return []; });
+      return EST_LIST;
+    }
+
+    /** Pick an estimator. Resolves to an email, or null if cancelled. */
+    function assignDialog(p) {
+      const cur = String(p.assigned_estimator || "").toLowerCase();
+      return new Promise((resolve) => {
+        const ov = document.createElement("div");
+        ov.className = "est-ov";
+        ov.innerHTML =
+          `<div class="est-dlg" role="dialog" aria-modal="true" aria-label="Assign an estimator">
+             <div class="est-h">Assign an estimator</div>
+             <p class="est-sub">${esc(p.project_name||"(untitled)")}${p.sent_revision>0
+               ? " — the customer already has this one, so the CRM board and the morning digest move with it."
+               : " — they'll be pre-selected when this is sent."}</p>
+             <select data-who aria-label="Estimator"><option value="">Loading…</option></select>
+             <div class="est-act">
+               <button type="button" class="chip" data-x>Cancel</button>
+               <button type="button" class="open-btn" data-go disabled>Assign</button>
+             </div>
+           </div>`;
+        document.body.appendChild(ov);
+        const sel = ov.querySelector("[data-who]");
+        const go = ov.querySelector("[data-go]");
+        const close = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+        const onKey = (e) => { if (e.key === "Escape") close(null); };
+        document.addEventListener("keydown", onKey);
+        ov.querySelector("[data-x]").addEventListener("click", () => close(null));
+        ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(null); });
+        go.addEventListener("click", () => { if (sel.value) close(sel.value); });
+
+        loadEstimators().then(list => {
+          if (!ov.isConnected) return;                    // cancelled while fetching
+          if (!list.length) {
+            sel.innerHTML = '<option value="">Estimator list unavailable — reload the page</option>';
+            return;
+          }
+          const known = list.some(x => String(x.email).toLowerCase() === cur);
+          sel.innerHTML = '<option value="">Choose the estimator…</option>'
+            // Whoever is assigned stays listed even if they've left the roster —
+            // dropping them silently would read as "unassigned".
+            + (cur && !known ? `<option value="${esc(cur)}">${esc(nameOf(cur))} (no longer listed)</option>` : "")
+            + list.map(x => `<option value="${esc(x.email)}">${esc(x.name)}</option>`).join("");
+          sel.value = p.assigned_estimator || "";
+          const sync = () => { go.disabled = !sel.value || sel.value.toLowerCase() === cur; };
+          sync();
+          sel.addEventListener("change", sync);
+          sel.focus();
+        });
+      });
+    }
+
+    async function assignProject(row) {
+      const id = decodeURIComponent(row.dataset.id);
+      const p = ALL_PROJECTS.find(x => x.id === id);
+      if (!p) return;
+      const email = await assignDialog(p);
+      if (!email) return;
+      try {
+        const r = await fetch("/api/draft/" + encodeURIComponent(id) + "/assign", {
+          method: "POST", headers: TW.authHeaders(), body: JSON.stringify({ estimator_email: email }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) { alert((j && (j.error || j.detail)) || "Couldn't assign."); return; }
+        p.assigned_estimator = j.assigned_estimator || email;
+        cacheProjects();
+        paint();
+        // The draft is saved either way; only the customer-facing copy is behind.
+        if (j.sent && j.portal_updated === false) {
+          alert("Saved on the project, but the Customer Portal CRM didn't update. "
+              + "Reassign it from the CRM drawer so the follow-ups and the digest move too.");
+        }
+      } catch (err) { alert("Couldn't assign. " + (err.message||"")); }
+    }
+
     function cardsHtml(shown) {
       return shown.map(p => `
         <div class="card" data-id="${encodeURIComponent(p.id)}">
@@ -233,7 +326,9 @@
             ${p.deadline?`<span>due ${esc(p.deadline)}</span>`:""}
           </div>
           <div class="meta" style="margin-top:8px;">
-            <span>by ${esc(p.owner_email||"—")}</span>
+            <span class="est-cell${isAssigned(p)?"":" soft"}" title="${esc(estimatorOf(p)||"nobody yet")}${
+              isAssigned(p)?"":" — nobody is assigned yet, this is whoever built the estimate"}">Estimator: ${
+              estimatorOf(p)?esc(nameOf(estimatorOf(p)))+(isAssigned(p)?"":"?"):"—"} ${estBtn(p)}</span>
             <span>updated ${fmtDate(p.updated_at)}</span>
           </div>
           <div class="card-foot">
@@ -280,9 +375,10 @@
           <td class="t-name">${esc(p.project_name||"(untitled)")}</td>
           <td>${p.work_type?esc(p.work_type):""}</td>
           <td class="num">${p.total!=null?money(p.total):""}</td>
-          <td${isAssigned(p)?` title="${esc(email)}"`
-              :` class="soft" title="${esc(email)} — nobody is assigned yet, this is whoever built the estimate"`}>${
-            email?esc(nameOf(email)):"—"}</td>
+          <td class="est-cell${isAssigned(p)?"":" soft"}"${
+              isAssigned(p)?` title="${esc(email)}"`
+              :` title="${esc(email)} — nobody is assigned yet, this is whoever built the estimate"`}>${
+            email?esc(nameOf(email))+(isAssigned(p)?"":"?"):"—"} ${estBtn(p)}</td>
           <td>${p.sent_revision>0?`Rev ${p.sent_revision}`:""}</td>
           <td>${p.deadline?esc(p.deadline):""}</td>
           <td>${fmtDate(p.updated_at)}</td>
@@ -322,6 +418,7 @@
         if (!row) return;
         const id = row.dataset.id;                      // already encodeURIComponent'd
         if (e.target.closest(".trash-btn")) { e.stopPropagation(); trashCard(row); return; }
+        if (e.target.closest(".est-btn")) { e.stopPropagation(); assignProject(row); return; }
         const st = e.target.closest(".status-toggle");
         if (st) { e.stopPropagation(); toggleStatus(row, st); return; }
         // files=1 → done.html generates + shows downloads without the intake walk.

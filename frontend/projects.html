@@ -90,6 +90,25 @@
     .ptable .t-act { display:flex; gap:5px; align-items:center; justify-content:flex-end; }
     .ptable .t-act .status-toggle { position:static; }
     .ptable .t-act button { padding:4px 8px; font-size:12px; }
+    /* ── assign an estimator ────────────────────────────────────────────────
+       The pencil sits in the Estimator cell in both views. Quiet until hovered:
+       it's an edit affordance on a column you mostly read. */
+    .est-cell { white-space:nowrap; }
+    .est-btn { background:none; border:none; padding:0 3px; cursor:pointer; color:var(--ink-v);
+      font-size:12px; line-height:1; opacity:.45; transition:opacity .12s,color .12s; }
+    .est-cell:hover .est-btn, .est-btn:focus-visible { opacity:1; color:var(--red); }
+    .est-btn:focus-visible { outline:2px solid var(--red); outline-offset:2px; border-radius:4px; }
+    .est-ov { position:fixed; inset:0; z-index:10100; background:rgba(20,18,18,.55);
+      display:flex; align-items:center; justify-content:center; padding:20px; }
+    .est-dlg { background:#fff; border-radius:14px; padding:22px; width:min(440px,96vw);
+      box-shadow:0 24px 60px rgba(0,0,0,.3); }
+    .est-h { font-size:17px; font-weight:800; }
+    .est-sub { color:var(--ink-v); font-size:12.5px; margin:6px 0 16px; }
+    .est-dlg select { width:100%; box-sizing:border-box; font:inherit; padding:9px 10px;
+      border:1px solid rgba(27,28,28,.15); border-radius:8px; background:#fff; }
+    .est-dlg select:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+    .est-act { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+    .est-act button:disabled { opacity:.5; cursor:not-allowed; }
   </style>
 </head>
 <body>
