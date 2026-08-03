@@ -79,6 +79,29 @@ def test_the_worst_offender_comes_first(monkeypatch):
     assert got[0] == "stale"
 
 
+def test_what_you_can_act_on_comes_before_what_you_cannot(monkeypatch):
+    """Found by reading the real staging feed, not by reasoning about it.
+
+    `score()` was built for the digest, which filters by `eligible()` BEFORE ranking
+    matters — so it cheerfully awards age and customer-silence points to a proposal that
+    was approved months ago. Sorting the page on the score alone put four approved jobs
+    (100, 94, 90, 87 — none of them actionable) above the two live ones somebody could
+    actually ring. A column headed "needs attention" has to lead with what needs it."""
+    _wire(monkeypatch, [
+        # Approved and ancient: scores high, worth nothing.
+        row(proposal_id="old_won", project_name="Won Long Ago", proposal_status="approved",
+            sent_at="2026-01-01T12:00:00+00:00", last_activity_at="2026-01-01T12:00:00+00:00"),
+        # Live, recent, lower score, and the only one you can do something about.
+        row(proposal_id="live", project_name="Live", proposal_status="viewed",
+            sent_at="2026-08-01T12:00:00+00:00", last_activity_at="2026-08-01T12:00:00+00:00"),
+    ])
+    got = client.get("/api/portal/followups").json()["proposals"]
+    assert [p["proposal_id"] for p in got] == ["live", "old_won"]
+    assert got[0]["followup_score"] < got[1]["followup_score"], (
+        "the fixture no longer reproduces the bug — the ineligible row must out-SCORE the "
+        "eligible one, or this test proves nothing")
+
+
 def test_a_proposal_nobody_should_chase_carries_no_reason(monkeypatch):
     """Approved, paused and just-chased proposals still appear — Hanz wanted every
     proposal ever sent — but presenting a nag for them would be wrong. `eligible` is the
