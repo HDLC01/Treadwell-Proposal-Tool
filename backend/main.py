@@ -524,12 +524,11 @@ def api_estimators(request: Request) -> Dict[str, Any]:
     complete by construction. Only active accounts, and only the two fields the
     picker renders."""
     try:
-        users = profiles.list_users()
+        users = profiles.list_estimators()
     except Exception as exc:  # noqa: BLE001 — never break the Files page over this
         log.warning("estimator list unavailable: %s", exc)
         return {"ok": True, "estimators": []}
-    out = [{"email": u["email"], "name": u.get("full_name") or u["email"]}
-           for u in users if (u.get("status") or "active") == "active" and u.get("email")]
+    out = [{"email": u["email"], "name": u.get("full_name") or u["email"]} for u in users]
     out.sort(key=lambda u: (u["name"] or "").lower())
     return {"ok": True, "estimators": out}
 
@@ -3276,6 +3275,10 @@ class StatusIn(BaseModel):
     status: str
 
 
+class EstimatorIn(BaseModel):
+    is_estimator: bool = True
+
+
 class BanIn(BaseModel):
     reason: str = ""
 
@@ -3309,6 +3312,22 @@ def api_admin_set_status(user_id: str, payload: StatusIn, request: Request) -> D
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "status_changed",
                          {"target": user_id, "status": payload.status})
+    return out
+
+
+@app.put("/api/admin/users/{user_id}/estimator")
+def api_admin_set_estimator(user_id: str, payload: EstimatorIn, request: Request) -> Dict[str, Any]:
+    """Add somebody to the estimator roster, or take them off it.
+
+    Independent of `role`: a Treadwell employee can be a member, an admin and an estimator
+    at the same time, which one role column can't express. Only affects who is ASSIGNABLE
+    — it grants nothing and takes nothing away."""
+    actor = _require_admin(request)
+    out = profiles.set_estimator(actor, user_id, payload.is_estimator)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"),
+                         "estimator_added" if payload.is_estimator else "estimator_removed",
+                         {"target": user_id, "email": out.get("email")})
     return out
 
 

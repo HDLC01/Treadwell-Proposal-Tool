@@ -287,3 +287,139 @@ def test_a_stage_with_no_column_is_dropped_not_thrown():
     land in. A portal that grows a new status must not blank the whole board."""
     got = run("out(C.group(%s, C.STAGES));" % json.dumps([prop(proposal_status="closed_lost")]))
     assert all(v == [] for v in got.values())
+
+
+# ── estimator avatars ───────────────────────────────────────────────────────
+# A coloured circle of initials, the way BasisBoard shows an assignee. The colour has
+# to be derived, not stored: assigning by list position would repaint everybody the
+# moment somebody joins, and a per-page choice would give one person two colours.
+def test_initials_come_off_the_name_not_the_raw_address():
+    got = run("out(['kyle.loseke@wetreadwell.com','troy@wetreadwell.com',"
+              "'marisoll.monserrat.ontiveros@x.com','autopilot',''].map(C.initialsOf));")
+    # First and LAST word, so "Marisoll Monserrat Ontiveros" reads as MO — which is how
+    # the person who owns that name would write it. Two letters at most; a third stops
+    # fitting a 20px circle legibly.
+    assert got == ["KL", "T", "MO", "A", ""]
+
+
+def test_initials_work_from_a_display_name_too():
+    """Half the app has an email and half has a BasisBoard display name."""
+    got = run("out(['Kyle Loseke','Troy Holmes','Marisoll Monserrat Ontiveros']"
+              ".map(C.initialsOf));")
+    assert got == ["KL", "TH", "MO"]
+
+
+def test_a_colour_is_stable_for_one_person():
+    """Same estimator, same colour on every page, in every session, on every machine —
+    otherwise the colour carries no information at all."""
+    got = run("out([C.colorOf('kyle@wetreadwell.com'), C.colorOf('kyle@wetreadwell.com')]);")
+    assert got[0] == got[1]
+
+
+def test_the_address_is_matched_case_insensitively():
+    """The portal hands back whatever was typed. Two casings of one person must not be
+    two colours."""
+    got = run("out([C.colorOf('Kyle@WeTreadwell.com'), C.colorOf('  kyle@wetreadwell.com ')]);")
+    assert got[0] == got[1]
+
+
+def test_one_person_is_one_colour_across_both_data_sources():
+    """THE reason the hash keys on a first name. Our screens know Kyle as
+    kyle.loseke@wetreadwell.com; the Bid Pipeline and Analytics read BasisBoard, which
+    only says "Kyle Loseke". Hashing either string whole paints that person two different
+    colours across the app, which defeats colour-coding entirely."""
+    got = run("out([['kyle.loseke@wetreadwell.com','Kyle Loseke'],"
+              "['troy@wetreadwell.com','Troy Holmes'],"
+              "['hanz@wetreadwell.com','Hanz de la Cruz'],"
+              "['marisoll.monserrat.ontiveros@x.com','Marisoll Monserrat Ontiveros']]"
+              ".map(p => C.colorOf(p[0]) === C.colorOf(p[1])));")
+    assert got == [True, True, True, True]
+
+
+def test_the_identity_key_is_the_first_name():
+    got = run("out(['kyle.loseke@wetreadwell.com','Kyle Loseke','KYLE',"
+              "'kyle-loseke@x.com',''].map(C.identityKey));")
+    assert got == ["kyle", "kyle", "kyle", "kyle", ""]
+
+
+def test_every_colour_is_one_of_ours():
+    """Guards the hash: an out-of-range index would yield undefined and paint a
+    transparent chip with unreadable white text on it."""
+    # The empty case is excluded on purpose — it gets the reserved "nobody" neutral,
+    # which lives outside the palette. See the test below.
+    got = run("out(['a@x.com','b@y.com','c@z.com','zz.top@w.com','1@2.co',"
+              "'x','autopilot','kyle.loseke@wetreadwell.com','troy@wetreadwell.com',"
+              "'hanz@wetreadwell.com','greg.ingebretson@x.com'].map(C.colorOf)"
+              ".every(c => C.AVATAR_COLORS.includes(c)));")
+    assert got is True
+
+
+def test_every_estimator_on_the_roster_gets_their_own_colour():
+    """The seven people who actually get assigned proposals all separate — that's the
+    number the feature is judged on."""
+    got = run("const r=['kyle.loseke@wetreadwell.com','troy@wetreadwell.com',"
+              "'hanz@wetreadwell.com','greg.ingebretson@x.com','dane.cordova@x.com',"
+              "'rj.urzendowski@x.com','marisoll.monserrat.ontiveros@x.com'];"
+              "out(new Set(r.map(C.colorOf)).size);")
+    assert got == 7
+
+
+def test_a_wider_cast_still_mostly_separates():
+    """Non-estimators (Will, Liz) and the autopilot actor also render chips in places.
+    Ten names into fourteen buckets averages ~7.2 distinct by birthday paradox, so 8 is
+    the honest expectation, not a defect — and no salt or hash we tried beat it.
+
+    What the feature actually promises is the OTHER direction: one person is always ONE
+    colour. Two people sharing one costs a little scanning speed and never misattributes
+    anything, because the name is rendered beside every chip."""
+    got = run("const r=['kyle.loseke@wetreadwell.com','troy@wetreadwell.com',"
+              "'hanz@wetreadwell.com','greg.ingebretson@x.com','dane.cordova@x.com',"
+              "'rj.urzendowski@x.com','marisoll.monserrat.ontiveros@x.com',"
+              "'liz@wetreadwell.com','autopilot','will@wetreadwell.com'];"
+              "out(new Set(r.map(C.colorOf)).size);")
+    assert got >= 8, f"only {got} distinct colours across ten names — palette or hash regressed"
+
+
+def test_the_palette_is_sized_for_the_eye_not_the_hash():
+    """Fourteen is roughly where a human stops telling 20px circles apart. Widening it to
+    dodge hash collisions would just trade them for perceptual ones."""
+    assert run("out(C.AVATAR_COLORS.length);") == 14
+    assert run("out(new Set(C.AVATAR_COLORS).size);") == 14      # no duplicate entries
+
+
+def test_the_nobody_colour_is_not_one_a_person_can_wear():
+    """Reserved outside the palette, so the colour that means "unassigned" can never
+    also be somebody's colour. It has to stay out of the list rather than be carved from
+    it — dropping an entry to free one cost three roster separations, because a modulo
+    over a shorter palette reshuffles everybody."""
+    got = run("out([C.colorOf(''), C.colorOf(null), C.AVATAR_COLORS.includes(C.colorOf(''))]);")
+    assert got[0] == got[1] == "#4B5563"
+    assert got[2] is False
+
+
+def test_the_chip_carries_the_colour_inline_and_hides_from_screen_readers():
+    """The CSP forbids an inline <style>, so a per-person colour has to ride on the
+    element. aria-hidden because the name sits right next to it — a reader announcing
+    "K L Kyle Loseke" is noise."""
+    got = run("out(C.avatarHtml('kyle.loseke@wetreadwell.com'));")
+    assert 'class="tw-av"' in got
+    assert "background:" + run("out(C.colorOf('kyle.loseke@wetreadwell.com'));") in got
+    assert ">KL<" in got
+    assert 'aria-hidden="true"' in got
+
+
+def test_an_inherited_owner_renders_dimmed():
+    """Nobody chose them. The card also says so in words with a "?" — the dimming is
+    reinforcement, never the only signal."""
+    got = run("out([C.avatarHtml('a@x.com', true), C.avatarHtml('a@x.com', false)]);")
+    assert "tw-av-dim" in got[0]
+    assert "tw-av-dim" not in got[1]
+
+
+def test_the_chip_needs_no_escaping_by_construction():
+    """It gets interpolated into markup without esc(), so a hostile address must not be
+    able to reach the output: initials are letters pulled out by regex and the colour is
+    one of our constants."""
+    got = run(r"out(C.avatarHtml('\"><script>alert(1)</script>@x.com'));")
+    assert "<script>" not in got
+    assert "alert" not in got

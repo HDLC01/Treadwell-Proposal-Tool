@@ -212,12 +212,18 @@
      *  before that the only honest answer is whoever built it. */
     const estimatorOf = (p) => String(p.assigned_estimator || p.owner_email || "");
     const isAssigned = (p) => !!p.assigned_estimator;
-    /** "hanz@wetreadwell.com" → "Hanz". A column headed "Estimator" says a name on the
-     *  CRM board, so it says a name here too — the two pages shouldn't render the same
-     *  field two different ways. The full address stays in the cell's title. The CARDS
-     *  keep showing "by <address>", which is provenance rather than a column of data. */
-    const nameOf = (email) => String(email || "").split("@")[0].split(/[._-]+/)
-      .filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || String(email || "");
+    // Names, initials and avatar colours come from crm-core, the same module the CRM
+    // board uses — a third local copy of nameOf was two too many, and a person has to
+    // look identical on both pages for the colour to mean anything.
+    const nameOf = window.TWCrm.nameOf;
+    const avatar = window.TWCrm.avatarHtml;
+    /** Avatar + name + the "?" that marks an owner nobody actually chose. One helper,
+     *  because the table cell and the card line must not drift apart. */
+    const estLabel = (p) => {
+      const email = estimatorOf(p);
+      if (!email) return "—";
+      return avatar(email, !isAssigned(p)) + esc(nameOf(email)) + (isAssigned(p) ? "" : "?");
+    };
 
     /** The Estimator cell's edit affordance. Assignment used to happen only at send
      *  time or in the CRM drawer, which left this page showing an owner nobody had
@@ -240,7 +246,12 @@
       return EST_LIST;
     }
 
-    /** Pick an estimator. Resolves to an email, or null if cancelled. */
+    /** Pick an estimator. Resolves to an email, or null if cancelled.
+     *
+     *  A list of avatar rows rather than a `<select>`: a native option can't contain a
+     *  coloured chip, and the chip is the whole point — picking the right person from a
+     *  face is faster than reading five similar names. Filterable, because the roster
+     *  will outgrow one screen. */
     function assignDialog(p) {
       const cur = String(p.assigned_estimator || "").toLowerCase();
       return new Promise((resolve) => {
@@ -252,39 +263,68 @@
              <p class="est-sub">${esc(p.project_name||"(untitled)")}${p.sent_revision>0
                ? " — the customer already has this one, so the CRM board and the morning digest move with it."
                : " — they'll be pre-selected when this is sent."}</p>
-             <select data-who aria-label="Estimator"><option value="">Loading…</option></select>
+             <input type="search" data-q class="est-q" placeholder="Type to search…" aria-label="Search estimators" />
+             <div class="est-list" data-list role="listbox" aria-label="Estimators">
+               <p class="est-note">Loading…</p>
+             </div>
              <div class="est-act">
                <button type="button" class="chip" data-x>Cancel</button>
                <button type="button" class="open-btn" data-go disabled>Assign</button>
              </div>
            </div>`;
         document.body.appendChild(ov);
-        const sel = ov.querySelector("[data-who]");
+        const q = ov.querySelector("[data-q]");
+        const listEl = ov.querySelector("[data-list]");
         const go = ov.querySelector("[data-go]");
+        let picked = "";
         const close = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
         const onKey = (e) => { if (e.key === "Escape") close(null); };
         document.addEventListener("keydown", onKey);
         ov.querySelector("[data-x]").addEventListener("click", () => close(null));
         ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(null); });
-        go.addEventListener("click", () => { if (sel.value) close(sel.value); });
+        go.addEventListener("click", () => { if (picked) close(picked); });
 
-        loadEstimators().then(list => {
+        loadEstimators().then(people => {
           if (!ov.isConnected) return;                    // cancelled while fetching
-          if (!list.length) {
-            sel.innerHTML = '<option value="">Estimator list unavailable — reload the page</option>';
+          if (!people.length) {
+            listEl.innerHTML = '<p class="est-note">Estimator list unavailable — reload the page.</p>';
+            q.disabled = true;
             return;
           }
-          const known = list.some(x => String(x.email).toLowerCase() === cur);
-          sel.innerHTML = '<option value="">Choose the estimator…</option>'
-            // Whoever is assigned stays listed even if they've left the roster —
-            // dropping them silently would read as "unassigned".
-            + (cur && !known ? `<option value="${esc(cur)}">${esc(nameOf(cur))} (no longer listed)</option>` : "")
-            + list.map(x => `<option value="${esc(x.email)}">${esc(x.name)}</option>`).join("");
-          sel.value = p.assigned_estimator || "";
-          const sync = () => { go.disabled = !sel.value || sel.value.toLowerCase() === cur; };
-          sync();
-          sel.addEventListener("change", sync);
-          sel.focus();
+          // Whoever is assigned stays listed even if they've left the roster —
+          // dropping them silently would read as "unassigned".
+          const known = people.some(x => String(x.email).toLowerCase() === cur);
+          const rows = (cur && !known
+            ? [{ email: cur, name: nameOf(cur) + " (no longer listed)" }] : []).concat(people);
+
+          const draw = () => {
+            const needle = q.value.trim().toLowerCase();
+            const hits = needle
+              ? rows.filter(x => (x.name + " " + x.email).toLowerCase().includes(needle))
+              : rows;
+            listEl.innerHTML = hits.length
+              ? hits.map(x => {
+                  const on = String(x.email).toLowerCase() === picked.toLowerCase();
+                  const isCur = String(x.email).toLowerCase() === cur;
+                  return `<button type="button" class="est-opt${on?" is-on":""}" role="option"`
+                    + ` aria-selected="${on?"true":"false"}" data-email="${esc(x.email)}">`
+                    + avatar(x.email) + `<span class="est-nm">${esc(x.name)}</span>`
+                    + (isCur ? '<span class="est-now">assigned</span>' : "") + "</button>";
+                }).join("")
+              : '<p class="est-note">Nobody matches that.</p>';
+          };
+          // Delegated, so a redraw on every keystroke doesn't re-bind a row at a time.
+          listEl.addEventListener("click", (e) => {
+            const b = e.target.closest(".est-opt");
+            if (!b) return;
+            picked = b.dataset.email;
+            go.disabled = picked.toLowerCase() === cur;   // no-op reassignment stays blocked
+            draw();
+          });
+          q.addEventListener("input", draw);
+          picked = p.assigned_estimator || "";
+          draw();
+          q.focus();
         });
       });
     }
@@ -327,8 +367,8 @@
           </div>
           <div class="meta" style="margin-top:8px;">
             <span class="est-cell${isAssigned(p)?"":" soft"}" title="${esc(estimatorOf(p)||"nobody yet")}${
-              isAssigned(p)?"":" — nobody is assigned yet, this is whoever built the estimate"}">Estimator: ${
-              estimatorOf(p)?esc(nameOf(estimatorOf(p)))+(isAssigned(p)?"":"?"):"—"} ${estBtn(p)}</span>
+              isAssigned(p)?"":" — nobody is assigned yet, this is whoever built the estimate"}">${
+              estLabel(p)} ${estBtn(p)}</span>
             <span>updated ${fmtDate(p.updated_at)}</span>
           </div>
           <div class="card-foot">
@@ -378,7 +418,7 @@
           <td class="est-cell${isAssigned(p)?"":" soft"}"${
               isAssigned(p)?` title="${esc(email)}"`
               :` title="${esc(email)} — nobody is assigned yet, this is whoever built the estimate"`}>${
-            email?esc(nameOf(email))+(isAssigned(p)?"":"?"):"—"} ${estBtn(p)}</td>
+            estLabel(p)} ${estBtn(p)}</td>
           <td>${p.sent_revision>0?`Rev ${p.sent_revision}`:""}</td>
           <td>${p.deadline?esc(p.deadline):""}</td>
           <td>${fmtDate(p.updated_at)}</td>

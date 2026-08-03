@@ -102,11 +102,24 @@
   }
 
   // ── UI: bottom-left "logged in as" + nav ──
+  // Names, initials and avatar colours all come from crm-core (window.TWCrm), the one
+  // place that decides them, so the signed-in user looks the same here as they do on a
+  // CRM card, a Projects row or an Analytics chip.
+  //
+  // The local fallbacks exist because the sidebar renders on login.html too, which loads
+  // no page modules. They are never the path on a real app page. The OLD local initials()
+  // had a paren bug — `(a[0] || "" + b[0])` short-circuits — so it returned ONE letter
+  // for every two-word name; crm-core's version is correct.
   function initials(name, email) {
-    const s = (name || email || "?").trim();
-    const parts = s.split(/\s+/);
-    return ((parts[0] || "")[0] || "" + ((parts[1] || "")[0] || "")).toUpperCase()
-      || s.slice(0, 2).toUpperCase();
+    const who = name || email || "";
+    if (window.TWCrm) return window.TWCrm.initialsOf(who);
+    const parts = String(who).trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+  }
+  function avatarColor(name, email) {
+    const who = name || email || "";
+    return window.TWCrm ? window.TWCrm.colorOf(who) : "#4B5563";
   }
 
   // Left sidebar matching the main Treadwell app (light, 240px, red accent),
@@ -159,7 +172,8 @@
       navItem("/notifications.html", "✉", "Notification Sending") +
       (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
-      '<div class="tw-user"><div class="tw-avatar">' + esc(initials(u.name, u.email)) + '</div>' +
+      '<div class="tw-user"><div class="tw-avatar" style="background:' +
+      avatarColor(u.name, u.email) + '">' + esc(initials(u.name, u.email)) + '</div>' +
       '<div class="tw-userinfo"><div class="tw-userline">' +
       '<span class="tw-username">' + esc(u.name || u.email || "Signed in") + '</span>' +
       '<span class="tw-badge ' + roleClass + '">' + roleLabel + '</span></div>' +
@@ -408,8 +422,18 @@ text-decoration:none;color:var(--tw-ink);}
 .tw-nav-item.active .tw-nav-ico{color:var(--tw-red-dark);}
 .tw-user{display:flex;align-items:center;gap:10px;padding:8px;border-radius:9px;background:var(--tw-surf-low);
 margin-top:10px;border-top:1px solid rgba(27,28,28,.05);}
-.tw-avatar{width:34px;height:34px;border-radius:50%;background:var(--tw-surf-high);color:var(--tw-ink);
-font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;flex:none;}
+.tw-avatar{width:34px;height:34px;border-radius:50%;color:#fff;
+font-weight:800;font-size:12.5px;letter-spacing:.02em;display:flex;align-items:center;justify-content:center;flex:none;}
+/* THE estimator/person chip, defined once here because this stylesheet is injected on
+   every page. Colour rides inline (per person, from crm-core's colorOf) since the CSP
+   forbids an inline <style> block. Any page that names a person uses this class, so one
+   person looks identical on the CRM board, Projects, Analytics and the Bid Pipeline. */
+.tw-av{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;
+border-radius:50%;margin-right:5px;flex:0 0 auto;font:800 9.5px/1 system-ui;letter-spacing:.02em;
+color:#fff;vertical-align:-4px;text-transform:uppercase;}
+/* An inherited owner nobody actually chose. The "?" beside the name says so too — the
+   dimming is reinforcement, never the only signal. */
+.tw-av-dim{opacity:.5;}
 .tw-userinfo{flex:1;min-width:0;}
 .tw-userline{display:flex;align-items:center;gap:6px;}
 .tw-username{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}

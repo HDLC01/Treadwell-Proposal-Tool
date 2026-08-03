@@ -29,7 +29,7 @@
             <select id="rolefilter"><option value="">All roles</option><option value="user">Users</option><option value="admin">Admins</option><option value="super_admin">Super admins</option></select>
           </div>
           <div style="overflow-x:auto"><table><thead><tr>
-            <th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Joined</th><th>Last change</th><th>Set role</th><th style="text-align:right">Actions</th>
+            <th>Email</th><th>Name</th><th>Role</th><th title="Can be assigned proposals. Independent of role — somebody can be a member, an admin and an estimator at once.">Estimator</th><th>Status</th><th>Joined</th><th>Last change</th><th>Set role</th><th style="text-align:right">Actions</th>
           </tr></thead><tbody id="tbody"></tbody></table></div>
         </div>
         <div class="panel" style="margin-top:18px;">
@@ -78,7 +78,7 @@
       document.getElementById("ptbody").innerHTML = rows.map(p => `
         <tr data-id="${esc(p.id)}" data-name="${esc(p.project_name||"")}">
           <td>${esc(p.project_name||"(untitled)")}</td>
-          <td>${esc(p.owner_email||"—")}</td>
+          <td>${p.owner_email?TWCrm.avatarHtml(p.owner_email)+esc(TWCrm.nameOf(p.owner_email)):"—"}</td>
           <td>${money(p.total)}</td>
           <td>${p.work_type?`<span class="badge b-user">${esc(p.work_type)}</span>`:"—"}</td>
           <td>${fmtDate(p.updated_at)}</td>
@@ -113,9 +113,16 @@
         const paused = u.status==="paused", banned = u.status==="banned";
         const opt = (val,label)=>`<option value="${val}" ${u.role===val?"selected":""} ${(val==="admin"&&!isSuper)?"disabled":""}>${label}</option>`;
         return `<tr data-id="${esc(u.id)}">
-          <td>${esc(u.email)}${isSelf?'<span class="you">you</span>':""}</td>
-          <td>${esc(u.full_name||"—")}</td>
+          <td>${TWCrm.avatarHtml(u.full_name||u.email)}${esc(u.email)}${isSelf?'<span class="you">you</span>':""}</td>
+          <td>${esc(u.full_name||TWCrm.nameOf(u.email))}</td>
           <td>${roleBadge(u.role)}</td>
+          <!-- Anyone an admin can see, an admin can flag: being assignable is not a
+               privilege, so this is NOT gated by canEdit the way role/ban/delete are.
+               An admin who also estimates must be able to tick their own box. -->
+          <td><button class="est-tog ${u.is_estimator?"on":""}" data-act="estimator"
+                      aria-pressed="${u.is_estimator?"true":"false"}"
+                      title="${u.is_estimator?"Remove from the estimator roster":"Add to the estimator roster"}"
+                >${u.is_estimator?"✓ Estimator":"Add"}</button></td>
           <td>${statusBadge(u.status)}</td>
           <td>${fmtDate(u.created_at)}</td>
           <td>${fmtDate(u.updated_at)}</td>
@@ -125,7 +132,7 @@
             <button class="act" data-act="${banned?"unban":"ban"}" ${canEdit?"":"disabled"}>${banned?"Unban":"Ban"}</button>
             <button class="act danger" data-act="delete" ${canEdit?"":"disabled"}>Delete</button>
           </td></tr>`;
-      }).join("") || '<tr><td colspan="8" style="color:#5c403f;padding:24px">No users.</td></tr>';
+      }).join("") || '<tr><td colspan="9" style="color:#5c403f;padding:24px">No users.</td></tr>';
 
       document.querySelectorAll("#tbody [data-act]").forEach(el => {
         const act = el.dataset.act, id = el.closest("tr").dataset.id;
@@ -147,6 +154,10 @@
       else if (act==="ban") r = await api(`/api/admin/users/${id}/ban`,{method:"POST",body:JSON.stringify({reason:""})});
       else if (act==="unban") r = await api(`/api/admin/users/${id}/unban`,{method:"POST",body:"{}"});
       else if (act==="delete") r = await api(`/api/admin/users/${id}`,{method:"DELETE"});
+      else if (act==="estimator") {
+        const on = tr.querySelector(".est-tog").getAttribute("aria-pressed") !== "true";
+        r = await api(`/api/admin/users/${id}/estimator`,{method:"PUT",body:JSON.stringify({is_estimator:on})});
+      }
       after(r);
     }
     function after(r){ if(!r || r.ok===false){ alert((r&&r.error)||"Action failed"); } refresh(); }

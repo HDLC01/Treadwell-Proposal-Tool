@@ -94,6 +94,8 @@
        The pencil sits in the Estimator cell in both views. Quiet until hovered:
        it's an edit affordance on a column you mostly read. */
     .est-cell { white-space:nowrap; }
+    /* .tw-av / .tw-av-dim (the person chip) are defined once in auth.js's
+       injected stylesheet, which every page loads. */
     .est-btn { background:none; border:none; padding:0 3px; cursor:pointer; color:var(--ink-v);
       font-size:12px; line-height:1; opacity:.45; transition:opacity .12s,color .12s; }
     .est-cell:hover .est-btn, .est-btn:focus-visible { opacity:1; color:var(--red); }
@@ -104,9 +106,28 @@
       box-shadow:0 24px 60px rgba(0,0,0,.3); }
     .est-h { font-size:17px; font-weight:800; }
     .est-sub { color:var(--ink-v); font-size:12.5px; margin:6px 0 16px; }
-    .est-dlg select { width:100%; box-sizing:border-box; font:inherit; padding:9px 10px;
+    /* An avatar list, not a <select> — a native option can't hold a coloured chip, and
+       the chip is the point. Same shape as BasisBoard's assignee picker. */
+    .est-q { width:100%; box-sizing:border-box; font:inherit; padding:9px 10px;
       border:1px solid rgba(27,28,28,.15); border-radius:8px; background:#fff; }
-    .est-dlg select:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+    .est-q:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+    .est-list { margin-top:8px; max-height:246px; overflow-y:auto;
+      border:1px solid rgba(27,28,28,.1); border-radius:8px; }
+    .est-opt { display:flex; align-items:center; gap:2px; width:100%; text-align:left;
+      background:none; border:none; border-bottom:1px solid rgba(27,28,28,.06);
+      padding:9px 11px; font:inherit; cursor:pointer; }
+    .est-opt:last-child { border-bottom:none; }
+    .est-opt:hover { background:#faf9f9; }
+    /* Selected state carries a tick and a tinted row, never colour alone — the avatar
+       is already coloured, so a colour-only selection would be invisible against it. */
+    .est-opt.is-on { background:#fdf3f3; font-weight:700; }
+    .est-opt.is-on::after { content:"✓"; margin-left:auto; color:var(--red); font-weight:800; }
+    .est-opt:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
+    .est-nm { color:var(--ink); }
+    .est-now { margin-left:8px; font-size:10px; font-weight:700; text-transform:uppercase;
+      letter-spacing:.04em; color:var(--ink-v); background:#e9e8e7; border-radius:999px; padding:1px 7px; }
+    .est-opt.is-on .est-now { margin-left:8px; }
+    .est-note { color:var(--ink-v); font-size:12.5px; margin:12px; }
     .est-act { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
     .est-act button:disabled { opacity:.5; cursor:not-allowed; }
   </style>
@@ -142,6 +163,10 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
+  <!-- Estimator names, initials and avatar colours — shared with the CRM board so one
+       person reads identically on both pages. Must load BEFORE projects.js, which
+       reads window.TWCrm as it runs. -->
+  <script src="/js/crm-core.js"></script>
   <script src="/js/projects.js"></script>
 </body>
 </html>

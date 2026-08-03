@@ -30,6 +30,14 @@
     .you { color:var(--ink-v); font-size:10px; margin-left:6px; }
     select.role { background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.18); border-radius:7px; padding:5px 8px; }
     .act { background:#fff; border:1px solid rgba(27,28,28,.18); color:var(--ink); border-radius:7px; padding:5px 9px; font:600 12px system-ui; cursor:pointer; margin-left:6px; }
+
+    /* Estimator roster toggle. States are carried in the LABEL ("✓ Estimator" vs
+       "Add") as well as the tint, so it reads correctly if a browser re-tints the
+       page — same rule the CRM chips follow. */
+    .est-tog{background:#fff;color:var(--ink-v);border:1px solid rgba(27,28,28,.15);
+      border-radius:999px;padding:3px 10px;font:600 11px system-ui;cursor:pointer;white-space:nowrap;}
+    .est-tog:hover{border-color:var(--red);color:var(--red);}
+    .est-tog.on{background:#dcf5e3;color:#0f7b34;border-color:#b7e3c4;}
     .act:hover { background:#f4f4f5; }
     .act:disabled { opacity:.4; cursor:default; }
     .act.danger { color:#c8102e; border-color:rgba(200,16,46,.4); }
@@ -42,6 +50,10 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
+  <!-- Shared person rendering (names, initials, avatar colours) — one source of
+       truth so an estimator looks identical on every page. Must precede the page's
+       own script, which reads window.TWCrm as it runs. -->
+  <script src="/js/crm-core.js"></script>
   <script src="/js/admin.js"></script>
 </body>
 </html>
