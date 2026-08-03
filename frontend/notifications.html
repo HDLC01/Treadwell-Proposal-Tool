@@ -46,6 +46,17 @@
     background:var(--surf-high); color:var(--ink-v); }
   .nt-chip.on { background:#dcf5e3; color:#0f7b34; border-color:#bfe3c8; }
   .nt-chip:disabled { cursor:not-allowed; opacity:.6; }
+  /* The avatar inside a toggle chip, deliberately colourless — NOT the shared .tw-av.
+     On this control colour IS the state (green = receives this project's email), so an
+     identity colour would compete with the one signal that matters. It borrows the chip's
+     own on/off tint instead of carrying its own, and keeps .tw-av's geometry so a name
+     still sits at the same height as everywhere else. Same class and same reasoning as
+     portal.html, which carries this control in the CRM drawer. */
+  .nt-chip .nt-av { display:inline-flex; align-items:center; justify-content:center;
+    width:20px; height:20px; border-radius:50%; margin-right:5px; flex:0 0 auto;
+    font:800 9.5px/1 system-ui; letter-spacing:.02em; vertical-align:middle; text-transform:uppercase;
+    background:rgba(27,28,28,.09); color:var(--ink-v); }
+  .nt-chip.on .nt-av { background:rgba(15,123,52,.15); color:#0f7b34; }
 </style>
 </head>
 <body>
