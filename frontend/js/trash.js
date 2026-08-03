@@ -27,7 +27,7 @@
             ${p.work_type?`<span class="badge">${esc(p.work_type)}</span>`:""}
           </div>
           <div class="meta" style="margin-top:8px;">
-            <span>by ${esc(p.owner_email||"—")}</span>
+            <span>${p.owner_email?TWCrm.avatarHtml(p.owner_email)+esc(TWCrm.nameOf(p.owner_email)):"—"}</span>
             <span class="trashed">trashed ${fmtDate(p.deleted_at)}</span>
           </div>
           <div class="card-foot">

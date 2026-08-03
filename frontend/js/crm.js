@@ -33,13 +33,17 @@
   }
 
   function card(p) {
-    const est = (p.estimators || []).join(", ");
+    // BasisBoard gives display names ("Kyle Loseke"), never emails — which is why the
+    // shared colour hash keys on a FIRST NAME. Kyle is the same colour here as on the
+    // Customer Portal CRM, where we only know him by kyle.loseke@wetreadwell.com.
+    const est = (p.estimators || []).filter(Boolean).map((n) =>
+      window.TWCrm.avatarHtml(n) + esc(n)).join(" ");
     const won = p.awarded ? '<span class="deal-won" title="Awarded">✓</span>' : "";
     return '<div class="deal">' +
       '<p class="deal-title">' + esc(p.name) + won + '</p>' +
       (p.location ? '<p class="deal-sub">' + esc(p.location) + '</p>' : '') +
       '<div class="deal-foot">' +
-        '<span class="deal-est">' + esc(est) + '</span>' +
+        '<span class="deal-est">' + (est || "—") + '</span>' +
         (typeof p.value === "number" ? '<span class="deal-val">' + money(p.value) + '</span>' : '') +
       '</div></div>';
   }

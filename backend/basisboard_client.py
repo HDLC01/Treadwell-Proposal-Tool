@@ -158,6 +158,100 @@ class _Pacer:
 _PACER = _Pacer()
 
 
+# ── circuit breaker ───────────────────────────────────────────────────
+# WHY THIS EXISTS, because it isn't obvious from the code it guards:
+#
+# On 2026-08-01 proposals.wetreadwell.com was DOWN for eleven hours and nothing
+# alerted anyone. Basisboard was rate-limiting us — 4-11 rejections a minute, in
+# bursts that cleared on their own. Their limit was not the bug; ours was.
+#
+# Every rejected request sat in `time.sleep()` inside a threadpool thread for the
+# ~7.5s its four retries take. The build locks below then made the NEXT caller
+# block on the lock, holding another thread. FastAPI serves every sync route from
+# that same pool, so once it filled, pages stopped — and `/healthz` stopped with
+# them, which is why the container reported unhealthy for eleven hours while the
+# bell kept happily answering 401s from async middleware that needs no thread.
+#
+# So: stop calling an upstream that is refusing us, and never let waiting for it
+# consume a thread that a page needs. Rate-limiting Basisboard should make the
+# Lead Inbox and Analytics go quiet. It must never take proposal generation down.
+_BREAKER_FAILS = _env_int("BASISBOARD_BREAKER_FAILS", 3, 1, 20)
+_BREAKER_COOLDOWN_S = _env_int("BASISBOARD_BREAKER_COOLDOWN_S", 120, 10, 3600)
+# Longer than a healthy cold build (~4s measured) and far shorter than a build
+# under rate-limiting (minutes). A waiter that gives up frees its thread; one that
+# waits forever is the outage.
+_BUILD_WAIT_S = _env_int("BASISBOARD_BUILD_WAIT_S", 8, 1, 60)
+
+
+class _Breaker:
+    """Open after `fails` consecutive failures; refuse everything for `cooldown`.
+
+    Deliberately counts a 429 as a full trip on its own: a rate limit is a definite
+    "stop asking", unlike a transport blip that may just be one bad connection."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._fails = 0
+        self._open_until = 0.0
+
+    def allow(self) -> bool:
+        with self._lock:
+            if time.monotonic() < self._open_until:
+                return False
+            if self._open_until:                 # cooldown elapsed — try one through
+                self._open_until = 0.0
+                self._fails = 0
+            return True
+
+    def ok(self) -> None:
+        with self._lock:
+            self._fails = 0
+            self._open_until = 0.0
+
+    def fail(self, rate_limited: bool = False) -> None:
+        with self._lock:
+            self._fails += 1
+            if rate_limited or self._fails >= _BREAKER_FAILS:
+                self._open_until = time.monotonic() + _BREAKER_COOLDOWN_S
+                log.warning("Basisboard circuit breaker OPEN for %ss after %s failure(s)%s",
+                            _BREAKER_COOLDOWN_S, self._fails,
+                            " (rate limited)" if rate_limited else "")
+
+    def state(self) -> Dict[str, Any]:
+        with self._lock:
+            left = max(0.0, self._open_until - time.monotonic())
+            return {"open": left > 0, "reopens_in_s": round(left, 1), "fails": self._fails}
+
+
+_BREAKER = _Breaker()
+
+
+class BasisboardUnavailable(RuntimeError):
+    """The breaker is open. Raised instead of dialling out, so no thread sleeps."""
+
+
+def breaker_state() -> Dict[str, Any]:
+    """For the admin health view — is Basisboard currently being skipped, and for
+    how much longer."""
+    return _BREAKER.state()
+
+
+# The last good payload per view, held OUTSIDE the TTL caches on purpose: a TTL
+# cache expires exactly when an outage means you most want the stale copy. Serving
+# yesterday's inbox beats serving an error page.
+_last_good: Dict[str, Dict[str, Any]] = {}
+
+
+def _stale(key: str) -> Optional[Dict[str, Any]]:
+    """The last good payload for `key`, flagged so the UI can say so."""
+    prev = _last_good.get(key)
+    if prev is None:
+        return None
+    out = dict(prev)
+    out["stale"] = True
+    return out
+
+
 # ── config ────────────────────────────────────────────────────────────
 def _api_key() -> str:
     return (os.environ.get("BASISBOARD_API_KEY") or "").strip()
@@ -233,7 +327,13 @@ def _get(client, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     limit, so we wait as long as they ask and give up slowly rather than
     hammering. `client` is a pooled httpx.Client."""
     import httpx
+    # Checked BEFORE anything else: while the breaker is open this must not dial out,
+    # and above all must not sleep. Every second spent waiting here is a threadpool
+    # slot a page can't have.
+    if not _BREAKER.allow():
+        raise BasisboardUnavailable("Basisboard is being skipped (circuit breaker open)")
     last: Exception = RuntimeError("no attempt")
+    rate_limited = False
     for attempt in range(_RETRIES + 1):
         _PACER.wait()
         try:
@@ -243,14 +343,24 @@ def _get(client, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         else:
             if resp.status_code not in _TRANSIENT:
                 resp.raise_for_status()
+                _BREAKER.ok()
                 return resp.json()
             if resp.status_code == 429:
                 _PACER.back_off()
+                rate_limited = True
+                # Don't burn the remaining retries against a wall. One trip is enough
+                # to open the breaker, and sleeping through three more attempts is
+                # exactly what filled the pool.
+                _BREAKER.fail(rate_limited=True)
+                raise BasisboardUnavailable("Basisboard rate-limited us") from None
             last = httpx.HTTPStatusError(f"transient {resp.status_code}",
                                          request=resp.request, response=resp)
             pause = _retry_after(resp)
         if attempt < _RETRIES:
             time.sleep(pause if pause is not None else _BACKOFF_BASE * (2 ** attempt))
+    # Retries exhausted on a non-429 transient (5xx, transport). Counts toward the
+    # breaker so a persistently sick upstream also stops costing us threads.
+    _BREAKER.fail(rate_limited=rate_limited)
     raise last
 
 
@@ -444,7 +554,21 @@ def get_pipeline() -> Dict[str, Any]:
     cached = _pipeline_cache.get("pipeline")
     if cached is not None:
         return cached
-    with _BUILD_LOCK:
+    # Breaker open → answer from the last good copy at once. No dial-out, no sleep.
+    if not _BREAKER.allow():
+        return _stale("pipeline") or {
+            "ok": False, "configured": True, "skipped": True,
+            "error": "Basisboard is rate-limiting us — pausing for a moment"}
+    # BOUNDED wait, not `with _BUILD_LOCK`. Coalescing concurrent cold builds is worth
+    # a short queue (a healthy build is ~4s), but an unbounded one is how the outage
+    # happened: under rate-limiting the holder slept for minutes and every waiter sat
+    # on this lock holding a threadpool thread that a page needed.
+    if not _BUILD_LOCK.acquire(timeout=_BUILD_WAIT_S):
+        log.info("Basisboard pipeline build busy — serving the last good copy")
+        return _stale("pipeline") or {
+            "ok": False, "configured": True, "busy": True,
+            "error": "Still loading from Basisboard — try again in a moment"}
+    try:
         cached = _pipeline_cache.get("pipeline")        # another thread may have built it
         if cached is not None:
             return cached
@@ -452,9 +576,13 @@ def get_pipeline() -> Dict[str, Any]:
             result = _build_pipeline()
         except Exception as exc:  # noqa: BLE001 — read view must never 500 the page
             log.warning("Basisboard get_pipeline failed: %s", exc)
-            return {"ok": False, "configured": True, "error": "Couldn't reach Basisboard"}
+            return _stale("pipeline") or {
+                "ok": False, "configured": True, "error": "Couldn't reach Basisboard"}
         _pipeline_cache["pipeline"] = result
+        _last_good["pipeline"] = result
         return result
+    finally:
+        _BUILD_LOCK.release()
 
 
 # ── inbox (lead messages) ─────────────────────────────────────────────
@@ -483,7 +611,18 @@ def get_inbox(status: str = "unlinked") -> Dict[str, Any]:
     cached = _inbox_cache.get(status)
     if cached is not None:
         return cached
-    with _INBOX_LOCK:
+    key = "inbox:" + status
+    empty = {"ok": False, "configured": True, "messages": [], "stats": {}}
+    if not _BREAKER.allow():
+        return _stale(key) or dict(empty, skipped=True,
+                                   error="Basisboard is rate-limiting us — pausing for a moment")
+    # Bounded, for the same reason as the pipeline above. This path is the one the
+    # notification bell polls, so it runs far more often than anything else here.
+    if not _INBOX_LOCK.acquire(timeout=_BUILD_WAIT_S):
+        log.info("Basisboard inbox build busy — serving the last good copy")
+        return _stale(key) or dict(empty, busy=True,
+                                   error="Still loading from Basisboard — try again in a moment")
+    try:
         cached = _inbox_cache.get(status)            # another thread may have built it
         if cached is not None:
             return cached
@@ -491,10 +630,12 @@ def get_inbox(status: str = "unlinked") -> Dict[str, Any]:
             result = _build_inbox(status)
         except Exception as exc:  # noqa: BLE001 — read view must never 500 the page
             log.warning("Basisboard get_inbox failed: %s", exc)
-            return {"ok": False, "configured": True, "messages": [], "stats": {},
-                    "error": "Couldn't reach Basisboard"}
+            return _stale(key) or dict(empty, error="Couldn't reach Basisboard")
         _inbox_cache[status] = result
+        _last_good[key] = result
         return result
+    finally:
+        _INBOX_LOCK.release()
 
 
 def get_message_detail(message_id: str) -> Optional[Dict[str, Any]]:

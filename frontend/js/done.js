@@ -159,7 +159,9 @@
         <strong style="min-width:64px;">Rev ${rv.revision_no}</strong>
         ${i === 0 ? '<span class="hint" style="color:var(--success,#137333);font-weight:600;">current</span>' : ""}
         <span class="hint">${fmtDate(rv.created_at)}</span>
-        <span class="hint">${rv.created_by ? String(rv.created_by).split("@")[0] : "—"}</span>
+        <span class="hint">${rv.created_by
+          ? window.TWCrm.avatarHtml(rv.created_by) + esc(window.TWCrm.nameOf(rv.created_by))
+          : "—"}</span>
         <strong style="margin-left:auto;">${money(rv.total)}</strong>
         ${rv.has_documents ? `
           <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="xlsx" style="padding:4px 10px;">.xlsx</button>
@@ -239,8 +241,11 @@
     }
     const list = ((await _estimatorsPromise) || {}).estimators || [];
     const prev = String(st.assigned_estimator || "").toLowerCase();
+    // A native <option> can't hold a coloured chip, so the initials ride in the label
+    // instead — "KL · Kyle Loseke". Same names and the same initials as the chips
+    // everywhere else; the colour is the one thing a select can't carry.
     sel.innerHTML = '<option value="">Choose the estimator…</option>'
-      + list.map(e => `<option value="${esc(e.email)}">${esc(e.name)} (${esc(e.email)})</option>`).join("");
+      + list.map(e => `<option value="${esc(e.email)}">${esc(window.TWCrm.initialsOf(e.name || e.email))} · ${esc(e.name)}</option>`).join("");
     // A re-send remembers the last explicit choice; a first send starts blank on
     // purpose, so nobody assigns a colleague by accident.
     if (prev && list.some(e => String(e.email).toLowerCase() === prev)) sel.value = prev;

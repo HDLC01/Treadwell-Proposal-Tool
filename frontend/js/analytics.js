@@ -82,29 +82,20 @@
   // Colour is a shortcut, never the message: every chip carries the initials and
   // the name, every pill carries the stage's word. Someone who can't tell two
   // hues apart loses nothing.
-  var EST_IX = {};                     // estimator id -> palette slot
-
-  function indexEstimators(list) {
-    EST_IX = {};
-    // Keyed by position in the name-sorted list, so a person's colour is the
-    // same on every tab and doesn't shuffle when a filter changes the counts.
-    (list || []).forEach(function (e, i) { EST_IX[e.id] = i % C.PALETTE.length; });
-  }
-
-  function estColor(id) { return C.PALETTE[EST_IX[id] || 0]; }
-
-  function initials(name) {
-    var parts = String(name || "?").replace(/\(.*\)/, "").trim().split(/\s+/);
-    var a = (parts[0] || "?").charAt(0);
-    var b = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
-    return (a + b).toUpperCase();
-  }
+  // Estimator colours and initials come from crm-core, the one place that decides them.
+  // This page used to index into the CHART palette by roster position, which gave the
+  // same person a different colour here than on the CRM board — and repainted everybody
+  // whenever somebody joined. crm-core hashes a first name instead, so Kyle is the same
+  // colour on a chart, a board card and a Projects row, and BasisBoard's display names
+  // line up with our own email-keyed screens.
+  function estColor(id) { return window.TWCrm.colorOf(NAMES.estimator[id] || id); }
 
   /** An estimator, as a coloured initial + their name. */
   function estChip(id) {
     var name = NAMES.estimator[id] || "Unknown";
-    return '<span class="who"><span class="av" style="background:' + estColor(id) + '">' +
-      esc(initials(name)) + "</span>" + esc(name) + "</span>";
+    // The same chip class the rest of the app uses (defined in auth.js's injected
+    // stylesheet), rather than this page's private `.av`.
+    return '<span class="who">' + window.TWCrm.avatarHtml(name) + esc(name) + "</span>";
   }
 
   function estChips(ids) {
@@ -586,7 +577,6 @@
     (payload.stages || []).forEach(function (s) { NAMES.stage[s.id] = s.name; });
     // trades are their own label
     NAMES.trade = {};
-    indexEstimators(payload.estimators);
 
     var bits = [];
     if (payload.truncated) {

@@ -407,7 +407,18 @@ def detect_work_type(epoxy_sf: float, polish_sf: float) -> str:
 
 # ─── Endpoints ────────────────────────────────────────────────────────
 @app.get("/healthz")
-def healthz() -> Dict[str, Any]:
+async def healthz() -> Dict[str, Any]:
+    """ASYNC on purpose, and it matters more than it looks.
+
+    FastAPI runs a `def` handler in the shared threadpool; an `async def` one runs on the
+    event loop and needs no thread at all. This used to be sync, so when a Basisboard
+    rate-limit spell filled the pool with sleeping retries, the healthcheck starved along
+    with every page — and the container sat there reporting "unhealthy" for eleven hours
+    while nobody noticed. A liveness probe that can be blocked by application load is a
+    probe that lies exactly when you need it.
+
+    Deliberately does no I/O: it answers "is this process serving requests at all". The
+    dependency detail lives on /api/admin/health."""
     return {"ok": True}
 
 
@@ -524,12 +535,11 @@ def api_estimators(request: Request) -> Dict[str, Any]:
     complete by construction. Only active accounts, and only the two fields the
     picker renders."""
     try:
-        users = profiles.list_users()
+        users = profiles.list_estimators()
     except Exception as exc:  # noqa: BLE001 — never break the Files page over this
         log.warning("estimator list unavailable: %s", exc)
         return {"ok": True, "estimators": []}
-    out = [{"email": u["email"], "name": u.get("full_name") or u["email"]}
-           for u in users if (u.get("status") or "active") == "active" and u.get("email")]
+    out = [{"email": u["email"], "name": u.get("full_name") or u["email"]} for u in users]
     out.sort(key=lambda u: (u["name"] or "").lower())
     return {"ok": True, "estimators": out}
 
@@ -644,6 +654,46 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
 @app.get("/api/portal/pipeline")
 def api_portal_pipeline() -> Dict[str, Any]:
     return _portal("/api/admin/pipeline", "GET")
+
+
+@app.get("/api/portal/followups")
+def api_portal_followups() -> Dict[str, Any]:
+    """The Follow-ups page: every proposal ever sent, with where its chase stands.
+
+    Server-side rather than shaped in the browser, because the ranking and the "why it's
+    here" sentence come from `digest_worker` — the same code that writes the 6 AM email.
+    Computing them twice, in two languages, is how a page ends up disagreeing with the
+    email it is supposed to explain.
+
+    Deliberately uses the TEMPLATED reason, not the Claude one: this endpoint is hit on
+    every page load and a poll, and an AI call per row per refresh would be absurd. The
+    written-out sentence stays in the digest, where it is worth the spend."""
+    data = _portal("/api/admin/pipeline", "GET") or {}
+    rows = data.get("proposals") or []
+    now = digest_worker.now_utc()
+    out = []
+    for p in rows:
+        score, facts = digest_worker.score(p, now)
+        item = dict(p)
+        item["followup_score"] = score
+        item["followup_facts"] = facts
+        # Why it is worth a call, in one line. `eligible` is the digest's own filter, so
+        # a paused or already-chased proposal reads as such instead of being nagged about.
+        item["eligible"] = digest_worker.eligible(p, now)
+        item["reason"] = (digest_worker.fallback_reason(
+            {"unread": p.get("unread") or 0, "facts": facts}) if item["eligible"] else "")
+        out.append(item)
+    # Actionable first, THEN worst-first within that.
+    #
+    # Sorting on the score alone looked right and was wrong, which only showed up against
+    # real data: `score()` exists for the digest, which filters by `eligible()` before
+    # ranking ever matters, so it happily awards age and silence points to a proposal that
+    # was approved months ago. On staging that put four approved jobs — scoring 100, 94, 90
+    # and 87, none of them actionable — above the two live ones a human could actually ring.
+    # A column headed "needs attention" has to lead with what needs attention.
+    out.sort(key=lambda x: (not x["eligible"], -x["followup_score"],
+                            (x.get("project_name") or "").lower()))
+    return {"ok": True, "proposals": out}
 
 
 @app.get("/api/portal/proposal/{proposal_id}")
@@ -822,6 +872,28 @@ def api_portal_set_status(proposal_id: str, request: Request,
     if reason:
         body["reason"] = reason
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
+
+
+@app.get("/api/admin/health")
+def api_admin_health(request: Request) -> Dict[str, Any]:
+    """Are we currently skipping any upstream, and why.
+
+    Exists because the last outage was invisible: Basisboard rate-limited us, the retries
+    ate the request threadpool, and the only symptom anyone could have seen was the whole
+    site being slow. The breaker now sheds that load — but shedding it silently would
+    just make the Lead Inbox quietly wrong instead, so its state is readable here."""
+    _require_admin(request)
+    bb = basisboard_client.breaker_state()
+    return {
+        "ok": True,
+        "basisboard": dict(bb, configured=basisboard_client.is_configured(),
+                           # Plain English, because the person reading this at 7am is
+                           # deciding whether to worry, not debugging a state machine.
+                           note=("Skipping Basisboard for now — it rate-limited us. The Lead "
+                                 "Inbox, Bid Pipeline and Analytics show the last good copy; "
+                                 "everything else is unaffected."
+                                 if bb.get("open") else "Basisboard is answering normally.")),
+    }
 
 
 @app.post("/api/admin/digest/run")
@@ -3009,6 +3081,51 @@ def api_archive_draft(draft_id: str, payload: ArchiveIn, request: Request) -> Di
         return {"ok": False, "error": str(exc)}
 
 
+class AssignDraftIn(BaseModel):
+    estimator_email: str = ""
+
+
+@app.post("/api/draft/{draft_id}/assign")
+def api_assign_draft(draft_id: str, payload: AssignDraftIn, request: Request) -> Dict[str, Any]:
+    """Hand a project to an estimator from the Projects tab.
+
+    Projects rows are DRAFTS, most of them never sent, so this writes the draft's own
+    copy — which is what pre-fills the Files-page picker on the next send. A project
+    the customer already has ALSO carries the assignment on its portal row, and that
+    is the copy the CRM board and the morning digest read, so a sent project is
+    forwarded on to the portal as well.
+
+    A portal failure does not fail the request. The draft write already succeeded, and
+    reporting `portal_updated: false` lets the page say "also reassign it from the CRM
+    drawer" instead of pretending nothing happened or losing the draft-side change."""
+    email = _clean_estimator(payload.estimator_email)
+    try:
+        existed = drafts.set_assigned_estimator(draft_id, email, _user_email(request))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_assigned_estimator failed: %s", exc)
+        raise HTTPException(502, "Could not save the assignment.") from exc
+    if not existed:
+        raise HTTPException(404, "project_not_found")
+
+    # Never sent → there is no portal row to update, so skip the round-trip entirely.
+    try:
+        sent = bool(drafts.latest_revision_no(draft_id))
+    except Exception as exc:  # noqa: BLE001 — a revisions read must not undo the assign
+        log.warning("revision lookup failed for %s: %s", draft_id, exc)
+        sent = False
+    if not sent:
+        return {"ok": True, "assigned_estimator": email, "portal_updated": False, "sent": False}
+
+    try:
+        _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/assign", "POST",
+                {"estimator_email": email, "by": _user_email(request)})
+        portal_ok = True
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        log.warning("portal assign failed for %s: %s", draft_id, exc)
+        portal_ok = False
+    return {"ok": True, "assigned_estimator": email, "portal_updated": portal_ok, "sent": True}
+
+
 @app.get("/api/drafts")
 def api_list_drafts() -> Dict[str, Any]:
     """Unified ACTIVE project list (all users) for the Projects dashboard."""
@@ -3231,6 +3348,10 @@ class StatusIn(BaseModel):
     status: str
 
 
+class EstimatorIn(BaseModel):
+    is_estimator: bool = True
+
+
 class BanIn(BaseModel):
     reason: str = ""
 
@@ -3264,6 +3385,22 @@ def api_admin_set_status(user_id: str, payload: StatusIn, request: Request) -> D
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "status_changed",
                          {"target": user_id, "status": payload.status})
+    return out
+
+
+@app.put("/api/admin/users/{user_id}/estimator")
+def api_admin_set_estimator(user_id: str, payload: EstimatorIn, request: Request) -> Dict[str, Any]:
+    """Add somebody to the estimator roster, or take them off it.
+
+    Independent of `role`: a Treadwell employee can be a member, an admin and an estimator
+    at the same time, which one role column can't express. Only affects who is ASSIGNABLE
+    — it grants nothing and takes nothing away."""
+    actor = _require_admin(request)
+    out = profiles.set_estimator(actor, user_id, payload.is_estimator)
+    if out.get("ok"):
+        drafts.log_event(None, actor.get("email"),
+                         "estimator_added" if payload.is_estimator else "estimator_removed",
+                         {"target": user_id, "email": out.get("email")})
     return out
 
 
