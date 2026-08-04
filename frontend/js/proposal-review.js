@@ -1505,15 +1505,59 @@
     flush();
   }
 
+  // ── hand-edited paragraphs, stored PER TEMPLATE ───────────────────────────
+  // There used to be exactly one slot: `paragraph_overrides` + one `_meta`. Every
+  // save overwrote it with the currently rendered template's edits, so an
+  // epoxy → polish → epoxy round trip silently threw the epoxy edits away — the
+  // estimator's own typing, gone with no warning and no undo. The single slot also
+  // meant `restoreSavedOverrides` had nothing to restore FROM after a switch, which
+  // is why it looked like the edits "didn't stick".
+  //
+  // Now every template gets its own entry, keyed by work type + audience (the two
+  // things that pick the file), each carrying the template version its paragraph
+  // ids were captured against. The flat `paragraph_overrides` field is still
+  // written for the CURRENT template because that is what /api/generate reads
+  // (main.py:326) and what collectOverrides() falls back to when the editor never
+  // loaded — this adds a store, it does not change that contract.
+  const overrideKey = (wt, audience) => String(wt || "") + ":" + String(audience || "Direct");
+
+  /** The per-template store with ONE template's entry replaced, as a new object.
+   *
+   *  Pure on purpose: the merge is the entire fix — `Object.assign({}, existing)` then
+   *  setting one key is what keeps the sibling templates' edits alive, and building a
+   *  fresh object here instead would silently recreate the bug. Kept as its own function
+   *  so the test can exercise the real thing rather than a copy of it that can drift. */
+  function mergeOverrideEntry(all, wt, audience, templateVersion, items) {
+    const next = Object.assign({}, (all && typeof all === "object") ? all : null);
+    next[overrideKey(wt, audience)] = { template_version: templateVersion, items: items };
+    return next;
+  }
+
+  /** The saved override entry for one template, or null.
+   *
+   *  Falls back to the legacy single slot when the keyed store has no entry — that
+   *  is the migration path for drafts saved before this change, and it must stay:
+   *  a draft in progress right now has edits only in the old shape. */
+  function savedOverridesFor(wt, audience) {
+    const all = state.paragraph_overrides_all;
+    const hit = all && typeof all === "object" ? all[overrideKey(wt, audience)] : null;
+    if (hit && Array.isArray(hit.items)) return hit;
+    const meta = state.paragraph_overrides_meta || {};
+    if (meta.work_type === wt && meta.audience === audience) {
+      return { template_version: String(meta.template_version || ""),
+               items: Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [] };
+    }
+    return null;
+  }
+
   // Saved document edits (persisted in state as they're typed, so a reload /
   // device switch keeps them) — reapplied only when they were made against
   // THIS template file (version + type/audience), otherwise the ids could
   // point at the wrong paragraphs.
   function restoreSavedOverrides(wt, audience) {
-    const meta = state.paragraph_overrides_meta || {};
-    if (String(meta.template_version || "") !== templateVersion ||
-        meta.work_type !== wt || meta.audience !== audience) return;
-    for (const o of (Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [])) {
+    const saved = savedOverridesFor(wt, audience);
+    if (!saved || String(saved.template_version || "") !== templateVersion) return;
+    for (const o of saved.items) {
       if (!o || typeof o.text !== "string") continue;
       const el = docSurface.querySelector(`.tw-block[data-id="${Number(o.id)}"]`);
       if (!el) continue;
@@ -1544,12 +1588,22 @@
     if (_overridesTimer) clearTimeout(_overridesTimer);
     _overridesTimer = setTimeout(() => {
       try {
+        const wt = effectiveWorkType();
+        const audience = state.audience || "Direct";
+        const items = collectOverrides();
+        // Merge, never replace. Reading state fresh here (rather than closing over an
+        // earlier copy) matters because the 800ms debounce can straddle a template
+        // switch that rewrote it.
         TW.setState({
-          paragraph_overrides: collectOverrides(),
+          paragraph_overrides_all:
+            mergeOverrideEntry(state.paragraph_overrides_all, wt, audience, templateVersion, items),
+          // Kept in lockstep for the CURRENT template: /api/generate reads these two,
+          // and so does collectOverrides()'s no-editor fallback.
+          paragraph_overrides: items,
           paragraph_overrides_meta: {
             template_version: templateVersion,
-            work_type: effectiveWorkType(),
-            audience: state.audience || "Direct",
+            work_type: wt,
+            audience: audience,
           },
         });
       } catch {}
@@ -2530,8 +2584,17 @@
     // moved to the Done page so the user has one final review screen before
     // anything customer-facing happens. Stash the payload that Done.html
     // will POST when the user clicks Generate.
+    // Also file them under this template in the per-template store, so hitting
+    // Continue counts as a save. Otherwise an edit made inside the last 800ms —
+    // the debounce window — would be preserved for generation but lost from the
+    // store, and would vanish on the next template switch.
+    const _allOverrides = mergeOverrideEntry(
+      state.paragraph_overrides_all, effectiveWorkType(), state.audience || "Direct",
+      templateVersion, paragraphOverrides);
+
     TW.setState({
       ...mergedValues,
+      paragraph_overrides_all: _allOverrides,
       paragraph_overrides: paragraphOverrides,
       paragraph_overrides_meta: {
         template_version: templateVersion,
