@@ -1793,6 +1793,8 @@
     box.style.transformOrigin = "";
     box.style.maxHeight = "";
     box.style.overflow = "";
+    box.style.zIndex = "";
+    box.classList.remove("tw-notes-open");
     const target = parseFloat(box.dataset.boxHPt) * 96 / 72 + 1;   // design height in px (+1 slack)
     if (!(target > 0)) return;
     const clear = () => { box.classList.remove("tw-notes-overflow"); box.title = ""; };
@@ -1810,22 +1812,53 @@
       box.style.fontSize = Math.round(k * 100) + "%";
       if (box.offsetHeight <= target) { clear(); return; }
     }
-    // 2) Still over at 75%. The content genuinely does not fit the box Kyle designed,
-    //    and no amount of shrinking makes that untrue — it just hides it. So: hold the
-    //    smallest legible size, CLIP to the box so it cannot overlap the next section
-    //    or the baked page art, and say so loudly. Clipping is what makes the problem
-    //    visible; the estimator can see exactly where it runs out and trim.
+    // 2) Still over at 75%, so shrinking has failed — and shrinking that fails is the
+    //    worst of both worlds: it clips ANYWAY and makes what's left hard to read.
+    //    Measured on a real GC proposal, three boxes were 45-80% over capacity; the old
+    //    code scaled them to 0.556-0.676, i.e. 6.7-8.1px text, and a 75% floor only got
+    //    that to 9px while still clipping.
     //
-    //    Word's own normAutofit has a floor too, so a preview that crams everything in
-    //    at 45% was also lying about the document that gets generated.
-    box.style.fontSize = "75%";
+    //    So go back to the DESIGN size (12px, readable), clip to the box, and say so.
+    //    The estimator gets a legible preview of as much as fits, an obvious marker where
+    //    it stops, and a click to see the rest. Clipping also keeps the box in register
+    //    with the page frame, which is baked into the artwork at full size — a scaled box
+    //    drifted out of alignment with it, which is what made the old rendering look
+    //    like overlapping garbage.
+    //
+    //    The underlying fact is a content problem, not a rendering one: this text does not
+    //    fit the box Kyle designed, and Word's own normAutofit will cramp the generated
+    //    .docx too. Saying so beats hiding it behind a scale transform.
+    box.style.fontSize = "";
     box.style.maxHeight = Math.round(target) + "px";
     box.style.overflow = "hidden";
     box.classList.add("tw-notes-overflow");
-    box.title = "This section is longer than the box on the template — the rest is cut off "
-              + "here and will overflow in the Word document. Trim it, or move some lines to "
-              + "the notes below.";
+    box.title = "This section is longer than the box on the template, so the rest is hidden "
+              + "here — and Word will cramp it in the generated document too. Click to see "
+              + "all of it; trim it to fix it properly.";
   }
+
+  /** Let a clipped box be opened to read the hidden part.
+   *
+   *  Delegated on the surface, because boxes are re-created on every render. Toggling
+   *  breaks the page layout on purpose — you are looking past the design to check content,
+   *  and the marker stays so it is obvious this is not how it prints. */
+  function wireOverflowExpand() {
+    if (docSurface.dataset.expandWired) return;
+    docSurface.dataset.expandWired = "1";
+    docSurface.addEventListener("click", (e) => {
+      const box = e.target.closest(".tw-txbx.tw-notes-overflow, .tw-txbx.tw-notes-open");
+      if (!box) return;
+      // Don't fight the paragraph editor: a click meant for a block should edit it.
+      if (e.target.closest(".tw-block, .tw-line-edit, [contenteditable=true]")) return;
+      const open = box.classList.toggle("tw-notes-open");
+      box.style.maxHeight = open ? "none" : Math.round(
+        parseFloat(box.dataset.boxHPt) * 96 / 72 + 1) + "px";
+      box.style.overflow = open ? "visible" : "hidden";
+      box.style.zIndex = open ? "30" : "";
+    });
+  }
+  wireOverflowExpand();
+
   // Fit every mounted positioned text box (WORK / PRICE / NOTES / …).
   function fitNotesBox() {
     document.querySelectorAll(".tw-txbx").forEach(fitTxbx);
