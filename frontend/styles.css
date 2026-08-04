@@ -1006,3 +1006,54 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
     margin: 0 16px 12px; box-shadow: none;
   }
 }
+
+/* ── Formatting toolbar on the focused proposal block ──────────────────────
+   position:fixed on purpose — the document surface sits under a zoom
+   transform, so viewport coordinates keep the bar the right size and in the
+   right place at every zoom level with no scale factor to divide out. */
+.tw-fmtbar {
+  display: none;
+  position: fixed;
+  z-index: 60;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--surface-dim);
+  border-radius: 8px;
+  background: var(--surface-lowest);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .16);
+  font-size: 13px;
+}
+.tw-fmtbar button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tw-fmtbar button:hover { background: var(--surface-low); }
+.tw-fmtbar button.on {
+  border-color: var(--treadwell-red);
+  background: var(--treadwell-red-light);
+  color: var(--treadwell-red-dark);
+}
+.tw-fmtbar button[data-fmt="reset"] { font-size: 12px; color: var(--ink-variant); }
+.tw-fmtbar select {
+  height: 26px;
+  border: 1px solid var(--surface-dim);
+  border-radius: 5px;
+  background: var(--surface-lowest);
+  color: var(--ink);
+  font-size: 12px;
+}
+.tw-fmtsep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--surface-dim);
+}
