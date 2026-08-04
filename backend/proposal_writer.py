@@ -542,8 +542,13 @@ def _txbx_insets(txbx):
     return ins["lIns"], ins["rIns"], ins["tIns"], ins["bIns"]
 
 
-def _scale_txbx_runs(txbx, scale: float) -> None:
+def _scale_txbx_runs(txbx, scale: float, exempt: set | None = None) -> None:
     """Directly shrink every run's font size in a text box by `scale`.
+
+    `exempt` holds the id()s of paragraphs whose sizes the ESTIMATOR chose. Those are skipped:
+    an automatic shrink that silently overrides a deliberate size is worse than a box that
+    overflows, because the person who set it has no way to see what happened. Measured before
+    this existed: an edited GC NOTES line came out of fill_proposal at 4.5pt.
 
     Why not autofit: LibreOffice-headless (our docx→PDF engine) does NOT apply
     DrawingML text autofit — neither an empty <a:normAutofit/> nor one with an
@@ -555,6 +560,13 @@ def _scale_txbx_runs(txbx, scale: float) -> None:
              if (v := sz.get(qn("w:val"))) and v.isdigit()]
     default_hp = max(set(sizes), key=sizes.count) if sizes else 18   # half-points; 18 = 9pt
     for r in txbx.iter(qn("w:r")):
+        if exempt:
+            # Walk up to the run's paragraph; if the estimator sized that paragraph, leave it.
+            par = r.getparent()
+            while par is not None and not par.tag.endswith("}p"):
+                par = par.getparent()
+            if par is not None and id(par) in exempt:
+                continue
         rpr = r.find(qn("w:rPr"))
         cur = None
         if rpr is not None:
@@ -608,7 +620,7 @@ def _shrink_overflowing_text_boxes(d: Document) -> int:
         af.attrib.pop("lnSpcReduction", None)
         scale = _estimate_txbx_scale(txbx, boxes[i] if i < len(boxes) else None)
         if scale < 0.999:
-            _scale_txbx_runs(txbx, scale)
+            _scale_txbx_runs(txbx, scale, _user_sized_paragraphs(d))
         n += 1
     # Straggler noAutofit not paired to a geometry box: preserve the old intent.
     for na in list(d.element.iter(NO)):
@@ -1479,6 +1491,117 @@ def template_geometry(d: Document) -> dict:
     return {"page": page, "boxes": boxes, "images": images}
 
 
+def _user_sized_paragraphs(d) -> set:
+    """Paragraphs whose run sizes the ESTIMATOR set, per document.
+
+    Kept on the Document object rather than in the XML: a custom attribute on `w:r` would be
+    invalid OOXML and Word may reject the file. `_shrink_overflowing_text_boxes` consults this
+    so a deliberate size is not rewritten by the automatic shrink — which was measured
+    rewriting an edited NOTES line down to 4.5pt, i.e. silently undoing the estimator on
+    exactly the overflowing boxes they were fixing."""
+    got = getattr(d, "_tw_user_sized", None)
+    if got is None:
+        got = set()
+        try:
+            d._tw_user_sized = got
+        except Exception:  # noqa: BLE001 — a read-only Document still works, just unexempted
+            return set()
+    return got
+
+
+def _set_paragraph_runs(p_elem, runs) -> bool:
+    """Replace a paragraph's text with `runs`, KEEPING each run's own formatting.
+
+    `_set_paragraph_text` (below) collapses a paragraph to run[0]'s rPr. That is fine for a
+    plain text edit and destructive for a formatted one: Kyle's templates genuinely mix
+    formats inside one paragraph — a GC label row is bold+underlined 9pt followed by 8pt body
+    with an italic aside — and an override flattened all of it to the first run's look.
+
+    Each run is {text, bold?, italic?, underline?, size_pt?}. An ABSENT key means "inherit",
+    which is not the same as False: absent leaves the template's own rPr alone, False writes an
+    explicit off. That distinction is what lets somebody bold one phrase without pinning the
+    size of everything around it.
+
+    The first template run's rPr is the base for every new run, so whatever the estimator did
+    NOT touch — font, colour, and the size when they set none — still comes from Kyle's design.
+    Media runs are never removed, for the same reason as `_set_paragraph_text`: they anchor the
+    letterhead and every floating text box.
+
+    Returns True when any run carries an explicit size, so the caller can exempt this
+    paragraph from the overflow shrink (which would otherwise rewrite it — measured at 4.5pt
+    on a real GC NOTES line).
+    """
+    _MEDIA_TAGS = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
+    all_runs = p_elem.findall(qn("w:r"))
+    text_runs = [r for r in all_runs
+                 if not any(next(r.iter(tag), None) is not None for tag in _MEDIA_TAGS)]
+
+    base_rpr = None
+    for r in (text_runs or all_runs):
+        rpr = r.find(qn("w:rPr"))
+        if rpr is not None:
+            base_rpr = copy.deepcopy(rpr)
+            break
+
+    # Where the text used to start, so the new runs land in the same place relative to any
+    # media runs (an anchored text box in the same paragraph must stay put).
+    children = list(p_elem)
+    insert_at = children.index(text_runs[0]) if text_runs else len(children)
+    for r in text_runs:
+        p_elem.remove(r)
+
+    user_sized = False
+    for offset, spec in enumerate(runs):
+        r = OxmlElement("w:r")
+        rpr = copy.deepcopy(base_rpr) if base_rpr is not None else OxmlElement("w:rPr")
+
+        def toggle(tag, on):
+            """Word booleans: <w:b/> on, <w:b w:val="0"/> explicitly off, absent inherit —
+            all three are meaningful."""
+            if on is None:
+                return
+            el = rpr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                rpr.append(el)
+            el.set(qn("w:val"), "1" if on else "0")
+
+        toggle("w:b", spec.get("bold"))
+        toggle("w:bCs", spec.get("bold"))
+        toggle("w:i", spec.get("italic"))
+        toggle("w:iCs", spec.get("italic"))
+
+        u = spec.get("underline")
+        if u is not None:
+            el = rpr.find(qn("w:u"))
+            if el is None:
+                el = OxmlElement("w:u")
+                rpr.append(el)
+            el.set(qn("w:val"), "single" if u else "none")
+
+        size_pt = spec.get("size_pt")
+        if size_pt:
+            # Half-points on BOTH w:sz and w:szCs — the idiom _scale_txbx_runs already uses,
+            # and the one LibreOffice reliably honours (it ignores DrawingML autofit).
+            hp = max(2, int(round(float(size_pt) * 2)))
+            for tag in ("w:sz", "w:szCs"):
+                el = rpr.find(qn(tag))
+                if el is None:
+                    el = OxmlElement(tag)
+                    rpr.append(el)
+                el.set(qn("w:val"), str(hp))
+            user_sized = True
+
+        if len(rpr):
+            r.append(rpr)
+        t = OxmlElement("w:t")
+        r.append(t)
+        _write_t_text(t, str(spec.get("text", "")))
+        p_elem.insert(insert_at + offset, r)
+
+    return user_sized
+
+
 def _set_paragraph_text(p_elem, text: str) -> None:
     """Replace a paragraph's visible text with `text` IN PLACE, preserving the
     paragraph's formatting by keeping its FIRST text run (and that run's
@@ -1552,13 +1675,35 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
 
     Returns the number of overrides actually applied.
     """
-    by_id: dict[int, str] = {}
+    by_id: dict[int, object] = {}
     for o in overrides or []:
         if not isinstance(o, dict):
             continue
         pid = o.get("id")
         if isinstance(pid, bool) or not isinstance(pid, int):
             continue
+        # `runs` is the richer shape: [{text, bold?, italic?, underline?, size_pt?}]. It only
+        # appears when the estimator applied formatting; a plain edit still sends `text`, so the
+        # common case takes the simpler path and the payload stays the size it always was.
+        runs = o.get("runs")
+        if isinstance(runs, list) and runs and all(isinstance(r, dict) for r in runs):
+            clean = []
+            for r in runs:
+                t = r.get("text")
+                if not isinstance(t, str):
+                    continue
+                one = {"text": t}
+                for k in ("bold", "italic", "underline"):
+                    v = r.get(k)
+                    if isinstance(v, bool):
+                        one[k] = v
+                sz = r.get("size_pt")
+                if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
+                    one["size_pt"] = float(sz)
+                clean.append(one)
+            if clean:
+                by_id[pid] = clean
+                continue
         text = o.get("text")
         if not isinstance(text, str):
             continue
@@ -1571,7 +1716,13 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
     for idx, _kind, p_elem, in_block, _text, _txbx in iter_editable_blocks(d):
         if idx not in by_id or in_block is not None:
             continue
-        _set_paragraph_text(p_elem, by_id[idx])
+        val = by_id[idx]
+        if isinstance(val, list):
+            if _set_paragraph_runs(p_elem, val):
+                # Remember the box so the overflow shrink leaves this paragraph's sizes alone.
+                _user_sized_paragraphs(d).add(id(p_elem))
+        else:
+            _set_paragraph_text(p_elem, val)
         applied += 1
     return applied
 

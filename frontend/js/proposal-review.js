@@ -1371,6 +1371,88 @@
     return walk(el).replace(/\u00a0/g, " ");
   }
 
+  // \u2500\u2500 capturing FORMATTING, not just text \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // serializeBlock above walks INTO the style spans blockHtml wrote, keeps their text and
+  // throws the styling away. That made a formatting-only edit lose twice over: it never
+  // reached the backend, and because the text was unchanged the block wasn't marked dirty, so
+  // the next refreshDocumentFills() rewrote innerHTML and wiped it off the screen too.
+  //
+  // serializeRuns is the inverse of blockHtml: read the spans back out as runs. Kyle's
+  // templates genuinely mix formats inside one paragraph \u2014 GC Resinous block 112 is 20
+  // segments mixing 9pt and 8pt with italic and underline \u2014 so flattening was never
+  // acceptable, it just wasn't visible until somebody tried to edit one.
+  const RUN_KEYS = ["bold", "italic", "underline", "size_pt"];
+
+  /** The computed run format of a node, walking up to (not past) the block. */
+  function fmtAt(node, stop) {
+    const out = { bold: null, italic: null, underline: null, size_pt: null };
+    let el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    // Read the nearest declaration for each property. Inline styles only \u2014 the block's own
+    // inherited size is the template's and must stay null so the docx keeps inheriting it,
+    // rather than being pinned to whatever the browser computed.
+    while (el && el !== stop && el !== document.body) {
+      const s = el.style;
+      if (out.bold === null && s.fontWeight) out.bold = Number(s.fontWeight) >= 600;
+      if (out.italic === null && s.fontStyle) out.italic = s.fontStyle === "italic";
+      if (out.underline === null && s.textDecorationLine) {
+        out.underline = s.textDecorationLine.includes("underline");
+      }
+      if (out.underline === null && s.textDecoration) {
+        out.underline = String(s.textDecoration).includes("underline");
+      }
+      if (out.size_pt === null && s.fontSize && s.fontSize.endsWith("pt")) {
+        out.size_pt = parseFloat(s.fontSize);
+      }
+      el = el.parentElement;
+    }
+    return out;
+  }
+
+  const sameFmt = (a, b) => RUN_KEYS.every(k => a[k] === b[k]);
+
+  /** A block's content as runs: [{text, bold?, italic?, underline?, size_pt?}].
+   *
+   *  Adjacent identical formats are merged, so a paragraph the estimator never formatted
+   *  comes back as ONE run and the override stays as small as the old text-only one. */
+  function serializeRuns(el) {
+    const runs = [];
+    const push = (text, fmt) => {
+      if (!text) return;
+      const prev = runs[runs.length - 1];
+      if (prev && sameFmt(prev._f, fmt)) { prev.text += text; return; }
+      runs.push({ text: text, _f: fmt });
+    };
+    const walk = (node) => {
+      node.childNodes.forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE) {
+          push(String(n.nodeValue).replace(/\u00a0/g, " "), fmtAt(n, el));
+          return;
+        }
+        if (n.nodeType !== Node.ELEMENT_NODE) return;
+        if (n.tagName === "BR") { push("\n", fmtAt(n, el)); return; }
+        if (/^(DIV|P)$/.test(n.tagName)) {
+          const last = runs[runs.length - 1];
+          if (last && !last.text.endsWith("\n")) push("\n", fmtAt(n, el));
+        }
+        walk(n);
+      });
+    };
+    walk(el);
+    return runs.map(r => {
+      const out = { text: r.text };
+      for (const k of RUN_KEYS) if (r._f[k] !== null) out[k] = r._f[k];
+      return out;
+    });
+  }
+
+  /** True when the runs carry no formatting at all \u2014 one plain run.
+   *
+   *  Used to keep sending the old `{id, text}` shape in that case: most edits are plain, and a
+   *  smaller payload keeps the 500-override cap and the draft blob where they were. */
+  function runsArePlain(runs) {
+    return runs.length <= 1 && (!runs[0] || RUN_KEYS.every(k => runs[0][k] === undefined));
+  }
+
   function singleTokenHint(templText) {
     const m = String(templText).trim().match(/^\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}$/);
     return m ? (TOKEN_HINTS[m[1]] || null) : null;
@@ -1578,7 +1660,16 @@
     docSurface.querySelectorAll(".tw-block").forEach(el => {
       const id = Number(el.dataset.id);
       const cur = serializeBlock(el);
-      if (cur !== pristineById.get(id)) out.push({ id, text: cur });
+      const runs = serializeRuns(el);
+      const textChanged = cur !== pristineById.get(id);
+      const fmtChanged = el.classList.contains("tw-fmt");
+      if (!textChanged && !fmtChanged) return;
+      // Send the plain shape whenever nothing is formatted: most edits are plain, the payload
+      // stays as small as it was, and the writer keeps its simpler path. Runs only appear when
+      // the estimator has actually applied formatting.
+      out.push(runsArePlain(runs) && !fmtChanged
+        ? { id: id, text: cur }
+        : { id: id, text: cur, runs: runs });
     });
     return out;
   }
@@ -2308,7 +2399,10 @@
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
     if (!el) return;
     const cur = serializeBlock(el);
-    const changed = cur !== pristineById.get(Number(el.dataset.id));
+    // `tw-fmt` marks "the estimator formatted this", which the text comparison cannot see.
+    // Without it a formatting-only edit stayed un-dirty, so refreshDocumentFills() rewrote the
+    // block's innerHTML on the next sidebar change and silently erased the work.
+    const changed = cur !== pristineById.get(Number(el.dataset.id)) || el.classList.contains("tw-fmt");
     el.classList.toggle("tw-dirty", changed);
     el.classList.toggle("tw-empty", !cur.trim());
     // ⚠ reminder when an edited free paragraph carries a price ($) or an SF/LF
