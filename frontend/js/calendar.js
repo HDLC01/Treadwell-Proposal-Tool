@@ -46,8 +46,21 @@
   const A = window.TWAgg;
   const K = window.TWCal;
 
-  const api = (path, opts) => fetch(TW.resolveApiBase() + path,
-    Object.assign({}, opts || {}, { headers: TW.authHeaders((opts || {}).headers) }));
+  // Every request waits for auth.js to mint the bearer token FIRST.
+  //
+  // The wait lives here, in the one helper, rather than in each caller — because putting it in
+  // the callers is exactly how this page broke twice. `load()` got the await in #241; `loadMine()`
+  // did not, so on first paint it 401'd, MINE stayed empty, and a Treadwell entry the API was
+  // happily returning simply never appeared on the calendar. The page looked like it had no
+  // editable entries at all.
+  //
+  // TWAuth.ready resolves once and is then instant, so the 2-minute refresh and every CRUD
+  // write pay nothing for this.
+  const api = async (path, opts) => {
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+    return fetch(TW.resolveApiBase() + path,
+      Object.assign({}, opts || {}, { headers: TW.authHeaders((opts || {}).headers) }));
+  };
 
   // Compact money, because a day header has room for "$721k" and not for "$721,400".
   function money(n) {
@@ -339,13 +352,7 @@
 
   async function load(first) {
     try {
-      // Wait for auth.js to mint the bearer token before the first read. Without this the
-      // page fires its fetch as it parses, beats the token into existence, and renders
-      // "Missing bearer token." on a screen that has nothing wrong with it — the same race
-      // that hit /api/default-notes. The poll is per-call and resolves immediately once
-      // the token exists, so the 2-minute refresh pays nothing for it.
-      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-      const r = await api("/api/analytics");
+      const r = await api("/api/analytics");   // api() waits for the bearer token
       const j = await r.json();
       if (!j || j.ok === false) {
         // Basisboard being unavailable (or simply unconfigured) must not blank OUR rows —
