@@ -83,6 +83,70 @@
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
     .alert:empty { display:none; }
+    /* ── List | Board switcher ── */
+    .views { display:flex; gap:2px; margin-left:auto; background:#efeeec; border-radius:10px; padding:2px; }
+    .views button { border:0; background:none; padding:6px 14px; border-radius:8px; cursor:pointer;
+      font:600 12.5px system-ui; color:var(--ink-v); }
+    .views button[aria-pressed="true"] { background:#fff; color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(27,28,28,.12); }
+
+    /* ── the board ── */
+    #list.boardwrap { overflow-x:auto; padding-bottom:6px; }
+    .fu-board { display:grid; grid-template-columns:repeat(6, minmax(224px, 1fr)); gap:10px;
+      align-items:start; }
+    .fu-col { background:#efeeec; border:1px solid var(--line); border-radius:12px; padding:8px;
+      display:flex; flex-direction:column; gap:7px; min-height:180px; }
+    /* A column the CUSTOMER owns. Dashed, and never a drop target — dragging a card into
+       "Viewed" would assert that somebody opened a proposal they never opened, and that fact
+       feeds the digest's ranking and its 6 AM sentence. */
+    .fu-col.theirs { background:#f6f5f3; border-style:dashed; }
+    .fu-col.over { outline:2px dashed var(--red); outline-offset:-3px; background:#fdf5f6; }
+    .fu-chead { display:flex; align-items:center; gap:6px; padding:2px 3px 3px; }
+    .fu-chead b { font:700 10.5px system-ui; text-transform:uppercase; letter-spacing:.07em; }
+    .fu-chead .n { font:600 11px system-ui; color:var(--ink-v); font-variant-numeric:tabular-nums; }
+    .fu-chead .v { margin-left:auto; font:600 11px system-ui; color:var(--ink-v);
+      font-variant-numeric:tabular-nums; }
+    .fu-dot { width:8px; height:8px; border-radius:50%; flex:none; }
+    .fu-csub { font-size:10.5px; color:var(--ink-v); padding:0 3px 3px; margin:-3px 0 0; }
+    .fu-lock { font:700 8.5px system-ui; letter-spacing:.05em; text-transform:uppercase;
+      background:rgba(27,28,28,.08); color:var(--ink-v); border-radius:4px; padding:1px 5px; }
+
+    /* ── card ── */
+    .fu-card { background:#fff; border:1px solid var(--line); border-left:3px solid #4a6b8a;
+      border-radius:9px; padding:8px 9px; box-shadow:0 1px 1px rgba(27,28,28,.05);
+      text-align:left; width:100%; font:inherit; color:inherit; cursor:grab; display:block; }
+    .fu-card:hover { box-shadow:0 4px 14px rgba(27,28,28,.10); }
+    .fu-card:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .fu-card.theirs { cursor:default; }
+    .fu-card.dragging { opacity:.45; }
+    /* Colour = NEGLECT, not stage. The column already says the stage; this says how long it
+       has been ignored, which is the only reason to look at this page. */
+    .fu-card.cold { border-left-color:#b3261e; background:#fdf1f0; }
+    .fu-card.warm { border-left-color:#9a5b00; background:#fdf6e8; }
+    .fu-name { font:600 12.5px/1.3 system-ui; margin:0 0 3px; }
+    .fu-cust { font-size:11px; color:var(--ink-v); margin:0 0 6px; overflow:hidden;
+      text-overflow:ellipsis; white-space:nowrap; }
+    .fu-meta { display:flex; align-items:center; gap:5px; font-size:10.5px; color:var(--ink-v);
+      font-variant-numeric:tabular-nums; }
+    .fu-meta .amt { margin-left:auto; font-weight:600; color:var(--ink); }
+    .fu-quiet { margin-top:5px; font-size:10px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
+    .fu-quiet b { color:#b3261e; }
+    /* The digest's own sentence, verbatim from the server — re-deriving it here is how a
+       board ends up disagreeing with the email it exists to explain. */
+    .fu-why { margin:6px 0 0; padding-top:6px; border-top:1px solid rgba(27,28,28,.07);
+      font-size:10.5px; line-height:1.42; color:var(--ink-v); }
+    .fu-unread { background:var(--red); color:#fff; font:700 9px system-ui; border-radius:999px;
+      padding:1px 6px; margin-left:auto; }
+    .fu-acts { display:flex; gap:4px; margin-top:7px; }
+    .fu-acts button { background:#fff; border:1px solid rgba(27,28,28,.15); border-radius:6px;
+      padding:2px 7px; font:600 10.5px system-ui; color:var(--ink-v); cursor:pointer; }
+    .fu-acts button:hover { color:var(--red); border-color:var(--red); }
+    .fu-legend { display:flex; gap:14px; flex-wrap:wrap; margin-top:14px; font-size:11.5px;
+      color:var(--ink-v); align-items:center; }
+    .fu-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; }
+    @media (max-width:1100px) { .fu-board { grid-template-columns:repeat(3, minmax(224px,1fr)); } }
+    @media (max-width:700px)  { .fu-board { grid-template-columns:1fr; } }
+
     /* Log dialog — same shell as the Projects assign dialog. */
     .ov { position:fixed; inset:0; z-index:10100; background:rgba(20,18,18,.55);
       display:flex; align-items:center; justify-content:center; padding:20px; }
@@ -105,9 +169,13 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
     <h1>Follow-ups</h1>
+    <div class="views" role="group" aria-label="View">
+      <button type="button" id="v-list" data-view="list">List</button>
+      <button type="button" id="v-board" data-view="board">Board</button>
+    </div>
   </div>
-  <p class="hint">Every proposal that has been sent to a customer, and where its chase stands.
-    Logging a call here takes it off tomorrow morning's digest.</p>
+  <p class="hint" id="hint">Every proposal that has been sent to a customer, and where its chase
+    stands. Logging a call here takes it off tomorrow morning's digest.</p>
   <div class="wrap">
     <div id="filters" class="toolbar" hidden></div>
     <div id="toolbar" class="toolbar" hidden>
@@ -137,6 +205,9 @@
   <!-- Shared person rendering (names, initials, avatar colours) — must precede the
        page script, which reads window.TWCrm as it runs. -->
   <script src="/js/crm-core.js"></script>
+  <!-- Board columns, drop rules and the cadence plan for a drag — pure, tested under node.
+       Must precede the page script, which reads window.TWFu as it runs. -->
+  <script src="/js/followups-core.js"></script>
   <script src="/js/followups.js"></script>
 </body>
 </html>

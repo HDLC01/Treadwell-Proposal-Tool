@@ -24,7 +24,7 @@ today isn't stamped), and one that restarts at 6:05 having already sent does
 not. The file lives on the same Docker volume as the drafts DB, so it survives
 `up -d --build`.
 
-  DIGEST_ENABLED    on | off              (default on)
+  DIGEST_ENABLED    on | off              (default OFF — must be opted into)
   DIGEST_HOUR       hour in Central       (default 6)
   DIGEST_MIN_SCORE  needed to recommend   (default 40)
   DIGEST_MAX_ITEMS  per estimator         (default 5)
@@ -92,7 +92,16 @@ REASON_MAX_WORDS = 25
 
 # ── config ────────────────────────────────────────────────────────────
 def _enabled() -> bool:
-    return (os.environ.get("DIGEST_ENABLED") or "on").strip().lower() not in ("off", "0", "false", "no")
+    """OFF unless explicitly switched on.
+
+    Deliberately opt-IN. This worker emails the real estimating team about real customers,
+    so the cost of the two defaults is asymmetric: defaulting on and being wrong sends mail
+    nobody asked for from whatever box happens to be running, while defaulting off and
+    being wrong sends nothing and somebody notices a missing digest. Prod used to be safe
+    only because `DIGEST_ENABLED=off` was set explicitly in the compose file — a fresh
+    container, a dropped variable or a new environment would have started emailing on its
+    own."""
+    return (os.environ.get("DIGEST_ENABLED") or "off").strip().lower() in ("on", "1", "true", "yes")
 
 
 def _int_env(name: str, default: int, low: int, high: int) -> int:

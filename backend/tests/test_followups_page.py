@@ -193,3 +193,108 @@ def test_the_poll_holds_off_while_somebody_is_typing():
     """A 45s repaint that wipes a half-written note is worse than stale data."""
     js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
     assert "busy()" in js and "document.hidden" in js
+
+
+# ── the board view ────────────────────────────────────────────────────
+# Structural pins for the kanban. The column LOGIC is exercised under node in
+# test_followups_board_js.py; these assert the page is wired to it correctly, in the same
+# read-the-source style as the rest of this file.
+def test_the_board_loads_its_core_before_the_page_script():
+    """followups.js reads window.TWFu as it runs, so the order is load-bearing — get it wrong
+    and the page throws on boot and renders nothing at all."""
+    html = (FRONTEND / "followups.html").read_text(encoding="utf-8")
+    assert "/js/followups-core.js" in html
+    assert html.index("/js/followups-core.js") < html.index("/js/followups.js")
+
+
+def test_only_our_columns_are_drop_targets():
+    """Sent / Viewed / Approved record what the CUSTOMER did. A drop there would assert a view
+    or an approval that never happened, and viewed_at feeds the digest's 6 AM sentence — so the
+    lie would reach an email. The renderer must only mark our columns droppable."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function paintBoard()")
+    block = js[i:i + 2000]
+    assert 'data-drop="1"' in block
+    assert "c.ours" in block, "the droppable flag no longer comes from the column definition"
+
+
+def test_the_drop_handler_asks_the_core_not_the_dom():
+    """canMove() knows an approved card cannot be closed-lost (the portal 400s it). Trusting
+    only the DOM's data-drop would light up a column the server will refuse."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index('addEventListener("dragover"')
+    assert "B.canMove(" in js[i:i + 700]
+
+
+def test_a_drag_changes_the_cadence_not_just_the_label():
+    """The whole point of the board. A move posts to the real status endpoint; a relabel would
+    leave the reminders running and the board lying about them."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("async function moveTo(")
+    block = js[i:i + 1800]
+    assert "/status" in block and "B.movePlan(" in block
+    assert "enable_automation" in block, (
+        "the two-write resume is gone — resume_followups() does not re-enable automation, so "
+        "a paused+disabled card would land in Chasing with nothing sending")
+
+
+def test_the_board_has_a_keyboard_path():
+    """A drag-only control would be the only thing on this page you cannot reach without a
+    mouse; every row already has tabindex + Enter."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    assert "data-move=" in js
+    i = js.index("[data-move]")
+    assert "moveTo(" in js[i:i + 200]
+
+
+def test_the_poll_holds_off_during_a_drag():
+    """A 45s repaint mid-drag pulls the card out from under the pointer."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("const busy = ()")
+    assert "DRAGGING" in js[i:i + 260]
+
+
+def test_the_board_ignores_the_tab_filter():
+    """Its columns ARE those tabs. Honouring "In play" on the board would leave Paused,
+    Approved and Closed lost permanently empty and make it look broken."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function visible()")
+    assert 'VIEW === "board"' in js[i:i + 600]
+
+
+def test_the_view_choice_survives_a_reload():
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    assert "tw_fu_view" in js
+
+
+def test_a_board_card_is_not_a_button_element():
+    """`button` may only contain PHRASING content, and a card holds <p> and <div>. Rendering it
+    as a <button> made the HTML parser close the button early — and with it the enclosing
+    .fu-board — which dumped Paused / Approved / Closed lost outside the grid as full-width
+    rows. It looked like a CSS bug and was a nesting bug.
+
+    Found by measuring the rendered DOM on staging: the first three columns had parent
+    `.fu-board`, the last three had parent `.boardwrap`. None of the source-text assertions
+    above could see it, because every string in the file was correct."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function cardHtml(")
+    block = js[i:js.index("function moveButtons(")]
+    assert '<div class="fu-card' in block, "the card wrapper is no longer a div"
+    assert '`<button class="fu-card' not in block and '"button" : "div"' not in block, (
+        "a board card is being rendered as a <button> again — it cannot legally contain the "
+        "<p>/<div> it holds, and the parser will break the board grid")
+    assert 'role="button"' in block, "the card lost its button semantics"
+
+
+def test_the_board_card_can_be_activated_from_the_keyboard():
+    """A div[role=button] does not fire on Enter/Space by itself, so the card needs an explicit
+    handler — otherwise the whole board is mouse-only."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    # Anchor on the card SELECTOR, not on the first keydown listener in the file — there are
+    # several (two dialogs and the table row), and picking the wrong one made this pass or fail
+    # for reasons unrelated to the board.
+    i = js.index('.fu-card[role="button"]')
+    around = js[max(0, i - 400):i + 260]
+    assert 'addEventListener("keydown"' in around, "the card selector is not in a keydown handler"
+    assert '"Enter"' in around and '" "' in around, "Enter/Space are not both handled"
+    assert "card.click()" in around, "the handler does not actually activate the card"
