@@ -1785,32 +1785,46 @@
   // overlap the next box / the baked page-frame art.
   function fitTxbx(box) {
     if (!box || !box.dataset.boxHPt) return;
+    // Reset EVERYTHING this function can set. fitTxbx re-runs after every edit and
+    // repagination, so a property left behind would keep a box clipped (or shrunk) after
+    // the estimator had already trimmed the text that caused it.
     box.style.fontSize = "";                                   // reset to the design size
     box.style.transform = "";
     box.style.transformOrigin = "";
+    box.style.maxHeight = "";
+    box.style.overflow = "";
     const target = parseFloat(box.dataset.boxHPt) * 96 / 72 + 1;   // design height in px (+1 slack)
     if (!(target > 0)) return;
     const clear = () => { box.classList.remove("tw-notes-overflow"); box.title = ""; };
     if (box.offsetHeight <= target) { clear(); return; }       // fits at full size — no inline size
     // 1) Font-size shrink first — keeps the full box width and matches the .docx
     //    normAutofit "shrink text on overflow". Handles the common moderate case.
-    for (let k = 0.95; k >= 0.60 - 1e-9; k -= 0.05) {
+    //
+    //    The floor is 75%, not 60%. Below about three-quarters this stops being a
+    //    preview: the GC templates carry a long "Options & Unit Prices" block and a
+    //    dozen exclusion lines, and at 60% — then scaled again by the step that used
+    //    to follow — the result was genuinely unreadable on screen. The old code
+    //    scaled to 45% and its comment claimed that "never becomes unreadable",
+    //    which was simply wrong.
+    for (let k = 0.95; k >= 0.75 - 1e-9; k -= 0.05) {
       box.style.fontSize = Math.round(k * 100) + "%";
       if (box.offsetHeight <= target) { clear(); return; }
     }
-    // 2) Still over at the 60% floor (very long content, e.g. gyp's verbose WORK
-    //    scope) — uniformly scale the whole box down so it CANNOT overlap the next
-    //    section. Belt-and-suspenders over the docx shrink; a bit narrower, but no
-    //    collision. Floor at 45% so it never becomes unreadable.
-    box.style.fontSize = "";
-    const k = Math.max(0.45, target / box.offsetHeight);
-    box.style.transformOrigin = "top left";
-    box.style.transform = "scale(" + k.toFixed(3) + ")";
-    clear();
-    if (k <= 0.45 + 1e-9) {                                    // even 45% wasn't enough — warn
-      box.classList.add("tw-notes-overflow");
-      box.title = "Very long content — scaled to fit; consider trimming.";
-    }
+    // 2) Still over at 75%. The content genuinely does not fit the box Kyle designed,
+    //    and no amount of shrinking makes that untrue — it just hides it. So: hold the
+    //    smallest legible size, CLIP to the box so it cannot overlap the next section
+    //    or the baked page art, and say so loudly. Clipping is what makes the problem
+    //    visible; the estimator can see exactly where it runs out and trim.
+    //
+    //    Word's own normAutofit has a floor too, so a preview that crams everything in
+    //    at 45% was also lying about the document that gets generated.
+    box.style.fontSize = "75%";
+    box.style.maxHeight = Math.round(target) + "px";
+    box.style.overflow = "hidden";
+    box.classList.add("tw-notes-overflow");
+    box.title = "This section is longer than the box on the template — the rest is cut off "
+              + "here and will overflow in the Word document. Trim it, or move some lines to "
+              + "the notes below.";
   }
   // Fit every mounted positioned text box (WORK / PRICE / NOTES / …).
   function fitNotesBox() {
