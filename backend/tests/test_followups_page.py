@@ -265,3 +265,36 @@ def test_the_board_ignores_the_tab_filter():
 def test_the_view_choice_survives_a_reload():
     js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
     assert "tw_fu_view" in js
+
+
+def test_a_board_card_is_not_a_button_element():
+    """`button` may only contain PHRASING content, and a card holds <p> and <div>. Rendering it
+    as a <button> made the HTML parser close the button early — and with it the enclosing
+    .fu-board — which dumped Paused / Approved / Closed lost outside the grid as full-width
+    rows. It looked like a CSS bug and was a nesting bug.
+
+    Found by measuring the rendered DOM on staging: the first three columns had parent
+    `.fu-board`, the last three had parent `.boardwrap`. None of the source-text assertions
+    above could see it, because every string in the file was correct."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function cardHtml(")
+    block = js[i:js.index("function moveButtons(")]
+    assert '<div class="fu-card' in block, "the card wrapper is no longer a div"
+    assert '`<button class="fu-card' not in block and '"button" : "div"' not in block, (
+        "a board card is being rendered as a <button> again — it cannot legally contain the "
+        "<p>/<div> it holds, and the parser will break the board grid")
+    assert 'role="button"' in block, "the card lost its button semantics"
+
+
+def test_the_board_card_can_be_activated_from_the_keyboard():
+    """A div[role=button] does not fire on Enter/Space by itself, so the card needs an explicit
+    handler — otherwise the whole board is mouse-only."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    # Anchor on the card SELECTOR, not on the first keydown listener in the file — there are
+    # several (two dialogs and the table row), and picking the wrong one made this pass or fail
+    # for reasons unrelated to the board.
+    i = js.index('.fu-card[role="button"]')
+    around = js[max(0, i - 400):i + 260]
+    assert 'addEventListener("keydown"' in around, "the card selector is not in a keydown handler"
+    assert '"Enter"' in around and '" "' in around, "Enter/Space are not both handled"
+    assert "card.click()" in around, "the handler does not actually activate the card"

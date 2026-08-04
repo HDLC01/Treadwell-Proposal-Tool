@@ -213,9 +213,13 @@
     const quiet = days(p.last_activity_at);
     const chased = days(p.last_followup_at);
     const val = typeof p.approved_total === "number" ? money(p.approved_total) : "";
-    const tag = mine ? "button" : "div";
-    return `<${tag} class="fu-card ${neg}${mine ? "" : " theirs"}"${
-        mine ? ' type="button" draggable="true"' : ""} data-id="${esc(p.proposal_id)}"${
+    // A DIV with role=button, NOT a <button>. `button` only permits PHRASING content, and
+    // this card contains <p> and <div> — so the parser closed the button early, which closed
+    // the enclosing .fu-board with it and dumped Paused/Approved/Closed-lost outside the grid
+    // as full-width rows. Found by measuring the rendered DOM on staging; the source-text
+    // tests could not see it because the strings were all correct.
+    return `<div class="fu-card ${neg}${mine ? "" : " theirs"}"${
+        mine ? ' role="button" tabindex="0" draggable="true"' : ""} data-id="${esc(p.proposal_id)}"${
         mine ? ' aria-label="' + esc(p.project_name || "Proposal") + ' — move or log"' : ""}>
       <p class="fu-name">${esc(p.project_name || "(untitled)")}</p>
       <p class="fu-cust">${esc(p.customer_name || p.customer_email || "")}</p>
@@ -229,7 +233,7 @@
       ${p.reason ? `<p class="fu-why">${esc(p.reason)}</p>` : ""}
       ${mine ? `<div class="fu-acts">${moveButtons(p, today)}
         <button type="button" data-act="log" data-id="${esc(p.proposal_id)}">Log</button></div>` : ""}
-    </${tag}>`;
+    </div>`;
   }
 
   /** Keyboard/click parity for the drag. A drag-only control would be the first
@@ -507,6 +511,17 @@
     // Anything else on the row opens the full drawer, where the automation toggle,
     // the history and the chat live. This page is the list; that is the detail.
     window.location.assign("/portal.html?open=" + encodeURIComponent(id) + "&sec=followup");
+  });
+
+  // A div[role=button] does not fire on Enter/Space the way a real button does, and the card
+  // has to stay a div (see cardHtml — `button` cannot legally contain <p>/<div>). So wire the
+  // keyboard explicitly, or the board's cards become mouse-only.
+  $("list").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest('.fu-card[role="button"]');
+    if (!card || e.target.closest("button")) return;   // let the inner buttons speak for themselves
+    e.preventDefault();
+    card.click();
   });
 
   // ── drag and drop ───────────────────────────────────────────────────────────
