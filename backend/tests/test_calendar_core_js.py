@@ -389,3 +389,24 @@ def test_the_poll_holds_off_during_a_drag():
     js = _page_js()
     i = js.index("setInterval(")
     assert "DRAGGING" in js[i:i + 200]
+
+
+def test_every_calendar_request_waits_for_the_bearer_token():
+    """The wait belongs in the ONE api() helper, not in each caller — putting it in callers is
+    exactly how this page broke twice.
+
+    `load()` got the await in #241. `loadMine()` did not, so on first paint it 401'd, MINE stayed
+    empty, and a Treadwell entry the API was happily returning never appeared on the calendar.
+    From the outside that looked like "editing doesn't work" rather than an auth race, and it is
+    what Hanz hit when he asked whether he could edit calendar projects at all."""
+    js = _page_js()
+    i = js.index("const api = ")
+    block = js[i:i + 700]
+    assert "TWAuth.ready" in block, (
+        "api() no longer waits for the token — any fetch that runs during page load will 401")
+    # Exactly ONE await, and it is inside api(). Counting the bare name would also match the
+    # comment that explains it, which is how the first version of this assertion failed.
+    awaits = js.count("await window.TWAuth.ready")
+    assert awaits == 1, (
+        f"expected one auth await (inside api()), found {awaits} — a caller is re-implementing it")
+    assert "await window.TWAuth.ready" in block
