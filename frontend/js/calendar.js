@@ -27,8 +27,10 @@
 //     edit affordance on something we can't save, so nobody discovers the limit by
 //     losing work to it.
 //   * Treadwell's own entries — /api/calendar/events, full add/edit/delete, in our own
-//     Postgres. Their cards are BUTTONS that open the editor. Once Basisboard is gone,
-//     only these remain and nothing here has to change.
+//     Postgres. Their cards open the editor on click and can be DRAGGED to another day,
+//     which just means "give it that deadline" (keeping the time of day — moving a 2pm bid
+//     to Thursday should leave it due at 2pm). Once Basisboard is gone, only these remain
+//     and nothing here has to change.
 //
 // A Basisboard outage therefore degrades to "ours only" rather than an empty page.
 //
@@ -44,8 +46,21 @@
   const A = window.TWAgg;
   const K = window.TWCal;
 
-  const api = (path, opts) => fetch(TW.resolveApiBase() + path,
-    Object.assign({}, opts || {}, { headers: TW.authHeaders((opts || {}).headers) }));
+  // Every request waits for auth.js to mint the bearer token FIRST.
+  //
+  // The wait lives here, in the one helper, rather than in each caller — because putting it in
+  // the callers is exactly how this page broke twice. `load()` got the await in #241; `loadMine()`
+  // did not, so on first paint it 401'd, MINE stayed empty, and a Treadwell entry the API was
+  // happily returning simply never appeared on the calendar. The page looked like it had no
+  // editable entries at all.
+  //
+  // TWAuth.ready resolves once and is then instant, so the 2-minute refresh and every CRUD
+  // write pay nothing for this.
+  const api = async (path, opts) => {
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+    return fetch(TW.resolveApiBase() + path,
+      Object.assign({}, opts || {}, { headers: TW.authHeaders((opts || {}).headers) }));
+  };
 
   // Compact money, because a day header has room for "$721k" and not for "$721,400".
   function money(n) {
@@ -128,10 +143,10 @@
 
   /** One card, from either source.
    *
-   *  Ours renders as a <button> and opens the editor; a mirrored Basisboard bid renders as
-   *  a link out to Basisboard. That difference is the whole read-only story made visible:
-   *  there is no edit affordance on something we cannot save, so nobody discovers the
-   *  limitation by losing work to it. */
+   *  Ours is a draggable div[role=button] that opens the editor; a mirrored Basisboard bid is
+   *  a plain link out to Basisboard. That difference is the whole read-only story made
+   *  visible: no edit affordance and no drag handle on something we cannot save, so nobody
+   *  discovers the limitation by losing work to it. */
   function card(r, urg) {
     const val = money(r.quote);
     const mine = r.source === "treadwell";
@@ -142,9 +157,16 @@
       + "</div>" + gcLine(r);
     const cls = "card u-" + urg + (mine ? " mine" : "");
     if (mine) {
-      return '<button type="button" class="' + cls + '" data-edit="' + esc(r.id) + '"'
+      // A DIV with role=button, NOT a <button>: `button` may only contain PHRASING content and
+      // this card holds <p> and <div>, so the parser closes the button early and the card's
+      // content spills loose into the day cell — losing its border, stripe and click target.
+      // The same mistake broke the Follow-ups board grid (#246); it was latent here only
+      // because a board with no Treadwell-owned entries never renders one of these.
+      // Draggable, because for OUR entries a drag means "give it this deadline instead".
+      return '<div class="' + cls + '" role="button" tabindex="0" draggable="true"'
+        + ' data-edit="' + esc(r.id) + '"'
         + ' title="' + esc(r.name || "") + (val ? " — " + moneyFull(r.quote) : "")
-        + ' · click to edit">' + inner + "</button>";
+        + ' · click to edit, or drag to another day">' + inner + "</div>";
     }
     const href = "https://app.basisboard.com/projects/" + encodeURIComponent(r.id || "");
     return '<a class="' + cls + '" href="' + esc(href) + '"'
@@ -172,7 +194,7 @@
         ? ' <span class="load">' + load.count + (load.value ? " · " + money(load.value) : "") + "</span>"
         : "")
       + "</div>";
-    return '<div class="' + cls.join(" ") + '">' + head
+    return '<div class="' + cls.join(" ") + '" data-day="' + day + '">' + head
       + rows.map((r) => card(r, K.urgency(day, TODAY))).join("") + "</div>";
   }
 
@@ -330,13 +352,7 @@
 
   async function load(first) {
     try {
-      // Wait for auth.js to mint the bearer token before the first read. Without this the
-      // page fires its fetch as it parses, beats the token into existence, and renders
-      // "Missing bearer token." on a screen that has nothing wrong with it — the same race
-      // that hit /api/default-notes. The poll is per-call and resolves immediately once
-      // the token exists, so the 2-minute refresh pays nothing for it.
-      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-      const r = await api("/api/analytics");
+      const r = await api("/api/analytics");   // api() waits for the bearer token
       const j = await r.json();
       if (!j || j.ok === false) {
         // Basisboard being unavailable (or simply unconfigured) must not blank OUR rows —
@@ -516,19 +532,104 @@
     }
   }
 
+  // A div[role=button] does not fire on Enter/Space by itself, and the card must stay a div
+  // (see card() — `button` cannot legally contain the <p>/<div> it holds).
+  $("grid").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest('.card[role="button"]');
+    if (!card) return;
+    e.preventDefault();
+    card.click();
+  });
+
+  // ── drag a Treadwell entry to another day ───────────────────────────
+  // Only OUR entries are draggable — a Basisboard bid's deadline lives in Basisboard and we
+  // never write there, so dragging one would show a change that reverts on the next sync.
+  // Their cards are <a> elements with no draggable attribute, so they cannot start a drag.
+  //
+  // A drag means "give this entry that deadline", keeping the TIME OF DAY. Moving a 2pm bid to
+  // Thursday should leave it due at 2pm, not midnight — the hour is a real fact about the bid,
+  // not an artefact of which day it was on.
+  let DRAG_ID = null;
+  let DRAGGING = false;
+
+  $("grid").addEventListener("dragstart", (e) => {
+    const card = e.target.closest(".card.mine[data-edit]");
+    if (!card) return;
+    DRAG_ID = card.dataset.edit;
+    DRAGGING = true;
+    card.classList.add("dragging");
+    try { e.dataTransfer.setData("text/plain", DRAG_ID); e.dataTransfer.effectAllowed = "move"; } catch {}
+  });
+
+  $("grid").addEventListener("dragend", () => {
+    DRAGGING = false; DRAG_ID = null;
+    document.querySelectorAll(".card.dragging").forEach((c) => c.classList.remove("dragging"));
+    document.querySelectorAll(".cell.over").forEach((c) => c.classList.remove("over"));
+  });
+
+  $("grid").addEventListener("dragover", (e) => {
+    const cell = e.target.closest(".cell[data-day]");
+    if (!cell || !DRAG_ID) return;
+    const row = MINE.find((r) => r.id === DRAG_ID);
+    if (!row) return;
+    // Dropping on the day it is already due is a no-op, so don't invite it.
+    if (row.bid_deadline_at && A.bizDay(row.bid_deadline_at) === cell.dataset.day) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = "move"; } catch {}
+    document.querySelectorAll(".cell.over").forEach((c) => c.classList.remove("over"));
+    cell.classList.add("over");
+  });
+
+  $("grid").addEventListener("drop", (e) => {
+    const cell = e.target.closest(".cell[data-day]");
+    if (!cell || !DRAG_ID) return;
+    e.preventDefault();
+    const id = DRAG_ID, day = cell.dataset.day;
+    DRAGGING = false; DRAG_ID = null;
+    cell.classList.remove("over");
+    reschedule(id, day);
+  });
+
+  /** Move one of OUR entries to `day`, keeping its time of day. */
+  async function reschedule(id, day) {
+    const row = MINE.find((r) => r.id === id);
+    if (!row) return;
+    // Keep the existing clock time; default to 2pm Central for an entry that had no deadline,
+    // because that is when bids are actually due and midnight would read as "no time set".
+    const hhmm = row.bid_deadline_at
+      ? (toLocalInput(row.bid_deadline_at).split("T")[1] || "14:00")
+      : "14:00";
+    const iso = fromLocalInput(day + "T" + hhmm);
+    if (!iso) return;
+    try {
+      const r = await api("/api/calendar/events/" + encodeURIComponent(id),
+        { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deadline_at: iso }) });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        showAlert(j.detail || j.error || "Couldn't move that entry.", false);
+        return;
+      }
+      await loadMine(false);
+    } catch (err) {
+      showAlert("Couldn't reach the server. " + (err.message || ""), false);
+    }
+  }
+
   $("add").addEventListener("click", () => openDialog(null));
   $("dlg-form").addEventListener("submit", save);
   $("f-cancel").addEventListener("click", () => $("dlg").close());
   $("f-del").addEventListener("click", remove);
   // Delegated because the grid is re-rendered wholesale on every paint.
   $("grid").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-edit]");
+    const b = e.target.closest("[data-edit]");
     if (!b) return;
     const row = MINE.find((r) => r.id === b.dataset.edit);
     if (row) openDialog(row);
   });
   $("tray").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-edit]");
+    const b = e.target.closest("[data-edit]");
     if (!b) return;
     const row = MINE.find((r) => r.id === b.dataset.edit);
     if (row) openDialog(row);
@@ -573,7 +674,8 @@
   // Ours first: it's a small, fast read and it means a brand-new install with no
   // Basisboard key still shows a working, editable calendar rather than an error.
   loadMine(true).then(() => load(true));
-  setInterval(() => { loadMine(false); load(false); }, 120000);
+  // A repaint mid-drag pulls the card out from under the pointer.
+  setInterval(() => { if (!DRAGGING) { loadMine(false); load(false); } }, 120000);
   // Coming back to a tab left open overnight must not leave "Today" on yesterday.
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) { TODAY = A.today(); loadMine(false); load(false); }

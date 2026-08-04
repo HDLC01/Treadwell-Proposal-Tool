@@ -856,10 +856,49 @@ button {
 }
 /* A floating text box placed at its Word anchor position. */
 .tw-txbx { position: absolute; z-index: 1; }
-/* NOTES box that still overflows its design height at the smallest fit font
-   (fitNotesBox floor) — a thin red underline warns it may print over the
-   baked-in acceptance frame below it. */
-.tw-txbx.tw-notes-overflow { box-shadow: inset 0 -2px 0 rgba(158, 0, 31, .45); }
+/* A box whose content is longer than the space Kyle's template gives it, even at the
+   smallest legible font. fitTxbx CLIPS it there — shrinking further stopped being a
+   preview and started being unreadable — so this has to say plainly that text is
+   missing, not hint at it.
+
+   It replaces a 2px inset line, which was the right instinct while the box merely
+   *might* print over the acceptance frame. Now that content is genuinely cut off, a
+   hairline is not enough: a fade tells you the text runs out, and the badge says why
+   and what to do. Both sit inside the box so the printed page design is untouched. */
+.tw-txbx.tw-notes-overflow {
+  box-shadow: inset 0 -2px 0 rgba(158, 0, 31, .55);
+  position: absolute;                 /* already absolute; restated for the ::after anchor */
+}
+.tw-txbx.tw-notes-overflow::before {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2.2em;
+  background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,.96) 72%);
+  pointer-events: none;
+}
+/* Opened to read the hidden part. Deliberately breaks the page layout — you are looking
+   PAST the design to check content — so it gets a tint and keeps its marker, and the badge
+   changes to say how to put it back. */
+.tw-txbx.tw-notes-open {
+  background: #fffdf4;
+  box-shadow: 0 0 0 1px rgba(158, 0, 31, .45), 0 6px 22px rgba(27, 28, 28, .16);
+}
+.tw-txbx.tw-notes-open::before { display: none; }        /* no fade — nothing is cut off now */
+.tw-txbx.tw-notes-open::after { content: "Showing all of it — click to collapse"; }
+.tw-txbx.tw-notes-overflow { cursor: zoom-in; }
+.tw-txbx.tw-notes-open { cursor: zoom-out; }
+.tw-txbx.tw-notes-overflow::after {
+  content: "Too long for this box — click to see the rest";
+  position: absolute; right: 0; bottom: -1.05em;
+  font: 700 7.5pt/1 'Inter', system-ui, sans-serif;
+  letter-spacing: .02em;
+  color: #9e001f;
+  background: #fff;
+  padding: 1px 4px;
+  border: 1px solid rgba(158, 0, 31, .35);
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+}
 
 /* One template paragraph, editable in place. Reads as plain page text;
    hover/focus reveal the editability; a hand-edited paragraph carries a

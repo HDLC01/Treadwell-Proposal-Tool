@@ -21,7 +21,8 @@
     Object.assign({}, opts || {}, { headers: TW.authHeaders((opts || {}).headers) }));
 
   let ALL = [];
-  const K = { tab: "tw_fu_tab", est: "tw_fu_est", sort: "tw_fu_sort", dir: "tw_fu_dir", q: "tw_fu_q" };
+  const K = { tab: "tw_fu_tab", est: "tw_fu_est", sort: "tw_fu_sort", dir: "tw_fu_dir", q: "tw_fu_q",
+              view: "tw_fu_view" };
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
 
@@ -33,6 +34,8 @@
   let SORT = SORTS.includes(ss(K.sort, "")) ? ss(K.sort, "") : "score";
   let DIR = ss(K.dir, "") || NATURAL[SORT];
   let Q = ss(K.q, "");
+  let VIEW = ss(K.view, "") === "board" ? "board" : "list";
+  let DRAGGING = false;   // pauses the 45s poll — a repaint mid-drag drops the card
 
   // ── how a row reads ────────────────────────────────────────────────────────
   const DAY = 86400000;
@@ -125,7 +128,13 @@
   }
 
   function visible() {
-    const inTab = ALL.filter((p) => TAB === "all" || bucket(p) === TAB);
+    // The board ignores TAB on purpose: its COLUMNS are those tabs. Honouring a "In play"
+    // tab there would leave Paused, Approved and Closed lost permanently empty and make the
+    // board look broken. Search and estimator still apply to both views, so a narrowed list
+    // stays narrowed when you switch.
+    const inTab = (VIEW === "board")
+      ? ALL
+      : ALL.filter((p) => TAB === "all" || bucket(p) === TAB);
     const byEst = EST ? inTab.filter((p) => C.estimatorOf(p).toLowerCase() === EST) : inTab;
     return sorted(byEst.filter(matches));
   }
@@ -185,19 +194,119 @@
     </tr>`;
   }
 
-  function paint() {
+  // ── the board ───────────────────────────────────────────────────────────────
+  // A second VIEW of the same rows, not a replacement: the board answers "where does
+  // everything stand", the ranked list answers "what do I do next", and the list is better
+  // at the second. Columns, drop rules and what a drag actually DOES all live in
+  // followups-core.js (window.TWFu) so they can be tested without a browser.
+  const B = window.TWFu;
+
+  /** One card. Ours-to-move renders as a <button> (draggable, keyboard-reachable); a
+   *  customer-owned one renders as a plain div, so there is no affordance on something a
+   *  drag could not honestly change. */
+  function cardHtml(p, today, nowMs) {
+    const col = B.columnById(B.column(p, today));
+    const mine = !!(col && col.ours);
+    const neg = B.neglect(p, nowMs);
+    const est = C.estimatorOf(p);
+    const due = dueLabel(p);
+    const quiet = days(p.last_activity_at);
+    const chased = days(p.last_followup_at);
+    const val = typeof p.approved_total === "number" ? money(p.approved_total) : "";
+    // A DIV with role=button, NOT a <button>. `button` only permits PHRASING content, and
+    // this card contains <p> and <div> — so the parser closed the button early, which closed
+    // the enclosing .fu-board with it and dumped Paused/Approved/Closed-lost outside the grid
+    // as full-width rows. Found by measuring the rendered DOM on staging; the source-text
+    // tests could not see it because the strings were all correct.
+    return `<div class="fu-card ${neg}${mine ? "" : " theirs"}"${
+        mine ? ' role="button" tabindex="0" draggable="true"' : ""} data-id="${esc(p.proposal_id)}"${
+        mine ? ' aria-label="' + esc(p.project_name || "Proposal") + ' — move or log"' : ""}>
+      <p class="fu-name">${esc(p.project_name || "(untitled)")}</p>
+      <p class="fu-cust">${esc(p.customer_name || p.customer_email || "")}</p>
+      <div class="fu-meta">${est ? C.avatarHtml(est) + esc(C.nameOf(est).split(/\s+/)[0])
+                                 : '<span class="tw-av av-none" title="No estimator">?</span>Unassigned'}
+        ${Number(p.unread) > 0 ? `<span class="fu-unread">${Number(p.unread)} unread</span>`
+                               : (val ? `<span class="amt">${val}</span>` : "")}</div>
+      <p class="fu-quiet">${chased === null ? "<b>never chased</b>"
+          : "chased " + chased + "d ago"}${quiet !== null ? " · quiet " + quiet + "d" : ""}${
+          due.text !== "—" ? " · next " + esc(due.text) : ""}</p>
+      ${p.reason ? `<p class="fu-why">${esc(p.reason)}</p>` : ""}
+      ${mine ? `<div class="fu-acts">${moveButtons(p, today)}
+        <button type="button" data-act="log" data-id="${esc(p.proposal_id)}">Log</button></div>` : ""}
+    </div>`;
+  }
+
+  /** Keyboard/click parity for the drag. A drag-only control would be the first
+   *  unreachable thing on this page — every row already has Enter/Space. */
+  function moveButtons(p, today) {
+    return B.COLUMNS.filter((c) => c.ours && B.canMove(p, c.id, today))
+      .map((c) => `<button type="button" data-move="${c.id}" data-id="${esc(p.proposal_id)}"
+        title="Move to ${esc(c.label)}">→ ${esc(c.label)}</button>`).join("");
+  }
+
+  function paintBoard() {
+    const rows = visible();
+    const today = TW.bizToday();
+    const nowMs = Date.now();
+    const cols = B.group(rows, today);
+    const el = $("list");
+    el.className = "boardwrap";
+    el.innerHTML = `<div class="fu-board">` + B.COLUMNS.map((c) => {
+      const items = cols[c.id] || [];
+      const load = B.load(items);
+      return `<div class="fu-col${c.ours ? "" : " theirs"}" data-col="${c.id}"${
+          c.ours ? ' data-drop="1"' : ""}>
+        <div class="fu-chead"><span class="fu-dot" style="background:${c.dot}"></span>
+          <b>${esc(c.label)}</b><span class="n">${load.count}</span>${
+          load.value ? `<span class="v">${money(load.value)}</span>` : ""}</div>
+        <p class="fu-csub">${c.ours ? "" : '<span class="fu-lock">Customer moves this</span> '}${
+          esc(c.sub)}</p>
+        ${items.map((p) => cardHtml(p, today, nowMs)).join("")}
+      </div>`;
+    }).join("") + `</div>
+      <div class="fu-legend">
+        <span><i style="background:#b3261e"></i>Nobody has chased this</span>
+        <span><i style="background:#9a5b00"></i>Going quiet</span>
+        <span><i style="background:#4a6b8a"></i>On cadence</span>
+        <span><span class="fu-lock">Customer moves this</span> not a drop target</span>
+        <span>Column header shows count · total value</span>
+      </div>`;
+  }
+
+  /** Toolbar, tab strip and count — shared by both views.
+   *
+   *  The tab strip is hidden on the board because the COLUMNS are those tabs: showing both
+   *  invites "In play" + a Paused column, which contradict each other. Search, estimator
+   *  and sort still apply to both, so a filtered list stays filtered when you switch. */
+  function paintChrome() {
     const rows = visible();
     const counts = {};
     TABS.forEach(([k]) => { counts[k] = k === "all" ? ALL.length : ALL.filter((p) => bucket(p) === k).length; });
     const f = $("filters");
-    f.hidden = !ALL.length;
-    f.innerHTML = TABS.map(([k, label]) =>
-      `<button type="button" class="chip ${k === TAB ? "sel" : ""}" data-tab="${k}">${
-        esc(label)}<span class="n">${counts[k]}</span></button>`).join("");
+    f.hidden = !ALL.length || VIEW === "board";
+    if (!f.hidden) {
+      f.innerHTML = TABS.map(([k, label]) =>
+        `<button type="button" class="chip ${k === TAB ? "sel" : ""}" data-tab="${k}">${
+          esc(label)}<span class="n">${counts[k]}</span></button>`).join("");
+    }
     $("toolbar").hidden = !ALL.length;
+    // Sorting a board makes no sense — the columns are the order, and within a column the
+    // feed's own digest ranking is what you want.
+    $("sort").hidden = VIEW === "board";
+    $("dir").hidden = VIEW === "board";
     populateEstimators();
     syncToolbar();
     $("count").textContent = ALL.length ? rows.length + " of " + ALL.length : "";
+    ["list", "board"].forEach((v) => {
+      const b = $("v-" + v);
+      if (b) b.setAttribute("aria-pressed", String(VIEW === v));
+    });
+    return rows;
+  }
+
+  function paint() {
+    const rows = paintChrome();
+    if (VIEW === "board") return paintBoard();
 
     const el = $("list");
     if (!rows.length) {
@@ -276,6 +385,90 @@
     });
   }
 
+  /** Ask for the extra input a cadence change needs. `needs` comes from the core's plan, so
+   *  the dialog and the API call can't drift apart. */
+  function askFor(needs, p) {
+    if (!needs) return Promise.resolve({});
+    const monthsUi = `<label for="mm">Wait how long?</label>
+        <select id="mm" data-months>
+          <option value="1">1 month</option><option value="2">2 months</option>
+          <option value="3" selected>3 months</option><option value="4">4 months</option>
+        </select>
+        <p class="dlg-sub">Reminders stop until then, and this drops off the morning digest.
+          The customer is not emailed.</p>`;
+    // Kyle's list, from the drawer — same six the portal accepts, so a reason can't 400.
+    const reasonUi = `<label for="rr">Why did we lose it?</label>
+        <select id="rr" data-reason>
+          <option value="price">Price</option>
+          <option value="another_contractor">Another contractor</option>
+          <option value="canceled">Project canceled</option>
+          <option value="scope_changed">Scope changed</option>
+          <option value="timing">Timing</option>
+          <option value="other">Other</option>
+        </select>
+        <p class="dlg-sub">Stops the reminders for good. You can reopen it later from the
+          project drawer.</p>`;
+    return new Promise((resolve) => {
+      const ov = document.createElement("div");
+      ov.className = "ov";
+      ov.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="Change follow-ups">
+        <div class="dlg-h">${needs === "months" ? "Pause reminders" : "Close this out"}</div>
+        <p class="dlg-sub">${esc(p.project_name || "This proposal")}</p>
+        ${needs === "months" ? monthsUi : reasonUi}
+        <div class="dlg-act">
+          <button type="button" class="chip" data-x>Cancel</button>
+          <button type="button" class="go" data-go>${
+            needs === "months" ? "Pause" : "Close lost"}</button>
+        </div></div>`;
+      document.body.appendChild(ov);
+      const close = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+      const onKey = (e) => {
+        if (e.key === "Escape") close(null);
+        if (e.key === "Enter") ov.querySelector("[data-go]").click();
+      };
+      document.addEventListener("keydown", onKey);
+      ov.querySelector("[data-x]").addEventListener("click", () => close(null));
+      ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(null); });
+      ov.querySelector("[data-go]").addEventListener("click", () => close(
+        needs === "months" ? { months: Number(ov.querySelector("[data-months]").value) }
+                           : { reason: ov.querySelector("[data-reason]").value }));
+    });
+  }
+
+  /** Move a proposal into one of OUR columns, changing the cadence for real.
+   *
+   *  The plan (which endpoint, what payload, whether a second write is needed) comes from
+   *  followups-core so it is tested; this function only performs it. */
+  async function moveTo(id, colId) {
+    const p = ALL.find((x) => x.proposal_id === id);
+    if (!p) return;
+    const plan = B.movePlan(p, colId, TW.bizToday());
+    if (!plan) return;                       // refused — customer-owned, or already there
+    const extra = await askFor(plan.needs, p);
+    if (extra === null) return;
+    $("alert").textContent = "";
+    const post = (path, body) => api("/api/portal/proposal/" + encodeURIComponent(id) + path,
+      { method: "POST", body: JSON.stringify(body) });
+    try {
+      const r = await post("/status", Object.assign({ status: plan.status }, extra));
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      // Resuming is TWO writes when automation was also switched off: the portal's
+      // resume_followups() clears the pause but not followup_disabled_at, so without this
+      // the card would land in Chasing with nothing actually sending.
+      for (const step of (plan.then || [])) {
+        if (step === "enable_automation") {
+          const r2 = await post("/followup-automation", { enabled: true });
+          if (!r2.ok) throw new Error("Reminders resumed but automation stayed off — "
+                                    + "open the project and switch it on.");
+        }
+      }
+      await load();
+    } catch (err) {
+      $("alert").textContent = "Couldn't change that: " + (err.message || "try again");
+    }
+  }
+
   async function logFollowup(id) {
     const p = ALL.find((x) => x.proposal_id === id);
     if (!p) return;
@@ -305,13 +498,92 @@
       paint();
       return;
     }
-    const tr = e.target.closest("tr[data-id]");
-    if (!tr) return;
-    const id = tr.dataset.id;
+    // Board: the per-card "→ Paused / → Chasing / → Closed lost" buttons. These are the
+    // KEYBOARD path for the drag — a drag-only control would be the only thing on this page
+    // you couldn't reach without a mouse.
+    const mv = e.target.closest("[data-move]");
+    if (mv) { e.stopPropagation(); moveTo(mv.dataset.id, mv.dataset.move); return; }
+
+    const holder = e.target.closest("tr[data-id], .fu-card[data-id]");
+    if (!holder) return;
+    const id = holder.dataset.id;
     if (e.target.closest('[data-act="log"]')) { e.stopPropagation(); logFollowup(id); return; }
     // Anything else on the row opens the full drawer, where the automation toggle,
     // the history and the chat live. This page is the list; that is the detail.
     window.location.assign("/portal.html?open=" + encodeURIComponent(id) + "&sec=followup");
+  });
+
+  // A div[role=button] does not fire on Enter/Space the way a real button does, and the card
+  // has to stay a div (see cardHtml — `button` cannot legally contain <p>/<div>). So wire the
+  // keyboard explicitly, or the board's cards become mouse-only.
+  $("list").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest('.fu-card[role="button"]');
+    if (!card || e.target.closest("button")) return;   // let the inner buttons speak for themselves
+    e.preventDefault();
+    card.click();
+  });
+
+  // ── drag and drop ───────────────────────────────────────────────────────────
+  // Delegated on the container, because the board is replaced wholesale on every paint and
+  // on the 45s poll — per-card handlers would be rebound continuously and leak.
+  let DRAG_ID = null;
+
+  $("list").addEventListener("dragstart", (e) => {
+    const card = e.target.closest(".fu-card[data-id]");
+    if (!card || card.classList.contains("theirs")) return;
+    DRAG_ID = card.dataset.id;
+    DRAGGING = true;
+    card.classList.add("dragging");
+    try { e.dataTransfer.setData("text/plain", DRAG_ID); e.dataTransfer.effectAllowed = "move"; } catch {}
+  });
+
+  $("list").addEventListener("dragend", () => {
+    DRAGGING = false;
+    DRAG_ID = null;
+    document.querySelectorAll(".fu-card.dragging").forEach((c) => c.classList.remove("dragging"));
+    document.querySelectorAll(".fu-col.over").forEach((c) => c.classList.remove("over"));
+  });
+
+  $("list").addEventListener("dragover", (e) => {
+    const col = e.target.closest(".fu-col[data-drop]");
+    if (!col || !DRAG_ID) return;
+    const p = ALL.find((x) => x.proposal_id === DRAG_ID);
+    // Ask the core, not the DOM: a customer-owned column has no data-drop at all, and an
+    // approved card can't be closed-lost, so neither should light up as droppable.
+    if (!p || !B.canMove(p, col.dataset.col, TW.bizToday())) return;
+    e.preventDefault();                       // preventDefault IS what permits the drop
+    try { e.dataTransfer.dropEffect = "move"; } catch {}
+    document.querySelectorAll(".fu-col.over").forEach((c) => c.classList.remove("over"));
+    col.classList.add("over");
+  });
+
+  $("list").addEventListener("drop", (e) => {
+    const col = e.target.closest(".fu-col[data-drop]");
+    if (!col || !DRAG_ID) return;
+    e.preventDefault();
+    const id = DRAG_ID;
+    DRAGGING = false;
+    DRAG_ID = null;
+    col.classList.remove("over");
+    moveTo(id, col.dataset.col);
+  });
+
+  // ── List | Board ────────────────────────────────────────────────────────────
+  ["list", "board"].forEach((v) => {
+    const b = $("v-" + v);
+    if (b) b.addEventListener("click", () => {
+      if (VIEW === v) return;
+      VIEW = v;
+      ssSet(K.view, v === "board" ? "board" : "");
+      $("hint").textContent = v === "board"
+        ? "Every proposal that has been sent, grouped by where its chase stands. Drag a card to"
+          + " pause the reminders or close it out — the first three columns are the customer's"
+          + " to move."
+        : "Every proposal that has been sent to a customer, and where its chase stands."
+          + " Logging a call here takes it off tomorrow morning's digest.";
+      paint();
+    });
   });
   $("list").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
@@ -366,6 +638,7 @@
   // Somebody else logging a call should show up here without an F5 — filters and sort
   // survive a repaint (they live in module state and sessionStorage).
   const busy = () => {
+    if (DRAGGING) return true;      // a repaint mid-drag pulls the card out from under you
     if (document.querySelector(".ov")) return true;                 // a dialog is open
     const a = document.activeElement;
     return !!a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName);
