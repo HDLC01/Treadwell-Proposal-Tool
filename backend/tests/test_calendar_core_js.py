@@ -321,3 +321,71 @@ def test_hasEstimator_is_false_for_every_shape_of_empty():
     got = run('out([C.hasEstimator({estimator_ids:["u1"]}), C.hasEstimator({estimator_ids:[]}),'
               'C.hasEstimator({}), C.hasEstimator(null)])')
     assert got == [True, False, False, False]
+
+
+# ── the card element + drag-to-reschedule ─────────────────────────────
+# Structural pins. The DATE logic above is exercised under node; these assert the page renders
+# a card the browser will actually keep intact, and that a drag only ever moves OUR entries.
+def _page_js():
+    return (FRONTEND / "js" / "calendar.js").read_text(encoding="utf-8")
+
+
+def test_our_card_is_not_a_button_element():
+    """`button` may only contain PHRASING content, and the card holds <p> and <div>. Rendered as
+    a <button>, the parser closes it early and the card's content spills loose into the day
+    cell — losing its border, stripe and click target.
+
+    This was latent here for a while: it only renders for Treadwell-OWNED entries, and prod had
+    none, so nothing looked wrong until somebody used + Add. The identical bug did break the
+    Follow-ups board grid (#246), which is how it was found here."""
+    js = _page_js()
+    i = js.index("function card(r, urg)")
+    block = js[i:js.index("function dayCell(")]
+    assert "'<button type=\"button\" class=\"' + cls" not in block, (
+        "the calendar card is a <button> again — it cannot legally contain its own markup")
+    assert 'role="button"' in block and 'tabindex="0"' in block
+
+
+def test_only_our_entries_are_draggable():
+    """A Basisboard bid's deadline lives in Basisboard and we never write there, so dragging one
+    would show a change that reverts on the next sync. Their cards must carry no draggable
+    attribute at all — the absence IS the affordance."""
+    js = _page_js()
+    i = js.index("function card(r, urg)")
+    block = js[i:js.index("function dayCell(")]
+    mine_part = block[block.index("if (mine)"):block.index("const href")]
+    bb_part = block[block.index("const href"):]
+    assert 'draggable="true"' in mine_part
+    assert "draggable" not in bb_part, "a BasisBoard card is draggable"
+
+
+def test_a_drop_reschedules_via_the_real_endpoint():
+    js = _page_js()
+    i = js.index("async function reschedule(")
+    block = js[i:i + 1200]
+    assert "/api/calendar/events/" in block and '"PATCH"' in block
+    assert "deadline_at" in block
+
+
+def test_a_drop_keeps_the_time_of_day():
+    """Moving a 2pm bid to Thursday must leave it due at 2pm. Midnight would read as "no time
+    set" and quietly change a real fact about the bid."""
+    js = _page_js()
+    i = js.index("async function reschedule(")
+    block = js[i:i + 900]
+    assert "toLocalInput(" in block and "fromLocalInput(" in block, (
+        "the reschedule no longer round-trips the existing clock time")
+
+
+def test_the_drag_only_accepts_our_own_rows():
+    """The dragover handler must look the row up in MINE — the editable set — so a stale id or a
+    mirrored bid cannot become a drop."""
+    js = _page_js()
+    i = js.index('addEventListener("dragover"')
+    assert "MINE.find(" in js[i:i + 500]
+
+
+def test_the_poll_holds_off_during_a_drag():
+    js = _page_js()
+    i = js.index("setInterval(")
+    assert "DRAGGING" in js[i:i + 200]
