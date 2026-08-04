@@ -1222,7 +1222,7 @@
   // continuation letterhead's logo ink reaches into the text column, scanned
   // from the art itself (never a hardcoded offset, so every template's art
   // works). Cached so switching work-types doesn't re-scan the same PNG.
-  const _termsBandCache = new Map();   // media name -> reserved top band (pt)
+  const _termsBandCache = new Map();   // work_type:media name -> reserved top band (pt)
 
   // True when the keyboard focus is inside `el` — used to skip any re-render
   // that would rebuild `el`'s innerHTML (and destroy the caret) while the
@@ -1281,6 +1281,50 @@
     price_line: () => [document.getElementById("price-lines-block")],
     alternate:  () => [document.getElementById("alternate-block")],
   };
+
+  // ── keeping the mounted islands alive across a re-render ──────────────────
+  // Every id above is a REAL NODE that lives in #price-preview-staging and is
+  // MOVED into the document by mountRegionPreviews (appendChild moves, it does
+  // not copy). So `docSurface.innerHTML = ""` at the top of a re-render DESTROYS
+  // them, and the next getElementById returns null — at which point
+  // mountRegionPreviews mounts nothing at all, silently, because of its
+  // `if (el)` guard.
+  //
+  // That is what broke switching the base bid back to an epoxy sheet. Epoxy's
+  // PRICE box is entirely region-mounted, so every line of it — Base Bid, the
+  // price, the tax rows, Total, "Options:" — came from these nodes and the box
+  // rendered empty. Polish survives the same trip only because its base bid is
+  // a plain template paragraph, which is why the bug looked one-directional.
+  //
+  // systemPreviewEl / notesPreviewEl never had this problem: they are held in
+  // consts above, so `innerHTML = ""` detaches them but the references live on.
+  // These are id-addressed instead, so they need somewhere to be detached TO —
+  // their original home. Reclaiming is idempotent: on a first render they are
+  // already in staging and moving them there again is a no-op.
+  const ISLAND_IDS = ["rooms-block", "base-bid-heading", "combo-price-block",
+                      "base-bid-row", "sales-tax-row", "remodel-tax-row", "total-row",
+                      "options-heading", "price-lines-block", "alternate-block"];
+  const stagingHome = stagingPanel && stagingPanel.parentNode;
+
+  /** Empty the document surface WITHOUT destroying the live price previews.
+   *
+   *  Always use this instead of touching docSurface.innerHTML directly — the two
+   *  render paths (positioned + flow) and the error path all clear the surface,
+   *  and a clear that skips the reclaim reintroduces the blank-preview bug. */
+  function clearDocSurface() {
+    for (const id of ISLAND_IDS) {
+      const el = document.getElementById(id);
+      if (el && stagingPanel && el.parentNode !== stagingPanel) stagingPanel.appendChild(el);
+    }
+    // The panel itself gets re-parented into the surface by the error path below,
+    // so put it back too — otherwise the next successful render deletes the whole
+    // staging area and every island with it.
+    if (stagingPanel && stagingHome && stagingPanel.parentNode !== stagingHome) {
+      stagingPanel.hidden = true;
+      stagingHome.appendChild(stagingPanel);
+    }
+    docSurface.innerHTML = "";
+  }
 
   // Substituted HTML for one template paragraph: text escaped, each known
   // {{token}} replaced by a highlighted span. Unknown tokens keep their
@@ -1820,7 +1864,7 @@
     const margin = page.margin || { top: 72, left: 90, right: 90, bottom: 72 };
     flowMode = false;
     docSurface.classList.remove("tw-flow");
-    docSurface.innerHTML = "";
+    clearDocSurface();
 
     const arts = (geo.images || []).slice().sort((a, b) => (a.para_index || 0) - (b.para_index || 0));
 
@@ -1927,10 +1971,14 @@
   // scan the art the SAME way it's painted (as a full-page background covering
   // pageWpt x pageH), so a different template's art yields a different reserve;
   // NO pixel constant is baked in. Returns a Promise<pt> in [0,120]; resolves 0
-  // on no ink or any error (canvas taint, decode failure). Cached per media
-  // name so a work-type switch reuses the result instead of re-scanning.
+  // on no ink or any error (canvas taint, decode failure).
+  //
+  // Cached per WORK TYPE + media name, for the same reason artUrl() is: templates
+  // reuse PNG filenames (image1.png), so a name-only key made a base-bid switch
+  // reserve the previous template's top band on the T&C page. Same class of bug as
+  // the stale-letterhead one that comment already warns about.
   function measureTermsBand(dataUrl, mediaName) {
-    const key = mediaName || dataUrl;
+    const key = mediaName ? (effectiveWorkType() + ":" + mediaName) : dataUrl;
     if (_termsBandCache.has(key)) return Promise.resolve(_termsBandCache.get(key));
     if (!dataUrl || !_termsGeom) return Promise.resolve(0);
     const { pageH, margin } = _termsGeom;
@@ -2056,7 +2104,7 @@
     flowMode = true;
     pageWpt = 612;
     docSurface.classList.add("tw-flow");
-    docSurface.innerHTML = "";
+    clearDocSurface();
     const pg = document.createElement("div");
     pg.className = "tw-page tw-flow";
     pg.style.width = pageWpt + "pt";
@@ -2102,15 +2150,28 @@
       // re-measure once fonts settle.
       try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { scheduleRepaginate(0); try { fitNotesBox(); } catch {} }); } catch {}
     } catch (err) {
-      // Degraded fallback: surface the price preview alone so the estimator
-      // can still verify pricing and continue; previously saved document
-      // edits still ship via collectOverrides()'s state fallback.
-      const loading = document.getElementById("doc-loading");
-      if (loading) {
-        loading.textContent = "Couldn't load the document preview — showing the price summary instead. You can still continue.";
-        stagingPanel.hidden = false;
-        loading.appendChild(stagingPanel);
+      // Say something, always. This was silent: the only user-facing hook was
+      // #doc-loading, which lives INSIDE #doc-surface and is therefore destroyed
+      // by the first successful render — so a failure on any LATER render (i.e.
+      // every base-bid switch) showed nothing, logged nothing, and left a blank
+      // page that looked identical to a rendering bug. That cost real debugging
+      // time, so the error now reaches the console and the screen either way.
+      console.error("Proposal preview failed to render:", err);
+      let loading = document.getElementById("doc-loading");
+      if (!loading) {
+        clearDocSurface();          // reclaims the islands before wiping
+        loading = document.createElement("div");
+        loading.id = "doc-loading";
+        loading.className = "tw-page";
+        loading.style.padding = "72pt 90pt";
+        docSurface.appendChild(loading);
       }
+      // Degraded fallback: surface the price preview alone so the estimator can
+      // still verify pricing and continue; previously saved document edits still
+      // ship via collectOverrides()'s state fallback.
+      loading.textContent = "Couldn't load the document preview — showing the price summary instead. You can still continue.";
+      stagingPanel.hidden = false;
+      loading.appendChild(stagingPanel);
       refreshPriceDisplay();
       applyZoom();
     }
@@ -2121,10 +2182,14 @@
   // from the new role: adapt the sidebar rows/labels, re-seed untouched
   // narrative + notes boilerplate (hand edits survive), and reload the template
   // + artwork. No-op when the type is unchanged (same-role base switches — the
-  // common case — only re-price, via applyAndRefresh). initDocumentEditor is
-  // idempotent and recomputes tokens from the current state, so this is safe to
-  // re-run; overrides are keyed by work_type, so epoxy edits don't bleed into
-  // the polish render.
+  // common case — only re-price, via applyAndRefresh).
+  //
+  // NB: this used to claim initDocumentEditor was "idempotent and safe to re-run".
+  // It was not, and that assumption is what broke switching back to an epoxy base:
+  // re-running it wiped the document surface, which destroyed the live price rows
+  // that had been MOVED into it, and epoxy's PRICE box is built entirely from
+  // those. It is safe now only because clearDocSurface() reclaims them first — if
+  // you add another surface clear, route it through there too.
   function reloadForWorkType() {
     const cur = effectiveWorkType();
     if (cur === _lastEffWt) return;
