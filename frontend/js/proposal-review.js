@@ -1381,7 +1381,8 @@
   // templates genuinely mix formats inside one paragraph \u2014 GC Resinous block 112 is 20
   // segments mixing 9pt and 8pt with italic and underline \u2014 so flattening was never
   // acceptable, it just wasn't visible until somebody tried to edit one.
-  const RUN_KEYS = ["bold", "italic", "underline", "size_pt"];
+  const F = window.TWFmt;                       // run algebra (proposal-format-core.js)
+  const RUN_KEYS = F.RUN_KEYS;
 
   /** The computed run format of a node, walking up to (not past) the block. */
   function fmtAt(node, stop) {
@@ -1410,39 +1411,341 @@
 
   const sameFmt = (a, b) => RUN_KEYS.every(k => a[k] === b[k]);
 
-  /** A block's content as runs: [{text, bold?, italic?, underline?, size_pt?}].
+  /** Every text position in the block, in document order \u2014 the ONE walker behind both the
+   *  serialised runs and the toolbar's selection offsets.
    *
-   *  Adjacent identical formats are merged, so a paragraph the estimator never formatted
-   *  comes back as ONE run and the override stays as small as the old text-only one. */
-  function serializeRuns(el) {
-    const runs = [];
-    const push = (text, fmt) => {
+   *  Those two have to agree on what "character 12" means, or the toolbar formats different
+   *  words than the estimator selected. Deriving both from a single traversal makes that
+   *  agreement structural instead of two similar-looking walkers promising to stay in step.
+   *
+   *  Synthetic newlines (a BR, and the break before a nested DIV/P) carry `node: null`: they
+   *  are real characters to the serialiser, but there is no text node to put a caret in.
+   *  `tok` is the nearest enclosing token fill, so a format can be re-rendered without
+   *  dissolving `.tw-fill` spans back into plain text. */
+  function segmentsOf(el) {
+    const segs = [];
+    const push = (text, node, n2) => {
       if (!text) return;
-      const prev = runs[runs.length - 1];
-      if (prev && sameFmt(prev._f, fmt)) { prev.text += text; return; }
-      runs.push({ text: text, _f: fmt });
+      const fill = n2 && n2.parentElement ? n2.parentElement.closest(".tw-fill[data-token]") : null;
+      segs.push({ text: text, fmt: fmtAt(n2, el), node: node,
+                  tok: fill && el.contains(fill) ? fill.dataset.token : null });
     };
     const walk = (node) => {
       node.childNodes.forEach(n => {
         if (n.nodeType === Node.TEXT_NODE) {
-          push(String(n.nodeValue).replace(/\u00a0/g, " "), fmtAt(n, el));
+          push(String(n.nodeValue).replace(/\u00a0/g, " "), n, n);
           return;
         }
         if (n.nodeType !== Node.ELEMENT_NODE) return;
-        if (n.tagName === "BR") { push("\n", fmtAt(n, el)); return; }
+        if (n.tagName === "BR") { push("\n", null, n); return; }
         if (/^(DIV|P)$/.test(n.tagName)) {
-          const last = runs[runs.length - 1];
-          if (last && !last.text.endsWith("\n")) push("\n", fmtAt(n, el));
+          const last = segs[segs.length - 1];
+          if (last && !last.text.endsWith("\n")) push("\n", null, n);
         }
         walk(n);
       });
     };
     walk(el);
-    return runs.map(r => {
+    return segs;
+  }
+
+  /** Merge adjacent segments that agree on `keyOf`, then drop the internals. */
+  function mergeSegs(segs, alsoToken) {
+    const out = [];
+    for (const s of segs) {
+      const prev = out[out.length - 1];
+      if (prev && sameFmt(prev._f, s.fmt) && (!alsoToken || prev._tok === s.tok)) {
+        prev.text += s.text;
+        continue;
+      }
+      out.push({ text: s.text, _f: s.fmt, _tok: s.tok });
+    }
+    return out;
+  }
+
+  /** A block's content as runs: [{text, bold?, italic?, underline?, size_pt?}].
+   *
+   *  Adjacent identical formats are merged, so a paragraph the estimator never formatted
+   *  comes back as ONE run and the override stays as small as the old text-only one.
+   *  Deliberately merges on format ALONE, ignoring token boundaries: splitting there would
+   *  push every fill-carrying block onto the richer payload shape and past `runsArePlain`,
+   *  changing what gets sent for blocks nobody formatted. */
+  function serializeRuns(el) {
+    return mergeSegs(segmentsOf(el), false).map(r => {
       const out = { text: r.text };
       for (const k of RUN_KEYS) if (r._f[k] !== null) out[k] = r._f[k];
       return out;
     });
+  }
+
+  /** The editing view of the same content: also split at token boundaries, so re-rendering
+   *  after a format can put the `.tw-fill` spans back exactly where they were. */
+  function editRuns(el) {
+    return mergeSegs(segmentsOf(el), true).map(r => {
+      const out = { text: r.text, tok: r._tok };
+      for (const k of RUN_KEYS) if (r._f[k] !== null) out[k] = r._f[k];
+      return out;
+    });
+  }
+
+  // ── Word-like formatting on the focused block ──────────────────────────────
+  //
+  // Bold / italic / underline / size, applied by rebuilding the block from its runs — NOT via
+  // execCommand. execCommand emits <b>/<i>/<u> TAGS, and `fmtAt` reads inline STYLES only, so
+  // an execCommand bold would look applied on screen and arrive in the .docx as nothing at
+  // all. Rendering from runs makes what is on screen and what gets sent the same object.
+
+  const SIZE_CHOICES = [6, 7, 8, 9, 10, 11, 12, 14, 16, 18];
+  const MARK_A = "\u0001", MARK_B = "\u0002";   // never occur in proposal text
+  let _fmtBusy = false;                          // re-entrancy guard for selectionchange
+
+  /** Like `runStyleCss`, but writes the explicit OFF switches too.
+   *
+   *  `runStyleCss` emits italic/underline only when true, which is right for the initial
+   *  render but makes "turn italic off" unrepresentable: with no inline style `fmtAt` reads
+   *  null = inherit, and the paragraph silently keeps the template's italic. Kept separate so
+   *  the initial render from the backend's runs is untouched. */
+  function runEditCss(s) {
+    let css = runStyleCss(s);
+    if (s.italic === false) css += "font-style:normal;";
+    if (s.underline === false) css += "text-decoration-line:none;";
+    return css;
+  }
+
+  // The run algebra lives in proposal-format-core.js so the tests drive the same code the
+  // page does, rather than a copy of it that can drift.
+  const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
+
+  /** Runs → the block's innerHTML. Inverse of `editRuns`. */
+  function renderRuns(el, runs) {
+    let html = "";
+    for (const r of runs) {
+      let inner = escHtml(String(r.text)).replace(/\n/g, "<br>");
+      if (r.tok) inner = `<span class="tw-fill" data-token="${escHtml(r.tok)}">${inner}</span>`;
+      const css = runEditCss(r);
+      html += css ? `<span style="${css}">${inner}</span>` : inner;
+    }
+    el.innerHTML = html || "<br>";
+  }
+
+  /** Character offset → a caret position, skipping synthetic newlines (no text node to sit in). */
+  function pointAt(el, offset) {
+    let pos = 0, last = null;
+    for (const s of segmentsOf(el)) {
+      if (s.node) {
+        if (offset <= pos + s.text.length) return { node: s.node, offset: offset - pos };
+        last = { node: s.node, offset: s.text.length };
+      }
+      pos += s.text.length;
+    }
+    return last;
+  }
+
+  function placeSelection(el, start, end) {
+    const a = pointAt(el, start), b = pointAt(el, end);
+    if (!a || !b) return;
+    const r = document.createRange();
+    try {
+      r.setStart(a.node, Math.max(0, Math.min(a.offset, a.node.length)));
+      r.setEnd(b.node, Math.max(0, Math.min(b.offset, b.node.length)));
+    } catch { return; }
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  /** The selection as [start, end] character offsets into the block, or null if it is elsewhere.
+   *
+   *  Two control-character markers are dropped at the boundaries and the offsets read back out
+   *  of the serialised text. Letting the browser's own Range place them beats re-deriving
+   *  offsets from container/offset pairs across nested spans and half-selected fills. The
+   *  markers are removed and the selection restored before returning, so this reads as a pure
+   *  query — `_fmtBusy` keeps the restore from re-entering through `selectionchange`. */
+  function selectionRange(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    if (!el.contains(r.startContainer) || !el.contains(r.endContainer)) return null;
+    const prev = _fmtBusy;
+    _fmtBusy = true;
+    try {
+      const a = document.createTextNode(MARK_A), b = document.createTextNode(MARK_B);
+      const rb = r.cloneRange(); rb.collapse(false); rb.insertNode(b);
+      const ra = r.cloneRange(); ra.collapse(true); ra.insertNode(a);
+      const text = segmentsOf(el).map(s => s.text).join("");
+      a.remove(); b.remove();
+      el.normalize();
+      let i = text.indexOf(MARK_A), j = text.indexOf(MARK_B);
+      if (i < 0 || j < 0) return null;
+      if (j > i) j -= 1;                    // MARK_A shifted everything after it along by one
+      const out = [Math.min(i, j), Math.max(i, j)];
+      placeSelection(el, out[0], out[1]);   // put back what the markers disturbed
+      return out;
+    } catch {
+      return null;
+    } finally {
+      _fmtBusy = prev;
+    }
+  }
+
+  /** What the selection currently looks like. A key is `undefined` when the selection spans
+   *  more than one value ("mixed"), so a toggle can decide between on and off honestly. */
+  function selectionFormat(el) {
+    const runs = editRuns(el);
+    const total = runsLength(runs);
+    const sel = selectionRange(el);
+    let start = sel ? sel[0] : 0, end = sel ? sel[1] : total;
+    // A collapsed caret means "this whole paragraph". The estimator asked for a section to
+    // change size; a pending style that only affects the next keystroke would read as nothing
+    // having happened.
+    if (start === end) { start = 0; end = total; }
+    const f = F.summarize(runs, start, end);
+    return { bold: f.bold, italic: f.italic, underline: f.underline, size_pt: f.size_pt,
+             range: [start, end], empty: total === 0 };
+  }
+
+  function markEdited(el, formatted) {
+    if (formatted) el.classList.add("tw-fmt");
+    // Reuse the one input handler: dirty flags, the $/SF warning, override persistence and
+    // terms repagination all already hang off it.
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function applyFormat(el, patch, range) {
+    const runs = editRuns(el);
+    let start, end;
+    if (range) { start = range[0]; end = range[1]; }
+    else {
+      const f = selectionFormat(el);
+      start = f.range[0]; end = f.range[1];
+    }
+    if (end <= start) return false;
+    renderRuns(el, patchRuns(runs, start, end, patch));
+    placeSelection(el, start, end);
+    markEdited(el, true);
+    return true;
+  }
+
+  function toggleFormat(el, key) {
+    const f = selectionFormat(el);
+    if (f.empty) return;
+    const patch = {};
+    patch[key] = F.nextToggle(f[key]);
+    applyFormat(el, patch, f.range);
+    showFmtBar(el);
+  }
+
+  // ── Paste ──────────────────────────────────────────────────────────────────
+  // There was no paste handler at all: Word's HTML landed in the DOM as arbitrary markup —
+  // classes, mso-* styles, font tags, tables — and `fmtAt` silently dropped nearly all of it.
+  // Pasted content is now reduced to the four switches we can actually carry into the .docx.
+
+  function runsFromHtml(html) {
+    const box = document.createElement("div");
+    box.innerHTML = String(html);
+    box.querySelectorAll("script,style,meta,link,title,object,iframe,svg,img").forEach(n => n.remove());
+    const runs = [];
+    const walk = (node, inherited) => {
+      node.childNodes.forEach(n => {
+        if (n.nodeType === Node.TEXT_NODE) {
+          const t = String(n.nodeValue).replace(/\u00a0/g, " ").replace(/[\r\t]/g, "");
+          if (t) runs.push(Object.assign({}, inherited, { text: t }));
+          return;
+        }
+        if (n.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = n.tagName;
+        if (tag === "BR") { runs.push(Object.assign({}, inherited, { text: "\n" })); return; }
+        const f = F.fmtFromPasted(tag, n.style || {}, inherited);
+        walk(n, f);
+        if (/^(P|DIV|LI|TR|H[1-6]|BLOCKQUOTE)$/.test(tag)) {
+          const last = runs[runs.length - 1];
+          if (last && !last.text.endsWith("\n")) runs.push({ text: "\n" });
+        }
+      });
+    };
+    walk(box, {});
+    while (runs.length && runs[runs.length - 1].text === "\n") runs.pop();   // trailing block break
+    return coalesce(runs.map(r => {
+      const out = { text: r.text, tok: null };
+      for (const k of RUN_KEYS) if (r[k] !== undefined) out[k] = r[k];
+      return out;
+    }));
+  }
+
+  // ── The toolbar ────────────────────────────────────────────────────────────
+  let fmtBar = null, fmtBlock = null;
+
+  function ensureFmtBar() {
+    if (fmtBar) return fmtBar;
+    fmtBar = document.createElement("div");
+    fmtBar.className = "tw-fmtbar";
+    fmtBar.setAttribute("role", "toolbar");
+    fmtBar.setAttribute("aria-label", "Text formatting");
+    fmtBar.innerHTML =
+      '<button type="button" data-fmt="bold" aria-label="Bold" title="Bold (Ctrl+B)"><b>B</b></button>' +
+      '<button type="button" data-fmt="italic" aria-label="Italic" title="Italic (Ctrl+I)"><i>I</i></button>' +
+      '<button type="button" data-fmt="underline" aria-label="Underline" title="Underline (Ctrl+U)"><u>U</u></button>' +
+      '<span class="tw-fmtsep" aria-hidden="true"></span>' +
+      '<select data-fmt="size" aria-label="Text size" title="Text size">' +
+      '<option value="">Template size</option>' +
+      SIZE_CHOICES.map(n => `<option value="${n}">${n} pt</option>`).join("") +
+      '</select>' +
+      '<span class="tw-fmtsep" aria-hidden="true"></span>' +
+      '<button type="button" data-fmt="reset" title="Back to the template’s own formatting">Reset</button>';
+    document.body.appendChild(fmtBar);
+
+    // Never let the toolbar take focus: the block has to keep its selection for the format to
+    // land on the words the estimator actually highlighted.
+    fmtBar.addEventListener("mousedown", (e) => {
+      if (!e.target.closest("select")) e.preventDefault();
+    });
+    fmtBar.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-fmt]");
+      if (!btn || !fmtBlock) return;
+      e.preventDefault();
+      if (btn.dataset.fmt === "reset") {
+        const f = selectionFormat(fmtBlock);
+        applyFormat(fmtBlock, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
+        showFmtBar(fmtBlock);
+        return;
+      }
+      toggleFormat(fmtBlock, btn.dataset.fmt);
+    });
+    fmtBar.addEventListener("change", (e) => {
+      const sel = e.target.closest("select[data-fmt='size']");
+      if (!sel || !fmtBlock) return;
+      const v = sel.value ? Number(sel.value) : null;
+      const f = selectionFormat(fmtBlock);
+      applyFormat(fmtBlock, { size_pt: v }, f.range);
+      showFmtBar(fmtBlock);
+    });
+    return fmtBar;
+  }
+
+  function showFmtBar(el) {
+    const bar = ensureFmtBar();
+    fmtBlock = el;
+    const f = selectionFormat(el);
+    bar.querySelectorAll("button[data-fmt]").forEach(b => {
+      const k = b.dataset.fmt;
+      if (k !== "reset") b.classList.toggle("on", f[k] === true);
+      b.setAttribute("aria-pressed", k === "reset" ? "false" : String(f[k] === true));
+    });
+    const sizeSel = bar.querySelector("select[data-fmt='size']");
+    if (sizeSel) sizeSel.value = f.size_pt ? String(f.size_pt) : "";
+    bar.style.display = "flex";
+    // Viewport coordinates on purpose: the bar is position:fixed, so the page's zoom transform
+    // does not enter into it and there is no scale factor to divide out.
+    const r = el.getBoundingClientRect();
+    const h = bar.offsetHeight || 34, w = bar.offsetWidth || 260;
+    const above = r.top - h - 8;
+    bar.style.top = Math.round(above < 8 ? Math.min(window.innerHeight - h - 8, r.bottom + 8) : above) + "px";
+    bar.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, r.left))) + "px";
+  }
+
+  function hideFmtBar() {
+    if (fmtBar) fmtBar.style.display = "none";
+    fmtBlock = null;
   }
 
   /** True when the runs carry no formatting at all \u2014 one plain run.
@@ -2412,6 +2715,68 @@
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
     if (el.closest(".tw-terms-page")) scheduleRepaginate();
+  });
+
+  // ── Wire the formatting toolbar to the focused block ───────────────────────
+  docSurface.addEventListener("focusin", (e) => {
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (el) showFmtBar(el);
+    else hideFmtBar();
+  });
+
+  docSurface.addEventListener("focusout", (e) => {
+    const to = e.relatedTarget;
+    if (to && fmtBar && fmtBar.contains(to)) return;         // moved into the toolbar itself
+    if (to && to.closest && to.closest(".tw-block")) return; // handled by the next focusin
+    hideFmtBar();
+  });
+
+  // Keep the button states honest as the estimator drags across differently-formatted words.
+  document.addEventListener("selectionchange", () => {
+    if (_fmtBusy || !fmtBlock || !fmtBar || fmtBar.style.display === "none") return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    if (!fmtBlock.contains(sel.getRangeAt(0).startContainer)) return;
+    showFmtBar(fmtBlock);
+  });
+
+  window.addEventListener("scroll", () => { if (fmtBlock) showFmtBar(fmtBlock); }, true);
+
+  docSurface.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const key = { b: "bold", i: "italic", u: "underline" }[String(e.key).toLowerCase()];
+    if (!key) return;
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (!el) return;
+    // Stop the browser's own handler: it runs execCommand, which emits <b>/<i>/<u> tags that
+    // `fmtAt` cannot read — the formatting would show on screen and reach the .docx as nothing.
+    e.preventDefault();
+    toggleFormat(el, key);
+  });
+
+  docSurface.addEventListener("paste", (e) => {
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (!el) return;
+    e.preventDefault();
+    const dt = e.clipboardData;
+    let ins = [];
+    const html = dt ? dt.getData("text/html") : "";
+    if (html) ins = runsFromHtml(html);
+    if (!ins.length) {
+      const plain = String((dt && dt.getData("text/plain")) || "").replace(/\r\n?/g, "\n");
+      if (plain) ins = [{ text: plain, tok: null }];
+    }
+    if (!ins.length) return;
+    const sel = selectionRange(el);
+    if (!sel) return;
+    const merged = F.spliceRuns(editRuns(el), sel[0], sel[1], ins);
+    renderRuns(el, merged);
+    const caret = sel[0] + runsLength(ins);
+    placeSelection(el, caret, caret);
+    // Only claim "formatted" when the pasted content actually carries formatting; a plain-text
+    // paste is an ordinary text edit and the text comparison already catches it.
+    markEdited(el, ins.some(r => RUN_KEYS.some(k => r[k] !== undefined)));
+    showFmtBar(el);
   });
 
   // ── Editable estimate-sourced fills: WORK systems ──────────────────────
