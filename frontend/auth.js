@@ -124,10 +124,14 @@
 
   // Left sidebar matching the main Treadwell app (light, 240px, red accent),
   // collapsing to an off-canvas drawer under 768px.
-  function navItem(href, glyph, label) {
+  function navItem(href, glyph, label, tag) {
     const active = location.pathname.toLowerCase().endsWith(href.toLowerCase());
+    // `tag` marks a page as not-yet-finished. Optional so the other twelve callers are
+    // untouched, and rendered as a chip rather than folded into the label so it reads as a
+    // status on the page rather than part of its name.
     return '<a class="tw-nav-item' + (active ? " active" : "") + '" href="' + href + '">' +
-      '<span class="tw-nav-ico">' + glyph + '</span><span class="tw-nav-label">' + label + '</span></a>';
+      '<span class="tw-nav-ico">' + glyph + '</span><span class="tw-nav-label">' + label + '</span>' +
+      (tag ? '<span class="tw-nav-tag">' + tag + '</span>' : "") + '</a>';
   }
 
   function renderSidebar() {
@@ -180,7 +184,7 @@
       // 🧱 rather than another shaded square: ▤ already belongs to Lead Inbox, and the
       // geometric set is low-distinction enough without two items sharing a glyph. A brick
       // also says "materials" at a glance, which none of the squares do.
-      navItem("/library.html", "🧱", "Item Library") +
+      navItem("/library.html", "🧱", "Item Library", "BETA") +
       '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
@@ -435,6 +439,9 @@ text-decoration:none;color:var(--tw-ink);}
 .tw-nav-item:hover{background:var(--tw-surf-low);}
 .tw-nav-item.active{background:rgba(200,16,46,.1);color:var(--tw-red-dark);font-weight:600;}
 .tw-nav-ico{width:20px;text-align:center;color:var(--tw-ink-v);font-size:15px;}
+.tw-nav-tag{margin-left:auto;font:700 8.5px/1 system-ui;letter-spacing:.06em;
+  padding:3px 5px;border-radius:4px;background:rgba(200,16,46,.12);
+  color:var(--tw-red-dark);white-space:nowrap;}
 .tw-nav-item.active .tw-nav-ico{color:var(--tw-red-dark);}
 .tw-user{display:flex;align-items:center;gap:10px;padding:8px;border-radius:9px;background:var(--tw-surf-low);
 margin-top:10px;border-top:1px solid rgba(27,28,28,.05);}
