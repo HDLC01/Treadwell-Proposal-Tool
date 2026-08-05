@@ -188,7 +188,11 @@
       <td class="t-why">${esc(p.reason || "")}</td>
       <td class="num">${money(p.approved_total)}</td>
       <td><div class="acts">
-        <button type="button" data-act="log" title="Log a call, email, text or note">Log</button>
+        ${B.column(p) === "approved" || B.column(p) === "lost" ? "" :
+          `<button type="button" class="go-send" data-act="send"
+            title="Email the customer and add it to their message thread">Send</button>`}
+        <button type="button" data-act="log"
+          title="Record a call, text or email you sent yourself. Does NOT email the customer.">Log a call</button>
         <button type="button" data-act="open" title="Open in the Customer Portal CRM">Open</button>
       </div></td>
     </tr>`;
@@ -205,8 +209,15 @@
    *  customer-owned one renders as a plain div, so there is no affordance on something a
    *  drag could not honestly change. */
   function cardHtml(p, today, nowMs) {
-    const col = B.columnById(B.column(p, today));
+    const colId = B.column(p, today);
+    const col = B.columnById(colId);
+    // `mine` now means only one thing: this card sits in Closed lost, the single column we
+    // decide. Everything else records what the customer did, so it is not draggable — but it
+    // still gets ACTION BUTTONS, because Pause and Resume stopped being columns and the buttons
+    // are now the only way to reach them.
     const mine = !!(col && col.ours);
+    const acts = B.actionsFor(p, today);
+    const canDrag = B.canMove(p, "lost", today);
     const neg = B.neglect(p, nowMs);
     const est = C.estimatorOf(p);
     const due = dueLabel(p);
@@ -219,53 +230,85 @@
     // as full-width rows. Found by measuring the rendered DOM on staging; the source-text
     // tests could not see it because the strings were all correct.
     return `<div class="fu-card ${neg}${mine ? "" : " theirs"}"${
-        mine ? ' role="button" tabindex="0" draggable="true"' : ""} data-id="${esc(p.proposal_id)}"${
-        mine ? ' aria-label="' + esc(p.project_name || "Proposal") + ' — move or log"' : ""}>
+        canDrag ? ' role="button" tabindex="0" draggable="true"' : ""} data-id="${esc(p.proposal_id)}"${
+        canDrag ? ' aria-label="' + esc(p.project_name || "Proposal") + ' — drag to Closed lost, or use the buttons"' : ""}>
       <p class="fu-name">${esc(p.project_name || "(untitled)")}</p>
       <p class="fu-cust">${esc(p.customer_name || p.customer_email || "")}</p>
       <div class="fu-meta">${est ? C.avatarHtml(est) + esc(C.nameOf(est).split(/\s+/)[0])
                                  : '<span class="tw-av av-none" title="No estimator">?</span>Unassigned'}
+        ${autoBadge(p, today)}
         ${Number(p.unread) > 0 ? `<span class="fu-unread">${Number(p.unread)} unread</span>`
                                : (val ? `<span class="amt">${val}</span>` : "")}</div>
       <p class="fu-quiet">${chased === null ? "<b>never chased</b>"
           : "chased " + chased + "d ago"}${quiet !== null ? " · quiet " + quiet + "d" : ""}${
           due.text !== "—" ? " · next " + esc(due.text) : ""}</p>
-      ${deliveryHint(p, today)}
+      ${seenLine(p, colId)}
       ${p.reason ? `<p class="fu-why">${esc(p.reason)}</p>` : ""}
-      ${mine ? `<div class="fu-acts">${moveButtons(p, today)}
-        <button type="button" data-act="log" data-id="${esc(p.proposal_id)}">Log</button></div>` : ""}
+      <div class="fu-acts">${sendButton(p, colId)}${actionButtons(p, acts)}
+        <button type="button" data-act="log" data-id="${esc(p.proposal_id)}"
+          title="Record a call, text or email you sent yourself. Does NOT email the customer.">Log a call</button></div>
     </div>`;
   }
 
-  /** Whether the notification email got through, for a proposal nobody has opened yet.
+  /** The reason you came to this page: chase somebody.
    *
-   *  Two very different problems look identical on a card that has sat in Sent for a week:
-   *  the customer is thinking about it, or we have the wrong address and nobody ever saw it.
-   *  A follow-up call is the right move for the first and a waste of time for the second.
+   *  Hidden once a proposal is approved or closed lost — there is nothing to chase, and offering
+   *  it would invite emailing a customer about a decision they have already made. */
+  function sendButton(p, colId) {
+    if (colId === "approved" || colId === "lost") return "";
+    return `<button type="button" class="go-send" data-act="send" data-id="${esc(p.proposal_id)}"
+      title="Email the customer and add it to their message thread">Send follow-up</button>`;
+  }
+
+  /** What WE are doing about it — chasing, paused, or automation off.
    *
-   *  Only shown while the proposal is still un-viewed, because once somebody has actually
-   *  opened the portal the question is answered and the line would be noise. Says "link
-   *  opened" rather than "seen" on purpose: the landing page serves before any login, and mail
-   *  scanners follow links, so this is evidence about the EMAIL, not about a person reading a
-   *  bid. `proposal_status` is deliberately untouched by it (see db.mark_link_clicked). */
-  function deliveryHint(p, today) {
-    const st = String((p && p.proposal_status) || "");
-    if (st !== "sent") return "";                    // already viewed/approved/lost — answered
-    if (!p.link_clicked_at) return "";
+   *  This used to be a column, which is what made the old board ambiguous: a proposal could be
+   *  "not opened" AND "paused three months" at once, so the code had to rank two independent
+   *  facts and the table and the board could disagree. It is an attribute of a proposal, not a
+   *  place a proposal lives, so it belongs on the card. */
+  function autoBadge(p, today) {
+    const a = B.automation(p, today);
+    if (!a) return "";                                  // approved / lost — nothing is going out
+    const label = a === "chasing" ? "Chasing" : a === "paused" ? "Paused" : "Not automated";
+    const until = a === "paused" ? B.pausedUntil(p, today) : "";
+    const title = a === "chasing" ? "Automatic reminders are going out."
+      : a === "paused" ? ("Reminders held until " + until + ".")
+      : "No automatic reminders. Chase it by hand, or press Resume.";
+    return `<span class="fu-auto is-${a}" title="${esc(title)}">${esc(label)}</span>`;
+  }
+
+  /** How the customer saw it, and when.
+   *
+   *  Only on the Seen column, where it is the whole question. A portal view means a person
+   *  definitely looked; an email link click is weaker — that page serves before anyone signs in
+   *  and mail scanners follow links — so the wording never says "seen by" and the tooltip says
+   *  so outright. On a card in "Not opened" it would be a contradiction, and past Seen the
+   *  question is already answered. */
+  function seenLine(p, colId) {
+    if (colId !== "seen") return "";
+    const how = B.seenHow(p);
+    if (!how) return "";
+    if (how === "portal") {
+      const d = days(p.last_viewed_at || p.viewed_at);
+      const when = d === null ? "" : (d === 0 ? " today" : " " + d + "d ago");
+      return `<p class="fu-seen is-portal" title="They opened the proposal in the portal.">` +
+             `opened the portal${esc(when)}</p>`;
+    }
     const d = days(p.last_link_clicked_at || p.link_clicked_at);
     const when = d === null ? "" : (d === 0 ? " today" : " " + d + "d ago");
-    return `<p class="fu-delivered" title="Somebody followed the link in the notification email.` +
-           ` The email is getting through. It is not proof the proposal was read — this page` +
-           ` loads before anyone signs in, and mail scanners follow links too.">` +
+    return `<p class="fu-seen is-email" title="Somebody followed the link in the notification` +
+           ` email, so the email is getting through. It is not proof the proposal was read —` +
+           ` that page loads before anyone signs in, and mail scanners follow links too.">` +
            `email link opened${esc(when)}</p>`;
   }
 
-  /** Keyboard/click parity for the drag. A drag-only control would be the first
-   *  unreachable thing on this page — every row already has Enter/Space. */
-  function moveButtons(p, today) {
-    return B.COLUMNS.filter((c) => c.ours && B.canMove(p, c.id, today))
-      .map((c) => `<button type="button" data-move="${c.id}" data-id="${esc(p.proposal_id)}"
-        title="Move to ${esc(c.label)}">→ ${esc(c.label)}</button>`).join("");
+  /** The actions available on this card.
+   *
+   *  Keyboard/click parity for the drag, and the ONLY route to Pause and Resume now that they
+   *  are not columns. A drag-only control would be the first unreachable thing on this page. */
+  function actionButtons(p, acts) {
+    return (acts || []).map((a) => `<button type="button" data-do="${a.id}"
+        data-id="${esc(p.proposal_id)}" title="${esc(a.label)}">${esc(a.label)}</button>`).join("");
   }
 
   function paintBoard() {
@@ -409,6 +452,50 @@
     });
   }
 
+  /** Compose a follow-up to the customer.
+   *
+   *  Deliberately a plain message box and nothing more. A template picker would be the obvious
+   *  next thing, and the wrong one to add first: the automated cadence already sends the
+   *  templated nudges, so what an estimator needs from here is the sentence a template cannot
+   *  write — "Dave, we can still hit your March start if we hear back this week".
+   *
+   *  Says exactly who it reaches, because this one DOES email the customer and Log does not, and
+   *  those two buttons sit next to each other. */
+  function sendDialog(p) {
+    const who = esc(p.customer_name || p.customer_email || "the customer");
+    return new Promise((resolve) => {
+      const ov = document.createElement("div");
+      ov.className = "ov";
+      ov.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="Send a follow-up">
+        <div class="dlg-h">Send a follow-up</div>
+        <p class="dlg-sub">${esc(p.project_name || "This proposal")} — emails ${who} and adds it
+          to their message thread. They can reply straight to it.</p>
+        <label for="sm">Message</label>
+        <textarea id="sm" data-msg rows="5" maxlength="4000"
+          placeholder="Hi ${who} — just checking whether you had any questions on the proposal. Happy to walk through it whenever suits."></textarea>
+        <div class="dlg-act">
+          <button type="button" class="chip" data-x>Cancel</button>
+          <button type="button" class="go" data-go>Send email</button>
+        </div></div>`;
+      document.body.appendChild(ov);
+      const close = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+      const onKey = (e) => {
+        // No Enter-to-send: this one leaves the building. Enter inside a textarea should make a
+        // new line, and a stray keystroke must not email a customer a half-written sentence.
+        if (e.key === "Escape") close(null);
+      };
+      document.addEventListener("keydown", onKey);
+      ov.querySelector("[data-x]").addEventListener("click", () => close(null));
+      ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(null); });
+      ov.querySelector("[data-go]").addEventListener("click", () => {
+        const body = ov.querySelector("[data-msg]").value.trim();
+        if (!body) { ov.querySelector("[data-msg]").focus(); return; }   // never send an empty one
+        close({ body: body });
+      });
+      ov.querySelector("[data-msg]").focus();
+    });
+  }
+
   /** Ask for the extra input a cadence change needs. `needs` comes from the core's plan, so
    *  the dialog and the API call can't drift apart. */
   function askFor(needs, p) {
@@ -463,11 +550,11 @@
    *
    *  The plan (which endpoint, what payload, whether a second write is needed) comes from
    *  followups-core so it is tested; this function only performs it. */
-  async function moveTo(id, colId) {
+  async function moveTo(id, action) {
     const p = ALL.find((x) => x.proposal_id === id);
     if (!p) return;
-    const plan = B.movePlan(p, colId, TW.bizToday());
-    if (!plan) return;                       // refused — customer-owned, or already there
+    const plan = B.actionPlan(p, action, TW.bizToday());
+    if (!plan) return;                       // refused — not ours to change, or already there
     const extra = await askFor(plan.needs, p);
     if (extra === null) return;
     $("alert").textContent = "";
@@ -490,6 +577,38 @@
       await load();
     } catch (err) {
       $("alert").textContent = "Couldn't change that: " + (err.message || "try again");
+    }
+  }
+
+  /** Email the customer, and log it as outreach in one go.
+   *
+   *  Reuses the same endpoint the Customer Portal CRM chat uses, so a follow-up sent from here
+   *  lands in the same thread the customer already replies into — rather than becoming a second,
+   *  invisible channel. The `staff_email` log is what takes it off tomorrow's digest; without it
+   *  the estimator would send a chase and still be told to chase.
+   */
+  async function sendFollowup(id) {
+    const p = ALL.find((x) => x.proposal_id === id);
+    if (!p) return;
+    const out = await sendDialog(p);
+    if (!out) return;
+    $("alert").textContent = "";
+    const post = (path, body) => api("/api/portal/proposal/" + encodeURIComponent(id) + path,
+      { method: "POST", body: JSON.stringify(body) });
+    try {
+      const r = await post("/reply", { body: out.body });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      // The email is away. A failure to LOG it must not read as a failure to send — the customer
+      // already has it — so this is reported separately and does not undo anything.
+      try {
+        await post("/followups", { kind: "email", note: out.body.slice(0, 300) });
+      } catch (logErr) {
+        $("alert").textContent = "Sent, but couldn't log it — it may still show as needing a chase.";
+      }
+      await load();
+    } catch (err) {
+      $("alert").textContent = "Couldn't send that: " + (err.message || "try again");
     }
   }
 
@@ -525,12 +644,13 @@
     // Board: the per-card "→ Paused / → Chasing / → Closed lost" buttons. These are the
     // KEYBOARD path for the drag — a drag-only control would be the only thing on this page
     // you couldn't reach without a mouse.
-    const mv = e.target.closest("[data-move]");
-    if (mv) { e.stopPropagation(); moveTo(mv.dataset.id, mv.dataset.move); return; }
+    const mv = e.target.closest("[data-do]");
+    if (mv) { e.stopPropagation(); moveTo(mv.dataset.id, mv.dataset.do); return; }
 
     const holder = e.target.closest("tr[data-id], .fu-card[data-id]");
     if (!holder) return;
     const id = holder.dataset.id;
+    if (e.target.closest('[data-act="send"]')) { e.stopPropagation(); sendFollowup(id); return; }
     if (e.target.closest('[data-act="log"]')) { e.stopPropagation(); logFollowup(id); return; }
     // Anything else on the row opens the full drawer, where the automation toggle,
     // the history and the chat live. This page is the list; that is the detail.
@@ -575,7 +695,7 @@
     const p = ALL.find((x) => x.proposal_id === DRAG_ID);
     // Ask the core, not the DOM: a customer-owned column has no data-drop at all, and an
     // approved card can't be closed-lost, so neither should light up as droppable.
-    if (!p || !B.canMove(p, col.dataset.col, TW.bizToday())) return;
+    if (!p || !B.canMove(p, col.dataset.col, TW.bizToday())) return;   // only Closed lost
     e.preventDefault();                       // preventDefault IS what permits the drop
     try { e.dataTransfer.dropEffect = "move"; } catch {}
     document.querySelectorAll(".fu-col.over").forEach((c) => c.classList.remove("over"));
@@ -590,6 +710,9 @@
     DRAGGING = false;
     DRAG_ID = null;
     col.classList.remove("over");
+    // The column id doubles as the action id, and only for "lost" — the sole column that is
+    // ours to set. That overlap is deliberate (see actionPlan) and pinned by the core tests:
+    // canMove has already refused every other column, so nothing else can arrive here.
     moveTo(id, col.dataset.col);
   });
 
