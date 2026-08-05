@@ -69,6 +69,7 @@ import info_sheet_writer
 import invoice_writer
 import leads
 import leads_worker
+import library
 import notifications
 import pdf_writer
 import pricing
@@ -528,6 +529,102 @@ def api_calendar_delete(event_id: str, request: Request) -> Dict[str, Any]:
     # Soft delete — a calendar is a work queue, and a destroyed bid deadline could cost a
     # job. The row keeps its deleted_at and can be brought back by hand.
     return {"ok": True, "deleted": event_id}
+
+
+# ── Item Library ──────────────────────────────────────────────────────────────
+# Materials Treadwell buys, and the assemblies built out of them. STANDALONE: nothing in the
+# intake / estimate / proposal path reads these, by instruction and by design — the shape of an
+# assembly is still being worked out, and a table the estimator depends on cannot change
+# freely. See backend/library.py.
+class LibraryItemIn(BaseModel):
+    """Loose on purpose — library.validate_item() is the single authority on what is
+    acceptable, so the rules can't drift between a Pydantic model and the writer."""
+    name: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    # `Any`, because these arrive pasted from a spreadsheet as "$85.38" and "2,875".
+    unit_cost: Optional[Any] = None
+    coverage: Optional[Any] = None
+    sku: Optional[str] = None
+    vendor: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class LibraryAssemblyIn(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    lines: Optional[Any] = None
+
+
+@app.get("/api/library/items")
+def api_library_items() -> Dict[str, Any]:
+    return {"ok": True, "items": library.list_items()}
+
+
+@app.post("/api/library/items")
+def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
+    try:
+        row = library.create_item(payload.model_dump(exclude_unset=True), _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "item": row}
+
+
+@app.patch("/api/library/items/{item_id}")
+def api_library_item_update(item_id: str, payload: LibraryItemIn) -> Dict[str, Any]:
+    try:
+        row = library.update_item(item_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        # 404 rather than a cheerful 200: the material may have been deleted in another tab,
+        # and reporting a successful write to nothing is how two people overwrite silently.
+        raise HTTPException(404, "That material no longer exists.")
+    return {"ok": True, "item": row}
+
+
+@app.delete("/api/library/items/{item_id}")
+def api_library_item_delete(item_id: str) -> Dict[str, Any]:
+    if not library.delete_item(item_id):
+        raise HTTPException(404, "That material no longer exists.")
+    # Assemblies pointing at it are left untouched on purpose: rewriting somebody else's
+    # assembly as a side effect of a delete is worse than a visible line they can repoint.
+    return {"ok": True, "deleted": item_id}
+
+
+@app.get("/api/library/assemblies")
+def api_library_assemblies() -> Dict[str, Any]:
+    return {"ok": True, "assemblies": library.list_assemblies()}
+
+
+@app.post("/api/library/assemblies")
+def api_library_assembly_create(payload: LibraryAssemblyIn, request: Request) -> Dict[str, Any]:
+    try:
+        row = library.create_assembly(payload.model_dump(exclude_unset=True),
+                                      _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "assembly": row}
+
+
+@app.patch("/api/library/assemblies/{asm_id}")
+def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn) -> Dict[str, Any]:
+    try:
+        row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        raise HTTPException(404, "That assembly no longer exists.")
+    return {"ok": True, "assembly": row}
+
+
+@app.delete("/api/library/assemblies/{asm_id}")
+def api_library_assembly_delete(asm_id: str) -> Dict[str, Any]:
+    if not library.delete_assembly(asm_id):
+        raise HTTPException(404, "That assembly no longer exists.")
+    return {"ok": True, "deleted": asm_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───

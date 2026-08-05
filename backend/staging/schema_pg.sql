@@ -108,6 +108,59 @@ create index if not exists calendar_events_project_idx
   on public.calendar_events (project_id)
   where deleted_at is null and project_id is not null;
 
+-- ── Item Library ────────────────────────────────────────────────────────
+-- Materials, and the assemblies built out of them. Standalone: nothing in the
+-- estimate/proposal path reads these. Mirrors supabase_schema.sql; see
+-- backend/library.py for the reasoning behind the JSONB lines and the missing FK.
+create table if not exists public.library_items (
+  id           text primary key,
+  name         text not null,
+  unit         text not null default 'Gal',   -- Gal / Kit / Pint / Each / … freeform
+  unit_cost    numeric(12,4),                 -- four places: $85.3827 back-solves from the sheet
+  coverage     numeric(12,3),                 -- SF one unit covers; a line may override it
+  category     text,
+  sku          text,
+  vendor       text,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz                    -- soft delete: a hand-typed price list
+);
+create index if not exists library_items_live_name_idx
+  on public.library_items (name) where deleted_at is null;
+create index if not exists library_items_category_idx
+  on public.library_items (category) where deleted_at is null;
+
+create table if not exists public.library_assemblies (
+  id           text primary key,
+  name         text not null,
+  unit         text not null default 'SF',
+  -- [{role, item_id, coverage, note}]. item_id is deliberately NOT an FK: a material must stay
+  -- deletable while an assembly still references it, and the pricing layer reports that line
+  -- as broken rather than the database forbidding the delete or cascading a silent rewrite.
+  lines        jsonb not null default '[]'::jsonb,
+  category     text,
+  description  text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_assemblies_live_name_idx
+  on public.library_assemblies (name) where deleted_at is null;
+
+-- Granted explicitly, NOT left to the blanket grant below.
+--
+-- Measured on staging 2026-08-05: creating these two tables and re-running the blanket
+-- `grant all on all tables` left service_role with ZERO privileges on them — that statement
+-- only covers tables that exist when it runs, and the `alter default privileges` line did not
+-- cover them either. PostgREST connects as service_role, so the tables read fine and every
+-- write failed. A per-table grant beside the table it belongs to cannot be missed when the
+-- next table is added.
+grant select, insert, update, delete on public.library_items to service_role;
+grant select, insert, update, delete on public.library_assemblies to service_role;
+
 -- ── Grants so PostgREST (service_role) can read/write ───────────────────
 grant usage on schema public to service_role;
 grant all on all tables in schema public to service_role;
