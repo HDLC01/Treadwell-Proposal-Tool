@@ -23,6 +23,12 @@
     .logo { width:54px; height:34px; display:block; flex:none; }
     h1 { font-size:20px; margin:0; flex:1; }
     .wrap { max-width:1320px; margin:0 auto; }
+    /* Beta marker. Deliberately beside the title rather than a dismissible banner: this page
+       is being trialled, and somebody arriving from the sidebar in three weeks should still be
+       told before they rely on a number it produced. */
+    .beta { font:700 10px system-ui; letter-spacing:.07em; text-transform:uppercase;
+      background:var(--red-tint); color:var(--red-dark); border:1px solid rgba(200,16,46,.28);
+      border-radius:999px; padding:4px 10px; white-space:nowrap; cursor:help; }
     .hint { color:var(--ink-v); font-size:13px; margin:0 auto 16px; max-width:74ch; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
     .alert:empty { display:none; }
@@ -118,6 +124,7 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Item Library</h1>
+    <span class="beta" title="Being tested. The shape of an assembly may still change, and nothing here feeds an estimate or a proposal yet.">Beta test</span>
   </div>
   <p class="hint">Materials you buy, and the assemblies you build out of them. Change a
     material's cost once and every assembly using it reprices. Nothing here feeds the estimate

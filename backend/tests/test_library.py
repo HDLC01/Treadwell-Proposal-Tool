@@ -389,3 +389,17 @@ def test_both_schema_files_declare_the_tables():
         sql = path.read_text(encoding="utf-8")
         for table in ("library_items", "library_assemblies"):
             assert ("create table if not exists public.%s" % table) in sql, (path.name, table)
+
+
+def test_the_page_and_the_sidebar_both_say_it_is_a_beta():
+    """Hanz asked for it labelled. Two places, because they answer different moments: the
+    sidebar tells you before you click, and the page tells you while you are typing numbers
+    into it three weeks later."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2] / "frontend"
+    html = (root / "library.html").read_text(encoding="utf-8")
+    auth = (root / "auth.js").read_text(encoding="utf-8")
+    assert 'class="beta"' in html and "Beta test" in html
+    assert ".beta {" in html, "the marker has no style and would inherit body text"
+    assert 'navItem("/library.html", "\U0001f9f1", "Item Library", "BETA")' in auth
+    assert ".tw-nav-tag{" in auth, "the sidebar tag has no style"
