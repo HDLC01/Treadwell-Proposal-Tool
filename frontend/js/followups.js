@@ -326,7 +326,7 @@
         <div class="fu-chead"><span class="fu-dot" style="background:${c.dot}"></span>
           <b>${esc(c.label)}</b><span class="n">${load.count}</span>${
           load.value ? `<span class="v">${money(load.value)}</span>` : ""}</div>
-        <p class="fu-csub">${c.ours ? "" : '<span class="fu-lock">Customer moves this</span> '}${
+        <p class="fu-csub">${c.ours ? '<span class="fu-lock">You set this</span> ' : ""}${
           esc(c.sub)}</p>
         ${items.map((p) => cardHtml(p, today, nowMs)).join("")}
       </div>`;
@@ -335,7 +335,7 @@
         <span><i style="background:#b3261e"></i>Nobody has chased this</span>
         <span><i style="background:#9a5b00"></i>Going quiet</span>
         <span><i style="background:#4a6b8a"></i>On cadence</span>
-        <span><span class="fu-lock">Customer moves this</span> not a drop target</span>
+        <span><span class="fu-lock">You set this</span> the only column you can drag into</span>
         <span>Column header shows count · total value</span>
       </div>`;
   }
