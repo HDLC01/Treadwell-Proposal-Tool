@@ -1377,19 +1377,63 @@ def _resize_txbx(txbx, w_pt=None, h_pt=None) -> int:
     return wrote
 
 
-def _sanitize_box_overrides(raw) -> dict:
-    """`{"<box id>": {h_pt?, w_pt?}}`, coerced and clamped. Never raises.
+# The printable area of Kyle's templates: US Letter with 1in margins, so 432 x 648pt. Used when
+# no document is to hand; `_apply_box_overrides` measures the real one instead.
+_DEFAULT_MAX_BOX_PT = (432.0, 648.0)
+_MIN_BOX_PT = 12.0
+
+
+def box_size_limits(d: Document) -> tuple:
+    """The biggest a text box may be made, `(w_pt, h_pt)` — the printable area of the page.
+
+    A box taller than the printable height cannot fit from ANY starting position, so accepting one
+    guarantees text outside the margins. The old ceiling was 1600pt, about two pages. Measured in
+    the container against the real LibreOffice render, filling one box with 60 numbered lines:
+
+        design 184pt   7/60 lines   lowest text 134pt
+        limit  648pt  46/60 lines   lowest text 684pt   inside the 720pt bottom margin
+               700pt  50/60 lines   lowest text 740pt   into the margin
+              1600pt  56/60 lines   lowest text 789pt   3pt from the sheet edge, 4 lines GONE
+
+    So the old ceiling did not push text off the sheet — LibreOffice clips it instead, which is
+    worse: the last lines vanish silently and what survives prints into the unprintable margin.
+    Nothing errors, and the customer receives a proposal missing text.
+
+    This bounds the impossible, not every overflow: `wp:positionV` in these templates is
+    `relativeFrom="paragraph"`, so where a box actually lands depends on the text flowing above
+    it, which needs a layout engine rather than a geometry read. A box anchored low can still be
+    given a height that fits the page and overflows anyway. Catching that is the render check's
+    job, not this function's.
+    """
+    try:
+        sec = d.sections[0]
+        w = float(sec.page_width.pt) - float(sec.left_margin.pt) - float(sec.right_margin.pt)
+        h = float(sec.page_height.pt) - float(sec.top_margin.pt) - float(sec.bottom_margin.pt)
+    except Exception:  # noqa: BLE001 — a template with no usable sectPr falls back to Letter
+        return _DEFAULT_MAX_BOX_PT
+    # A section with absurd margins would otherwise produce a limit under the minimum, which
+    # would refuse every resize on that template.
+    if not (math.isfinite(w) and math.isfinite(h)) or w <= _MIN_BOX_PT or h <= _MIN_BOX_PT:
+        return _DEFAULT_MAX_BOX_PT
+    return (w, h)
+
+
+def _sanitize_box_overrides(raw, limits=None) -> dict:
+    """`{"<box id>": {h_pt?, w_pt?}}`, coerced and bounded. Never raises.
 
     A dict keyed by id rather than a list, for the reason the paragraph-override sanitizer
     already documents: a list's positions shift, and a stale draft would then resize a
     different box than the estimator dragged.
 
-    Bounds are a page: nothing useful is under 12pt tall, and a box taller or wider than a
-    couple of pages is a corrupt draft rather than an intention.
+    Bounds are the printable area (see `box_size_limits`). Out-of-range values are REFUSED, not
+    clamped: the drag handle stops at the same limit, so anything past it arrived from a stale
+    draft or a hand-built request, and leaving the design size gives a document that still reads
+    correctly. Nothing useful is under 12pt either way.
     """
     out = {}
     if not isinstance(raw, dict):
         return out
+    max_w, max_h = limits or _DEFAULT_MAX_BOX_PT
     for key, spec in list(raw.items())[:200]:
         try:
             box_id = int(key)
@@ -1398,12 +1442,12 @@ def _sanitize_box_overrides(raw) -> dict:
         if box_id < 0 or not isinstance(spec, dict):
             continue
         one = {}
-        for field, lo, hi in (("h_pt", 12.0, 1600.0), ("w_pt", 12.0, 1200.0)):
+        for field, hi in (("h_pt", max_h), ("w_pt", max_w)):
             v = spec.get(field)
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 continue
             v = float(v)
-            if not math.isfinite(v) or not (lo <= v <= hi):
+            if not math.isfinite(v) or not (_MIN_BOX_PT <= v <= hi):
                 continue
             one[field] = v
         if one:
@@ -1420,7 +1464,9 @@ def _apply_box_overrides(d: Document, raw) -> int:
     is the entire point of the feature: a box the estimator enlarged should show its text at
     full size, not get its runs scaled to 4.5pt anyway.
     """
-    boxes = _sanitize_box_overrides(raw)
+    # Bounded by THIS template's printable area, not a constant: the fallback is Kyle's page size,
+    # and a template with different margins should be held to its own page.
+    boxes = _sanitize_box_overrides(raw, box_size_limits(d))
     if not boxes:
         return 0
     changed = 0
@@ -1643,10 +1689,16 @@ def template_geometry(d: Document) -> dict:
                letterhead — `para_index` orders them by where they anchor).
     """
     sec = d.sections[0]
+    _max_w, _max_h = box_size_limits(d)
     page = {
         "w_pt": sec.page_width.pt, "h_pt": sec.page_height.pt,
         "margin": {"top": sec.top_margin.pt, "left": sec.left_margin.pt,
                    "right": sec.right_margin.pt, "bottom": sec.bottom_margin.pt},
+        # Stated rather than left for the editor to derive, so the drag handle stops exactly where
+        # the sanitiser starts refusing. Two independent subtractions of the same margins is how
+        # a handle ends up letting somebody drag to a size the server then throws away, which
+        # reads as the drag not having worked.
+        "max_box": {"w_pt": _max_w, "h_pt": _max_h, "min_pt": _MIN_BOX_PT},
     }
     body = d.element.body
     top_ps = [c for c in body if c.tag == qn("w:p")]

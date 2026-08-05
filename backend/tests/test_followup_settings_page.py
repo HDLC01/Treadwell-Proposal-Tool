@@ -133,6 +133,57 @@ def test_the_page_says_whether_anybody_has_ever_changed_it(js):
     is the first question when the cadence surprises somebody."""
     assert "Never changed" in js
     assert "j.saved" in js
+    # Written in ONE place. The first version of this test asserted only that the two strings
+    # appeared somewhere in the file, which they did — inside load() — while save() and reset()
+    # never touched the line. It passed, and the page told a lie on staging.
+    #
+    # Counting the STRING would count the comment above showWhoChanged() that quotes it, which is
+    # how a test ends up measuring its own prose. Count the write to the element instead.
+    assert js.count('$("meta").textContent') == 1, (
+        "the audit line is written in more than one place; they will drift")
+
+
+@pytest.mark.parametrize("handler", ['$("save").addEventListener',
+                                     '$("reset").addEventListener'])
+def test_saving_or_resetting_refreshes_who_changed_it(js, handler):
+    """Found by using the page, not by the tests above.
+
+    Saving stored the edit correctly and left "Never changed — this is the cadence as shipped" on
+    screen underneath it, until somebody reloaded. That line exists to answer exactly one question
+    and was answering it wrongly at the only moment anybody had reason to look."""
+    block = js[js.index(handler):][:2400]
+    assert "showWhoChanged(j)" in block, (
+        "this path changes who last edited the cadence but does not update the line that says so")
+
+
+def test_the_audit_line_and_the_previews_refresh_together(js):
+    """Both come from the same response; refreshing one and not the other is how it broke."""
+    for handler in ('$("save").addEventListener', '$("reset").addEventListener'):
+        block = js[js.index(handler):][:2400]
+        assert "renderPreview(" in block and "showWhoChanged(" in block
+
+
+def test_the_server_owns_what_each_email_is_called(js):
+    """The refusal messages quote these names ("the “Second reminder” email needs {link}"). If the
+    page kept its own copy, a message could name a tab that does not exist."""
+    assert "LABELS[k] = j.labels[k]" in js, "the page ignores the labels the server sends"
+    # Asserting only that "j.labels" appears somewhere is not enough: disabling the block with
+    # `if (false)` left the text in the file, inside code that can never run, and the test passed.
+    # Nor is it enough to look at the NEAREST `if` — that is the inner one, which still mentions
+    # j.labels while the outer one has been switched off. Check every condition on the way in.
+    i = js.index("LABELS[k] = j.labels[k]")
+    # From the guard that opens the block to the assignment — not a fixed window, which swept in
+    # the unrelated j.tokens check next door and failed on correct code.
+    start = js.rindex("if (", 0, js.index("Object.keys(LABELS)"))
+    conditions = re.findall(r"if \(([^)]*)\)", js[start:i])
+    assert conditions, "no conditional guards the adoption at all"
+    for cond in conditions:
+        assert "j.labels" in cond, (
+            "a condition gating the labels does not depend on them (%r) — the block is "
+            "unreachable or gated on the wrong thing" % cond)
+    i = js.index("var LABELS")
+    assert "fall back" in js[max(0, i - 400):i + 200], (
+        "the local copy needs to be marked as a fallback, or it reads as the source of truth")
 
 
 def test_the_tokens_are_offered_with_an_explanation(js):
