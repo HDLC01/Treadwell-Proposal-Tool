@@ -3188,6 +3188,27 @@ def api_archive_draft(draft_id: str, payload: ArchiveIn, request: Request) -> Di
         return {"ok": False, "error": str(exc)}
 
 
+class TestFlagIn(BaseModel):
+    is_test: bool = True
+
+
+@app.post("/api/draft/{draft_id}/test")
+def api_test_flag_draft(draft_id: str, payload: TestFlagIn, request: Request) -> Dict[str, Any]:
+    """File a project as test/demo, or put it back with the real bids.
+
+    `{"is_test": true}` moves it to the Projects page's Test tab; `false` returns it to
+    Active. Both are recorded — `false` is a deliberate "this IS a real bid", which is how a
+    project whose NAME looks like a test (the page's fallback heuristic for legacy rows) gets
+    pulled back into the working list. Any signed-in user can manage the shared list, same as
+    archive."""
+    try:
+        existed = drafts.set_test_flag(draft_id, payload.is_test, _user_email(request))
+        return {"ok": True, "existed": existed, "is_test": payload.is_test}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_test_flag failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
 class AssignDraftIn(BaseModel):
     estimator_email: str = ""
 

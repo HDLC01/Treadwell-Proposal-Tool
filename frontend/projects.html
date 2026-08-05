@@ -36,6 +36,12 @@
     .info-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
     .trash-btn { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:7px; padding:7px 11px; font:600 13px system-ui; cursor:pointer; }
     .trash-btn:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
+    /* "Test?" / "✓ Test" — files a project out of the working list. Quieter than the other
+       foot actions until it is ON, because it applies to a minority of projects. */
+    .test-btn { background:transparent; color:var(--ink-v); border:1px dashed rgba(27,28,28,.22); border-radius:7px; padding:7px 10px; font:600 12.5px system-ui; cursor:pointer; opacity:.72; }
+    .test-btn:hover { opacity:1; color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
+    .test-btn.is-test { opacity:1; border-style:solid; border-color:#c9a227; background:#fdf6dd; color:#7a5c00; }
+    .test-btn[disabled] { cursor:wait; opacity:.5; }
     .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 14px; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
     /* active/inactive filter chips */

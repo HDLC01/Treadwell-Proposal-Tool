@@ -1,5 +1,6 @@
 """Shared test setup. Makes the backend importable, and bypasses the Supabase
 auth gate for tests that aren't about auth (so /api/* calls don't 401)."""
+import os
 import pathlib
 import sys
 
@@ -11,6 +12,84 @@ import supabase_client
 # Capture the REAL verifier BEFORE any test patches it (test_auth uses this to
 # exercise the genuine logic, while everything else runs with the bypass below).
 _REAL_VERIFY_TOKEN = supabase_client.verify_token
+
+
+# ── Never let the suite write to the production data store ────────────────────
+#
+# `backend/.env` sets SUPABASE_URL to the live cloud project, and `data_url()` falls back to
+# it when SUPABASE_DATA_URL is unset. `main` loads that .env on import — so simply running
+# pytest locally pointed every draft/event write at PRODUCTION. Measured on 2026-08-05: a
+# single afternoon of local runs left 637 fake `generated`/`created`/`marked_test` rows in the
+# prod events table, which is what the History page reads. Fixtures create and delete real
+# `drafts` rows there too.
+#
+# Nothing announced this. The tests passed either way, which is exactly why it went unnoticed.
+#
+# CI is unaffected (no credentials, so `get_client()` raises and store-backed tests are the
+# ones that fail loudly). This guard makes the local behaviour match that: fail fast with an
+# explanation instead of quietly polluting a live audit log.
+#
+# To run store-backed tests deliberately, point them somewhere safe:
+#   SUPABASE_DATA_URL=<staging PostgREST>   (staging keeps its data on the VPS)
+# or acknowledge the risk for one run:
+#   TW_ALLOW_PROD_DATA_WRITES=1
+_PROD_DATA_HOSTS = ("hyjowrzgrrxrbfbaxkyu.supabase.co",)
+
+
+def _resolved_data_host() -> str:
+    """The host the DATA store WILL resolve to once the app is imported.
+
+    The check has to load `backend/.env` itself. `main` is what normally loads it, and `main`
+    is imported during collection — long after pytest_configure. The first version of this
+    guard read `data_url()` straight away, got an empty string, decided everything was fine,
+    and let the run write to production anyway. It reported nothing and looked like it worked.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(pathlib.Path(__file__).resolve().parent.parent / ".env", override=True)
+    except ImportError:
+        pass
+    try:
+        url = supabase_client.data_url() or ""
+    except Exception:                       # noqa: BLE001 — unconfigured is the safe case
+        return ""
+    return url.split("//", 1)[-1].split("/", 1)[0].lower()
+
+
+# Every module that talks to the store binds the factory by name at import time
+# (`from supabase_client import get_client`), so each binding has to be closed off separately —
+# patching only `supabase_client.get_client` would leave drafts.py holding the original.
+_CLIENT_HOLDERS = ("supabase_client", "drafts", "calendar_events", "leads", "profiles")
+
+
+@pytest.fixture(autouse=True)
+def _no_prod_data_writes(monkeypatch):
+    """Make the REAL data client unreachable when it points at production.
+
+    Deliberately not a session-level refusal: most of the suite never touches the store, and
+    the store-backed tests are supposed to run against the in-memory fake (they monkeypatch
+    `get_client` themselves, which takes precedence over this). What this stops is the case
+    that actually happened — a test reaching the live client by default and writing to prod.
+
+    A test that genuinely needs a real store can set TW_ALLOW_PROD_DATA_WRITES=1.
+    """
+    if os.environ.get("TW_ALLOW_PROD_DATA_WRITES") == "1":
+        return
+    if _resolved_data_host() not in _PROD_DATA_HOSTS:
+        return
+
+    def _refuse():
+        raise RuntimeError(
+            "This test reached the REAL data client, which resolves to the PRODUCTION Supabase "
+            "project. Writing there creates and deletes real `drafts` rows and leaves fake "
+            "`events` on the History page.\n"
+            "Use the `fake_supabase` fixture (see test_archive.py) and monkeypatch "
+            "<module>.get_client, or set TW_ALLOW_PROD_DATA_WRITES=1 if you really mean it.")
+
+    for name in _CLIENT_HOLDERS:
+        mod = sys.modules.get(name)
+        if mod is not None and hasattr(mod, "get_client"):
+            monkeypatch.setattr(mod, "get_client", _refuse)
 
 
 @pytest.fixture(autouse=True)
