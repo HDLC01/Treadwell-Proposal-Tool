@@ -230,10 +230,34 @@
       <p class="fu-quiet">${chased === null ? "<b>never chased</b>"
           : "chased " + chased + "d ago"}${quiet !== null ? " · quiet " + quiet + "d" : ""}${
           due.text !== "—" ? " · next " + esc(due.text) : ""}</p>
+      ${deliveryHint(p, today)}
       ${p.reason ? `<p class="fu-why">${esc(p.reason)}</p>` : ""}
       ${mine ? `<div class="fu-acts">${moveButtons(p, today)}
         <button type="button" data-act="log" data-id="${esc(p.proposal_id)}">Log</button></div>` : ""}
     </div>`;
+  }
+
+  /** Whether the notification email got through, for a proposal nobody has opened yet.
+   *
+   *  Two very different problems look identical on a card that has sat in Sent for a week:
+   *  the customer is thinking about it, or we have the wrong address and nobody ever saw it.
+   *  A follow-up call is the right move for the first and a waste of time for the second.
+   *
+   *  Only shown while the proposal is still un-viewed, because once somebody has actually
+   *  opened the portal the question is answered and the line would be noise. Says "link
+   *  opened" rather than "seen" on purpose: the landing page serves before any login, and mail
+   *  scanners follow links, so this is evidence about the EMAIL, not about a person reading a
+   *  bid. `proposal_status` is deliberately untouched by it (see db.mark_link_clicked). */
+  function deliveryHint(p, today) {
+    const st = String((p && p.proposal_status) || "");
+    if (st !== "sent") return "";                    // already viewed/approved/lost — answered
+    if (!p.link_clicked_at) return "";
+    const d = days(p.last_link_clicked_at || p.link_clicked_at);
+    const when = d === null ? "" : (d === 0 ? " today" : " " + d + "d ago");
+    return `<p class="fu-delivered" title="Somebody followed the link in the notification email.` +
+           ` The email is getting through. It is not proof the proposal was read — this page` +
+           ` loads before anyone signs in, and mail scanners follow links too.">` +
+           `email link opened${esc(when)}</p>`;
   }
 
   /** Keyboard/click parity for the drag. A drag-only control would be the first
