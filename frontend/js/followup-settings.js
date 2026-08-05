@@ -19,6 +19,9 @@
   var $ = function (id) { return document.getElementById(id); };
   var CFG = null;                 // the settings as last loaded or saved
   var KEY = "not_viewed";         // which email is open
+  // Names to fall back on if the server does not send them. It does (`labels` on the GET), and its
+  // copy is the one the refusal messages quote, so the two can never name the same email
+  // differently — these are only here so the tabs are never blank.
   var LABELS = {
     not_viewed: "Not opened yet",
     next_steps: "After they open it",
@@ -47,6 +50,18 @@
     el.className = "alert" + (ok ? " ok" : "");
   }
 
+  // Who last changed this, and when. ONE function, because there are three ways the answer
+  // changes — first load, a save, and a reset — and for a while only the first of them updated
+  // the line. Saving then left "Never changed — this is the cadence as shipped" on screen
+  // underneath the edit that had just been stored, which is precisely the question this line
+  // exists to answer. Every response that can change it carries the same three fields.
+  function showWhoChanged(j) {
+    $("meta").textContent = j && j.saved
+      ? "Last changed " + (j.updated_at ? TW.fmtBizDate(j.updated_at) : "just now")
+        + (j.updated_by ? " by " + j.updated_by : "")
+      : "Never changed — this is the cadence as shipped";
+  }
+
   // ── load ───────────────────────────────────────────────────────────────────
   async function load() {
     try {
@@ -55,15 +70,15 @@
       if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
       CFG = j.settings;
       if (Array.isArray(j.tokens) && j.tokens.length) TOKENS = j.tokens;
+      // The server owns what each email is called, because its refusal messages quote those names.
+      if (j.labels && typeof j.labels === "object") {
+        Object.keys(LABELS).forEach(function (k) {
+          if (j.labels[k]) LABELS[k] = j.labels[k];
+        });
+      }
       $("loading").hidden = true;
       $("main").hidden = false;
-      // Saying whether this is somebody's choice or the shipped default matters: a fresh install
-      // and an edited one otherwise look identical, and "did anyone change this?" is the first
-      // question anybody asks when the cadence surprises them.
-      $("meta").textContent = j.saved
-        ? "Last changed " + (j.updated_at ? TW.fmtBizDate(j.updated_at) : "at some point")
-          + (j.updated_by ? " by " + j.updated_by : "")
-        : "Never changed — this is the cadence as shipped";
+      showWhoChanged(j);
       paintTabs();
       fillNumbers();
       fillTemplate();
@@ -243,6 +258,7 @@
       fillNumbers();
       fillTemplate();
       renderPreview(j.previews && j.previews[KEY]);
+      showWhoChanged(j);
       var after = JSON.stringify([CFG.first_nudge_hours, CFG.second_nudge_hours,
                                   CFG.recurring_hours, CFG.staff_personal_hours,
                                   CFG.max_recurring].map(Number));
@@ -277,6 +293,7 @@
       fillNumbers();
       fillTemplate();
       renderPreview(j.previews && j.previews[KEY]);
+      showWhoChanged(j);      // a reset IS a change, and it is the newest one
       say("Back to the shipped cadence.", true);
     } catch (err) {
       say("Couldn't reset that: " + (err.message || "try again"));
