@@ -190,6 +190,10 @@
       navItem("/trash.html", "🗑", "Trash") +
       '<div class="tw-section">Settings</div>' +
       navItem("/notifications.html", "✉", "Notification Sending") +
+      // The chase schedule and the wording of the four automated emails. Under Settings
+      // rather than beside Follow-ups: the board is a daily working surface, this is a
+      // thing you set once and rarely revisit.
+      navItem("/followup-settings.html", "⏲", "Follow-up cadence") +
       (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar" style="background:' +
