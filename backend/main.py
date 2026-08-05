@@ -324,6 +324,13 @@ class GenerateIn(BaseModel):
     # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
     # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
     paragraph_overrides: list = Field(default_factory=list)
+    # Proposal Review's document editor: boxes the estimator dragged taller/wider.
+    # {"<box id from /api/proposal-template geometry>": {"h_pt": <float>, "w_pt": <float>}}.
+    # A DICT keyed by id, not a list — a list's positions shift, and a stale draft would then
+    # resize a different box than the one that was dragged. Rides the SAME template_version
+    # guard as paragraph_overrides below (the ids are positions in the same template file), and
+    # is re-validated independently by proposal_writer._sanitize_box_overrides.
+    box_overrides: dict = Field(default_factory=dict)
     # The proposal template version the paragraph_overrides ids were captured
     # against (echoed from /api/proposal-template). Since annotation shifts the
     # editable-block ids, api_generate DROPS paragraph_overrides when this is
@@ -2872,11 +2879,18 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     _cur_template_version = _template_proposal_version(
         proposal_writer.pick_template(payload.work_type, payload.audience or None))
     _para_overrides = payload.paragraph_overrides
+    # box_overrides ids are positions in the same walk over the same template file, so they go
+    # stale for exactly the same reason and are dropped by the same guard. Extending this block
+    # rather than adding a second one keeps the two from drifting apart.
+    _box_overrides = payload.box_overrides
     if payload.template_version and payload.template_version != _cur_template_version:
         log.warning(
-            "Dropping %d paragraph_override(s): stale template_version %r != current %r",
-            len(_para_overrides or []), payload.template_version, _cur_template_version)
+            "Dropping %d paragraph_override(s) and %d box_override(s): "
+            "stale template_version %r != current %r",
+            len(_para_overrides or []), len(_box_overrides or {}),
+            payload.template_version, _cur_template_version)
         _para_overrides = []
+        _box_overrides = {}
 
     # Fill proposal document
     try:
@@ -2916,6 +2930,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # outside the priced/repeatable regions (see /api/proposal-template).
             # Version-guarded above (stale template_version -> dropped).
             paragraph_overrides=_sanitize_paragraph_overrides(_para_overrides),
+            box_overrides=_box_overrides,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc

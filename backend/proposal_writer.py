@@ -1230,6 +1230,208 @@ def iter_editable_blocks(d: Document):
 _ANCHOR_LINE_H_PT = 14.0
 _EMU_PER_PT = 12700.0
 
+# ── Resizing a floating text box ──────────────────────────────────────────────
+#
+# A box's size is stored in THREE places that all have to agree, in two different unit
+# systems, and which one a renderer believes depends on the renderer:
+#
+#   1. wp:extent/@cx,@cy                     — EMU, the DrawingML anchor's own size
+#   2. wps:spPr/a:xfrm/a:ext/@cx,@cy         — EMU, the shape's transform
+#   3. the mc:Fallback VML v:shape/@style    — POINTS (or inches) in a CSS-ish string
+#
+# Writing only the DrawingML pair leaves the legacy VML twin claiming the old size, and
+# which branch gets read is Word-version and LibreOffice-version dependent — so Word and
+# the customer's PDF could disagree about the same box. All three, every time.
+#
+# Two traps that cost time to find, both confirmed against
+# `GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx`:
+#
+#   * `wsp.iter(a:ext)` matches TWO elements — the real one under `a:xfrm` and a second
+#     under `a:extLst` that carries no cx/cy at all. Only the `a:xfrm` child is geometry.
+#   * VML lengths are not all in points. Box 0 reads `width:324.8pt;height:99pt` while box 1
+#     reads `width:1in;height:18pt`, so parsing has to be unit-aware. (Both agree with their
+#     DrawingML twins: 4124960 EMU = 324.8pt, 914400 EMU = 72pt = 1in.)
+#
+# Sizes are set EXPLICITLY and never by asking the renderer to autofit: project experience
+# is that LibreOffice ignores DrawingML autofit outright, which is why
+# `_shrink_overflowing_text_boxes` rewrites run sizes directly instead.
+_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_V_NS = "urn:schemas-microsoft-com:vml"
+_WPS_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+
+_VML_UNIT_PT = {"pt": 1.0, "in": 72.0, "pc": 12.0, "cm": 72.0 / 2.54,
+                "mm": 7.2 / 2.54, "px": 0.75, "": 1.0}
+
+
+def _vml_len_pt(raw):
+    """A VML length ("99pt", "1in", "324.8") to points, or None if unparseable."""
+    m = re.match(r"^\s*(-?[\d.]+)\s*([a-z%]*)\s*$", str(raw or ""), re.I)
+    if not m:
+        return None
+    try:
+        n = float(m.group(1))
+    except ValueError:
+        return None
+    factor = _VML_UNIT_PT.get(m.group(2).lower())
+    return None if factor is None else n * factor
+
+
+def _fmt_vml_pt(v):
+    """Points as VML writes them: no trailing ".0", because the templates don't."""
+    return ("%g" % round(float(v), 2)) + "pt"
+
+
+def _set_vml_size(shape, w_pt, h_pt) -> bool:
+    """Rewrite width/height in a VML @style, leaving every other declaration alone.
+
+    Order is preserved rather than rebuilt: the style also carries position, z-index and
+    visibility, and reordering those is a needless diff in a customer-facing template.
+    """
+    style = shape.get("style") or ""
+    parts = [p for p in style.split(";") if p.strip()]
+    out, seen = [], set()
+    for part in parts:
+        key = part.partition(":")[0].strip().lower()
+        if key == "width" and w_pt is not None:
+            out.append("width:" + _fmt_vml_pt(w_pt))
+            seen.add("width")
+        elif key == "height" and h_pt is not None:
+            out.append("height:" + _fmt_vml_pt(h_pt))
+            seen.add("height")
+        else:
+            out.append(part)
+    if w_pt is not None and "width" not in seen:
+        out.append("width:" + _fmt_vml_pt(w_pt))
+    if h_pt is not None and "height" not in seen:
+        out.append("height:" + _fmt_vml_pt(h_pt))
+    new = ";".join(out)
+    if new == style:
+        return False
+    shape.set("style", new)
+    return True
+
+
+def _txbx_anchor(txbx):
+    """The `wp:anchor`/`wp:inline` that positions this text box, or None."""
+    wanted = (qn("wp:anchor"), qn("wp:inline"))
+    for anc in txbx.iterancestors():
+        if anc.tag in wanted:
+            return anc
+    return None
+
+
+def _txbx_vml_twins(txbx):
+    """The VML shapes in the `mc:Fallback` branch paired with this box.
+
+    `_iter_txbx` deliberately skips Fallback content, so the twin has to be reached through
+    the shared `mc:AlternateContent` ancestor.
+    """
+    for ac in txbx.iterancestors("{%s}AlternateContent" % _MC_NS):
+        fb = ac.find("{%s}Fallback" % _MC_NS)
+        if fb is None:
+            return []
+        out = []
+        for tag in ("shape", "rect", "roundrect", "oval"):
+            out.extend(fb.iter("{%s}%s" % (_V_NS, tag)))
+        return out
+    return []
+
+
+def _resize_txbx(txbx, w_pt=None, h_pt=None) -> int:
+    """Set one text box's size everywhere it is recorded. Returns the number of sites written.
+
+    Either dimension may be None to leave it alone. Never raises: a template whose shape is
+    built differently simply gets fewer sites written, which is a box at its design size —
+    not a 500 on /api/generate.
+    """
+    wrote = 0
+    emu = lambda v: str(int(round(float(v) * _EMU_PER_PT)))   # noqa: E731
+
+    anchor = _txbx_anchor(txbx)
+    if anchor is not None:
+        ext = anchor.find(qn("wp:extent"))
+        if ext is not None:
+            if w_pt is not None:
+                ext.set("cx", emu(w_pt))
+            if h_pt is not None:
+                ext.set("cy", emu(h_pt))
+            wrote += 1
+
+    for wsp in txbx.iterancestors("{%s}wsp" % _WPS_NS):
+        # `a:xfrm/a:ext` ONLY — a bare iter() would also match the cx/cy-less a:extLst/a:ext.
+        xfrm = next(iter(wsp.iter("{%s}xfrm" % _A_NS)), None)
+        if xfrm is not None:
+            e = xfrm.find("{%s}ext" % _A_NS)
+            if e is not None:
+                if w_pt is not None:
+                    e.set("cx", emu(w_pt))
+                if h_pt is not None:
+                    e.set("cy", emu(h_pt))
+                wrote += 1
+        break
+
+    for shape in _txbx_vml_twins(txbx):
+        if _set_vml_size(shape, w_pt, h_pt):
+            wrote += 1
+
+    return wrote
+
+
+def _sanitize_box_overrides(raw) -> dict:
+    """`{"<box id>": {h_pt?, w_pt?}}`, coerced and clamped. Never raises.
+
+    A dict keyed by id rather than a list, for the reason the paragraph-override sanitizer
+    already documents: a list's positions shift, and a stale draft would then resize a
+    different box than the estimator dragged.
+
+    Bounds are a page: nothing useful is under 12pt tall, and a box taller or wider than a
+    couple of pages is a corrupt draft rather than an intention.
+    """
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, spec in list(raw.items())[:200]:
+        try:
+            box_id = int(key)
+        except (TypeError, ValueError):
+            continue
+        if box_id < 0 or not isinstance(spec, dict):
+            continue
+        one = {}
+        for field, lo, hi in (("h_pt", 12.0, 1600.0), ("w_pt", 12.0, 1200.0)):
+            v = spec.get(field)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            v = float(v)
+            if not math.isfinite(v) or not (lo <= v <= hi):
+                continue
+            one[field] = v
+        if one:
+            out[str(box_id)] = one
+    return out
+
+
+def _apply_box_overrides(d: Document, raw) -> int:
+    """Resize the boxes the estimator dragged.
+
+    MUST run before `_pad_frame_boxes`/`_shrink_overflowing_text_boxes`, because the shrink
+    re-reads `template_geometry(d)` to decide what overflows. Applying the resize first is
+    what lets the shrink stand down by itself on a box that has been made big enough — which
+    is the entire point of the feature: a box the estimator enlarged should show its text at
+    full size, not get its runs scaled to 4.5pt anyway.
+    """
+    boxes = _sanitize_box_overrides(raw)
+    if not boxes:
+        return 0
+    changed = 0
+    for idx, txbx in enumerate(_iter_txbx(d)):
+        spec = boxes.get(str(idx))
+        if not spec:
+            continue
+        if _resize_txbx(txbx, w_pt=spec.get("w_pt"), h_pt=spec.get("h_pt")):
+            changed += 1
+    return changed
+
 
 def _fmt_of_run(run: Run, para: Paragraph) -> dict:
     """Resolved character formatting for one run: the run's own font first,
@@ -1742,6 +1944,7 @@ def fill_proposal(
     tax_breakout: bool = False,
     has_options: bool = False,
     paragraph_overrides: list[Mapping[str, Any]] | None = None,
+    box_overrides: Mapping[str, Any] | None = None,
 ) -> bytes:
     """Open the matching template, substitute tokens, return docx bytes.
 
@@ -1872,6 +2075,14 @@ def fill_proposal(
     # Double spacing after the base-bid Total, before the Options section (Kyle).
     if _space_before_options(d, 2):
         log.info("Added double spacing before the PRICE Options heading")
+    # Boxes the estimator resized, FIRST — before the padding and therefore before the
+    # shrink, which re-reads template_geometry(d) to decide what overflows. Applying a
+    # resize first is what lets the shrink stand down by itself on a box that is now big
+    # enough: a box somebody enlarged precisely because its text was being cut off must show
+    # that text at full size, not get its runs scaled down anyway.
+    _resized = _apply_box_overrides(d, box_overrides)
+    if _resized:
+        log.info("Resized %d text box(es) from the estimator's box overrides", _resized)
     # Pad affected framed boxes' top inset (so the first NOTES bullet / "Base Bid"
     # clear their red borders) BEFORE the shrink, so the shrink estimate sees the
     # reduced usable height and can't push the WORK box into overflow.
