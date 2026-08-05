@@ -148,6 +148,37 @@ def set_archived(draft_id: str, archived: bool,
     return True
 
 
+def set_test_flag(draft_id: str, is_test: bool,
+                  actor_email: Optional[str] = None) -> bool:
+    """Mark a project as test/demo, or as a real customer bid.
+
+    Same posture as `set_archived`: inside the `data` blob, no migration, no `updated_at`
+    bump (filing a project as test isn't work on the estimate).
+
+    Why this exists at all: the Projects page already keeps test projects out of
+    Active/Inactive/All, but it classified them by NAME — so "Testing", "test1" and
+    "(untitled)" all read as real customer bids and cluttered Kyle's working list, while a
+    genuine bid could in principle be misfiled by the same regex. The flag is the estimator's
+    own decision and it survives a rename.
+
+    Stored as a real bool BOTH ways on purpose. `False` is not the same as absent: absent
+    means "nobody has said", so the name heuristic still gets a vote, while `False` means
+    "somebody looked at this and said it's a real bid" and must beat the heuristic. That's
+    what lets a genuinely-named project like "Test Treadwell" be pulled back into Active.
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    data["is_test"] = bool(is_test)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "marked_test" if is_test else "marked_real",
+              {"project_name": data.get("project_name"), "id": draft_id})
+    _cache_clear()
+    return True
+
+
 def set_assigned_estimator(draft_id: str, email: str,
                            actor_email: Optional[str] = None) -> bool:
     """Name the estimator who owns this project's follow-up.
@@ -255,6 +286,9 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 "work_type:data->>work_type,"
                 "deadline:data->>deadline,"
                 "archived:data->>archived,"
+                # Test/demo, as set by hand on the Projects page. Tri-state (see _tribool):
+                # absent leaves the name heuristic in charge for legacy rows.
+                "is_test:data->>is_test,"
                 # Who owns the follow-up. Persisted on the draft when staff send,
                 # so the Projects list can say who is chasing each bid without
                 # asking the portal for every row.
@@ -276,6 +310,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "work_type": r.get("work_type"),
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
+            "is_test": _tribool(r.get("is_test")),
             "owner_email": r.get("owner_email"),
             "assigned_estimator": r.get("assigned_estimator"),
             "created_at": r.get("created_at"),
@@ -418,6 +453,26 @@ def _truthy(v: Any) -> bool:
     return str(v).strip().lower() in ("true", "t", "1", "yes")
 
 
+def _tribool(v: Any) -> Optional[bool]:
+    """Like `_truthy`, but keeps "nobody has said" separate from "said no".
+
+    `data.is_test` has three meaningful states and the Projects page depends on all three:
+    absent lets the name heuristic decide, `True` forces the Test tab, `False` forces the
+    project back into Active even when its name looks like a test. Coercing absent to False
+    would silently promote every legacy project to "confirmed real bid" and switch the
+    heuristic off for the whole list."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "t", "1", "yes"):
+        return True
+    if s in ("false", "f", "0", "no"):
+        return False
+    return None                      # "null", "", or anything unrecognised = nobody has said
+
+
 def _bid_total(data: Dict[str, Any]) -> Optional[float]:
     cb = (data or {}).get("computed_bid") or {}
     fb = cb.get("full_bid") or {}
@@ -445,6 +500,7 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "audience": data.get("audience"),
         "total": _bid_total(data),
         "archived": _truthy(data.get("archived")),
+        "is_test": _tribool(data.get("is_test")),
         "lump_sum_display": data.get("lump_sum_display"),
         "owner_email": row.get("owner_email"),
         "assigned_estimator": data.get("assigned_estimator"),
