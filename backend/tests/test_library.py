@@ -349,6 +349,27 @@ def test_every_request_waits_for_the_token_in_one_place():
     assert code.count("fetch(") == 1, "a fetch outside the api() helper would skip the token wait"
 
 
+def test_pending_edits_are_merged_not_replaced():
+    """Every edit PATCHes a single field, debounced per record. If the pending body is REPLACED
+    instead of merged, editing a material's name and then its cost inside the debounce window
+    sends only the cost and the name is silently lost.
+
+    That is not hypothetical — it shipped. On staging I typed three materials with a name, unit,
+    cost and coverage each, reloaded, and found them all still called "New material" with one of
+    three costs saved. Typing a name then tabbing straight to a price is the normal way to fill
+    a row, so it would have happened to Kyle immediately."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[2]
+           / "frontend" / "js" / "library.js").read_text(encoding="utf-8")
+    code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("//"))
+    assert "pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body)" in code, (
+        "patchSoon does not merge pending fields; a multi-field edit will lose all but the last")
+    # And the buffer must be cleared when the request actually goes out, or a later edit would
+    # re-send fields that were already saved.
+    assert "delete pendingPatch[key]" in code
+    assert "JSON.stringify(payload)" in code, "the merged payload is not what gets sent"
+
+
 def test_the_sidebar_has_one_entry_and_no_duplicate_glyph():
     import pathlib
     import re

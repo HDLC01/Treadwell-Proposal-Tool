@@ -63,16 +63,27 @@
 
   // ── writes ─────────────────────────────────────────────────────────────────
   var timers = {};
-  /** PATCH one record, debounced per (kind,id,field-set) so holding a key is one write. */
-  function patchSoon(kind, id, body, after) {
+  var pendingPatch = {};
+  /** PATCH one record, debounced per record so holding a key is one write.
+   *
+   *  Pending fields are MERGED, not replaced. The first version replaced the body on each call,
+   *  and since every edit sends a single field, editing a material's name and then its cost
+   *  inside the debounce window sent only the cost — the name was silently dropped. Caught on
+   *  staging: after a reload the materials were all still called "New material" and only one of
+   *  three costs had saved. Typing a name and tabbing straight to a price is the normal way to
+   *  fill a row, so this was going to happen constantly. */
+  function patchSoon(kind, id, body) {
     var key = kind + ":" + id;
+    pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
     if (timers[key]) clearTimeout(timers[key]);
     timers[key] = setTimeout(async function () {
+      var payload = pendingPatch[key];
+      delete pendingPatch[key];
       saving("Saving…");
       try {
         var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
           { method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body) });
+            body: JSON.stringify(payload) });
         if (!r.ok) {
           var j = await r.json().catch(function () { return {}; });
           // Deliberately does NOT revert the field. Overwriting what somebody just typed while
