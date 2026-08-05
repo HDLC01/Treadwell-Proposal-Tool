@@ -172,6 +172,15 @@
       // are the daily queue, this is the look back over all of it.
       '<div class="tw-section">Analytics</div>' +
       navItem("/analytics.html", "◫", "Analytics") +
+      // Reference data, not a daily page — the materials Treadwell buys and the assemblies
+      // built out of them. Its own heading for the same reason Analytics has one: filed under
+      // Proposals it would read as a step in making one, which it deliberately is not (nothing
+      // in the estimate or proposal path reads it yet).
+      '<div class="tw-section">Library</div>' +
+      // 🧱 rather than another shaded square: ▤ already belongs to Lead Inbox, and the
+      // geometric set is low-distinction enough without two items sharing a glyph. A brick
+      // also says "materials" at a glance, which none of the squares do.
+      navItem("/library.html", "🧱", "Item Library") +
       '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
