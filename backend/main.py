@@ -879,6 +879,31 @@ def api_portal_proposal(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}", "GET")
 
 
+# ── follow-up cadence settings ────────────────────────────────────────────────
+# The portal owns the storage (it owns portal_*), so these are proxies. Any signed-in user may
+# edit, which is Hanz's call: the sign-in on THIS side is the gate, and the portal only ever sees
+# the service token.
+@app.get("/api/followup-settings")
+def api_followup_settings() -> Dict[str, Any]:
+    return _portal("/api/admin/settings/followups", "GET")
+
+
+@app.put("/api/followup-settings")
+async def api_save_followup_settings(request: Request) -> Dict[str, Any]:
+    body = await request.json()
+    payload = dict(body or {})
+    # Stamp who changed it. These settings send email to CUSTOMERS, so "who and when" has to be
+    # answerable later, and the browser must not be the thing that decides whose name goes on it.
+    payload["by"] = _user_email(request)
+    return _portal("/api/admin/settings/followups", "PUT", payload)
+
+
+@app.post("/api/followup-settings/preview")
+async def api_preview_followup_settings(request: Request) -> Dict[str, Any]:
+    body = await request.json()
+    return _portal("/api/admin/settings/followups/preview", "POST", body or {})
+
+
 @app.post("/api/portal/proposal/{proposal_id}/reply")
 async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]:
     proposal_id = _safe_id(proposal_id)
