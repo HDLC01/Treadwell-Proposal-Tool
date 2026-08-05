@@ -2616,7 +2616,10 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # dict (new fields, changed semantics) wouldn't bust a browser's cached
 # response — it would 304 and keep rendering stale blocks. BUMP THIS whenever
 # the block shape changes. v2: added `price_flat` (flush/bullet-less PRICE rows).
-_BLOCK_SCHEMA_VERSION = "3"
+# v4: added `geometry.page.max_box` (the resize limit the drag handle must stop at). Nothing
+# reads it yet, so a stale cache is harmless today — but Phase 3's handle would find the field
+# missing on any browser holding a v3 response, which is a confusing way to learn about caching.
+_BLOCK_SCHEMA_VERSION = "4"
 
 
 def _template_proposal_version(path: Path) -> str:

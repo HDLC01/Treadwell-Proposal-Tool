@@ -177,14 +177,76 @@ def test_malformed_box_overrides_never_raise_and_never_apply(raw):
 
 
 @pytest.mark.parametrize("h,kept", [
-    (12.0, True), (200.0, True), (1600.0, True),
-    (11.9, False), (0, False), (-5, False), (1601.0, False), (99999, False),
+    (12.0, True), (200.0, True), (648.0, True),
+    (11.9, False), (0, False), (-5, False), (649.0, False), (700.0, False),
+    (1600.0, False), (99999, False),
 ])
-def test_heights_outside_a_page_are_refused_rather_than_clamped(h, kept):
-    """A 4pt or 20-page box is a corrupt draft, not an intention. Refusing leaves the design
-    size, which is a document that still reads correctly."""
+def test_heights_outside_the_printable_area_are_refused_rather_than_clamped(h, kept):
+    """A 4pt box is a corrupt draft, not an intention. Refusing leaves the design size, which is
+    a document that still reads correctly.
+
+    The ceiling used to be 1600pt — about two pages. Measured in the container: at 1600pt the
+    render keeps 56 of 60 lines and puts the last one 3pt from the sheet edge. The four that do
+    not fit are silently dropped, so the customer gets a proposal missing text and nothing
+    anywhere reports a problem."""
     got = pw._sanitize_box_overrides({"0": {"h_pt": h}})
     assert ("0" in got) is kept
+
+
+def test_a_box_may_not_be_made_taller_than_the_page_can_print():
+    """The bug this closes: 700pt was accepted and put text past the bottom edge."""
+    d = docx.Document(str(GC_RESINOUS))
+    assert pw._apply_box_overrides(d, {"0": {"h_pt": 700.0}}) == 0, (
+        "a height the page cannot print was applied anyway")
+
+
+@pytest.mark.parametrize("path", sorted(TEMPLATES.rglob("*.docx")))
+def test_no_template_ships_a_box_bigger_than_the_limit(path):
+    """If any design box exceeded the printable area, the new ceiling would forbid resizing it at
+    all — a fix that broke the feature for that template. Measured: the largest is 424x222."""
+    d = docx.Document(str(path))
+    max_w, max_h = pw.box_size_limits(d)
+    for i, tb in enumerate(pw._iter_txbx(d)):
+        anc = pw._txbx_anchor(tb)
+        ext = None if anc is None else anc.find(pw.qn("wp:extent"))
+        if ext is None:
+            continue
+        w = float(ext.get("cx") or 0) / 12700.0
+        h = float(ext.get("cy") or 0) / 12700.0
+        assert w <= max_w and h <= max_h, (
+            "box %d in %s is %.0fx%.0f, past its own page limit of %.0fx%.0f"
+            % (i, path.name, w, h, max_w, max_h))
+
+
+def test_the_limit_is_the_printable_area_of_the_template_it_is_given():
+    """Not a constant: a template with different margins is held to its own page."""
+    d = docx.Document(str(GC_RESINOUS))
+    sec = d.sections[0]
+    max_w, max_h = pw.box_size_limits(d)
+    assert max_h == pytest.approx(sec.page_height.pt - sec.top_margin.pt - sec.bottom_margin.pt)
+    assert max_w == pytest.approx(sec.page_width.pt - sec.left_margin.pt - sec.right_margin.pt)
+    assert (max_w, max_h) == pytest.approx((432.0, 648.0)), "Kyle's templates are Letter, 1in"
+
+
+def test_a_template_with_no_usable_page_falls_back_instead_of_refusing_everything():
+    """Absurd margins would otherwise compute a limit below the 12pt minimum, which would refuse
+    every resize on that template rather than bound it."""
+    class _Fake:
+        sections = []
+    assert pw.box_size_limits(_Fake()) == (432.0, 648.0)
+
+
+def test_the_editor_is_told_the_limit_rather_than_deriving_it():
+    """Two independent subtractions of the same margins is how a drag handle ends up letting
+    somebody drag to a size the server then throws away — which reads as the drag not working."""
+    d = docx.Document(str(GC_RESINOUS))
+    page = pw.template_geometry(d)["page"]
+    assert page["max_box"]["h_pt"] == pytest.approx(648.0)
+    assert page["max_box"]["w_pt"] == pytest.approx(432.0)
+    assert page["max_box"]["min_pt"] == pytest.approx(12.0)
+    got = pw._sanitize_box_overrides({"0": {"h_pt": page["max_box"]["h_pt"]}},
+                                     pw.box_size_limits(d))
+    assert "0" in got, "the limit the editor is given is itself refused by the sanitiser"
 
 
 def test_a_string_key_that_is_a_number_is_accepted():
@@ -284,13 +346,35 @@ def test_the_pdf_really_honours_an_explicit_resize():
             pytest.skip("PyMuPDF not installed")
         with fitz.open(stream=pdf, filetype="pdf") as doc:
             text = "".join(page.get_text() for page in doc)
-        return len(set(_re.findall(r"MARK\d\d", text)))
+            # How far down the paper the last surviving line sits, so the limit can be held to
+            # its actual promise rather than to a line count.
+            low, page_h = 0.0, doc[0].rect.height
+            for page in doc:
+                for x0, y0, x1, y1, word, *_ in page.get_text("words"):
+                    if word.startswith("MARK"):
+                        low = max(low, y1)
+        return len(set(_re.findall(r"MARK\d\d", text))), low, page_h
 
-    small = lines_in_pdf(None)
-    big = lines_in_pdf(700.0)
+    # The tallest the product will actually accept, not an arbitrary large number. This used to
+    # measure at 700pt, which the sanitiser now refuses for running off the paper — proving the
+    # mechanism at a size nobody can ask for would be proving the wrong thing.
+    limit = pw.box_size_limits(docx.Document(str(GC_RESINOUS)))[1]
+    small, _, _ = lines_in_pdf(None)
+    big, lowest, page_h = lines_in_pdf(limit)
     assert small < 60, ("the design-height box already fits all 60 lines, so this test cannot "
                         "distinguish honoured from ignored — it needs a box that overflows")
     assert big > small, (
-        "LibreOffice ignored the explicit resize: %d lines at design height, %d when enlarged. "
-        "If this ever fails, box resizing cannot be trusted to reach the customer's PDF."
-        % (small, big))
+        "LibreOffice ignored the explicit resize: %d lines at design height, %d at the %.0fpt "
+        "limit. If this ever fails, box resizing cannot be trusted to reach the customer's PDF."
+        % (small, big, limit))
+    # The point of the limit: at the tallest size the product accepts, the text is still inside
+    # the printable area. Measured — 648pt puts the last line at 684pt of a 720pt margin; 700pt
+    # puts it at 740pt, into the margin; 1600pt at 789pt, with four lines dropped altogether.
+    #
+    # Asserting merely "on the paper" would pass at all three, because LibreOffice clips rather
+    # than spilling. That is the assertion I first wrote, and it would not have caught the bug
+    # this limit exists for.
+    bottom = page_h - docx.Document(str(GC_RESINOUS)).sections[0].bottom_margin.pt
+    assert lowest <= bottom, (
+        "at the permitted maximum the last line sits %.0fpt down, past the %.0fpt bottom margin "
+        "— the limit does not keep the box inside the printable area" % (lowest, bottom))
