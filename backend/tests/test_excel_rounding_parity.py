@@ -68,9 +68,26 @@ def test_the_builtins_are_unregistered_first(js):
 def test_the_value_is_snapped_before_rounding_and_after_scaling(js):
     """Scaling by a power of ten to honour the `places` argument reintroduces exactly the noise
     being removed, so the snap has to happen twice."""
-    i = js.index("roundup = function")
-    block = js[i:i + 600]
+    # Matches the class-method form. It was `roundup = function`, from the prototype-based
+    # version that could not be instantiated at all.
+    i = js.index("roundup(ast, state)")
+    block = js[i:i + 700]
     assert block.count("snap(") >= 2, "only one snap; the places argument reintroduces the noise"
+
+
+def test_the_plugin_is_a_class_and_not_a_prototype_chain(js):
+    """HyperFormula's FunctionPlugin is an ES class, and an ES class cannot be invoked without
+    `new`. The prototype form threw inside buildEmpty(), so Estimate Review, the Info Sheet
+    editor and the polish page would all have failed to OPEN — worse than the rounding bug being
+    fixed. Only a browser caught it; these source tests could not."""
+    # Comments stripped: the file explains the bug by QUOTING the broken form, so a raw grep
+    # matches its own prose. That has now caught me out three times in this file's tests.
+    code = "\n".join(l for l in js.splitlines() if not l.strip().startswith("//"))
+    assert re.search(r'class\s+ExcelRounding\s+extends\s+Plugin', code), (
+        "the plugin is not a real class; HyperFormula cannot instantiate it")
+    assert "Plugin.apply(this" not in code, (
+        "calling an ES class constructor as a function throws when the engine is built")
+    assert "Object.create(Plugin.prototype)" not in code
 
 
 def test_twelve_significant_digits(js):
