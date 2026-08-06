@@ -158,13 +158,29 @@ def test_the_page_exists_and_boots_like_the_others():
     assert "<script>" not in html.replace("<script src", "<script-src")
 
 
-def test_it_is_in_the_sidebar_under_proposals():
+def test_the_board_and_its_cadence_share_one_sidebar_section():
+    """Hanz, 2026-08-06: chasing is its own job, so it gets its own heading.
+
+    The board was under Proposals and the cadence under Settings, which put the two halves of one
+    task at opposite ends of the sidebar - and hid the wording of four recurring customer emails
+    behind a heading nobody opens twice a year."""
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    # auth.js builds the nav with single-quoted strings.
-    i = auth.index("tw-section\">Proposals")
-    j = auth.index("tw-section\">Analytics", i)
+    i = auth.index("tw-section\">Follow-ups")
+    j = auth.index("tw-section\">", i + 10)              # the heading after it
     section = auth[i:j]
-    assert "/followups.html" in section, "the nav entry is not in the Proposals section"
+    assert "/followups.html" in section, "the board is not in the Follow-ups section"
+    assert "/followup-settings.html" in section, "the cadence is not in the Follow-ups section"
+    assert section.index("/followups.html") < section.index("/followup-settings.html"), (
+        "the daily board should come before the thing you set once")
+
+
+def test_neither_follow_up_page_is_left_behind_in_its_old_section():
+    """A move that copies rather than moves leaves the same page in two places."""
+    auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    assert auth.count('navItem("/followups.html"') == 1
+    assert auth.count('navItem("/followup-settings.html"') == 1
+    settings = auth[auth.index("tw-section\">Settings"):]
+    assert "/followup-settings.html" not in settings, "the cadence is still under Settings too"
 
 
 def test_the_page_reads_the_feed_and_nothing_else():
@@ -232,7 +248,10 @@ def test_a_drag_changes_the_cadence_not_just_the_label():
     js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
     i = js.index("async function moveTo(")
     block = js[i:i + 1800]
-    assert "/status" in block and "B.movePlan(" in block
+    # `actionPlan`, not `movePlan`: Pause and Resume stopped being columns when the board moved
+    # to customer-journey categories, so the plan is keyed on an ACTION now. The behaviour it
+    # guards is unchanged — a real status write, not a relabel.
+    assert "/status" in block and "B.actionPlan(" in block
     assert "enable_automation" in block, (
         "the two-write resume is gone — resume_followups() does not re-enable automation, so "
         "a paused+disabled card would land in Chasing with nothing sending")
@@ -242,8 +261,10 @@ def test_the_board_has_a_keyboard_path():
     """A drag-only control would be the only thing on this page you cannot reach without a
     mouse; every row already has tabindex + Enter."""
     js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
-    assert "data-move=" in js
-    i = js.index("[data-move]")
+    # `data-do` (an action) rather than `data-move` (a column): with one axis of columns, Pause
+    # and Resume have no column to move to, so the buttons carry actions.
+    assert "data-do=" in js
+    i = js.index("[data-do]")
     assert "moveTo(" in js[i:i + 200]
 
 
@@ -278,7 +299,7 @@ def test_a_board_card_is_not_a_button_element():
     above could see it, because every string in the file was correct."""
     js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
     i = js.index("function cardHtml(")
-    block = js[i:js.index("function moveButtons(")]
+    block = js[i:js.index("function autoBadge(")]
     assert '<div class="fu-card' in block, "the card wrapper is no longer a div"
     assert '`<button class="fu-card' not in block and '"button" : "div"' not in block, (
         "a board card is being rendered as a <button> again — it cannot legally contain the "
@@ -298,3 +319,82 @@ def test_the_board_card_can_be_activated_from_the_keyboard():
     assert 'addEventListener("keydown"' in around, "the card selector is not in a keydown handler"
     assert '"Enter"' in around and '" "' in around, "Enter/Space are not both handled"
     assert "card.click()" in around, "the handler does not actually activate the card"
+
+
+# ── sending, versus merely logging ────────────────────────────────────────────
+def test_the_board_can_actually_email_the_customer():
+    """The gap Hanz found: the page that tells you who needs chasing had no way to chase them.
+    "Log" records a call made OUTSIDE the system and sends nothing, which is easy to mistake for
+    the action itself — so sending meant leaving for the Customer Portal CRM."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    assert 'data-act="send"' in js, "no send control on the board"
+    i = js.index("async function sendFollowup(")
+    block = js[i:i + 1600]
+    assert '"/reply"' in block, "sending must post to the reply endpoint, not merely log"
+
+
+def test_sending_reuses_the_thread_the_customer_already_replies_into():
+    """The same endpoint the Customer Portal CRM chat uses. A separate channel would make a
+    follow-up invisible in the conversation the customer answers."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    portal = (FRONTEND / "js" / "portal.js").read_text(encoding="utf-8")
+    assert "/reply" in js and "/reply" in portal
+
+
+def test_a_sent_follow_up_is_also_logged_so_the_digest_stops_nagging():
+    """Without the log the estimator would send a chase and still be told tomorrow to chase."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("async function sendFollowup(")
+    block = js[i:i + 1600]
+    assert '"/followups"' in block and '"email"' in block
+
+
+def test_a_logging_failure_does_not_read_as_a_failure_to_send():
+    """The customer already has the email by then. Reporting "couldn't send" would be false and
+    would invite a second one."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("async function sendFollowup(")
+    block = js[i:i + 1600]
+    assert "Sent, but couldn't log it" in block
+
+
+def test_an_empty_follow_up_is_never_sent():
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function sendDialog(")
+    block = js[i:i + 2200]
+    assert "if (!body)" in block, "an empty message could be emailed to a customer"
+
+
+def test_enter_does_not_send():
+    """This one leaves the building. Enter in a textarea should make a new line, and a stray
+    keystroke must not email a customer a half-written sentence — unlike the log dialog, where
+    Enter-to-submit is harmless."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function sendDialog(")
+    block = js[i:i + 2200]
+    onkey = block[block.index("const onKey"):block.index("document.addEventListener(\"keydown\"")]
+    # Strip comments first. The handler's own comment explains why Enter is absent, and matching
+    # that would be a test failing on its own documentation rather than on the product — the same
+    # mistake that made the earlier wording guard useless.
+    code = "\n".join(l for l in onkey.split("\n") if not l.strip().startswith("//"))
+    assert "Escape" in code
+    assert "Enter" not in code, "Enter-to-send on a customer-facing message"
+
+
+def test_sending_is_not_offered_on_a_decided_proposal():
+    """Nothing to chase once it is approved or lost, and offering it invites emailing somebody
+    about a decision they already made."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    i = js.index("function sendButton(")
+    block = js[i:i + 600]
+    assert 'colId === "approved"' in block and 'colId === "lost"' in block
+
+
+def test_the_two_buttons_cannot_be_confused():
+    """They sit a keystroke apart and have very different consequences, so the labels and the
+    tooltips have to make the difference unmissable — and the sending one is the emphasised one."""
+    js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "followups.html").read_text(encoding="utf-8")
+    assert "Log a call" in js, "the log button still reads as the generic action"
+    assert "Does NOT email the customer" in js, "the log button does not say what it will not do"
+    assert "go-send" in js and ".go-send" in css, "the sending button carries no emphasis"

@@ -212,3 +212,66 @@ create index if not exists calendar_events_project_idx
 -- the service-role key.
 alter table public.calendar_events enable row level security;
 grant select, insert, update, delete on public.calendar_events to service_role;
+
+-- ── Item Library ──────────────────────────────────────────────────────────
+-- Materials Treadwell buys, and the assemblies built out of them. STANDALONE: nothing in the
+-- intake / estimate / proposal path reads these tables. See backend/library.py for why.
+create table if not exists public.library_items (
+  id           text primary key,
+  name         text not null,
+  category     text,
+  -- Freeform. Kyle buys by Gal, Kit, Pint, Quart, Each, Bag, Roll — and the next product will
+  -- use a unit nobody has thought of yet. A check constraint would block it.
+  unit         text not null default 'Gal',
+  -- FOUR decimal places, not two. Kyle's per-gallon prices back-solve to $85.3827 and
+  -- $79.7574; holding them at two cents drifts by dollars over a large floor.
+  unit_cost    numeric(12,4),
+  -- Square feet one unit covers. The default a line inherits; a line may override it, because
+  -- the same product is used at different coverages in different systems.
+  coverage     numeric(12,3),
+  sku          text,
+  vendor       text,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  -- Soft delete, as everywhere else here. A price list is typed by hand and every other
+  -- destructive action in this tool is recoverable.
+  deleted_at   timestamptz
+);
+-- The library's only real query: live materials in name order.
+create index if not exists library_items_live_name_idx
+  on public.library_items (name) where deleted_at is null;
+create index if not exists library_items_category_idx
+  on public.library_items (category) where deleted_at is null;
+
+create table if not exists public.library_assemblies (
+  id           text primary key,
+  name         text not null,
+  category     text,
+  description  text,
+  -- What the assembly's price is expressed per — SF for a floor system.
+  unit         text not null default 'SF',
+  -- [{role, item_id, coverage, note}], ordered. JSONB rather than a third table because the
+  -- lines are always read and written as a whole and never queried across assemblies — the
+  -- same call made for drafts.paragraph_overrides.
+  --
+  -- `item_id` is NOT a foreign key on purpose. A material has to be deletable even while an
+  -- assembly still points at it; the pricing layer reports such a line as broken and excludes
+  -- it. An FK would instead refuse the delete forever, and a cascade would silently rewrite
+  -- somebody else's assembly.
+  lines        jsonb not null default '[]'::jsonb,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_assemblies_live_name_idx
+  on public.library_assemblies (name) where deleted_at is null;
+
+-- Same posture as drafts/events/calendar_events: RLS on, no policies here; the proposal tool
+-- holds the service-role key.
+alter table public.library_items enable row level security;
+alter table public.library_assemblies enable row level security;
+grant select, insert, update, delete on public.library_items to service_role;
+grant select, insert, update, delete on public.library_assemblies to service_role;

@@ -68,22 +68,38 @@
       try { return sessionStorage.getItem(FILTER_KEY) || "active"; } catch { return "active"; }
     })();
 
-    // Test/demo projects are segregated into their OWN "Test" tab and kept OUT
-    // of Active / Inactive / All, so the working list only shows real customer
-    // bids. Classified by name: anything containing sample/test/verify/demo/qa/
-    // bugtest, "delete me", or starting with "zz". Rename a project to move it
-    // in or out of the Test bucket.
-    function isTest(p) {
+    // Test/demo projects are segregated into their OWN "Test" tab and kept OUT of Active /
+    // Inactive / All, so the working list only shows real customer bids.
+    //
+    // The estimator's own decision comes first: the ✓/Test button on each card writes
+    // `is_test` on the project, and it wins in BOTH directions. `false` matters as much as
+    // `true` — it means somebody looked and said "this is a real bid", which is what pulls a
+    // project named "Test Treadwell" back into Active.
+    //
+    // Absent (legacy rows, and anything nobody has filed yet) falls back to the name: sample /
+    // test / verify / demo / qa / bugtest, "delete me", or a name starting "zz". The heuristic
+    // is deliberately narrow and stays narrow — widening it risks misfiling real bids, and
+    // "demo" inside "demolition" is a live hazard in a construction tool. Names it misses
+    // ("Testing", "test1", "(untitled)") are what the button is for.
+    function nameLooksLikeTest(p) {
       const n = String((p && p.project_name) || "");
       return /\b(sample|test|verify|demo|qa|bugtest)\b/i.test(n)
           || /delete me/i.test(n)
           || /^\s*zz/i.test(n);
     }
+    function isTest(p) {
+      if (p && typeof p.is_test === "boolean") return p.is_test;   // filed by hand, either way
+      return nameLooksLikeTest(p);
+    }
+    // ONE definition of "the real bids", used by both the grid and the chip counts. They were
+    // filtered separately before, which let the number on a tab disagree with what the tab
+    // actually showed.
+    function realOnly(list) { return list.filter(p => !isTest(p)); }
     function isActive(p)   { return !p.archived; }
     function isInactive(p) { return !!p.archived; }
     function applyFilter(list) {
       if (CURRENT_FILTER === "test") return list.filter(isTest);
-      const real = list.filter(p => !isTest(p));   // test projects never show in active/inactive/all
+      const real = realOnly(list);            // test projects never show in active/inactive/all
       if (CURRENT_FILTER === "inactive") return real.filter(isInactive);
       if (CURRENT_FILTER === "all")      return real;
       return real.filter(isActive);  // "active"
@@ -157,7 +173,7 @@
 
     function renderChips() {
       const f = document.getElementById("filters");
-      const real = ALL_PROJECTS.filter(p => !isTest(p));   // Active/Inactive/All count real bids only
+      const real = realOnly(ALL_PROJECTS);   // Active/Inactive/All count real bids only
       const nActive = real.filter(isActive).length;
       const nInactive = real.filter(isInactive).length;
       const nTest = ALL_PROJECTS.filter(isTest).length;
@@ -352,6 +368,20 @@
       } catch (err) { alert("Couldn't assign. " + (err.message||"")); }
     }
 
+    // File a project as test, or put it back with the real bids. Shown on EVERY tab, not just
+    // Test: a project misfiled by the name heuristic has to be reachable to un-file, and it is
+    // only visible from the tab it was wrongly put in.
+    function testBtn(p) {
+      const t = isTest(p);
+      const filed = p && typeof p.is_test === "boolean";
+      const why = t
+        ? (filed ? "Filed as a test project. Click to move it back with the real bids."
+                 : "Treated as a test project because of its name. Click to say it is a real bid.")
+        : "Not a customer bid? Click to file it under Test and take it out of Active.";
+      return `<button type="button" class="test-btn${t ? " is-test" : ""}" data-test="${t ? 1 : 0}"` +
+             ` title="${why}">${t ? "✓ Test" : "Test?"}</button>`;
+    }
+
     function cardsHtml(shown) {
       return shown.map(p => `
         <div class="card" data-id="${encodeURIComponent(p.id)}">
@@ -374,6 +404,7 @@
           <div class="card-foot">
             <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
             <div class="foot-actions">
+              ${testBtn(p)}
               <button type="button" class="files-btn" title="${p.sent_revision>0?"Files, sent versions, and re-send to the customer":"Generate + download the files (no need to re-walk intake)"}">📄 Files</button>
               <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info</button>
               <!-- Already sent: say "Revise", because opening and changing it is
@@ -426,6 +457,7 @@
             <button type="button" class="status-toggle ${p.archived?"is-inactive":"is-active"}"
                     data-archived="${p.archived?1:0}"
                     title="Click to mark ${p.archived?"active":"inactive"}">${p.archived?"Inactive":"Active"}</button>
+            ${testBtn(p)}
             <button type="button" class="files-btn" title="Files + re-send">📄</button>
             <button type="button" class="info-btn" title="Project Info Sheet">📋</button>
             <button type="button" class="trash-btn" title="Move to Trash">🗑</button>
@@ -459,6 +491,8 @@
         const id = row.dataset.id;                      // already encodeURIComponent'd
         if (e.target.closest(".trash-btn")) { e.stopPropagation(); trashCard(row); return; }
         if (e.target.closest(".est-btn")) { e.stopPropagation(); assignProject(row); return; }
+        const tb = e.target.closest(".test-btn");
+        if (tb) { e.stopPropagation(); toggleTest(row, tb); return; }
         const st = e.target.closest(".status-toggle");
         if (st) { e.stopPropagation(); toggleStatus(row, st); return; }
         // files=1 → done.html generates + shows downloads without the intake walk.
@@ -492,6 +526,26 @@
         cacheProjects();
         paint();   // re-filter: a now-inactive card leaves the Active view
       } catch (err) { alert("Couldn't update status. " + (err.message||"")); btn.disabled=false; }
+    }
+
+    async function toggleTest(c, btn) {
+      const id = decodeURIComponent(c.dataset.id);
+      const next = btn.dataset.test !== "1";        // currently real → file as test
+      btn.disabled = true;
+      try {
+        const r = await fetch("/api/draft/" + encodeURIComponent(id) + "/test", {
+          method: "POST", headers: TW.authHeaders(), body: JSON.stringify({ is_test: next }),
+        });
+        const j = await r.json();
+        if (!j || j.ok === false) { alert((j&&j.error)||"Couldn't file that project."); btn.disabled=false; return; }
+        const p = ALL_PROJECTS.find(x => x.id === id);
+        // Store the BOOLEAN, both ways. Writing `false` is the point: it records "this is a
+        // real bid" and outvotes the name heuristic, so an un-filed "Test Treadwell" does not
+        // bounce straight back into the Test tab on the next paint.
+        if (p) p.is_test = next;
+        cacheProjects();
+        paint();   // re-filter + re-count: the card leaves the tab it was on
+      } catch (err) { alert("Couldn't file that project. " + (err.message||"")); btn.disabled=false; }
     }
 
     async function trashCard(c) {

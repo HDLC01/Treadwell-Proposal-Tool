@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Item Library · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Styles itself, like calendar.html and followups.html, so it needs its own opt-out:
+       without it Chromium synthesizes a dark theme and flattens the amber "material
+       removed" warning into the ordinary row background. There is no dark theme here. -->
+  <meta name="color-scheme" content="only light" />
+  <style>
+    :root { color-scheme: only light;
+      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;
+      --ink:#1b1c1c; --ink-v:#5c403f;
+      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea;
+      --line:rgba(27,28,28,.1); --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
+      font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .mono { font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1320px; margin:0 auto 4px; }
+    .logo { width:54px; height:34px; display:block; flex:none; }
+    h1 { font-size:20px; margin:0; flex:1; }
+    .wrap { max-width:1320px; margin:0 auto; }
+    /* Beta marker. Deliberately beside the title rather than a dismissible banner: this page
+       is being trialled, and somebody arriving from the sidebar in three weeks should still be
+       told before they rely on a number it produced. */
+    .beta { font:700 10px system-ui; letter-spacing:.07em; text-transform:uppercase;
+      background:var(--red-tint); color:var(--red-dark); border:1px solid rgba(200,16,46,.28);
+      border-radius:999px; padding:4px 10px; white-space:nowrap; cursor:help; }
+    .hint { color:var(--ink-v); font-size:13px; margin:0 0 16px; max-width:74ch; }
+    .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
+    .alert:empty { display:none; }
+
+    /* Items | Assemblies */
+    .views { display:flex; gap:2px; background:#efeeec; border-radius:10px; padding:2px;
+      margin:0 0 16px; width:max-content; }
+    .views button { border:0; background:none; padding:7px 16px; border-radius:8px;
+      cursor:pointer; font:600 13px system-ui; color:var(--ink-v); }
+    .views button[aria-selected="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(27,28,28,.12); }
+    .views .n { opacity:.6; margin-left:6px; font-weight:500; font-variant-numeric:tabular-nums; }
+
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05); }
+    .btn { background:var(--red); color:#fff; border:0; border-radius:8px; padding:8px 14px;
+      font:600 13px system-ui; cursor:pointer; }
+    .btn:hover { background:var(--red-dark); }
+    .btn.ghost { background:transparent; color:var(--ink-v); border:1px solid var(--line); }
+    .btn.ghost:hover { color:var(--red); border-color:var(--red); }
+    .btn.sm { padding:5px 10px; font-size:12px; }
+    .icon { background:none; border:0; cursor:pointer; color:var(--ink-v); padding:4px 6px;
+      border-radius:6px; font-size:13px; line-height:1; }
+    .icon:hover { color:var(--red); background:var(--surf-low); }
+    input, select, textarea { font:inherit; color:var(--ink); background:var(--card);
+      border:1px solid var(--line); border-radius:7px; padding:6px 9px; }
+    input:hover, select:hover { border-color:var(--red); }
+    :where(a,button,input,select,textarea,[tabindex]):focus-visible { outline:2px solid var(--red);
+      outline-offset:2px; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+
+    /* tables */
+    .tw { overflow-x:auto; }
+    table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
+    th, td { text-align:left; padding:9px 11px; border-bottom:1px solid rgba(27,28,28,.08); }
+    thead th { background:var(--surf-low); font:700 10px system-ui; letter-spacing:.06em;
+      text-transform:uppercase; color:var(--ink-v); white-space:nowrap; }
+    tbody tr:last-child td { border-bottom:0; }
+    td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+
+    /* assemblies workspace */
+    .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
+    @media (max-width:1080px){ .work { grid-template-columns:1fr; } }
+    .alist { padding:8px; display:flex; flex-direction:column; gap:3px; }
+    .arow { text-align:left; background:none; border:0; cursor:pointer; width:100%;
+      padding:9px 10px; border-radius:8px; font:inherit; color:var(--ink); display:grid; gap:2px; }
+    .arow:hover { background:var(--surf-low); }
+    .arow[aria-current="true"] { background:var(--red-tint); }
+    .arow[aria-current="true"] .an { color:var(--red-dark); }
+    .an { font-weight:600; font-size:13px; }
+    .am { font-size:11.5px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
+    .apanel { padding:18px 20px 20px; display:grid; gap:16px; }
+    .atitle { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .atitle input { font:700 16px system-ui; padding:5px 8px; flex:1; min-width:180px; }
+
+    /* The measured area is the one input every number below depends on, so it gets its own
+       band rather than becoming another column in the line table. */
+    .areaband { background:var(--surf-low); border:1px solid var(--line); border-radius:10px;
+      padding:12px 14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    .areaband label { font-weight:600; font-size:13px; }
+    .areaband input { width:116px; font-weight:600; }
+    .areaband .why { color:var(--ink-v); font-size:12px; }
+
+    .lines td { vertical-align:middle; }
+    .lines .role input { width:100%; min-width:96px; }
+    .lines select { width:100%; min-width:150px; }
+    .lines .cov input { width:82px; }
+    /* The arithmetic, shown rather than implied: a wrong coverage should be visible in the
+       working, not inferred from a total that looks slightly off. */
+    .calc { font-size:11px; color:var(--ink-v); margin-top:3px; }
+    .qty { font-weight:700; font-variant-numeric:tabular-nums; }
+    .gone { color:var(--warn); font-size:11.5px; margin-top:3px; font-weight:600; }
+    tr.broken { background:var(--warn-bg); }
+
+    .totals { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .tot { border:1px solid var(--line); border-radius:10px; padding:10px 14px;
+      background:var(--card); min-width:150px; }
+    .tot .k { font:700 9.5px system-ui; letter-spacing:.07em; text-transform:uppercase;
+      color:var(--ink-v); }
+    .tot .v { font:700 20px/1.25 system-ui; font-variant-numeric:tabular-nums; margin-top:3px; }
+    .tot.head { border-color:var(--ok); }
+    .tot.head .v { color:var(--ok); }
+
+    .empty { padding:46px 24px; text-align:center; color:var(--ink-v); }
+    .empty h3 { color:var(--ink); font-size:15px; margin:0 0 6px; }
+    .empty p { margin:0 auto 14px; max-width:48ch; font-size:13px; }
+    .foot { color:var(--ink-v); font-size:12px; margin-top:20px; max-width:76ch; }
+    [hidden] { display:none !important; }
+    .saving { color:var(--ink-v); font-size:11.5px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
+    <h1>Item Library</h1>
+    <span class="beta" title="Being tested. The shape of an assembly may still change, and nothing here feeds an estimate or a proposal yet.">Beta test</span>
+  </div>
+  <div class="wrap">
+    <p class="hint">Materials you buy, and the assemblies you build out of them. Change a
+      material's cost once and every assembly using it reprices. Nothing here feeds the estimate
+      or a proposal yet — it is a place to work the systems out.</p>
+    <p class="alert" id="alert" role="status" aria-live="polite"></p>
+
+    <div class="views" role="tablist" aria-label="Library">
+      <button type="button" role="tab" id="tab-items" aria-selected="false"
+              aria-controls="pane-items">Items<span class="n" id="n-items"></span></button>
+      <button type="button" role="tab" id="tab-asm" aria-selected="true"
+              aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
+    </div>
+
+    <!-- ── Items ──────────────────────────────────────────────────────── -->
+    <section id="pane-items" role="tabpanel" aria-labelledby="tab-items" hidden>
+      <div class="card tw">
+        <table>
+          <thead>
+            <tr>
+              <th>Material</th><th>Category</th><th>Buy by</th>
+              <th class="n">Cost / unit</th><th class="n">Coverage (SF)</th><th>Vendor</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="items-body"></tbody>
+        </table>
+        <div id="items-empty" class="empty" hidden>
+          <h3>No materials yet</h3>
+          <p>Add the products you buy — a name, what you buy it by, and what it costs. Coverage
+            is how much area one unit covers.</p>
+          <button class="btn" type="button" data-add-item>+ Add your first material</button>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <button class="btn ghost" type="button" data-add-item>+ Add material</button>
+      </div>
+      <p class="foot">Costs are held to four decimal places, because a per-gallon price rounded
+        to the cent drifts by dollars across a large floor.</p>
+    </section>
+
+    <!-- ── Assemblies ─────────────────────────────────────────────────── -->
+    <section id="pane-asm" role="tabpanel" aria-labelledby="tab-asm">
+      <div class="work">
+        <div class="card alist" id="asm-list" hidden></div>
+
+        <div class="card apanel" id="asm-panel" hidden>
+          <div class="atitle">
+            <input id="asm-name" aria-label="Assembly name" maxlength="200" />
+            <button class="icon" type="button" id="asm-del" title="Delete this assembly"
+                    aria-label="Delete this assembly">🗑</button>
+            <span class="saving" id="asm-saving"></span>
+          </div>
+
+          <div class="areaband">
+            <label for="area">Test area</label>
+            <input id="area" class="num" inputmode="decimal" value="1000" />
+            <span>SF</span>
+            <span class="why">Every quantity below is worked out from this. It is a what-if —
+              it is not saved with the assembly.</span>
+          </div>
+
+          <div class="tw">
+            <table class="lines">
+              <thead>
+                <tr>
+                  <th style="width:150px;">Role</th>
+                  <th>Material</th>
+                  <th class="n" style="width:120px;">Coverage</th>
+                  <th class="n" style="width:124px;">Quantity</th>
+                  <th class="n" style="width:132px;">Cost</th>
+                  <th style="width:34px;"></th>
+                </tr>
+              </thead>
+              <tbody id="lines-body"></tbody>
+            </table>
+          </div>
+
+          <div><button class="btn ghost sm" type="button" id="add-line">+ Add material line</button></div>
+
+          <div class="totals">
+            <div class="tot">
+              <div class="k">Material total</div>
+              <div class="v" id="t-total">—</div>
+            </div>
+            <div class="tot head">
+              <div class="k">Price per SF</div>
+              <div class="v" id="t-unit">—</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card empty" id="asm-empty" style="grid-column:1/-1;" hidden>
+          <h3 id="asm-empty-h">No assemblies yet</h3>
+          <p id="asm-empty-why"></p>
+          <button class="btn" type="button" id="asm-new">+ Build your first assembly</button>
+        </div>
+      </div>
+      <div id="asm-newrow" style="margin-top:12px;" hidden>
+        <button class="btn ghost" type="button" id="asm-new-2">+ New assembly</button>
+      </div>
+      <p class="foot">Quantities round <b>up</b> to whole units: you cannot buy 3.7 kits. That is
+        why a 2,875 SF floor takes 4 kits of a 775 SF top coat and not 3.71.</p>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <!-- The pricing maths. Must precede the page script, which reads window.TWLib as it runs. -->
+  <script src="/js/library-core.js"></script>
+  <script src="/js/library.js"></script>
+</body>
+</html>

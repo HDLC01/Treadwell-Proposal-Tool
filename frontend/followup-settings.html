@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Follow-up cadence · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Styles itself, like followups.html and library.html, so it needs its own opt-out. -->
+  <meta name="color-scheme" content="only light" />
+  <style>
+    :root { color-scheme: only light;
+      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;
+      --ink:#1b1c1c; --ink-v:#5c403f;
+      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea;
+      --line:rgba(27,28,28,.1); --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
+      font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .mono { font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1180px; margin:0 auto 4px; }
+    .logo { width:54px; height:34px; display:block; flex:none; }
+    h1 { font-size:20px; margin:0; flex:1; }
+    .wrap { max-width:1180px; margin:0 auto; }
+    .hint { color:var(--ink-v); font-size:13px; margin:0 0 18px; max-width:76ch; }
+    .alert { font-size:12.5px; margin:0 0 12px; min-height:1em; color:var(--red-dark); }
+    .alert:empty { display:none; }
+    .alert.ok { color:var(--ok); }
+
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05); padding:18px 20px; margin:0 0 16px; }
+    h2 { font-size:15px; margin:0 0 4px; }
+    .sub { color:var(--ink-v); font-size:12.5px; margin:0 0 16px; max-width:74ch; }
+
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:14px; }
+    label { display:block; font:600 12.5px system-ui; margin:0 0 5px; }
+    .fhint { color:var(--ink-v); font-size:11.5px; margin:4px 0 0; }
+    input, select, textarea { font:inherit; color:var(--ink); background:var(--card);
+      border:1px solid var(--line); border-radius:7px; padding:7px 9px; width:100%; }
+    input:hover, textarea:hover, select:hover { border-color:var(--red); }
+    :where(a,button,input,select,textarea,[tabindex]):focus-visible { outline:2px solid var(--red);
+      outline-offset:2px; }
+    input.num { text-align:right; font-variant-numeric:tabular-nums; max-width:110px; }
+    .row { display:flex; align-items:center; gap:8px; }
+    .row span { color:var(--ink-v); font-size:12.5px; }
+
+    .btn { background:var(--red); color:#fff; border:0; border-radius:8px; padding:9px 16px;
+      font:600 13px system-ui; cursor:pointer; }
+    .btn:hover { background:var(--red-dark); }
+    .btn[disabled] { opacity:.55; cursor:wait; }
+    .btn.ghost { background:transparent; color:var(--ink-v); border:1px solid var(--line); }
+    .btn.ghost:hover { color:var(--red); border-color:var(--red); }
+    .acts { display:flex; gap:10px; align-items:center; margin-top:4px; }
+    .meta { color:var(--ink-v); font-size:11.5px; margin-left:auto; }
+
+    /* emails */
+    .tabs { display:flex; gap:2px; background:#efeeec; border-radius:10px; padding:3px;
+      width:max-content; margin:0 0 14px; flex-wrap:wrap; }
+    .tabs button { border:0; background:none; padding:7px 13px; border-radius:8px; cursor:pointer;
+      font:600 12.5px system-ui; color:var(--ink-v); }
+    .tabs button[aria-selected="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(27,28,28,.12); }
+    .editor { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+    @media (max-width:940px){ .editor { grid-template-columns:1fr; } }
+    .fields { display:grid; gap:12px; }
+    textarea { min-height:190px; resize:vertical; line-height:1.5; }
+    .tokens { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .tok { font:600 11px ui-monospace,monospace; background:var(--surf-low); color:var(--ink-v);
+      border:1px solid var(--line); border-radius:5px; padding:3px 7px; cursor:pointer; }
+    .tok:hover { border-color:var(--red); color:var(--red); }
+
+    /* preview */
+    .pv { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    .pv-head { background:var(--surf-low); padding:10px 13px; border-bottom:1px solid var(--line); }
+    .pv-sub { font:600 13px system-ui; }
+    .pv-from { color:var(--ink-v); font-size:11.5px; margin-top:2px; }
+    .pv-body { padding:16px 18px; font-size:13px; line-height:1.6; }
+    .pv-body p { margin:0 0 11px; }
+    .pv-cta { display:inline-block; background:var(--red); color:#fff; border-radius:7px;
+      padding:9px 16px; font:600 12.5px system-ui; }
+    .pv-note { color:var(--ink-v); font-size:11.5px; margin:8px 0 0; }
+    .bad { background:var(--warn-bg); border:1px solid #e8d9a8; color:var(--warn);
+      border-radius:8px; padding:10px 12px; font-size:12.5px; }
+    [hidden] { display:none !important; }
+    .loading { color:var(--ink-v); text-align:center; padding:40px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
+    <h1>Follow-up cadence</h1>
+  </div>
+  <div class="wrap">
+    <p class="hint">How often a sent proposal gets chased, and what those emails say. One schedule
+      for everybody. Changes apply to every proposal already being chased, from the next check
+      onwards — nothing is re-sent retroactively.</p>
+
+    <p class="alert" id="alert" role="status" aria-live="polite"></p>
+    <div class="loading" id="loading">Loading…</div>
+
+    <div id="main" hidden>
+      <div class="card">
+        <h2>Timing</h2>
+        <p class="sub">Hours between reminders. The first number is the wait after sending, and
+          again after the customer first opens it.</p>
+        <div class="grid">
+          <div>
+            <label for="first">First reminder</label>
+            <div class="row"><input id="first" class="num" inputmode="numeric" /><span>hours</span></div>
+            <p class="fhint">After sending, and after the first view.</p>
+          </div>
+          <div>
+            <label for="second">Second reminder</label>
+            <div class="row"><input id="second" class="num" inputmode="numeric" /><span>hours</span></div>
+            <p class="fhint">Counted from the first view.</p>
+          </div>
+          <div>
+            <label for="recurring">Then every</label>
+            <div class="row"><input id="recurring" class="num" inputmode="numeric" /><span>hours</span></div>
+            <p class="fhint">72 is the "every 3 days" on the flow chart.</p>
+          </div>
+          <div>
+            <label for="staff">Tell the estimator after</label>
+            <div class="row"><input id="staff" class="num" inputmode="numeric" /><span>hours</span></div>
+            <p class="fhint">Viewed but still undecided — time to make it personal.</p>
+          </div>
+          <div>
+            <label for="maxrec">Stop after</label>
+            <div class="row"><input id="maxrec" class="num" inputmode="numeric" /><span>reminders</span></div>
+            <p class="fhint">So a proposal nobody closes doesn't nag forever.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>When emails may go out</h2>
+        <p class="sub">Customer emails are held to these hours, Central time — a reminder at 3am
+          reads as a robot and invites a spam complaint. Emails to estimators ignore this, because
+          they land in a work inbox.</p>
+        <div class="row" style="gap:10px;">
+          <span>Between</span>
+          <select id="startH" aria-label="Earliest hour"></select>
+          <span>and</span>
+          <select id="endH" aria-label="Latest hour"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>The emails</h2>
+        <p class="sub">Plain text — it gets laid into the Treadwell letterhead, so there is no way
+          to break the layout. Click a placeholder to insert it.</p>
+        <div class="tabs" role="tablist" id="tabs"></div>
+        <div class="editor">
+          <div class="fields">
+            <div>
+              <label for="t-subject">Subject line</label>
+              <input id="t-subject" maxlength="200" />
+            </div>
+            <div>
+              <label for="t-title">Heading inside the email</label>
+              <input id="t-title" maxlength="120" />
+            </div>
+            <div>
+              <label for="t-body">Message</label>
+              <textarea id="t-body" maxlength="4000"></textarea>
+              <div class="tokens" id="tokens"></div>
+            </div>
+            <div>
+              <label for="t-cta">Button label</label>
+              <input id="t-cta" maxlength="60" />
+            </div>
+          </div>
+          <div>
+            <label>What the customer gets</label>
+            <div class="pv" id="pv">
+              <div class="pv-head">
+                <div class="pv-sub" id="pv-subject"></div>
+                <div class="pv-from">Treadwell Industrial Flooring · reply goes straight to us</div>
+              </div>
+              <div class="pv-body" id="pv-body"></div>
+            </div>
+            <p class="bad" id="pv-bad" hidden></p>
+            <p class="pv-note">Sample values: Dave, Westport Retail Center. The real email uses the
+              customer's own first name and project.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="acts">
+        <button class="btn" type="button" id="save">Save cadence</button>
+        <button class="btn ghost" type="button" id="reset">Back to the shipped cadence</button>
+        <span class="meta" id="meta"></span>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/followup-settings.js"></script>
+</body>
+</html>

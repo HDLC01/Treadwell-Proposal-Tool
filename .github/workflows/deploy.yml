@@ -121,6 +121,65 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
 
+      # ── the tests CI cannot run ────────────────────────────────────────────
+      # A handful of tests need LibreOffice, because the PDF every customer receives is
+      # produced by `soffice --headless`, not by Word. Installing it on the runner would add
+      # minutes and a few hundred MB to every build, so those tests carry a skipif and were
+      # silently skipping in CI AND on the dev box — nothing was checking them anywhere.
+      #
+      # That mattered most for box resizing. Project experience is that LibreOffice ignores
+      # docx text-box autofit (which is why the writer scales run sizes directly), so whether
+      # it honours an explicit box extent was an open question — and if it didn't, an estimator
+      # would resize a box, see it change in Word, and the customer's PDF would be unchanged.
+      # Measured in this container: 7 of 60 lines reach the PDF at the template's box height,
+      # 50 of 60 once the box is enlarged. It honours it.
+      #
+      # Runs in a THROWAWAY container from the image just deployed, with the checkout mounted
+      # read-only, so a test run can never disturb the live staging service or leave packages
+      # behind in it.
+      #
+      # This step FAILS the run when the check fails or silently skips, and that is deliberate.
+      # Staging is already deployed and healthy by now, so failing does not roll anything back —
+      # what it buys is a red run somebody notices. `continue-on-error` would leave a failed
+      # step inside a green run, which is precisely the kind of thing that gets missed and is
+      # how this test came to be skipping everywhere in the first place. The one tolerated
+      # non-failure is pip being unable to reach the index; that is infrastructure, not the
+      # product, and it exits 0 with a message.
+      - name: PDF fidelity smoke (LibreOffice, in the deployed image)
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          envs: TW_IMAGE
+          script: |
+            set -euo pipefail
+            docker run --rm \
+              -e PYTHONDONTWRITEBYTECODE=1 -e HOME=/tmp \
+              -v /opt/treadwell-staging:/src:ro \
+              "$TW_IMAGE" \
+              sh -c 'pip install --quiet --no-input pytest pymupdf >/dev/null 2>&1 || {
+                       echo "could not install pytest/pymupdf - skipping"; exit 0; }
+                     cd /src/backend
+                     # test_box_resize.py is the only file with a genuinely LibreOffice-gated
+                     # test. test_pdf_export.py monkeypatches docx_to_pdf away in every case,
+                     # so running it here would imply PDF coverage that does not exist.
+                     python -m pytest tests/test_box_resize.py \
+                       -q -p no:cacheprovider -p no:warnings
+                     # Fail loudly if the one test this step exists for silently skipped -
+                     # a green "46 passed" with the PDF case skipped is the exact false
+                     # reassurance this step was added to remove.
+                     python -m pytest tests/test_box_resize.py -p no:cacheprovider \
+                       -p no:warnings -q -k pdf 2>&1 | tee /tmp/pdf.out
+                     grep -q "1 passed" /tmp/pdf.out || {
+                       echo "PDF fidelity test did not RUN (skipped or missing)"; exit 1; }'
+        env:
+          # Each ssh-action step gets its own environment, so TW_IMAGE has to be passed again
+          # here — without it `set -u` aborts on the first line and the step never runs the
+          # check it exists for.
+          TW_IMAGE: ${{ needs.build.outputs.image }}
+
   production:
     if: github.ref_name == 'main'
     needs: build
