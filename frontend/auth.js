@@ -169,6 +169,11 @@
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
       navItem("/info-sheet.html", "📋", "Info Sheet") +
+      // Step 2 for polish jobs, without the spreadsheet. Sits under Proposals rather than
+      // getting its own heading: it IS part of making a proposal, unlike the Item Library.
+      // The old Estimate Review is untouched and still reachable, so a polish bid can be run
+      // both ways and compared while this is in beta.
+      navItem("/polish-estimate.html", "◐", "Polish Estimate", "BETA") +
       // Chasing is its own job, so it gets its own heading (Hanz, 2026-08-06).
       //
       // The board was filed under Proposals and the cadence under Settings, which put the two

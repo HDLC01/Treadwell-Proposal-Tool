@@ -1069,6 +1069,16 @@ async function init() {
   const initialSheet = defaultBaseSheet();
   badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
+
+  // 4b. Offer the polish beta, on polish jobs only. It runs BESIDE this page rather than
+  //     replacing it, so the same bid can be priced both ways while it is in beta. The link
+  //     carries the draft id, or the new page would open with no project.
+  if ((state.work_type || "").toLowerCase() === "polish") {
+    const banner = document.getElementById("polish-beta-banner");
+    const link = document.getElementById("polish-beta-link");
+    if (link) link.href = TW.withDraft("/polish-estimate.html");
+    if (banner) banner.hidden = false;
+  }
   // 5. Re-render the bid bar + total bar now that EVERY sheet (incl. copied
   //    tabs) exists in HF with the saved overrides applied. Without this the
   //    chips keep their pre-HF render (blank prices) until the 1.2s delayed
