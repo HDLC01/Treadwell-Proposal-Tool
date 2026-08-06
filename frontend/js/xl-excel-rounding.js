@@ -64,29 +64,32 @@
     return Number(n.toPrecision(12));
   }
 
-  function ExcelRounding() { Plugin.apply(this, arguments); }
-  ExcelRounding.prototype = Object.create(Plugin.prototype);
-  ExcelRounding.prototype.constructor = ExcelRounding;
+  // A REAL class, extending HyperFormula's. Not a prototype chain: FunctionPlugin is an ES
+  // class, so calling it as `Plugin.apply(this, arguments)` throws "Class constructors cannot be
+  // invoked without 'new'" the moment HyperFormula instantiates the plugin -- which happens
+  // inside buildEmpty(), so the estimate screen would fail to open at all rather than merely
+  // rounding wrong. Caught by running this in a browser; the source-inspecting tests could not
+  // see it.
+  class ExcelRounding extends Plugin {
+    roundup(ast, state) {
+      return this.runFunction(ast.args, state, this.metadata("ROUNDUP"), function (value, places) {
+        var p = Math.trunc(places || 0);
+        var f = Math.pow(10, p);
+        // Snap twice: once on the incoming value, once after scaling. Scaling by a power of ten
+        // reintroduces exactly the noise we are trying to remove.
+        var s = snap(snap(value) * f);
+        return (s >= 0 ? Math.ceil(s) : Math.floor(s)) / f;
+      });
+    }
 
-  ExcelRounding.prototype.roundup = function (ast, state) {
-    var self = this;
-    return this.runFunction(ast.args, state, this.metadata("ROUNDUP"), function (value, places) {
-      var p = Math.trunc(places || 0);
-      var f = Math.pow(10, p);
-      // Snap twice: once on the incoming value, once after scaling. Scaling by a power of ten
-      // reintroduces exactly the noise we are trying to remove.
-      var s = snap(snap(value) * f);
-      return (s >= 0 ? Math.ceil(s) : Math.floor(s)) / f;
-    });
-  };
-
-  ExcelRounding.prototype.ceilingFn = function (ast, state) {
-    return this.runFunction(ast.args, state, this.metadata("CEILING"), function (value, sig) {
-      var s = (sig === undefined || sig === null) ? 1 : Number(sig);
-      if (s === 0) return 0;                   // Excel returns 0, not an error
-      return Math.ceil(snap(snap(value) / s)) * s;
-    });
-  };
+    ceilingFn(ast, state) {
+      return this.runFunction(ast.args, state, this.metadata("CEILING"), function (value, sig) {
+        var s = (sig === undefined || sig === null) ? 1 : Number(sig);
+        if (s === 0) return 0;                 // Excel returns 0, not an error
+        return Math.ceil(snap(snap(value) / s)) * s;
+      });
+    }
+  }
 
   ExcelRounding.implementedFunctions = {
     ROUNDUP: {
