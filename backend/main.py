@@ -556,6 +556,9 @@ class LibraryAssemblyIn(BaseModel):
     description: Optional[str] = None
     unit: Optional[str] = None
     lines: Optional[Any] = None
+    # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
+    # so without this two people with the same assembly open silently overwrite each other.
+    expected_updated_at: Optional[str] = None
 
 
 @app.get("/api/library/items")
@@ -615,6 +618,15 @@ def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn) -> Dict
         row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
+    except library.StaleWrite as exc:
+        # 409 with the CURRENT state attached, so the page can show what it would have destroyed
+        # instead of just refusing. Losing a few typed characters beats losing somebody's lines.
+        return JSONResponse(status_code=409, content={
+            "ok": False,
+            "error": "Somebody else changed this assembly while you had it open. "
+                     "Your screen has been refreshed with their version - re-apply your change.",
+            "assembly": exc.current,
+        })
     if row is None:
         raise HTTPException(404, "That assembly no longer exists.")
     return {"ok": True, "assembly": row}

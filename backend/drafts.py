@@ -38,15 +38,38 @@ def init_db() -> None:
 
 
 # ── drafts ────────────────────────────────────────────────────────────
+# Keys that live inside the `data` blob but are set by the SERVER, never by the form.
+#
+# The browser PUTs the whole blob on every autosave, so anything the server wrote into it is
+# erased by the next save from a tab that loaded before the write. Concretely: mark a project as
+# test, leave yesterday's tab open on it, and that tab's next autosave silently drops `is_test` —
+# `_tribool` reads the absence as "nobody has said", the name heuristic gets its vote back, and a
+# real bid named something like "Demo Only - Bldg C" vanishes from Active with nothing on screen
+# to explain it. `archived` has had the same exposure since long before this.
+#
+# Preserved here rather than at each call site: the generate path already remembered to merge
+# (main.py), the autosave path did not, and the next writer would have had to remember too.
+_SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator")
+
+
 def save_draft(draft_id: str, data: Dict[str, Any],
                owner_email: Optional[str] = None) -> Dict[str, str]:
     """Upsert a project. On first save, stamps owner_email + logs a `created`
-    event. On update, preserves owner_email/created_at. Returns {id, updated_at}."""
+    event. On update, preserves owner_email/created_at and the server-owned keys
+    listed in `_SERVER_OWNED_KEYS`. Returns {id, updated_at}."""
     sb = get_client()
     now = _now_iso()
-    existing = sb.table("drafts").select("id").eq("id", draft_id).limit(1).execute()
+    existing = sb.table("drafts").select("id,data").eq("id", draft_id).limit(1).execute()
 
     if existing.data:
+        # Carry forward what the server owns, unless this caller is deliberately setting it.
+        # `is_test` is a tri-state, so `False` is a real value and `in` is the right test — a
+        # `.get()` truthiness check would treat "somebody said this IS a real bid" as unset.
+        prior = existing.data[0].get("data") or {}
+        data = dict(data)
+        for key in _SERVER_OWNED_KEYS:
+            if key not in data and key in prior:
+                data[key] = prior[key]
         sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
     else:
         sb.table("drafts").insert({

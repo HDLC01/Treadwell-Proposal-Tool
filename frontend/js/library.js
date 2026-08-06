@@ -72,6 +72,32 @@
    *  staging: after a reload the materials were all still called "New material" and only one of
    *  three costs had saved. Typing a name and tabbing straight to a price is the normal way to
    *  fill a row, so this was going to happen constantly. */
+  function byId(kind, id) {
+    var list = (kind === "assemblies") ? ASMS : ITEMS;
+    for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+
+  // Take the server's version stamp after our own successful write, so the next keystroke does
+  // not conflict with the change we just made.
+  function adoptSaved(kind, fresh) {
+    var known = byId(kind, fresh.id);
+    if (known) known.updated_at = fresh.updated_at;
+  }
+
+  // Somebody else got there first. Show THEIR version rather than leaving a screen that quietly
+  // disagrees with the database - and say so, because a silent redraw mid-edit is worse than the
+  // conflict.
+  function adoptConflict(id, fresh) {
+    if (!fresh || !fresh.id) return;
+    for (var i = 0; i < ASMS.length; i++) {
+      if (ASMS[i].id === id) { ASMS[i] = fresh; break; }
+    }
+    delete pendingPatch["assemblies:" + id];
+    renderList();
+    renderPanel();
+  }
+
   function patchSoon(kind, id, body) {
     var key = kind + ":" + id;
     pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
@@ -79,11 +105,26 @@
     timers[key] = setTimeout(async function () {
       var payload = pendingPatch[key];
       delete pendingPatch[key];
+      // Declare the version being edited. A line change rewrites the WHOLE lines array, so
+      // without this two people with the same assembly open overwrite each other in silence:
+      // the second save replaces the first person's lines with a snapshot taken before they
+      // existed, and neither screen shows anything wrong.
+      if (kind === "assemblies") {
+        var known = byId(kind, id);
+        if (known && known.updated_at) payload.expected_updated_at = known.updated_at;
+      }
       saving("Saving…");
       try {
         var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
           { method: "PATCH", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload) });
+        if (r.status === 409) {
+          var conflict = await r.json().catch(function () { return {}; });
+          adoptConflict(id, conflict.assembly);
+          say(conflict.error || "Somebody else changed this while you had it open.");
+          saving("Not saved");
+          return;
+        }
         if (!r.ok) {
           var j = await r.json().catch(function () { return {}; });
           // Deliberately does NOT revert the field. Overwriting what somebody just typed while
@@ -92,6 +133,10 @@
           saving("Not saved");
           return;
         }
+        // Adopt the new version stamp, or the NEXT save conflicts with our own write.
+        var saved = await r.json().catch(function () { return {}; });
+        var fresh = saved.assembly || saved.item;
+        if (fresh && fresh.id) adoptSaved(kind, fresh);
         say(""); saving("Saved");
         setTimeout(function () { saving(""); }, 1200);
       } catch (err) {

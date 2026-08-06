@@ -221,3 +221,47 @@ def test_the_test_button_is_rendered_in_both_views():
     code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("//"))
     assert code.count("${testBtn(p)}") == 2, "expected the button in the card and the table row"
     assert 'class="test-btn' in code
+
+
+# ── an open tab must not erase what the server owns ───────────────────────────
+# From the adversarial audit. The browser PUTs the whole `data` blob on every autosave, so a tab
+# that loaded before somebody pressed "Mark as test" silently dropped the flag on its next save.
+# `_tribool` reads the absence as "nobody has said", the name heuristic regains its vote, and a
+# real bid named something like "Demo Only - Bldg C" disappears from Active with no explanation.
+def test_an_autosave_from_a_stale_tab_keeps_the_test_flag(store):
+    drafts.save_draft("p1", {"project_name": "Demo Only - Bldg C"})
+    drafts.set_test_flag("p1", True)
+    # A tab that loaded BEFORE the flag was set now autosaves its own view of the world.
+    drafts.save_draft("p1", {"project_name": "Demo Only - Bldg C", "sqft": 2875})
+    assert _blob(store).get("is_test") is True, (
+        "the flag was erased, so this project silently returns to the Active tab")
+
+
+def test_a_stale_tab_cannot_re_hide_a_project_marked_real(store):
+    """The direction that actually loses work: False means "somebody looked and said this is a
+    real bid", and it must beat the name heuristic. Dropping it re-hides a live customer bid."""
+    drafts.save_draft("p2", {"project_name": "Test Treadwell"})
+    drafts.set_test_flag("p2", False)
+    drafts.save_draft("p2", {"project_name": "Test Treadwell", "sqft": 100})
+    data = _blob(store, "p2")
+    assert "is_test" in data and data["is_test"] is False, (
+        "False was treated as unset, so the name heuristic hides a real bid again")
+
+
+def test_archived_and_the_assigned_estimator_survive_the_same_way(store):
+    """Same blob, same exposure. `archived` has had it since long before the test flag."""
+    drafts.save_draft("p3", {"project_name": "Westport"})
+    drafts.set_archived("p3", True)
+    drafts.set_assigned_estimator("p3", "kyle@wetreadwell.com")
+    drafts.save_draft("p3", {"project_name": "Westport", "sqft": 1})
+    data = _blob(store, "p3")
+    assert data.get("archived") is True
+    assert data.get("assigned_estimator") == "kyle@wetreadwell.com"
+
+
+def test_a_caller_that_MEANS_to_change_a_server_key_still_can(store):
+    """Preserving must not become freezing — set_test_flag itself writes through save paths."""
+    drafts.save_draft("p4", {"project_name": "X"})
+    drafts.set_test_flag("p4", True)
+    drafts.save_draft("p4", {"project_name": "X", "is_test": False})
+    assert _blob(store, "p4")["is_test"] is False
