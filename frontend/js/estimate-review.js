@@ -307,11 +307,36 @@ function applyHeuristics(intake, putIfBlank) {
   putIfBlank("Epoxy!C47", pw ? 48.00 : 32.20);
 }
 
+// Quantity fields that belong to ONE work type, and which types they belong to.
+// Anything not listed here (project name, contacts, dates) applies to every job.
+//
+// Intake hides the fields a work type does not use, but it deliberately keeps the VALUES:
+// somebody who types a polish SF under Combo and then switches to Epoxy should find it
+// again if they switch back. That means a stale, orphaned quantity can still be sitting in
+// the draft, and seeding it would write a polish area onto the sheet for an epoxy job.
+// Filtering here — at the one place intake values reach cells — is what stops it.
+const SCOPED_FIELDS = {
+  system_1_sf: ["epoxy", "combo"],
+  system_2_sf: ["epoxy", "combo"],
+  cove_1_lf:   ["epoxy", "combo"],   // cove is an epoxy detail; polish never has it
+  cove_2_lf:   ["epoxy", "combo"],
+  polish_sf:   ["polish", "combo"],
+};
+
+function fieldAppliesTo(field, workType) {
+  const types = SCOPED_FIELDS[field];
+  return !types || types.includes((workType || "epoxy").toLowerCase());
+}
+
 (function autofillFromIntake() {
   const seed = (addr, v) => {
     if (v !== undefined && v !== null && v !== "" && cellValues[addr] === undefined) cellValues[addr] = v;
   };
-  for (const [field, addr] of Object.entries(FORM_TO_CELL)) seed(addr, state[field]);
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  for (const [field, addr] of Object.entries(FORM_TO_CELL)) {
+    if (!fieldAppliesTo(field, wt)) continue;
+    seed(addr, state[field]);
+  }
   // Gyp jobs additionally seed the gyp base sheet's project info + the three SF
   // buckets across all five gyp variants (Epoxy/Polish seeds above are inert
   // reference data — the gyp base is the actual bid driver here).
