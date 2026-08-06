@@ -165,13 +165,26 @@
       '<div class="tw-section">Proposals</div>' +
       navItem("/projects.html", "▣", "Projects") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
-      // Sits after the CRM board on purpose: the board is "what's the shape of the
-      // pipeline", this is "who have we left waiting". Same data, different question.
-      navItem("/followups.html", "⏱", "Follow-ups") +
       // Same glyph as the "📋 Info" button on the project cards, so the two
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
       navItem("/info-sheet.html", "📋", "Info Sheet") +
+      // Chasing is its own job, so it gets its own heading (Hanz, 2026-08-06).
+      //
+      // The board was filed under Proposals and the cadence under Settings, which put the two
+      // halves of one task at opposite ends of the sidebar. They are not "a proposal page" and
+      // "a preference": the board is who is waiting on us, the cadence is what we send them and
+      // when, and somebody who opens one almost always wants the other. Splitting them also hid
+      // the cadence behind a heading nobody opens twice a year, so the wording of four recurring
+      // customer emails was the least discoverable thing in the app.
+      //
+      // Placed after Proposals because chasing follows sending, and before Analytics, which is
+      // the look back rather than the work.
+      '<div class="tw-section">Follow-ups</div>' +
+      // Board first: it is the daily surface. The cadence is set once and revisited rarely, so
+      // it reads as the settings for the page above it.
+      navItem("/followups.html", "⏱", "Follow-ups") +
+      navItem("/followup-settings.html", "⏲", "Cadence &amp; emails") +
       // Its own heading rather than a third item under Leads & bids: those two
       // are the daily queue, this is the look back over all of it.
       '<div class="tw-section">Analytics</div>' +
@@ -190,10 +203,6 @@
       navItem("/trash.html", "🗑", "Trash") +
       '<div class="tw-section">Settings</div>' +
       navItem("/notifications.html", "✉", "Notification Sending") +
-      // The chase schedule and the wording of the four automated emails. Under Settings
-      // rather than beside Follow-ups: the board is a daily working surface, this is a
-      // thing you set once and rarely revisit.
-      navItem("/followup-settings.html", "⏲", "Follow-up cadence") +
       (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar" style="background:' +

@@ -158,13 +158,29 @@ def test_the_page_exists_and_boots_like_the_others():
     assert "<script>" not in html.replace("<script src", "<script-src")
 
 
-def test_it_is_in_the_sidebar_under_proposals():
+def test_the_board_and_its_cadence_share_one_sidebar_section():
+    """Hanz, 2026-08-06: chasing is its own job, so it gets its own heading.
+
+    The board was under Proposals and the cadence under Settings, which put the two halves of one
+    task at opposite ends of the sidebar - and hid the wording of four recurring customer emails
+    behind a heading nobody opens twice a year."""
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    # auth.js builds the nav with single-quoted strings.
-    i = auth.index("tw-section\">Proposals")
-    j = auth.index("tw-section\">Analytics", i)
+    i = auth.index("tw-section\">Follow-ups")
+    j = auth.index("tw-section\">", i + 10)              # the heading after it
     section = auth[i:j]
-    assert "/followups.html" in section, "the nav entry is not in the Proposals section"
+    assert "/followups.html" in section, "the board is not in the Follow-ups section"
+    assert "/followup-settings.html" in section, "the cadence is not in the Follow-ups section"
+    assert section.index("/followups.html") < section.index("/followup-settings.html"), (
+        "the daily board should come before the thing you set once")
+
+
+def test_neither_follow_up_page_is_left_behind_in_its_old_section():
+    """A move that copies rather than moves leaves the same page in two places."""
+    auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    assert auth.count('navItem("/followups.html"') == 1
+    assert auth.count('navItem("/followup-settings.html"') == 1
+    settings = auth[auth.index("tw-section\">Settings"):]
+    assert "/followup-settings.html" not in settings, "the cadence is still under Settings too"
 
 
 def test_the_page_reads_the_feed_and_nothing_else():
