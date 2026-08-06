@@ -69,6 +69,7 @@ import info_sheet_writer
 import invoice_writer
 import leads
 import leads_worker
+import library
 import notifications
 import pdf_writer
 import pricing
@@ -324,6 +325,13 @@ class GenerateIn(BaseModel):
     # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
     # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
     paragraph_overrides: list = Field(default_factory=list)
+    # Proposal Review's document editor: boxes the estimator dragged taller/wider.
+    # {"<box id from /api/proposal-template geometry>": {"h_pt": <float>, "w_pt": <float>}}.
+    # A DICT keyed by id, not a list — a list's positions shift, and a stale draft would then
+    # resize a different box than the one that was dragged. Rides the SAME template_version
+    # guard as paragraph_overrides below (the ids are positions in the same template file), and
+    # is re-validated independently by proposal_writer._sanitize_box_overrides.
+    box_overrides: dict = Field(default_factory=dict)
     # The proposal template version the paragraph_overrides ids were captured
     # against (echoed from /api/proposal-template). Since annotation shifts the
     # editable-block ids, api_generate DROPS paragraph_overrides when this is
@@ -521,6 +529,114 @@ def api_calendar_delete(event_id: str, request: Request) -> Dict[str, Any]:
     # Soft delete — a calendar is a work queue, and a destroyed bid deadline could cost a
     # job. The row keeps its deleted_at and can be brought back by hand.
     return {"ok": True, "deleted": event_id}
+
+
+# ── Item Library ──────────────────────────────────────────────────────────────
+# Materials Treadwell buys, and the assemblies built out of them. STANDALONE: nothing in the
+# intake / estimate / proposal path reads these, by instruction and by design — the shape of an
+# assembly is still being worked out, and a table the estimator depends on cannot change
+# freely. See backend/library.py.
+class LibraryItemIn(BaseModel):
+    """Loose on purpose — library.validate_item() is the single authority on what is
+    acceptable, so the rules can't drift between a Pydantic model and the writer."""
+    name: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    # `Any`, because these arrive pasted from a spreadsheet as "$85.38" and "2,875".
+    unit_cost: Optional[Any] = None
+    coverage: Optional[Any] = None
+    sku: Optional[str] = None
+    vendor: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class LibraryAssemblyIn(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    lines: Optional[Any] = None
+    # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
+    # so without this two people with the same assembly open silently overwrite each other.
+    expected_updated_at: Optional[str] = None
+
+
+@app.get("/api/library/items")
+def api_library_items() -> Dict[str, Any]:
+    return {"ok": True, "items": library.list_items()}
+
+
+@app.post("/api/library/items")
+def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
+    try:
+        row = library.create_item(payload.model_dump(exclude_unset=True), _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "item": row}
+
+
+@app.patch("/api/library/items/{item_id}")
+def api_library_item_update(item_id: str, payload: LibraryItemIn) -> Dict[str, Any]:
+    try:
+        row = library.update_item(item_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        # 404 rather than a cheerful 200: the material may have been deleted in another tab,
+        # and reporting a successful write to nothing is how two people overwrite silently.
+        raise HTTPException(404, "That material no longer exists.")
+    return {"ok": True, "item": row}
+
+
+@app.delete("/api/library/items/{item_id}")
+def api_library_item_delete(item_id: str) -> Dict[str, Any]:
+    if not library.delete_item(item_id):
+        raise HTTPException(404, "That material no longer exists.")
+    # Assemblies pointing at it are left untouched on purpose: rewriting somebody else's
+    # assembly as a side effect of a delete is worse than a visible line they can repoint.
+    return {"ok": True, "deleted": item_id}
+
+
+@app.get("/api/library/assemblies")
+def api_library_assemblies() -> Dict[str, Any]:
+    return {"ok": True, "assemblies": library.list_assemblies()}
+
+
+@app.post("/api/library/assemblies")
+def api_library_assembly_create(payload: LibraryAssemblyIn, request: Request) -> Dict[str, Any]:
+    try:
+        row = library.create_assembly(payload.model_dump(exclude_unset=True),
+                                      _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "assembly": row}
+
+
+@app.patch("/api/library/assemblies/{asm_id}")
+def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn) -> Dict[str, Any]:
+    try:
+        row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    except library.StaleWrite as exc:
+        # 409 with the CURRENT state attached, so the page can show what it would have destroyed
+        # instead of just refusing. Losing a few typed characters beats losing somebody's lines.
+        return JSONResponse(status_code=409, content={
+            "ok": False,
+            "error": "Somebody else changed this assembly while you had it open. "
+                     "Your screen has been refreshed with their version - re-apply your change.",
+            "assembly": exc.current,
+        })
+    if row is None:
+        raise HTTPException(404, "That assembly no longer exists.")
+    return {"ok": True, "assembly": row}
+
+
+@app.delete("/api/library/assemblies/{asm_id}")
+def api_library_assembly_delete(asm_id: str) -> Dict[str, Any]:
+    if not library.delete_assembly(asm_id):
+        raise HTTPException(404, "That assembly no longer exists.")
+    return {"ok": True, "deleted": asm_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
@@ -773,6 +889,31 @@ def api_portal_followups() -> Dict[str, Any]:
 @app.get("/api/portal/proposal/{proposal_id}")
 def api_portal_proposal(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}", "GET")
+
+
+# ── follow-up cadence settings ────────────────────────────────────────────────
+# The portal owns the storage (it owns portal_*), so these are proxies. Any signed-in user may
+# edit, which is Hanz's call: the sign-in on THIS side is the gate, and the portal only ever sees
+# the service token.
+@app.get("/api/followup-settings")
+def api_followup_settings() -> Dict[str, Any]:
+    return _portal("/api/admin/settings/followups", "GET")
+
+
+@app.put("/api/followup-settings")
+async def api_save_followup_settings(request: Request) -> Dict[str, Any]:
+    body = await request.json()
+    payload = dict(body or {})
+    # Stamp who changed it. These settings send email to CUSTOMERS, so "who and when" has to be
+    # answerable later, and the browser must not be the thing that decides whose name goes on it.
+    payload["by"] = _user_email(request)
+    return _portal("/api/admin/settings/followups", "PUT", payload)
+
+
+@app.post("/api/followup-settings/preview")
+async def api_preview_followup_settings(request: Request) -> Dict[str, Any]:
+    body = await request.json()
+    return _portal("/api/admin/settings/followups/preview", "POST", body or {})
 
 
 @app.post("/api/portal/proposal/{proposal_id}/reply")
@@ -2487,7 +2628,10 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # dict (new fields, changed semantics) wouldn't bust a browser's cached
 # response — it would 304 and keep rendering stale blocks. BUMP THIS whenever
 # the block shape changes. v2: added `price_flat` (flush/bullet-less PRICE rows).
-_BLOCK_SCHEMA_VERSION = "3"
+# v4: added `geometry.page.max_box` (the resize limit the drag handle must stop at). Nothing
+# reads it yet, so a stale cache is harmless today — but Phase 3's handle would find the field
+# missing on any browser holding a v3 response, which is a confusing way to learn about caching.
+_BLOCK_SCHEMA_VERSION = "4"
 
 
 def _template_proposal_version(path: Path) -> str:
@@ -2872,11 +3016,18 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     _cur_template_version = _template_proposal_version(
         proposal_writer.pick_template(payload.work_type, payload.audience or None))
     _para_overrides = payload.paragraph_overrides
+    # box_overrides ids are positions in the same walk over the same template file, so they go
+    # stale for exactly the same reason and are dropped by the same guard. Extending this block
+    # rather than adding a second one keeps the two from drifting apart.
+    _box_overrides = payload.box_overrides
     if payload.template_version and payload.template_version != _cur_template_version:
         log.warning(
-            "Dropping %d paragraph_override(s): stale template_version %r != current %r",
-            len(_para_overrides or []), payload.template_version, _cur_template_version)
+            "Dropping %d paragraph_override(s) and %d box_override(s): "
+            "stale template_version %r != current %r",
+            len(_para_overrides or []), len(_box_overrides or {}),
+            payload.template_version, _cur_template_version)
         _para_overrides = []
+        _box_overrides = {}
 
     # Fill proposal document
     try:
@@ -2916,6 +3067,7 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
             # outside the priced/repeatable regions (see /api/proposal-template).
             # Version-guarded above (stale template_version -> dropped).
             paragraph_overrides=_sanitize_paragraph_overrides(_para_overrides),
+            box_overrides=_box_overrides,
         )
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
@@ -3170,6 +3322,27 @@ def api_archive_draft(draft_id: str, payload: ArchiveIn, request: Request) -> Di
         return {"ok": True, "existed": existed, "archived": payload.archived}
     except Exception as exc:  # noqa: BLE001
         log.warning("set_archived failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+class TestFlagIn(BaseModel):
+    is_test: bool = True
+
+
+@app.post("/api/draft/{draft_id}/test")
+def api_test_flag_draft(draft_id: str, payload: TestFlagIn, request: Request) -> Dict[str, Any]:
+    """File a project as test/demo, or put it back with the real bids.
+
+    `{"is_test": true}` moves it to the Projects page's Test tab; `false` returns it to
+    Active. Both are recorded — `false` is a deliberate "this IS a real bid", which is how a
+    project whose NAME looks like a test (the page's fallback heuristic for legacy rows) gets
+    pulled back into the working list. Any signed-in user can manage the shared list, same as
+    archive."""
+    try:
+        existed = drafts.set_test_flag(draft_id, payload.is_test, _user_email(request))
+        return {"ok": True, "existed": existed, "is_test": payload.is_test}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_test_flag failed: %s", exc)
         return {"ok": False, "error": str(exc)}
 
 

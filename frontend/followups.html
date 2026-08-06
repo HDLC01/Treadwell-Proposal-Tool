@@ -79,6 +79,11 @@
     .acts { display:flex; gap:5px; justify-content:flex-end; align-items:center; }
     .acts button, .acts select { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15);
       border-radius:7px; padding:4px 8px; font:600 12px system-ui; cursor:pointer; }
+    /* The one button that actually reaches the customer. Given emphasis because it sits next to
+       "Log a call", which only writes to our own records — two buttons a keystroke apart with
+       very different consequences. */
+    .acts .go-send, .fu-acts .go-send { background:var(--red); color:#fff; border-color:var(--red); }
+    .acts .go-send:hover, .fu-acts .go-send:hover { background:var(--red-dark); border-color:var(--red-dark); }
     .acts button:hover { color:var(--red); border-color:var(--red); }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
@@ -135,6 +140,22 @@
        board ends up disagreeing with the email it exists to explain. */
     .fu-why { margin:6px 0 0; padding-top:6px; border-top:1px solid rgba(27,28,28,.07);
       font-size:10.5px; line-height:1.42; color:var(--ink-v); }
+    /* "email link opened" — evidence the notification reached a mailbox, on a proposal nobody
+       has opened yet. Deliberately quiet and green-ish: it is reassurance, not an action, and
+       it must not read like the customer viewed the bid. */
+    /* What WE are doing, on the card rather than as a column — it is an attribute of a
+       proposal, not a place one lives, and making it a column is what let the board and the
+       table disagree about the same proposal. */
+    .fu-auto { font:700 8.5px system-ui; letter-spacing:.05em; text-transform:uppercase;
+      border-radius:4px; padding:2px 5px; white-space:nowrap; border:1px solid transparent; }
+    .fu-auto.is-chasing { background:#dcf5e3; color:var(--ok); border-color:#b7e3c4; }
+    .fu-auto.is-paused { background:#fdf6e3; color:var(--warn); border-color:#e8d9a8; }
+    .fu-auto.is-off { background:#e9e8e7; color:var(--ink-v); border-color:var(--line); }
+    /* How they saw it, on the Seen column only. A portal view means a person definitely looked;
+       an email click is weaker, so the two are not coloured the same. */
+    .fu-seen { margin:5px 0 0; font-size:10px; }
+    .fu-seen.is-portal { color:var(--ok); }
+    .fu-seen.is-email { color:var(--ink-v); }
     .fu-unread { background:var(--red); color:#fff; font:700 9px system-ui; border-radius:999px;
       padding:1px 6px; margin-left:auto; }
     .fu-acts { display:flex; gap:4px; margin-top:7px; }

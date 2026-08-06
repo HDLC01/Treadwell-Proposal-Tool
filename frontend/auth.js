@@ -124,10 +124,14 @@
 
   // Left sidebar matching the main Treadwell app (light, 240px, red accent),
   // collapsing to an off-canvas drawer under 768px.
-  function navItem(href, glyph, label) {
+  function navItem(href, glyph, label, tag) {
     const active = location.pathname.toLowerCase().endsWith(href.toLowerCase());
+    // `tag` marks a page as not-yet-finished. Optional so the other twelve callers are
+    // untouched, and rendered as a chip rather than folded into the label so it reads as a
+    // status on the page rather than part of its name.
     return '<a class="tw-nav-item' + (active ? " active" : "") + '" href="' + href + '">' +
-      '<span class="tw-nav-ico">' + glyph + '</span><span class="tw-nav-label">' + label + '</span></a>';
+      '<span class="tw-nav-ico">' + glyph + '</span><span class="tw-nav-label">' + label + '</span>' +
+      (tag ? '<span class="tw-nav-tag">' + tag + '</span>' : "") + '</a>';
   }
 
   function renderSidebar() {
@@ -161,17 +165,39 @@
       '<div class="tw-section">Proposals</div>' +
       navItem("/projects.html", "▣", "Projects") +
       navItem("/portal.html", "◆", "Customer Portal CRM") +
-      // Sits after the CRM board on purpose: the board is "what's the shape of the
-      // pipeline", this is "who have we left waiting". Same data, different question.
-      navItem("/followups.html", "⏱", "Follow-ups") +
       // Same glyph as the "📋 Info" button on the project cards, so the two
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
       navItem("/info-sheet.html", "📋", "Info Sheet") +
+      // Chasing is its own job, so it gets its own heading (Hanz, 2026-08-06).
+      //
+      // The board was filed under Proposals and the cadence under Settings, which put the two
+      // halves of one task at opposite ends of the sidebar. They are not "a proposal page" and
+      // "a preference": the board is who is waiting on us, the cadence is what we send them and
+      // when, and somebody who opens one almost always wants the other. Splitting them also hid
+      // the cadence behind a heading nobody opens twice a year, so the wording of four recurring
+      // customer emails was the least discoverable thing in the app.
+      //
+      // Placed after Proposals because chasing follows sending, and before Analytics, which is
+      // the look back rather than the work.
+      '<div class="tw-section">Follow-ups</div>' +
+      // Board first: it is the daily surface. The cadence is set once and revisited rarely, so
+      // it reads as the settings for the page above it.
+      navItem("/followups.html", "⏱", "Follow-ups") +
+      navItem("/followup-settings.html", "⏲", "Cadence &amp; emails") +
       // Its own heading rather than a third item under Leads & bids: those two
       // are the daily queue, this is the look back over all of it.
       '<div class="tw-section">Analytics</div>' +
       navItem("/analytics.html", "◫", "Analytics") +
+      // Reference data, not a daily page — the materials Treadwell buys and the assemblies
+      // built out of them. Its own heading for the same reason Analytics has one: filed under
+      // Proposals it would read as a step in making one, which it deliberately is not (nothing
+      // in the estimate or proposal path reads it yet).
+      '<div class="tw-section">Library</div>' +
+      // 🧱 rather than another shaded square: ▤ already belongs to Lead Inbox, and the
+      // geometric set is low-distinction enough without two items sharing a glyph. A brick
+      // also says "materials" at a glance, which none of the squares do.
+      navItem("/library.html", "🧱", "Item Library", "BETA") +
       '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
@@ -426,6 +452,9 @@ text-decoration:none;color:var(--tw-ink);}
 .tw-nav-item:hover{background:var(--tw-surf-low);}
 .tw-nav-item.active{background:rgba(200,16,46,.1);color:var(--tw-red-dark);font-weight:600;}
 .tw-nav-ico{width:20px;text-align:center;color:var(--tw-ink-v);font-size:15px;}
+.tw-nav-tag{margin-left:auto;font:700 8.5px/1 system-ui;letter-spacing:.06em;
+  padding:3px 5px;border-radius:4px;background:rgba(200,16,46,.12);
+  color:var(--tw-red-dark);white-space:nowrap;}
 .tw-nav-item.active .tw-nav-ico{color:var(--tw-red-dark);}
 .tw-user{display:flex;align-items:center;gap:10px;padding:8px;border-radius:9px;background:var(--tw-surf-low);
 margin-top:10px;border-top:1px solid rgba(27,28,28,.05);}
