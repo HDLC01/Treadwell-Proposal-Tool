@@ -11,6 +11,10 @@
        formulas so the figure on screen is the one in the downloaded file. Pinned + SRI, matching
        estimate-review.html and info-sheet.html. -->
   <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+  <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
+       script builds an engine: registration is global and one-time. Without it every
+       ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
+  <script src="/js/xl-excel-rounding.js"></script>
   <style>
     :root { color-scheme: only light;
       --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;

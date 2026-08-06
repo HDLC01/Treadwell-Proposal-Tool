@@ -8,6 +8,10 @@
 <link rel="stylesheet" href="/styles.css">
 <!-- HyperFormula — Excel-compatible formula engine for live recompute -->
 <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+  <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
+       script builds an engine: registration is global and one-time. Without it every
+       ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
+  <script src="/js/xl-excel-rounding.js"></script>
 <style>
   /* Full-viewport layout — the estimate review uses the whole window,
      not the standard centred 1200px container. */
