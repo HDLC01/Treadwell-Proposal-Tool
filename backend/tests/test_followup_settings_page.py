@@ -218,3 +218,38 @@ def test_the_sidebar_links_to_it_without_a_duplicate_glyph():
     assert 'navItem("/followup-settings.html"' in auth
     glyphs = re.findall(r'navItem\("[^"]+", "([^"]+)"', auth)
     assert len(glyphs) == len(set(glyphs)), "two sidebar items share a glyph: %s" % glyphs
+
+
+def test_a_failed_read_disables_saving_rather_than_offering_the_defaults(js):
+    """From the adversarial audit of this batch, and the worst thing it found.
+
+    Saving REPLACES the whole row — five intervals, the send window and the wording of all four
+    customer emails — on a single-row table with no history. If a failed read is shown as an empty
+    one, the page displays the shipped defaults under the words "Never changed" and one press of
+    Save destroys wording somebody may have written by hand months ago, with that estimator's name
+    on the change."""
+    assert "read_failed" in js, "the page ignores the flag that says the read failed"
+    i = js.index("function lockForFailedRead")
+    block = js[i:i + 1200]
+    assert '$("save").disabled' in block and '$("reset").disabled' in block, (
+        "a page that cannot see the current settings must not be able to overwrite them")
+    # And it must be called on load, not merely defined.
+    assert "lockForFailedRead(" in js[js.index("async function load("):]
+
+
+def test_a_failed_read_does_not_claim_the_cadence_has_never_been_changed(js):
+    """"Never changed — this is the cadence as shipped" is a factual claim. Printed over a row we
+    could not read, it is both wrong and the exact reason somebody would feel safe pressing Save."""
+    i = js.index("function showWhoChanged")
+    block = js[i:i + 500]
+    assert "read_failed" in block, "the audit line does not know the read failed"
+    assert block.index("read_failed") < block.index("Never changed"), (
+        "the never-changed branch is reached before the failed-read one is considered")
+
+
+def test_the_reason_saving_is_off_survives_the_first_keystroke(js):
+    """A greyed-out Save with no explanation is a bug report. The inputs clear a stale "Saved."
+    line, so they must not also clear the warning that explains the dead button."""
+    assert "clearUnlessLocked" in js
+    i = js.index("var clearUnlessLocked")
+    assert "if (!locked)" in js[i:i + 120]

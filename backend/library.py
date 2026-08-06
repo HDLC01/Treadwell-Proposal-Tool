@@ -323,16 +323,41 @@ def create_assembly(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict
     return _shape_assembly(row)
 
 
+class StaleWrite(Exception):
+    """Somebody else changed this assembly since the page last read it.
+
+    Every line edit PATCHes the WHOLE `lines` array, because that is how a JSONB column is
+    written. Two people with the assembly open therefore overwrite each other completely: the
+    second save replaces the first person's lines with a snapshot taken before they existed, and
+    neither screen shows anything wrong. Hand-typed reference data, gone, with no error and
+    nothing to recover from — soft-delete protects rows, not the contents of one.
+
+    So a caller may declare the version it is editing, and a write against a stale one is refused
+    with the current state attached, rather than silently winning.
+    """
+
+    def __init__(self, current: Optional[Dict[str, Any]]):
+        super().__init__("This assembly changed while you were editing it.")
+        self.current = current
+
+
 def update_assembly(asm_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Patch one assembly. `expected_updated_at`, when given, must match what is stored."""
+    expected = payload.get("expected_updated_at") if isinstance(payload, dict) else None
     patch = validate_assembly(payload, partial=True)
     if not patch:
         return get_assembly(asm_id)
     patch["updated_at"] = _now_iso()
     sb = get_client()
-    cur = (sb.table(ASSEMBLIES).select("id")
+    cur = (sb.table(ASSEMBLIES).select("id,updated_at")
            .eq("id", asm_id).is_("deleted_at", "null").limit(1).execute())
-    if not (cur.data or []):
+    rows = cur.data or []
+    if not rows:
         return None
+    # Only checked when the caller supplies it, so an integration or a curl call is not forced to
+    # play along — but the editor always does, which is where the conflict actually happens.
+    if expected and str(rows[0].get("updated_at") or "") != str(expected):
+        raise StaleWrite(get_assembly(asm_id))
     sb.table(ASSEMBLIES).update(patch).eq("id", asm_id).execute()
     return get_assembly(asm_id)
 

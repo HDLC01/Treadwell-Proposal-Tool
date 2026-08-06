@@ -56,10 +56,32 @@
   // underneath the edit that had just been stored, which is precisely the question this line
   // exists to answer. Every response that can change it carries the same three fields.
   function showWhoChanged(j) {
-    $("meta").textContent = j && j.saved
-      ? "Last changed " + (j.updated_at ? TW.fmtBizDate(j.updated_at) : "just now")
-        + (j.updated_by ? " by " + j.updated_by : "")
-      : "Never changed — this is the cadence as shipped";
+    $("meta").textContent = j && j.read_failed
+      ? "Can't read the saved cadence right now"
+      : j && j.saved
+        ? "Last changed " + (j.updated_at ? TW.fmtBizDate(j.updated_at) : "just now")
+          + (j.updated_by ? " by " + j.updated_by : "")
+        : "Never changed — this is the cadence as shipped";
+  }
+
+  // A read that FAILED must not be shown as a read that came back empty.
+  //
+  // Saving replaces the whole row — all five intervals, the send window and the wording of all
+  // four emails. So if the page shows the shipped defaults after a failed read, says "never
+  // changed", and lets somebody press Save, it overwrites wording that may have been written by
+  // hand months ago, with no history to recover it from and that estimator's name on the change.
+  // The only safe posture when we cannot see the current values is to refuse to write them.
+  var locked = false;             // read failed: the form is editable but must not be saved
+
+  function lockForFailedRead(failed) {
+    locked = !!failed;
+    $("save").disabled = failed;
+    $("reset").disabled = failed;
+    if (failed) {
+      say("Couldn't read the saved cadence, so this shows the shipped defaults — which may not be "
+        + "what is in use. Saving is off until it can be read, because it would replace the real "
+        + "settings and all four email drafts. Try reloading in a minute.");
+    }
   }
 
   // ── load ───────────────────────────────────────────────────────────────────
@@ -79,6 +101,7 @@
       $("loading").hidden = true;
       $("main").hidden = false;
       showWhoChanged(j);
+      lockForFailedRead(!!j.read_failed);
       paintTabs();
       fillNumbers();
       fillTemplate();
@@ -231,11 +254,15 @@
   ["t-subject", "t-title", "t-body", "t-cta"].forEach(function (id) {
     $(id).addEventListener("input", schedulePreview);
   });
+  // Typing clears a stale "Saved."/error line — but NOT the read-failed warning, which explains
+  // why Save is greyed out. Losing it on the first keystroke would leave a dead button and no
+  // reason given.
+  var clearUnlessLocked = function () { if (!locked) say(""); };
   ["first", "second", "recurring", "staff", "maxrec"].forEach(function (id) {
-    $(id).addEventListener("input", function () { say(""); });
+    $(id).addEventListener("input", clearUnlessLocked);
   });
   ["startH", "endH"].forEach(function (id) {
-    $(id).addEventListener("change", function () { say(""); });
+    $(id).addEventListener("change", clearUnlessLocked);
   });
 
   $("save").addEventListener("click", async function () {

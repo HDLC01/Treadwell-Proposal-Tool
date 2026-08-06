@@ -403,3 +403,57 @@ def test_the_page_and_the_sidebar_both_say_it_is_a_beta():
     assert ".beta {" in html, "the marker has no style and would inherit body text"
     assert 'navItem("/library.html", "\U0001f9f1", "Item Library", "BETA")' in auth
     assert ".tw-nav-tag{" in auth, "the sidebar tag has no style"
+
+
+# ── two people editing one assembly ───────────────────────────────────────────
+# From the adversarial audit. Every line change PATCHes the WHOLE lines array, from a snapshot the
+# page fetched once at load. Two editors therefore overwrite each other completely, in silence:
+# the second save replaces the first person's lines with a state that predates them, neither
+# screen shows anything wrong, and soft-delete does not help because it protects rows, not the
+# contents of one.
+def test_a_write_against_a_stale_version_is_refused(store):
+    asm = library.create_assembly({"name": "MACRO Flake"}, "hanz@wetreadwell.com")
+    library.update_assembly(asm["id"], {"lines": [{"role": "1st BC"}]})     # the other person
+    with pytest.raises(library.StaleWrite) as e:
+        library.update_assembly(asm["id"], {
+            "lines": [], "expected_updated_at": asm["updated_at"]})          # our stale snapshot
+    assert e.value.current["lines"], "the refusal did not carry the version that won"
+
+
+def test_the_refused_write_did_not_land(store):
+    """The point. A refusal that still writes is worse than no check at all."""
+    asm = library.create_assembly({"name": "MACRO Flake"}, "hanz@wetreadwell.com")
+    library.update_assembly(asm["id"], {"lines": [{"role": "Top Coat"}]})
+    try:
+        library.update_assembly(asm["id"], {"lines": [], "expected_updated_at": asm["updated_at"]})
+    except library.StaleWrite:
+        pass
+    assert library.get_assembly(asm["id"])["lines"], "the other person's lines were destroyed"
+
+
+def test_a_write_with_the_current_version_goes_through(store):
+    asm = library.create_assembly({"name": "MACRO Flake"}, "hanz@wetreadwell.com")
+    got = library.update_assembly(asm["id"], {
+        "lines": [{"role": "Grout"}], "expected_updated_at": asm["updated_at"]})
+    assert got and len(got["lines"]) == 1
+
+
+def test_a_caller_that_declares_no_version_is_not_forced_to(store):
+    """curl, an import script, or anything that is not the editor. Only the editor has the
+    conflict, because only it holds a snapshot."""
+    asm = library.create_assembly({"name": "MACRO Flake"}, "hanz@wetreadwell.com")
+    library.update_assembly(asm["id"], {"lines": [{"role": "A"}]})
+    got = library.update_assembly(asm["id"], {"lines": [{"role": "B"}]})
+    assert len(got["lines"]) == 1 and got["lines"][0]["role"] == "B"
+
+
+def test_the_endpoint_answers_409_with_the_version_that_won(store):
+    asm = library.create_assembly({"name": "MACRO Flake"}, "hanz@wetreadwell.com")
+    library.update_assembly(asm["id"], {"lines": [{"role": "1st BC"}]})
+    r = client.patch("/api/library/assemblies/" + asm["id"],
+                     json={"lines": [], "expected_updated_at": asm["updated_at"]})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["ok"] is False
+    assert body["assembly"]["lines"], "the page cannot show what it would have destroyed"
+    assert "changed" in body["error"].lower()
