@@ -230,3 +230,54 @@ def test_the_core_module_holds_no_rates_of_its_own():
         assert rate not in body, (
             "%r looks like a rate copied out of the worksheet; the sheet must stay the only "
             "place a price lives" % rate)
+
+
+# ── a blank field must not wipe what the template already holds ───────────────
+# Found by opening the page on a real staging project. The template arrives with Kyle's own
+# figures in it - the material rates in C20, C21, C29 and the rest - and cellWrites emitted null
+# for every field nobody had typed. The bid fell from $17,431 to $6,194 the instant the page
+# opened, and it saved. Every test above passed, because they all feed it a POPULATED model.
+def test_an_untouched_material_row_is_not_written_at_all():
+    """Not null, not zero: absent from the payload, so the worksheet keeps Kyle's rate."""
+    w = run("out(P.cellWrites({areas:[{sf:1000}], materials:{}}))")
+    for row in (17, 20, 21, 22, 25, 26, 29):
+        assert "Polish!B%d" % row not in w, "row %d quantity clobbered" % row
+        assert "Polish!C%d" % row not in w, "row %d COST clobbered - that is Kyle's rate" % row
+
+
+def test_an_untouched_labour_line_is_not_written():
+    w = run("out(P.cellWrites({areas:[{sf:1000}], labour:{}}))")
+    for cell in ("A37", "B37", "C37", "A40", "B40", "A44"):
+        assert "Polish!" + cell not in w, "%s clobbered" % cell
+
+
+def test_an_untouched_add_is_not_written():
+    w = run("out(P.cellWrites({areas:[{sf:1000}], adds:{}}))")
+    for cell in ("J17", "J18", "J19", "J20", "J21", "J22"):
+        assert "Polish!" + cell not in w
+
+
+def test_a_half_typed_added_line_does_not_blank_its_slot():
+    """A name with no numbers yet must not write nulls over the spare row's inputs."""
+    w = run("out(P.cellWrites({areas:[{sf:1}], added:[{name:'Stair nosing'}]}))")
+    assert w.get("Polish!A18") == "Stair nosing"
+    assert "Polish!B18" not in w and "Polish!C18" not in w
+
+
+def test_a_typed_value_IS_written():
+    """The other half: leaving blanks alone must not stop real edits reaching the sheet."""
+    w = run("out(P.cellWrites({areas:[{sf:1000}], materials:{20:{qty:1000,cost:0.09}}, "
+            "labour:{polishing:{crew:4,days:6}}, adds:{ram_board:240}}))")
+    assert w["Polish!B20"] == 1000
+    assert w["Polish!C20"] == 0.09
+    assert w["Polish!A37"] == 4 and w["Polish!B37"] == 6
+    assert w["Polish!J17"] == 240
+
+
+def test_zero_is_a_real_value_and_does_get_written():
+    """Blank means "leave it alone", so typing 0 has to be how a line is deliberately zeroed.
+    If 0 were ignored too, there would be no way to remove a cost."""
+    w = run("out(P.cellWrites({areas:[{sf:1000}], materials:{20:{qty:0,cost:0}}, "
+            "adds:{ram_board:0}}))")
+    assert w["Polish!B20"] == 0 and w["Polish!C20"] == 0
+    assert w["Polish!J17"] == 0

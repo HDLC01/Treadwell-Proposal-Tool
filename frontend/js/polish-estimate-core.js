@@ -151,6 +151,20 @@
     var out = {};
     var put = function (addr, v) { out[SHEET + "!" + addr] = v; };
 
+    // A FIELD LEFT BLANK MEANS "LEAVE THE SHEET ALONE", NOT "CLEAR IT".
+    //
+    // The template arrives with Kyle's own figures already in it - the material rates in C20,
+    // C21, C29 and the rest. Writing null for every field nobody had typed wiped them, and the
+    // bid on a real staging project fell from $17,431 to $6,194 the moment the page opened.
+    // Caught in a browser; every unit test passed, because they all fed it a POPULATED model.
+    //
+    // So putIf only writes a value the estimator actually supplied. To zero something
+    // deliberately, type 0 - a real value, and it does get written.
+    var putIf = function (addr, v) {
+      if (v === "" || v === null || v === undefined) return;
+      put(addr, num(v));
+    };
+
     put(CELLS.area, totalArea(state.areas) || null);
     if (systemByValue(state.system)) put(CELLS.system, state.system);
     if (state.tooling) put(CELLS.tooling, state.tooling);
@@ -159,8 +173,8 @@
 
     MATERIAL_LINES.forEach(function (l) {
       var m = (state.materials || {})[l.row] || {};
-      put("B" + l.row, m.qty === "" || m.qty == null ? null : num(m.qty));
-      put("C" + l.row, m.cost === "" || m.cost == null ? null : num(m.cost));
+      putIf("B" + l.row, m.qty);
+      putIf("C" + l.row, m.cost);
     });
 
     // Added lines take the spare rows in order: description into A, quantity into B, rate into
@@ -168,21 +182,20 @@
     (state.added || []).forEach(function (line, i) {
       var row = slotForAdded(i);
       if (row === null) return;                 // over capacity; the page says so
-      put("A" + row, line && line.name ? String(line.name) : null);
-      put("B" + row, num(line && line.qty) || null);
-      put("C" + row, num(line && line.cost) || null);
+      if (line && line.name) put("A" + row, String(line.name));
+      putIf("B" + row, line && line.qty);
+      putIf("C" + row, line && line.cost);
     });
 
     LABOUR_LINES.forEach(function (l) {
       var v = (state.labour || {})[l.key] || {};
-      put(l.crew, num(v.crew) || null);
-      put(l.days, num(v.days) || null);
-      if (v.rate !== undefined && v.rate !== "") put(l.rate, num(v.rate));
+      putIf(l.crew, v.crew);
+      putIf(l.days, v.days);
+      putIf(l.rate, v.rate);
     });
 
     ADDS.forEach(function (a) {
-      var v = (state.adds || {})[a.key];
-      put(a.cell, v === "" || v == null ? null : num(v));
+      putIf(a.cell, (state.adds || {})[a.key]);
     });
 
     return out;
