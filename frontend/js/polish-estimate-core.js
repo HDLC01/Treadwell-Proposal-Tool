@@ -38,17 +38,70 @@
     { value: "hybrid",      label: "Hybrid pads" },
   ];
 
+  // ── CELLS THIS FORM MUST NEVER WRITE ────────────────────────────────────────
+  //
+  // The Polish tab is not a grid of blanks waiting to be filled. Most of what looks like an
+  // input is a FORMULA, and writing a number into it replaces the formula with a constant —
+  // in the engine AND in the .xlsx that gets downloaded, because cell_values is what
+  // /api/generate fills the workbook from. Kyle's file comes back broken.
+  //
+  // Found in a browser on staging: materials read 0 against 1,632 SF, because B20 = "=E18" had
+  // been frozen at the value it happened to hold (0) when the page opened. Twenty-two cells
+  // were being clobbered this way.
+  //
+  // The formula text is quoted so the reason is legible without opening the workbook. Checked
+  // against templates/estimate_sheet_5.7.xlsx by test_polish_derived_cells.py, which reads the
+  // real file — so this list cannot silently drift from it.
+  var DERIVED = {
+    // Conditions: three of the five MIRROR the Epoxy tab rather than holding their own value.
+    "D5":  "=Epoxy!D5",
+    "B6":  "=Epoxy!B6",
+    "D6":  "=Epoxy!D6",
+    // Material quantities all come off the area, some via a Yes/No the sheet asks elsewhere.
+    "B17": "=E18",
+    "C17": '=IF(B10="New",0.05,0.15)',
+    "B20": "=E18",
+    "B21": "=E18",
+    "B22": '=IF(I36="Yes Grout",E18)',
+    "B25": '=IF(E25="Yes",E18)',
+    "B26": '=IF(E25="Yes",E18)',
+    "B29": '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)',
+    // Labour: days on the main crew, the joint-filler line, and the mock-up rate.
+    "B37": "=E37",
+    "C40": "=C37",
+    "A44": "=(A37*B37)+(A38*B38)+(A40*B40)+(A42*B42)",
+    "B44": "=Epoxy!B52",
+    // Standard adds: ram board and joint filler follow B35, the coves follow E19.
+    "J17": "=B35",
+    "J18": "=B35",
+    "J19": "=E19",
+    "J20": "=E19",
+    // Option prices extend off H27. The page only ever reads these.
+    "J28": "=ROUNDUP((I28*$H$27),0)",
+    "J29": "=ROUNDUP((I29*$H$27),0)",
+    "J30": "=ROUNDUP((I30*$H$27),0)",
+  };
+
+  function isDerived(addr) {
+    return Object.prototype.hasOwnProperty.call(DERIVED, addr);
+  }
+
   // The sheet stores these as the literal words Yes/No, not booleans.
+  //
+  // `cell` is the Polish cell Kyle would look at; `write` is where the value actually belongs.
+  // For three of the five those differ: Polish!D5/B6/D6 are "=Epoxy!D5" and friends, so the
+  // value goes to the EPOXY tab and Polish pulls it. Writing the Polish cell directly would
+  // set the right number once and cut the link that keeps the two tabs agreeing.
   var CONDITIONS = [
-    { key: "local",     cell: "B4", label: "Local job",
+    { key: "local",     cell: "B4", write: "Polish!B4", label: "Local job",
       why: "Under 70 miles. Off means travel and lodging get added." },
-    { key: "hard_bid",  cell: "B5", label: "Hard bid",
+    { key: "hard_bid",  cell: "B5", write: "Polish!B5", label: "Hard bid",
       why: "Competitive bid. Tightens the margin the sheet applies." },
-    { key: "prevailing_wage", cell: "D5", label: "Prevailing wage",
+    { key: "prevailing_wage", cell: "D5", write: "Epoxy!D5", label: "Prevailing wage",
       why: "Raises every labour line to the prevailing rate." },
-    { key: "taxable",   cell: "B6", label: "Taxable",
+    { key: "taxable",   cell: "B6", write: "Epoxy!B6", label: "Taxable",
       why: "Adds sales tax. The bid you see already includes it." },
-    { key: "remodel_tax", cell: "D6", label: "Remodel tax",
+    { key: "remodel_tax", cell: "D6", write: "Epoxy!D6", label: "Remodel tax",
       why: "Occupied remodel. Adds the county remodel rate on top." },
   ];
 
@@ -162,6 +215,10 @@
     // deliberately, type 0 - a real value, and it does get written.
     var putIf = function (addr, v) {
       if (v === "" || v === null || v === undefined) return;
+      // A DERIVED CELL IS NOT AN INPUT. Writing it replaces the worksheet's formula with a
+      // frozen number, in the download as well as on screen. Refuse, always — there is no
+      // "the user really meant it" case, because the page does not offer these as fields.
+      if (isDerived(addr)) return;
       put(addr, num(v));
     };
 
@@ -169,7 +226,10 @@
     if (systemByValue(state.system)) put(CELLS.system, state.system);
     if (state.tooling) put(CELLS.tooling, state.tooling);
 
-    CONDITIONS.forEach(function (c) { put(c.cell, yesNo((state.conditions || {})[c.key])); });
+    // Sheet-qualified: three of these belong on the Epoxy tab. See CONDITIONS.
+    CONDITIONS.forEach(function (c) {
+      out[c.write] = yesNo((state.conditions || {})[c.key]);
+    });
 
     MATERIAL_LINES.forEach(function (l) {
       var m = (state.materials || {})[l.row] || {};
@@ -252,6 +312,7 @@
     SYSTEMS: SYSTEMS, TOOLINGS: TOOLINGS, CONDITIONS: CONDITIONS,
     MATERIAL_LINES: MATERIAL_LINES, LINE_SLOTS: LINE_SLOTS,
     LABOUR_LINES: LABOUR_LINES, ADDS: ADDS, OPTIONS: OPTIONS,
+    DERIVED: DERIVED, isDerived: isDerived,
     num: num, yesNo: yesNo, totalArea: totalArea,
     slotForAdded: slotForAdded, slotsLeft: slotsLeft, systemByValue: systemByValue,
     cellWrites: cellWrites, stepStatus: stepStatus, blockers: blockers,

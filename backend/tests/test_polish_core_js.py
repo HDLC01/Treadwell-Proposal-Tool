@@ -163,18 +163,20 @@ def test_slot_allocation_reports_when_it_is_full():
 
 # ── conditions are words, not booleans ───────────────────────────────────────
 def test_conditions_are_written_as_the_words_the_sheet_stores():
+    """Two of the five live on Polish; three MIRROR the epoxy tab (Polish!B6 is "=Epoxy!B6"),
+    so the value belongs on Epoxy and Polish pulls it. See test_polish_derived_cells.py."""
     w = run("out(P.cellWrites(S))")
-    assert w["Polish!B4"] == "Yes"      # local
-    assert w["Polish!B5"] == "No"       # hard bid
-    assert w["Polish!B6"] == "Yes"      # taxable
-    assert w["Polish!D5"] == "No"       # prevailing wage
+    assert w["Polish!B4"] == "Yes"      # local          — Polish's own constant
+    assert w["Polish!B5"] == "No"       # hard bid       — Polish's own constant
+    assert w["Epoxy!B6"] == "Yes"       # taxable        — Polish!B6 is =Epoxy!B6
+    assert w["Epoxy!D5"] == "No"        # prevailing wage — Polish!D5 is =Epoxy!D5
 
 
 def test_an_unset_condition_is_No_rather_than_missing():
     """A missing flag would leave whatever the template shipped with, which for B4 is "Yes" —
     so an out-of-town job would price as local."""
     w = run("out(P.cellWrites({areas:[{sf:1}]}))")
-    assert w["Polish!B4"] == "No" and w["Polish!B6"] == "No"
+    assert w["Polish!B4"] == "No" and w["Epoxy!B6"] == "No"
 
 
 # ── the cells we read back ───────────────────────────────────────────────────
@@ -265,19 +267,29 @@ def test_a_half_typed_added_line_does_not_blank_its_slot():
 
 
 def test_a_typed_value_IS_written():
-    """The other half: leaving blanks alone must not stop real edits reaching the sheet."""
+    """The other half: leaving blanks alone must not stop real edits reaching the sheet.
+
+    Every cell asserted here is a genuine INPUT in the template. The quantities and days that
+    used to be checked (B20, B37, J17) are formulas the worksheet computes off the area, so
+    writing them is the bug test_polish_derived_cells.py exists to catch — they are not a
+    weaker version of this assertion, they are the opposite of it."""
     w = run("out(P.cellWrites({areas:[{sf:1000}], materials:{20:{qty:1000,cost:0.09}}, "
-            "labour:{polishing:{crew:4,days:6}}, adds:{ram_board:240}}))")
-    assert w["Polish!B20"] == 1000
-    assert w["Polish!C20"] == 0.09
-    assert w["Polish!A37"] == 4 and w["Polish!B37"] == 6
-    assert w["Polish!J17"] == 240
+            "labour:{polishing:{crew:4,days:6}}, adds:{stripe_4:240}}))")
+    assert w["Polish!C20"] == 0.09          # densifier rate — a constant Kyle maintains
+    assert w["Polish!A37"] == 4             # crew size      — a constant
+    assert w["Polish!J21"] == 240           # 4" striping    — a constant
+    assert w["Polish!E18"] == 1000          # the area
+    assert "Polish!B20" not in w            # "=E18"
+    assert "Polish!B37" not in w            # "=E37"
 
 
 def test_zero_is_a_real_value_and_does_get_written():
     """Blank means "leave it alone", so typing 0 has to be how a line is deliberately zeroed.
     If 0 were ignored too, there would be no way to remove a cost."""
     w = run("out(P.cellWrites({areas:[{sf:1000}], materials:{20:{qty:0,cost:0}}, "
-            "adds:{ram_board:0}}))")
-    assert w["Polish!B20"] == 0 and w["Polish!C20"] == 0
-    assert w["Polish!J17"] == 0
+            "adds:{stripe_4:0, stripe_6:0}}))")
+    assert w["Polish!C20"] == 0             # the rate zeroed on purpose
+    assert w["Polish!J21"] == 0 and w["Polish!J22"] == 0
+    # A zero aimed at a computed cell is still refused. Zero is a real value, but B20 is "=E18"
+    # and freezing it at 0 is exactly the failure that put materials at $0 on a 1,632 SF job.
+    assert "Polish!B20" not in w
