@@ -606,17 +606,35 @@
        phones get pinch-zoom + swipe. Don't try to reflow the grid. */
     .xl-viewport { min-height: 320px; }
   }
-  /* The polish beta invitation. Quiet on purpose — it sits above a working screen and must
-     not read as an error or a warning. */
-  .polish-beta { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-    background:#fbe9ec; border:1px solid rgba(27,28,28,.11); border-radius:10px;
-    padding:11px 14px; margin:0 0 14px; font-size:13px; color:#5c403f; }
-  .polish-beta a { margin-left:auto; background:#c8102e; color:#fff; text-decoration:none;
-    border-radius:8px; padding:8px 14px; font:600 12.5px system-ui; white-space:nowrap;
-    display:inline-flex; align-items:center; gap:7px; }
-  .polish-beta a:hover { background:#9e001f; }
-  .polish-beta .pb-tag { font:700 9.5px/1 system-ui; letter-spacing:.09em;
-    background:rgba(255,255,255,.22); border-radius:20px; padding:3px 6px; }
+  /* ─── The bid-bar / worksheet splitter ──────────────────────────────
+     Hanz asked to be able to grab the sheet and make it bigger. The bid bar was capped at 30vh
+     and could take a third of the window on a laptop, above the grid, with no way to shrink it
+     short of collapsing it entirely.
+     6px of hit area is too mean for a drag target, so the bar is 3px and the handle claims
+     padding either side of it. */
+  .bid-resizer { flex: 0 0 auto; height: 9px; margin: -3px 0; cursor: ns-resize;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; position: relative; z-index: 2; }
+  .bid-resizer::before { content: ""; position: absolute; left: 0; right: 0; height: 3px;
+    background: transparent; transition: background .12s; }
+  .bid-resizer:hover::before, .bid-resizer.dragging::before,
+  .bid-resizer:focus-visible::before { background: var(--red, #c8102e); }
+  .bid-resizer .br-grip { width: 34px; height: 3px; border-radius: 2px;
+    background: var(--surface-dim, #d7d3d0); position: relative; z-index: 1; }
+  .bid-resizer:hover .br-grip, .bid-resizer.dragging .br-grip { background: #fff; }
+  .bid-resizer:focus-visible { outline: 2px solid var(--red, #c8102e); outline-offset: 1px; }
+  /* Nothing to trade when the bar is folded away. */
+  .bid-bar.collapsed + .bid-resizer { display: none; }
+  /* While dragging: kill text selection and let the pointer keep the resize cursor even when it
+     wanders off the 9px strip, or a fast drag flickers between cursors. */
+  body.bid-resizing { cursor: ns-resize; user-select: none; }
+  body.bid-resizing .xl-viewport { pointer-events: none; }
+
+  /* NO BANNER ABOVE THE GRID. A polish-beta invitation used to sit here and cost ~60px of
+     vertical space on the one screen where the spreadsheet is the work. Hanz, 2026-08-07:
+     "I can barely see the sheet. The Estimate sheet is supposed to be the majority viewport."
+     The beta is reached from the sidebar (Polish Estimate · BETA) instead. Anything new that
+     wants to announce itself belongs there too, not on top of the grid. */
 </style>
 </head>
 <body class="estimate-app">
@@ -638,15 +656,6 @@
 </header>
 
 <main>
-  <!-- Polish jobs only. The new page is a beta running BESIDE this one, not replacing it, so a
-       polish bid can be priced both ways and compared. Shown here rather than only in the
-       sidebar because this is where a polish estimator is already standing. Unhidden by
-       estimate-review.js when work_type is polish. -->
-  <div id="polish-beta-banner" class="polish-beta" hidden>
-    <span><b>New:</b> polish estimating without the spreadsheet — the same numbers as seven
-      short steps, with the bid always on screen.</span>
-    <a id="polish-beta-link" href="/polish-estimate.html">Try it <span class="pb-tag">BETA</span></a>
-  </div>
   <div class="top-toolbar">
     <h1>Estimate Review <span id="type-badge" class="type-badge">EPOXY</span></h1>
     <button type="button" id="autofill-btn" class="btn-ai">↺ Autofill with AI</button>
@@ -700,6 +709,14 @@
       <div id="cb-pricelines"></div>
     </div>
   </div>
+
+  <!-- Drag me to trade height between the bid bar and the worksheet. A separator rather than a
+       decorative div: it is focusable and takes arrow keys, because a mouse-only resize is
+       unusable for anyone who does not use one. Hidden while the bid bar is collapsed — there
+       is nothing to trade then. -->
+  <div id="bid-resizer" class="bid-resizer" role="separator" aria-orientation="horizontal"
+       tabindex="0" aria-label="Resize the bid bar. Arrow keys adjust, double-click resets."
+       title="Drag to resize · double-click to reset"><span class="br-grip"></span></div>
 
   <!-- Excel-style formula bar: Name Box (active cell address) + fx + value
        input, two-way bound to the focused grid cell by syncFormulaBar() in
