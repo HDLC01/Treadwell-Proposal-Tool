@@ -26,7 +26,27 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var state = TW.getState();
-  var cellValues = Object.assign({}, state.cell_values || {});
+
+  /** Strip any Polish cell that the worksheet computes for itself.
+   *
+   *  Refusing to WRITE a derived cell is not enough on its own. Drafts saved by the earlier
+   *  build already carry entries like {"Polish!B20": 0} where the template has "=E18", and both
+   *  the engine load and the save are a MERGE - so without this the poison outlives the fix and
+   *  keeps the material lines pinned at zero on any job already touched.
+   *
+   *  Dropping the key restores the template's formula, because a cell nobody overrides is
+   *  whatever the workbook says it is. */
+  function dropDerived(map) {
+    var out = {};
+    Object.keys(map || {}).forEach(function (k) {
+      var m = /^Polish!([A-Z]+\d+)$/.exec(k);
+      if (m && P.isDerived(m[1])) return;
+      out[k] = map[k];
+    });
+    return out;
+  }
+
+  var cellValues = dropDerived(state.cell_values || {});
   var engine = null;
   var sheetNames = [];
   var at = 0;
@@ -120,7 +140,8 @@
     saveTimer = setTimeout(function () {
       // Merge, never replace: cell_values may carry Epoxy!* entries from before this job's
       // work type changed, and the generate path reads the whole map.
-      var merged = Object.assign({}, TW.getState().cell_values || {}, cellValues);
+      var merged = dropDerived(
+        Object.assign({}, TW.getState().cell_values || {}, cellValues));
       TW.setState(Object.assign({}, TW.getState(), {
         cell_values: merged,
         polish_estimate: M,
@@ -241,6 +262,31 @@
       html);
   }
 
+  /** A worksheet cell the estimator may type into, OR the value the worksheet works out itself.
+   *
+   *  The difference matters more than it looks. A derived cell holds a FORMULA — B20 is "=E18",
+   *  so the densifier quantity follows the area on its own. Rendering it as an input invites a
+   *  number that overwrites the formula, in the download as well as on screen, and the line
+   *  stops tracking the area for good.
+   *
+   *  So a derived cell is shown, never offered: the computed figure, dimmed, with the formula in
+   *  its tooltip so the estimator can see WHY it says what it says and which field to change to
+   *  move it. */
+  function derivedCell(addr) {
+    var v = read(addr);
+    var shown = v == null || v === "" ? "—"
+      : (typeof v === "number" ? P.num(v).toLocaleString("en-US",
+          { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 0 }) : String(v));
+    return '<span class="derived" title="' + esc(addr + "  " + P.DERIVED[addr]) +
+      '">' + esc(shown) + '</span>';
+  }
+
+  function qtyOrCostCell(addr, row, k, value) {
+    if (P.isDerived(addr)) return derivedCell(addr);
+    return '<input class="n" data-mat="' + row + '" data-k="' + k + '" value="' +
+      esc(value == null ? "" : value) + '">';
+  }
+
   function materialsPanel() {
     var rows = "";
     var lastGroup = null;
@@ -253,10 +299,8 @@
       var m = M.materials[l.row] || {};
       var d = read("D" + l.row);
       rows += '<tr><td class="rowcell">' + l.row + '</td><td>' + esc(l.label) + '</td>' +
-        '<td class="r"><input class="n" data-mat="' + l.row + '" data-k="qty" value="' +
-        esc(m.qty == null ? "" : m.qty) + '"></td>' +
-        '<td class="r"><input class="n" data-mat="' + l.row + '" data-k="cost" value="' +
-        esc(m.cost == null ? "" : m.cost) + '"></td>' +
+        '<td class="r">' + qtyOrCostCell("B" + l.row, l.row, "qty", m.qty) + '</td>' +
+        '<td class="r">' + qtyOrCostCell("C" + l.row, l.row, "cost", m.cost) + '</td>' +
         '<td class="r calc">' + (d == null ? "" : Math.round(d).toLocaleString()) + '</td></tr>';
     });
 
@@ -302,13 +346,15 @@
     var rows = P.LABOUR_LINES.map(function (l) {
       var v = M.labour[l.key] || {};
       var d = read("D" + l.crew.replace(/\D/g, ""));
+      var fld = function (addr, k, val) {
+        if (P.isDerived(addr)) return derivedCell(addr);
+        return '<input class="n" data-lab="' + esc(l.key) + '" data-k="' + k + '" value="' +
+          esc(val == null ? "" : val) + '">';
+      };
       return '<tr><td>' + esc(l.label) + ' <span class="rowcell">' + esc(l.crew) + '</span></td>' +
-        '<td class="r"><input class="n" data-lab="' + esc(l.key) + '" data-k="crew" value="' +
-        esc(v.crew == null ? "" : v.crew) + '"></td>' +
-        '<td class="r"><input class="n" data-lab="' + esc(l.key) + '" data-k="days" value="' +
-        esc(v.days == null ? "" : v.days) + '"></td>' +
-        '<td class="r"><input class="n" data-lab="' + esc(l.key) + '" data-k="rate" value="' +
-        esc(v.rate == null ? "" : v.rate) + '"></td>' +
+        '<td class="r">' + fld(l.crew, "crew", v.crew) + '</td>' +
+        '<td class="r">' + fld(l.days, "days", v.days) + '</td>' +
+        '<td class="r">' + fld(l.rate, "rate", v.rate) + '</td>' +
         '<td class="r calc">' + (d == null ? "" : Math.round(d).toLocaleString()) + '</td></tr>';
     }).join("");
     var tot = read(P.CELLS.labour_total);
@@ -331,11 +377,20 @@
     var html = '<div class="grid">' + P.ADDS.map(function (a) {
       var v = M.adds[a.key];
       var k = read(a.cell.replace("J", "K"));
+      // Ram board and joint filler follow B35; the two coves follow E19. The worksheet already
+      // knows the quantity, so showing an empty box beside it would be asking for a number that
+      // has an answer — and any answer typed would cut the link.
+      var derived = P.isDerived(a.cell);
+      var field = derived
+        ? '<div class="derived-box">' + derivedCell(a.cell) + '</div>'
+        : '<input class="n" data-add="' + esc(a.key) + '" value="' + esc(v == null ? "" : v) + '">';
+      var hint = derived
+        ? "Follows the area. Change the area in step 1."
+        : (k ? "<b>" + esc(P.fmtMoney(k)) + "</b> at this quantity"
+             : "Leave at zero if the job has none.");
       return '<div class="f"><label>' + esc(a.label) + ' <span class="unit">' + esc(a.unit) +
-        '</span><span class="cell">' + esc(a.cell) + '</span></label>' +
-        '<input class="n" data-add="' + esc(a.key) + '" value="' + esc(v == null ? "" : v) + '">' +
-        '<p class="hint">' + (k ? "<b>" + esc(P.fmtMoney(k)) + "</b> at this quantity"
-                                : "Leave at zero if the job has none.") + '</p></div>';
+        '</span><span class="cell">' + esc(a.cell) + '</span></label>' + field +
+        '<p class="hint">' + hint + '</p></div>';
     }).join("") + '</div>';
     return shell("Standard adds",
       "Enter a quantity and it prices itself off the worksheet's rate bands.",
@@ -532,9 +587,15 @@
    *
    *  Only fills what the estimator has not already set: a returning visit must show their work,
    *  not the template's defaults.
+   *
+   *  A DERIVED CELL IS NEVER HYDRATED. Reading a formula's current result into form state is how
+   *  it gets written back as a constant on the next save - the formula is gone, and the line
+   *  stops following the area. That is precisely the bug this pass fixes, and hydrate was half
+   *  of it: B20 ("=E18") was read as 0 while the area was still loading, then saved as 0.
    */
   function hydrateFromSheet() {
     var raw = function (addr) {
+      if (P.isDerived(addr)) return null;       // see above - never freeze a formula
       var v = engine.getValue(P.SHEET, addr);
       return typeof v === "number" ? v : null;
     };
