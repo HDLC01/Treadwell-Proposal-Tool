@@ -231,12 +231,28 @@ def test_hydrate_never_reads_a_formula_into_form_state():
         "written back as a constant")
 
 
-def test_poisoned_drafts_are_cleaned_rather_than_merged_forward():
-    """Refusing to write is not enough. Both the load and the save are a MERGE, so an entry
-    written by the earlier build outlives the fix and keeps the line pinned at zero."""
-    page = (FRONTEND / "js" / "polish-estimate.js").read_text(encoding="utf-8")
-    code = "\n".join(l for l in page.splitlines() if not l.strip().startswith("//"))
-    assert "dropDerived" in code
-    assert code.count("dropDerived(") >= 3, (
-        "dropDerived must run on the initial load AND on every save; a merge on either side "
-        "reintroduces the poison")
+def test_an_existing_override_is_kept_not_stripped():
+    """The page must never DELETE a value somebody typed over a formula with.
+
+    An earlier version stripped every derived key on load and on save, on the theory that they
+    were all poison from the broken build. They are not. Estimate Review is a spreadsheet:
+    typing over a formula there is an ordinary, intentional act. A real prod job carries
+    Polish!B37 = 2.5 against a template that says "=E37", because Kyle judged the days himself.
+
+    Production had no poison at all — this page had never run there — so stripping did nothing
+    but destroy real work, silently, and made the two screens disagree about the same job by
+    $5,634: Estimate Review said $15,806, the polish page said $21,440.
+    """
+    code = _page_code()
+    assert "dropDerived" not in code, (
+        "the page strips derived keys, which deletes a deliberate override made in Estimate "
+        "Review and changes a saved estimate behind the estimator's back")
+    assert "overrideFor" in code, "the page does not look for an existing override at all"
+
+
+def test_an_override_is_shown_and_marked_rather_than_silently_used():
+    """A hand-set figure the estimator cannot see is worse than one they can argue with: the bid
+    is built from it either way. Same amber convention as the rest of the tool."""
+    body = _body(_page_code(), "derivedCell")
+    assert "overrideFor" in body, "derivedCell ignores overrides and shows the formula's result"
+    assert "overridden" in body and "⚠" in body, "an override is displayed with no marker"

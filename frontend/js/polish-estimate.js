@@ -27,26 +27,29 @@
 
   var state = TW.getState();
 
-  /** Strip any Polish cell that the worksheet computes for itself.
+  /** An estimator's DELIBERATE override of a worksheet formula, kept exactly as they left it.
    *
-   *  Refusing to WRITE a derived cell is not enough on its own. Drafts saved by the earlier
-   *  build already carry entries like {"Polish!B20": 0} where the template has "=E18", and both
-   *  the engine load and the save are a MERGE - so without this the poison outlives the fix and
-   *  keeps the material lines pinned at zero on any job already touched.
+   *  This page must never CREATE one - writing a number into "=E18" because a form field
+   *  happened to be filled is the bug that put materials at $0. cellWrites refuses that.
    *
-   *  Dropping the key restores the template's formula, because a cell nobody overrides is
-   *  whatever the workbook says it is. */
-  function dropDerived(map) {
-    var out = {};
-    Object.keys(map || {}).forEach(function (k) {
-      var m = /^Polish!([A-Z]+\d+)$/.exec(k);
-      if (m && P.isDerived(m[1])) return;
-      out[k] = map[k];
-    });
-    return out;
+   *  But an override that already exists is a different thing entirely, and the difference is
+   *  the whole point. Estimate Review is a spreadsheet: typing over a formula there is an
+   *  ordinary, intentional act, the same as it is in Excel. Kyle does it - a real prod job has
+   *  Polish!B37 = 2.5 where the template says "=E37", because he judged the days himself.
+   *
+   *  An earlier version of this file STRIPPED every such entry, on the theory that they were all
+   *  poison left by the broken build. They are not. On production there was no poison at all -
+   *  this page had never run there - so stripping only destroyed real work, silently, and made
+   *  the two screens disagree about the same job by $5,634.
+   *
+   *  So: keep it, show it, and mark it. Same amber convention the rest of the tool uses for a
+   *  hand-edited figure. */
+  function overrideFor(addr) {
+    var v = (state.cell_values || {})["Polish!" + addr];
+    return (v === undefined || v === null || v === "") ? null : v;
   }
 
-  var cellValues = dropDerived(state.cell_values || {});
+  var cellValues = Object.assign({}, state.cell_values || {});
   var engine = null;
   var sheetNames = [];
   var at = 0;
@@ -140,8 +143,7 @@
     saveTimer = setTimeout(function () {
       // Merge, never replace: cell_values may carry Epoxy!* entries from before this job's
       // work type changed, and the generate path reads the whole map.
-      var merged = dropDerived(
-        Object.assign({}, TW.getState().cell_values || {}, cellValues));
+      var merged = Object.assign({}, TW.getState().cell_values || {}, cellValues);
       TW.setState(Object.assign({}, TW.getState(), {
         cell_values: merged,
         polish_estimate: M,
@@ -272,13 +274,27 @@
    *  So a derived cell is shown, never offered: the computed figure, dimmed, with the formula in
    *  its tooltip so the estimator can see WHY it says what it says and which field to change to
    *  move it. */
+  function fmtCell(v) {
+    if (v == null || v === "") return "—";
+    if (typeof v === "number") {
+      return P.num(v).toLocaleString("en-US",
+        { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 0 });
+    }
+    return String(v);
+  }
+
   function derivedCell(addr) {
-    var v = read(addr);
-    var shown = v == null || v === "" ? "—"
-      : (typeof v === "number" ? P.num(v).toLocaleString("en-US",
-          { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 0 }) : String(v));
+    var ov = overrideFor(addr);
+    if (ov !== null) {
+      // Somebody typed over the formula in Estimate Review. Show THEIR number - it is what the
+      // bid is built from - and mark it, so the figure is not mistaken for the worksheet's own.
+      return '<span class="overridden" title="' + esc(
+        addr + " was set by hand to " + ov + ", replacing " + P.DERIVED[addr] +
+        ". Clear it in Estimate Review to go back to the worksheet’s own figure."
+      ) + '">' + esc(fmtCell(ov)) + ' <span class="flag">⚠</span></span>';
+    }
     return '<span class="derived" title="' + esc(addr + "  " + P.DERIVED[addr]) +
-      '">' + esc(shown) + '</span>';
+      '">' + esc(fmtCell(read(addr))) + '</span>';
   }
 
   function qtyOrCostCell(addr, row, k, value) {
