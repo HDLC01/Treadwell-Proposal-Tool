@@ -965,6 +965,45 @@ def test_score_mode_scores_but_never_creates(monkeypatch, autopilot):
     assert autopilot.created == []
 
 
+def test_the_DEFAULT_scores_but_never_creates(monkeypatch, autopilot):
+    """With nothing set in the environment, the server must not create projects.
+
+    THE BUG THIS EXISTS TO PREVENT. The default used to be `create`, and neither the prod nor
+    the staging .env set the variable — so both ran armed. Eight of staging's fifteen Active
+    projects were machine-made off real Basisboard invites, owned by nobody, sitting beside
+    Kyle's and RJ's actual bids. Prod was equally armed and had simply not had a qualifying lead
+    since its last restart.
+
+    A project in the Active tab has to mean a person decided to bid the job. Hanz, 2026-08-07:
+    "Wait for them to actually create that project from the lead inbox."
+
+    The env vars on the box are a hand-edit and a rebuilt .env would silently re-arm it. This
+    test is what makes the safe behaviour survive that.
+    """
+    monkeypatch.delenv("LEADS_AUTOPILOT", raising=False)     # the fixture sets it; unset it
+    assert leads_worker._mode() == "score"
+    autopilot.ai["m1"] = {"fit_score": 99, "recommendation": "pursue"}
+    _stub_inbox(monkeypatch, [_full_msg("m1")])
+    leads_worker._sweep()
+    assert [mid for mid, _ in autopilot.scored] == ["m1"], "scoring must stay on"
+    assert autopilot.created == [], "the server created a project nobody asked for"
+    assert autopilot.bells == []
+
+
+@pytest.mark.parametrize("value", ["", "   ", "Create ", "CREATE", "yes", "true", "1", "auto"])
+def test_only_the_exact_word_create_arms_auto_creation(monkeypatch, autopilot, value):
+    """A typo, a leftover, or a well-meant "true" must fall back to score rather than arm the
+    thing. Falling back to `create` on an unrecognised value is how a one-character mistake in a
+    .env turns into projects nobody asked for.
+
+    "CREATE" and "Create " ARE accepted — the read lowercases and strips, which is deliberate.
+    """
+    monkeypatch.setenv("LEADS_AUTOPILOT", value)
+    expected = "create" if value.strip().lower() == "create" else "score"
+    assert leads_worker._mode() == expected, (
+        "LEADS_AUTOPILOT=%r resolved to %r" % (value, leads_worker._mode()))
+
+
 def test_off_mode_does_nothing_at_all(monkeypatch, autopilot):
     monkeypatch.setenv("LEADS_AUTOPILOT", "off")
     monkeypatch.setattr(bb, "get_inbox", _boom("get_inbox in off mode"))
