@@ -1,0 +1,379 @@
+{
+  "job01": {
+    "job": "$ estimate sheet - Project Jayhawk",
+    "configs": {
+      "was": {
+        "numeric": 1648,
+        "match": 1634,
+        "pct": 99.15,
+        "misses": 14,
+        "worst": [
+          {
+            "cell": "Polish!B15",
+            "why": "headline",
+            "excel": 23301,
+            "hf": 23303,
+            "diff": 2
+          },
+          {
+            "cell": "Polish!D82",
+            "why": "headline",
+            "excel": 23301,
+            "hf": 23303,
+            "diff": 2
+          },
+          {
+            "cell": "Epoxy blank!D70",
+            "why": "rounding",
+            "excel": 4927,
+            "hf": 4929,
+            "diff": 2
+          },
+          {
+            "cell": "Leveling!D69",
+            "why": "rounding",
+            "excel": 4808,
+            "hf": 4810,
+            "diff": 2
+          },
+          {
+            "cell": "Leveling!D66",
+            "why": "rounding",
+            "excel": 4281,
+            "hf": 4282,
+            "diff": 1
+          },
+          {
+            "cell": "Leveling!D39",
+            "why": "rounding",
+            "excel": 216,
+            "hf": 217,
+            "diff": 1
+          }
+        ]
+      },
+      "SHIPPED": {
+        "numeric": 1648,
+        "match": 1634,
+        "pct": 99.15,
+        "misses": 14,
+        "worst": [
+          {
+            "cell": "Polish!B15",
+            "why": "headline",
+            "excel": 23301,
+            "hf": 23303,
+            "diff": 2
+          },
+          {
+            "cell": "Polish!D82",
+            "why": "headline",
+            "excel": 23301,
+            "hf": 23303,
+            "diff": 2
+          },
+          {
+            "cell": "Epoxy blank!D70",
+            "why": "rounding",
+            "excel": 4927,
+            "hf": 4929,
+            "diff": 2
+          },
+          {
+            "cell": "Leveling!D69",
+            "why": "rounding",
+            "excel": 4808,
+            "hf": 4810,
+            "diff": 2
+          },
+          {
+            "cell": "Leveling!D66",
+            "why": "rounding",
+            "excel": 4281,
+            "hf": 4282,
+            "diff": 1
+          },
+          {
+            "cell": "Leveling!D39",
+            "why": "rounding",
+            "excel": 216,
+            "hf": 217,
+            "diff": 1
+          }
+        ]
+      },
+      "precision": {
+        "numeric": 1648,
+        "match": 1634,
+        "pct": 99.15,
+        "misses": 14,
+        "worst": [
+          {
+            "cell": "Polish!B15",
+            "why": "headline",
+            "excel": 23301,
+            "hf": 23303,
+            "diff": 2
+          },
+          {
+            "cell": "Polish!D82",
+            "why": "headline",
+            "excel": 23301,
+            "hf": 23303,
+            "diff": 2
+          },
+          {
+            "cell": "Epoxy blank!D70",
+            "why": "rounding",
+            "excel": 4927,
+            "hf": 4929,
+            "diff": 2
+          },
+          {
+            "cell": "Leveling!D69",
+            "why": "rounding",
+            "excel": 4808,
+            "hf": 4810,
+            "diff": 2
+          },
+          {
+            "cell": "Leveling!D66",
+            "why": "rounding",
+            "excel": 4281,
+            "hf": 4282,
+            "diff": 1
+          },
+          {
+            "cell": "Leveling!D39",
+            "why": "rounding",
+            "excel": 216,
+            "hf": 217,
+            "diff": 1
+          }
+        ]
+      },
+      "roundup": {
+        "numeric": 1648,
+        "match": 1648,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "nosmart": {
+        "numeric": 1648,
+        "match": 1648,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      }
+    }
+  },
+  "job02": {
+    "job": "$ estimate sheet - Decoursey Building",
+    "configs": {
+      "was": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "SHIPPED": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "precision": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "roundup": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "nosmart": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      }
+    }
+  },
+  "job03": {
+    "job": "$ estimate sheet - Branson Meadows Home2Suites (shortlist100)",
+    "configs": {
+      "was": {
+        "numeric": 1650,
+        "match": 1650,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "SHIPPED": {
+        "numeric": 1650,
+        "match": 1650,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "precision": {
+        "numeric": 1650,
+        "match": 1650,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "roundup": {
+        "numeric": 1650,
+        "match": 1650,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "nosmart": {
+        "numeric": 1650,
+        "match": 1650,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      }
+    }
+  },
+  "job04": {
+    "job": "$ estimate sheet - Example — Warehouse Epoxy Floor",
+    "configs": {
+      "was": {
+        "numeric": 1914,
+        "match": 1914,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "SHIPPED": {
+        "numeric": 1914,
+        "match": 1914,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "precision": {
+        "numeric": 1914,
+        "match": 1914,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "roundup": {
+        "numeric": 1914,
+        "match": 1914,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "nosmart": {
+        "numeric": 1914,
+        "match": 1914,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      }
+    }
+  },
+  "job05": {
+    "job": "$ estimate sheet - Springhill Towneplace Suites OFallon 3",
+    "configs": {
+      "was": {
+        "numeric": 1681,
+        "match": 1680,
+        "pct": 99.94,
+        "misses": 1,
+        "worst": [
+          {
+            "cell": "Gyp (USG N25 1-4\")!E69",
+            "why": "rounding",
+            "excel": 106829,
+            "hf": 106830,
+            "diff": 1
+          }
+        ]
+      },
+      "SHIPPED": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "precision": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "roundup": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "nosmart": {
+        "numeric": 1681,
+        "match": 1681,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      }
+    }
+  },
+  "job06": {
+    "job": "$ REVISED estimate sheet - Cardinal Place Apartments",
+    "configs": {
+      "was": {
+        "numeric": 1634,
+        "match": 1634,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "SHIPPED": {
+        "numeric": 1634,
+        "match": 1634,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "precision": {
+        "numeric": 1634,
+        "match": 1634,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "roundup": {
+        "numeric": 1634,
+        "match": 1634,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      },
+      "nosmart": {
+        "numeric": 1634,
+        "match": 1634,
+        "pct": 100,
+        "misses": 0,
+        "worst": []
+      }
+    }
+  }
+}

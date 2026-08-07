@@ -13,8 +13,26 @@ const HF = {
   init(sheetNames) {
     const hf = HyperFormula.buildEmpty({
       licenseKey: "gpl-v3",  // free for GPL-compatible use
-      smartRounding: true,
-      precisionRounding: 4,
+      // smartRounding OFF, deliberately, and this is load-bearing.
+      //
+      // It was `smartRounding: true, precisionRounding: 4`, which did two damaging things.
+      //
+      // 1. It rounded every value READ out of the engine to 5 significant figures, so
+      //    $59,642.37 came back as 59642 and $1,234,567.89 as 1234600. Cents could never
+      //    appear on a five-figure bid.
+      // 2. Worse, it nudged intermediate values, and the workbook's own ROUNDUP then rounded
+      //    the nudged value up again. Double rounding, always upward.
+      //
+      // Audited against Excel on six real Treadwell estimates from the Dropbox folder --
+      // 10,208 rounding and total cells compared to the cent. The old config disagreed with
+      // Excel on 15 of them, every one reading HIGH: Project Jayhawk's bid showed $23,303
+      // where the workbook says $23,301. With smartRounding off: zero disagreements.
+      //
+      // Display is unaffected -- formatValue applies each cell's number format with a fixed
+      // number of decimals, so a raw 0.30000000000000004 still renders as 0.30.
+      //
+      // The audit harness lives in docs/excel-parity-audit/ and is re-runnable.
+      smartRounding: false,
     });
     for (const name of sheetNames) {
       hf.addSheet(name);
@@ -307,11 +325,36 @@ function applyHeuristics(intake, putIfBlank) {
   putIfBlank("Epoxy!C47", pw ? 48.00 : 32.20);
 }
 
+// Quantity fields that belong to ONE work type, and which types they belong to.
+// Anything not listed here (project name, contacts, dates) applies to every job.
+//
+// Intake hides the fields a work type does not use, but it deliberately keeps the VALUES:
+// somebody who types a polish SF under Combo and then switches to Epoxy should find it
+// again if they switch back. That means a stale, orphaned quantity can still be sitting in
+// the draft, and seeding it would write a polish area onto the sheet for an epoxy job.
+// Filtering here — at the one place intake values reach cells — is what stops it.
+const SCOPED_FIELDS = {
+  system_1_sf: ["epoxy", "combo"],
+  system_2_sf: ["epoxy", "combo"],
+  cove_1_lf:   ["epoxy", "combo"],   // cove is an epoxy detail; polish never has it
+  cove_2_lf:   ["epoxy", "combo"],
+  polish_sf:   ["polish", "combo"],
+};
+
+function fieldAppliesTo(field, workType) {
+  const types = SCOPED_FIELDS[field];
+  return !types || types.includes((workType || "epoxy").toLowerCase());
+}
+
 (function autofillFromIntake() {
   const seed = (addr, v) => {
     if (v !== undefined && v !== null && v !== "" && cellValues[addr] === undefined) cellValues[addr] = v;
   };
-  for (const [field, addr] of Object.entries(FORM_TO_CELL)) seed(addr, state[field]);
+  const wt = (state.work_type || "epoxy").toLowerCase();
+  for (const [field, addr] of Object.entries(FORM_TO_CELL)) {
+    if (!fieldAppliesTo(field, wt)) continue;
+    seed(addr, state[field]);
+  }
   // Gyp jobs additionally seed the gyp base sheet's project info + the three SF
   // buckets across all five gyp variants (Epoxy/Polish seeds above are inert
   // reference data — the gyp base is the actual bid driver here).
@@ -1044,6 +1087,16 @@ async function init() {
   const initialSheet = defaultBaseSheet();
   badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
+
+  // 4b. Offer the polish beta, on polish jobs only. It runs BESIDE this page rather than
+  //     replacing it, so the same bid can be priced both ways while it is in beta. The link
+  //     carries the draft id, or the new page would open with no project.
+  if ((state.work_type || "").toLowerCase() === "polish") {
+    const banner = document.getElementById("polish-beta-banner");
+    const link = document.getElementById("polish-beta-link");
+    if (link) link.href = TW.withDraft("/polish-estimate.html");
+    if (banner) banner.hidden = false;
+  }
   // 5. Re-render the bid bar + total bar now that EVERY sheet (incl. copied
   //    tabs) exists in HF with the saved overrides applied. Without this the
   //    chips keep their pre-HF render (blank prices) until the 1.2s delayed

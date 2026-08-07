@@ -9,6 +9,10 @@
 <!-- HyperFormula — so Division, Payroll Tax Group and the accounting prompts
      recalculate as the estimator types, exactly as they would in Excel. -->
 <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+  <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
+       script builds an engine: registration is global and one-time. Without it every
+       ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
+  <script src="/js/xl-excel-rounding.js"></script>
 <style>
   html, body { height: 100%; overflow: hidden; margin: 0; }
   .info-app { display: flex; flex-direction: column; height: 100vh; width: auto; overflow: hidden; }
