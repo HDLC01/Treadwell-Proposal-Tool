@@ -6,6 +6,25 @@
       try { localStorage.removeItem("treadwell.proposal_tool.state"); } catch {}
       try { localStorage.removeItem("treadwell.proposal_tool.draft_id"); } catch {}
       try { sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once"); } catch {}
+
+      // THE NEW PROJECT LANDS IN THE TAB YOU STARTED IT FROM.
+      //
+      // Pressing "+ New project" while standing in Test reads as "make me a test project", and
+      // it used to make a live one — you then had to come back and press Test? on its card, or
+      // forget to, and leave it sitting in Kyle's working list.
+      //
+      // Active writes `false` rather than nothing on purpose. Absent means "nobody has said",
+      // which lets the name heuristic vote, and a real bid for a customer with "test" in the
+      // name would file itself away. False is somebody saying it IS a real bid, and it beats
+      // the heuristic. See _SERVER_OWNED_KEYS / set_test_flag in backend/drafts.py.
+      //
+      // All and Inactive say nothing: neither is a statement about test-ness.
+      try {
+        if (CURRENT_FILTER === "test")        TW.setNewProjectTestIntent(true);
+        else if (CURRENT_FILTER === "active") TW.setNewProjectTestIntent(false);
+        else                                  TW.setNewProjectTestIntent(null);
+      } catch {}
+
       window.location.assign("/?new=1");   // ?new = explicit intent to open the intake form (home is Projects)
     });
 
