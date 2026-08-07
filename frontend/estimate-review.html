@@ -606,6 +606,30 @@
        phones get pinch-zoom + swipe. Don't try to reflow the grid. */
     .xl-viewport { min-height: 320px; }
   }
+  /* ─── The bid-bar / worksheet splitter ──────────────────────────────
+     Hanz asked to be able to grab the sheet and make it bigger. The bid bar was capped at 30vh
+     and could take a third of the window on a laptop, above the grid, with no way to shrink it
+     short of collapsing it entirely.
+     6px of hit area is too mean for a drag target, so the bar is 3px and the handle claims
+     padding either side of it. */
+  .bid-resizer { flex: 0 0 auto; height: 9px; margin: -3px 0; cursor: ns-resize;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; position: relative; z-index: 2; }
+  .bid-resizer::before { content: ""; position: absolute; left: 0; right: 0; height: 3px;
+    background: transparent; transition: background .12s; }
+  .bid-resizer:hover::before, .bid-resizer.dragging::before,
+  .bid-resizer:focus-visible::before { background: var(--red, #c8102e); }
+  .bid-resizer .br-grip { width: 34px; height: 3px; border-radius: 2px;
+    background: var(--surface-dim, #d7d3d0); position: relative; z-index: 1; }
+  .bid-resizer:hover .br-grip, .bid-resizer.dragging .br-grip { background: #fff; }
+  .bid-resizer:focus-visible { outline: 2px solid var(--red, #c8102e); outline-offset: 1px; }
+  /* Nothing to trade when the bar is folded away. */
+  .bid-bar.collapsed + .bid-resizer { display: none; }
+  /* While dragging: kill text selection and let the pointer keep the resize cursor even when it
+     wanders off the 9px strip, or a fast drag flickers between cursors. */
+  body.bid-resizing { cursor: ns-resize; user-select: none; }
+  body.bid-resizing .xl-viewport { pointer-events: none; }
+
   /* NO BANNER ABOVE THE GRID. A polish-beta invitation used to sit here and cost ~60px of
      vertical space on the one screen where the spreadsheet is the work. Hanz, 2026-08-07:
      "I can barely see the sheet. The Estimate sheet is supposed to be the majority viewport."
@@ -685,6 +709,14 @@
       <div id="cb-pricelines"></div>
     </div>
   </div>
+
+  <!-- Drag me to trade height between the bid bar and the worksheet. A separator rather than a
+       decorative div: it is focusable and takes arrow keys, because a mouse-only resize is
+       unusable for anyone who does not use one. Hidden while the bid bar is collapsed — there
+       is nothing to trade then. -->
+  <div id="bid-resizer" class="bid-resizer" role="separator" aria-orientation="horizontal"
+       tabindex="0" aria-label="Resize the bid bar. Arrow keys adjust, double-click resets."
+       title="Drag to resize · double-click to reset"><span class="br-grip"></span></div>
 
   <!-- Excel-style formula bar: Name Box (active cell address) + fx + value
        input, two-way bound to the focused grid cell by syncFormulaBar() in
