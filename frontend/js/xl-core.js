@@ -458,7 +458,27 @@
     };
 
     const hf = HyperFormula.buildEmpty({
-      licenseKey: "gpl-v3", smartRounding: true, precisionRounding: 4,
+      licenseKey: "gpl-v3",
+      // smartRounding OFF, deliberately, and this is load-bearing.
+      //
+      // It was `smartRounding: true, precisionRounding: 4`, which did two damaging things.
+      //
+      // 1. It rounded every value READ out of the engine to 5 significant figures, so
+      //    $59,642.37 came back as 59642 and $1,234,567.89 as 1234600. Cents could never
+      //    appear on a five-figure bid.
+      // 2. Worse, it nudged intermediate values, and the workbook's own ROUNDUP then rounded
+      //    the nudged value up again. Double rounding, always upward.
+      //
+      // Audited against Excel on six real Treadwell estimates from the Dropbox folder --
+      // 10,208 rounding and total cells compared to the cent. The old config disagreed with
+      // Excel on 15 of them, every one reading HIGH: Project Jayhawk's bid showed $23,303
+      // where the workbook says $23,301. With smartRounding off: zero disagreements.
+      //
+      // Display is unaffected -- formatValue applies each cell's number format with a fixed
+      // number of decimals, so a raw 0.30000000000000004 still renders as 0.30.
+      //
+      // The audit harness lives in docs/excel-parity-audit/ and is re-runnable.
+      smartRounding: false,
     });
     for (const name of sheetNames) {
       hf.addSheet(name);

@@ -25,19 +25,22 @@
       const f = systemFieldNames(k);
       const label = k === 2 ? `System ${k} (optional)` : `System ${k}`;
       const tag = n > 1 ? `<div class="system-tag">${label}</div>` : "";
+      // data-scope drives which work types each field belongs to (see
+      // syncScopeToWorkType). Asking an epoxy job for Polish floor SF, or a polish
+      // job for cove, is how an intake form teaches people to ignore it.
       html += `
         <div class="system-block">
           ${tag}
           <div class="row">
-            <label>Epoxy floor SF
+            <label data-scope="epoxy">Epoxy floor SF
               <input type="number" name="${f.epoxy}" min="0" step="1" value="0">
             </label>
-            <label>Polish floor SF
+            <label data-scope="polish">Polish floor SF
               <input type="number" name="${f.polish}" min="0" step="1" value="0">
             </label>
           </div>
           <div class="row">
-            <label>Cove LF (epoxy)
+            <label data-scope="cove">Cove LF (epoxy)
               <input type="number" name="${f.cove}" min="0" step="1" value="0">
             </label>
           </div>
@@ -57,11 +60,36 @@
   // Gyp jobs use 3 SF buckets instead of the epoxy/polish system fields — show
   // the right scope inputs for the selected work type (and on a restored draft).
   const gypBox = document.getElementById("gyp-sf-container");
+
+  // Which quantity fields belong to which work type. Cove is an epoxy detail, so a
+  // polish-only job never shows it (Hanz, 2026-08-06).
+  const SCOPE_BY_WORK_TYPE = {
+    epoxy:  ["epoxy", "cove"],
+    polish: ["polish"],
+    combo:  ["epoxy", "polish", "cove"],
+    gyp:    [],                     // gyp uses its own three SF buckets instead
+  };
+
   function syncScopeToWorkType() {
     const wt = (form.querySelector("[name='work_type']:checked") || {}).value || "epoxy";
     const isGyp = wt === "gyp";
     if (gypBox) gypBox.style.display = isGyp ? "" : "none";
     if (systemsContainer) systemsContainer.style.display = isGyp ? "none" : "";
+
+    // Hide, never remove: the field names are what saved drafts and the estimate-cell
+    // mappings key on, and a value typed under Combo should still be there if somebody
+    // switches back. Keeping it out of the SHEET is estimate-review's job, which seeds
+    // only the fields that apply to the chosen work type.
+    const allowed = SCOPE_BY_WORK_TYPE[wt] || SCOPE_BY_WORK_TYPE.epoxy;
+    (systemsContainer ? systemsContainer.querySelectorAll("[data-scope]") : []).forEach((el) => {
+      el.style.display = allowed.includes(el.getAttribute("data-scope")) ? "" : "none";
+    });
+    // A row whose every field is hidden would otherwise leave an empty gap.
+    (systemsContainer ? systemsContainer.querySelectorAll(".row") : []).forEach((row) => {
+      const fields = row.querySelectorAll("[data-scope]");
+      const anyShown = [...fields].some((el) => el.style.display !== "none");
+      if (fields.length) row.style.display = anyShown ? "" : "none";
+    });
   }
   form.querySelectorAll("[name='work_type']").forEach(r => r.addEventListener("change", syncScopeToWorkType));
   syncScopeToWorkType();
