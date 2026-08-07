@@ -2,15 +2,19 @@
 
 One daemon thread. Every sweep it takes the already-cached Basisboard inbox,
 picks the bid invites nobody (and no previous sweep) has scored yet, and runs
-them through the same prequalify + create-estimate code the drawer buttons use.
-Strong fits become a labelled draft in Projects and a bell item; everything else
-just gets a score the estimator sees when they open the lead.
+them through the same prequalify code the drawer buttons use. Every lead gets a
+score the estimator sees when they open it.
+
+It does NOT create the project. That is `create` mode, and it is off by default
+(Hanz, 2026-08-07): a project in the Active tab should mean a person decided to
+bid the job. A human presses Create estimate in the lead drawer, which runs this
+same code path.
 
 Why a thread and not a request: a `claude -p` run takes 20-30 s, so scoring
 inline would hold an HTTP worker hostage. Why not a cron: the state that makes a
 sweep safe to repeat already lives in Postgres.
 
-  LEADS_AUTOPILOT           create | score | off      (default create)
+  LEADS_AUTOPILOT           create | score | off      (default SCORE)
   LEADS_AUTOCREATE_SCORE    fit_score needed to draft  (default 70)
   LEADS_AUTOPILOT_BATCH     leads scored per sweep     (default 3)
   LEADS_AUTOPILOT_INTERVAL  seconds between sweeps     (default 90)
@@ -62,8 +66,22 @@ _QUIET_UNTIL = 0.0
 
 # ── config ────────────────────────────────────────────────────────────
 def _mode() -> str:
-    mode = (os.environ.get("LEADS_AUTOPILOT") or "create").strip().lower()
-    return mode if mode in _MODES else "create"
+    """Scoring is the default; CREATING a project is not.
+
+    A project appearing in Projects means somebody at Treadwell decided to bid the job. When the
+    server decided instead, the Active tab filled with work nobody had chosen: eight of the
+    fifteen projects on staging were machine-made off real Basisboard invites, owned by nobody,
+    sitting beside Kyle's and RJ's actual bids. Hanz, 2026-08-07: "Wait for them to actually
+    create that project from the lead inbox."
+
+    Scoring stays on, because it costs one AI run and it is what makes the inbox worth opening -
+    the estimator sees the fit and the summary before they decide. The Create estimate button in
+    the lead drawer runs this exact code path, so nothing is lost by making a person press it.
+
+    An unrecognised value also falls back to score: a typo in the env must not silently arm
+    auto-creation."""
+    mode = (os.environ.get("LEADS_AUTOPILOT") or "score").strip().lower()
+    return mode if mode in _MODES else "score"
 
 
 def _int_env(name: str, default: int, low: int, high: int) -> int:
