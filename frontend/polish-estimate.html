@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polish estimate · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Styles itself, like library.html and followup-settings.html, so it needs its own opt-out. -->
+  <meta name="color-scheme" content="only light" />
+  <!-- The workbook stays the calculation engine: HyperFormula recalculates the Polish tab's own
+       formulas so the figure on screen is the one in the downloaded file. Pinned + SRI, matching
+       estimate-review.html and info-sheet.html. -->
+  <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
+  <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
+       script builds an engine: registration is global and one-time. Without it every
+       ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
+  <script src="/js/xl-excel-rounding.js"></script>
+  <style>
+    :root { color-scheme: only light;
+      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;
+      --ink:#1b1c1c; --ink-v:#5c403f; --ink-3:#8a7a79;
+      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea;
+      --line:rgba(27,28,28,.11); --line-2:rgba(27,28,28,.06);
+      --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3;
+      --amber:#ffcf3f; --amber-ink:#b26a00;
+      --mono:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;
+      --sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+      --r:12px; --r-s:7px; --shadow:0 1px 3px rgba(0,0,0,.05); }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--surf);color:var(--ink);font:400 14px/1.55 var(--sans);
+         padding:26px 22px 132px}
+    [hidden]{display:none!important}
+    .wrap{max-width:1000px;margin:0 auto}
+
+    .head{display:flex;align-items:flex-start;gap:14px;margin-bottom:4px}
+    .logo{width:52px;height:33px;display:block;flex:none}
+    .head h1{font-size:20px;margin:0 0 3px;letter-spacing:-.01em}
+    .head p{margin:0;color:var(--ink-v);font-size:13px}
+    .beta{font:700 10px/1 var(--sans);letter-spacing:.09em;background:var(--red-tint);
+          color:var(--red-dark);border:1px solid var(--line);border-radius:20px;
+          padding:5px 9px;white-space:nowrap;margin-left:auto}
+
+    .steps{display:flex;gap:5px;flex-wrap:wrap;margin:15px 0 16px;font-size:12.5px}
+    .steps span,.steps a{padding:6px 12px;border-radius:20px;border:1px solid var(--line);
+          color:var(--ink-v);background:var(--card);text-decoration:none}
+    .steps .on{background:var(--red);color:#fff;border-color:transparent;font-weight:600}
+
+    .alert{font-size:12.5px;margin:0 0 12px;color:var(--red-dark);min-height:1em}
+    .alert:empty{display:none}
+    .alert.ok{color:var(--ok)}
+    .loading{color:var(--ink-v);text-align:center;padding:44px}
+
+    /* sub-step rail */
+    .rail{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+          box-shadow:var(--shadow);padding:5px;display:flex;gap:2px;overflow-x:auto;margin:0 0 14px}
+    .rail button{flex:1 0 auto;display:flex;align-items:center;gap:8px;background:none;border:0;
+          border-radius:9px;padding:9px 12px;cursor:pointer;color:var(--ink-v);
+          font:600 12.5px var(--sans);white-space:nowrap}
+    .rail button:hover{background:var(--surf-low)}
+    .rail button[aria-current="true"]{background:var(--red-tint);color:var(--red-dark)}
+    .pip{width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;
+         font:700 10.5px var(--mono);border:1.5px solid var(--line);color:var(--ink-3)}
+    .rail button[aria-current="true"] .pip{background:var(--red);color:#fff;border-color:transparent}
+    .pip.ok{background:var(--ok);border-color:transparent;color:#fff}
+    .pip.att{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
+
+    .sec{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+         box-shadow:var(--shadow);overflow:hidden}
+    .sec-h{padding:16px 19px;border-bottom:1px solid var(--line-2)}
+    .sec-h h2{font-size:16px;margin:0 0 2px}
+    .sec-h p{margin:0;color:var(--ink-3);font-size:12.5px}
+    .sec-b{padding:18px 19px}
+    .nav{display:flex;align-items:center;gap:10px;padding:14px 19px;
+         border-top:1px solid var(--line-2);background:var(--surf-low)}
+    .nav .step-of{font-size:12px;color:var(--ink-3);margin-right:auto;
+         font-variant-numeric:tabular-nums}
+    .btn{background:var(--red);color:#fff;border:0;border-radius:8px;padding:9px 17px;
+         font:600 13px var(--sans);cursor:pointer}
+    .btn:hover{background:var(--red-dark)}
+    .btn.ghost{background:transparent;color:var(--ink-v);border:1px solid var(--line)}
+    .btn.ghost:hover{color:var(--red);border-color:var(--red)}
+    .btn[disabled]{opacity:.5;cursor:not-allowed}
+
+    .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+    .f label{display:flex;align-items:baseline;gap:6px;font:600 12.5px var(--sans);
+             margin:0 0 5px;flex-wrap:wrap}
+    .unit{font:600 10.5px var(--mono);color:var(--ink-3);background:var(--surf-low);
+          border-radius:4px;padding:2px 5px}
+    /* Kyle knows the workbook by cell. Naming the destination makes every field checkable
+       against the file he already trusts. */
+    .cell{font:600 10.5px var(--mono);color:var(--red-dark);background:var(--red-tint);
+          border-radius:4px;padding:2px 5px;margin-left:auto;opacity:.75}
+    .f input,.f select{width:100%;font:inherit;color:var(--ink);background:var(--card);
+          border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px}
+    .f input.n{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+    .f input:hover,.f select:hover{border-color:var(--red)}
+    :where(input,select,button,a,[tabindex]):focus-visible{outline:2px solid var(--red);
+          outline-offset:1px}
+    .f .hint{color:var(--ink-3);font-size:11.5px;margin:5px 0 0}
+
+    .area{border:1px solid var(--line);border-radius:10px;padding:15px;margin:0 0 11px;
+          background:var(--surf-low)}
+    .area-h{display:flex;align-items:center;gap:9px;margin:0 0 13px}
+    .area-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
+    .area-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
+    .x{background:none;border:0;color:var(--ink-3);cursor:pointer;font-size:15px}
+    .x:hover{color:var(--red)}
+
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th{text-align:left;font:600 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;
+       color:var(--ink-3);padding:0 9px 7px;white-space:nowrap}
+    th.r,td.r{text-align:right}
+    td{padding:6px 9px;border-top:1px solid var(--line-2)}
+    td.calc{font-family:var(--mono);font-variant-numeric:tabular-nums}
+    tr.head-row td{background:var(--surf-low);font-weight:700;font-size:11px;
+       letter-spacing:.05em;text-transform:uppercase;color:var(--ink-v)}
+    td input{width:100%;font:inherit;color:var(--ink);background:transparent;
+       border:1px solid transparent;border-radius:5px;padding:5px 7px}
+    td input:hover{border-color:var(--line);background:var(--card)}
+    td input.n{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+    /* A figure the worksheet computes for itself. Deliberately not a box: an empty-looking
+       input invites a number, and a number typed here would replace the formula. Dotted
+       underline + help cursor, so it reads as "explained" rather than "disabled". */
+    .derived{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3);
+       border-bottom:1px dotted var(--line);cursor:help}
+    .derived-box{padding:8px 10px;border:1px dashed var(--line);border-radius:var(--r-s);
+       background:var(--surf-low);text-align:right}
+    tr.added td{background:#fff8e1}
+    .flag{color:var(--amber-ink);font-weight:700;cursor:help}
+    .rowcell{font:600 10px var(--mono);color:var(--ink-3)}
+    .sum-row td{border-top:2px solid var(--line);font-weight:700;font-family:var(--mono);
+       font-variant-numeric:tabular-nums}
+    .addbtn{margin-top:11px;background:transparent;border:1px dashed var(--line);
+       color:var(--ink-v);border-radius:var(--r-s);padding:8px 13px;font:600 12.5px var(--sans);
+       cursor:pointer;width:100%}
+    .addbtn:hover:not([disabled]){border-color:var(--red);color:var(--red)}
+    .addbtn[disabled]{opacity:.5;cursor:not-allowed}
+    .cap{color:var(--ink-3);font-size:11.5px;margin:8px 0 0}
+
+    .sw{display:flex;align-items:flex-start;gap:11px;padding:11px 0;
+        border-bottom:1px solid var(--line-2)}
+    .sw:last-child{border-bottom:0}
+    .track{width:38px;height:22px;border-radius:12px;background:var(--surf-low);
+        border:1px solid var(--line);position:relative;flex:none;cursor:pointer;margin-top:1px}
+    .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;
+        border-radius:50%;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .13s}
+    .sw.on .track{background:var(--red);border-color:transparent}
+    .sw.on .track::after{left:18px;background:#fff}
+    .sw .t{font-weight:600;font-size:13px}
+    .sw .c{color:var(--ink-3);font-size:11.5px;margin-top:2px;display:block}
+    .sw .cell{margin-left:auto;align-self:center}
+
+    .opt{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--line);
+         border-radius:9px;margin:0 0 9px}
+    .opt .nm{font-weight:600;font-size:13px;display:block}
+    .opt .rate{color:var(--ink-3);font-size:11.5px}
+    .opt .adds{margin-left:auto;text-align:right}
+    .opt .adds b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:14px}
+    .opt .adds span{display:block;color:var(--ink-3);font-size:11px}
+
+    .rev{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 11px}
+    .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surf-low);
+           font:600 12.5px var(--sans)}
+    .rev-h .amt{margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums}
+    .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
+           cursor:pointer;text-decoration:underline}
+    .rev-b{padding:10px 14px;font-size:12.5px;color:var(--ink-v);display:grid;gap:4px 16px;
+           grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+    .rev-b div{display:flex;gap:8px}
+    .rev-b b{font-weight:600;color:var(--ink)}
+    .rev-b span{margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums}
+    .blockers{background:var(--warn-bg);border:1px solid #e8d9a8;color:var(--warn);
+           border-radius:9px;padding:11px 13px;font-size:12.5px;margin:0 0 12px}
+    .blockers ul{margin:6px 0 0;padding-left:18px}
+
+    .bid{position:fixed;left:0;right:0;bottom:0;background:var(--card);
+         border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9}
+    .bid-in{max-width:1000px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;
+         gap:18px;flex-wrap:wrap}
+    .maths{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;
+         color:var(--ink-v);font-family:var(--mono);font-variant-numeric:tabular-nums}
+    .maths i{font-style:normal;color:var(--ink-3)}
+    .src{font-size:11px;color:var(--ink-3);max-width:210px;line-height:1.35}
+    .total{margin-left:auto;text-align:right}
+    .total .lbl{font:600 10.5px var(--sans);letter-spacing:.08em;text-transform:uppercase;
+         color:var(--ink-3)}
+    .total .v{font:700 26px/1.05 var(--mono);font-variant-numeric:tabular-nums;color:var(--red);
+         letter-spacing:-.02em}
+    .total .psf{font-size:12px;color:var(--ink-v);font-family:var(--mono)}
+    @media (max-width:760px){ .total{margin-left:0;text-align:left;width:100%} .maths{width:100%} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
+      <div>
+        <h1>Polish estimate</h1>
+        <p id="proj-line">Loading…</p>
+      </div>
+      <span class="beta">BETA</span>
+    </div>
+
+    <nav class="steps">
+      <a href="/?edit=1">1 · Intake</a>
+      <span class="on">2 · Estimate</span>
+      <a href="/proposal-review.html">3 · Proposal</a>
+      <a href="/done.html">4 · Files</a>
+    </nav>
+
+    <p class="alert" id="alert" role="status" aria-live="polite"></p>
+    <div class="loading" id="loading">Loading the workbook into the formula engine…</div>
+
+    <div id="main" hidden>
+      <div class="rail" id="rail"></div>
+      <div id="panels"></div>
+    </div>
+  </div>
+
+  <div class="bid" id="bidbar" hidden>
+    <div class="bid-in">
+      <div class="maths" id="maths"></div>
+      <p class="src">Read from the Polish worksheet at <b>D82</b>, so this is the figure in the
+        file you download.</p>
+      <div class="total">
+        <div class="lbl">Total base bid</div>
+        <div class="v" id="bid-total">—</div>
+        <div class="psf" id="bid-psf"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/xl-core.js"></script>
+  <script src="/js/polish-estimate-core.js"></script>
+  <script src="/js/polish-estimate.js"></script>
+</body>
+</html>
