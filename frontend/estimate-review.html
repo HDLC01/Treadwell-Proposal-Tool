@@ -606,17 +606,11 @@
        phones get pinch-zoom + swipe. Don't try to reflow the grid. */
     .xl-viewport { min-height: 320px; }
   }
-  /* The polish beta invitation. Quiet on purpose — it sits above a working screen and must
-     not read as an error or a warning. */
-  .polish-beta { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-    background:#fbe9ec; border:1px solid rgba(27,28,28,.11); border-radius:10px;
-    padding:11px 14px; margin:0 0 14px; font-size:13px; color:#5c403f; }
-  .polish-beta a { margin-left:auto; background:#c8102e; color:#fff; text-decoration:none;
-    border-radius:8px; padding:8px 14px; font:600 12.5px system-ui; white-space:nowrap;
-    display:inline-flex; align-items:center; gap:7px; }
-  .polish-beta a:hover { background:#9e001f; }
-  .polish-beta .pb-tag { font:700 9.5px/1 system-ui; letter-spacing:.09em;
-    background:rgba(255,255,255,.22); border-radius:20px; padding:3px 6px; }
+  /* NO BANNER ABOVE THE GRID. A polish-beta invitation used to sit here and cost ~60px of
+     vertical space on the one screen where the spreadsheet is the work. Hanz, 2026-08-07:
+     "I can barely see the sheet. The Estimate sheet is supposed to be the majority viewport."
+     The beta is reached from the sidebar (Polish Estimate · BETA) instead. Anything new that
+     wants to announce itself belongs there too, not on top of the grid. */
 </style>
 </head>
 <body class="estimate-app">
@@ -638,15 +632,6 @@
 </header>
 
 <main>
-  <!-- Polish jobs only. The new page is a beta running BESIDE this one, not replacing it, so a
-       polish bid can be priced both ways and compared. Shown here rather than only in the
-       sidebar because this is where a polish estimator is already standing. Unhidden by
-       estimate-review.js when work_type is polish. -->
-  <div id="polish-beta-banner" class="polish-beta" hidden>
-    <span><b>New:</b> polish estimating without the spreadsheet — the same numbers as seven
-      short steps, with the bid always on screen.</span>
-    <a id="polish-beta-link" href="/polish-estimate.html">Try it <span class="pb-tag">BETA</span></a>
-  </div>
   <div class="top-toolbar">
     <h1>Estimate Review <span id="type-badge" class="type-badge">EPOXY</span></h1>
     <button type="button" id="autofill-btn" class="btn-ai">↺ Autofill with AI</button>
