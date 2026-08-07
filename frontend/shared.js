@@ -177,10 +177,19 @@
     // the estimator has since chosen on the card, and filing is one click to redo.
     try { localStorage.removeItem(NEW_IS_TEST_KEY); } catch {}
     try {
-      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + "/test-flag", {
+      // Same endpoint the Test? button on the Projects card uses. It is "/test" — an earlier
+      // version of this guessed "/test-flag" from the handler's name and got a 405 on every
+      // call, which the source tests could not see because they only checked the string was
+      // there. Caught by creating a project on staging and reading the flag back.
+      //
+      // keepalive because the first save often coincides with leaving the page: intake submits
+      // and navigates straight to Estimate Review, and a plain fetch is cancelled on unload —
+      // the PUT above carries it for exactly the same reason.
+      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + "/test", {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ is_test: want }),
+        keepalive: true,
       }).catch(() => {});
     } catch {}
   }

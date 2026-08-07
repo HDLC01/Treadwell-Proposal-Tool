@@ -95,12 +95,42 @@ def test_the_flag_never_goes_into_the_saved_blob(shared):
     assert "setState" in shared
     # The intent lives under its own localStorage key, not in the draft state.
     assert "treadwell.proposal_tool.new_is_test" in shared
-    body = _body(shared, "applyPendingTestIntent")
-    assert "test-flag" in body, "the flag is not applied through the server-owned endpoint"
     # It must not be smuggled into the PUT body.
     put = _body(shared, "putDraft")
     assert "is_test" not in put, (
         "putDraft sends is_test in the blob, which lets a stale tab undo somebody's filing")
+
+
+def test_it_posts_to_the_same_endpoint_the_Test_button_uses():
+    """The route, not a plausible-looking spelling of it.
+
+    An earlier version guessed "/test-flag" from the handler name `api_test_flag_draft`. The
+    real route is "/test". Every call 405'd and the project silently stayed in Active — and the
+    test passed, because it only asserted the string "test-flag" appeared in the file.
+
+    Comparing against projects.js is what makes this bite: both call the same endpoint, so if
+    one is wrong they disagree, and if the route is ever renamed both have to move together.
+    """
+    shared_src = SHARED.read_text(encoding="utf-8")
+    projects_src = PROJECTS.read_text(encoding="utf-8")
+    pat = r'"/api/draft/"\s*\+\s*encodeURIComponent\(\w+\)\s*\+\s*"(/[a-z-]+)"'
+    theirs = set(re.findall(pat, projects_src))
+    mine = set(re.findall(pat, shared_src))
+    assert "/test" in theirs, (
+        "projects.js no longer posts to /test; this test's reference point has moved: %s" % theirs)
+    assert "/test" in mine, (
+        "shared.js files the new project at %s, but the Test? button uses /test" % (mine or "nothing"))
+
+
+def test_the_call_survives_the_navigation_that_usually_follows_it():
+    """Intake submits and goes straight to Estimate Review, so the first save and the page
+    unload happen together. Without keepalive the browser cancels the flag POST in flight — the
+    PUT beside it carries keepalive for exactly this reason."""
+    shared_src = SHARED.read_text(encoding="utf-8")
+    i = shared_src.index("function applyPendingTestIntent")
+    body = shared_src[i:i + 1400]
+    assert "keepalive: true" in body, (
+        "the flag POST is cancelled when intake navigates to Estimate Review")
 
 
 def test_the_intent_is_bound_to_an_id_before_it_can_be_applied(shared):
