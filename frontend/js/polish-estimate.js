@@ -523,6 +523,46 @@
     });
   }
 
+  /** Fill the form from what the workbook already holds.
+   *
+   *  The template arrives with Kyle's own figures in it - material rates, crew sizes, day rates.
+   *  Showing blanks beside a bid computed FROM those figures would misrepresent where the number
+   *  came from, and leave the estimator nothing to change. So the page reads the sheet and shows
+   *  what is really there.
+   *
+   *  Only fills what the estimator has not already set: a returning visit must show their work,
+   *  not the template's defaults.
+   */
+  function hydrateFromSheet() {
+    var raw = function (addr) {
+      var v = engine.getValue(P.SHEET, addr);
+      return typeof v === "number" ? v : null;
+    };
+    var blank = function (v) { return v === undefined || v === ""; };
+
+    P.MATERIAL_LINES.forEach(function (l) {
+      var m = M.materials[l.row] = M.materials[l.row] || {};
+      if (blank(m.qty))  { var q = raw("B" + l.row); if (q !== null) m.qty = q; }
+      if (blank(m.cost)) { var c = raw("C" + l.row); if (c !== null) m.cost = c; }
+    });
+    P.LABOUR_LINES.forEach(function (l) {
+      var v = M.labour[l.key] = M.labour[l.key] || {};
+      if (blank(v.crew)) { var a = raw(l.crew); if (a !== null) v.crew = a; }
+      if (blank(v.days)) { var b = raw(l.days); if (b !== null) v.days = b; }
+      if (blank(v.rate)) { var c = raw(l.rate); if (c !== null) v.rate = c; }
+    });
+    P.ADDS.forEach(function (a) {
+      if (blank(M.adds[a.key])) {
+        var v = raw(a.cell);
+        if (v !== null && v !== 0) M.adds[a.key] = v;
+      }
+    });
+    var sys = engine.getValue(P.SHEET, P.CELLS.system);
+    if (typeof sys === "string" && P.systemByValue(sys)) M.system = sys;
+    var tool = engine.getValue(P.SHEET, P.CELLS.tooling);
+    if (typeof tool === "string" && tool) M.tooling = String(tool).toLowerCase();
+  }
+
   // ── boot ────────────────────────────────────────────────────────────────────
   async function init() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
@@ -584,6 +624,16 @@
     if (!P.totalArea(M.areas) && P.num(state.polish_sf) > 0) {
       M.areas[0].sf = P.num(state.polish_sf);
     }
+    // If intake had no area but the sheet does, take the sheet's.
+    if (!P.totalArea(M.areas)) {
+      var sheetArea = engine.getValue(P.SHEET, P.CELLS.area);
+      if (typeof sheetArea === "number" && sheetArea > 0) M.areas[0].sf = sheetArea;
+    }
+
+    // Read the workbook's own figures into the form BEFORE pushing anything back, or the page
+    // overwrites Kyle's rates with blanks. On a real staging project that dropped the bid from
+    // $17,431 to $6,194 the instant the page opened.
+    hydrateFromSheet();
 
     $("loading").hidden = true;
     $("main").hidden = false;
