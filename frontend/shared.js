@@ -118,6 +118,82 @@
     } catch {}
   }
 
+  // ── "the new project lands in the tab you started it from" ────────────────
+  //
+  // Projects records the intent when + New project is pressed; it is applied here, once, after
+  // the project first reaches the server.
+  //
+  // WHY IT IS NOT JUST A FIELD IN THE SAVED BLOB. `is_test` is server-owned (see
+  // _SERVER_OWNED_KEYS in backend/drafts.py). The browser PUTs the whole blob on every autosave,
+  // so a tab that held its own copy of `is_test` would overwrite whatever somebody had since
+  // chosen on the Projects card — file a project as real, leave yesterday's tab open, and its
+  // next autosave silently files it back as a test. Keeping the flag off the blob and applying
+  // it through /test-flag is what stops that.
+  //
+  // WHY IT IS BOUND TO AN ID. Unbound, the intent would attach to whatever project happened to
+  // be saved next — press New project, change your mind, open a real customer bid, and that bid
+  // gets filed as a test. So it is rewritten as "<id>:<0|1>" the moment an id exists, and only
+  // ever applied to that id.
+  const NEW_IS_TEST_KEY = "treadwell.proposal_tool.new_is_test";
+
+  /** Called by Projects. `true`/`false` state a position; `null` says nothing (All, Inactive). */
+  function setNewProjectTestIntent(want) {
+    try {
+      if (want === null || want === undefined) localStorage.removeItem(NEW_IS_TEST_KEY);
+      else localStorage.setItem(NEW_IS_TEST_KEY, want ? "1" : "0");
+    } catch {}
+  }
+
+  function bindNewProjectTestIntent(id) {
+    try {
+      const raw = localStorage.getItem(NEW_IS_TEST_KEY);
+      if (raw === "1" || raw === "0") localStorage.setItem(NEW_IS_TEST_KEY, id + ":" + raw);
+    } catch {}
+  }
+
+  /** An intent still waiting for its id — the user pressed New project and then went somewhere
+   *  else. Dropped rather than left to land on an unrelated project. */
+  function dropUnboundTestIntent() {
+    try {
+      const raw = localStorage.getItem(NEW_IS_TEST_KEY);
+      if (raw === "1" || raw === "0") localStorage.removeItem(NEW_IS_TEST_KEY);
+    } catch {}
+  }
+
+  function pendingTestIntentFor(id) {
+    try {
+      const raw = localStorage.getItem(NEW_IS_TEST_KEY) || "";
+      const i = raw.lastIndexOf(":");
+      if (i < 0 || raw.slice(0, i) !== id) return null;
+      const v = raw.slice(i + 1);
+      return v === "1" ? true : (v === "0" ? false : null);
+    } catch { return null; }
+  }
+
+  function applyPendingTestIntent(id) {
+    const want = pendingTestIntentFor(id);
+    if (want === null) return;
+    // Cleared before the call, win or lose. A retry that outlived the page would fight whatever
+    // the estimator has since chosen on the card, and filing is one click to redo.
+    try { localStorage.removeItem(NEW_IS_TEST_KEY); } catch {}
+    try {
+      // Same endpoint the Test? button on the Projects card uses. It is "/test" — an earlier
+      // version of this guessed "/test-flag" from the handler's name and got a 405 on every
+      // call, which the source tests could not see because they only checked the string was
+      // there. Caught by creating a project on staging and reading the flag back.
+      //
+      // keepalive because the first save often coincides with leaving the page: intake submits
+      // and navigates straight to Estimate Review, and a plain fetch is cancelled on unload —
+      // the PUT above carries it for exactly the same reason.
+      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + "/test", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ is_test: want }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+  }
+
   // One place that actually PUTs a blob to a draft id. Callers guarantee the
   // blob belongs to `id`; this never picks the id itself.
   function putDraft(id, blob) {
@@ -127,6 +203,10 @@
         headers: authHeaders(),
         body: JSON.stringify({ data: blob }),
         keepalive: true,         // let it finish even if the tab is closing
+      }).then((res) => {
+        // Only after the row exists: set_test_flag returns false on a missing draft, so filing
+        // before the first save would be a silent no-op and the project would stay in Active.
+        if (res && res.ok) applyPendingTestIntent(id);
       }).catch(() => {/* offline / backend down — local copy still safe */});
     } catch {}
   }
@@ -195,10 +275,17 @@
     const empty = Object.keys(blob).filter((k) => k !== STAMP).length === 0;
 
     if (!urlId) {
+      const minting = !localId;                  // a genuinely new project, not a resumed one
       setDraftId(localId || newDraftId());
+      // Bind now, while we know this id is the one + New project was pressed for.
+      if (minting) bindNewProjectTestIntent(getDraftId());
       if (!stamp && !empty) { blob[STAMP] = getDraftId(); writeBlob(blob); }   // lazy-stamp legacy blob
       return;
     }
+
+    // Arriving at an EXISTING project instead. Whatever the last + New project meant, it was
+    // not this — drop it rather than let it file somebody's real bid as a test.
+    dropUnboundTestIntent();
 
     // Does the local blob belong to this URL's draft?
     const owned = stamp === urlId
@@ -543,6 +630,7 @@
     resolveApiBase,
     getDraftId,
     initDraftSync,
+    setNewProjectTestIntent,
     withDraft,
     draftReady,
   };

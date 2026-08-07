@@ -214,18 +214,27 @@ def test_the_old_estimate_review_still_exists_and_is_untouched_as_a_route():
         "intake was re-routed to the beta; the old path must stay the default while it is a beta")
 
 
-def test_the_invitation_only_shows_on_polish_jobs():
-    review = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
-    i = review.index("polish-beta-banner")
-    block = review[max(0, i - 600):i + 300]
-    assert 'work_type' in block and 'polish' in block
+def test_nothing_is_advertised_above_the_estimate_grid():
+    """Estimate Review IS the spreadsheet, so the spreadsheet gets the viewport.
 
+    A polish-beta banner used to sit above the grid — roughly 60px of pink, on the one screen
+    where the estimator is reading rows of numbers. Hanz, 2026-08-07: "I can barely see the
+    sheet. The Estimate sheet is supposed to be the majority viewport."
 
-def test_the_invitation_carries_the_draft_id():
-    """Without it the beta opens with no project and looks broken."""
+    The beta is reached from the sidebar instead (Polish Estimate · BETA), which is where the
+    Item Library and the Info Sheet announce themselves too. This test is here so the next
+    feature that wants a launch moment does not take it from the grid.
+    """
+    html = (FRONTEND / "estimate-review.html").read_text(encoding="utf-8")
+    body = html[html.index("<main>"):]
+    banner = re.search(r'<(div|section|aside)[^>]*\bid="[^"]*(banner|promo|announce|beta)[^"]*"',
+                       body, re.I)
+    assert not banner, (
+        "something is advertising itself above the grid again: %s" % (banner and banner.group(0)))
+
     review = (FRONTEND / "js" / "estimate-review.js").read_text(encoding="utf-8")
-    i = review.index("polish-beta-link")
-    assert "withDraft" in review[i:i + 260]
+    code = "\n".join(l for l in review.splitlines() if not l.strip().startswith("//"))
+    assert "polish-beta-banner" not in code, "the removed banner is still being unhidden"
 
 
 def test_the_sidebar_entry_is_marked_beta_and_has_its_own_glyph():

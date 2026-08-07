@@ -1088,15 +1088,10 @@ async function init() {
   badge.textContent = labelFor(initialSheet).toUpperCase();
   showSheet(initialSheet);
 
-  // 4b. Offer the polish beta, on polish jobs only. It runs BESIDE this page rather than
-  //     replacing it, so the same bid can be priced both ways while it is in beta. The link
-  //     carries the draft id, or the new page would open with no project.
-  if ((state.work_type || "").toLowerCase() === "polish") {
-    const banner = document.getElementById("polish-beta-banner");
-    const link = document.getElementById("polish-beta-link");
-    if (link) link.href = TW.withDraft("/polish-estimate.html");
-    if (banner) banner.hidden = false;
-  }
+  // 4b. The polish beta used to be advertised here, in a banner above the grid. It is reached
+  //     from the sidebar now: this screen IS the spreadsheet, and ~60px of announcement at the
+  //     top of it cost the estimator rows they were reading.
+  //
   // 5. Re-render the bid bar + total bar now that EVERY sheet (incl. copied
   //    tabs) exists in HF with the saved overrides applied. Without this the
   //    chips keep their pre-HF render (blank prices) until the 1.2s delayed
@@ -1239,6 +1234,110 @@ wireBidBar();   // base-bid toggles + per-tab option controls (delegated, once)
     c = !c;
     try { localStorage.setItem("tw_bidbar_collapsed", c ? "1" : "0"); } catch {}
     apply(c);
+  });
+})();
+
+// Drag the splitter to trade height between the bid bar and the worksheet.
+//
+// The bid bar was capped at 30vh and sits ABOVE the grid, so on a laptop it could take a third
+// of the window with no way to shrink it short of hiding it altogether. Hanz asked to be able
+// to grab the sheet and make it bigger; this is that.
+//
+// It resizes the BID BAR, not the viewport. The viewport is `flex: 1 1 auto`, so every pixel
+// taken off the bar is a pixel the sheet gains — and the sheet keeps filling the window on any
+// screen size, which setting an explicit grid height would break.
+(function wireBidResizer() {
+  const bar = document.getElementById("bid-bar");
+  const grip = document.getElementById("bid-resizer");
+  const view = document.querySelector(".xl-viewport");
+  if (!bar || !grip || !view) return;
+
+  const KEY = "tw_bidbar_h";
+  const MIN = 34;               // the header row stays reachable; use Hide to go further
+  const GRID_FLOOR = 160;       // never squeeze the sheet down to a couple of rows
+
+  /** The tallest the bar may be right now: whatever leaves the grid its floor. Recomputed per
+   *  drag rather than cached, because the window resizes and the sidebar collapses. */
+  function maxH() {
+    const avail = bar.getBoundingClientRect().height + view.getBoundingClientRect().height;
+    return Math.max(MIN, avail - GRID_FLOOR);
+  }
+
+  function setH(px, persist) {
+    const h = Math.round(Math.max(MIN, Math.min(px, maxH())));
+    bar.style.maxHeight = "none";     // the 30vh cap is what we are overriding
+    bar.style.height = h + "px";
+    if (persist) { try { localStorage.setItem(KEY, String(h)); } catch {} }
+  }
+
+  function reset() {
+    bar.style.height = "";
+    bar.style.maxHeight = "";         // back to the stylesheet's 30vh
+    try { localStorage.removeItem(KEY); } catch {}
+  }
+
+  // Restore. Clamped on read: a height saved on a big monitor would bury the sheet on a laptop.
+  try {
+    const saved = parseInt(localStorage.getItem(KEY) || "", 10);
+    if (isFinite(saved) && saved > 0) setH(saved, false);
+  } catch {}
+
+  let startY = 0, startH = 0, dragging = false;
+
+  function onMove(e) {
+    if (!dragging) return;
+    const y = (e.touches ? e.touches[0].clientY : e.clientY);
+    setH(startH + (y - startY), false);
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    grip.classList.remove("dragging");
+    document.body.classList.remove("bid-resizing");
+    // Persist the settled height, not every intermediate frame.
+    setH(bar.getBoundingClientRect().height, true);
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("touchmove", onMove);
+    window.removeEventListener("touchend", onUp);
+  }
+
+  function onDown(e) {
+    dragging = true;
+    startY = (e.touches ? e.touches[0].clientY : e.clientY);
+    startH = bar.getBoundingClientRect().height;
+    grip.classList.add("dragging");
+    document.body.classList.add("bid-resizing");
+    // Listeners on WINDOW, not the grip: a fast drag outruns a 9px target, and releasing
+    // outside it would leave the page stuck in resize mode.
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    e.preventDefault();
+  }
+
+  grip.addEventListener("mousedown", onDown);
+  grip.addEventListener("touchstart", onDown, { passive: false });
+  grip.addEventListener("dblclick", reset);
+
+  // Keyboard: a mouse-only resize is unusable without one, and the grip is already focusable.
+  grip.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 40 : 12;
+    const h = bar.getBoundingClientRect().height;
+    if (e.key === "ArrowUp")        setH(h - step, true);
+    else if (e.key === "ArrowDown") setH(h + step, true);
+    else if (e.key === "Home")      setH(MIN, true);
+    else if (e.key === "End")       setH(maxH(), true);
+    else if (e.key === "Escape")    reset();
+    else return;
+    e.preventDefault();
+  });
+
+  // A saved height that was fine on one window can bury the sheet on a smaller one.
+  window.addEventListener("resize", () => {
+    if (bar.style.height) setH(bar.getBoundingClientRect().height, false);
   });
 })();
 
