@@ -105,7 +105,30 @@
     return out.join("");
   }
 
+  // What the board currently shows. `renderBoard()` replaces the board's entire innerHTML, so
+  // painting data that hasn't changed destroys and rebuilds every column and card for no reason
+  // — which the eye sees as the whole board blinking. This page polls every 25s, the shortest
+  // interval in the app, so it blinked more than any other board here.
+  //
+  // Same guard as the Bid Pipeline (crm.js), the Lead Inbox (leads.js) and the Bid Calendar
+  // (calendar.js). It goes at the TOP, before populateEstimators/populateMonths: those rebuild
+  // the filter <select> options, and rebuilding a <select> closes it under the cursor of anyone
+  // who happened to have it open.
+  let BOARD_SIG = "";
+
   function renderBoard() {
+    // The whole shaped dataset plus every piece of view state renderBoard draws from — a
+    // proposal moving stage leaves the count identical, and the filters have to keep repainting
+    // or changing one would appear to do nothing.
+    //
+    // One benign wrinkle: populateMonths below can clear a MONTH whose rows have all gone, after
+    // this signature captured the old value. The next call then sees a different signature and
+    // repaints once. One extra paint, no loop, and only on a month emptying out.
+    const sig = JSON.stringify([ALL, EST, MONTH, SORTFIELD, SORTDIR, SHOW_LOST, VIEW,
+                                ($("search") || {}).value || ""]);
+    if (sig === BOARD_SIG) return;
+    BOARD_SIG = sig;
+
     populateEstimators();
     populateMonths();
     const items = visible();
@@ -268,12 +291,33 @@
       ALL = j.proposals || [];
       renderBoard();
     } catch (err) {
-      $("board").innerHTML = '<div class="empty">Could not load the portal pipeline: ' + esc(err.message) +
-        '. Check that the portal is configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).</div>';
+      // Only when there is nothing to keep. This runs on a 25s timer, so a single blip on a
+      // page a rep leaves open all day would otherwise throw the whole board away and flash an
+      // error over work they were reading. Stale rows beat that.
+      //
+      // The signature describes WHAT IS ON SCREEN, so an error goes in it too. A first draft
+      // cleared it instead, and on staging — where the portal is genuinely unreachable — that
+      // repainted the identical error every 25s: the same blink, in the one situation where it
+      // is least useful. Holding the message means an unchanged error is silent, while a
+      // recovery produces a data signature that differs and repaints.
+      if (!ALL.length) {
+        const esig = "error:" + err.message;
+        if (esig !== BOARD_SIG) {
+          $("board").innerHTML = '<div class="empty">Could not load the portal pipeline: ' + esc(err.message) +
+            '. Check that the portal is configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).</div>';
+          BOARD_SIG = esig;
+        }
+      }
     }
     // Deep-link from a staff notification email: ?open=<proposal_id>.
+    //
+    // ONCE. load() re-runs on every poll, and an unguarded read here re-opened the drawer every
+    // 25s — over a rep who had closed it, and on top of refreshLive's own openDetail, giving two
+    // concurrent fetches and two blanks per tick. Reps arrive this way as a matter of course
+    // (notifications.py builds /portal.html?open=<pid>, and the Follow-ups board links with
+    // &sec=followup), so this was the normal case, not an edge one.
     const openId = new URLSearchParams(location.search).get("open");
-    if (openId) openDetail(openId);
+    if (openId && !DEEPLINK_USED) openDetail(openId);
   }
 
   // ── keeping the board live ──────────────────────────────────────────────────
@@ -300,22 +344,22 @@
     return tag === "textarea" || tag === "input" || tag === "select" || a.isContentEditable;
   }
 
-  /** Refresh the board, and the open drawer with it. */
+  /** Refresh the board, and the open drawer with it.
+   *
+   *  `load()` stays in here even though the board has its own 25s timer: the Chat tab's unread
+   *  badge is read off the BOARD row, so letting the two drift means the badge disagrees with
+   *  the thread printed directly beneath it. Both renders are signature-guarded, so calling it
+   *  costs a fetch and no repaint.
+   *
+   *  Scroll handling used to live here, capturing #thread around the await. It has moved into
+   *  renderDetail (capture) and applySecPanel (apply), because renderDetail is the function that
+   *  destroys #thread — every path that repaints needs the behaviour, not just this one, and the
+   *  version here read a node that a concurrent openDetail had already replaced. */
   async function refreshLive() {
     if (document.hidden) return;
     await load();
     if (!CUR_PID || drawerBusy()) return;
-    const scroller = document.getElementById("thread");
-    const wasAtBottom = scroller
-      ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40 : false;
-    const scrollTop = scroller ? scroller.scrollTop : null;
     await openDetail(CUR_PID);
-    const s2 = document.getElementById("thread");
-    if (s2 && scrollTop != null) {
-      // Reading older messages? Hold position. Already at the bottom? Follow the
-      // new message down, which is what a live thread should do.
-      s2.scrollTop = wasAtBottom ? s2.scrollHeight : scrollTop;
-    }
   }
 
   function startLiveUpdates() {
@@ -336,6 +380,9 @@
     $("drawer").classList.remove("open"); syncScrim();
     // Clear the tab so the NEXT open routes by what needs attention again.
     CUR_PID = null; ACTIVE_SEC = null;
+    // And the signature, or reopening the same proposal with unchanged data would be skipped as
+    // "already showing that" — leaving an empty drawer and skipping defaultSection's routing.
+    DRAWER_SIG = "";
   }
   function closeAll() { closeDrawer(); }
   // Delegated on #drawer: renderDetail replaces its innerHTML, never the node
@@ -373,18 +420,41 @@
     }
     $("scrim").style.display = "block";
     const d = $("drawer"); d.classList.add("open");
-    d.innerHTML = '<div class="dbody"><p class="note">Loading…</p></div>';
+
+    // NEVER BLANK A DRAWER THAT IS ALREADY SHOWING SOMETHING.
+    //
+    // This line used to be an unconditional `d.innerHTML = 'Loading…'`, and it is what Hanz
+    // reported as "blinking": #drawer is a fixed, centred white box over a dark scrim, so
+    // emptying it to one line collapses it to a small white card in the middle of a greyed-out
+    // screen. It then waited on an uncached proxy hop to the portal (20s timeout) before
+    // painting again — every 12s while the drawer was open, and after every button press.
+    //
+    // Rendering the cached payload first means the poll is invisible: the signature guard in
+    // renderDetail throws the repaint away when nothing changed, and shows the difference when
+    // something did. Same shape as the Lead Inbox drawer, which this one was copied from.
+    if (DETAIL_CACHE[pid]) renderDetail(pid, DETAIL_CACHE[pid]);
+    else d.innerHTML = '<div class="dbody"><p class="note">Loading…</p></div>';
+
+    // Which request this is. Two can be in flight — a poll and a click, or two clicks — and the
+    // slower one must not paint over the newer one, or repopulate a drawer the rep has closed.
+    const gen = ++DETAIL_GEN;
     let data;
     try {
       const r = await api("/api/portal/proposal/" + encodeURIComponent(pid));
       data = await r.json();
       if (!r.ok || data.ok === false) throw new Error(data.error || data.detail || ("HTTP " + r.status));
     } catch (err) {
+      if (gen !== DETAIL_GEN || pid !== CUR_PID) return;
+      // Keep the last good view rather than replacing it with an error a poll caused. Only a
+      // first open, with nothing to fall back on, has to show the failure.
+      if (DETAIL_CACHE[pid]) return;
       d.innerHTML = '<div class="dhead"><h2>Error</h2><button class="dclose">&times;</button></div>' +
         '<div class="dbody"><p class="note">' + esc(err.message) + '</p></div>';
       d.querySelector(".dclose").addEventListener("click", closeDrawer);
       return;
     }
+    if (gen !== DETAIL_GEN || pid !== CUR_PID) return;
+    DETAIL_CACHE[pid] = data;
     renderDetail(pid, data);
   }
 
@@ -417,9 +487,23 @@
   let ACTIVE_SEC = null;
   let CUR_PID = null;            // the drawer is reused across projects
   const REPLY_DRAFT = {};        // unsent text survives the post-action re-render
-  const NT_CACHE = {};           // chips fetch once per render, not per action
+  const NT_CACHE = {};           // chips per PROJECT, so a poll doesn't refetch them
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
+
+  // What the drawer currently shows, same idea as BOARD_SIG. renderDetail replaces the drawer's
+  // whole innerHTML including the chat thread, so an unchanged repaint tears down and rebuilds
+  // every message for nothing.
+  let DRAWER_SIG = "";
+  // The last payload per project, so a refresh can render from memory instead of blanking the
+  // drawer while it waits on the network. Bounded by projects opened in one session.
+  const DETAIL_CACHE = {};
+  // Which detail fetch is current; an older one must not paint. Separate from RENDER_GEN, which
+  // counts RENDERS (chips use it to detect a re-render mid-fetch).
+  let DETAIL_GEN = 0;
+  // Where the chat thread was scrolled to just before the drawer was torn down. Captured in
+  // renderDetail, consumed once by applySecPanel's next frame.
+  let THREAD_SCROLL = null;
 
   /** Show only the active tab's eligible cards. The single place that sets
    *  visibility — see the note above. */
@@ -448,7 +532,19 @@
     if (sec === "proposal") loadNotifyChips(CUR_PID, RENDER_GEN);
     if (sec === "chat") requestAnimationFrame(() => {
       const t = $("thread");
-      if (t) t.scrollTop = t.scrollHeight;                 // land on the newest message
+      if (!t) return;
+      // Consume the capture renderDetail took before it destroyed the old thread. One-shot: a
+      // later tab switch must land on the newest message, not on where someone was reading
+      // several polls ago.
+      const held = THREAD_SCROLL;
+      THREAD_SCROLL = null;
+      // Reading back through older messages? Stay there. At the bottom, or opening fresh?
+      // Follow the newest message down, which is what a live thread should do.
+      //
+      // A fresh open captures nothing (no #thread existed) and a tab switch captures a hidden
+      // node whose metrics all read 0, which counts as "at the bottom" — so both land on the
+      // newest message without needing a special case.
+      t.scrollTop = (held && !held.atBottom) ? held.top : t.scrollHeight;
     });
   }
 
@@ -496,56 +592,79 @@
    *  enforces it too). Loaded only when the Proposal tab is actually on screen,
    *  so replying to a customer no longer costs a round-trip. */
   async function loadNotifyChips(pid, gen) {
-    const key = pid + "|" + gen;
-    if (!pid || NT_CACHE[key]) return;
-    NT_CACHE[key] = 1;
-    const me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
-    const isAdmin = me.role === "admin" || me.role === "super_admin";
-    const myEmail = (me.email || "").toLowerCase();
+    if (!pid) return;
+    // Keyed by PROJECT, not by render.
+    //
+    // The key used to be `pid + "|" + gen`, and gen increments on every render — so the cache
+    // never hit across a poll and the chip strip refetched, flashing its own "Loading…" every
+    // 12s while the Proposal tab was open. It also grew a new entry per render and never freed
+    // one.
+    //
+    // Storing the PAYLOAD rather than a marker matters: with a pid key, a marker hit would
+    // return early and leave the freshly-rendered static "Loading…" markup on screen for good.
+    if (NT_CACHE[pid]) { paintNtChips(pid, NT_CACHE[pid], gen); return; }
     try {
       const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/notify-overrides");
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      // Re-read the node AFTER the await: a re-render mid-fetch would otherwise
-      // leave us writing into a detached element.
-      const wrap = $("nt-chips");
-      if (!wrap || gen !== RENDER_GEN) return;
-      const ov = {};                                        // email -> 'add' | 'mute'
-      (j.overrides || []).forEach((o) => { ov[String(o.email).toLowerCase()] = o.mode; });
-      const seen = {}, people = [];
-      (j.roster || []).forEach((m) => { const e = String(m.email).toLowerCase(); seen[e] = 1; people.push({ email: m.email, base: !!m.enabled }); });
-      Object.keys(ov).forEach((e) => { if (!seen[e]) people.push({ email: e, base: false }); });   // 'add'ed non-roster person
-      wrap.innerHTML = people.map((p) => {
-        const e = String(p.email).toLowerCase();
-        const mode = ov[e];
-        const eff = mode === "add" ? true : mode === "mute" ? false : p.base;
-        const canEdit = isAdmin || e === myEmail;
-        return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
-             + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">`
-             + `${plainAvatar(p.email)}${esc(nameOf(p.email))}</button>`;
-      }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
-      wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
-        if (b.disabled) return;
-        const email = b.dataset.email, base = b.dataset.base === "1", eff = b.dataset.eff === "1";
-        const newEff = !eff;
-        const mode = (newEff === base) ? "clear" : (newEff ? "add" : "mute");   // clear when back to base
-        b.disabled = true;
-        try {
-          const rr = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/notify-overrides",
-            { method: "PUT", body: JSON.stringify({ email, mode }) });
-          const jj = await rr.json().catch(() => ({}));
-          if (!rr.ok || jj.ok === false) throw new Error(jj.error || jj.detail || ("HTTP " + rr.status));
-          openDetail(pid);   // refresh chips
-        } catch (err) {
-          const al = $("nt-alert");
-          if (al) al.textContent = "Could not update: " + (err.message || "retry");
-          b.disabled = false;
-        }
-      }));
+      NT_CACHE[pid] = j;
+      paintNtChips(pid, j, gen);
     } catch (err) {
       const wrap = $("nt-chips");
       if (wrap && gen === RENDER_GEN) wrap.innerHTML = '<span class="note">Could not load notifications: ' + esc(err.message) + "</span>";
     }
+  }
+
+  /** Draw the chip strip from an already-fetched payload. Synchronous on purpose: called
+   *  straight after the drawer's innerHTML on a cache hit, so the chips appear in the same frame
+   *  as everything around them and there is nothing to see flashing. */
+  function paintNtChips(pid, j, gen) {
+    const me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
+    const isAdmin = me.role === "admin" || me.role === "super_admin";
+    const myEmail = (me.email || "").toLowerCase();
+    // Re-read the node rather than trusting one captured before an await: a re-render mid-fetch
+    // would otherwise leave us writing into a detached element.
+    const wrap = $("nt-chips");
+    if (!wrap || gen !== RENDER_GEN) return;
+    const ov = {};                                          // email -> 'add' | 'mute'
+    (j.overrides || []).forEach((o) => { ov[String(o.email).toLowerCase()] = o.mode; });
+    const seen = {}, people = [];
+    (j.roster || []).forEach((m) => { const e = String(m.email).toLowerCase(); seen[e] = 1; people.push({ email: m.email, base: !!m.enabled }); });
+    Object.keys(ov).forEach((e) => { if (!seen[e]) people.push({ email: e, base: false }); });   // 'add'ed non-roster person
+    wrap.innerHTML = people.map((p) => {
+      const e = String(p.email).toLowerCase();
+      const mode = ov[e];
+      const eff = mode === "add" ? true : mode === "mute" ? false : p.base;
+      const canEdit = isAdmin || e === myEmail;
+      return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
+           + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">`
+           + `${plainAvatar(p.email)}${esc(nameOf(p.email))}</button>`;
+    }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
+    wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      const email = b.dataset.email, base = b.dataset.base === "1", eff = b.dataset.eff === "1";
+      const newEff = !eff;
+      const mode = (newEff === base) ? "clear" : (newEff ? "add" : "mute");   // clear when back to base
+      b.disabled = true;
+      try {
+        const rr = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/notify-overrides",
+          { method: "PUT", body: JSON.stringify({ email, mode }) });
+        const jj = await rr.json().catch(() => ({}));
+        if (!rr.ok || jj.ok === false) throw new Error(jj.error || jj.detail || ("HTTP " + rr.status));
+        // Repaint the chips, not the drawer.
+        //
+        // This used to call openDetail(pid), which is now wrong twice over: it would rebuild the
+        // entire drawer to update one chip, and the overrides are NOT part of the proposal
+        // payload — so the drawer signature would find nothing changed, skip the repaint, and
+        // the toggle would never appear to take effect.
+        delete NT_CACHE[pid];
+        loadNotifyChips(pid, RENDER_GEN);
+      } catch (err) {
+        const al = $("nt-alert");
+        if (al) al.textContent = "Could not update: " + (err.message || "retry");
+        b.disabled = false;
+      }
+    }));
   }
 
   /** Unread customer messages for the Chat tile. Prefer the server's own number
@@ -1184,6 +1303,27 @@
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
 
     const unread = unreadCount(pid, msgs);
+
+    // Nothing changed? Leave the DOM alone. This is the guard that makes the 12s drawer poll
+    // invisible: without it every tick destroyed the thread, the tab strip and every card, and
+    // threw away wherever the rep had scrolled.
+    //
+    // `unread` is in the signature because it is read off the BOARD row, not this payload, so it
+    // can move while the proposal itself is unchanged — and it drives the Chat badge. ACTIVE_SEC
+    // deliberately is NOT: switching tabs only toggles classes, it never re-renders, so putting
+    // it here would repaint the whole drawer on every tab click.
+    const sig = JSON.stringify([pid, data, unread]);
+    if (sig === DRAWER_SIG) return;
+    DRAWER_SIG = sig;
+
+    // Where the chat was, before the innerHTML below detaches it. Must happen here rather than
+    // in the caller: renderDetail is the only place that destroys #thread, and every path
+    // through it — poll, action, reply, chip toggle — needs the position kept.
+    const t0 = $("thread");
+    THREAD_SCROLL = t0
+      ? { top: t0.scrollTop, atBottom: t0.scrollHeight - t0.scrollTop - t0.clientHeight < 40 }
+      : null;
+
     ACTIVE_SEC = defaultSection(p, unread);
 
     // The tab strip is a THIRD flex item between .dhead and .dbody, not a child
@@ -1353,6 +1493,11 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
         delete REPLY_DRAFT[pid];
+        // Sending is a deliberate "take me to the newest message". Pin the thread to the bottom
+        // BEFORE the repaint so renderDetail's capture records atBottom, and your own reply is
+        // followed down instead of the view holding wherever you were reading.
+        const t = $("thread");
+        if (t) t.scrollTop = t.scrollHeight;
         await openDetail(pid);
       } catch (err) {
         $("reply-alert").textContent = "Could not send: " + (err.message || "retry");

@@ -214,7 +214,26 @@
     }
 
     // Re-draw chips + the filtered grid from ALL_PROJECTS (single source of truth).
+    // What the list currently shows. paint() replaces the whole container's innerHTML, so
+    // repainting unchanged data rebuilds every card and throws away however far the page was
+    // scrolled — which the eye sees as a blink.
+    //
+    // This page blinks TWICE per visit without the guard, by design: the stale-while-revalidate
+    // load paints instantly from the cache, then again when the fetch lands, and the second
+    // paint is usually pixel-identical. The 60s poll then repeats it all day.
+    //
+    // Same guard as the Bid Pipeline (crm.js), the Lead Inbox (leads.js), the Bid Calendar
+    // (calendar.js), Follow-ups and the Customer Portal CRM (portal.js). Every piece of view
+    // state is in the signature, so switching tab, searching, filtering by month, re-sorting or
+    // changing view still repaints.
+    let LAST_SIG = "";
+
     function paint() {
+      const sig = JSON.stringify([ALL_PROJECTS, CURRENT_FILTER, SEARCH, MONTH,
+                                  SORTFIELD, SORTDIR, VIEW]);
+      if (sig === LAST_SIG) return;
+      LAST_SIG = sig;
+
       renderChips();
       const tb = document.getElementById("toolbar");
       if (tb) tb.hidden = ALL_PROJECTS.length === 0;
