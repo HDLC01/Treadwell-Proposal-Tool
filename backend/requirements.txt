@@ -12,7 +12,7 @@ openpyxl==3.1.5
 # generated file came back 27 KB instead of 124 KB with all three gone. It ships
 # transitively in local venvs, which is why this went unnoticed until staging.
 # Pinned by test_info_sheet.py::test_the_download_keeps_the_treadwell_logo.
-Pillow>=10.4.0
+Pillow>=12.3.0
 python-docx==1.2.0
 dropbox==12.0.2
 pydantic>=2.13.4
