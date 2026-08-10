@@ -790,13 +790,20 @@
     } catch (err) {
       // Only when there is nothing to keep. This runs on a 45s timer, so one blip would
       // otherwise throw away a board somebody was working from and replace it with an error.
+      //
+      // The error goes INTO the signature rather than clearing it. Clearing it repaints the same
+      // message on every poll — the same blink, in the one situation where it is least useful,
+      // which is exactly what staging showed with its portal unreachable. Holding the message
+      // keeps an unchanged error silent, while a recovery produces a data signature that differs
+      // and repaints.
       if (!ALL.length) {
-        $("list").className = "empty";
-        $("list").textContent = "Couldn't load follow-ups: " + (err.message || "") +
-          ". Check that the customer portal is reachable.";
-        // The error is not what the signature describes: without this, a recovery carrying
-        // identical data is skipped as unchanged and the message stays up for good.
-        LAST_SIG = "";
+        const esig = "error:" + (err.message || "");
+        if (esig !== LAST_SIG) {
+          $("list").className = "empty";
+          $("list").textContent = "Couldn't load follow-ups: " + (err.message || "") +
+            ". Check that the customer portal is reachable.";
+          LAST_SIG = esig;
+        }
       }
     }
   }

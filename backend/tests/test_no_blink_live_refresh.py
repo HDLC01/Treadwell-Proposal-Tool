@@ -166,9 +166,33 @@ def test_a_failed_poll_never_blanks_a_populated_board(page, fn, var, data):
     tail = body[cat:]
     assert re.search(r"if\s*\(\s*!" + data + r"\.length\s*\)", tail), (
         "%s paints its load error unconditionally" % page)
-    assert var in tail, (
-        "%s does not clear the signature when it paints the error — a recovery carrying identical "
-        "data would then be skipped as unchanged and the error would stay up for good" % page)
+
+
+@pytest.mark.parametrize("page,fn,var", [
+    ("portal.js", "load", "BOARD_SIG"),
+    ("followups.js", "load", "LAST_SIG"),
+])
+def test_a_repeated_identical_error_does_not_repaint_either(page, fn, var):
+    """The error is part of what is on screen, so it belongs IN the signature.
+
+    Caught in a browser, on staging, where the portal backend is genuinely unreachable. The first
+    version of this fix CLEARED the signature when it painted the error — which repainted the
+    identical message every 25s. A MutationObserver counted three rebuilds in sixty seconds: the
+    same blink, in the one situation where a blink is least useful.
+
+    Holding the message keeps an unchanged error silent. A recovery produces a data signature,
+    which differs, so it repaints — that is what clearing was reaching for, without the flashing.
+    """
+    body = _block(page, fn)
+    tail = body[body.index("catch"):]
+    assert re.search(r'"error:"', tail), (
+        "%s does not put the error message into the signature" % page)
+    assert re.search(r"if\s*\(\s*esig\s*!==\s*" + var + r"\s*\)", tail), (
+        "%s repaints the error even when it is identical to the one already showing" % page)
+    assert re.search(var + r"\s*=\s*esig", tail), (
+        "%s never stores the error signature, so the comparison can never match" % page)
+    assert not re.search(var + r'\s*=\s*""', tail), (
+        "%s clears the signature on error, which repaints the same message on every poll" % page)
 
 
 # ── the drawer: the actual white box in the screenshot ────────────────────────
