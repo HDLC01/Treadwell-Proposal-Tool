@@ -15,9 +15,9 @@
   // and is exercised under node. See the header there for why each answer is what
   // it is. This file owns rendering and nothing else about the board's meaning.
   const C = window.TWCrm;
-  const { STAGES, STAGE_SUBMITTED, STAGE_LOST, NATURAL_DIR, SORT_FIELDS } = C;
+  const { STAGES, STAGE_SUBMITTED, NATURAL_DIR, SORT_FIELDS } = C;
   const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
-          isLost, lostReason, followupOff, nameOf } = C;
+          isLost, isTest, lostReason, followupOff, nameOf } = C;
   const fu = C.followup;
   const avatar = C.avatarHtml;
   /** The same chip with the identity colour taken OUT — for the drawer's notification
@@ -36,14 +36,21 @@
   // a scan survives both a re-render and a return visit.
   const EST_KEY = "tw_crm_est", MONTH_KEY = "tw_crm_month";
   const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
-  const LOST_KEY = "tw_crm_lost", VIEW_KEY = "tw_crm_view";
+  const TAB_KEY = "tw_crm_tab", VIEW_KEY = "tw_crm_view";
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
   let EST = ss(EST_KEY, "");
   let MONTH = ss(MONTH_KEY, "");
   let SORTFIELD = SORT_FIELDS.includes(ss(SORTFIELD_KEY, "")) ? ss(SORTFIELD_KEY, "") : "activity";
   let SORTDIR = ss(SORTDIR_KEY, "") === "asc" ? "asc" : (ss(SORTDIR_KEY, "") === "desc" ? "desc" : NATURAL_DIR[SORTFIELD]);
-  let SHOW_LOST = ss(LOST_KEY, "") === "1";
+  // Active by default: the working list is what a rep opens this page for, and Test is
+  // somewhere you go on purpose. Same default, and the same `is_test` flag, as the
+  // Proposals Database.
+  //
+  // There is no SHOW_LOST here any more. It used to add a Lost column and a "Show closed
+  // lost (N)" toggle; Hanz, 2026-08-10: "if its lost remove it from the Customer CRM. To
+  // remove clutter." The count now sits on the tab row as a link out. See syncLostLink.
+  let TAB = ss(TAB_KEY, "") === "test" ? "test" : "active";
   let VIEW = ss(VIEW_KEY, "") === "table" ? "table" : "board";
 
   function api(path, opts) {
@@ -80,11 +87,29 @@
 
   const applySort = (list) => C.sort(list, SORTFIELD, SORTDIR);
 
+  /** The rows this board is ABOUT, before any filter the toolbar owns. Two exclusions,
+   *  and neither of them is something the rep can switch back on:
+   *
+   *  CLOSED LOST IS GONE. Hanz, 2026-08-10: "allow for the projects to be lost even its been
+   *  approved and if its lost remove it from the Customer CRM. To remove clutter." No Lost
+   *  column, no toggle. The tab row carries the count and links out to the Proposals Database,
+   *  so a dead deal is still findable without occupying a board of live work.
+   *
+   *  TEST PROJECTS ARE THEIR OWN TAB, split by C.isTest, the same predicate on the same
+   *  `is_test` flag, that the Proposals Database uses. Anything that page shows under Test has
+   *  to show up under Test here too.
+   *
+   *  Also what populateEstimators/populateMonths count, so an option can never offer a filter
+   *  that yields nothing: a month whose only proposals were lost used to sit in that dropdown
+   *  and blank the board when picked. */
+  function boardPool() {
+    return ALL.filter((p) => !isLost(p) && isTest(p) === (TAB === "test"));
+  }
+
   /** Everything the current filters allow, in the current order. Both views read
    *  this, so a filter can never mean two different things depending on the view. */
   function visible() {
-    const rows = applySort(applyMonth(applySearch(applyEstimator(ALL))));
-    return SHOW_LOST ? rows : rows.filter((p) => !isLost(p));
+    return applySort(applyMonth(applySearch(applyEstimator(boardPool()))));
   }
 
   /** The state chips a card and a row both carry. Words, not colour alone: this page
@@ -124,30 +149,40 @@
     // One benign wrinkle: populateMonths below can clear a MONTH whose rows have all gone, after
     // this signature captured the old value. The next call then sees a different signature and
     // repaints once. One extra paint, no loop, and only on a month emptying out.
-    const sig = JSON.stringify([ALL, EST, MONTH, SORTFIELD, SORTDIR, SHOW_LOST, VIEW,
-                                ($("search") || {}).value || ""]);
+    //
+    // The lost COUNT is named even though `ALL` is serialized whole and therefore already
+    // implies it. Two reasons it earns its place: the count is painted OUTSIDE the board's
+    // innerHTML (it is a link in the toolbar), and lost rows are excluded from everything else
+    // this signature is derived from, so narrowing `ALL` to the visible pool, which is the
+    // obvious optimisation the day 300 rows per poll starts to hurt, would silently freeze that
+    // number at whatever it was on first paint.
+    const sig = JSON.stringify([ALL, EST, MONTH, SORTFIELD, SORTDIR, TAB, VIEW,
+                                ($("search") || {}).value || "", lostCount()]);
     if (sig === BOARD_SIG) return;
     BOARD_SIG = sig;
 
     populateEstimators();
     populateMonths();
     const items = visible();
-    const shown = SHOW_LOST ? ALL.length : ALL.filter((p) => !isLost(p)).length;
+    const shown = boardPool().length;
     $("count").textContent = items.length === shown
       ? shown + " proposal" + (shown === 1 ? "" : "s")
       : items.length + " of " + shown;
     const clear = $("crm-clear");
     if (clear) clear.hidden = !(EST || MONTH || SORTFIELD !== "activity" || SORTDIR !== "desc");
-    syncLostChip();
+    syncTabs();
+    syncLostLink();
     const board = $("board");
     board.classList.toggle("as-table", VIEW === "table");
     board.innerHTML = VIEW === "table" ? tableHtml(items) : kanbanHtml(items);
   }
 
   function kanbanHtml(items) {
-    const cols = SHOW_LOST ? STAGES.concat([STAGE_LOST]) : STAGES;
-    const byStage = C.group(items, cols);
-    return cols.map((s) => {
+    // STAGES only. There is no Closed lost column: those proposals never reach here (see
+    // boardPool), and C.group drops any row whose stage has no column, so one arriving by
+    // some other route is left out rather than throwing.
+    const byStage = C.group(items, STAGES);
+    return STAGES.map((s) => {
       const cards = byStage[s].map((p) => {
         const act = lastActivity(p);
         // Who owns it and when it last moved, on one line each — the column is only
@@ -177,7 +212,7 @@
       }).join("") || '<div class="empty">—</div>';
       // Money is in and unconfirmed → flag the column, it's the one needing a human.
       const attn = s === STAGE_SUBMITTED && byStage[s].length ? " col-attn" : "";
-      return `<div class="col${attn}${s === STAGE_LOST ? " col-lost" : ""}"><h2>${esc(s)}<span>${byStage[s].length}</span></h2>${cards}</div>`;
+      return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span></h2>${cards}</div>`;
     }).join("");
   }
 
@@ -251,12 +286,15 @@
   });
 
   /** Options come from the data, so the list can't offer an estimator with no
-   *  cards. A stale selection is dropped rather than leaving the board blank. */
+   *  cards. A stale selection is dropped rather than leaving the board blank.
+   *
+   *  boardPool(), not ALL: an estimator whose only proposals are lost, or who is only on the
+   *  other tab, would otherwise be listed here and empty the board when picked. */
   function populateEstimators() {
     const sel = $("crm-est");
     if (!sel) return;
     const counts = {};
-    ALL.forEach((p) => {
+    boardPool().forEach((p) => {
       const e = estimatorOf(p).toLowerCase();
       if (e) counts[e] = (counts[e] || 0) + 1;
     });
@@ -271,7 +309,7 @@
     const sel = $("crm-month");
     if (!sel) return;
     const counts = {};
-    ALL.forEach((p) => {
+    boardPool().forEach((p) => {
       const ym = TW.bizYM(activityTs(p));
       if (ym) counts[ym] = (counts[ym] || 0) + 1;
     });
@@ -1525,16 +1563,45 @@
       : "Descending (newest · Z→A · high→low) — click for ascending";
   }
 
-  /** The closed-lost toggle carries its own count, so the number of dead deals is
-   *  readable without revealing them. */
-  function syncLostChip() {
-    const b = $("crm-lost");
-    if (!b) return;
-    const n = ALL.filter(isLost).length;
-    b.hidden = n === 0;                       // nothing lost yet → no control at all
-    b.textContent = (SHOW_LOST ? "Hide" : "Show") + " closed lost (" + n + ")";
-    b.setAttribute("aria-pressed", SHOW_LOST ? "true" : "false");
-    b.classList.toggle("on", SHOW_LOST);
+  function lostCount() { return ALL.filter(isLost).length; }
+
+  /** How many proposals the customer closed lost, and the way to them.
+   *
+   *  They are not on this board at all any more (see boardPool), so this count is the only
+   *  thing here that says they exist, which is exactly what Hanz asked for when he chose it
+   *  over a Lost column: "Gone from the board, but keep a count somewhere."
+   *
+   *  The link is PLAIN, and that is a real limitation rather than an oversight. /projects.html
+   *  reads no filter out of the URL: its tabs are Active / Inactive / All / Test, held in
+   *  sessionStorage, and it has no idea what a lost proposal is: `closed_lost` lives on the
+   *  portal row, while that page lists our own drafts. So this lands you on the project list,
+   *  not on a pre-filtered view of the dead ones. Passing ?filter=lost would be a parameter
+   *  that page silently ignores. */
+  function syncLostLink() {
+    const a = $("crm-lost");
+    if (!a) return;
+    const n = lostCount();
+    a.hidden = n === 0;                       // nothing lost yet → no link at all
+    a.textContent = n + " closed lost →";
+    a.title = n + " proposal" + (n === 1 ? "" : "s") + " the customer isn't moving forward with."
+      + " They're off this board. Open the Proposals Database to find them.";
+  }
+
+  /** The Active / Test switch. The counts come off the same predicate the board filters with,
+   *  so a tab can never advertise a number it then refuses to show. Lost proposals are outside
+   *  both tabs, so they are subtracted before either is counted. */
+  function syncTabs() {
+    const wrap = $("crm-tabs");
+    if (!wrap) return;
+    const live = ALL.filter((p) => !isLost(p));
+    const n = { test: live.filter(isTest).length, active: live.filter((p) => !isTest(p)).length };
+    wrap.querySelectorAll("[data-tab]").forEach((b) => {
+      const on = b.dataset.tab === TAB;
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.classList.toggle("on", on);
+      const c = b.querySelector(".n");
+      if (c) c.textContent = n[b.dataset.tab] || 0;
+    });
   }
 
   function syncViewToggle() {
@@ -1550,7 +1617,7 @@
   (function wireToolbar() {
     const est = $("crm-est"), month = $("crm-month");
     const sort = $("crm-sort"), dir = $("crm-dir"), clear = $("crm-clear");
-    const lost = $("crm-lost"), view = $("crm-view");
+    const tabs = $("crm-tabs"), view = $("crm-view");
     const syncDir = syncSortControls;
     $("search").addEventListener("input", renderBoard);
     $("search").addEventListener("keydown", (e) => {
@@ -1578,8 +1645,14 @@
         ssSet(SORTDIR_KEY, SORTDIR); syncDir(); renderBoard();
       });
     }
-    if (lost) lost.addEventListener("click", () => {
-      SHOW_LOST = !SHOW_LOST; ssSet(LOST_KEY, SHOW_LOST ? "1" : ""); renderBoard();
+    // Delegated, so the two buttons need no per-element binding, and TAB is in BOARD_SIG,
+    // so renderBoard is guaranteed to repaint (including the pressed state, via syncTabs).
+    if (tabs) tabs.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-tab]");
+      if (!b || b.dataset.tab === TAB) return;
+      TAB = b.dataset.tab === "test" ? "test" : "active";
+      ssSet(TAB_KEY, TAB === "test" ? "test" : "");
+      renderBoard();
     });
     if (view) view.addEventListener("click", () => {
       VIEW = VIEW === "table" ? "board" : "table";
@@ -1587,14 +1660,17 @@
       syncViewToggle(); renderBoard();
     });
     if (clear) clear.addEventListener("click", () => {
-      // Deliberately NOT the view or the closed-lost toggle: those are how the rep
-      // wants to look at the board, not a filter narrowing what's on it.
+      // Deliberately NOT the view or the Active/Test tab: those are which board the rep is
+      // looking at, not a filter narrowing what's on it.
       EST = ""; MONTH = ""; SORTFIELD = "activity"; SORTDIR = "desc";
       [EST_KEY, MONTH_KEY, SORTFIELD_KEY, SORTDIR_KEY].forEach((k) => ssSet(k, ""));
       $("search").value = "";
       syncDir(); renderBoard();
     });
     syncViewToggle();
+    // Before the first fetch lands, so a remembered Test tab reads as selected while the
+    // board still says "Loading…" rather than flipping under the rep a second later.
+    syncTabs();
   })();
   load();
   startLiveUpdates();

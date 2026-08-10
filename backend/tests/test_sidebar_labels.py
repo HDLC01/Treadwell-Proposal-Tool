@@ -1,0 +1,240 @@
+"""The sidebar's Proposals section, renamed and de-cluttered (Hanz, 2026-08-10).
+
+WHAT HE ASKED FOR, IN HIS WORDS.
+
+    Change "Projects" sidebar label to Proposals Database
+    and Customer Portal CRM TO "Active Projects"
+    ...
+    Remove the followups on the sidebar.
+
+WHY THE RENAME. Two of the eleven sidebar items were named after the code rather than the job.
+"Projects" is every proposal anybody has ever drafted, most of them never sent to a customer, so
+it is a record you search. "Customer Portal CRM" is the short list of jobs that are live with a
+customer right now, which is the one Troy opens every morning. Standing in the sidebar neither
+name told you which was which, and both start with the same idea, so people opened the wrong one.
+
+WHY THE REMOVAL. The FOLLOW-UPS heading and its two items, Follow-ups and Cadence & emails, were
+added on 2026-08-06 with a nine-line comment arguing that chasing is its own job and deserves its
+own section. Four days later Hanz wanted the clutter gone. He was told in as many words that
+removing both leaves the cadence page with nothing linking to it, and chose that anyway, so
+/followup-settings.html is now reachable by URL only.
+
+"Unlinked" is one keystroke away from "deleted", which is the mistake these tests exist to catch.
+The cadence page is the ONLY place the wording of four recurring customer emails is editable, it
+saves by REPLACING the whole single row with no history (see test_followup_settings_page.py), and
+nothing on screen points at it any more. So the last tests here assert both pages are still on
+disk and still load their script, because a later cleanup pass that sees an unreferenced page and
+deletes it would destroy that wording with no way back.
+
+WHY SOURCE ASSERTIONS. The sidebar is built by string concatenation in a browser file. What is
+checkable here is the markup it emits, which is exactly what changed.
+
+THREE TESTS ELSEWHERE ASSERTED THE DELETED SECTION and were dealt with in the same commit, since
+leaving them red would have meant shipping a red suite. test_followups_page.py's two sidebar tests
+(test_the_board_and_its_cadence_share_one_sidebar_section and
+test_neither_follow_up_page_is_left_behind_in_its_old_section) are gone, replaced by a comment
+pointing here. test_followup_settings_page.py::test_the_sidebar_links_to_it_without_a_duplicate_glyph
+kept its glyph half and lost its sidebar-link half, and is now
+test_no_two_sidebar_items_share_a_glyph.
+"""
+import pathlib
+import re
+
+import pytest
+
+FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
+AUTH = FRONTEND / "auth.js"
+
+
+def _code(path):
+    """Source with // comment lines stripped.
+
+    auth.js explains this change by quoting the old labels back at you, so a raw grep for
+    "Customer Portal CRM" matches the comment that records its removal and every "the old label is
+    gone" assertion passes for the wrong reason. That has caught me out repeatedly in this repo.
+    """
+    return "\n".join(l for l in path.read_text(encoding="utf-8").splitlines()
+                     if not l.strip().startswith("//"))
+
+
+def _block(path, fn):
+    """The body of a `function fn(...) {` in <path>, brace-counted.
+
+    Never grep the whole of auth.js for a nav href: injectSidebarStyles is one enormous template
+    literal and the file also holds the login and notification code, so a file-wide match proves
+    nothing about the sidebar. Every assertion below is scoped to the function that must contain
+    it.
+    """
+    src = _code(path)
+    m = re.search(r"\n\s{2,6}(?:async\s+)?function " + re.escape(fn) + r"\s*\(", src)
+    assert m, "%s() is gone from %s, so these tests need rewriting rather than deleting" % (
+        fn, path.name)
+    i = src.index("{", m.end())
+    depth, j = 0, i
+    while j < len(src):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[i:j + 1]
+        j += 1
+    pytest.fail("unbalanced braces reading %s() in %s" % (fn, path.name))
+
+
+@pytest.fixture(scope="module")
+def sidebar():
+    return _block(AUTH, "renderSidebar")
+
+
+def _nav_labels(sidebar):
+    """(href, glyph, label) for every navItem call in the sidebar."""
+    return re.findall(r'navItem\("([^"]+)",\s*"([^"]+)",\s*"([^"]+)"', sidebar)
+
+
+# ── the two renames ───────────────────────────────────────────────────────────
+def test_the_projects_item_is_labelled_proposals_database(sidebar):
+    """Kills reverting the label to "Projects", and kills renaming the page by changing its href
+    instead: /projects.html is what auth.js redirects to after sign-in (HOME_PAGE), what the
+    notification links point at and what staff have bookmarked."""
+    assert re.search(r'navItem\("/projects\.html",\s*"[^"]+",\s*"Proposals Database"\)', sidebar), (
+        "the Proposals Database item is missing; nav items are %s" % (_nav_labels(sidebar),))
+
+
+def test_the_portal_item_is_labelled_active_projects(sidebar):
+    """Kills reverting to "Customer Portal CRM". The href must stay /portal.html: the follow-ups
+    board, the notification bell and projects.js all link into that page."""
+    assert re.search(r'navItem\("/portal\.html",\s*"[^"]+",\s*"Active Projects"\)', sidebar), (
+        "the Active Projects item is missing; nav items are %s" % (_nav_labels(sidebar),))
+
+
+def test_no_sidebar_item_still_carries_an_old_name(sidebar):
+    """Kills the half-rename: adding the new label somewhere while the old one survives, which is
+    how you end up with two entries that read like two different pages."""
+    labels = [lbl for _, _, lbl in _nav_labels(sidebar)]
+    assert "Projects" not in labels, "the old bare 'Projects' label is still in the sidebar"
+    assert "Customer Portal CRM" not in labels, "the old 'Customer Portal CRM' label survives"
+
+
+# ── the follow-ups section, removed ───────────────────────────────────────────
+def test_the_follow_ups_board_is_not_in_the_sidebar(sidebar):
+    """The item Hanz named. Kills a removal that only took the cadence out."""
+    assert "/followups.html" not in sidebar, "the Follow-ups board is still a sidebar item"
+
+
+def test_the_cadence_page_IS_still_in_the_sidebar(sidebar):
+    """The board went, the cadence stayed.
+
+    This test asserted the opposite for a few hours. Hanz first said "Remove the followups on the
+    sidebar" and, asked where the orphaned cadence should go, chose to drop it too. Seeing both
+    gone he reversed it: "Keep the Cadence and EMAILs... Just the follow up tab."
+
+    Worth keeping pointed at, because unlinking this page is not a cosmetic act: it is the only
+    editor for the four recurring customer emails, and its save replaces the single settings row
+    with no history. An unreachable version of it is one wording change away from being
+    unrecoverable.
+    """
+    assert "/followup-settings.html" in sidebar, "Cadence & emails has left the sidebar again"
+
+
+def test_the_cadence_page_sits_under_settings(sidebar):
+    """Not under a one-item FOLLOW-UPS heading, and not stranded in Proposals. Beside
+    Notification Sending, which answers the other half of the same question."""
+    i = sidebar.index('tw-section">Settings')
+    assert sidebar.index("/followup-settings.html") > i, (
+        "the cadence link is above the Settings heading, so it reads as part of another section")
+    nxt = sidebar.find('tw-section">', i + 1)
+    if nxt != -1:
+        assert sidebar.index("/followup-settings.html") < nxt, (
+            "the cadence link fell past the end of the Settings section")
+
+
+def test_the_follow_ups_heading_went_with_them(sidebar):
+    """Kills deleting the two items and leaving the heading, which renders an empty FOLLOW-UPS
+    label with nothing under it: more clutter than before, not less."""
+    assert 'tw-section">Follow-ups' not in sidebar, (
+        "the FOLLOW-UPS heading is still there with no items beneath it")
+
+
+def test_the_removal_did_not_take_its_neighbours_with_it(sidebar):
+    """The section sat between Polish Estimate and the Analytics heading, so an over-wide delete
+    lands on those. Kills losing the last item of Proposals or the whole Analytics heading."""
+    assert "/polish-estimate.html" in sidebar, "Polish Estimate was removed along with the section"
+    assert 'tw-section">Analytics' in sidebar, "the Analytics heading went with the section"
+    assert sidebar.index("/polish-estimate.html") < sidebar.index('tw-section">Analytics'), (
+        "Proposals and Analytics have been reordered, which was not part of this change")
+
+
+# ── unlinked must not become deleted ──────────────────────────────────────────
+@pytest.mark.parametrize("page,script", [
+    ("followup-settings.html", "/js/followup-settings.js"),
+    ("followups.html", "/js/followups.js"),
+])
+def test_the_page_still_exists_and_still_loads_its_script(page, script):
+    """Both pages are now URL-only. Kills the cleanup pass that spots an unreferenced page and
+    deletes it, and kills the subtler version where the html survives but its <script src> or the
+    js file behind it does not, so the page opens as an empty shell.
+
+    The cadence page is the only editor for four recurring customer emails and saving replaces the
+    whole row with no history, so losing it loses wording nobody can retype.
+    """
+    html_path = FRONTEND / page
+    assert html_path.is_file(), "%s has been deleted; it is unlinked, not unwanted" % page
+    html = html_path.read_text(encoding="utf-8")
+    assert 'src="%s"' % script in html, "%s no longer loads %s" % (page, script)
+    js_path = FRONTEND / script.lstrip("/")
+    assert js_path.is_file(), "%s is gone, so %s opens as an empty shell" % (script, page)
+    assert len(js_path.read_text(encoding="utf-8")) > 500, "%s has been emptied out" % script
+    # CSP: an inline <script> silently fails, so a page kept alive by inlining its JS is dead.
+    assert "<script>" not in html.replace("<script src", "<script-src")
+
+
+# ── the traps ─────────────────────────────────────────────────────────────────
+def test_the_active_highlight_is_decided_by_the_href_not_the_label():
+    """navItem marks the current page. Kills any version that compares the LABEL against the
+    path, because then renaming Projects to Proposals Database would silently stop the sidebar
+    highlighting the page you are standing on.
+    """
+    body = _block(AUTH, "navItem")
+    m = re.search(r"active\s*=\s*location\.pathname", body)
+    assert m, "the active check no longer starts from location.pathname"
+    decision = body[m.start():body.index(";", m.start())]
+    assert "href" in decision, "the active item is not decided from its href"
+    assert "label" not in decision, (
+        "the active highlight reads the label, so renaming an item breaks it")
+
+
+def test_no_two_sidebar_items_share_a_glyph(sidebar):
+    """Same invariant test_polish_estimate_page.py and test_library.py assert. Removing ⏱ and ⏲
+    frees two glyphs, and this kills quietly reusing one on a new item: the icons are the only
+    thing distinguishing eleven near-identical rows at a glance.
+    """
+    glyphs = [g for _, g, _ in _nav_labels(sidebar)]
+    assert len(glyphs) == len(set(glyphs)), "two sidebar items share a glyph: %s" % glyphs
+
+
+# ── the page must not disagree with the sidebar ───────────────────────────────
+def test_the_projects_page_calls_itself_what_the_sidebar_calls_it():
+    """Kills renaming the sidebar alone. Clicking "Proposals Database" and landing on a page
+    headed "Projects" reads as the wrong page, and the browser tab is how staff find it among a
+    dozen open tabs.
+    """
+    html = (FRONTEND / "projects.html").read_text(encoding="utf-8")
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)      # the comment records the old name
+    assert "<h1>Proposals Database</h1>" in html, "the page heading was not renamed"
+    assert "<h1>Projects</h1>" not in html
+    assert "<title>Proposals Database" in html, "the browser tab still says Projects"
+
+
+def test_the_portal_page_calls_itself_what_the_sidebar_calls_it():
+    """The half of the rename that was missed the first time round: the sidebar said Active
+    Projects while the page it opened was still headed and tabbed "Customer Portal CRM", which
+    reads as having clicked the wrong thing. Same reason as the test above, and the tab title
+    matters more here because this is the page Troy leaves open all day.
+    """
+    html = (FRONTEND / "portal.html").read_text(encoding="utf-8")
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)      # the comment records the old name
+    assert "<h1>Active Projects</h1>" in html, "the page heading was not renamed"
+    assert "Customer Portal CRM" not in html, (
+        "the old name survives on the page the sidebar calls Active Projects")
+    assert "<title>Active Projects" in html, "the browser tab still says Customer Portal CRM"

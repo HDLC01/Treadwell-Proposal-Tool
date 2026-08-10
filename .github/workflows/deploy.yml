@@ -109,13 +109,39 @@ jobs:
             trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
             docker compose -f docker-compose.staging.yml pull app
             docker compose -f docker-compose.staging.yml up -d     # NO --build
+            ok=0
             for i in $(seq 1 24); do
-              if curl -fsS http://localhost:8889/healthz >/dev/null; then
-                echo "staging healthy on $TW_IMAGE"; exit 0
-              fi
+              if curl -fsS http://localhost:8889/healthz >/dev/null; then ok=1; break; fi
               sleep 5
             done
-            echo "staging post-deploy healthcheck failed"; exit 1
+            if [ "$ok" != "1" ]; then echo "staging post-deploy healthcheck failed"; exit 1; fi
+            echo "staging healthy on $TW_IMAGE"
+
+            # Housekeeping. Each deploy leaves a ~1.7GB image behind, and on 2026-08-11 there
+            # were FIFTY of them: the disk was at 55% and clearing them freed 6GB. Hanz asked for
+            # this to happen on its own rather than be remembered.
+            #
+            # AFTER the healthcheck, deliberately. A deploy that failed still has its predecessor
+            # sitting on the box to roll back to.
+            #
+            # Keeps the three newest, so the documented rollback
+            # (TW_IMAGE=...:sha-<old> docker compose up -d) resolves locally instead of reaching
+            # for ghcr, which returned 403s and 500s on the day this was written.
+            #
+            # Never `image prune -a`: this box hosts a dozen other apps and that would reach
+            # their images too.
+            KEEP=$(docker ps -a --format '{{.Image}}' | sort -u)
+            NEWEST=$(docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
+                     | grep 'treadwell-proposal-tool:sha-' | sort -r | head -3 | cut -d'|' -f2)
+            for img in $(docker images --format '{{.Repository}}:{{.Tag}}' \
+                         | grep 'treadwell-proposal-tool:sha-' || true); do
+              if echo "$KEEP" | grep -qx "$img"; then continue; fi
+              if echo "$NEWEST" | grep -qx "$img"; then continue; fi
+              docker rmi "$img" >/dev/null 2>&1 || true
+            done
+            docker image prune -f >/dev/null 2>&1 || true
+            docker builder prune -f >/dev/null 2>&1 || true
+            df -h / | tail -1
         env:
           TW_IMAGE: ${{ needs.build.outputs.image }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -202,13 +228,28 @@ jobs:
             trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
             docker compose pull proposal-tool
             docker compose up -d                                   # NO --build
+            ok=0
             for i in $(seq 1 24); do
-              if curl -fsS http://localhost:8888/healthz >/dev/null; then
-                echo "prod healthy on $TW_IMAGE"; exit 0
-              fi
+              if curl -fsS http://localhost:8888/healthz >/dev/null; then ok=1; break; fi
               sleep 5
             done
-            echo "prod post-deploy healthcheck failed"; exit 1
+            if [ "$ok" != "1" ]; then echo "prod post-deploy healthcheck failed"; exit 1; fi
+            echo "prod healthy on $TW_IMAGE"
+
+            # Same housekeeping as the staging step; see the long note there for why it runs after
+            # the healthcheck and why it keeps three.
+            KEEP=$(docker ps -a --format '{{.Image}}' | sort -u)
+            NEWEST=$(docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
+                     | grep 'treadwell-proposal-tool:sha-' | sort -r | head -3 | cut -d'|' -f2)
+            for img in $(docker images --format '{{.Repository}}:{{.Tag}}' \
+                         | grep 'treadwell-proposal-tool:sha-' || true); do
+              if echo "$KEEP" | grep -qx "$img"; then continue; fi
+              if echo "$NEWEST" | grep -qx "$img"; then continue; fi
+              docker rmi "$img" >/dev/null 2>&1 || true
+            done
+            docker image prune -f >/dev/null 2>&1 || true
+            docker builder prune -f >/dev/null 2>&1 || true
+            df -h / | tail -1
         env:
           TW_IMAGE: ${{ needs.build.outputs.image }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

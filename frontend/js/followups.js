@@ -193,7 +193,7 @@
             title="Email the customer and add it to their message thread">Send</button>`}
         <button type="button" data-act="log"
           title="Record a call, text or email you sent yourself. Does NOT email the customer.">Log a call</button>
-        <button type="button" data-act="open" title="Open in the Customer Portal CRM">Open</button>
+        <button type="button" data-act="open" title="Open in Active Projects">Open</button>
       </div></td>
     </tr>`;
   }
