@@ -77,11 +77,13 @@ def test_scheduled_is_not_a_column():
     assert "Scheduled" not in _node("C.STAGES")
 
 
-def test_the_columns_that_remain_are_the_expected_six():
+def test_the_columns_that_remain_are_the_expected_seven():
     """Named explicitly so a stray edit to the list is a test failure rather than a surprise on
-    the board."""
-    assert _node("C.STAGES") == ["Sent", "Viewed", "Approved", "Deposit submitted",
-                                 "Deposit received", "Contact info"]
+    the board. "Created but not sent" was added the same day, AFTER this removal (see
+    test_created_not_sent.py) — it is a different change and is listed here so this test stays
+    the single place that says what the board's columns are."""
+    assert _node("C.STAGES") == ["Created but not sent", "Sent", "Viewed", "Approved",
+                                 "Deposit submitted", "Deposit received", "Contact info"]
 
 
 def test_closed_lost_still_works():

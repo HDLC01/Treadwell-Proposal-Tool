@@ -43,7 +43,17 @@
   //
   // schedule_status and scheduled_at are untouched in the database. Nothing is deleted, so
   // reinstating the column is putting these two lines back.
-  var STAGES = ["Sent", "Viewed", "Approved", STAGE_SUBMITTED,
+  //
+  // The first column is not a portal state at all. Hanz, 2026-08-11: "Under the Active Proposals
+  // we need to create a new category before sent 'Created but not Sent'."
+  //
+  // Everything to its right comes from portal_proposals, which only has a row once a proposal has
+  // been emailed to a customer. A finished estimate sitting on somebody's desk therefore has no
+  // portal row and was invisible on this board, which is exactly the work most worth chasing.
+  // api_portal_pipeline synthesises those rows out of our own drafts and marks them `not_sent`;
+  // see the note there for what counts as one.
+  var STAGE_CREATED = "Created but not sent";
+  var STAGES = [STAGE_CREATED, "Sent", "Viewed", "Approved", STAGE_SUBMITTED,
                 "Deposit received", "Contact info"];
 
   var LOST_REASON = {
@@ -67,10 +77,16 @@
     ["contacts_received_at", "Contacts in"],
     ["last_message_at", "Message"],
     ["last_followup_at", "Followed up"],
+    // Only a synthesised "Created but not sent" row carries this; the portal never stores it.
+    // LAST, because lastActivity keeps the first entry on a strictly-greater comparison — so a
+    // real portal event sharing the timestamp wins the card's activity line, which is right:
+    // being created is the earliest thing that can happen to a project.
+    ["drafted_at", "Created"],
   ];
 
   // The date a card EARNED its current column.
   var STAGE_DATE_KEY = {
+    "Created but not sent": "drafted_at",
     "Sent": "sent_at",
     "Viewed": "last_viewed_at",
     "Approved": "approved_at",
@@ -124,6 +140,11 @@
 
   function stage(p) {
     if (isLost(p)) return STAGE_LOST;
+    // Checked before every portal state, because a synthesised row has none of them: it is a
+    // draft of ours, not a proposal the customer has. The flag is set server-side rather than
+    // inferred from missing fields, so a portal row that arrives without a status cannot fall
+    // into this column by accident.
+    if (p.not_sent) return STAGE_CREATED;
     // No schedule branch. A scheduled job now reads as Contact info, the furthest stage that
     // still exists, rather than vanishing: group() only keeps cards whose stage is a live
     // column. See the note on STAGES.
@@ -170,6 +191,19 @@
   }
 
   function estimatorOf(p) { return String(p.assigned_estimator || p.estimator_email || ""); }
+
+  /** The money on a card, or null when there is none to show.
+   *
+   *  Two sources because a card has two possible lives. A sent proposal carries the portal's
+   *  `approved_total`, which is the figure the customer was actually given. A "Created but not
+   *  sent" card has no portal row at all, so it carries `bid_total` off the draft — the same
+   *  number the Proposals Database shows. Deliberately NOT one field: calling an unsent
+   *  draft's working figure "approved" would put a word on it that nobody has earned. */
+  function cardTotal(p) {
+    if (typeof p.approved_total === "number") return p.approved_total;
+    if (typeof p.bid_total === "number") return p.bid_total;
+    return null;
+  }
   function isAssigned(p) { return !!p.assigned_estimator; }
 
   /** A pause the customer asked for, still in the future — "" once it lapses.
@@ -326,8 +360,7 @@
     },
     total: function (dir) {
       return function (x, y) {
-        var tx = typeof x.approved_total === "number" ? x.approved_total : null;
-        var ty = typeof y.approved_total === "number" ? y.approved_total : null;
+        var tx = cardTotal(x), ty = cardTotal(y);
         if (tx === null && ty === null) return 0;
         if (tx === null) return 1;
         if (ty === null) return -1;
@@ -356,12 +389,14 @@
 
   return {
     STAGES: STAGES, STAGE_SUBMITTED: STAGE_SUBMITTED, STAGE_LOST: STAGE_LOST,
+    STAGE_CREATED: STAGE_CREATED,
     LOST_REASON: LOST_REASON, MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
     followup: followup, isLost: isLost, depositSatisfied: depositSatisfied,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
     stage: stage, lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
-    estimatorOf: estimatorOf, isAssigned: isAssigned, pausedUntil: pausedUntil,
+    estimatorOf: estimatorOf, isAssigned: isAssigned, cardTotal: cardTotal,
+    pausedUntil: pausedUntil,
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,
     initialsOf: initialsOf, colorOf: colorOf, avatarHtml: avatarHtml, identityKey: identityKey,
     AVATAR_COLORS: AVATAR_COLORS, AVATAR_NONE: AVATAR_NONE,
