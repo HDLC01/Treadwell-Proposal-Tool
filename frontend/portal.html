@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Customer Portal CRM · Treadwell Proposal Generator</title>
+<title>Active Projects · Treadwell Proposal Generator</title>
 <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
 <!-- This page styles itself and does not link styles.css, so it needs its own
      opt-out. Without it Chromium synthesizes a dark theme over the whole drawer
@@ -39,7 +39,25 @@
      be re-tinted by a synthesized dark theme — so the label itself flips too
      ("Show"/"Hide", "Table"/"Board"). */
   .tw-clear[aria-pressed="true"] { border-color:var(--ink-v); color:var(--ink); background:var(--surf-high); }
-  .tw-lost.on { border-color:var(--ink-v); }
+  /* Active / Test. Same two categories, same `is_test` flag, as the Proposals Database, so
+     these are pills in the toolbar family rather than a new shape, and the selected one is
+     marked by weight and a filled background as well as tint (this page can be re-tinted by a
+     synthesized dark theme, so colour alone would not survive). Its own row above the
+     toolbar: it says which board you are on, not how it is filtered. */
+  .tw-tabs { display:flex; gap:8px; align-items:center; margin:0 0 12px; }
+  .tw-tab { background:#fff; color:var(--ink-v); border:1px solid var(--line); border-radius:999px;
+    min-height:36px; padding:0 14px; font:700 13px system-ui; cursor:pointer; display:inline-flex;
+    align-items:center; gap:6px; }
+  .tw-tab:hover { border-color:var(--red); color:var(--red); }
+  .tw-tab[aria-pressed="true"] { background:var(--red-dark); border-color:var(--red-dark); color:#fff; }
+  .tw-tab .n { font-size:11px; font-weight:800; font-variant-numeric:tabular-nums;
+    background:var(--surf-high); color:var(--ink-v); border-radius:999px; padding:1px 6px; }
+  .tw-tab[aria-pressed="true"] .n { background:rgba(255,255,255,.22); color:#fff; }
+  /* Closed lost: a count and a way out, not a control. Quiet: nothing here needs doing, it
+     exists so a dead deal is still findable after it leaves the board. */
+  .tw-lostlink { margin-left:auto; color:var(--ink-v); font:600 12px system-ui; text-decoration:none;
+    border-bottom:1px dotted var(--line); }
+  .tw-lostlink:hover { color:var(--red); border-bottom-color:var(--red); }
   .board { display:flex; gap:14px; align-items:flex-start; overflow-x:auto; padding-bottom:8px; }
   /* The table replaces the columns inside the same #board node, so it has to undo
      the flex row that node is otherwise carrying. */
@@ -76,11 +94,9 @@
     border:1px solid var(--line); background:var(--surf-high); color:var(--ink-v); white-space:nowrap; }
   .chip-pause { background:#fdf6e3; border-color:#e8d9a8; color:#7a5c00; }
   .chip-off { background:var(--surf-high); }
+  /* Kept for a lost proposal opened straight from a link, even though no card on the board
+     can carry it any more: closed-lost rows leave the board entirely (portal.js:boardPool). */
   .chip-lost { background:var(--surf-high); color:var(--ink-v); text-decoration:none; }
-  /* Closed lost is an archive column, not work: quieter than the rest, and the
-     header is the only thing in it at full strength. */
-  .col.col-lost { background:var(--surf-high); }
-  .col.col-lost .deal { opacity:.72; }
   /* Every proposal as one sortable list — the answer to "show me all sixty". */
   .ptable { width:100%; border-collapse:separate; border-spacing:0; background:#fff;
     border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px; }
@@ -278,8 +294,19 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Customer Portal CRM</h1>
+    <!-- Renamed with the sidebar label (Hanz, 2026-08-10: Customer Portal CRM TO "Active
+         Projects"). The URL stays /portal.html: the follow-ups board, the notification bell and
+         projects.js all deep-link into it. -->
+    <h1>Active Projects</h1>
     <p class="sub">Proposals sent to customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
+    <!-- Which board, not how it's filtered: the same Active / Test split as the Proposals
+         Database, off the same is_test flag. The closed-lost count sits on this row too
+         because it is the other thing that isn't on the board. -->
+    <div id="crm-tabs" class="tw-tabs">
+      <button type="button" class="tw-tab on" data-tab="active" aria-pressed="true">Active <span class="n">0</span></button>
+      <button type="button" class="tw-tab" data-tab="test" aria-pressed="false">Test <span class="n">0</span></button>
+      <a id="crm-lost" class="tw-lostlink" href="/projects.html" hidden>0 closed lost →</a>
+    </div>
     <div class="toolbar">
       <input id="search" type="search" placeholder="Search project, customer, estimator…" />
       <select id="crm-est" class="tw-select" aria-label="Filter by estimator">
@@ -296,7 +323,6 @@
       </select>
       <button type="button" id="crm-dir" class="tw-select tw-dir" aria-label="Toggle sort direction">↓ Desc</button>
       <button type="button" id="crm-view" class="tw-clear tw-view" aria-label="Switch between the board and a table">☰ Table</button>
-      <button type="button" id="crm-lost" class="tw-clear tw-lost" aria-label="Show or hide closed-lost proposals" hidden>Show closed lost (0)</button>
       <button type="button" id="crm-clear" class="tw-clear" hidden>✕ Clear</button>
       <span id="count" class="count"></span>
       <a href="/notifications.html" class="btn btn-s" style="min-height:40px;display:inline-flex;align-items:center;text-decoration:none">Notification Sending →</a>

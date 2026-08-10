@@ -128,6 +128,46 @@
   .top-toolbar .field-inline input.sysname { width: 180px; }
   .top-toolbar .field-inline input.tex     { width: 100px; }
 
+  /* The polish beta's door. Deliberately sized like the other inline controls (11.5px type on
+     5px padding, the same ~28px box as .btn-ai) so it sits in the row that already exists and
+     takes no height off the sheet. See the NO BANNER note at the end of this block for why that
+     is the whole constraint. Outlined, not filled: it is a side door, not the action on this
+     screen. */
+  .top-toolbar .beta-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 1;
+    min-height: 28px;
+    white-space: nowrap;
+    color: var(--treadwell-red);
+    text-decoration: none;
+    border: 1px solid var(--surface-dim);
+    border-radius: 6px;
+  }
+  /* display:inline-flex outranks the hidden attribute, and this link ships hidden because it
+     belongs to polish jobs only. Without this rule it is visible on every epoxy bid. */
+  .top-toolbar .beta-link[hidden] { display: none; }
+  .top-toolbar .beta-link:hover {
+    border-color: var(--treadwell-red);
+    background: var(--treadwell-red-light);
+  }
+  .top-toolbar .beta-link .bl-tag {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    background: var(--treadwell-red);
+    color: white;
+    border-radius: 20px;
+    padding: 2px 5px;
+  }
+  /* The "opens a test copy" half is the caveat, not the label, so it reads quieter than the
+     name. It is not optional though: the beta copies a real project rather than editing it. */
+  .top-toolbar .beta-link .bl-note { font-weight: 500; color: var(--ink-variant); }
+
   .estimate-app .xl-tab-bar { flex: 0 0 auto; }
   .estimate-app .total-bar  { flex: 0 0 auto; margin-top: 0; padding: 8px 16px; }
 
@@ -677,6 +717,17 @@
             title="Duplicate the current worksheet, with all of its contents">⧉ Copy sheet</button>
     <button type="button" id="lock-cell-btn" class="btn-ai" style="white-space:nowrap;" disabled
             title="Select a cell, then lock or unlock it (locked cells can't be edited in Excel)">🔒 Lock cell</button>
+    <!-- The polish beta's only route out of this screen, on polish jobs only. It lives in this
+         toolbar row rather than above the grid because the thing it replaces was a banner that
+         cost ~60px of sheet; a link in a row that already exists costs nothing.
+         The copy names the test copy on purpose. The beta does not continue this bid: on a real
+         project it takes a copy filed under Test and leaves the bid alone, so "Try it" would be
+         a lie about where the estimator's numbers end up.
+         Same ◐ glyph and BETA tag as the sidebar entry, so the two doors read as one place.
+         Unhidden, and given the ?d= draft id, by offerPolishBeta() in js/estimate-review.js. -->
+    <a id="polish-beta-link" class="beta-link" href="/polish-estimate.html" hidden
+       title="Price this polish job in the beta: the same numbers as seven short steps instead of a spreadsheet. It opens a TEST COPY of this project, filed under the Test tab, and leaves this bid exactly as it is."
+       >◐ Polish estimate <span class="bl-tag">BETA</span> <span class="bl-note">· opens a test copy</span></a>
     <div class="nav-btns">
       <button type="button" id="back-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 12px;">← Back</button>
       <button type="button" id="continue-btn" class="btn-primary" style="padding: 5px 12px; font-size: 12px;">Continue to Proposal →</button>

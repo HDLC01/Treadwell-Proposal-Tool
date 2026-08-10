@@ -73,6 +73,36 @@
   function followup(p) { return (p && p.followup_state) || {}; }
   function isLost(p) { return String((p && p.proposal_status) || "") === "closed_lost"; }
 
+  // ── test / demo projects ───────────────────────────────────────────────────
+  // Somebody's scratch work, as opposed to a customer's bid. The Proposals Database has kept
+  // these in their own tab since 2026-08-07; the Active Projects board grew the same
+  // Active/Test split on 2026-08-10. It has to be ONE rule: a project filed as test on that
+  // page must appear under Test here, or the two screens disagree about what a test project is.
+  //
+  // THE FLAG WINS, IN BOTH DIRECTIONS. `is_test` is a tri-state on purpose (see `_tribool` in
+  // backend/drafts.py): true = filed as test, false = somebody looked and said "real bid",
+  // absent = nobody has said. False has to BEAT the name, or un-filing a project genuinely
+  // called "Test Treadwell" bounces it straight back into the Test tab with no way out.
+  //
+  // Absent falls back to the NAME, and that regex stays narrow deliberately: "demo" lives
+  // inside "demolition", which is a live hazard in a construction tool, and a misfiled real bid
+  // is worse than a visible test one. The names it misses ("Testing", "test1", "(untitled)")
+  // are what the Test? button on the card is for.
+  //
+  // projects.js still carries its own copy of this pair. It predates this module, and it was
+  // being edited by somebody else the day this moved here. test_active_projects_board.py
+  // compares the two heuristics character for character so they cannot drift apart unnoticed.
+  function nameLooksLikeTest(p) {
+    var n = String((p && p.project_name) || "");
+    return /\b(sample|test|verify|demo|qa|bugtest)\b/i.test(n)
+        || /delete me/i.test(n)
+        || /^\s*zz/i.test(n);
+  }
+  function isTest(p) {
+    if (p && typeof p.is_test === "boolean") return p.is_test;   // filed by hand, either way
+    return nameLooksLikeTest(p);
+  }
+
   /** No deposit stage stands between approval and contacts when this job doesn't
    *  collect one — otherwise a GC project would sit in "Approved" forever, unable
    *  to reach Contact info or Scheduled. An issued invoice means a deposit is
@@ -317,6 +347,7 @@
     LOST_REASON: LOST_REASON, MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
     followup: followup, isLost: isLost, depositSatisfied: depositSatisfied,
+    isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
     stage: stage, lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, pausedUntil: pausedUntil,
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,

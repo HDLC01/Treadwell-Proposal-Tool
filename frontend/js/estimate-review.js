@@ -398,6 +398,31 @@ const TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
   texInput = sel;
 })();
 
+// ─── The polish beta's door, on polish jobs only ─────────────────────
+// This was a banner above the grid until 2026-08-07, when Hanz had it removed: "remove this
+// please I can barely see the sheet. The Estimate sheet is supposed to be the majority
+// viewport." Right call, but it left the sidebar as the only way in, and on 2026-08-11 he asked
+// why the journey never gets there: "why is it when I click intake and then proceed to estimate
+// it doesnt lead me to the Estimate sheet in beta? instead it leads me to the excel sheet
+// still". Continue stays on this workflow (he wants the two kept separate), so the beta gets a
+// door in the toolbar row instead, which costs the grid no height.
+//
+// Runs here, synchronously, and NOT from init() where the banner used to be unhidden: init
+// awaits /api/sheets plus every sheet in the workbook, so a slow or failed load meant no door
+// at all on a page that otherwise still works.
+function offerPolishBeta() {
+  const link = document.getElementById("polish-beta-link");
+  if (!link) return;
+  // Polish only. Epoxy/combo/gyp have no beta page to send anyone to.
+  if ((state.work_type || "").toLowerCase() !== "polish") return;
+  // withDraft or nothing: shared.js's anchor rewriter only touches the four wizard paths
+  // (_WIZARD_PATH), so a bare /polish-estimate.html can open with no project and read as
+  // broken. The banner shipped exactly that bug in its first version.
+  link.href = TW.withDraft("/polish-estimate.html");
+  link.hidden = false;
+}
+offerPolishBeta();
+
 // System Name auto-derives from the live System 1/2 picks (see refreshSystemName
 // below). A non-empty manual edit sets `system_name_manual` (persisted in state,
 // so the override survives reloads); clearing the field re-enables auto-derive.
@@ -1089,8 +1114,10 @@ async function init() {
   showSheet(initialSheet);
 
   // 4b. The polish beta used to be advertised here, in a banner above the grid. It is reached
-  //     from the sidebar now: this screen IS the spreadsheet, and ~60px of announcement at the
-  //     top of it cost the estimator rows they were reading.
+  //     from the sidebar and from a link in the toolbar now: this screen IS the spreadsheet, and
+  //     ~60px of announcement at the top of it cost the estimator rows they were reading. The
+  //     toolbar link is wired by offerPolishBeta(), which runs before this and does not wait on
+  //     the workbook load.
   //
   // 5. Re-render the bid bar + total bar now that EVERY sheet (incl. copied
   //    tabs) exists in HF with the saved overrides applied. Without this the

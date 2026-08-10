@@ -45,6 +45,16 @@
           color:var(--ink-v);background:var(--card);text-decoration:none}
     .steps .on{background:var(--red);color:#fff;border-color:transparent;font-weight:600}
 
+    /* The beta works on a test COPY of a real project (see enterSandbox in polish-estimate.js).
+       Silently editing a different project than the one that was clicked would be worse than the
+       bug that fixes, so the copy says so before the workbook has even finished loading. Amber,
+       like every other "this figure was touched by hand" mark in the tool. */
+    .sandbox{display:flex;gap:9px;align-items:flex-start;background:var(--warn-bg);
+          border:1px solid #e8d9a8;color:var(--warn);border-radius:9px;padding:10px 13px;
+          font-size:12.5px;margin:0 0 12px}
+    .sandbox b{color:var(--ink)}
+    .sandbox .ic{font-size:14px;line-height:1.25;flex:none}
+
     .alert{font-size:12.5px;margin:0 0 12px;color:var(--red-dark);min-height:1em}
     .alert:empty{display:none}
     .alert.ok{color:var(--ok)}
@@ -213,6 +223,7 @@
       <a href="/done.html">4 · Files</a>
     </nav>
 
+    <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
     <div class="loading" id="loading">Loading the workbook into the formula engine…</div>
 

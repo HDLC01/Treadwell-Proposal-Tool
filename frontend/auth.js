@@ -9,7 +9,7 @@
  *  - Gates app pages: no session → redirect to /login.html; wrong domain →
  *    sign out + bounce with a message.
  *  - Renders a bottom-left "logged in as" indicator (+ an Admin link by role),
- *    and a Projects/History nav.
+ *    and the left sidebar nav.
  */
 (function () {
   const LOGIN_PAGE = "/login.html";
@@ -163,8 +163,13 @@
       // due, and when". Both read the Basisboard bids; neither writes to them.
       navItem("/calendar.html", "▧", "Bid Calendar") +
       '<div class="tw-section">Proposals</div>' +
-      navItem("/projects.html", "▣", "Projects") +
-      navItem("/portal.html", "◆", "Customer Portal CRM") +
+      // Hanz, 2026-08-10, renamed both: "Projects" and "Customer Portal CRM" told you nothing
+      // about which one to open. /projects.html is every proposal we have ever drafted, most of
+      // them never sent, so it reads as a database. /portal.html is the short list of jobs that
+      // are actually live with a customer. The hrefs are untouched, which matters because
+      // navItem decides the active highlight from location.pathname and never from the label.
+      navItem("/projects.html", "▣", "Proposals Database") +
+      navItem("/portal.html", "◆", "Active Projects") +
       // Same glyph as the "📋 Info" button on the project cards, so the two
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
@@ -174,22 +179,15 @@
       // The old Estimate Review is untouched and still reachable, so a polish bid can be run
       // both ways and compared while this is in beta.
       navItem("/polish-estimate.html", "◐", "Polish Estimate", "BETA") +
-      // Chasing is its own job, so it gets its own heading (Hanz, 2026-08-06).
+      // The FOLLOW-UPS section used to sit here with two items, Follow-ups and Cadence & emails.
+      // Hanz, 2026-08-10: "Remove the followups on the sidebar", then on 2026-08-11, having seen
+      // both gone: "Keep the Cadence and EMAILs... Just the follow up tab." So the BOARD is what
+      // he wanted rid of. The cadence moved down to Settings rather than keeping a one-item
+      // heading up here, because it is a set-once configuration and Notification Sending, its
+      // nearest relative, already lives there.
       //
-      // The board was filed under Proposals and the cadence under Settings, which put the two
-      // halves of one task at opposite ends of the sidebar. They are not "a proposal page" and
-      // "a preference": the board is who is waiting on us, the cadence is what we send them and
-      // when, and somebody who opens one almost always wants the other. Splitting them also hid
-      // the cadence behind a heading nobody opens twice a year, so the wording of four recurring
-      // customer emails was the least discoverable thing in the app.
-      //
-      // Placed after Proposals because chasing follows sending, and before Analytics, which is
-      // the look back rather than the work.
-      '<div class="tw-section">Follow-ups</div>' +
-      // Board first: it is the daily surface. The cadence is set once and revisited rarely, so
-      // it reads as the settings for the page above it.
-      navItem("/followups.html", "⏱", "Follow-ups") +
-      navItem("/followup-settings.html", "⏲", "Cadence &amp; emails") +
+      // /followups.html is not deleted, only unlinked: it still exists and still works by URL.
+
       // Its own heading rather than a third item under Leads & bids: those two
       // are the daily queue, this is the look back over all of it.
       '<div class="tw-section">Analytics</div>' +
@@ -208,6 +206,13 @@
       navItem("/trash.html", "🗑", "Trash") +
       '<div class="tw-section">Settings</div>' +
       navItem("/notifications.html", "✉", "Notification Sending") +
+      // Kept at Hanz's request on 2026-08-11 after the Follow-ups board came out; see the note
+      // where its old heading used to be. Sits beside Notification Sending because the two
+      // answer the same question from opposite ends: who hears from us, and what they hear.
+      // This page is the only editor for the four recurring customer emails, and its save
+      // REPLACES the single settings row with no history, so an unreachable version of it is
+      // one wording change away from being unrecoverable.
+      navItem("/followup-settings.html", "⏲", "Cadence &amp; emails") +
       (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar" style="background:' +

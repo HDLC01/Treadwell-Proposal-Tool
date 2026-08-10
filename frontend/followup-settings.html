@@ -65,8 +65,14 @@
     textarea { min-height:190px; resize:vertical; line-height:1.5; }
     .tokens { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
     .tok { font:600 11px ui-monospace,monospace; background:var(--surf-low); color:var(--ink-v);
-      border:1px solid var(--line); border-radius:5px; padding:3px 7px; cursor:pointer; }
+      border:1px solid var(--line); border-radius:5px; padding:3px 7px; cursor:grab;
+      user-select:none; }
     .tok:hover { border-color:var(--red); color:var(--red); }
+    .tok:active { cursor:grabbing; }
+    /* Where the token will land. A drag with no target highlight looks like nothing is listening,
+       and these chips are draggable into any text field, so "this box is taking it" has to show. */
+    textarea.dropping { border-color:var(--red); background:var(--red-tint);
+      box-shadow:0 0 0 3px rgba(200,16,46,.14); }
 
     /* preview */
     .pv { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
@@ -131,23 +137,25 @@
         </div>
       </div>
 
-      <div class="card">
-        <h2>When emails may go out</h2>
-        <p class="sub">Customer emails are held to these hours, Central time — a reminder at 3am
-          reads as a robot and invites a spam complaint. Emails to estimators ignore this, because
-          they land in a work inbox.</p>
-        <div class="row" style="gap:10px;">
-          <span>Between</span>
-          <select id="startH" aria-label="Earliest hour"></select>
-          <span>and</span>
-          <select id="endH" aria-label="Latest hour"></select>
-        </div>
-      </div>
+      <!-- "When emails may go out" used to be a card here: two hour selects, #startH and #endH.
+           Hanz removed it on 2026-08-10 ("Remove this section in the Cadence and emails").
+
+           THE WINDOW ITSELF IS UNCHANGED AND STILL ENFORCED. It lives on the server
+           (followup_settings.DEFAULTS send_start_hour 8 / send_end_hour 18, held to Central) and
+           email_sender still honours it, so a customer reminder at 3am is as impossible as it was
+           yesterday: a robot hour like that invites a spam complaint. What went away is the
+           ability to EDIT it from here, at whatever value it is currently stored at. Because the
+           control is gone, followup-settings.js has to send the loaded hours back untouched on
+           every save; see collect() for why omitting them would reset them.
+
+           To put it back: these two selects, hourOptions() and the startH/endH fills in
+           fillNumbers(), and the change listeners. The payload keys are already being sent. -->
 
       <div class="card">
         <h2>The emails</h2>
         <p class="sub">Plain text — it gets laid into the Treadwell letterhead, so there is no way
-          to break the layout. Click a placeholder to insert it.</p>
+          to break the layout. Drag a placeholder into the message, or click one to drop it where
+          the cursor is.</p>
         <div class="tabs" role="tablist" id="tabs"></div>
         <div class="editor">
           <div class="fields">
@@ -187,7 +195,7 @@
 
       <div class="acts">
         <button class="btn" type="button" id="save">Save cadence</button>
-        <button class="btn ghost" type="button" id="reset">Back to the shipped cadence</button>
+        <button class="btn ghost" type="button" id="reset">Reset to Default</button>
         <span class="meta" id="meta"></span>
       </div>
     </div>

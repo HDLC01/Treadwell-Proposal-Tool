@@ -118,8 +118,13 @@ def test_the_signature_is_assigned_not_just_compared(page, fn, var):
 # Too narrow is the failure mode that looks like a fix. Guard on the data alone and the board
 # stops responding to its own filters: typing in the search box, switching tab, re-sorting or
 # flipping to the table view all leave the DOM untouched.
+#
+# portal.js lost SHOW_LOST on 2026-08-10: closed-lost proposals leave the board entirely, so
+# there is no toggle left to guard. TAB (Active / Test) took its place, and the lost COUNT
+# joined the list because it is painted outside the board's innerHTML. See
+# test_active_projects_board.py, which owns both of those.
 @pytest.mark.parametrize("page,fn,names", [
-    ("portal.js", "renderBoard", ["ALL", "EST", "MONTH", "SORTFIELD", "SORTDIR", "SHOW_LOST", "VIEW"]),
+    ("portal.js", "renderBoard", ["ALL", "EST", "MONTH", "SORTFIELD", "SORTDIR", "TAB", "VIEW"]),
     ("followups.js", "paint", ["ALL", "TAB", "EST", "SORT", "DIR", "Q", "VIEW"]),
     ("projects.js", "paint", ["ALL_PROJECTS", "CURRENT_FILTER", "SEARCH", "MONTH",
                               "SORTFIELD", "SORTDIR", "VIEW"]),
