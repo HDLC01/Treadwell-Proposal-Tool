@@ -68,7 +68,18 @@ def test_the_normal_progression():
     assert stage(proposal_status="approved", deposit_status="received") == "Deposit received"
     assert stage(proposal_status="approved", deposit_status="received",
                  contacts_status="received") == "Contact info"
-    assert stage(proposal_status="approved", schedule_status="scheduled") == "Scheduled"
+    # There used to be a "Scheduled" assertion here. Hanz removed scheduling from the CRM and
+    # the customer portal on 2026-08-11, notification included, because Treadwell books the
+    # date on the phone. A scheduled job now reads as the furthest stage that still exists,
+    # and that it does not fall OFF the board is pinned in test_schedule_removed.py — which is
+    # the assertion that matters, since group() drops any row whose stage is not a column.
+    assert stage(proposal_status="approved", schedule_status="scheduled") == "Approved"
+
+
+def test_a_project_created_but_never_sent_comes_before_sent():
+    """The board's first column, added 2026-08-11. Read before every portal state, because a
+    synthesised draft row has none of them — see test_created_not_sent.py."""
+    assert stage(not_sent=True) == "Created but not sent"
 
 
 def test_an_unpaid_deal_never_reads_as_further_along_than_a_paid_one():
@@ -278,8 +289,11 @@ def test_sorting_does_not_mutate_the_caller_list():
 # ── grouping ────────────────────────────────────────────────────────────────
 def test_grouping_covers_every_column_even_the_empty_ones():
     got = run("out(Object.keys(C.group([], C.STAGES)));")
-    assert got == ["Sent", "Viewed", "Approved", "Deposit submitted",
-                   "Deposit received", "Contact info", "Scheduled"]
+    # "Scheduled" came off the end on 2026-08-11 and "Created but not sent" went on the front
+    # the same day. Both are separate changes with their own files; this stays the assertion
+    # that the GROUPING covers every column, so an empty column still renders.
+    assert got == ["Created but not sent", "Sent", "Viewed", "Approved", "Deposit submitted",
+                   "Deposit received", "Contact info"]
 
 
 def test_a_stage_with_no_column_is_dropped_not_thrown():
