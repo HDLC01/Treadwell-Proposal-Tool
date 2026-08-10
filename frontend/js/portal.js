@@ -294,12 +294,19 @@
       // Only when there is nothing to keep. This runs on a 25s timer, so a single blip on a
       // page a rep leaves open all day would otherwise throw the whole board away and flash an
       // error over work they were reading. Stale rows beat that.
+      //
+      // The signature describes WHAT IS ON SCREEN, so an error goes in it too. A first draft
+      // cleared it instead, and on staging — where the portal is genuinely unreachable — that
+      // repainted the identical error every 25s: the same blink, in the one situation where it
+      // is least useful. Holding the message means an unchanged error is silent, while a
+      // recovery produces a data signature that differs and repaints.
       if (!ALL.length) {
-        $("board").innerHTML = '<div class="empty">Could not load the portal pipeline: ' + esc(err.message) +
-          '. Check that the portal is configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).</div>';
-        // The error is not what the signature describes, so clear it: without this a recovery
-        // carrying identical data is skipped as unchanged and the error stays up for good.
-        BOARD_SIG = "";
+        const esig = "error:" + err.message;
+        if (esig !== BOARD_SIG) {
+          $("board").innerHTML = '<div class="empty">Could not load the portal pipeline: ' + esc(err.message) +
+            '. Check that the portal is configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).</div>';
+          BOARD_SIG = esig;
+        }
       }
     }
     // Deep-link from a staff notification email: ?open=<proposal_id>.
