@@ -461,3 +461,80 @@ def test_the_instructions_mention_dragging_and_clicking():
     low = html.lower()
     assert "drag a placeholder" in low, "the copy does not mention dragging"
     assert "click one" in low, "the copy no longer mentions that clicking works"
+
+
+# ── one editable subject for the whole project thread (2026-08-11) ────────────
+def _page():
+    return (pathlib.Path(__file__).resolve().parents[2]
+            / "frontend" / "followup-settings.html").read_text(encoding="utf-8")
+
+
+def _js():
+    return (pathlib.Path(__file__).resolve().parents[2]
+            / "frontend" / "js" / "followup-settings.js").read_text(encoding="utf-8")
+
+
+def test_the_per_template_subject_field_is_gone():
+    """Hanz asked for one email thread per project. Gmail groups by the References chain AND the
+    subject, so four templates with four subjects meant four conversations about one job.
+
+    The field could not simply be IGNORED. It was a labelled input on this page: somebody types
+    a subject, saves, and nothing happens — worse than either alternative. So it moved up to
+    project level instead of dying in place.
+    """
+    page, js = _page(), _js()
+    assert 't-subject' not in page, "the per-template Subject input is still on the page"
+    assert 't-subject' not in js, "the JS still reads or writes a per-template subject"
+    assert 'id="thread-subject"' in page, "there is no project-level subject field"
+
+
+def test_the_project_subject_is_above_the_per_email_tabs():
+    """It applies to every email, so it must not sit inside the tabbed editor where it reads as
+    a property of whichever email is selected."""
+    page = _page()
+    assert page.index('id="thread-subject"') < page.index('id="tabs"')
+
+
+def test_the_heading_field_survived():
+    """This is what still varies per email, and it is the only thing left carrying the event
+    wording — the subject stopped naming it."""
+    assert 'id="t-title"' in _page()
+    assert '$("t-title")' in _js()
+
+
+def test_the_subject_is_ROUND_TRIPPED_on_save():
+    """The trap this page already documents for the send window, now applicable to one more
+    field. The PUT runs followup_settings.validate(), which calls
+    validate_thread_subject(raw.get("thread_subject")); an absent key is None, which that
+    function reads as "cleared" and answers with the shipped wording. So omitting it from the
+    payload would silently reset a customised subject the first time anybody edited an email.
+    """
+    js = _js()
+    i = js.index("send_start_hour: CFG.send_start_hour")
+    j = js.index("templates: CFG.templates", i)
+    assert "thread_subject:" in js[i:j], (
+        "thread_subject is not in the save payload, so saving any edit resets it")
+
+
+def test_the_field_is_populated_from_the_stored_value():
+    assert 'CFG.thread_subject' in _js(), "the field never loads what is saved"
+
+
+def test_switching_email_tabs_does_not_touch_the_project_subject():
+    """It belongs to the cadence, not to one email. Filling it in fillTemplate would reload or
+    clear it every time somebody clicked a tab."""
+    js = _js()
+    i = js.index("function fillTemplate")
+    j = js.index("function collect", i)
+    assert "thread-subject" not in js[i:j], (
+        "fillTemplate touches the project subject, so changing tabs would overwrite it")
+
+
+def test_the_preview_shows_the_project_subject():
+    """The server stopped rendering a per-template subject, so an unchanged preview would print
+    "(no subject)" over every email and read as broken."""
+    js = _js()
+    i = js.index("function renderPreview")
+    body = js[i:js.index("\n  function ", i + 1)]
+    assert "thread-subject" in body, "the preview no longer shows a subject at all"
+    assert "pv.subject" not in body, "the preview still reads a subject the server does not send"
