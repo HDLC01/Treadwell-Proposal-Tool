@@ -371,7 +371,20 @@
     return rows;
   }
 
+  // What the page currently shows. Both painters below replace their container's whole
+  // innerHTML, so repainting unchanged data rebuilds every column and card for nothing — which
+  // the eye sees as the board blinking. This one polls every 45s, so it did that all day.
+  //
+  // Same guard as the Bid Pipeline (crm.js), the Lead Inbox (leads.js), the Bid Calendar
+  // (calendar.js) and the Customer Portal CRM (portal.js). Every piece of view state is in the
+  // signature so switching tab, filtering, sorting, searching or changing view still repaints.
+  let LAST_SIG = "";
+
   function paint() {
+    const sig = JSON.stringify([ALL, TAB, EST, SORT, DIR, Q, VIEW]);
+    if (sig === LAST_SIG) return;
+    LAST_SIG = sig;
+
     const rows = paintChrome();
     if (VIEW === "board") return paintBoard();
 
@@ -775,9 +788,23 @@
       ALL = j.proposals || [];
       paint();
     } catch (err) {
-      $("list").className = "empty";
-      $("list").textContent = "Couldn't load follow-ups: " + (err.message || "") +
-        ". Check that the customer portal is reachable.";
+      // Only when there is nothing to keep. This runs on a 45s timer, so one blip would
+      // otherwise throw away a board somebody was working from and replace it with an error.
+      //
+      // The error goes INTO the signature rather than clearing it. Clearing it repaints the same
+      // message on every poll — the same blink, in the one situation where it is least useful,
+      // which is exactly what staging showed with its portal unreachable. Holding the message
+      // keeps an unchanged error silent, while a recovery produces a data signature that differs
+      // and repaints.
+      if (!ALL.length) {
+        const esig = "error:" + (err.message || "");
+        if (esig !== LAST_SIG) {
+          $("list").className = "empty";
+          $("list").textContent = "Couldn't load follow-ups: " + (err.message || "") +
+            ". Check that the customer portal is reachable.";
+          LAST_SIG = esig;
+        }
+      }
     }
   }
 
