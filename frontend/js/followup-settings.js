@@ -112,6 +112,9 @@
   }
 
   function fillNumbers() {
+    // The project-level subject lives here rather than in fillTemplate: it belongs to the
+    // whole cadence, so switching tabs must not reload or clear it.
+    $("thread-subject").value = CFG.thread_subject || "";
     $("first").value = CFG.first_nudge_hours;
     $("second").value = CFG.second_nudge_hours;
     $("recurring").value = CFG.recurring_hours;
@@ -140,7 +143,6 @@
 
   function fillTemplate() {
     var t = (CFG.templates || {})[KEY] || {};
-    $("t-subject").value = t.subject || "";
     $("t-title").value = t.title || "";
     $("t-body").value = t.body || "";
     $("t-cta").value = t.cta || "";
@@ -148,7 +150,6 @@
 
   function collect() {
     var t = (CFG.templates || {})[KEY] || {};
-    t.subject = $("t-subject").value;
     t.title = $("t-title").value;
     t.body = $("t-body").value;
     t.cta = $("t-cta").value;
@@ -179,6 +180,11 @@
       // send stale hours either: lockForFailedRead disables Save outright.
       send_start_hour: CFG.send_start_hour,
       send_end_hour: CFG.send_end_hour,
+      // SENT EVERY TIME, for exactly the reason the send window above is. validate() runs
+      // validate_thread_subject(raw.get("thread_subject")), and an absent key is None, which
+      // that function treats as "cleared" and answers with the shipped wording. Omitting this
+      // would silently reset a customised subject the first time anybody edited an email.
+      thread_subject: $("thread-subject").value,
       templates: CFG.templates,
     };
   }
@@ -186,7 +192,11 @@
   // ── preview ────────────────────────────────────────────────────────────────
   function renderPreview(pv) {
     if (!pv) return;
-    $("pv-subject").textContent = pv.subject || "(no subject)";
+    // The server no longer renders a per-template subject, because there is not one. Show the
+    // project subject with the sample project filled in, which is what the customer will see.
+    $("pv-subject").textContent =
+      ($("thread-subject").value || "Your Treadwell proposal — {project}")
+        .replace("{project}", "Westport Retail Center");
     // The server hands back the body with the CTA already rendered as "[ Label ]" — turn the
     // paragraphs into markup here and the button into a real one, so the preview reads like an
     // email rather than like a template.
@@ -405,7 +415,7 @@
     insertToken(tok, at, at);
   });
 
-  ["t-subject", "t-title", "t-body", "t-cta"].forEach(function (id) {
+  ["thread-subject", "t-title", "t-body", "t-cta"].forEach(function (id) {
     $(id).addEventListener("input", schedulePreview);
   });
   // Typing clears a stale "Saved."/error line — but NOT the read-failed warning, which explains
