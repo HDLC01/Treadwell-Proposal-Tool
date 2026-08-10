@@ -371,7 +371,20 @@
     return rows;
   }
 
+  // What the page currently shows. Both painters below replace their container's whole
+  // innerHTML, so repainting unchanged data rebuilds every column and card for nothing — which
+  // the eye sees as the board blinking. This one polls every 45s, so it did that all day.
+  //
+  // Same guard as the Bid Pipeline (crm.js), the Lead Inbox (leads.js), the Bid Calendar
+  // (calendar.js) and the Customer Portal CRM (portal.js). Every piece of view state is in the
+  // signature so switching tab, filtering, sorting, searching or changing view still repaints.
+  let LAST_SIG = "";
+
   function paint() {
+    const sig = JSON.stringify([ALL, TAB, EST, SORT, DIR, Q, VIEW]);
+    if (sig === LAST_SIG) return;
+    LAST_SIG = sig;
+
     const rows = paintChrome();
     if (VIEW === "board") return paintBoard();
 
@@ -775,9 +788,16 @@
       ALL = j.proposals || [];
       paint();
     } catch (err) {
-      $("list").className = "empty";
-      $("list").textContent = "Couldn't load follow-ups: " + (err.message || "") +
-        ". Check that the customer portal is reachable.";
+      // Only when there is nothing to keep. This runs on a 45s timer, so one blip would
+      // otherwise throw away a board somebody was working from and replace it with an error.
+      if (!ALL.length) {
+        $("list").className = "empty";
+        $("list").textContent = "Couldn't load follow-ups: " + (err.message || "") +
+          ". Check that the customer portal is reachable.";
+        // The error is not what the signature describes: without this, a recovery carrying
+        // identical data is skipped as unchanged and the message stays up for good.
+        LAST_SIG = "";
+      }
     }
   }
 
