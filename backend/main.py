@@ -843,7 +843,38 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
 
 @app.get("/api/portal/pipeline")
 def api_portal_pipeline() -> Dict[str, Any]:
-    return _portal("/api/admin/pipeline", "GET")
+    """The Active Projects board: the portal's pipeline, stamped with OUR test flag.
+
+    The portal has no notion of a test project: `is_test` lives in this app's `drafts` blob,
+    filed by hand on the Proposals Database. The board grew an Active / Test split on
+    2026-08-10 and the two pages have to agree about which projects are somebody's scratch
+    work, so the flag is looked up here rather than guessed in the browser from the name.
+
+    The ids line up: a portal row's `proposal_id` IS the draft id, the same identity
+    `_deposit_requested` relies on above.
+
+    ONE list read for the whole board (and normally off the 60s summary cache), never a query
+    per row. Best-effort in both directions:
+
+      * an unreadable drafts list must not take the board down, it degrades to the name
+        heuristic in the browser, which is what a legacy project gets anyway;
+      * a proposal we cannot find is left ALONE rather than stamped False. Absent means
+        "nobody has said" and keeps that heuristic in charge; writing False would claim every
+        row we failed to look up had been confirmed a real bid.
+    """
+    data = _portal("/api/admin/pipeline", "GET") or {}
+    rows = data.get("proposals") or []
+    flags: Dict[str, Any] = {}
+    try:
+        for row in drafts.list_drafts():
+            flags[row["id"]] = row.get("is_test")     # tri-state: True / False / None
+    except Exception as exc:  # noqa: BLE001 (the board matters more than the split)
+        log.warning("pipeline test flags unavailable: %s", exc)
+    for row in rows:
+        pid = row.get("proposal_id")
+        if pid in flags:
+            row["is_test"] = flags[pid]
+    return data
 
 
 @app.get("/api/portal/followups")

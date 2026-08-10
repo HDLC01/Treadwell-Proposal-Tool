@@ -490,7 +490,7 @@
     } catch (err) {
       console.error("Info sheet load failed", err);
       host.innerHTML = '<div class="info-msg">Couldn\'t load the info sheet. Reload the page, ' +
-        'or open it again from <a href="/projects.html">Projects</a>.</div>';
+        'or open it again from <a href="/projects.html">the Proposals Database</a>.</div>';
       dlBtn.disabled = true;
       return;
     }

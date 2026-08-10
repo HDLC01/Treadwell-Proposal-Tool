@@ -147,7 +147,7 @@ def test_it_does_not_spend_an_ai_call_per_row(monkeypatch):
     assert all(p["reason"] for p in body["proposals"])
 
 
-# ── the page + the sidebar ──────────────────────────────────────────────────
+# ── the page itself ─────────────────────────────────────────────────────────
 def test_the_page_exists_and_boots_like_the_others():
     html = (FRONTEND / "followups.html").read_text(encoding="utf-8")
     assert "@supabase/supabase-js" in html
@@ -158,29 +158,12 @@ def test_the_page_exists_and_boots_like_the_others():
     assert "<script>" not in html.replace("<script src", "<script-src")
 
 
-def test_the_board_and_its_cadence_share_one_sidebar_section():
-    """Hanz, 2026-08-06: chasing is its own job, so it gets its own heading.
-
-    The board was under Proposals and the cadence under Settings, which put the two halves of one
-    task at opposite ends of the sidebar - and hid the wording of four recurring customer emails
-    behind a heading nobody opens twice a year."""
-    auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    i = auth.index("tw-section\">Follow-ups")
-    j = auth.index("tw-section\">", i + 10)              # the heading after it
-    section = auth[i:j]
-    assert "/followups.html" in section, "the board is not in the Follow-ups section"
-    assert "/followup-settings.html" in section, "the cadence is not in the Follow-ups section"
-    assert section.index("/followups.html") < section.index("/followup-settings.html"), (
-        "the daily board should come before the thing you set once")
-
-
-def test_neither_follow_up_page_is_left_behind_in_its_old_section():
-    """A move that copies rather than moves leaves the same page in two places."""
-    auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    assert auth.count('navItem("/followups.html"') == 1
-    assert auth.count('navItem("/followup-settings.html"') == 1
-    settings = auth[auth.index("tw-section\">Settings"):]
-    assert "/followup-settings.html" not in settings, "the cadence is still under Settings too"
+# The two sidebar tests that used to sit here are gone. They asserted the FOLLOW-UPS heading
+# and its two items, which Hanz had removed on 2026-08-10: "Remove the followups on the
+# sidebar." This page is now reachable by URL only, and that is the invariant worth holding, so
+# test_sidebar_labels.py owns both halves of it: the sidebar must NOT list /followups.html, and
+# followups.html plus js/followups.js must still be on disk and still wired together. Do not
+# re-add a "the board is in the sidebar" assertion here without asking him first.
 
 
 def test_the_page_reads_the_feed_and_nothing_else():

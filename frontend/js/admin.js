@@ -92,7 +92,7 @@
     }
     async function doDeleteProject(id, name){
       const ok = await TW.confirmDanger({ title:"Move to Trash?", before:"Move ", name:(name||id), after:" to Trash?",
-        detail:"It leaves the shared Projects list but stays restorable from the Trash page.", confirmText:"Move to Trash", tone:"warn", icon:"🗑" });
+        detail:"It leaves the shared Proposals Database but stays restorable from the Trash page.", confirmText:"Move to Trash", tone:"warn", icon:"🗑" });
       if (!ok) return;
       const r = await api(`/api/admin/projects/${encodeURIComponent(id)}`, { method:"DELETE" });
       if (!r || r.ok===false){ alert((r&&r.error)||"Move to Trash failed"); }
