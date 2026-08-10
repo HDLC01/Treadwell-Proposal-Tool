@@ -134,7 +134,21 @@ def test_the_cadence_page_IS_still_in_the_sidebar(sidebar):
     with no history. An unreachable version of it is one wording change away from being
     unrecoverable.
     """
-    assert "/followup-settings.html" in sidebar, "Cadence & emails has left the sidebar again"
+    assert "/followup-settings.html" in sidebar, "Auto Followups has left the sidebar again"
+
+
+def test_the_cadence_page_is_called_auto_followups(sidebar):
+    """Hanz, 2026-08-11: "Rename the cadence and emails to 'Auto Followups'". "Cadence" is a
+    word from the scheduling code, not from anyone's day: what the page configures is the
+    emails that go out on their own. The page's own title and heading match, or the sidebar
+    sends you somewhere that calls itself something else."""
+    import pathlib
+    assert "Auto Followups" in sidebar, "the sidebar still uses the old cadence wording"
+    assert "Cadence" not in sidebar
+    page = (pathlib.Path(__file__).resolve().parents[2]
+            / "frontend" / "followup-settings.html").read_text(encoding="utf-8")
+    assert "<h1>Auto Followups</h1>" in page, "the page heading was not renamed with the link"
+    assert "<title>Auto Followups" in page, "the browser tab still says cadence"
 
 
 def test_the_cadence_page_sits_under_settings(sidebar):

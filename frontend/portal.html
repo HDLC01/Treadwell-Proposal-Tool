@@ -239,9 +239,12 @@
      collapses them completely. Mirrors the customer portal's own bubbles. */
   .msg.customer { align-self:flex-start; background:var(--surf-high); border-bottom-left-radius:3px; }
   .msg.staff { align-self:flex-end; background:var(--red-dark); color:#fff; border-bottom-right-radius:3px; }
-  .msg.staff .who, .msg.staff .when { text-align:right; color:rgba(255,255,255,.8); }
+  .msg.staff .when { text-align:right; color:rgba(255,255,255,.8); }
   .msg.staff .via-email { border-color:rgba(255,255,255,.6); }
-  .msg .who { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
+  /* An emailed reply arrives with its own line breaks. Without pre-wrap they collapsed into
+     one run, which is most of why a signature read as a wall of text. anywhere, not
+     break-word, so a long tracking URL cannot push the bubble past its max-width. */
+  .msg .mbody { white-space:pre-wrap; overflow-wrap:anywhere; }
   .msg .via-email { border:1px solid var(--ink-v); border-radius:999px; padding:0 5px; margin-left:4px; font-size:9px; }
   .msg .when { font-size:10px; color:var(--ink-v); margin-top:3px; }
   textarea { width:100%; min-height:74px; padding:10px; border:1px solid var(--line); border-radius:7px; font:inherit; resize:vertical; }

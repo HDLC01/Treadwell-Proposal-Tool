@@ -864,17 +864,61 @@ def api_portal_pipeline() -> Dict[str, Any]:
     """
     data = _portal("/api/admin/pipeline", "GET") or {}
     rows = data.get("proposals") or []
-    flags: Dict[str, Any] = {}
+    summaries: List[Dict[str, Any]] = []
     try:
-        for row in drafts.list_drafts():
-            flags[row["id"]] = row.get("is_test")     # tri-state: True / False / None
+        summaries = drafts.list_drafts()
     except Exception as exc:  # noqa: BLE001 (the board matters more than the split)
         log.warning("pipeline test flags unavailable: %s", exc)
+    flags = {s["id"]: s.get("is_test") for s in summaries}   # tri-state: True / False / None
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
             row["is_test"] = flags[pid]
+    data["proposals"] = rows + _not_sent_rows(summaries, rows)
     return data
+
+
+def _not_sent_rows(summaries: List[Dict[str, Any]],
+                   sent: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Synthesise the board's first column: finished paperwork nobody has sent yet.
+
+    Hanz, 2026-08-11: "Under the Active Proposals we need to create a new category before
+    sent 'Created but not Sent'." A bid that's been priced and generated but never published
+    was invisible on this board — it existed only as a row on the Proposals Database, which
+    is a filing cabinet, not a pipeline. That's exactly the bid worth chasing.
+
+    Qualifying is deliberately narrow: Generate has run (`has_files`) AND the portal has no
+    row for the id. A started-and-abandoned intake form is not a proposal, and the portal's
+    own row always wins — once a project is sent it has real dates and belongs downstream.
+
+    The rows are SHAPED like portal rows so nothing downstream has to know they're different:
+    `not_sent` is the only new field, and `stage()` reads it before every portal state
+    precisely because a synthesised row has none of them. `drafted_at` dates the card and
+    `last_activity_at` sorts it, both off the draft's own updated_at, so these sort against
+    real proposals by when someone last touched them rather than piling up dateless.
+    """
+    have = {r.get("proposal_id") for r in sent}
+    out: List[Dict[str, Any]] = []
+    for s in summaries:
+        if s["id"] in have or not s.get("has_files") or s.get("archived"):
+            continue
+        out.append({
+            "proposal_id": s["id"],
+            "not_sent": True,
+            "project_name": s.get("project_name"),
+            "customer_email": s.get("contact_email") or "",
+            "is_test": s.get("is_test"),
+            "assigned_estimator": s.get("assigned_estimator"),
+            # estimatorOf falls back to this, which reads right here: with nobody assigned,
+            # the person who priced it is the person to ask about it.
+            "estimator_email": s.get("owner_email"),
+            "drafted_at": s.get("updated_at"),
+            "last_activity_at": s.get("updated_at"),
+            # NOT approved_total: nobody has approved this. cardTotal() reads both.
+            "bid_total": s.get("total"),
+            "work_type": s.get("work_type"),
+        })
+    return out
 
 
 @app.get("/api/portal/followups")
@@ -1042,9 +1086,10 @@ def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})
 
 
-@app.post("/api/portal/proposal/{proposal_id}/scheduled")
-def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
-    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
+# The /scheduled proxy was removed on 2026-08-11 with the rest of scheduling. Nothing calls it:
+# the drawer's Mark scheduled button and the customer's Schedule tile went at the same time, and
+# Treadwell books the date on the phone. The portal's own endpoint went too, so re-adding this
+# alone would proxy to a 404.
 
 
 # ── follow-up automation (drawer actions) ─────────────────────────────────────
