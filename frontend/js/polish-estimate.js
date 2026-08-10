@@ -25,7 +25,13 @@
   var X = window.TWXL;
   var $ = function (id) { return document.getElementById(id); };
 
-  var state = TW.getState();
+  // The draft this page is working ON, and the two views derived from it. Reassigned together by
+  // adopt(), because the page can switch drafts mid-boot: opening a real bid here works on a test
+  // copy instead (see enterSandbox), and rendering the copy with the real bid's numbers still in
+  // hand would be the same silent mix-up in a different direction.
+  var state = {};
+  var cellValues = {};
+  var M = null;
 
   /** An estimator's DELIBERATE override of a worksheet formula, kept exactly as they left it.
    *
@@ -49,25 +55,35 @@
     return (v === undefined || v === null || v === "") ? null : v;
   }
 
-  var cellValues = Object.assign({}, state.cell_values || {});
   var engine = null;
   var sheetNames = [];
   var at = 0;
 
   // The page's own model. Kept under one key so it round-trips with the draft and cannot
   // collide with the epoxy page's fields.
-  var M = Object.assign({
-    areas: [{ name: "", sf: "" }],
-    system: "S&P",
-    tooling: "traditional",
-    conditions: { local: true, hard_bid: false, prevailing_wage: false,
-                  taxable: true, remodel_tax: false },
-    materials: {},
-    added: [],
-    labour: {},
-    adds: {},
-    options: {},
-  }, state.polish_estimate || {});
+  function freshModel(s) {
+    return Object.assign({
+      areas: [{ name: "", sf: "" }],
+      system: "S&P",
+      tooling: "traditional",
+      conditions: { local: true, hard_bid: false, prevailing_wage: false,
+                    taxable: true, remodel_tax: false },
+      materials: {},
+      added: [],
+      labour: {},
+      adds: {},
+      options: {},
+    }, (s || {}).polish_estimate || {});
+  }
+
+  /** Point the page at one draft's blob: its state, its cell map, its model. */
+  function adopt(blob) {
+    state = blob || {};
+    cellValues = Object.assign({}, state.cell_values || {});
+    M = freshModel(state);
+  }
+
+  adopt(TW.getState());
 
   var STEPS = [
     { key: "areas",      label: "Areas" },
@@ -201,7 +217,11 @@
     var next = at < STEPS.length - 1
       ? '<button class="btn" data-go="' + (at + 1) + '">Next · ' +
         esc(STEPS[at + 1].label) + ' →</button>'
-      : '<a class="btn" href="/proposal-review.html">Continue to proposal →</a>';
+      // withDraft, not a bare path: this panel is rendered long after shared.js has finished
+      // stamping ?d= onto the static links, and on a test copy the id it would have stamped is
+      // the REAL project's. Continue has to carry the draft the page is actually editing.
+      : '<a class="btn" href="' + esc(TW.withDraft("/proposal-review.html")) +
+        '">Continue to proposal →</a>';
     return '<section class="sec"><div class="sec-h"><h2>' + esc(title) + '</h2><p>' +
       esc(blurb) + '</p></div><div class="sec-b">' + body + '</div>' +
       '<div class="nav"><span class="step-of">Step ' + (at + 1) + ' of ' + STEPS.length +
@@ -640,9 +660,318 @@
     if (typeof tool === "string" && tool) M.tooling = String(tool).toLowerCase();
   }
 
+  // ── the beta is a sandbox: it never edits a live bid ────────────────────────
+  //
+  // Hanz, 2026-08-11: "The current polish excel sheet and the beta shuold be two different
+  // workflows okay? The BETA is for testing and which means all data from that leads to the
+  // 'test' Category of the proposals database." Asked what should happen when somebody opens a
+  // REAL project in the beta, he chose: make a test copy, leave the real bid alone. It sits
+  // under his standing rule from 2026-08-07: never test against a live Active project.
+  //
+  // So Kyle opening Nearman Creek here leaves Nearman Creek in Active exactly as it was, and
+  // works on "Nearman Creek (beta test)" under Test. He can price one job both ways and compare
+  // them, which is the whole reason the beta runs beside the old screen instead of replacing it.
+  var BETA_SUFFIX = " (beta test)";
+
+  /** The copy's id is DERIVED from the source's, not minted.
+   *
+   *  Idempotence is the reason, and there is no other cheap way to get it. Reopening the beta on
+   *  the same real project has to find the copy it made last time or it mints a second, third and
+   *  fourth; the projects list cannot be searched for it (_build_summaries in backend/drafts.py
+   *  selects a fixed set of columns, and a "copy of" field is not one of them); and the obvious
+   *  alternative, a pointer written onto the SOURCE, is exactly the write this whole feature
+   *  exists to avoid. A derived id needs neither: one GET answers whether the copy exists. It
+   *  also reads plainly in the database, which matters when Kyle is looking at two rows for one
+   *  job. */
+  function sandboxIdFor(id) { return id + "-beta"; }
+
+  /** Recognisable at a glance in the Proposals Database, and it never stacks up: run the logic
+   *  twice and the name still ends in ONE " (beta test)". */
+  function betaName(name) {
+    var n = String(name == null ? "" : name).trim();
+    if (!n) return "Untitled" + BETA_SUFFIX;
+    return n.slice(-BETA_SUFFIX.length) === BETA_SUFFIX ? n : n + BETA_SUFFIX;
+  }
+
+  function draftUrl(id, tail) {
+    return TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + (tail || "");
+  }
+
+  /** Has anything actually been typed into this draft yet?
+   *
+   *  __draft_id is not content: it is shared.js's ownership stamp, and shared.js writes a
+   *  stamped-EMPTY blob on purpose (initDraftSync's 404 floor, and again when its hydration guard
+   *  trips). Counting it would read "nobody has touched this" as "there is work here". Same rule,
+   *  and the same reason, as flushEvictedBlob in shared.js. */
+  function hasContent(blob) {
+    if (!blob) return false;
+    return Object.keys(blob).filter(function (k) { return k !== "__draft_id"; }).length > 0;
+  }
+
+  /** Ask shared.js to file this project as a test on its FIRST real save, instead of creating the
+   *  row here to have something to file.
+   *
+   *  The sidebar door is a bare /polish-estimate.html with no ?d=, so shared.js has already minted
+   *  an id by the time enterSandbox runs, and saving unconditionally filed a nameless "Untitled"
+   *  row under Test every time somebody opened the beta to look at it, `created` event and all.
+   *  That is the same thing ae23c5d stopped the server doing ("the server stops creating projects
+   *  nobody asked for").
+   *
+   *  Bound to this id ("<id>:1", the format pendingTestIntentFor reads) rather than the bare "1"
+   *  that setNewProjectTestIntent writes: an unbound intent lands on whatever project is saved
+   *  next, which is how a real customer bid would end up filed as a test. */
+  function markNewProjectAsTest(id) {
+    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}
+  }
+
+  /** A draft's blob, or null when that id has never been saved.
+   *
+   *  READ ONLY, deliberately: no method, no body. This is the one call that touches the real
+   *  project, and it must not be able to change it.
+   *
+   *  Anything other than 200/404 throws rather than answering. An indeterminate reply read as
+   *  "not filed as a test" would copy a project needlessly; read as "filed" it would edit a live
+   *  bid, which is the one outcome there is no undoing. The caller stops the page instead. */
+  async function loadRow(id) {
+    var res = await fetch(draftUrl(id), { headers: TW.authHeaders() });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    var body = await res.json();
+    return (body && body.data) || {};
+  }
+
+  /** File a draft under the Projects page's Test tab.
+   *
+   *  The route is "/test". An earlier pass named it after the handler instead
+   *  (api_test_flag_draft), got a silent 405 on every call, and the project sat in Active looking
+   *  fine. projects.js has always posted to "/test" and this has to agree with it.
+   *
+   *  keepalive because the estimator can navigate while this is in flight; a plain fetch is
+   *  cancelled on unload, same reason shared.js carries its own saves that way. */
+  function fileAsTest(id) {
+    return fetch(draftUrl(id, "/test"), {
+      method: "POST",
+      headers: TW.authHeaders(),
+      body: JSON.stringify({ is_test: true }),
+      keepalive: true,
+    });
+  }
+
+  /** Write `blob` under `id`, and file it as a test only once that has actually landed.
+   *
+   *  Ordering is not stylistic. set_test_flag returns False on a missing draft, so filing before
+   *  the first successful save is a silent no-op and the project stays in Active.
+   *
+   *  And "landed" is not res.ok: api_save_draft catches its own failures and answers 200 with
+   *  {"ok": false, "error": ...}, so a save that never happened looks like a success to anyone
+   *  checking the status alone.
+   *
+   *  The flag POST is best-effort on purpose. If it fails the copy still exists and is still safe
+   *  to edit (it is not the real bid), and its "(beta test)" name puts it in the Test tab via
+   *  the projects-page name heuristic anyway. Refusing to open over that would be worse. */
+  async function saveThenFileAsTest(id, blob) {
+    var res = await fetch(draftUrl(id), {
+      method: "PUT",
+      headers: TW.authHeaders(),
+      body: JSON.stringify({ data: blob }),
+      keepalive: true,
+    });
+    var body = res.ok ? await res.json().catch(function () { return null; }) : null;
+    if (!res.ok || (body && body.ok === false)) {
+      throw new Error("save refused: " + ((body && body.error) || res.status));
+    }
+    await fileAsTest(id).catch(function (e) { console.warn("[polish beta] test flag failed", e); });
+  }
+
+  /** The source's numbers under a new name, plus the marks that make the copy a copy. */
+  function buildCopy(srcData, srcId) {
+    var blob = Object.assign({}, srcData);
+    // Server-owned (_SERVER_OWNED_KEYS in backend/drafts.py). is_test especially: the source may
+    // carry `false`, meaning a human said "this IS a real bid", and this page PUTs the whole blob
+    // on every autosave, so copying that key across would file the copy as a test through /test
+    // and then quietly put it back in Active a couple of seconds later.
+    delete blob.is_test;
+    delete blob.archived;
+    delete blob.assigned_estimator;
+    delete blob.__draft_id;              // shared.js's ownership stamp; it belongs to the source
+    blob.project_name = betaName(srcData.project_name);
+    // Paired with the derived id, this is what makes reopening idempotent: a draft that says
+    // whose sandbox it is never gets copied again, even if its test flag went missing.
+    blob.beta_sandbox_of = srcId;
+    blob.beta_sandbox_of_name = srcData.project_name || "";
+    return blob;
+  }
+
+  /** Move the page, and the address bar, onto `id`, with `blob` as its state.
+   *
+   *  The URL matters as much as the id. A reload that still said ?d=<the real project> would land
+   *  back on the live bid, and the next autosave would write to it.
+   *
+   *  clearState first so the source's blob is out of localStorage before anything is written: with
+   *  it still there and stamped, shared.js refuses the setState below as a foreign write. */
+  function adoptDraft(id, blob) {
+    TW.clearState();
+    try {
+      var url = new URL(window.location.href);
+      url.searchParams.set("d", id);
+      window.history.replaceState({}, "", url);
+    } catch (e) {}
+    // shared.js keeps the id here for navigations that drop the query string and exports no
+    // setter for it; projects.js reaches for the same key when it starts a fresh project.
+    try { localStorage.setItem("treadwell.proposal_tool.draft_id", id); } catch (e) {}
+    adopt(blob);
+    TW.setState(state);
+    repointWizardLinks();
+  }
+
+  /** shared.js stamps ?d= onto the static wizard links at DOMContentLoaded, which is long before
+   *  this page has settled which draft it is on. Left alone, "3 · Proposal" walks the estimator
+   *  straight back onto the real bid. */
+  function repointWizardLinks() {
+    var id = TW.getDraftId();
+    if (!id) return;
+    document.querySelectorAll("a[href]").forEach(function (a) {
+      try {
+        var u = new URL(a.getAttribute("href"), location.origin);
+        if (u.origin !== location.origin || !u.searchParams.has("d")) return;
+        u.searchParams.set("d", id);
+        a.setAttribute("href", u.pathname + u.search + u.hash);
+      } catch (e) {}
+    });
+  }
+
+  /** Say so, on screen. Working on a different project than the one clicked is worse than the bug
+   *  being fixed if nobody is told. textContent throughout: a project name is not markup. */
+  function showCopyNote(srcName, copyName) {
+    var el = $("sandbox-note");
+    if (!el) return;
+    el.textContent = "";
+    var ic = document.createElement("span");
+    ic.className = "ic";
+    ic.textContent = "⧉";
+    el.appendChild(ic);
+    var p = document.createElement("span");
+    p.appendChild(document.createTextNode("You are editing a test copy. Everything here saves to "));
+    var b1 = document.createElement("b");
+    b1.textContent = copyName;
+    p.appendChild(b1);
+    p.appendChild(document.createTextNode(" under the Test tab. The real project, "));
+    var b2 = document.createElement("b");
+    b2.textContent = srcName || "the one you opened";
+    p.appendChild(b2);
+    p.appendChild(document.createTextNode(", is untouched in Active."));
+    el.appendChild(p);
+    el.hidden = false;
+  }
+
+  /** `pending` = the row does not exist yet, so nothing has been filed yet either. Saying "this
+   *  project is filed as a test" over an empty page would be a claim about a row that is not
+   *  there. */
+  function showDirectNote(pending) {
+    var el = $("sandbox-note");
+    if (!el) return;
+    el.textContent = "";
+    var ic = document.createElement("span");
+    ic.className = "ic";
+    ic.textContent = "⧉";
+    el.appendChild(ic);
+    var p = document.createElement("span");
+    p.textContent = pending
+      ? "Nothing has been priced here yet. Whatever you enter is saved as a NEW test project, " +
+        "under the Test tab. No real bid is involved."
+      : "This project is filed as a test, so the beta is editing it directly. " +
+        "No real bid is involved.";
+    el.appendChild(p);
+    el.hidden = false;
+  }
+
+  /** Settle which draft this page may write to, BEFORE it can be typed into.
+   *
+   *  Returns false when it could not settle that safely, in which case the caller leaves the page
+   *  on its loading message. Stopping is the correct failure: the alternative is a beta that
+   *  edits a customer's bid because a fetch blipped. */
+  async function enterSandbox() {
+    var id = TW.getDraftId();
+    if (!id) return true;                        // no project at all, nothing to protect
+
+    var row;
+    try { row = await loadRow(id); }
+    catch (e) {
+      $("loading").textContent = "Couldn't check whether this project is filed as a test, so the " +
+        "beta stopped rather than risk editing a real bid. Reload to try again.";
+      return false;
+    }
+
+    // Never saved: this id IS the sandbox, there is nothing to copy, and Hanz asked for
+    // everything the beta touches to land under Test. Save it so the row exists, then file it.
+    //
+    // Only when there is something to save, though. Opening the beta must not CREATE a project:
+    // see markNewProjectAsTest, which hands the filing to the first save the estimator earns.
+    if (row === null) {
+      if (hasContent(state)) {
+        try { await saveThenFileAsTest(id, state); }
+        catch (e) { console.warn("[polish beta] could not file the new project as a test", e); }
+        showDirectNote(false);
+      } else {
+        markNewProjectAsTest(id);
+        showDirectNote(true);
+      }
+      return true;
+    }
+
+    // Already filed as a test, or a copy this page made earlier. Work on it directly: no copy, no
+    // rename. This is the normal path once somebody is working in the sandbox.
+    //
+    // `=== true` exactly, because is_test is a tri-state (see _tribool in backend/drafts.py):
+    // `false` is a human saying "this IS a real bid" and absent is nobody having said. Both of
+    // those are projects to copy, and a truthiness check would have read absent as filed.
+    if (row.is_test === true || row.beta_sandbox_of) {
+      showDirectNote(false);
+      return true;
+    }
+
+    var copyId = sandboxIdFor(id);
+    var copy;
+    try { copy = await loadRow(copyId); }
+    catch (e) {
+      $("loading").textContent = "Couldn't check for this project's test copy, so the beta " +
+        "stopped rather than risk editing the real bid. Reload to try again.";
+      return false;
+    }
+
+    if (copy) {
+      // Second visit. Reuse the copy AS IT IS: re-seeding it from the source would throw away
+      // whatever was priced here last time, which is the comparison the beta exists for.
+      if (copy.is_test !== true) {
+        fileAsTest(copyId).catch(function (e) { console.warn("[polish beta] refiling failed", e); });
+      }
+      adoptDraft(copyId, copy);
+    } else {
+      var blob = buildCopy(row, id);
+      try { await saveThenFileAsTest(copyId, blob); }
+      catch (e) {
+        $("loading").textContent = "Couldn't make the test copy, so the beta stopped rather than " +
+          "edit the real project itself. Reload to try again.";
+        return false;
+      }
+      adoptDraft(copyId, blob);
+    }
+    showCopyNote(row.project_name, state.project_name);
+    return true;
+  }
+
   // ── boot ────────────────────────────────────────────────────────────────────
   async function init() {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
+    // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
+    // and every decision below turns on that id.
+    try { await TW.draftReady; } catch (e) {}
+    adopt(TW.getState());
+
+    // Before the workbook, before the form, before anything can be typed: whatever happens after
+    // this line writes to a test project. A save timer started against the real bid and fired
+    // after the switch would be the bug with extra steps.
+    if (!(await enterSandbox())) return;
 
     $("proj-line").textContent = [state.project_name, state.city && state.state
       ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";

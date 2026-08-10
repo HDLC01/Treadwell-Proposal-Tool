@@ -111,28 +111,12 @@
     }
   }
 
-  function hourOptions() {
-    var out = "";
-    for (var h = 0; h < 24; h++) {
-      var label = h === 0 ? "midnight" : h === 12 ? "noon"
-        : (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? "am" : "pm");
-      out += '<option value="' + h + '">' + label + "</option>";
-    }
-    return out;
-  }
-
   function fillNumbers() {
     $("first").value = CFG.first_nudge_hours;
     $("second").value = CFG.second_nudge_hours;
     $("recurring").value = CFG.recurring_hours;
     $("staff").value = CFG.staff_personal_hours;
     $("maxrec").value = CFG.max_recurring;
-    if (!$("startH").options.length) {
-      $("startH").innerHTML = hourOptions();
-      $("endH").innerHTML = hourOptions();
-    }
-    $("startH").value = String(CFG.send_start_hour);
-    $("endH").value = String(CFG.send_end_hour);
   }
 
   function paintTabs() {
@@ -145,8 +129,12 @@
         ? "your signed approval — and the deposit, when the job has one"
         : t === "{link}" ? "the button back to the proposal (required)"
         : t === "{first_name}" ? "the customer's first name" : "the project name";
-      return '<button type="button" class="tok" data-tok="' + esc(t) + '" title="' + esc(why) +
-             '">' + esc(t) + "</button>";
+      // draggable="true" because a <button> is not draggable by default. It has to be set HERE
+      // rather than once on the container: paintTabs rebuilds this strip on every tab switch, so
+      // anything hung on the chips themselves is gone by the second email you edit. The listeners
+      // avoid the same trap by being delegated on #tokens, which survives.
+      return '<button type="button" class="tok" draggable="true" data-tok="' + esc(t) +
+             '" title="' + esc(why) + '">' + esc(t) + "</button>";
     }).join("");
   }
 
@@ -172,8 +160,25 @@
       recurring_hours: $("recurring").value,
       staff_personal_hours: $("staff").value,
       max_recurring: $("maxrec").value,
-      send_start_hour: $("startH").value,
-      send_end_hour: $("endH").value,
+      // THE SEND WINDOW IS ROUND-TRIPPED, NOT OMITTED, and that is not a style choice.
+      //
+      // Hanz took the two hour selects off this page on 2026-08-10, but the window is still stored
+      // and the sender still enforces it. Leaving these keys out of the payload would quietly
+      // reset it. The PUT lands on the portal's /api/admin/settings/followups, which runs
+      // followup_settings.validate() (portal main.py:1764), and validate() does
+      // `_clamp_int(raw.get(field), field)` for EVERY field in DEFAULTS, where a missing key means
+      // raw.get() is None and _clamp_int returns the DEFAULT. So a window somebody had set to
+      // 9-17 would silently snap back to the shipped 8-18 the first time anybody edited an email.
+      //
+      // The near miss: followup_settings.merge() DOES skip absent keys (`if field in stored`), so
+      // reading that function alone says omitting is safe. merge() is the read path. It never sees
+      // this payload.
+      //
+      // CFG is whatever the GET returned, and it is replaced by the response on every save, so
+      // these are the live stored values rather than a copy that can drift. A failed read cannot
+      // send stale hours either: lockForFailedRead disables Save outright.
+      send_start_hour: CFG.send_start_hour,
+      send_end_hour: CFG.send_end_hour,
       templates: CFG.templates,
     };
   }
@@ -237,18 +242,167 @@
     schedulePreview();
   });
 
+  // ── the token chips: drag one in, or click one ─────────────────────────────
+  //
+  // Hanz, 2026-08-10: "also make this a drag and drop bar instead of a brace". Dragging is the new
+  // way in and it lands the token where you let go of it.
+  //
+  // CLICK STAYS, and not out of caution. A drag needs a pointer, so drag-only would put all four
+  // placeholders out of reach of a keyboard and awkward on a touch screen. And {link} is not
+  // optional decoration: the server refuses to save a body without it (followup_settings
+  // validate_template), so an estimator who cannot insert a token cannot save the email at all.
   $("tokens").addEventListener("click", function (e) {
     var b = e.target.closest("[data-tok]");
     if (!b) return;
-    // Insert at the caret rather than appending: somebody clicking {first_name} means "here".
+    // The caret, not the end of the box: clicking {first_name} means "here".
     var ta = $("t-body");
-    var tok = b.getAttribute("data-tok");
-    var at = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
-    var end = ta.selectionEnd == null ? at : ta.selectionEnd;
-    ta.value = ta.value.slice(0, at) + tok + ta.value.slice(end);
+    insertToken(b.getAttribute("data-tok"), ta.selectionStart, ta.selectionEnd);
+  });
+
+  // Both ways in end here: a click hands over the caret, a drop hands over the point it
+  // landed on.
+  function insertToken(tok, at, end) {
+    var ta = $("t-body");
+    var lim = ta.value.length;
+    var from = Math.max(0, Math.min(lim, at == null ? lim : at));
+    var to = Math.max(from, Math.min(lim, end == null ? from : end));
+    ta.value = ta.value.slice(0, from) + tok + ta.value.slice(to);
     ta.focus();
-    ta.setSelectionRange(at + tok.length, at + tok.length);
+    ta.setSelectionRange(from + tok.length, from + tok.length);
     schedulePreview();
+  }
+
+  // Our own drag type. It is what lets the textarea tell one of these chips from every other thing
+  // that can be dropped into it, which the drop handler below depends on completely.
+  var TOK_MIME = "application/x-treadwell-token";
+
+  var isTokenDrag = function (e) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    if (!types) return false;
+    // types is a DOMStringList on older engines, so indexOf/includes are not safe to assume.
+    for (var i = 0; i < types.length; i++) {
+      if (String(types[i]).toLowerCase() === TOK_MIME) return true;
+    }
+    return false;
+  };
+
+  var carriesText = function (e) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    if (!types) return false;
+    for (var i = 0; i < types.length; i++) {
+      var t = String(types[i]).toLowerCase();
+      if (t === "text/plain" || t === "text" || t === TOK_MIME) return true;
+    }
+    return false;
+  };
+
+  $("tokens").addEventListener("dragstart", function (e) {
+    var b = e.target.closest("[data-tok]");
+    if (!b || !e.dataTransfer) return;
+    var tok = b.getAttribute("data-tok");
+    // text/plain too, so a chip dragged into the subject line, the heading box, or out into any
+    // other text field entirely, still deposits the token instead of nothing.
+    e.dataTransfer.setData("text/plain", tok);
+    e.dataTransfer.setData(TOK_MIME, tok);
+    e.dataTransfer.effectAllowed = "copy";
+  });
+
+  // Where a drop landed, as an index into the textarea's value, or null if that cannot be worked
+  // out honestly.
+  //
+  // A textarea is NOT a contenteditable, and the two APIs disagree about it badly enough that this
+  // has to be checked rather than trusted. Measured in Chrome 151 against a known body of text:
+  //
+  //   document.caretPositionFromPoint  ->  offsetNode is the TEXTAREA itself (an element node) and
+  //                                       offset is a real index into .value: 7, 17, 97, 103, 122
+  //                                       and 140-of-140 all landed on the right character.
+  //   document.caretRangeFromPoint     ->  startContainer is BODY, startOffset is 1. It does not
+  //                                       resolve into the control at all.
+  //
+  // So the WebKit fallback, taken at face value, would have inserted every dragged token at
+  // character 1 of the message, six words into "Hi {first_name}," and blamed on the drag. The
+  // ownership test below is what catches that, and it is the reason this function returns null
+  // instead of a number it cannot stand behind. A token one character out is a typo anybody can
+  // fix; a token spliced into the middle of an unrelated sentence reads as the tool being broken.
+  function dropOffset(ta, x, y) {
+    var node = null, off = null;
+    if (document.caretPositionFromPoint) {
+      var pos = document.caretPositionFromPoint(x, y);
+      if (pos) { node = pos.offsetNode; off = pos.offset; }
+    } else if (document.caretRangeFromPoint) {
+      var rng = document.caretRangeFromPoint(x, y);
+      if (rng) { node = rng.startContainer; off = rng.startOffset; }
+    }
+    if (!node || typeof off !== "number" || off < 0) return null;
+    if (!ownedBy(node, ta)) return null;                 // BODY/1, and anything else foreign
+    // Two shapes are safe to read as a value index. The control itself, which is what the spec now
+    // says a text control returns and what Chrome does. Or a text node holding the WHOLE value,
+    // which is how an engine with anonymous content inside the control answers. The length test
+    // is the point of it: an offset into one line of a value split across nodes is not an offset
+    // into the value, and there is no way to add up the ones in front of it from here.
+    if (node !== ta && !(node.nodeType === 3 && node.nodeValue != null
+                         && node.nodeValue.length === ta.value.length)) return null;
+    return off > ta.value.length ? null : off;
+  }
+
+  // ta.contains() answers false for the anonymous content inside a text control, so walk out by
+  // hand. A ShadowRoot has no parentNode; it has a host.
+  function ownedBy(node, ta) {
+    for (var n = node; n; n = n.parentNode || n.host || null) {
+      if (n === ta) return true;
+    }
+    return false;
+  }
+
+  var msg = $("t-body");
+  var overDepth = 0;                  // see the dragleave handler
+
+  msg.addEventListener("dragover", function (e) {
+    // No preventDefault here and the drop event never fires at all, which is the single easiest way
+    // to ship this looking finished and doing nothing.
+    if (!carriesText(e)) return;      // a file dragged onto the page is not ours to accept
+    e.preventDefault();
+    if (e.dataTransfer && isTokenDrag(e)) e.dataTransfer.dropEffect = "copy";
+  });
+
+  msg.addEventListener("dragenter", function (e) {
+    if (!isTokenDrag(e)) return;
+    overDepth++;
+    msg.classList.add("dropping");
+  });
+
+  msg.addEventListener("dragleave", function () {
+    // Counted, not just removed. Dragging across a textarea sends leave/enter pairs as the pointer
+    // crosses its own inner content, and a bare remove flickered the highlight off and on while
+    // the pointer never left the box.
+    if (--overDepth <= 0) { overDepth = 0; msg.classList.remove("dropping"); }
+  });
+
+  // Let go outside the textarea and the drop never fires, so the highlight would sit there lit up
+  // over a box that received nothing.
+  $("tokens").addEventListener("dragend", function () {
+    overDepth = 0;
+    msg.classList.remove("dropping");
+  });
+
+  msg.addEventListener("drop", function (e) {
+    overDepth = 0;
+    msg.classList.remove("dropping");
+    // EVERY OTHER DROP IS LEFT TO THE BROWSER, on purpose. A textarea already inserts dropped text
+    // at the drop point, and it knows two things this handler does not: a selection dragged from
+    // inside this same box is a MOVE, so handling it here would leave the original behind and
+    // paste a second copy, and text arriving from another application may carry a flavour we never
+    // asked for. Not calling preventDefault is also what stops a token landing twice: the default
+    // insert and ours both firing is the duplicate this guard exists to avoid.
+    if (!isTokenDrag(e)) return;
+    e.preventDefault();
+    var tok = e.dataTransfer.getData(TOK_MIME) || e.dataTransfer.getData("text/plain") || "";
+    if (!tok) return;
+    var at = dropOffset(msg, e.clientX, e.clientY);
+    // Nothing resolvable under the pointer: the caret is a wrong-but-predictable answer, and the
+    // estimator can see where it is.
+    if (at == null) at = msg.selectionStart == null ? msg.value.length : msg.selectionStart;
+    insertToken(tok, at, at);
   });
 
   ["t-subject", "t-title", "t-body", "t-cta"].forEach(function (id) {
@@ -260,9 +414,6 @@
   var clearUnlessLocked = function () { if (!locked) say(""); };
   ["first", "second", "recurring", "staff", "maxrec"].forEach(function (id) {
     $(id).addEventListener("input", clearUnlessLocked);
-  });
-  ["startH", "endH"].forEach(function (id) {
-    $(id).addEventListener("change", clearUnlessLocked);
   });
 
   $("save").addEventListener("click", async function () {
@@ -300,9 +451,14 @@
 
   $("reset").addEventListener("click", async function () {
     var ok = await TW.confirmDanger({
-      title: "Back to the shipped cadence?",
-      message: "Every timing and all four emails go back to how they were before anybody edited "
-             + "them.",
+      title: "Reset to Default?",
+      // The send window is named HERE because this dialog is now the only place it can be. A reset
+      // PUTs an empty payload, so the server refills every field including send_start_hour and
+      // send_end_hour, which has always been true. What changed on 2026-08-10 is that the card
+      // showing those hours is gone, so a window somebody had set to 9-17 snaps back to 8-18 with
+      // nothing on screen before or after to say it happened.
+      message: "Every timing, the hours those emails may go out, and all four emails go back to "
+             + "how they were before anybody edited them.",
       detail: "Proposals already being chased carry on — nothing is re-sent.",
       confirmText: "Reset cadence",
       tone: "warn",
@@ -321,7 +477,7 @@
       fillTemplate();
       renderPreview(j.previews && j.previews[KEY]);
       showWhoChanged(j);      // a reset IS a change, and it is the newest one
-      say("Back to the shipped cadence.", true);
+      say("Reset to the default cadence.", true);
     } catch (err) {
       say("Couldn't reset that: " + (err.message || "try again"));
     }

@@ -207,15 +207,38 @@ def test_the_page_explains_that_changes_are_not_retroactive(html):
     assert "retroactively" in html or "nothing is re-sent" in html
 
 
-def test_the_send_window_explains_why_it_exists(html):
-    """A 3am reminder reads as a robot and invites a spam complaint — worth saying, or somebody
-    will widen it to 24 hours."""
-    assert "3am" in html or "robot" in html
+def test_the_send_window_explains_why_it_exists():
+    """This used to read the VISIBLE copy, and it stopped meaning that on 2026-08-10.
+
+    Hanz removed the "When emails may go out" card, so "3am" and "robot" now appear nowhere a user
+    can see. The old assertion (`"3am" in html or "robot" in html`) still passed, because both words
+    survive in the comment left where the card was, and its docstring had gone false with it:
+    nobody can widen the window to 24 hours from this page any more.
+
+    So it is pointed at the comment on purpose. The rationale is still the thing worth keeping, it
+    is just kept for the maintainer rather than the estimator, and the window really is still
+    enforced server-side. Reading the raw file here is deliberate: the audience is somebody with
+    the file open. test_cadence_page_cleanup.py owns the rest of the note's contents.
+    """
+    raw = (FRONTEND / "followup-settings.html").read_text(encoding="utf-8")
+    notes = " ".join(re.findall(r"<!--(.*?)-->", raw, flags=re.S))
+    assert "3am" in notes or "robot" in notes, (
+        "nothing left on the page says why the send window exists, so the next person to be asked "
+        "'can we just email whenever?' has no answer written down")
+    body = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
+    assert "When emails may go out" not in body, (
+        "the card is back on the page; move this assertion to the visible copy again")
 
 
-def test_the_sidebar_links_to_it_without_a_duplicate_glyph():
+def test_no_two_sidebar_items_share_a_glyph():
+    """This used to also assert the sidebar linked here. It no longer does: Hanz removed both
+    follow-up items on 2026-08-10 ("Remove the followups on the sidebar"), so this page is
+    reachable by URL only and test_sidebar_labels.py holds the two guards that replaced it, that
+    the sidebar must not list it and that the page and its script must stay on disk. The glyph
+    half stays because the icons are the only thing telling eleven near-identical rows apart, and
+    the removal freed ⏱ and ⏲ for somebody to reuse by accident.
+    """
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    assert 'navItem("/followup-settings.html"' in auth
     glyphs = re.findall(r'navItem\("[^"]+", "([^"]+)"', auth)
     assert len(glyphs) == len(set(glyphs)), "two sidebar items share a glyph: %s" % glyphs
 
