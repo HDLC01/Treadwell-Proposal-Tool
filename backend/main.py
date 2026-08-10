@@ -1042,9 +1042,10 @@ def api_portal_deposit_received(proposal_id: str) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/deposit-received", "POST", {})
 
 
-@app.post("/api/portal/proposal/{proposal_id}/scheduled")
-def api_portal_scheduled(proposal_id: str) -> Dict[str, Any]:
-    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/scheduled", "POST", {})
+# The /scheduled proxy was removed on 2026-08-11 with the rest of scheduling. Nothing calls it:
+# the drawer's Mark scheduled button and the customer's Schedule tile went at the same time, and
+# Treadwell books the date on the phone. The portal's own endpoint went too, so re-adding this
+# alone would proxy to a 404.
 
 
 # ── follow-up automation (drawer actions) ─────────────────────────────────────

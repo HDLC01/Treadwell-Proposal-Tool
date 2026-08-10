@@ -31,8 +31,20 @@
 
   var STAGE_SUBMITTED = "Deposit submitted";
   var STAGE_LOST = "Closed lost";
+  // "Scheduled" was the last column until 2026-08-11. Hanz: "We need to remove the schedule
+  // status on the CRM and on the Customer portal Status." It was a step with nothing behind it:
+  // Treadwell books the date by phone, so the customer's own Schedule tile had nowhere to
+  // navigate to and the column only ever restated what a call had already settled.
+  //
+  // The stage() branch that returned it went at the same moment, and that pairing is not
+  // optional: group() below drops any card whose stage is not a live column, so leaving the
+  // branch would have made every scheduled project disappear off the board rather than fall
+  // back to Contact info.
+  //
+  // schedule_status and scheduled_at are untouched in the database. Nothing is deleted, so
+  // reinstating the column is putting these two lines back.
   var STAGES = ["Sent", "Viewed", "Approved", STAGE_SUBMITTED,
-                "Deposit received", "Contact info", "Scheduled"];
+                "Deposit received", "Contact info"];
 
   var LOST_REASON = {
     price: "Price", another_contractor: "Another contractor",
@@ -53,7 +65,6 @@
     ["deposit_submitted_at", "Deposit sent"],
     ["deposit_received_at", "Deposit in"],
     ["contacts_received_at", "Contacts in"],
-    ["scheduled_at", "Scheduled"],
     ["last_message_at", "Message"],
     ["last_followup_at", "Followed up"],
   ];
@@ -66,7 +77,6 @@
     "Deposit submitted": "deposit_submitted_at",
     "Deposit received": "deposit_received_at",
     "Contact info": "contacts_received_at",
-    "Scheduled": "scheduled_at",
     "Closed lost": "closed_at",
   };
 
@@ -105,8 +115,8 @@
 
   /** No deposit stage stands between approval and contacts when this job doesn't
    *  collect one — otherwise a GC project would sit in "Approved" forever, unable
-   *  to reach Contact info or Scheduled. An issued invoice means a deposit is
-   *  genuinely outstanding, flag or not, so it still gates. */
+   *  to reach Contact info. An issued invoice means a deposit is genuinely
+   *  outstanding, flag or not, so it still gates. */
   function depositSatisfied(p) {
     return p.deposit_status === "received" ||
       (p.deposit_required === false && !p.deposit_requested_at);
@@ -114,7 +124,9 @@
 
   function stage(p) {
     if (isLost(p)) return STAGE_LOST;
-    if (p.schedule_status === "scheduled") return "Scheduled";
+    // No schedule branch. A scheduled job now reads as Contact info, the furthest stage that
+    // still exists, rather than vanishing: group() only keeps cards whose stage is a live
+    // column. See the note on STAGES.
     // A customer may submit contacts right after approval (the portal allows it),
     // but an unpaid deal must NOT read as further along than a paid one.
     if (depositSatisfied(p) && p.contacts_status === "received") return "Contact info";

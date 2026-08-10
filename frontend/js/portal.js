@@ -512,7 +512,10 @@
     proposal: ["dsec-customer", "dsec-approved", "dsec-notify"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
-    schedule: ["dsec-schedule"],
+    // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
+    // button and its customer email included: Treadwell books the date on the phone and the
+    // customer hears it there, so the app had a status, a tile and a notification all restating
+    // a call that had already happened. schedule_status stays in the database untouched.
     chat:     ["dsec-chat"],
     followup: ["dsec-followup"],
   };
@@ -620,7 +623,6 @@
     // to action there. Contacts/schedule is the real next step.
     if (p.proposal_status === "approved" && !p.deposit_requested_at
         && p.deposit_required !== false) return "deposit";
-    if (p.contacts_status === "received" && p.schedule_status !== "scheduled") return "schedule";
     return "proposal";
   }
 
@@ -743,8 +745,6 @@
       secTab("deposit", "Deposit", Object.assign({ hint: "Invoice, what the customer submitted, mark received" }, dep)) +
       secTab("contacts", "Contacts", { done: s.contactsDone, val: s.contactsDone ? "Received" : "Pending",
         hint: "Project contacts the customer supplied" }) +
-      secTab("schedule", "Schedule", { done: s.scheduledDone, val: s.scheduledDone ? "Scheduled" : "Pending",
-        hint: "Book the job once the deposit clears" }) +
       secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
         badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
       // Closed-lost is "done" in the sense the tab means it: nothing left to chase.
@@ -1319,7 +1319,6 @@
     // Sent without a deposit (typical for GC). Manual invoicing is still offered.
     const depositNotRequired = p.deposit_required === false && !p.deposit_requested_at;
     const contactsDone = p.contacts_status === "received";
-    const scheduledDone = p.schedule_status === "scheduled";
 
     // Full chat thread (fallback to the legacy text-only questions if a pre-PP1
     // portal hasn't shipped yet).
@@ -1374,7 +1373,7 @@
         <button class="dclose" aria-label="Close">&times;</button>
       </div>
       ${renderSecTabs({ approved, depositDone, depositSubmitted, depositNotRequired,
-                        contactsDone, scheduledDone,
+                        contactsDone,
                         requested: !!p.deposit_requested_at, unread,
                         lost: isLost(p), fuVal: followupState(p).val })}
       <div class="dbody">
@@ -1415,16 +1414,6 @@
         </div>
        </div>
 
-       <div class="dpanel" id="dpanel-schedule" role="tabpanel" aria-labelledby="dtab-schedule" tabindex="-1">
-        <div class="sec" id="dsec-schedule">
-          <div class="lbl">Schedule</div>
-          <p class="note">${scheduledDone ? "This job is booked."
-            : "Treadwell books the date once the deposit has cleared. Mark it here when the crew is scheduled — the customer is told."}</p>
-          <div class="row3" style="margin-top:8px">
-            <button class="btn btn-s" id="mark-scheduled" ${scheduledDone ? "disabled" : ""}>Mark scheduled</button>
-          </div>
-        </div>
-       </div>
 
        <div class="dpanel" id="dpanel-chat" role="tabpanel" aria-labelledby="dtab-chat" tabindex="-1">
         <div class="sec" id="dsec-chat">
@@ -1450,7 +1439,6 @@
     setSecEligible("dsec-notify", true);
     setSecEligible("dsec-deposit", true);
     setSecEligible("dsec-contacts", true);
-    setSecEligible("dsec-schedule", true);
     setSecEligible("dsec-chat", true);
     setSecEligible("dsec-followup", true);
 
@@ -1516,7 +1504,6 @@
       if (!ok) return;
       act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", btn);
     });
-    $("mark-scheduled").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/scheduled", e.target));
     wireFollowup(pid, p, act);
 
     $("reply-body").addEventListener("input", (e) => { REPLY_DRAFT[pid] = e.target.value; });
