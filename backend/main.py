@@ -701,6 +701,11 @@ class PortalPublishIn(BaseModel):
     message: str = ""
     require_deposit: Optional[bool] = None
     assigned_estimator: str = ""
+    # Which of those contacts should NOT receive the automated follow-ups — the per-contact
+    # checkbox on the Files screen. An opt-OUT list rather than an opt-in one, so the default
+    # (chase everybody, as it has always worked) needs no entry and a caller that omits the field
+    # forwards nothing.
+    no_followups: list[str] = Field(default_factory=list)
 
 
 def _clean_estimator(raw: str) -> str:
@@ -784,6 +789,12 @@ def api_portal_publish(draft_id: str, request: Request,
     # a legacy caller should do.
     if payload is not None and payload.require_deposit is not None:
         body["require_deposit"] = bool(payload.require_deposit)
+    # Cleaned with the SAME helper as `emails`, so a malformed entry is refused rather than
+    # dropped: silently ignoring one means somebody un-ticked a box and the contact is chased
+    # anyway, which nobody would notice until a customer complained.
+    no_fu = _clean_portal_emails(payload.no_followups if payload else [])
+    if no_fu:
+        body["no_followups"] = no_fu
     # Checked after the recipients (their errors are more specific and predate this)
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
@@ -1127,6 +1138,36 @@ def api_portal_followup_automation(proposal_id: str, request: Request,
                                    payload: Optional[AutomationIn] = None) -> Dict[str, Any]:
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-automation", "POST",
                    {"enabled": bool(payload.enabled) if payload else True,
+                    "by": _user_email(request)})
+
+
+class FollowupRecipientIn(BaseModel):
+    """One contact's follow-up setting, from the drawer's Follow-up tab.
+
+    `enabled` defaults True so the Add flow (which posts no setting) adds somebody who IS chased —
+    adding a contact and silently excluding them is not what "add" means. `add` is separate from
+    `enabled` because toggling an existing contact must never create one: a typo in the toggle
+    path would otherwise add a stranger to the proposal and email them the link."""
+    email: str = ""
+    enabled: bool = True
+    add: bool = False
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followup-recipient")
+def api_portal_followup_recipient(proposal_id: str, request: Request,
+                                  payload: Optional[FollowupRecipientIn] = None
+                                  ) -> Dict[str, Any]:
+    """Turn automated follow-ups on or off for one contact, or add a contact.
+
+    Shape-checks the address here so an obvious typo costs no round trip; the portal re-validates,
+    because this decides who gets sent a link to a customer's proposal."""
+    email = str((payload.email if payload else "") or "").strip().lower()
+    if not email or not _PORTAL_EMAIL_RE.match(email) or len(email) > 254:
+        raise HTTPException(400, "That doesn't look like an email address.")
+    return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-recipient", "POST",
+                   {"email": email,
+                    "enabled": bool(payload.enabled) if payload else True,
+                    "add": bool(payload.add) if payload else False,
                     "by": _user_email(request)})
 
 

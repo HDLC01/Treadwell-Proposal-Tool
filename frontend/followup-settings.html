@@ -88,7 +88,10 @@
       border-radius:8px; padding:10px 12px; font-size:12.5px; }
     [hidden] { display:none !important; }
     .loading { color:var(--ink-v); text-align:center; padding:40px; }
-  </style>
+      /* The "which email am I editing" heading. Reads as a caption for the form below rather
+       than as a section title — the card already has an h2. */
+    .which-email { font-size:13.5px; font-weight:700; color:var(--ink); margin:14px 0 10px; }
+</style>
 </head>
 <body>
   <div class="top">
@@ -106,27 +109,27 @@
     <div id="main" hidden>
       <div class="card">
         <h2>Timing</h2>
-        <p class="sub">Hours between reminders. The first number is the wait after sending, and
+        <p class="sub">Days between reminders. The first number is the wait after sending, and
           again after the customer first opens it.</p>
         <div class="grid">
           <div>
             <label for="first">First reminder</label>
-            <div class="row"><input id="first" class="num" inputmode="numeric" /><span>hours</span></div>
+            <div class="row"><input id="first" class="num" inputmode="numeric" /><span>days</span></div>
             <p class="fhint">After sending, and after the first view.</p>
           </div>
           <div>
             <label for="second">Second reminder</label>
-            <div class="row"><input id="second" class="num" inputmode="numeric" /><span>hours</span></div>
+            <div class="row"><input id="second" class="num" inputmode="numeric" /><span>days</span></div>
             <p class="fhint">Counted from the first view.</p>
           </div>
           <div>
             <label for="recurring">Then every</label>
-            <div class="row"><input id="recurring" class="num" inputmode="numeric" /><span>hours</span></div>
-            <p class="fhint">72 is the "every 3 days" on the flow chart.</p>
+            <div class="row"><input id="recurring" class="num" inputmode="numeric" /><span>days</span></div>
+            <p class="fhint">3 is the "every 3 days" on the flow chart.</p>
           </div>
           <div>
             <label for="staff">Tell the estimator after</label>
-            <div class="row"><input id="staff" class="num" inputmode="numeric" /><span>hours</span></div>
+            <div class="row"><input id="staff" class="num" inputmode="numeric" /><span>days</span></div>
             <p class="fhint">Viewed but still undecided — time to make it personal.</p>
           </div>
           <div>
@@ -168,6 +171,13 @@
           </div>
         </div>
         <div class="tabs" role="tablist" id="tabs"></div>
+        <!-- Which email you are editing, in words. Hanz, 2026-08-12: "each category in the emails
+             should have different language or terms ... Just to clearly show what category we are
+             in." The tab above is short enough to fit four across; this is where there is room to
+             say WHEN the thing fires. Served by the portal (editor_titles) rather than written
+             here, for the same reason the tab labels are: the heading and the message that
+             refuses a save must not disagree about what an email is called. -->
+        <h3 id="which-email" class="which-email"></h3>
         <div class="editor">
           <div class="fields">
             <div>

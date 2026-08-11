@@ -64,7 +64,19 @@
   .board.as-table { display:block; overflow-x:auto; }
   .col { flex:0 0 270px; background:var(--surf-low); border:1px solid var(--line); border-radius:10px; padding:10px; }
   .col h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-v);
-    margin:2px 4px 10px; display:flex; justify-content:space-between; }
+    margin:2px 4px 10px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
+  /* "+ New" in the Created-but-not-sent header. The count keeps the middle of the row, so
+     the button is pushed to the end rather than replacing space-between with a 3-way split. */
+  .col h2 .col-add { margin-left:auto; font:inherit; font-size:10px; letter-spacing:.04em;
+    border:1px solid var(--red-dark); color:var(--red-dark); background:#fff;
+    border-radius:999px; padding:2px 9px; cursor:pointer; white-space:nowrap; }
+  .col h2 .col-add:hover { background:var(--red-dark); color:#fff; }
+  /* Files / Info on every card. Quiet by default — they are always-available utilities, not
+     the point of the card — and they must not compete with the project name above them. */
+  .deal-acts { display:flex; gap:6px; margin-top:8px; }
+  .deal-act { font:inherit; font-size:10.5px; font-weight:600; border:1px solid var(--line);
+    background:#fff; color:var(--ink-v); border-radius:6px; padding:3px 9px; cursor:pointer; }
+  .deal-act:hover { border-color:var(--red-dark); color:var(--red-dark); }
   /* "Deposit submitted" — the customer has paid and nobody has confirmed it yet,
      so this column is the one that needs a human. Flagged only when occupied. */
   .col.col-attn { border-color:var(--red); background:#fdf3f3; }
@@ -245,6 +257,33 @@
      one run, which is most of why a signature read as a wall of text. anywhere, not
      break-word, so a long tracking URL cannot push the bubble past its max-width. */
   .msg .mbody { white-space:pre-wrap; overflow-wrap:anywhere; }
+  /* WHICH contact wrote it, on a proposal with more than one. The blanket author label was
+     removed on 2026-08-11 ("just the reply contents and the date") because with a single contact
+     it restated what the side and colour already said. On a multi-recipient proposal it says
+     something nothing else can, so it comes back conditionally — customer bubbles only. */
+  /* Recipients card: one chip per contact with what they have done. Its own classes, NOT
+     nt-chip — green there means "receives this project's emails", which would be a false
+     statement about a contact. */
+  /* The board card line. Dimmer than the estimator line above it: it is a supporting fact,
+     not the thing the card is about. */
+  .deal .meta.rc-line { color:var(--ink-v); font-weight:600; font-size:11.5px; }
+  /* "Automated follow-ups go to" — one tickable contact per row inside the Follow-up tab.
+     Always visible, because the question it answers is "is this person being chased". */
+  .fu-clist { display:flex; flex-direction:column; gap:5px; margin:2px 0 10px; }
+  .fu-c { display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; }
+  .fu-c input { margin:0; }
+  .tw-input { flex:1; min-width:0; border:1px solid var(--line); border-radius:7px;
+    padding:9px 11px; font:inherit; font-size:13px; background:#fff; }
+  .tw-input:focus { outline:none; border-color:var(--red-dark); }
+  .rc-list { display:flex; flex-direction:column; gap:6px; }
+  .rc-chip { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:6px 8px;
+    border:1px solid var(--line); border-radius:9px; background:#fff; }
+  .rc-chip .rc-n { font-weight:600; margin-right:2px; }
+  .rc-b { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+    border:1px solid var(--surf-dim); border-radius:999px; padding:1px 7px; color:var(--ink-v); }
+  .rc-b.on { border-color:#0f7b3f; color:#0f7b3f; }
+  .msg .who { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--ink-v); margin-bottom:2px; }
   .msg .via-email { border:1px solid var(--ink-v); border-radius:999px; padding:0 5px; margin-left:4px; font-size:9px; }
   .msg .when { font-size:10px; color:var(--ink-v); margin-top:3px; }
   textarea { width:100%; min-height:74px; padding:10px; border:1px solid var(--line); border-radius:7px; font:inherit; resize:vertical; }

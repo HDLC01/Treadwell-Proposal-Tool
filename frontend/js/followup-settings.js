@@ -28,6 +28,14 @@
     second_nudge: "Second reminder",
     checkin: "Recurring check-in",
   };
+  // Fallback only — the portal serves these (editor_titles). Present so a failed or older GET
+  // still shows which email is open rather than an empty heading.
+  var EDITOR_TITLES = {
+    not_viewed: "First reminder — after not opening",
+    next_steps: "Next steps — after they open it",
+    second_nudge: "Second reminder — opened, still no decision",
+    checkin: "Recurring check-in — repeats until they decide",
+  };
   var TOKENS = ["{first_name}", "{project}", "{need}", "{link}"];
 
   // Every request waits for the bearer token in ONE place — the Bid Calendar shipped a 401 that
@@ -98,7 +106,13 @@
           if (j.labels[k]) LABELS[k] = j.labels[k];
         });
       }
-      $("loading").hidden = true;
+
+      // Longer when-it-fires wording for the heading under the tabs, same server-owns-it rule.
+      if (j.editor_titles && typeof j.editor_titles === "object") {
+        Object.keys(j.editor_titles).forEach(function (k) {
+          if (j.editor_titles[k]) EDITOR_TITLES[k] = j.editor_titles[k];
+        });
+      }      $("loading").hidden = true;
       $("main").hidden = false;
       showWhoChanged(j);
       lockForFailedRead(!!j.read_failed);
@@ -111,18 +125,34 @@
     }
   }
 
+  // ── days on screen, hours in the database ────────────────────────────────
+  // Hanz, 2026-08-12: "Change the timing to Days instead of Hours". Hours is what the WORKER
+  // reads (followup_rules compares against *_hours, and the bounds in followup_settings.py are
+  // in hours), so converting the stored unit would mean touching the rules engine, the bounds,
+  // the digest and every existing row. The unit people read is a presentation concern, so it is
+  // converted here and nowhere else.
+  //
+  // Rounded, not floored: a stored 36 hours from before this change shows as 2 days rather than
+  // 1, which is the nearer truth. Floor 1 day, because 0 would mean "chase instantly, for ever".
+  function toDays(hours) { return Math.max(1, Math.round(Number(hours || 0) / 24)); }
+  function toHours(days) { return Math.max(1, Math.round(Number(days || 0))) * 24; }
+
   function fillNumbers() {
     // The project-level subject lives here rather than in fillTemplate: it belongs to the
     // whole cadence, so switching tabs must not reload or clear it.
     $("thread-subject").value = CFG.thread_subject || "";
-    $("first").value = CFG.first_nudge_hours;
-    $("second").value = CFG.second_nudge_hours;
-    $("recurring").value = CFG.recurring_hours;
-    $("staff").value = CFG.staff_personal_hours;
+    $("first").value = toDays(CFG.first_nudge_hours);
+    $("second").value = toDays(CFG.second_nudge_hours);
+    $("recurring").value = toDays(CFG.recurring_hours);
+    $("staff").value = toDays(CFG.staff_personal_hours);
+    // NOT a duration — a count of reminders. It was always unitless and stays unitless.
     $("maxrec").value = CFG.max_recurring;
   }
 
   function paintTabs() {
+    // In paintTabs rather than in the tab click handler: this runs on load AND on every switch,
+    // so the heading cannot get out of step with the form under it.
+    $("which-email").textContent = EDITOR_TITLES[KEY] || LABELS[KEY] || "";
     $("tabs").innerHTML = Object.keys(LABELS).map(function (k) {
       return '<button type="button" role="tab" data-key="' + k + '" aria-selected="' +
              (k === KEY) + '">' + esc(LABELS[k]) + "</button>";
@@ -156,10 +186,10 @@
     CFG.templates = CFG.templates || {};
     CFG.templates[KEY] = t;
     return {
-      first_nudge_hours: $("first").value,
-      second_nudge_hours: $("second").value,
-      recurring_hours: $("recurring").value,
-      staff_personal_hours: $("staff").value,
+      first_nudge_hours: toHours($("first").value),
+      second_nudge_hours: toHours($("second").value),
+      recurring_hours: toHours($("recurring").value),
+      staff_personal_hours: toHours($("staff").value),
       max_recurring: $("maxrec").value,
       // THE SEND WINDOW IS ROUND-TRIPPED, NOT OMITTED, and that is not a style choice.
       //
