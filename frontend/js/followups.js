@@ -188,7 +188,7 @@
       <td class="t-why">${esc(p.reason || "")}</td>
       <td class="num">${money(p.approved_total)}</td>
       <td><div class="acts">
-        ${B.column(p) === "approved" || B.column(p) === "lost" ? "" :
+        ${B.column(p) === "lost" || (B.column(p) === "approved" && B.depositIn(p)) ? "" :
           `<button type="button" class="go-send" data-act="send"
             title="Email the customer and add it to their message thread">Send</button>`}
         <button type="button" data-act="log"
@@ -252,10 +252,15 @@
 
   /** The reason you came to this page: chase somebody.
    *
-   *  Hidden once a proposal is approved or closed lost — there is nothing to chase, and offering
-   *  it would invite emailing a customer about a decision they have already made. */
+   *  Hidden on a closed-lost proposal, and on an approved one whose deposit is in — in both cases
+   *  there is nothing left to ask for, and offering it would invite emailing a customer about a
+   *  decision they already made.
+   *
+   *  NOT hidden on an approved job still waiting on its deposit. Hanz, 2026-08-12: "followups
+   *  should be automated until a deposit has been received." That is the one thing on this page
+   *  most worth a manual nudge, because dates are not held until the money lands. */
   function sendButton(p, colId) {
-    if (colId === "approved" || colId === "lost") return "";
+    if (colId === "lost" || (colId === "approved" && B.depositIn(p))) return "";
     return `<button type="button" class="go-send" data-act="send" data-id="${esc(p.proposal_id)}"
       title="Email the customer and add it to their message thread">Send follow-up</button>`;
   }
@@ -268,7 +273,7 @@
    *  place a proposal lives, so it belongs on the card. */
   function autoBadge(p, today) {
     const a = B.automation(p, today);
-    if (!a) return "";                                  // approved / lost — nothing is going out
+    if (!a) return "";                                  // closed lost, or approved and paid
     const label = a === "chasing" ? "Chasing" : a === "paused" ? "Paused" : "Not automated";
     const until = a === "paused" ? B.pausedUntil(p, today) : "";
     const title = a === "chasing" ? "Automatic reminders are going out."

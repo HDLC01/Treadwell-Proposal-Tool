@@ -33,7 +33,6 @@
 
     .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:14px; }
     label { display:block; font:600 12.5px system-ui; margin:0 0 5px; }
-    .fhint { color:var(--ink-v); font-size:11.5px; margin:4px 0 0; }
     input, select, textarea { font:inherit; color:var(--ink); background:var(--card);
       border:1px solid var(--line); border-radius:7px; padding:7px 9px; width:100%; }
     input:hover, textarea:hover, select:hover { border-color:var(--red); }
@@ -115,27 +114,22 @@
           <div>
             <label for="first">First reminder</label>
             <div class="row"><input id="first" class="num" inputmode="numeric" /><span>days</span></div>
-            <p class="fhint">After sending, and after the first view.</p>
           </div>
           <div>
             <label for="second">Second reminder</label>
             <div class="row"><input id="second" class="num" inputmode="numeric" /><span>days</span></div>
-            <p class="fhint">Counted from the first view.</p>
           </div>
           <div>
             <label for="recurring">Then every</label>
             <div class="row"><input id="recurring" class="num" inputmode="numeric" /><span>days</span></div>
-            <p class="fhint">3 is the "every 3 days" on the flow chart.</p>
           </div>
           <div>
             <label for="staff">Tell the estimator after</label>
             <div class="row"><input id="staff" class="num" inputmode="numeric" /><span>days</span></div>
-            <p class="fhint">Viewed but still undecided — time to make it personal.</p>
           </div>
           <div>
             <label for="maxrec">Stop after</label>
             <div class="row"><input id="maxrec" class="num" inputmode="numeric" /><span>reminders</span></div>
-            <p class="fhint">So a proposal nobody closes doesn't nag forever.</p>
           </div>
         </div>
       </div>
@@ -156,9 +150,6 @@
 
       <div class="card">
         <h2>The emails</h2>
-        <p class="sub">Plain text — it gets laid into the Treadwell letterhead, so there is no way
-          to break the layout. Drag a placeholder into the message, or click one to drop it where
-          the cursor is.</p>
         <div class="fields" style="margin:0 0 18px">
           <div>
             <label for="thread-subject">Email subject — every update about a project</label>

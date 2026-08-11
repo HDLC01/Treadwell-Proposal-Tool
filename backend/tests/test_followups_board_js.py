@@ -205,9 +205,57 @@ def test_a_lapsed_pause_is_not_a_pause():
 
 
 def test_the_badge_is_blank_where_chasing_is_meaningless():
-    """Nothing is going out for an approved or lost proposal, so a badge would be noise."""
-    assert run("out(C.automation(row({proposal_status:'approved'}), T))") == ""
+    """Nothing is going out for a closed-lost proposal, or an approved one that has been paid."""
     assert run("out(C.automation(row({proposal_status:'closed_lost'}), T))") == ""
+    assert run("out(C.automation(row({proposal_status:'approved',"
+               " deposit_status:'received'}), T))") == ""
+    assert run("out(C.automation(row({proposal_status:'approved',"
+               " deposit_required:false}), T))") == ""
+
+
+def test_an_approved_job_with_the_deposit_OUT_still_reads_as_chasing():
+    """This assertion used to be `automation(approved) == ""`, on the reasoning that nothing goes
+    out after approval. Hanz, 2026-08-12: "followups should be automated until a deposit has been
+    received", so something does — and a blank badge told staff the opposite of the truth while the
+    worker emailed the customer every few days.
+
+    `submitted` still counts as in: this page describes what the CUSTOMER is being sent, and their
+    reminders stop the moment they tell us the money is on its way."""
+    chasing = "{enrolled:true,enabled:true}"
+    assert run("out(C.automation(row({proposal_status:'approved', deposit_status:'pending',"
+               " followup_state:%s}), T))" % chasing) == "chasing"
+    assert run("out(C.automation(row({proposal_status:'approved',"
+               " followup_state:%s}), T))" % chasing) == "chasing", (
+        "a legacy row with no deposit_status reads as paid, so its badge goes blank")
+    assert run("out(C.automation(row({proposal_status:'approved', deposit_status:'submitted',"
+               " followup_state:%s}), T))" % chasing) == "", (
+        "the customer is shown as still being chased after telling us the deposit is on its way")
+
+
+def test_a_no_deposit_job_that_was_INVOICED_anyway_still_reads_as_chasing():
+    """`deposit_required=false` says none was asked for; `deposit_requested_at` says somebody
+    raised an invoice regardless, and the portal chases that money. depositIn() short-circuited on
+    the flag alone while claiming in its own docstring to mirror the portal rule — so the card said
+    nothing was going out on a job the worker was emailing about.
+
+    crm-core.depositSatisfied already had this right, which is what made the disagreement findable:
+    two staff modules, one question, two answers."""
+    chasing = "{enrolled:true,enabled:true}"
+    assert run("out(C.automation(row({proposal_status:'approved', deposit_required:false,"
+               " deposit_requested_at:'2026-08-05T12:00:00Z',"
+               " followup_state:%s}), T))" % chasing) == "chasing"
+    # And the plain no-deposit job is still settled at approval — the exception must not swallow
+    # the rule it is an exception to.
+    assert run("out(C.automation(row({proposal_status:'approved', deposit_required:false,"
+               " followup_state:%s}), T))" % chasing) == ""
+
+
+def test_a_paused_won_job_says_paused_rather_than_chasing():
+    """The pause check has to stay BELOW the deposit check and above the enrolled check, or a
+    customer who asked us to wait is shown as being emailed."""
+    got = run("out(C.automation(row({proposal_status:'approved', deposit_status:'pending',"
+              " followup_state:{enrolled:true, enabled:true, paused_until:'2026-12-01'}}), T))")
+    assert got == "paused"
 
 
 # ── what may be dragged ───────────────────────────────────────────────

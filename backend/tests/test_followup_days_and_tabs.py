@@ -70,12 +70,13 @@ def test_the_form_says_days_and_not_hours():
     assert "<span>reminders</span>" in page, "Stop after N lost its unit"
 
 
-def test_the_hint_no_longer_quotes_an_hour_figure():
-    """It read "72 is the 'every 3 days' on the flow chart" — true in hours, nonsense next to a
-    field that now shows 3."""
+def test_no_hour_figure_survives_anywhere_on_the_page():
+    """One hint read "72 is the 'every 3 days' on the flow chart" — true in hours and nonsense
+    beside a field showing 3. It was rewritten to say 3, and then Hanz deleted all five hints
+    on 2026-08-12, so what is left to assert is that no stale hour figure lingers."""
     page = HTML.read_text(encoding="utf-8")
-    assert '72 is the' not in page
-    assert '3 is the "every 3 days" on the flow chart.' in page
+    for stale in ("72 is the", "72 hours", "48 hours", "24 hours"):
+        assert stale not in page, "a leftover hour figure is still on screen: %r" % stale
 
 
 def test_the_four_durations_are_converted_on_the_way_in_and_out():
