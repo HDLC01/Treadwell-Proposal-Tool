@@ -10,6 +10,7 @@ The ranking and the "why it's here" sentence are computed SERVER-side from
 JavaScript would eventually disagree with the email it exists to explain, which is the
 one thing worth pinning here.
 """
+import datetime as _dt
 import pathlib
 
 import main
@@ -87,13 +88,23 @@ def test_what_you_can_act_on_comes_before_what_you_cannot(monkeypatch):
     was approved months ago. Sorting the page on the score alone put four approved jobs
     (100, 94, 90, 87 — none of them actionable) above the two live ones somebody could
     actually ring. A column headed "needs attention" has to lead with what needs it."""
+    # RELATIVE dates, not fixed ones. This fixture originally hardcoded 2026-01-01 and
+    # 2026-08-01, and on 2026-08-12 it stopped reproducing the bug: `score()` caps age at
+    # W_AGE_MAX and silence at W_SILENCE_MAX, so once the "live" row drifted far enough from
+    # today it hit the same ceilings as the ancient one and both scored 90. The guard assertion
+    # below caught it and said exactly that, which is the only reason this was not mistaken for
+    # a product regression — but a test that expires on a particular date is a test that will
+    # cry wolf again. Anchored to now, the gap cannot close.
+    recent = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=2)).isoformat()
+    ancient = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=220)).isoformat()
     _wire(monkeypatch, [
-        # Approved and ancient: scores high, worth nothing.
+        # Approved and ancient: saturates age and silence, worth nothing.
         row(proposal_id="old_won", project_name="Won Long Ago", proposal_status="approved",
-            sent_at="2026-01-01T12:00:00+00:00", last_activity_at="2026-01-01T12:00:00+00:00"),
-        # Live, recent, lower score, and the only one you can do something about.
+            sent_at=ancient, last_activity_at=ancient),
+        # Live and 2 days old: below every cap, so it must score LOWER — and it is the only one
+        # somebody could actually ring.
         row(proposal_id="live", project_name="Live", proposal_status="viewed",
-            sent_at="2026-08-01T12:00:00+00:00", last_activity_at="2026-08-01T12:00:00+00:00"),
+            sent_at=recent, last_activity_at=recent),
     ])
     got = client.get("/api/portal/followups").json()["proposals"]
     assert [p["proposal_id"] for p in got] == ["live", "old_won"]

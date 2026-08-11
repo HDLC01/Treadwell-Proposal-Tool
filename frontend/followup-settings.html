@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Follow-up cadence · Treadwell Proposal Generator</title>
+  <title>Auto Followups · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <!-- Styles itself, like followups.html and library.html, so it needs its own opt-out. -->
   <meta name="color-scheme" content="only light" />
@@ -93,7 +93,7 @@
 <body>
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
-    <h1>Follow-up cadence</h1>
+    <h1>Auto Followups</h1>
   </div>
   <div class="wrap">
     <p class="hint">How often a sent proposal gets chased, and what those emails say. One schedule
@@ -156,13 +156,20 @@
         <p class="sub">Plain text — it gets laid into the Treadwell letterhead, so there is no way
           to break the layout. Drag a placeholder into the message, or click one to drop it where
           the cursor is.</p>
+        <div class="fields" style="margin:0 0 18px">
+          <div>
+            <label for="thread-subject">Email subject — every update about a project</label>
+            <input id="thread-subject" maxlength="200" />
+            <p class="sub" style="margin:6px 0 0">One subject for the whole project, so the
+              proposal, the invoice, replies and these reminders stay in a single email
+              conversation instead of one per message. <code>{project}</code> is the only
+              placeholder that fits here — the rest change per email, which is what used to
+              split the thread. What each email SAYS is set below.</p>
+          </div>
+        </div>
         <div class="tabs" role="tablist" id="tabs"></div>
         <div class="editor">
           <div class="fields">
-            <div>
-              <label for="t-subject">Subject line</label>
-              <input id="t-subject" maxlength="200" />
-            </div>
             <div>
               <label for="t-title">Heading inside the email</label>
               <input id="t-title" maxlength="120" />
