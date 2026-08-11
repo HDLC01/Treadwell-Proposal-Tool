@@ -95,8 +95,12 @@ def _nav_labels(sidebar):
 # ── the two renames ───────────────────────────────────────────────────────────
 def test_the_projects_item_is_labelled_proposals_database(sidebar):
     """Kills reverting the label to "Projects", and kills renaming the page by changing its href
-    instead: /projects.html is what auth.js redirects to after sign-in (HOME_PAGE), what the
-    notification links point at and what staff have bookmarked."""
+    instead: /projects.html is what the notification links point at and what staff have bookmarked.
+
+    It is no longer where sign-in lands. HOME_PAGE became /portal.html on 2026-08-12 — Hanz: "tHE
+    DEFAULT page when I go in to propsals.wetreadwel should be the Active projects CRM not he
+    databgase" — so that half of this note would now be false. test_home_is_active_projects.py owns
+    the landing page, including that the server redirect and HOME_PAGE agree."""
     assert re.search(r'navItem\("/projects\.html",\s*"[^"]+",\s*"Proposals Database"\)', sidebar), (
         "the Proposals Database item is missing; nav items are %s" % (_nav_labels(sidebar),))
 

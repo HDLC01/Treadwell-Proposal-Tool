@@ -4125,19 +4125,30 @@ class NoCacheStaticFiles(StaticFiles):
 
 @app.get("/", include_in_schema=False)
 def _root(request: Request) -> Response:
-    """Home is the Projects dashboard. The intake ("New Project") screen is served
-    only when a project is explicitly being created (?new) or edited (?edit) — so
-    hitting the bare domain, or an old ?d=… link left in browser history, lands on
-    Projects instead of a blank intake form. Must be declared BEFORE the "/" static
-    mount so it wins for the exact root path (the mount still serves /index.html and
-    every other asset)."""
+    """Home is Active Projects. The intake ("New Project") screen is served only when a
+    project is explicitly being created (?new) or edited (?edit) — so hitting the bare
+    domain, or an old ?d=… link left in browser history, lands on a board instead of a
+    blank intake form. Must be declared BEFORE the "/" static mount so it wins for the
+    exact root path (the mount still serves /index.html and every other asset).
+
+    Hanz, 2026-08-12: "tHE DEFAULT page when I go in to propsals.wetreadwel should be the
+    Active projects CRM not he databgase." It used to be /projects.html, which was right
+    while the Proposals Database was the only place to start a bid; that stopped being true
+    when the board grew a + New button. `auth.js`'s HOME_PAGE — where signing in lands —
+    moved in the same commit, because two places deciding one landing page is how they end
+    up disagreeing.
+
+    THE ?new / ?edit BRANCH IS LOAD-BEARING and must stay above the redirect. Both the
+    Database and the board's + New button navigate to `/?new=1`; redirecting that would
+    bounce somebody straight back to a board instead of the intake form, and there would be
+    no way to start a proposal at all."""
     q = request.query_params
     if "new" in q or "edit" in q:
         return FileResponse(
             str(FRONTEND_DIR / "index.html"),
             headers={"Cache-Control": "no-store, must-revalidate, max-age=0"},
         )
-    return RedirectResponse(url="/projects.html", status_code=307)
+    return RedirectResponse(url="/portal.html", status_code=307)
 
 
 if FRONTEND_DIR.exists():
