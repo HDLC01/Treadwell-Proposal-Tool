@@ -73,7 +73,10 @@
     if (!q) return list;
     const tokens = q.split(/\s+/);
     return list.filter((p) => {
-      const hay = [p.project_name, p.customer_email, p.customer_name, p.estimator_email]
+      // Recipients included: a proposal sent to two people has to be findable by EITHER
+      // address, or searching for the person who actually replied turns up nothing.
+      const hay = [p.project_name, p.customer_email, p.customer_name, p.estimator_email,
+                   (p.recipients || []).join(" ")]
         .filter(Boolean).join(" ").toLowerCase();
       return tokens.every((t) => hay.includes(t));
     });
@@ -204,16 +207,59 @@
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           <div class="meta">${esc(p.customer_email || "")}</div>
+          ${recipientLine(p)}
           <div class="meta who"><span class="k">Estimator:</span> ${who}</div>
           ${act ? `<div class="meta act"><span class="k">${esc(act.label)}:</span> ${esc(TW.fmtBizDate(act.ts))}</div>` : ""}
           ${chips ? `<div class="chips">${chips}</div>` : ""}
           ${cardTotal(p) != null ? `<div class="val">${money(cardTotal(p))}</div>` : ""}
+          ${cardActions(p)}
         </div>`;
       }).join("") || '<div class="empty">—</div>';
       // Money is in and unconfirmed → flag the column, it's the one needing a human.
       const attn = s === STAGE_SUBMITTED && byStage[s].length ? " col-attn" : "";
-      return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span></h2>${cards}</div>`;
+      // The board can now START a bid, not only track one. Hanz, 2026-08-12: with the Proposals
+      // Database moved out of the way, "when we click a container we are able to create a
+      // proposal under that not sent category". Only this column gets the button, because it is
+      // the only one whose membership rule a new project can satisfy — everything to the right
+      // requires the customer to have been sent something.
+      const add = s === STAGE_CREATED
+        ? '<button type="button" class="col-add" data-new-proposal title="Start a new proposal — opens the intake form">+ New</button>'
+        : "";
+      return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span>${add}</h2>${cards}</div>`;
     }).join("");
+  }
+
+  /** Files and Info Sheet, on every card.
+   *
+   *  Hanz, 2026-08-12: "There should be a button for each container for the files and info sheet
+   *  as well." On EVERY card rather than only the unsent ones: this board is where the sales
+   *  meeting happens, so reaching a won job's Info Sheet hand-off should not mean going to
+   *  another page to find the same project.
+   *
+   *  The URLs are the ones the Proposals Database already uses (projects.js), deliberately
+   *  character-for-character — two spellings of the same route is how one of them rots. That a
+   *  synthesised not-sent row works here at all is because its `proposal_id` IS the draft id.
+   */
+  function cardActions(p) {
+    const id = encodeURIComponent(p.proposal_id);
+    return `<div class="deal-acts">
+      <button type="button" class="deal-act" data-files="${id}" title="Estimate and proposal files">Files</button>
+      <button type="button" class="deal-act" data-info="${id}" title="Project Info Sheet — the hand-off to accounting and ops">Info</button>
+    </div>`;
+  }
+
+  /** "2 recipients · 1 viewed" — only when there are two or more.
+   *
+   *  The board already dates a card by last_viewed_at, which answers "has anybody looked". This
+   *  answers "have they BOTH looked", which is the one that decides whether there is somebody
+   *  left to chase. Silent for a single contact, where the two lines would say the same thing.
+   */
+  function recipientLine(p) {
+    const n = (p.recipients || []).length;
+    if (n < 2) return "";
+    const v = (p.viewed_by || []).length;
+    return `<div class="meta rc-line" title="${esc((p.recipients || []).join(", "))}">${
+      n} recipients · ${v} viewed</div>`;
   }
 
   // ── the same pipeline as one table ─────────────────────────────────────────
@@ -274,9 +320,36 @@
       renderBoard();
       return;
     }
+    // These three run BEFORE the row branch below and each returns, because every one of them
+    // sits inside a .deal — without the early return a click would both navigate and open the
+    // drawer, and the drawer would win the paint.
+    const files = e.target.closest("[data-files]");
+    if (files) { window.location.assign("/done.html?d=" + files.dataset.files + "&files=1"); return; }
+    const info = e.target.closest("[data-info]");
+    if (info) { window.location.assign("/info-sheet.html?d=" + info.dataset.info); return; }
+    if (e.target.closest("[data-new-proposal]")) { startNewProposal(); return; }
+
     const row = e.target.closest(".deal, .trow");
     if (row && row.dataset.id) openDetail(row.dataset.id);
   });
+
+  /** Start a bid from this board. The same three storage keys and the same destination as
+   *  "+ New project" on the Proposals Database (projects.js) — a second way of minting a draft
+   *  would be a second set of bugs, and the intake form is reached by URL either way.
+   *
+   *  The test flag follows the TAB you are looking at, which is why this is safe to offer here:
+   *  the board is always on Active or Test, never on an "all" view, so a new project can never
+   *  land un-filed. Same rule Hanz asked for on the Database ("use the Test category so it
+   *  wouldn't mix up"). */
+  function startNewProposal() {
+    try {
+      localStorage.removeItem("treadwell.proposal_tool.state");
+      localStorage.removeItem("treadwell.proposal_tool.draft_id");
+      sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
+    } catch {/* private mode — the intake form still works, it just won't resume */}
+    TW.setNewProjectTestIntent(TAB === "test");
+    window.location.assign("/?new=1");
+  }
   $("board").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const row = e.target.closest && e.target.closest(".trow");
@@ -563,7 +636,7 @@
   // state, ACTIVE_SEC says which tab is ON SCREEN. Only applySecPanel() reads
   // both and touches visibility — nothing else may.
   const SEC_TABS = {
-    proposal: ["dsec-customer", "dsec-approved", "dsec-notify"],
+    proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -590,6 +663,9 @@
   // whole innerHTML including the chat thread, so an unchanged repaint tears down and rebuilds
   // every message for nothing.
   let DRAWER_SIG = "";
+  // Recipients of the proposal currently open. Module-scoped because msgHtml is called per
+  // message and threading it through every call site would touch a dozen signatures.
+  let DETAIL_RECIPIENTS = [];
   // The last payload per project, so a refresh can render from memory instead of blanking the
   // drawer while it waits on the network. Bounded by projects opened in one session.
   const DETAIL_CACHE = {};
@@ -863,6 +939,10 @@
       add("Method", x.method);
     }
     add("Bank", x.bank_name);
+    // WHICH contact paid, on a proposal with two. Full address here because this is the staff
+    // drawer and somebody may need to phone them; the customer's own banner gets a first name.
+    // Absent on rows written before submitted_by existed, and add() skips empty values.
+    if (x.submitted_by) add("Submitted by", nameOf(x.submitted_by), { title: x.submitted_by });
     add("Customer note", x.note);
 
     // Staff-entered wire/trace details — same fields as before, just grouped.
@@ -1050,6 +1130,41 @@
     return m.author_kind === "staff" ? "staff" : "customer";
   };
 
+  /** Who the proposal went to, and what each of them has actually done.
+   *
+   *  Hanz, 2026-08-11: "It should then highlight in the CRM who viewed it as well and who
+   *  replied." The peer notifications tell the other CONTACT; this tells the estimator, which is
+   *  what turns "somebody opened it" into "chase the one who hasn't".
+   *
+   *  Returns "" for one recipient or none: the card is only meaningful when there is somebody to
+   *  distinguish, and setSecEligible gates the tab on the same condition.
+   *
+   *  NOT nt-chip. That class is the notification roster's, where green means "receives this
+   *  project's emails" — reusing it here would say something untrue about every contact.
+   */
+  function recipientsHtml(rows) {
+    const list = rows || [];
+    if (list.length < 2) return "";
+    const chips = list.map((r) => {
+      const badges = [
+        r.viewed_at ? `<span class="rc-b on" title="${esc(TW.fmtBizDateTime(r.last_viewed_at || r.viewed_at))}${
+          r.view_count > 1 ? ` · ${r.view_count} opens` : ""}">Viewed</span>`
+                    : '<span class="rc-b">Not viewed</span>',
+        r.replied ? '<span class="rc-b on">Replied</span>' : "",
+        r.paid ? '<span class="rc-b on">Paid</span>' : "",
+        r.approved ? '<span class="rc-b on">Approved</span>' : "",
+      ].filter(Boolean).join("");
+      // Full address in the title, not on screen: staff may need it to phone somebody, and the
+      // chip has to stay readable with four badges on it.
+      return `<div class="rc-chip" title="${esc(r.email)}">${avatar(r.email)}<span class="rc-n">${
+        esc(r.name || r.email)}</span>${badges}</div>`;
+    }).join("");
+    return `<div class="sec" id="dsec-recipients">
+      <div class="lbl">Recipients (${list.length})</div>
+      <div class="rc-list">${chips}</div>
+    </div>`;
+  }
+
   function msgHtml(m) {
     const t = when(m.created_at);
     // These three render as CARDS, matching the customer portal exactly, so staff
@@ -1091,12 +1206,18 @@
     }
     const staff = m.author_kind === "staff";
     const viaEmail = m.meta && m.meta.source === "email";
+    // WHICH contact said it — but only when there is more than one, because with a single
+    // contact the name adds nothing and the label was removed for exactly that reason. This is
+    // the one thing the side of the bubble cannot tell you on a multi-recipient proposal.
+    const many = (DETAIL_RECIPIENTS || []).length > 1;
+    const who = !staff && many && m.author_email ? nameOf(m.author_email) : "";
     // Hanz, 2026-08-11: "can we simplify it to just the reply contents and the date? just
     // specify if its from email". The "TREADWELL" / "CUSTOMER" line said nothing the side of
     // the thread does not already say — red and right-aligned is us, grey and left is them —
     // and it cost a line of chrome on every bubble. Where the message CAME FROM is the part
     // that isn't inferable, so that is what stays, next to the date.
     return `<div class="msg ${staff ? "staff" : "customer"}">
+      ${who ? `<div class="who" title="${esc(m.author_email)}">${esc(who)}</div>` : ""}
       <div class="mbody">${esc(m.body)}</div>
       <div class="when">${t}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
     </div>`;
@@ -1240,9 +1361,46 @@
                <button class="btn btn-s" id="fu-lost">Mark closed lost</button>`}
         </div>
 
+        ${followupContactsHtml(data.recipient_activity)}
+
         <div class="lbl fu-lbl">History</div>
         <div class="fu-log">${log}</div>
       </div>`;
+  }
+
+  /** Who the automated follow-ups go to, and the controls to change it.
+   *
+   *  Hanz, 2026-08-12: "on this project container on the follow ups we must have the ability to
+   *  add or remove COntacts who receive the follow ups."
+   *
+   *  UN-TICKING IS NOT REMOVING THE CONTACT, and the copy says so, because the two are one click
+   *  apart and only one of them is reversible without consequence: the contact keeps the
+   *  proposal, the invoice and every reply, and only the chasing stops. Revoking access is a
+   *  different act and is not offered here.
+   *
+   *  Rendered even for a single contact, unlike the Recipients card on the Proposal tab — "is
+   *  this person being chased" is worth answering for one contact, whereas "which of them
+   *  replied" is not.
+   */
+  function followupContactsHtml(rows) {
+    const list = rows || [];
+    if (!list.length) return "";
+    const chips = list.map((r) => `
+      <label class="fu-c" title="${esc(r.email)}">
+        <input type="checkbox" data-fu-contact="${esc(r.email)}"${r.followups ? " checked" : ""}>
+        <span>${esc(r.name || r.email)}</span>
+      </label>`).join("");
+    return `
+      <div class="lbl fu-lbl">Automated follow-ups go to</div>
+      <p class="note">Un-tick somebody and they still get the proposal, the invoice and every
+        reply — they just stop being chased.</p>
+      <div class="fu-clist">${chips}</div>
+      <div class="fu-line">
+        <input id="fu-add-contact" class="tw-input" type="email" autocomplete="off"
+               placeholder="Add a contact — name@company.com">
+        <button class="btn btn-s" id="fu-add-contact-btn">Add</button>
+      </div>
+      <p class="note" id="fu-c-alert"></p>`;
   }
 
   /** Wire the follow-up panel. Called from renderDetail, so every handler is bound
@@ -1250,6 +1408,40 @@
   function wireFollowup(pid, p, act) {
     const alert = (msg) => { const el = $("fu-alert"); if (el) el.textContent = msg || ""; };
     const path = (suffix) => "/api/portal/proposal/" + encodeURIComponent(pid) + suffix;
+
+    // ── who gets chased ───────────────────────────────────────────────────
+    // Delegated on the list rather than per checkbox: renderDetail rebuilds this panel on every
+    // 12s poll and after every action, so per-element listeners would be re-bound continually.
+    const cAlert = (m) => { const el = $("fu-c-alert"); if (el) el.textContent = m || ""; };
+    const clist = document.querySelector(".fu-clist");
+    if (clist) clist.addEventListener("change", (e) => {
+      const box = e.target.closest("[data-fu-contact]");
+      if (!box) return;
+      cAlert("");
+      act(path("/followup-recipient"), box,
+          { body: JSON.stringify({ email: box.dataset.fuContact, enabled: box.checked }) });
+    });
+
+    const addC = $("fu-add-contact-btn");
+    if (addC) addC.addEventListener("click", (e) => {
+      const input = $("fu-add-contact");
+      const email = (input.value || "").trim().toLowerCase();
+      // Shape-checked here so an obvious typo does not cost a round trip; the portal re-validates,
+      // because this is the field that decides who gets sent a link to the proposal.
+      if (!email || !/^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$/.test(email)) {
+        cAlert("That doesn't look like an email address.");
+        input.focus();
+        return;
+      }
+      cAlert("");
+      // `add: true` also sends them the proposal link — they cannot reach the portal without one.
+      act(path("/followup-recipient"), e.target,
+          { body: JSON.stringify({ email, add: true, enabled: true }) });
+    });
+    const addCIn = $("fu-add-contact");
+    if (addCIn) addCIn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addC.click(); }
+    });
 
     const toggle = $("fu-toggle");
     if (toggle) toggle.addEventListener("click", (e) => {
@@ -1411,6 +1603,11 @@
     if (sig === DRAWER_SIG) return;
     DRAWER_SIG = sig;
 
+    // Set BEFORE the markup below is built: msgHtml reads it to decide whether to name the
+    // author, and a message rendered before it is populated would go unnamed. `data` is already
+    // in the signature above, so a recipient being added repaints on its own.
+    DETAIL_RECIPIENTS = (data && data.recipients) || [];
+
     // Where the chat was, before the innerHTML below detaches it. Must happen here rather than
     // in the caller: renderDetail is the only place that destroys #thread, and every path
     // through it — poll, action, reply, chip toggle — needs the position kept.
@@ -1438,8 +1635,10 @@
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
         <div class="sec" id="dsec-customer"><div class="lbl">Customer</div>${esc(p.customer_name || "")} &lt;${esc(p.customer_email)}&gt;<br>
           <a class="link" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a></div>
+        ${recipientsHtml(data.recipient_activity)}
         ${a ? `<div class="sec" id="dsec-approved"><div class="lbl">Approved</div>${esc(a.name)}${a.title ? ", " + esc(a.title) : ""}
-          on ${esc(a.date || "")} — <strong>${esc(approvedOpts || "")}</strong> at <strong>${money(a.total)}</strong></div>` : ""}
+          on ${esc(a.date || "")} — <strong>${esc(approvedOpts || "")}</strong> at <strong>${money(a.total)}</strong>${
+            a.approver_email ? `<div class="note" style="margin-top:2px">signed in as ${esc(nameOf(a.approver_email))} &lt;${esc(a.approver_email)}&gt;</div>` : ""}</div>` : ""}
 
         <div class="sec" id="dsec-notify">
           <div class="lbl">Notifications for this project</div>
@@ -1493,6 +1692,11 @@
     // Which cards APPLY. Every id in SEC_TABS must appear here or it can never
     // render — the portal shipped two bugs from exactly this omission.
     setSecEligible("dsec-customer", true);
+    // Only when there is somebody to distinguish. One contact needs no per-contact card, and an
+    // eligible-but-empty card is how the drawer grows tabs that lead nowhere. Registered in
+    // SEC_TABS above AND here: a card in one but not the other either never renders or renders
+    // in a tab that cannot be reached, and both have gone wrong in this file before.
+    setSecEligible("dsec-recipients", ((data.recipient_activity || []).length > 1));
     setSecEligible("dsec-approved", !!a);
     setSecEligible("dsec-notify", true);
     setSecEligible("dsec-deposit", true);
