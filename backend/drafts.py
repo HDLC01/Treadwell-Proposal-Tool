@@ -316,6 +316,15 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # so the Projects list can say who is chasing each bid without
                 # asking the portal for every row.
                 "assigned_estimator:data->>assigned_estimator,"
+                # Who the proposal was addressed to. The Active Projects board needs it for the
+                # "Created but not sent" column, where there is no portal row to read it off.
+                "contact_email:data->>contact_email,"
+                # Whether Generate has ever run for this project. Selected as ONE SCALAR from
+                # inside the blob rather than the blob itself: generate_result carries three
+                # download URLs and a totals object, and this list is read 300 rows at a time on
+                # every Projects page load. work_type is always present when the object is (see
+                # GenerateOut), so its presence is the cheapest honest existence test.
+                "has_files:data->generate_result->>work_type,"
                 "computed_bid:data->computed_bid")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
@@ -336,6 +345,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "is_test": _tribool(r.get("is_test")),
             "owner_email": r.get("owner_email"),
             "assigned_estimator": r.get("assigned_estimator"),
+            "contact_email": r.get("contact_email"),
+            "has_files": bool(r.get("has_files")),
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -527,6 +538,9 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "lump_sum_display": data.get("lump_sum_display"),
         "owner_email": row.get("owner_email"),
         "assigned_estimator": data.get("assigned_estimator"),
+        "contact_email": data.get("contact_email"),
+        # Same meaning as the fast path's jsonb scalar: has Generate ever run here.
+        "has_files": bool(data.get("generate_result")),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

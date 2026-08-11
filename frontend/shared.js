@@ -226,6 +226,10 @@
   function scheduleServerSave(state) {
     const id = getDraftId();
     if (!id) return;            // no id yet → nothing to sync
+    if (isUnverified(id)) {     // never read this draft — do not write over it
+      console.warn("[TW] refused server save: draft", id, "was adopted without being read");
+      return;
+    }
     // Gate at schedule time: never queue a save of a blob owned by another draft.
     if (state && state[STAMP] && state[STAMP] !== id) {
       console.warn("[TW] refused server save: state stamped", state[STAMP], "≠ draft", id);
@@ -258,6 +262,26 @@
   }
   function setGuard(id) { try { sessionStorage.setItem(RELOAD_GUARD, id + ":" + Date.now()); } catch {} }
 
+  // ── "we have not actually read this project" ──────────────────────────────
+  // Dropping the `!stamp && empty` ownership clause above fixed the common way a blank form
+  // overwrote a live bid, but not the last one: if the hydrate GET fails twice we adopt a
+  // stamped-empty blob, and from then on the stamp AGREES with the draft id, so every save
+  // guard is satisfied and the first keystroke PUTs emptiness over the server copy.
+  //
+  // So an adopt that never saw the server is recorded, and server saves are refused while it
+  // stands. The customer-facing trade is deliberate: edits made in that state are not pushed
+  // (they survive locally), which is a smaller loss than replacing a bid nobody can recover.
+  //
+  // sessionStorage, because it has to survive the reload that adoptAndReload triggers. Cleared
+  // the moment a read succeeds — including a 404, which is a real answer: the server genuinely
+  // holds nothing for a draft nobody has saved yet, so empty is the truth rather than a guess.
+  const UNVERIFIED = "treadwell.proposal_tool.unverified";
+  function markUnverified(id) { try { sessionStorage.setItem(UNVERIFIED, id); } catch {} }
+  function clearUnverified() { try { sessionStorage.removeItem(UNVERIFIED); } catch {} }
+  function isUnverified(id) {
+    try { return !!id && sessionStorage.getItem(UNVERIFIED) === id; } catch { return false; }
+  }
+
   // Runs once on every page load, before the page's own init reads state.
   // Ownership is decided by the blob's STAMP (not by DRAFT_ID_KEY): if the URL's
   // ?d= draft doesn't own the local blob, hydrate it (fetch → clean-replace →
@@ -288,9 +312,28 @@
     dropUnboundTestIntent();
 
     // Does the local blob belong to this URL's draft?
-    const owned = stamp === urlId
-               || (!stamp && localId === urlId)   // migration: unstamped blob is owned by DRAFT_ID_KEY
-               || (!stamp && empty);              // fresh device / just-cleared — nothing to protect
+    //
+    // There used to be a third clause here: `|| (!stamp && empty)` — "fresh device /
+    // just-cleared, nothing to protect". It read as harmless and it was the worst bug in this
+    // file. It answers the wrong question. Nothing to protect LOCALLY is not the same as owning
+    // the project, and claiming ownership is what SKIPS the hydrate below. So opening a real
+    // project link on a machine with cleared storage rendered a blank form over a live bid, and
+    // the first keystroke put that blank blob back over the server copy: setState stamps the
+    // merged blob with the URL's id, so scheduleServerSave's mismatch guard sees a stamp that
+    // agrees and lets the PUT through. Name, scope notes and square footage all replaced.
+    // Reproduced on prod with a sentinel before this was changed.
+    //
+    // An empty blob is now exactly the case that MUST hydrate. The fetch below already handles
+    // every outcome: 200 adopts the server copy, 404 (a draft nobody has saved yet) adopts
+    // empty, and a failed read falls back to a stamped-empty floor. The only cost is one GET
+    // and one reload on a genuinely clean slate, which is what the non-owned path has always
+    // done for a cross-device open — and which is the point of the draft id being in the URL.
+    // `&& !isUnverified` is what makes the block self-healing rather than permanent: a draft we
+    // adopted blind is treated as not-ours, so the next load re-attempts the read. guardBlocks
+    // keeps that from becoming a tight loop.
+    const owned = (stamp === urlId
+                || (!stamp && localId === urlId))  // migration: unstamped blob owned by DRAFT_ID_KEY
+               && !isUnverified(urlId);
     if (owned) {
       setDraftId(urlId);
       if (!stamp && !empty) { blob[STAMP] = urlId; writeBlob(blob); }          // lazy-stamp
@@ -320,14 +363,28 @@
     const attempt = async () => {
       const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(urlId),
                               { headers: authHeaders() });
-      if (res.ok) { const body = await res.json(); return adoptAndReload((body && body.data) || {}); }
-      if (res.status === 404) return adoptAndReload({});   // brand-new / never-saved draft → stamped empty
+      if (res.ok) {
+        const body = await res.json();
+        clearUnverified();                                 // we have seen what the server holds
+        return adoptAndReload((body && body.data) || {});
+      }
+      if (res.status === 404) {
+        clearUnverified();                                 // a real answer: there is nothing to lose
+        return adoptAndReload({});                         // brand-new / never-saved draft
+      }
       throw new Error("HTTP " + res.status);
     };
     try { await attempt(); }
     catch {
       try { await attempt(); }                     // one silent retry for a transient blip
-      catch { adoptAndReload({}); }                // stamped-empty floor: no page auto-PUTs from empty state
+      catch {
+        // Adopting blind. Mark it so no save can push this emptiness over whatever the server
+        // is holding, and so the next load tries the read again.
+        markUnverified(urlId);
+        console.error("[TW] could not read draft", urlId,
+                      "— editing locally, but saves are held back until it can be read");
+        adoptAndReload({});
+      }
     }
   }
 

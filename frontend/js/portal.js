@@ -17,7 +17,7 @@
   const C = window.TWCrm;
   const { STAGES, STAGE_SUBMITTED, NATURAL_DIR, SORT_FIELDS } = C;
   const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
-          isLost, isTest, lostReason, followupOff, nameOf } = C;
+          isLost, isTest, lostReason, followupOff, nameOf, cardTotal } = C;
   const fu = C.followup;
   const avatar = C.avatarHtml;
   /** The same chip with the identity colour taken OUT — for the drawer's notification
@@ -207,7 +207,7 @@
           <div class="meta who"><span class="k">Estimator:</span> ${who}</div>
           ${act ? `<div class="meta act"><span class="k">${esc(act.label)}:</span> ${esc(TW.fmtBizDate(act.ts))}</div>` : ""}
           ${chips ? `<div class="chips">${chips}</div>` : ""}
-          ${p.approved_total != null ? `<div class="val">${money(p.approved_total)}</div>` : ""}
+          ${cardTotal(p) != null ? `<div class="val">${money(cardTotal(p))}</div>` : ""}
         </div>`;
       }).join("") || '<div class="empty">—</div>';
       // Money is in and unconfirmed → flag the column, it's the one needing a human.
@@ -252,7 +252,7 @@
         <td>${esc(TW.fmtBizDate(stageTs(p)))}</td>
         <td${isAssigned(p) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
           email ? avatar(email, !isAssigned(p)) + esc(nameOf(email)) + (isAssigned(p) ? "" : "?") : "—"}</td>
-        <td class="num">${p.approved_total != null ? money(p.approved_total) : ""}</td>
+        <td class="num">${cardTotal(p) != null ? money(cardTotal(p)) : ""}</td>
         <td>${act ? esc(act.label) + " " + esc(TW.fmtBizDate(act.ts)) : ""}</td>
       </tr>`;
     }).join("");
@@ -459,6 +459,14 @@
     $("scrim").style.display = "block";
     const d = $("drawer"); d.classList.add("open");
 
+    // A "Created but not sent" card is synthesised from a draft — the portal has never heard of
+    // it, so /api/portal/proposal/<id> would 404 and the rep would get "Error: HTTP 404" on a
+    // project that is perfectly fine. There is also nothing for the real drawer to show: no
+    // dates, no thread, no deposit, no contacts. So this answers the only question the card
+    // raises, and hands over the one action that moves it along.
+    const row = ALL.find((p) => p.proposal_id === pid);
+    if (row && row.not_sent) { renderNotSent(pid, row); return; }
+
     // NEVER BLANK A DRAWER THAT IS ALREADY SHOWING SOMETHING.
     //
     // This line used to be an unconditional `d.innerHTML = 'Loading…'`, and it is what Hanz
@@ -496,6 +504,52 @@
     renderDetail(pid, data);
   }
 
+  /** The drawer for a bid that exists only as paperwork.
+   *
+   *  No tab strip, because six of the seven tabs would be empty: there is no customer view, no
+   *  thread, no approval and no deposit until somebody sends it. What a rep needs here is the
+   *  value, who priced it, how long it has been sitting, and a way to act.
+   *
+   *  Signature-guarded like renderDetail. openDetail runs again on every 12s poll, and an
+   *  unguarded innerHTML here would blank and rebuild the panel four times a minute — the same
+   *  blink Hanz reported on the board and the chat. */
+  function renderNotSent(pid, row) {
+    const sig = JSON.stringify(["not_sent", pid, row]);
+    if (sig === DRAWER_SIG) return;
+    DRAWER_SIG = sig;
+    const who = estimatorOf(row);
+    const total = cardTotal(row);
+    const d = $("drawer");
+    d.innerHTML = `
+      <div class="dhead">
+        <h2>${esc(row.project_name || "Proposal")}</h2>
+        <button class="dclose" aria-label="Close">&times;</button>
+      </div>
+      <div class="dbody">
+        <div class="sec">
+          <div class="lbl">Not sent yet</div>
+          <p class="note" style="margin:0">The estimate and proposal are generated, but nobody has
+          sent them to the customer. Nothing is shared until you do.</p>
+        </div>
+        ${row.customer_email ? `<div class="sec"><div class="lbl">Addressed to</div>${esc(row.customer_email)}</div>` : ""}
+        <div class="sec"><div class="lbl">Estimator</div>${
+          who ? avatar(who, !isAssigned(row)) + esc(nameOf(who)) + (isAssigned(row) ? "" : "?")
+              : '<span class="unassigned">Nobody is assigned</span>'}</div>
+        ${total != null ? `<div class="sec"><div class="lbl">Bid</div><strong>${money(total)}</strong></div>` : ""}
+        ${row.drafted_at ? `<div class="sec"><div class="lbl">Created</div>${esc(TW.fmtBizDate(row.drafted_at))}</div>` : ""}
+        <div class="sec row3">
+          <button type="button" class="btn btn-p" data-go-files>Open the files</button>
+          <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
+        </div>
+      </div>`;
+    d.querySelector(".dclose").addEventListener("click", closeDrawer);
+    const go = (u) => window.location.assign(u);
+    d.querySelector("[data-go-files]").addEventListener("click",
+      () => go("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
+    d.querySelector("[data-go-edit]").addEventListener("click",
+      () => go("/?d=" + encodeURIComponent(pid) + "&edit=1"));
+  }
+
   // ── drawer sections ────────────────────────────────────────────────────────
   // The drawer used to be one long scroll — status pills, customer, approval,
   // deposit, contacts, notification chips and the whole chat thread — so a rep
@@ -512,7 +566,10 @@
     proposal: ["dsec-customer", "dsec-approved", "dsec-notify"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
-    schedule: ["dsec-schedule"],
+    // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
+    // button and its customer email included: Treadwell books the date on the phone and the
+    // customer hears it there, so the app had a status, a tile and a notification all restating
+    // a call that had already happened. schedule_status stays in the database untouched.
     chat:     ["dsec-chat"],
     followup: ["dsec-followup"],
   };
@@ -620,7 +677,6 @@
     // to action there. Contacts/schedule is the real next step.
     if (p.proposal_status === "approved" && !p.deposit_requested_at
         && p.deposit_required !== false) return "deposit";
-    if (p.contacts_status === "received" && p.schedule_status !== "scheduled") return "schedule";
     return "proposal";
   }
 
@@ -743,8 +799,6 @@
       secTab("deposit", "Deposit", Object.assign({ hint: "Invoice, what the customer submitted, mark received" }, dep)) +
       secTab("contacts", "Contacts", { done: s.contactsDone, val: s.contactsDone ? "Received" : "Pending",
         hint: "Project contacts the customer supplied" }) +
-      secTab("schedule", "Schedule", { done: s.scheduledDone, val: s.scheduledDone ? "Scheduled" : "Pending",
-        hint: "Book the job once the deposit clears" }) +
       secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
         badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
       // Closed-lost is "done" in the sense the tab means it: nothing left to chase.
@@ -1037,10 +1091,14 @@
     }
     const staff = m.author_kind === "staff";
     const viaEmail = m.meta && m.meta.source === "email";
+    // Hanz, 2026-08-11: "can we simplify it to just the reply contents and the date? just
+    // specify if its from email". The "TREADWELL" / "CUSTOMER" line said nothing the side of
+    // the thread does not already say — red and right-aligned is us, grey and left is them —
+    // and it cost a line of chrome on every bubble. Where the message CAME FROM is the part
+    // that isn't inferable, so that is what stays, next to the date.
     return `<div class="msg ${staff ? "staff" : "customer"}">
-      <div class="who">${staff ? "Treadwell" : "Customer"}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
-      <div>${esc(m.body)}</div>
-      <div class="when">${t}</div>
+      <div class="mbody">${esc(m.body)}</div>
+      <div class="when">${t}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
     </div>`;
   }
 
@@ -1319,7 +1377,6 @@
     // Sent without a deposit (typical for GC). Manual invoicing is still offered.
     const depositNotRequired = p.deposit_required === false && !p.deposit_requested_at;
     const contactsDone = p.contacts_status === "received";
-    const scheduledDone = p.schedule_status === "scheduled";
 
     // Full chat thread (fallback to the legacy text-only questions if a pre-PP1
     // portal hasn't shipped yet).
@@ -1374,7 +1431,7 @@
         <button class="dclose" aria-label="Close">&times;</button>
       </div>
       ${renderSecTabs({ approved, depositDone, depositSubmitted, depositNotRequired,
-                        contactsDone, scheduledDone,
+                        contactsDone,
                         requested: !!p.deposit_requested_at, unread,
                         lost: isLost(p), fuVal: followupState(p).val })}
       <div class="dbody">
@@ -1415,16 +1472,6 @@
         </div>
        </div>
 
-       <div class="dpanel" id="dpanel-schedule" role="tabpanel" aria-labelledby="dtab-schedule" tabindex="-1">
-        <div class="sec" id="dsec-schedule">
-          <div class="lbl">Schedule</div>
-          <p class="note">${scheduledDone ? "This job is booked."
-            : "Treadwell books the date once the deposit has cleared. Mark it here when the crew is scheduled — the customer is told."}</p>
-          <div class="row3" style="margin-top:8px">
-            <button class="btn btn-s" id="mark-scheduled" ${scheduledDone ? "disabled" : ""}>Mark scheduled</button>
-          </div>
-        </div>
-       </div>
 
        <div class="dpanel" id="dpanel-chat" role="tabpanel" aria-labelledby="dtab-chat" tabindex="-1">
         <div class="sec" id="dsec-chat">
@@ -1450,7 +1497,6 @@
     setSecEligible("dsec-notify", true);
     setSecEligible("dsec-deposit", true);
     setSecEligible("dsec-contacts", true);
-    setSecEligible("dsec-schedule", true);
     setSecEligible("dsec-chat", true);
     setSecEligible("dsec-followup", true);
 
@@ -1516,7 +1562,6 @@
       if (!ok) return;
       act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", btn);
     });
-    $("mark-scheduled").addEventListener("click", (e) => act("/api/portal/proposal/" + encodeURIComponent(pid) + "/scheduled", e.target));
     wireFollowup(pid, p, act);
 
     $("reply-body").addEventListener("input", (e) => { REPLY_DRAFT[pid] = e.target.value; });

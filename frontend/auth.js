@@ -212,7 +212,7 @@
       // This page is the only editor for the four recurring customer emails, and its save
       // REPLACES the single settings row with no history, so an unreachable version of it is
       // one wording change away from being unrecoverable.
-      navItem("/followup-settings.html", "⏲", "Cadence &amp; emails") +
+      navItem("/followup-settings.html", "⏲", "Auto Followups") +
       (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar" style="background:' +
