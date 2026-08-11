@@ -23,18 +23,22 @@
   // copy is the one the refusal messages quote, so the two can never name the same email
   // differently — these are only here so the tabs are never blank.
   var LABELS = {
+    sent: "Proposal sent",
     not_viewed: "Not opened yet",
     next_steps: "After they open it",
     second_nudge: "Second reminder",
     checkin: "Recurring check-in",
+    deposit_nudge: "Deposit reminder",
   };
   // Fallback only — the portal serves these (editor_titles). Present so a failed or older GET
   // still shows which email is open rather than an empty heading.
   var EDITOR_TITLES = {
+    sent: "Proposal sent — the first email, when you publish it",
     not_viewed: "First reminder — after not opening",
     next_steps: "Next steps — after they open it",
     second_nudge: "Second reminder — opened, still no decision",
     checkin: "Recurring check-in — repeats until they decide",
+    deposit_nudge: "Deposit reminder — approved, deposit not yet in",
   };
   var TOKENS = ["{first_name}", "{project}", "{need}", "{link}"];
 
@@ -100,12 +104,28 @@
       if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
       CFG = j.settings;
       if (Array.isArray(j.tokens) && j.tokens.length) TOKENS = j.tokens;
-      // The server owns what each email is called, because its refusal messages quote those names.
+      // The server owns WHICH emails exist, what each is called, and the order they appear in.
+      //
+      // This used to walk the LOCAL keys and copy any label the server also had, which meant a
+      // template the server knew about and this file did not could never grow a tab. That is not
+      // hypothetical: it is exactly what happened to the "Proposal sent" email — the portal served
+      // it, this list did not contain it, and the whole feature was unreachable on the page. Taking
+      // the server's key set wholesale is what stops the next one repeating it.
+      //
+      // Safe because the portal asserts its LABELS cover exactly the editable templates, so every
+      // tab this paints has a template behind it. The local map above is the fallback for a failed
+      // or older GET, and nothing more.
       if (j.labels && typeof j.labels === "object") {
-        Object.keys(LABELS).forEach(function (k) {
-          if (j.labels[k]) LABELS[k] = j.labels[k];
+        var served = {};
+        Object.keys(j.labels).forEach(function (k) {
+          if (j.labels[k]) served[k] = j.labels[k];
         });
+        if (Object.keys(served).length) LABELS = served;
       }
+      // The open tab has to be one that exists. Otherwise a server that stopped serving
+      // `not_viewed` would leave KEY pointing at nothing: no tab selected, and fillTemplate
+      // writing into a template nobody can see.
+      if (!LABELS[KEY]) KEY = Object.keys(LABELS)[0];
 
       // Longer when-it-fires wording for the heading under the tabs, same server-owns-it rule.
       if (j.editor_titles && typeof j.editor_titles === "object") {

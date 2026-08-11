@@ -47,10 +47,15 @@
   // somewhere you go on purpose. Same default, and the same `is_test` flag, as the
   // Proposals Database.
   //
-  // There is no SHOW_LOST here any more. It used to add a Lost column and a "Show closed
-  // lost (N)" toggle; Hanz, 2026-08-10: "if its lost remove it from the Customer CRM. To
-  // remove clutter." The count now sits on the tab row as a link out. See syncLostLink.
-  let TAB = ss(TAB_KEY, "") === "test" ? "test" : "active";
+  // There is no SHOW_LOST toggle. Lost proposals used to be a COLUMN on the live board with a
+  // "Show closed lost (N)" switch; Hanz, 2026-08-10: "if its lost remove it from the Customer
+  // CRM. To remove clutter." They came off the board, leaving only a count.
+  //
+  // They now have a TAB. Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where
+  // the lost projects will be held." Same intent as before — a dead deal must not take up room
+  // on a board of live work — with somewhere to actually look at them.
+  const TABS = ["active", "test", "lost"];
+  let TAB = TABS.includes(ss(TAB_KEY, "")) ? ss(TAB_KEY, "") : "active";
   let VIEW = ss(VIEW_KEY, "") === "table" ? "table" : "board";
 
   function api(path, opts) {
@@ -90,22 +95,27 @@
 
   const applySort = (list) => C.sort(list, SORTFIELD, SORTDIR);
 
-  /** The rows this board is ABOUT, before any filter the toolbar owns. Two exclusions,
-   *  and neither of them is something the rep can switch back on:
+  /** The rows this board is ABOUT, before any filter the toolbar owns. Which tab you are on is
+   *  the whole of it, and the three pools PARTITION `ALL` — every proposal is in exactly one, so
+   *  the tab counts add up to the total and nothing can fall through the gaps.
    *
-   *  CLOSED LOST IS GONE. Hanz, 2026-08-10: "allow for the projects to be lost even its been
-   *  approved and if its lost remove it from the Customer CRM. To remove clutter." No Lost
-   *  column, no toggle. The tab row carries the count and links out to the Proposals Database,
-   *  so a dead deal is still findable without occupying a board of live work.
+   *  CLOSED LOST IS ITS OWN TAB, and still absent from the live ones. Hanz, 2026-08-10: "allow
+   *  for the projects to be lost even its been approved and if its lost remove it from the
+   *  Customer CRM. To remove clutter", then 2026-08-12: "create another tab for 'Lost'".
    *
    *  TEST PROJECTS ARE THEIR OWN TAB, split by C.isTest, the same predicate on the same
    *  `is_test` flag, that the Proposals Database uses. Anything that page shows under Test has
    *  to show up under Test here too.
    *
+   *  A lost TEST project appears under Lost, not Test — Lost is every dead deal, or its count
+   *  would be a lie and the row would be reachable from nowhere (Test excludes lost, and always
+   *  did). Those cards carry a Test chip so they can't be read as real work.
+   *
    *  Also what populateEstimators/populateMonths count, so an option can never offer a filter
    *  that yields nothing: a month whose only proposals were lost used to sit in that dropdown
    *  and blank the board when picked. */
   function boardPool() {
+    if (TAB === "lost") return ALL.filter(isLost);
     return ALL.filter((p) => !isLost(p) && isTest(p) === (TAB === "test"));
   }
 
@@ -123,6 +133,9 @@
       const why = lostReason(p);
       out.push(`<span class="chip chip-lost" title="${esc(why ? "Reason: " + why : "No reason recorded")}">Closed lost${
         why ? " · " + esc(why) : ""}</span>`);
+      // The Lost tab holds EVERY dead deal, test ones included (see boardPool), so those cards
+      // have to say so. Only here: on the live tabs the tab itself is the label.
+      if (isTest(p)) out.push('<span class="chip chip-test" title="A test or demo project — filed under Test before it was closed">Test</span>');
     } else {
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
@@ -174,18 +187,47 @@
     const clear = $("crm-clear");
     if (clear) clear.hidden = !(EST || MONTH || SORTFIELD !== "activity" || SORTDIR !== "desc");
     syncTabs();
-    syncLostLink();
     const board = $("board");
     board.classList.toggle("as-table", VIEW === "table");
     board.innerHTML = VIEW === "table" ? tableHtml(items) : kanbanHtml(items);
   }
 
+  /** The Lost tab's columns: the reasons, not the stages.
+   *
+   *  Every card on that tab has the same stage, so grouping by stage would give one tall column
+   *  and answer nothing. Grouped by reason the board answers "why do we lose bids?" — which is
+   *  the reason the close dialog offers a fixed six instead of a free-text box.
+   *
+   *  Built from C.LOST_REASON so the columns are exactly the answers the dialog can produce, plus
+   *  the one it cannot: proposals closed before a reason was ever asked for. */
+  const LOST_COLS = Object.keys(C.LOST_REASON).map((k) => C.LOST_REASON[k]).concat(["Not recorded"]);
+
+  function groupByReason(items) {
+    const by = {};
+    LOST_COLS.forEach((c) => { by[c] = []; });
+    items.forEach((p) => {
+      // An unrecognised stored reason lands in "Not recorded" rather than vanishing — the same
+      // bias C.group takes with an unknown stage, for the same reason: a vocabulary that grows
+      // must not silently drop cards off the board.
+      (by[lostReason(p)] || by["Not recorded"]).push(p);
+    });
+    return by;
+  }
+
   function kanbanHtml(items) {
-    // STAGES only. There is no Closed lost column: those proposals never reach here (see
-    // boardPool), and C.group drops any row whose stage has no column, so one arriving by
-    // some other route is left out rather than throwing.
-    const byStage = C.group(items, STAGES);
-    return STAGES.map((s) => {
+    // Two shapes: the pipeline (STAGES) on the live tabs, the reasons on Lost.
+    //
+    // There is no Closed lost column on the live tabs — those proposals are not in the pool (see
+    // boardPool), and C.group drops any row whose stage has no column, so one arriving by some
+    // other route is left out rather than throwing.
+    const lost = TAB === "lost";
+    if (lost && !items.length) {
+      return '<div class="empty">Nothing closed lost' + (
+        boardPool().length ? " matches those filters." : " — every proposal is still live.") + "</div>";
+    }
+    const cols = lost ? LOST_COLS : STAGES;
+    const byStage = lost ? groupByReason(items) : C.group(items, STAGES);
+    return cols.map((s) => {
       const cards = byStage[s].map((p) => {
         const act = lastActivity(p);
         // Who owns it and when it last moved, on one line each — the column is only
@@ -222,7 +264,9 @@
       // proposal under that not sent category". Only this column gets the button, because it is
       // the only one whose membership rule a new project can satisfy — everything to the right
       // requires the customer to have been sent something.
-      const add = s === STAGE_CREATED
+      // `!lost` is belt as well as braces: no reason label equals STAGE_CREATED today, and a
+      // "+ New" button on a column of dead deals would file a brand-new bid as closed lost.
+      const add = !lost && s === STAGE_CREATED
         ? '<button type="button" class="col-add" data-new-proposal title="Start a new proposal — opens the intake form">+ New</button>'
         : "";
       return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span>${add}</h2>${cards}</div>`;
@@ -1299,6 +1343,19 @@
       "This proposal was sent before automatic follow-ups existed. Switch them on to start the cadence from today." };
     if (!f.enabled) return { val: "Off", lead:
       "Automatic follow-ups are off for this project. Nothing is sent to the customer unless you send it." };
+    // Approved with the money still out. Said before the general case because the general case
+    // promises the cadence STOPS at approval, which stopped being true on 2026-08-12 — Hanz:
+    // "followups should be automated until a deposit has been received." An estimator reading
+    // the old sentence on a won job would think nothing more was going out, and would either
+    // duplicate the chase by hand or leave it entirely.
+    if (String(p.proposal_status || "") === "approved" && !C.depositSatisfied(p)) {
+      const told = String(p.deposit_status || "") === "submitted";
+      return { val: "On", lead: told
+        ? "Approved, and they've told us the deposit is on its way — so they aren't being emailed "
+          + "about it any more. You keep getting reminded until it actually lands."
+        : "Approved — following up automatically until the deposit is in. Their reminders stop as "
+          + "soon as they tell us it's on the way; yours continue until it lands." };
+    }
     return { val: "On", lead:
       "Following up automatically until the customer approves, replies, or tells us their timeline changed." };
   }
@@ -1814,36 +1871,20 @@
 
   function lostCount() { return ALL.filter(isLost).length; }
 
-  /** How many proposals the customer closed lost, and the way to them.
+  /** The Active / Test / Lost switch. The counts come off the same predicates boardPool filters
+   *  with, so a tab can never advertise a number it then refuses to show — and because the three
+   *  pools partition `ALL`, the three counts add up to every proposal there is.
    *
-   *  They are not on this board at all any more (see boardPool), so this count is the only
-   *  thing here that says they exist, which is exactly what Hanz asked for when he chose it
-   *  over a Lost column: "Gone from the board, but keep a count somewhere."
-   *
-   *  The link is PLAIN, and that is a real limitation rather than an oversight. /projects.html
-   *  reads no filter out of the URL: its tabs are Active / Inactive / All / Test, held in
-   *  sessionStorage, and it has no idea what a lost proposal is: `closed_lost` lives on the
-   *  portal row, while that page lists our own drafts. So this lands you on the project list,
-   *  not on a pre-filtered view of the dead ones. Passing ?filter=lost would be a parameter
-   *  that page silently ignores. */
-  function syncLostLink() {
-    const a = $("crm-lost");
-    if (!a) return;
-    const n = lostCount();
-    a.hidden = n === 0;                       // nothing lost yet → no link at all
-    a.textContent = n + " closed lost →";
-    a.title = n + " proposal" + (n === 1 ? "" : "s") + " the customer isn't moving forward with."
-      + " They're off this board. Open the Proposals Database to find them.";
-  }
-
-  /** The Active / Test switch. The counts come off the same predicate the board filters with,
-   *  so a tab can never advertise a number it then refuses to show. Lost proposals are outside
-   *  both tabs, so they are subtracted before either is counted. */
+   *  This replaced a "N closed lost →" link out to /projects.html. That link could never do what
+   *  it implied: that page reads no filter from the URL, its tabs are Active / Inactive / All /
+   *  Test, and it lists our own drafts rather than portal rows — it has no notion of closed_lost
+   *  at all. So it landed you on an unfiltered list to hunt through. The tab shows them. */
   function syncTabs() {
     const wrap = $("crm-tabs");
     if (!wrap) return;
     const live = ALL.filter((p) => !isLost(p));
-    const n = { test: live.filter(isTest).length, active: live.filter((p) => !isTest(p)).length };
+    const n = { test: live.filter(isTest).length, active: live.filter((p) => !isTest(p)).length,
+                lost: lostCount() };
     wrap.querySelectorAll("[data-tab]").forEach((b) => {
       const on = b.dataset.tab === TAB;
       b.setAttribute("aria-pressed", on ? "true" : "false");
@@ -1894,13 +1935,16 @@
         ssSet(SORTDIR_KEY, SORTDIR); syncDir(); renderBoard();
       });
     }
-    // Delegated, so the two buttons need no per-element binding, and TAB is in BOARD_SIG,
-    // so renderBoard is guaranteed to repaint (including the pressed state, via syncTabs).
+    // Delegated, so the buttons need no per-element binding, and TAB is in BOARD_SIG, so
+    // renderBoard is guaranteed to repaint (including the pressed state, via syncTabs).
     if (tabs) tabs.addEventListener("click", (e) => {
       const b = e.target.closest("[data-tab]");
       if (!b || b.dataset.tab === TAB) return;
-      TAB = b.dataset.tab === "test" ? "test" : "active";
-      ssSet(TAB_KEY, TAB === "test" ? "test" : "");
+      // Against the known set, not `=== "test" ? "test" : "active"`. That coercion was correct
+      // while there were two tabs and silently swallows a third: clicking Lost would have stored
+      // Active, painted the Active board, and looked like a dead button.
+      TAB = TABS.includes(b.dataset.tab) ? b.dataset.tab : "active";
+      ssSet(TAB_KEY, TAB);
       renderBoard();
     });
     if (view) view.addEventListener("click", () => {

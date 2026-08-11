@@ -82,19 +82,43 @@ def test_a_live_proposal_is_eligible():
     assert dw.eligible(row(), NOW) is True
 
 
-def test_a_booked_job_is_done():
-    assert dw.eligible(row(schedule_status="scheduled"), NOW) is False
+def test_a_booked_AND_PAID_job_is_done():
+    """Booked used to be enough on its own. That made it a third stop point beside the two agreed
+    ones, and it sat one line below the approval check — so it re-excluded the very rows the
+    deposit change admits."""
+    assert dw.eligible(row(schedule_status="scheduled", deposit_status="received"), NOW) is False
+    assert dw.eligible(row(schedule_status="scheduled", deposit_required=False), NOW) is False
+
+
+def test_a_booked_job_with_the_money_STILL_OUT_is_not_done():
+    """Dates are not held until the deposit lands — which is what the customer-facing reminder
+    itself says. The portal keeps chasing such a row, so this list saying nothing would have the
+    two halves of one system disagreeing about the same project."""
+    assert dw.eligible(row(schedule_status="scheduled", proposal_status="approved",
+                           deposit_status="pending"), NOW) is True
 
 
 def test_a_lost_deal_is_never_chased():
     assert dw.eligible(row(proposal_status="closed_lost"), NOW) is False
 
 
-def test_an_approved_proposal_leaves_this_list():
-    """It isn't finished — the deposit still has to land — but the deposit column and
-    its own reminders own that. Two systems nagging about one proposal is worse than
-    one."""
-    assert dw.eligible(row(proposal_status="approved"), NOW) is False
+def test_a_PAID_approved_proposal_leaves_this_list():
+    """This test used to cover every approved proposal, and its reasoning was that "the deposit
+    column and its own reminders own that". There were no deposit reminders — so an approved job
+    got one invoice email and then silence, which is what Hanz overruled on 2026-08-12:
+    "followups should be automated until a deposit has been received."
+
+    What survives is the half that was always true: once the money is in, this list is done with
+    it. The unpaid case is now the most actionable row here — see
+    test_digest_chases_the_deposit.py, which owns it."""
+    assert dw.eligible(row(proposal_status="approved", deposit_status="received"), NOW) is False
+    assert dw.eligible(row(proposal_status="approved", deposit_required=False), NOW) is False
+
+
+def test_an_approved_proposal_STILL_OWING_A_DEPOSIT_stays_on_the_list():
+    """The other half of what the test above used to claim. Dates are not held until the money
+    lands, so a won job with the deposit out is the one worth ringing first."""
+    assert dw.eligible(row(proposal_status="approved", deposit_status="pending"), NOW) is True
 
 
 def test_a_customer_pause_is_respected():
@@ -399,7 +423,10 @@ def test_a_quiet_morning_sends_nothing_at_all():
     """No eligible proposals → no email. A daily message that often says "nothing to
     do" is one people filter away, and then the one that matters goes unread too."""
     calls = []
-    dw._HOOKS["portal"] = _portal_stub(calls, [row(schedule_status="scheduled")])
+    # Booked AND paid — the row this list is genuinely finished with. `scheduled` alone no longer
+    # settles anything (see test_a_booked_job_with_the_money_STILL_OUT_is_not_done).
+    dw._HOOKS["portal"] = _portal_stub(calls, [row(schedule_status="scheduled",
+                                                   deposit_status="received")])
     dw._HOOKS["run_claude"] = lambda p, s: {}
     out = dw.run_once(NOW)
     assert out["sent"] == []

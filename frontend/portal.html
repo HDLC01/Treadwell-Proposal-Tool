@@ -53,11 +53,6 @@
   .tw-tab .n { font-size:11px; font-weight:800; font-variant-numeric:tabular-nums;
     background:var(--surf-high); color:var(--ink-v); border-radius:999px; padding:1px 6px; }
   .tw-tab[aria-pressed="true"] .n { background:rgba(255,255,255,.22); color:#fff; }
-  /* Closed lost: a count and a way out, not a control. Quiet: nothing here needs doing, it
-     exists so a dead deal is still findable after it leaves the board. */
-  .tw-lostlink { margin-left:auto; color:var(--ink-v); font:600 12px system-ui; text-decoration:none;
-    border-bottom:1px dotted var(--line); }
-  .tw-lostlink:hover { color:var(--red); border-bottom-color:var(--red); }
   .board { display:flex; gap:14px; align-items:flex-start; overflow-x:auto; padding-bottom:8px; }
   /* The table replaces the columns inside the same #board node, so it has to undo
      the flex row that node is otherwise carrying. */
@@ -109,6 +104,8 @@
   /* Kept for a lost proposal opened straight from a link, even though no card on the board
      can carry it any more: closed-lost rows leave the board entirely (portal.js:boardPool). */
   .chip-lost { background:var(--surf-high); color:var(--ink-v); text-decoration:none; }
+  /* Only ever seen on the Lost tab, which is the one place test and real work sit together. */
+  .chip-test { background:#eef4ff; border-color:#c9dbff; color:#20408a; }
   /* Every proposal as one sortable list — the answer to "show me all sixty". */
   .ptable { width:100%; border-collapse:separate; border-spacing:0; background:#fff;
     border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px; }
@@ -347,7 +344,11 @@
     <div id="crm-tabs" class="tw-tabs">
       <button type="button" class="tw-tab on" data-tab="active" aria-pressed="true">Active <span class="n">0</span></button>
       <button type="button" class="tw-tab" data-tab="test" aria-pressed="false">Test <span class="n">0</span></button>
-      <a id="crm-lost" class="tw-lostlink" href="/projects.html" hidden>0 closed lost →</a>
+      <!-- Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where the lost projects
+           will be held". This REPLACED a "0 closed lost →" link that pointed at the Proposals
+           Database, which could not filter to the dead ones — /projects.html lists our drafts and
+           has no notion of closed_lost, so the link landed you on an unfiltered list. -->
+      <button type="button" class="tw-tab" data-tab="lost" aria-pressed="false">Lost <span class="n">0</span></button>
     </div>
     <div class="toolbar">
       <input id="search" type="search" placeholder="Search project, customer, estimator…" />
