@@ -298,7 +298,14 @@ def test_the_board_splits_by_the_FLAG_not_by_the_project_name():
     assert "isTest(p)" in pool, "boardPool does not consult the test flag at all"
     assert "bugtest" not in _src("portal.js"), (
         "portal.js has its own name regex; the rule belongs in crm-core.js so both pages share it")
-    assert "isTest" in _src("portal.js")[:2000], "isTest is not taken from crm-core"
+    # Asserted as a DESTRUCTURING, not by character offset. This was `in _src(...)[:2000]`, which
+    # says "isTest appears near the top" — a proxy for "it is imported" that breaks the moment
+    # anybody adds a comment above the imports. One did (the note explaining the STAGE_CREATED
+    # outage) and this failed at 2128 characters while the code was perfectly correct. A test that
+    # counts characters to infer structure will keep crying wolf.
+    assert re.search(r"const \{[^}]*\bisTest\b[^}]*\} = C;", _src("portal.js"), re.S), (
+        "isTest is not destructured off crm-core, so portal.js is deciding what a test project is "
+        "on its own")
 
 
 def test_the_test_rows_go_to_the_TEST_tab_and_the_others_to_ACTIVE():
