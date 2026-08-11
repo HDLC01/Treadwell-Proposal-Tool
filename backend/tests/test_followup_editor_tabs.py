@@ -105,7 +105,7 @@ def test_the_deposit_reminder_and_the_sent_email_both_get_a_tab():
       decl + "\\n" + merge + "\\nreturn { keys: Object.keys(LABELS), labels: LABELS, KEY: KEY };");
     console.log(JSON.stringify(run(j, KEY)));
     """ % (json.dumps(str(EDITOR)), json.dumps({"labels": SERVED, "editor_titles": {}}))
-    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=60)
+    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     got = json.loads(proc.stdout.strip().splitlines()[-1])
     assert got["keys"] == list(SERVED), (
@@ -128,7 +128,7 @@ def test_a_template_the_editor_has_never_heard_of_still_gets_a_tab():
       decl + "\\n" + merge + "\\nreturn Object.keys(LABELS);");
     console.log(JSON.stringify(run(j, KEY)));
     """ % json.dumps(str(EDITOR))
-    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=60)
+    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     keys = json.loads(proc.stdout.strip().splitlines()[-1])
     assert "brand_new" in keys, "a template added on the portal side still cannot grow a tab"

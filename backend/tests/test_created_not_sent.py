@@ -109,7 +109,7 @@ def _block_py(fn: str, module: str = "main") -> str:
 def _node(expr: str):
     src = ("const C = require(%s);\nconsole.log(JSON.stringify(%s));\n"
            % (json.dumps(str(CORE)), expr))
-    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=60)
+    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 

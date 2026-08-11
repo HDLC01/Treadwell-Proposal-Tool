@@ -51,7 +51,7 @@ def test_it_parses(path):
     It catches the whole family this belongs to: an unterminated template literal, a stray
     backtick in a comment, an unbalanced brace, a trailing comma where one isn't allowed."""
     proc = subprocess.run(["node", "--check", str(path)],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, (
         f"{path.name} does not parse — every page that loads it will break:\n{proc.stderr}")
 
