@@ -454,13 +454,22 @@ def test_the_chip_listeners_survive_the_strip_being_rebuilt():
         "something binds to the chips by class; those nodes are destroyed by the next paintTabs")
 
 
-# ── the copy has to describe both ways in ────────────────────────────────────
-def test_the_instructions_mention_dragging_and_clicking():
-    html = _markup()
-    assert "Click a placeholder to insert it." not in html, "the copy still describes click only"
-    low = html.lower()
-    assert "drag a placeholder" in low, "the copy does not mention dragging"
-    assert "click one" in low, "the copy no longer mentions that clicking works"
+# ── the chips have to say they can be dragged ────────────────────────────────
+def test_the_chips_advertise_both_ways_in():
+    """This asserted a SENTENCE on the page ("Drag a placeholder into the message, or click one
+    to drop it where the cursor is") until Hanz deleted that blurb on 2026-08-12. The claim it
+    protects is unchanged — a draggable control that looks like a button teaches nobody — so it
+    now reads the only place left that says so: the chip's own tooltip.
+
+    Kept rather than dropped with the sentence, because `draggable="true"` is invisible. Lose
+    both the prose and the title and drag-and-drop becomes a feature nobody finds."""
+    js = _js()
+    i = js.index('$("tokens").innerHTML')
+    chip = js[i:i + 1400]
+    assert 'draggable="true"' in chip, "the chips are no longer draggable"
+    low = chip.lower()
+    assert "drag" in low, "nothing tells the user the chips can be dragged"
+    assert "click" in low, "nothing tells the user clicking works too"
 
 
 # ── one editable subject for the whole project thread (2026-08-11) ────────────
@@ -538,3 +547,54 @@ def test_the_preview_shows_the_project_subject():
     body = js[i:js.index("\n  function ", i + 1)]
     assert "thread-subject" in body, "the preview no longer shows a subject at all"
     assert "pv.subject" not in body, "the preview still reads a subject the server does not send"
+
+
+# ── the timing hints and the emails blurb came off (Hanz, 2026-08-12) ─────────
+def test_the_per_field_timing_hints_are_gone():
+    """Hanz: "Delet these descriptions in the timing container in cadence and emails".
+
+    Five one-liners under the five numeric inputs. The labels above them already say what each
+    field is ("First reminder", "Then every", "Stop after") and the card keeps its one-sentence
+    sub, so the hints were repeating the label in longer words — and one of them still quoted an
+    hours figure after the fields moved to days, which is how explanatory copy rots.
+    """
+    page = _page()
+    assert 'class="fhint"' not in page, "the per-field timing hints are back"
+    for gone in ("After sending, and after the first view",
+                 "Counted from the first view",
+                 "on the flow chart",
+                 "time to make it personal",
+                 "nag forever"):
+        assert gone not in page, "the hint %r is back" % gone
+
+
+def test_the_dead_hint_style_went_with_them():
+    """A rule for an element nobody renders reads as though the element is still there — the
+    leftover that makes the next reader think the copy exists somewhere."""
+    assert ".fhint" not in _page()
+
+
+def test_the_timing_card_still_says_what_the_numbers_mean():
+    """Deleting the per-field hints must not leave five bare boxes. The card's own sentence is
+    what survives, and it is the thing that says the unit."""
+    page = _page()
+    assert "Days between reminders" in page
+    assert page.count("<span>days</span>") == 4
+    assert "<span>reminders</span>" in page, "Stop after N lost its unit"
+
+
+def test_the_emails_card_blurb_is_gone():
+    """Hanz: "Delete this in the email as well" — the "Plain text ... Drag a placeholder" line."""
+    page = _page()
+    for gone in ("Plain text", "laid into the Treadwell letterhead", "Drag a placeholder"):
+        assert gone not in page, "the emails-card blurb is back: %r" % gone
+
+
+def test_the_placeholder_chips_still_explain_themselves():
+    """The removed blurb was the only prose saying the chips are draggable. Each chip keeps its
+    own title, which is now the only explanation there is — so it has to stay."""
+    js = (pathlib.Path(__file__).resolve().parents[2]
+          / "frontend" / "js" / "followup-settings.js").read_text(encoding="utf-8")
+    assert 'draggable="true"' in js, "the chips are no longer draggable"
+    assert "title=" in js[js.index("$(\"tokens\").innerHTML"):js.index("$(\"tokens\").innerHTML") + 1200], (
+        "the placeholder chips have no tooltip, and the sentence that explained them is gone")

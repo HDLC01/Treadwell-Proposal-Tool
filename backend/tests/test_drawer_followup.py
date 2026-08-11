@@ -39,7 +39,12 @@ def _block(name: str) -> str:
     pytest.fail(f"unbalanced braces reading {name}()")
 
 
-PANEL = _block("followupPanelHtml")
+# The panel is built from TWO functions: followupPanelHtml interpolates followupContactsHtml,
+# which renders the "Automated follow-ups go to" contact list (added 2026-08-12 so staff can
+# choose who gets chased). Reading only the first one made the id check below fail on ids that
+# ARE rendered — the invariant it protects is "no handler reaches for something nobody renders",
+# and where in the panel the markup comes from is not part of that claim.
+PANEL = _block("followupPanelHtml") + _block("followupContactsHtml")
 WIRE = _block("wireFollowup")
 
 

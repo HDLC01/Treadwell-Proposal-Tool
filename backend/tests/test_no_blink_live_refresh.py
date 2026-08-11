@@ -119,10 +119,10 @@ def test_the_signature_is_assigned_not_just_compared(page, fn, var):
 # stops responding to its own filters: typing in the search box, switching tab, re-sorting or
 # flipping to the table view all leave the DOM untouched.
 #
-# portal.js lost SHOW_LOST on 2026-08-10: closed-lost proposals leave the board entirely, so
-# there is no toggle left to guard. TAB (Active / Test) took its place, and the lost COUNT
-# joined the list because it is painted outside the board's innerHTML. See
-# test_active_projects_board.py, which owns both of those.
+# portal.js lost SHOW_LOST on 2026-08-10: closed-lost proposals came off the live board, so there
+# is no toggle left to guard. TAB took its place (Active / Test, and Lost since 2026-08-12), and
+# the lost COUNT joined the list because it is painted outside the board's innerHTML — it is a tab
+# badge. See test_active_projects_board.py, which owns both of those.
 @pytest.mark.parametrize("page,fn,names", [
     ("portal.js", "renderBoard", ["ALL", "EST", "MONTH", "SORTFIELD", "SORTDIR", "TAB", "VIEW"]),
     ("followups.js", "paint", ["ALL", "TAB", "EST", "SORT", "DIR", "Q", "VIEW"]),

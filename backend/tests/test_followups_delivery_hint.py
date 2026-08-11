@@ -126,7 +126,9 @@ def test_the_card_shows_what_we_are_doing_as_a_badge(js):
     for label in ("Chasing", "Paused", "Not automated"):
         assert label in badge, "the badge cannot say %r" % label
     assert 'if (!a) return ""' in badge, (
-        "approved and lost proposals should show no badge — nothing is going out for them")
+        "a closed-lost proposal, or an approved one that has been paid, should show no badge — "
+        "nothing is going out for those. An approved job with the deposit still out IS being "
+        "chased and does get one; see test_followups_board_js.py, which owns that rule.")
 
 
 def test_the_badge_styles_separate_the_three_states():

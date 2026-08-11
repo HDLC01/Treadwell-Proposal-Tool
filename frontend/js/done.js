@@ -110,7 +110,11 @@
   // the "Send to customer portal" button sends to the whole list. Every recipient
   // gets a secure link + full portal access (view / ask / approve). Exposes a few
   // methods on `portalRecip` for the button handler below.
-  const portalRecip = { intake: "", hasIntake: false, extras: [], ready: false };
+  // `noFollowups` is the set of addresses the sender un-ticked. Hanz, 2026-08-12: "just like the
+  // 25% deposit creat a checkbox for each contact if they will be able to receive the automated
+  // follow ups or no". Stored as an opt-OUT set rather than an opt-in list so the default — chase
+  // everybody, which is how it has always worked — needs no entry at all.
+  const portalRecip = { intake: "", hasIntake: false, extras: [], noFollowups: [], ready: false };
 
   // ── Require deposit ─────────────────────────────────────────────────────────
   // Ticked → the customer must pay the 25% deposit after approving (today's
@@ -294,6 +298,13 @@
 
     const setErr = (m) => { errEl.textContent = m || ""; };
     const allEmails = () => (portalRecip.hasIntake ? [portalRecip.intake] : []).concat(portalRecip.extras);
+    // Only the un-ticked ones that are actually being SENT to. An address removed after being
+    // un-ticked, or an intake edited to something else, must not travel as an opt-out for a
+    // recipient that no longer exists.
+    portalRecip.noFollowupsToSend = () => {
+      const on = allEmails();
+      return portalRecip.noFollowups.filter((e) => on.indexOf(e) >= 0);
+    };
 
     // The intake email starts locked (it came from the customer's lead). "Edit"
     // unlocks it inline so the estimator can retarget the send — e.g. to their own
@@ -373,6 +384,25 @@
         const em = document.createElement("span");
         em.className = "em"; em.textContent = r.email;
         row.appendChild(em);
+
+        // Follow-ups for THIS contact. On the intake row too: the person the lead came from is
+        // exactly who somebody might not want chased four times.
+        const fu = document.createElement("label");
+        fu.className = "tw-em-fu";
+        fu.title = "Automated follow-up emails. Un-tick and this contact still gets the proposal, "
+                 + "the invoice and every reply — just not the chasing.";
+        const fuBox = document.createElement("input");
+        fuBox.type = "checkbox";
+        fuBox.checked = portalRecip.noFollowups.indexOf(r.email) < 0;
+        fuBox.addEventListener("change", () => {
+          const k = portalRecip.noFollowups.indexOf(r.email);
+          if (fuBox.checked) { if (k >= 0) portalRecip.noFollowups.splice(k, 1); }
+          else if (k < 0) portalRecip.noFollowups.push(r.email);
+        });
+        fu.appendChild(fuBox);
+        fu.appendChild(document.createTextNode(" Follow-ups"));
+        row.appendChild(fu);
+
         if (r.fixed) {
           const tag = document.createElement("span");
           tag.className = "tw-em-tag"; tag.textContent = intakeEdited ? "custom" : "intake";
@@ -391,6 +421,10 @@
           x.addEventListener("click", () => {
             const k = portalRecip.extras.indexOf(r.email);
             if (k >= 0) portalRecip.extras.splice(k, 1);
+            // Drop any opt-out with it. Otherwise removing an address and adding it back gives a
+            // ticked box that is a lie: the stale entry would still suppress its follow-ups.
+            const f = portalRecip.noFollowups.indexOf(r.email);
+            if (f >= 0) portalRecip.noFollowups.splice(f, 1);
             setErr(""); renderList();
           });
           row.appendChild(x);
@@ -573,7 +607,11 @@
         try {
           const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
                                       { emails, message, require_deposit: requireDeposit,
-                                        assigned_estimator: assignedEstimator });
+                                        assigned_estimator: assignedEstimator,
+                                        // Which of those contacts should not be chased. Filtered
+                                        // to the addresses actually being sent to, so a removed
+                                        // or retargeted one cannot travel as a stale opt-out.
+                                        no_followups: portalRecip.noFollowupsToSend() });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
           // Remember both for a re-send. require_deposit persists so a deliberate
           // GC-with-deposit (or Direct-without) choice survives a reload instead of

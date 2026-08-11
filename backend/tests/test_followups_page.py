@@ -84,10 +84,18 @@ def test_what_you_can_act_on_comes_before_what_you_cannot(monkeypatch):
     """Found by reading the real staging feed, not by reasoning about it.
 
     `score()` was built for the digest, which filters by `eligible()` BEFORE ranking
-    matters — so it cheerfully awards age and customer-silence points to a proposal that
-    was approved months ago. Sorting the page on the score alone put four approved jobs
-    (100, 94, 90, 87 — none of them actionable) above the two live ones somebody could
-    actually ring. A column headed "needs attention" has to lead with what needs it."""
+    matters — so it cheerfully awards age and customer-silence points to a proposal nobody
+    can act on. Sorting the page on the score alone put four such jobs (100, 94, 90, 87)
+    above the two live ones somebody could actually ring. A column headed "needs attention"
+    has to lead with what needs it.
+
+    THE UNACTIONABLE EXAMPLE IS NOW A PAID JOB, not simply an approved one. This fixture used
+    an ancient approval, which stopped being unactionable on 2026-08-12: Hanz, "followups
+    should be automated until a deposit has been received", so a won job with the money still
+    out is now the most actionable row on the page. Approved AND paid is what nobody can
+    act on — and it saturates the same age and silence ceilings, so the ordering bug it was
+    written to catch is reproduced exactly as before.
+    """
     # RELATIVE dates, not fixed ones. This fixture originally hardcoded 2026-01-01 and
     # 2026-08-01, and on 2026-08-12 it stopped reproducing the bug: `score()` caps age at
     # W_AGE_MAX and silence at W_SILENCE_MAX, so once the "live" row drifted far enough from
@@ -98,9 +106,9 @@ def test_what_you_can_act_on_comes_before_what_you_cannot(monkeypatch):
     recent = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=2)).isoformat()
     ancient = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=220)).isoformat()
     _wire(monkeypatch, [
-        # Approved and ancient: saturates age and silence, worth nothing.
+        # Won, PAID and ancient: saturates age and silence, and there is nothing left to ask for.
         row(proposal_id="old_won", project_name="Won Long Ago", proposal_status="approved",
-            sent_at=ancient, last_activity_at=ancient),
+            deposit_status="received", sent_at=ancient, last_activity_at=ancient),
         # Live and 2 days old: below every cap, so it must score LOWER — and it is the only one
         # somebody could actually ring.
         row(proposal_id="live", project_name="Live", proposal_status="viewed",
@@ -113,12 +121,37 @@ def test_what_you_can_act_on_comes_before_what_you_cannot(monkeypatch):
         "eligible one, or this test proves nothing")
 
 
-def test_a_proposal_nobody_should_chase_carries_no_reason(monkeypatch):
-    """Approved, paused and just-chased proposals still appear — Hanz wanted every
-    proposal ever sent — but presenting a nag for them would be wrong. `eligible` is the
-    digest's own filter, reused so the page and the email agree on who is worth a call."""
+def test_a_won_job_waiting_on_its_deposit_leads_the_page(monkeypatch):
+    """The other side of the same sort. Hanz, 2026-08-12: "followups should be automated until a
+    deposit has been received." Dates are not held until the money lands, so of everything on this
+    page that is the one to ring first — and before this change it was filtered out of actionable
+    entirely, sorted below every live bid, and carried no reason line."""
+    recent = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=2)).isoformat()
     _wire(monkeypatch, [
-        row(proposal_id="won", proposal_status="approved"),
+        row(proposal_id="live", project_name="Live", proposal_status="viewed",
+            sent_at=recent, last_activity_at=recent),
+        row(proposal_id="unpaid", project_name="Won Unpaid", proposal_status="approved",
+            deposit_status="pending", approved_at=recent,
+            sent_at=recent, last_activity_at=recent),
+    ])
+    got = client.get("/api/portal/followups").json()["proposals"]
+    by = {p["proposal_id"]: p for p in got}
+    assert by["unpaid"]["eligible"] is True, "a won job with the money out is not actionable"
+    assert got[0]["proposal_id"] == "unpaid", (
+        "the unpaid won job sorts below a live bid, so the page buries the money")
+    assert "deposit" in by["unpaid"]["reason"].lower(), (
+        "the reason line does not mention the deposit, which is the whole ask")
+
+
+def test_a_proposal_nobody_should_chase_carries_no_reason(monkeypatch):
+    """Paid, paused and just-chased proposals still appear — Hanz wanted every proposal ever
+    sent — but presenting a nag for them would be wrong. `eligible` is the digest's own filter,
+    reused so the page and the email agree on who is worth a call.
+
+    "won" carries a received deposit now: approval alone stopped meaning "nothing to chase" on
+    2026-08-12, and the row above it in this file is the test for the case that still does."""
+    _wire(monkeypatch, [
+        row(proposal_id="won", proposal_status="approved", deposit_status="received"),
         row(proposal_id="paused",
             followup_state={"enrolled": True, "enabled": True,
                             "paused_until": "2026-12-01", "closed_lost_reason": None,
@@ -375,13 +408,28 @@ def test_enter_does_not_send():
     assert "Enter" not in code, "Enter-to-send on a customer-facing message"
 
 
-def test_sending_is_not_offered_on_a_decided_proposal():
-    """Nothing to chase once it is approved or lost, and offering it invites emailing somebody
-    about a decision they already made."""
+def test_sending_is_not_offered_on_a_settled_proposal():
+    """Nothing left to ask for once it is lost, or approved AND paid, and offering it invites
+    emailing somebody about a decision they already made.
+
+    An approved job whose deposit is still out is deliberately NOT settled — Hanz, 2026-08-12:
+    "followups should be automated until a deposit has been received." It is the row on this page
+    most worth a manual nudge, because dates are not held until the money lands. The gate reads the
+    deposit through B.depositIn, the same answer the automation badge uses, so the button and the
+    badge cannot disagree about whether anything is going out."""
     js = (FRONTEND / "js" / "followups.js").read_text(encoding="utf-8")
     i = js.index("function sendButton(")
-    block = js[i:i + 600]
-    assert 'colId === "approved"' in block and 'colId === "lost"' in block
+    block = js[i:i + 700]
+    assert 'colId === "lost"' in block, "a closed-lost proposal still offers a follow-up send"
+    assert 'colId === "approved" && B.depositIn(p)' in block, (
+        "the send button is hidden on every approved job, including the ones still owing a "
+        "deposit — which are the ones worth chasing")
+    # The table row's copy of the gate has to move with it: two spellings of one rule is how the
+    # board offers a send the table hides.
+    row = js[js.index("function tableRow") if "function tableRow" in js else 0:]
+    assert 'B.column(p) === "approved" && B.depositIn(p)' in js, (
+        "the table's send gate still stops at approval while the card's does not")
+    del row
 
 
 def test_the_two_buttons_cannot_be_confused():

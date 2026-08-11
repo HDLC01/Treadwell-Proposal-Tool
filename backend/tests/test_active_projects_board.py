@@ -9,8 +9,13 @@ WHAT HANZ ASKED FOR, 2026-08-10.
     one for the Active ones."
 
 Asked how the lost ones should still be reachable, he chose: "Gone from the board, but keep a
-count somewhere." So NOT a Lost column and NOT the "Show closed lost (N)" toggle under a new
-name, but a count in the header that links out to the Proposals Database.
+count somewhere." So NOT a Lost column and NOT the "Show closed lost (N)" toggle under a new name.
+
+THEN, 2026-08-12: "Actualy create another tab for 'Lost' This is where the lost projects will be
+held." The count became a THIRD TAB. His original constraint is untouched — a dead deal still takes
+up no room on a board of live work — and what it replaced was a link to /projects.html that could
+not filter to the lost ones, because that page lists our own drafts and has never heard of
+`closed_lost`. The count was honest; the destination was not.
 
 WHAT WAS THERE BEFORE, AND WHY IT IS WORTH A TEST THAT IT IS GONE.
 
@@ -124,9 +129,13 @@ def _sig(name: str, fn: str) -> str:
 
 
 # ── Change A: closed lost leaves the board ───────────────────────────────────
-def test_the_lost_column_is_gone():
-    """Mutation this kills: putting STAGE_LOST back as an eighth column, which is the shape
-    Hanz explicitly turned down in favour of a count."""
+def test_the_live_tabs_have_no_lost_column():
+    """Mutation this kills: putting STAGE_LOST back as an eighth column on the live board, which is
+    the shape Hanz explicitly turned down.
+
+    The Lost TAB is a different thing and does not use STAGE_LOST at all: its columns are the close
+    REASONS, because every card on it has the same stage and grouping by that would give one tall
+    column answering nothing."""
     code = _code("portal.js")
     assert "STAGE_LOST" not in code, (
         "the Closed lost column is back; lost proposals are meant to leave the board")
@@ -147,11 +156,20 @@ def test_the_show_closed_lost_toggle_is_gone_including_its_stored_state():
         "the toggle button is still in the toolbar")
 
 
-def test_lost_proposals_are_filtered_out_unconditionally():
-    """Not "when the toggle is off", always. `visible()` used to end in a ternary on SHOW_LOST;
-    the exclusion now lives in boardPool so both views and both filter dropdowns share it."""
+def test_lost_proposals_are_off_the_live_tabs_and_one_place_decides():
+    """`visible()` used to end in a ternary on SHOW_LOST, so the board and the filter dropdowns
+    could disagree about what existed. The whole question now lives in boardPool: the tab decides
+    the pool, and no toggle can put a dead deal back among live work.
+
+    NOT "filtered out unconditionally" any more — on the Lost tab they are the only rows. What
+    survives is that no OTHER tab can show one."""
     pool = _block("portal.js", "boardPool")
     assert "!isLost(p)" in pool, "boardPool no longer excludes closed-lost proposals"
+    assert 'TAB === "lost"' in pool, "boardPool has no Lost branch, so that tab renders empty"
+    # The lost branch must RETURN before the live filter, or `isTest(p) === (TAB === "test")`
+    # judges the Lost tab too and half the dead deals vanish from it.
+    assert pool.index('TAB === "lost"') < pool.index("!isLost(p)"), (
+        "the live filter runs before the lost branch, so the Lost tab is filtered by is_test")
     vis = _block("portal.js", "visible")
     assert "boardPool()" in vis, "visible() bypasses the pool, so it can show lost rows again"
     assert "isLost" not in vis, (
@@ -168,28 +186,29 @@ def test_both_filter_dropdowns_count_the_same_pool_the_board_draws():
         assert "ALL.forEach" not in body, "%s is back on the unfiltered list" % fn
 
 
-def test_the_lost_count_is_rendered_and_links_to_the_proposals_database():
-    """The count IS the affordance: it is the only thing on this page that says these proposals
-    exist. A count with nowhere to go would be Hanz's "keep a count somewhere" only half done."""
-    body = _block("portal.js", "syncLostLink")
-    assert "lostCount()" in body, "the link does not read the count"
-    assert "closed lost" in body, "the link never says what the number is"
-    assert re.search(r"hidden\s*=\s*n\s*===\s*0", body), (
-        "a board with nothing lost still shows a '0 closed lost' link")
-    assert re.search(
-        r'<a id="crm-lost"[^>]*href="/projects\.html"[^>]*hidden', PORTAL_HTML), (
-        "the count is not an anchor to the Proposals Database, so the lost proposals are "
-        "unreachable from here")
+def test_the_lost_count_is_its_own_tab_and_the_dead_end_link_is_gone():
+    """The tab replaced the link. Both halves are asserted: leaving the link beside the tab would
+    give two routes to the same rows, one of which lands on a page that cannot filter to them."""
+    assert 'data-tab="lost"' in PORTAL_HTML, "there is no Lost tab in the markup"
+    assert "lostCount()" in _block("portal.js", "syncTabs"), (
+        "the Lost tab never reads how many there are")
+    code = _code("portal.js")
+    for gone in ("syncLostLink", "crm-lost", "tw-lostlink"):
+        assert gone not in code and gone not in PORTAL_HTML, (
+            "%s survived, so the dead-end link is still on the page beside the tab that replaced "
+            "it" % gone)
 
 
-def test_the_lost_link_says_the_number_and_not_only_the_words():
-    """Mutation this kills: `a.textContent = "closed lost →"`, dropping the count out of the
-    text. The link still appears, still hides at zero and still calls lostCount() to decide
-    that, so the test above stays green while the one thing Hanz actually asked to keep,
-    "Gone from the board, but keep a count somewhere", is nowhere on the page."""
-    body = _block("portal.js", "syncLostLink")
-    assert re.search(r"textContent\s*=\s*n\s*\+", body), (
-        "the link reads the count but never prints it")
+def test_every_tab_prints_the_number_it_holds():
+    """Mutation this kills: dropping the count out of the pill, or counting one tab's rows into
+    another's badge. The badge is the only thing saying whether a tab is worth opening."""
+    body = _block("portal.js", "syncTabs")
+    assert "lost: lostCount()" in body, "the Lost badge is not the count of lost proposals"
+    assert re.search(r"c\.textContent = n\[b\.dataset\.tab\]", body), (
+        "the badge is not filled from the per-tab counts, so a pill can advertise a wrong number")
+    # The live counts come off `live` (lost already removed), so Active + Test + Lost is every row.
+    assert "ALL.filter((p) => !isLost(p))" in body, (
+        "the Active/Test counts include lost rows, so the three tabs sum to more than exist")
 
 
 def test_the_count_is_out_of_what_THIS_TAB_holds():
@@ -210,16 +229,17 @@ def test_the_lost_count_is_in_the_board_signature():
         "the lost count is not in BOARD_SIG, so marking a proposal lost would not update it")
 
 
-def test_the_lost_link_is_painted_under_the_signature_guard():
-    """Same reason populateEstimators/populateMonths sit below it: work that happens before the
-    compare-and-return runs on every 25s poll whether or not anything moved."""
+def test_the_tabs_are_painted_under_the_signature_guard():
+    """Same reason populateEstimators/populateMonths sit below it: work done before the
+    compare-and-return runs on every 25s poll whether or not anything moved. syncTabs paints the
+    three counts, which is the job the retired lost link used to have."""
     body = _block("portal.js", "renderBoard")
-    assert body.index("BOARD_SIG) return") < body.index("syncLostLink()")
+    assert body.index("BOARD_SIG) return") < body.index("syncTabs()")
 
 
-def test_a_lost_proposal_opened_by_link_can_still_be_reactivated():
-    """It is reachable by URL from the Proposals Database and from an old notification, so the
-    drawer still has to handle one. Reactivate is the only way back onto the board."""
+def test_a_lost_proposal_can_still_be_reactivated():
+    """Reachable from the Lost tab now, as well as by URL from an old notification. Reactivate is
+    the only way back onto a live tab, so the drawer has to keep handling a lost row."""
     panel = _block("portal.js", "followupPanelHtml")
     assert 'id="fu-reopen"' in panel, "the Reactivate button is gone"
     assert "isLost(p)" in panel, "the panel no longer knows a lost proposal when it sees one"
@@ -231,13 +251,19 @@ def test_a_lost_proposal_opened_by_link_can_still_be_reactivated():
 
 # ── Change B: the Active / Test tabs ─────────────────────────────────────────
 def test_the_tabs_exist_and_active_is_the_default():
-    """Test is somewhere you go on purpose. Defaulting to Test, or to "all" (which would put
-    scratch work back among customer bids), is the failure this pins."""
+    """Test and Lost are both somewhere you go on purpose. Defaulting to either, or to "all"
+    (which would put scratch work back among customer bids), is the failure this pins."""
     code = _code("portal.js")
-    assert re.search(r'let TAB = ss\(TAB_KEY, ""\) === "test" \? "test" : "active"', code), (
-        "TAB does not default to active for a session that has never chosen")
-    assert 'data-tab="active"' in PORTAL_HTML and 'data-tab="test"' in PORTAL_HTML, (
-        "the two tabs are not in the markup")
+    assert re.search(r'let TAB = TABS\.includes\(ss\(TAB_KEY, ""\)\)', code), (
+        "TAB is no longer validated against the known tabs")
+    assert re.search(r': "active"', code), (
+        "TAB does not fall back to active for a session that has never chosen")
+    # An UNKNOWN stored value has to fall back too: a stale session holding a tab that no longer
+    # exists would otherwise paint no pressed pill over an empty board.
+    assert 'const TABS = ["active", "test", "lost"]' in code, (
+        "the tab list is not one named set, so the stored value and the markup can drift")
+    for t in ("active", "test", "lost"):
+        assert 'data-tab="%s"' % t in PORTAL_HTML, "the %s tab is not in the markup" % t
     assert re.search(r'data-tab="active" aria-pressed="true"', PORTAL_HTML), (
         "Active is not the tab that reads as selected before the first paint")
 

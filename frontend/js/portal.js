@@ -47,10 +47,15 @@
   // somewhere you go on purpose. Same default, and the same `is_test` flag, as the
   // Proposals Database.
   //
-  // There is no SHOW_LOST here any more. It used to add a Lost column and a "Show closed
-  // lost (N)" toggle; Hanz, 2026-08-10: "if its lost remove it from the Customer CRM. To
-  // remove clutter." The count now sits on the tab row as a link out. See syncLostLink.
-  let TAB = ss(TAB_KEY, "") === "test" ? "test" : "active";
+  // There is no SHOW_LOST toggle. Lost proposals used to be a COLUMN on the live board with a
+  // "Show closed lost (N)" switch; Hanz, 2026-08-10: "if its lost remove it from the Customer
+  // CRM. To remove clutter." They came off the board, leaving only a count.
+  //
+  // They now have a TAB. Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where
+  // the lost projects will be held." Same intent as before — a dead deal must not take up room
+  // on a board of live work — with somewhere to actually look at them.
+  const TABS = ["active", "test", "lost"];
+  let TAB = TABS.includes(ss(TAB_KEY, "")) ? ss(TAB_KEY, "") : "active";
   let VIEW = ss(VIEW_KEY, "") === "table" ? "table" : "board";
 
   function api(path, opts) {
@@ -73,7 +78,10 @@
     if (!q) return list;
     const tokens = q.split(/\s+/);
     return list.filter((p) => {
-      const hay = [p.project_name, p.customer_email, p.customer_name, p.estimator_email]
+      // Recipients included: a proposal sent to two people has to be findable by EITHER
+      // address, or searching for the person who actually replied turns up nothing.
+      const hay = [p.project_name, p.customer_email, p.customer_name, p.estimator_email,
+                   (p.recipients || []).join(" ")]
         .filter(Boolean).join(" ").toLowerCase();
       return tokens.every((t) => hay.includes(t));
     });
@@ -87,22 +95,27 @@
 
   const applySort = (list) => C.sort(list, SORTFIELD, SORTDIR);
 
-  /** The rows this board is ABOUT, before any filter the toolbar owns. Two exclusions,
-   *  and neither of them is something the rep can switch back on:
+  /** The rows this board is ABOUT, before any filter the toolbar owns. Which tab you are on is
+   *  the whole of it, and the three pools PARTITION `ALL` — every proposal is in exactly one, so
+   *  the tab counts add up to the total and nothing can fall through the gaps.
    *
-   *  CLOSED LOST IS GONE. Hanz, 2026-08-10: "allow for the projects to be lost even its been
-   *  approved and if its lost remove it from the Customer CRM. To remove clutter." No Lost
-   *  column, no toggle. The tab row carries the count and links out to the Proposals Database,
-   *  so a dead deal is still findable without occupying a board of live work.
+   *  CLOSED LOST IS ITS OWN TAB, and still absent from the live ones. Hanz, 2026-08-10: "allow
+   *  for the projects to be lost even its been approved and if its lost remove it from the
+   *  Customer CRM. To remove clutter", then 2026-08-12: "create another tab for 'Lost'".
    *
    *  TEST PROJECTS ARE THEIR OWN TAB, split by C.isTest, the same predicate on the same
    *  `is_test` flag, that the Proposals Database uses. Anything that page shows under Test has
    *  to show up under Test here too.
    *
+   *  A lost TEST project appears under Lost, not Test — Lost is every dead deal, or its count
+   *  would be a lie and the row would be reachable from nowhere (Test excludes lost, and always
+   *  did). Those cards carry a Test chip so they can't be read as real work.
+   *
    *  Also what populateEstimators/populateMonths count, so an option can never offer a filter
    *  that yields nothing: a month whose only proposals were lost used to sit in that dropdown
    *  and blank the board when picked. */
   function boardPool() {
+    if (TAB === "lost") return ALL.filter(isLost);
     return ALL.filter((p) => !isLost(p) && isTest(p) === (TAB === "test"));
   }
 
@@ -120,6 +133,9 @@
       const why = lostReason(p);
       out.push(`<span class="chip chip-lost" title="${esc(why ? "Reason: " + why : "No reason recorded")}">Closed lost${
         why ? " · " + esc(why) : ""}</span>`);
+      // The Lost tab holds EVERY dead deal, test ones included (see boardPool), so those cards
+      // have to say so. Only here: on the live tabs the tab itself is the label.
+      if (isTest(p)) out.push('<span class="chip chip-test" title="A test or demo project — filed under Test before it was closed">Test</span>');
     } else {
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
@@ -171,18 +187,47 @@
     const clear = $("crm-clear");
     if (clear) clear.hidden = !(EST || MONTH || SORTFIELD !== "activity" || SORTDIR !== "desc");
     syncTabs();
-    syncLostLink();
     const board = $("board");
     board.classList.toggle("as-table", VIEW === "table");
     board.innerHTML = VIEW === "table" ? tableHtml(items) : kanbanHtml(items);
   }
 
+  /** The Lost tab's columns: the reasons, not the stages.
+   *
+   *  Every card on that tab has the same stage, so grouping by stage would give one tall column
+   *  and answer nothing. Grouped by reason the board answers "why do we lose bids?" — which is
+   *  the reason the close dialog offers a fixed six instead of a free-text box.
+   *
+   *  Built from C.LOST_REASON so the columns are exactly the answers the dialog can produce, plus
+   *  the one it cannot: proposals closed before a reason was ever asked for. */
+  const LOST_COLS = Object.keys(C.LOST_REASON).map((k) => C.LOST_REASON[k]).concat(["Not recorded"]);
+
+  function groupByReason(items) {
+    const by = {};
+    LOST_COLS.forEach((c) => { by[c] = []; });
+    items.forEach((p) => {
+      // An unrecognised stored reason lands in "Not recorded" rather than vanishing — the same
+      // bias C.group takes with an unknown stage, for the same reason: a vocabulary that grows
+      // must not silently drop cards off the board.
+      (by[lostReason(p)] || by["Not recorded"]).push(p);
+    });
+    return by;
+  }
+
   function kanbanHtml(items) {
-    // STAGES only. There is no Closed lost column: those proposals never reach here (see
-    // boardPool), and C.group drops any row whose stage has no column, so one arriving by
-    // some other route is left out rather than throwing.
-    const byStage = C.group(items, STAGES);
-    return STAGES.map((s) => {
+    // Two shapes: the pipeline (STAGES) on the live tabs, the reasons on Lost.
+    //
+    // There is no Closed lost column on the live tabs — those proposals are not in the pool (see
+    // boardPool), and C.group drops any row whose stage has no column, so one arriving by some
+    // other route is left out rather than throwing.
+    const lost = TAB === "lost";
+    if (lost && !items.length) {
+      return '<div class="empty">Nothing closed lost' + (
+        boardPool().length ? " matches those filters." : " — every proposal is still live.") + "</div>";
+    }
+    const cols = lost ? LOST_COLS : STAGES;
+    const byStage = lost ? groupByReason(items) : C.group(items, STAGES);
+    return cols.map((s) => {
       const cards = byStage[s].map((p) => {
         const act = lastActivity(p);
         // Who owns it and when it last moved, on one line each — the column is only
@@ -204,16 +249,61 @@
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           <div class="meta">${esc(p.customer_email || "")}</div>
+          ${recipientLine(p)}
           <div class="meta who"><span class="k">Estimator:</span> ${who}</div>
           ${act ? `<div class="meta act"><span class="k">${esc(act.label)}:</span> ${esc(TW.fmtBizDate(act.ts))}</div>` : ""}
           ${chips ? `<div class="chips">${chips}</div>` : ""}
           ${cardTotal(p) != null ? `<div class="val">${money(cardTotal(p))}</div>` : ""}
+          ${cardActions(p)}
         </div>`;
       }).join("") || '<div class="empty">—</div>';
       // Money is in and unconfirmed → flag the column, it's the one needing a human.
       const attn = s === STAGE_SUBMITTED && byStage[s].length ? " col-attn" : "";
-      return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span></h2>${cards}</div>`;
+      // The board can now START a bid, not only track one. Hanz, 2026-08-12: with the Proposals
+      // Database moved out of the way, "when we click a container we are able to create a
+      // proposal under that not sent category". Only this column gets the button, because it is
+      // the only one whose membership rule a new project can satisfy — everything to the right
+      // requires the customer to have been sent something.
+      // `!lost` is belt as well as braces: no reason label equals STAGE_CREATED today, and a
+      // "+ New" button on a column of dead deals would file a brand-new bid as closed lost.
+      const add = !lost && s === STAGE_CREATED
+        ? '<button type="button" class="col-add" data-new-proposal title="Start a new proposal — opens the intake form">+ New</button>'
+        : "";
+      return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span>${add}</h2>${cards}</div>`;
     }).join("");
+  }
+
+  /** Files and Info Sheet, on every card.
+   *
+   *  Hanz, 2026-08-12: "There should be a button for each container for the files and info sheet
+   *  as well." On EVERY card rather than only the unsent ones: this board is where the sales
+   *  meeting happens, so reaching a won job's Info Sheet hand-off should not mean going to
+   *  another page to find the same project.
+   *
+   *  The URLs are the ones the Proposals Database already uses (projects.js), deliberately
+   *  character-for-character — two spellings of the same route is how one of them rots. That a
+   *  synthesised not-sent row works here at all is because its `proposal_id` IS the draft id.
+   */
+  function cardActions(p) {
+    const id = encodeURIComponent(p.proposal_id);
+    return `<div class="deal-acts">
+      <button type="button" class="deal-act" data-files="${id}" title="Estimate and proposal files">Files</button>
+      <button type="button" class="deal-act" data-info="${id}" title="Project Info Sheet — the hand-off to accounting and ops">Info</button>
+    </div>`;
+  }
+
+  /** "2 recipients · 1 viewed" — only when there are two or more.
+   *
+   *  The board already dates a card by last_viewed_at, which answers "has anybody looked". This
+   *  answers "have they BOTH looked", which is the one that decides whether there is somebody
+   *  left to chase. Silent for a single contact, where the two lines would say the same thing.
+   */
+  function recipientLine(p) {
+    const n = (p.recipients || []).length;
+    if (n < 2) return "";
+    const v = (p.viewed_by || []).length;
+    return `<div class="meta rc-line" title="${esc((p.recipients || []).join(", "))}">${
+      n} recipients · ${v} viewed</div>`;
   }
 
   // ── the same pipeline as one table ─────────────────────────────────────────
@@ -274,9 +364,36 @@
       renderBoard();
       return;
     }
+    // These three run BEFORE the row branch below and each returns, because every one of them
+    // sits inside a .deal — without the early return a click would both navigate and open the
+    // drawer, and the drawer would win the paint.
+    const files = e.target.closest("[data-files]");
+    if (files) { window.location.assign("/done.html?d=" + files.dataset.files + "&files=1"); return; }
+    const info = e.target.closest("[data-info]");
+    if (info) { window.location.assign("/info-sheet.html?d=" + info.dataset.info); return; }
+    if (e.target.closest("[data-new-proposal]")) { startNewProposal(); return; }
+
     const row = e.target.closest(".deal, .trow");
     if (row && row.dataset.id) openDetail(row.dataset.id);
   });
+
+  /** Start a bid from this board. The same three storage keys and the same destination as
+   *  "+ New project" on the Proposals Database (projects.js) — a second way of minting a draft
+   *  would be a second set of bugs, and the intake form is reached by URL either way.
+   *
+   *  The test flag follows the TAB you are looking at, which is why this is safe to offer here:
+   *  the board is always on Active or Test, never on an "all" view, so a new project can never
+   *  land un-filed. Same rule Hanz asked for on the Database ("use the Test category so it
+   *  wouldn't mix up"). */
+  function startNewProposal() {
+    try {
+      localStorage.removeItem("treadwell.proposal_tool.state");
+      localStorage.removeItem("treadwell.proposal_tool.draft_id");
+      sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
+    } catch {/* private mode — the intake form still works, it just won't resume */}
+    TW.setNewProjectTestIntent(TAB === "test");
+    window.location.assign("/?new=1");
+  }
   $("board").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const row = e.target.closest && e.target.closest(".trow");
@@ -563,7 +680,7 @@
   // state, ACTIVE_SEC says which tab is ON SCREEN. Only applySecPanel() reads
   // both and touches visibility — nothing else may.
   const SEC_TABS = {
-    proposal: ["dsec-customer", "dsec-approved", "dsec-notify"],
+    proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -590,6 +707,9 @@
   // whole innerHTML including the chat thread, so an unchanged repaint tears down and rebuilds
   // every message for nothing.
   let DRAWER_SIG = "";
+  // Recipients of the proposal currently open. Module-scoped because msgHtml is called per
+  // message and threading it through every call site would touch a dozen signatures.
+  let DETAIL_RECIPIENTS = [];
   // The last payload per project, so a refresh can render from memory instead of blanking the
   // drawer while it waits on the network. Bounded by projects opened in one session.
   const DETAIL_CACHE = {};
@@ -863,6 +983,10 @@
       add("Method", x.method);
     }
     add("Bank", x.bank_name);
+    // WHICH contact paid, on a proposal with two. Full address here because this is the staff
+    // drawer and somebody may need to phone them; the customer's own banner gets a first name.
+    // Absent on rows written before submitted_by existed, and add() skips empty values.
+    if (x.submitted_by) add("Submitted by", nameOf(x.submitted_by), { title: x.submitted_by });
     add("Customer note", x.note);
 
     // Staff-entered wire/trace details — same fields as before, just grouped.
@@ -1050,6 +1174,41 @@
     return m.author_kind === "staff" ? "staff" : "customer";
   };
 
+  /** Who the proposal went to, and what each of them has actually done.
+   *
+   *  Hanz, 2026-08-11: "It should then highlight in the CRM who viewed it as well and who
+   *  replied." The peer notifications tell the other CONTACT; this tells the estimator, which is
+   *  what turns "somebody opened it" into "chase the one who hasn't".
+   *
+   *  Returns "" for one recipient or none: the card is only meaningful when there is somebody to
+   *  distinguish, and setSecEligible gates the tab on the same condition.
+   *
+   *  NOT nt-chip. That class is the notification roster's, where green means "receives this
+   *  project's emails" — reusing it here would say something untrue about every contact.
+   */
+  function recipientsHtml(rows) {
+    const list = rows || [];
+    if (list.length < 2) return "";
+    const chips = list.map((r) => {
+      const badges = [
+        r.viewed_at ? `<span class="rc-b on" title="${esc(TW.fmtBizDateTime(r.last_viewed_at || r.viewed_at))}${
+          r.view_count > 1 ? ` · ${r.view_count} opens` : ""}">Viewed</span>`
+                    : '<span class="rc-b">Not viewed</span>',
+        r.replied ? '<span class="rc-b on">Replied</span>' : "",
+        r.paid ? '<span class="rc-b on">Paid</span>' : "",
+        r.approved ? '<span class="rc-b on">Approved</span>' : "",
+      ].filter(Boolean).join("");
+      // Full address in the title, not on screen: staff may need it to phone somebody, and the
+      // chip has to stay readable with four badges on it.
+      return `<div class="rc-chip" title="${esc(r.email)}">${avatar(r.email)}<span class="rc-n">${
+        esc(r.name || r.email)}</span>${badges}</div>`;
+    }).join("");
+    return `<div class="sec" id="dsec-recipients">
+      <div class="lbl">Recipients (${list.length})</div>
+      <div class="rc-list">${chips}</div>
+    </div>`;
+  }
+
   function msgHtml(m) {
     const t = when(m.created_at);
     // These three render as CARDS, matching the customer portal exactly, so staff
@@ -1091,12 +1250,18 @@
     }
     const staff = m.author_kind === "staff";
     const viaEmail = m.meta && m.meta.source === "email";
+    // WHICH contact said it — but only when there is more than one, because with a single
+    // contact the name adds nothing and the label was removed for exactly that reason. This is
+    // the one thing the side of the bubble cannot tell you on a multi-recipient proposal.
+    const many = (DETAIL_RECIPIENTS || []).length > 1;
+    const who = !staff && many && m.author_email ? nameOf(m.author_email) : "";
     // Hanz, 2026-08-11: "can we simplify it to just the reply contents and the date? just
     // specify if its from email". The "TREADWELL" / "CUSTOMER" line said nothing the side of
     // the thread does not already say — red and right-aligned is us, grey and left is them —
     // and it cost a line of chrome on every bubble. Where the message CAME FROM is the part
     // that isn't inferable, so that is what stays, next to the date.
     return `<div class="msg ${staff ? "staff" : "customer"}">
+      ${who ? `<div class="who" title="${esc(m.author_email)}">${esc(who)}</div>` : ""}
       <div class="mbody">${esc(m.body)}</div>
       <div class="when">${t}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
     </div>`;
@@ -1178,6 +1343,19 @@
       "This proposal was sent before automatic follow-ups existed. Switch them on to start the cadence from today." };
     if (!f.enabled) return { val: "Off", lead:
       "Automatic follow-ups are off for this project. Nothing is sent to the customer unless you send it." };
+    // Approved with the money still out. Said before the general case because the general case
+    // promises the cadence STOPS at approval, which stopped being true on 2026-08-12 — Hanz:
+    // "followups should be automated until a deposit has been received." An estimator reading
+    // the old sentence on a won job would think nothing more was going out, and would either
+    // duplicate the chase by hand or leave it entirely.
+    if (String(p.proposal_status || "") === "approved" && !C.depositSatisfied(p)) {
+      const told = String(p.deposit_status || "") === "submitted";
+      return { val: "On", lead: told
+        ? "Approved, and they've told us the deposit is on its way — so they aren't being emailed "
+          + "about it any more. You keep getting reminded until it actually lands."
+        : "Approved — following up automatically until the deposit is in. Their reminders stop as "
+          + "soon as they tell us it's on the way; yours continue until it lands." };
+    }
     return { val: "On", lead:
       "Following up automatically until the customer approves, replies, or tells us their timeline changed." };
   }
@@ -1240,9 +1418,46 @@
                <button class="btn btn-s" id="fu-lost">Mark closed lost</button>`}
         </div>
 
+        ${followupContactsHtml(data.recipient_activity)}
+
         <div class="lbl fu-lbl">History</div>
         <div class="fu-log">${log}</div>
       </div>`;
+  }
+
+  /** Who the automated follow-ups go to, and the controls to change it.
+   *
+   *  Hanz, 2026-08-12: "on this project container on the follow ups we must have the ability to
+   *  add or remove COntacts who receive the follow ups."
+   *
+   *  UN-TICKING IS NOT REMOVING THE CONTACT, and the copy says so, because the two are one click
+   *  apart and only one of them is reversible without consequence: the contact keeps the
+   *  proposal, the invoice and every reply, and only the chasing stops. Revoking access is a
+   *  different act and is not offered here.
+   *
+   *  Rendered even for a single contact, unlike the Recipients card on the Proposal tab — "is
+   *  this person being chased" is worth answering for one contact, whereas "which of them
+   *  replied" is not.
+   */
+  function followupContactsHtml(rows) {
+    const list = rows || [];
+    if (!list.length) return "";
+    const chips = list.map((r) => `
+      <label class="fu-c" title="${esc(r.email)}">
+        <input type="checkbox" data-fu-contact="${esc(r.email)}"${r.followups ? " checked" : ""}>
+        <span>${esc(r.name || r.email)}</span>
+      </label>`).join("");
+    return `
+      <div class="lbl fu-lbl">Automated follow-ups go to</div>
+      <p class="note">Un-tick somebody and they still get the proposal, the invoice and every
+        reply — they just stop being chased.</p>
+      <div class="fu-clist">${chips}</div>
+      <div class="fu-line">
+        <input id="fu-add-contact" class="tw-input" type="email" autocomplete="off"
+               placeholder="Add a contact — name@company.com">
+        <button class="btn btn-s" id="fu-add-contact-btn">Add</button>
+      </div>
+      <p class="note" id="fu-c-alert"></p>`;
   }
 
   /** Wire the follow-up panel. Called from renderDetail, so every handler is bound
@@ -1250,6 +1465,40 @@
   function wireFollowup(pid, p, act) {
     const alert = (msg) => { const el = $("fu-alert"); if (el) el.textContent = msg || ""; };
     const path = (suffix) => "/api/portal/proposal/" + encodeURIComponent(pid) + suffix;
+
+    // ── who gets chased ───────────────────────────────────────────────────
+    // Delegated on the list rather than per checkbox: renderDetail rebuilds this panel on every
+    // 12s poll and after every action, so per-element listeners would be re-bound continually.
+    const cAlert = (m) => { const el = $("fu-c-alert"); if (el) el.textContent = m || ""; };
+    const clist = document.querySelector(".fu-clist");
+    if (clist) clist.addEventListener("change", (e) => {
+      const box = e.target.closest("[data-fu-contact]");
+      if (!box) return;
+      cAlert("");
+      act(path("/followup-recipient"), box,
+          { body: JSON.stringify({ email: box.dataset.fuContact, enabled: box.checked }) });
+    });
+
+    const addC = $("fu-add-contact-btn");
+    if (addC) addC.addEventListener("click", (e) => {
+      const input = $("fu-add-contact");
+      const email = (input.value || "").trim().toLowerCase();
+      // Shape-checked here so an obvious typo does not cost a round trip; the portal re-validates,
+      // because this is the field that decides who gets sent a link to the proposal.
+      if (!email || !/^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$/.test(email)) {
+        cAlert("That doesn't look like an email address.");
+        input.focus();
+        return;
+      }
+      cAlert("");
+      // `add: true` also sends them the proposal link — they cannot reach the portal without one.
+      act(path("/followup-recipient"), e.target,
+          { body: JSON.stringify({ email, add: true, enabled: true }) });
+    });
+    const addCIn = $("fu-add-contact");
+    if (addCIn) addCIn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addC.click(); }
+    });
 
     const toggle = $("fu-toggle");
     if (toggle) toggle.addEventListener("click", (e) => {
@@ -1411,6 +1660,11 @@
     if (sig === DRAWER_SIG) return;
     DRAWER_SIG = sig;
 
+    // Set BEFORE the markup below is built: msgHtml reads it to decide whether to name the
+    // author, and a message rendered before it is populated would go unnamed. `data` is already
+    // in the signature above, so a recipient being added repaints on its own.
+    DETAIL_RECIPIENTS = (data && data.recipients) || [];
+
     // Where the chat was, before the innerHTML below detaches it. Must happen here rather than
     // in the caller: renderDetail is the only place that destroys #thread, and every path
     // through it — poll, action, reply, chip toggle — needs the position kept.
@@ -1438,8 +1692,10 @@
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
         <div class="sec" id="dsec-customer"><div class="lbl">Customer</div>${esc(p.customer_name || "")} &lt;${esc(p.customer_email)}&gt;<br>
           <a class="link" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a></div>
+        ${recipientsHtml(data.recipient_activity)}
         ${a ? `<div class="sec" id="dsec-approved"><div class="lbl">Approved</div>${esc(a.name)}${a.title ? ", " + esc(a.title) : ""}
-          on ${esc(a.date || "")} — <strong>${esc(approvedOpts || "")}</strong> at <strong>${money(a.total)}</strong></div>` : ""}
+          on ${esc(a.date || "")} — <strong>${esc(approvedOpts || "")}</strong> at <strong>${money(a.total)}</strong>${
+            a.approver_email ? `<div class="note" style="margin-top:2px">signed in as ${esc(nameOf(a.approver_email))} &lt;${esc(a.approver_email)}&gt;</div>` : ""}</div>` : ""}
 
         <div class="sec" id="dsec-notify">
           <div class="lbl">Notifications for this project</div>
@@ -1493,6 +1749,11 @@
     // Which cards APPLY. Every id in SEC_TABS must appear here or it can never
     // render — the portal shipped two bugs from exactly this omission.
     setSecEligible("dsec-customer", true);
+    // Only when there is somebody to distinguish. One contact needs no per-contact card, and an
+    // eligible-but-empty card is how the drawer grows tabs that lead nowhere. Registered in
+    // SEC_TABS above AND here: a card in one but not the other either never renders or renders
+    // in a tab that cannot be reached, and both have gone wrong in this file before.
+    setSecEligible("dsec-recipients", ((data.recipient_activity || []).length > 1));
     setSecEligible("dsec-approved", !!a);
     setSecEligible("dsec-notify", true);
     setSecEligible("dsec-deposit", true);
@@ -1610,36 +1871,20 @@
 
   function lostCount() { return ALL.filter(isLost).length; }
 
-  /** How many proposals the customer closed lost, and the way to them.
+  /** The Active / Test / Lost switch. The counts come off the same predicates boardPool filters
+   *  with, so a tab can never advertise a number it then refuses to show — and because the three
+   *  pools partition `ALL`, the three counts add up to every proposal there is.
    *
-   *  They are not on this board at all any more (see boardPool), so this count is the only
-   *  thing here that says they exist, which is exactly what Hanz asked for when he chose it
-   *  over a Lost column: "Gone from the board, but keep a count somewhere."
-   *
-   *  The link is PLAIN, and that is a real limitation rather than an oversight. /projects.html
-   *  reads no filter out of the URL: its tabs are Active / Inactive / All / Test, held in
-   *  sessionStorage, and it has no idea what a lost proposal is: `closed_lost` lives on the
-   *  portal row, while that page lists our own drafts. So this lands you on the project list,
-   *  not on a pre-filtered view of the dead ones. Passing ?filter=lost would be a parameter
-   *  that page silently ignores. */
-  function syncLostLink() {
-    const a = $("crm-lost");
-    if (!a) return;
-    const n = lostCount();
-    a.hidden = n === 0;                       // nothing lost yet → no link at all
-    a.textContent = n + " closed lost →";
-    a.title = n + " proposal" + (n === 1 ? "" : "s") + " the customer isn't moving forward with."
-      + " They're off this board. Open the Proposals Database to find them.";
-  }
-
-  /** The Active / Test switch. The counts come off the same predicate the board filters with,
-   *  so a tab can never advertise a number it then refuses to show. Lost proposals are outside
-   *  both tabs, so they are subtracted before either is counted. */
+   *  This replaced a "N closed lost →" link out to /projects.html. That link could never do what
+   *  it implied: that page reads no filter from the URL, its tabs are Active / Inactive / All /
+   *  Test, and it lists our own drafts rather than portal rows — it has no notion of closed_lost
+   *  at all. So it landed you on an unfiltered list to hunt through. The tab shows them. */
   function syncTabs() {
     const wrap = $("crm-tabs");
     if (!wrap) return;
     const live = ALL.filter((p) => !isLost(p));
-    const n = { test: live.filter(isTest).length, active: live.filter((p) => !isTest(p)).length };
+    const n = { test: live.filter(isTest).length, active: live.filter((p) => !isTest(p)).length,
+                lost: lostCount() };
     wrap.querySelectorAll("[data-tab]").forEach((b) => {
       const on = b.dataset.tab === TAB;
       b.setAttribute("aria-pressed", on ? "true" : "false");
@@ -1690,13 +1935,16 @@
         ssSet(SORTDIR_KEY, SORTDIR); syncDir(); renderBoard();
       });
     }
-    // Delegated, so the two buttons need no per-element binding, and TAB is in BOARD_SIG,
-    // so renderBoard is guaranteed to repaint (including the pressed state, via syncTabs).
+    // Delegated, so the buttons need no per-element binding, and TAB is in BOARD_SIG, so
+    // renderBoard is guaranteed to repaint (including the pressed state, via syncTabs).
     if (tabs) tabs.addEventListener("click", (e) => {
       const b = e.target.closest("[data-tab]");
       if (!b || b.dataset.tab === TAB) return;
-      TAB = b.dataset.tab === "test" ? "test" : "active";
-      ssSet(TAB_KEY, TAB === "test" ? "test" : "");
+      // Against the known set, not `=== "test" ? "test" : "active"`. That coercion was correct
+      // while there were two tabs and silently swallows a third: clicking Lost would have stored
+      // Active, painted the Active board, and looked like a dead button.
+      TAB = TABS.includes(b.dataset.tab) ? b.dataset.tab : "active";
+      ssSet(TAB_KEY, TAB);
       renderBoard();
     });
     if (view) view.addEventListener("click", () => {
