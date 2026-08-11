@@ -13,7 +13,15 @@
  */
 (function () {
   const LOGIN_PAGE = "/login.html";
-  const HOME_PAGE = "/projects.html";
+  // Where signing in lands you. Hanz, 2026-08-12: "tHE DEFAULT page when I go in to
+  // propsals.wetreadwel should be the Active projects CRM not he databgase."
+  //
+  // It was /projects.html, which made sense while the Database was the only place to mint a
+  // draft. That stopped being true when this board grew a + New button, and the page the weekly
+  // sales meeting runs on should be the one that opens. Same reasoning as moving it to the top of
+  // the sidebar, and the bare-domain redirect in main.py:_root moved with it — a landing page
+  // decided in two places is a landing page that disagrees with itself.
+  const HOME_PAGE = "/portal.html";
   const path = location.pathname.toLowerCase();
   const onLogin = path === "/login.html" || path.endsWith("/login.html");
 
