@@ -15,7 +15,17 @@
   // and is exercised under node. See the header there for why each answer is what
   // it is. This file owns rendering and nothing else about the board's meaning.
   const C = window.TWCrm;
-  const { STAGES, STAGE_SUBMITTED, NATURAL_DIR, SORT_FIELDS } = C;
+  // STAGE_CREATED is in this list because it was NOT, and that took the whole board down on
+  // production on 2026-08-12. `kanbanHtml` gained `s === STAGE_CREATED` to decide which column
+  // carries the + New button; crm-core exports the constant, portal.js never imported it, and an
+  // unresolved identifier in a `.map()` callback throws ReferenceError on the FIRST row. The
+  // symptom was the board sitting on "Loading..." for ever with the tab counts painted correctly
+  // above it — because the counts are written before `board.innerHTML`, and the throw happened
+  // during it.
+  //
+  // Nothing caught it: every test asserted the source TEXT ("s === STAGE_CREATED" appears in the
+  // gate) and none of them ever executed the renderer. See test_board_renders.py, which does.
+  const { STAGES, STAGE_SUBMITTED, STAGE_CREATED, NATURAL_DIR, SORT_FIELDS } = C;
   const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
           isLost, isTest, lostReason, followupOff, nameOf, cardTotal } = C;
   const fu = C.followup;
