@@ -124,7 +124,9 @@ def test_the_signature_is_assigned_not_just_compared(page, fn, var):
 # the lost COUNT joined the list because it is painted outside the board's innerHTML — it is a tab
 # badge. See test_active_projects_board.py, which owns both of those.
 @pytest.mark.parametrize("page,fn,names", [
-    ("portal.js", "renderBoard", ["ALL", "EST", "MONTH", "SORTFIELD", "SORTDIR", "TAB", "VIEW"]),
+    # PERIOD, not MONTH: portal.js's filter grew weeks alongside months on 2026-08-12 and the
+    # variable was renamed with it. projects.js below still has a month-only filter.
+    ("portal.js", "renderBoard", ["ALL", "EST", "PERIOD", "SORTFIELD", "SORTDIR", "TAB", "VIEW"]),
     ("followups.js", "paint", ["ALL", "TAB", "EST", "SORT", "DIR", "Q", "VIEW"]),
     ("projects.js", "paint", ["ALL_PROJECTS", "CURRENT_FILTER", "SEARCH", "MONTH",
                               "SORTFIELD", "SORTDIR", "VIEW"]),
@@ -150,11 +152,11 @@ def test_the_portal_board_signature_includes_the_search_box():
 
 
 def test_the_portal_guard_runs_before_the_filter_selects_are_rebuilt():
-    """populateEstimators/populateMonths rebuild <select> options. Rebuilding a <select> closes it
+    """populateEstimators/populatePeriods rebuild <select> options. Rebuilding a <select> closes it
     under the cursor of anyone who had it open, so an unchanged poll must not reach them."""
     body = _block("portal.js", "renderBoard")
     guard = body.index("BOARD_SIG) return")
-    for fn in ("populateEstimators()", "populateMonths()"):
+    for fn in ("populateEstimators()", "populatePeriods()"):
         assert guard < body.index(fn), "%s runs before the signature guard" % fn
 
 
