@@ -166,8 +166,13 @@
       // rather than once on the container: paintTabs rebuilds this strip on every tab switch, so
       // anything hung on the chips themselves is gone by the second email you edit. The listeners
       // avoid the same trap by being delegated on #tokens, which survives.
+      // The tooltip carries the HOW as well as the what. The sentence above the editor used to
+      // say "Drag a placeholder into the message, or click one to drop it where the cursor is";
+      // Hanz deleted it on 2026-08-12, and draggable="true" is invisible — so without this the
+      // drag-and-drop is a feature nobody would find. Costs no page copy.
       return '<button type="button" class="tok" draggable="true" data-tok="' + esc(t) +
-             '" title="' + esc(why) + '">' + esc(t) + "</button>";
+             '" title="' + esc(why) + ' — drag it in, or click to insert at the cursor' +
+             '">' + esc(t) + "</button>";
     }).join("");
   }
 
