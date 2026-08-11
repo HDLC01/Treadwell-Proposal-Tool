@@ -44,13 +44,17 @@
   // Module-level and mirrored to sessionStorage: renderBoard re-runs after every
   // staff action (act() calls load()), and the controls live in static HTML, so
   // a scan survives both a re-render and a return visit.
-  const EST_KEY = "tw_crm_est", MONTH_KEY = "tw_crm_month";
+  const EST_KEY = "tw_crm_est";
+  // The STORAGE key keeps its old name deliberately: a rep with a month selected when this
+  // shipped should still have it selected after the deploy. Only the variable was renamed,
+  // because it now holds either a month ("2026-08") or a week ("w:2026-08-10").
+  const PERIOD_KEY = "tw_crm_month";
   const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
   const TAB_KEY = "tw_crm_tab", VIEW_KEY = "tw_crm_view";
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
   let EST = ss(EST_KEY, "");
-  let MONTH = ss(MONTH_KEY, "");
+  let PERIOD = ss(PERIOD_KEY, "");
   let SORTFIELD = SORT_FIELDS.includes(ss(SORTFIELD_KEY, "")) ? ss(SORTFIELD_KEY, "") : "activity";
   let SORTDIR = ss(SORTDIR_KEY, "") === "asc" ? "asc" : (ss(SORTDIR_KEY, "") === "desc" ? "desc" : NATURAL_DIR[SORTFIELD]);
   // Active by default: the working list is what a rep opens this page for, and Test is
@@ -99,9 +103,26 @@
   const applyEstimator = (list) => (EST
     ? list.filter((p) => estimatorOf(p).toLowerCase() === EST)
     : list);
-  const applyMonth = (list) => (MONTH
-    ? list.filter((p) => TW.bizYM(activityTs(p)) === MONTH)   // the month the card shows
-    : list);
+  /** Narrow to one period of activity — a month, or a week.
+   *
+   *  Hanz, 2026-08-12: "For the filter adad weeks also please". A month is the wrong grain for a
+   *  weekly sales meeting: on the 28th, "August" is every bid anybody has touched, and the question
+   *  in the room is what moved since Monday.
+   *
+   *  The two live in ONE control and one stored value, distinguished by a "w:" prefix. A separate
+   *  week dropdown would have let somebody pick a week in one and a different month in the other,
+   *  and then the board would show nothing with two filters both looking innocent.
+   *
+   *  The prefix also makes the change backwards-compatible: every value stored before today is a
+   *  bare "YYYY-MM", which still takes the month branch. */
+  const applyPeriod = (list) => {
+    if (!PERIOD) return list;
+    if (PERIOD.slice(0, 2) === "w:") {
+      const wk = PERIOD.slice(2);
+      return list.filter((p) => TW.bizWeekStart(activityTs(p)) === wk);
+    }
+    return list.filter((p) => TW.bizYM(activityTs(p)) === PERIOD);   // the month the card shows
+  };
 
   const applySort = (list) => C.sort(list, SORTFIELD, SORTDIR);
 
@@ -121,7 +142,7 @@
    *  would be a lie and the row would be reachable from nowhere (Test excludes lost, and always
    *  did). Those cards carry a Test chip so they can't be read as real work.
    *
-   *  Also what populateEstimators/populateMonths count, so an option can never offer a filter
+   *  Also what populateEstimators/populatePeriods count, so an option can never offer a filter
    *  that yields nothing: a month whose only proposals were lost used to sit in that dropdown
    *  and blank the board when picked. */
   function boardPool() {
@@ -132,7 +153,7 @@
   /** Everything the current filters allow, in the current order. Both views read
    *  this, so a filter can never mean two different things depending on the view. */
   function visible() {
-    return applySort(applyMonth(applySearch(applyEstimator(boardPool()))));
+    return applySort(applyPeriod(applySearch(applyEstimator(boardPool()))));
   }
 
   /** The state chips a card and a row both carry. Words, not colour alone: this page
@@ -162,7 +183,7 @@
   // interval in the app, so it blinked more than any other board here.
   //
   // Same guard as the Bid Pipeline (crm.js), the Lead Inbox (leads.js) and the Bid Calendar
-  // (calendar.js). It goes at the TOP, before populateEstimators/populateMonths: those rebuild
+  // (calendar.js). It goes at the TOP, before populateEstimators/populatePeriods: those rebuild
   // the filter <select> options, and rebuilding a <select> closes it under the cursor of anyone
   // who happened to have it open.
   let BOARD_SIG = "";
@@ -172,7 +193,7 @@
     // proposal moving stage leaves the count identical, and the filters have to keep repainting
     // or changing one would appear to do nothing.
     //
-    // One benign wrinkle: populateMonths below can clear a MONTH whose rows have all gone, after
+    // One benign wrinkle: populatePeriods below can clear a PERIOD whose rows have all gone, after
     // this signature captured the old value. The next call then sees a different signature and
     // repaints once. One extra paint, no loop, and only on a month emptying out.
     //
@@ -182,20 +203,20 @@
     // this signature is derived from, so narrowing `ALL` to the visible pool, which is the
     // obvious optimisation the day 300 rows per poll starts to hurt, would silently freeze that
     // number at whatever it was on first paint.
-    const sig = JSON.stringify([ALL, EST, MONTH, SORTFIELD, SORTDIR, TAB, VIEW,
+    const sig = JSON.stringify([ALL, EST, PERIOD, SORTFIELD, SORTDIR, TAB, VIEW,
                                 ($("search") || {}).value || "", lostCount()]);
     if (sig === BOARD_SIG) return;
     BOARD_SIG = sig;
 
     populateEstimators();
-    populateMonths();
+    populatePeriods();
     const items = visible();
     const shown = boardPool().length;
     $("count").textContent = items.length === shown
       ? shown + " proposal" + (shown === 1 ? "" : "s")
       : items.length + " of " + shown;
     const clear = $("crm-clear");
-    if (clear) clear.hidden = !(EST || MONTH || SORTFIELD !== "activity" || SORTDIR !== "desc");
+    if (clear) clear.hidden = !(EST || PERIOD || SORTFIELD !== "activity" || SORTDIR !== "desc");
     syncTabs();
     const board = $("board");
     board.classList.toggle("as-table", VIEW === "table");
@@ -432,19 +453,55 @@
     sel.value = EST;
   }
 
-  function populateMonths() {
+  // How many recent weeks the dropdown offers. Bounded because weeks accumulate fast: a year of
+  // activity is 52 of them, and a list that long is worse than no week filter at all. Six covers
+  // "the last month and a half", which is as far back as a weekly meeting ever reaches.
+  const WEEKS_OFFERED = 6;
+
+  function populatePeriods() {
     const sel = $("crm-month");
     if (!sel) return;
-    const counts = {};
+    const weeks = {}, months = {};
     boardPool().forEach((p) => {
-      const ym = TW.bizYM(activityTs(p));
-      if (ym) counts[ym] = (counts[ym] || 0) + 1;
+      const ts = activityTs(p);
+      const wk = TW.bizWeekStart(ts);
+      if (wk) weeks[wk] = (weeks[wk] || 0) + 1;
+      const ym = TW.bizYM(ts);
+      if (ym) months[ym] = (months[ym] || 0) + 1;
     });
-    if (MONTH && !counts[MONTH]) { MONTH = ""; ssSet(MONTH_KEY, ""); }
-    const months = Object.keys(counts).sort().reverse();
-    sel.innerHTML = '<option value="">Any month</option>'
-      + months.map((ym) => `<option value="${esc(ym)}">${esc(TW.bizMonthLabel(ym))} (${counts[ym]})</option>`).join("");
-    sel.value = MONTH;
+
+    const shown = Object.keys(weeks).sort().reverse().slice(0, WEEKS_OFFERED);
+    const monthKeys = Object.keys(months).sort().reverse();
+
+    // Drop a selection whose rows have all gone — otherwise switching tab leaves a filter that
+    // matches nothing and an empty board that reads as broken. Checked against what is actually
+    // OFFERED, not merely what exists: a week that fell past WEEKS_OFFERED is unreachable in the
+    // dropdown, so leaving it selected would strand the board with no way back but Clear.
+    const offered = new Set(monthKeys.concat(shown.map((w) => "w:" + w)));
+    if (PERIOD && !offered.has(PERIOD)) { PERIOD = ""; ssSet(PERIOD_KEY, ""); }
+
+    // "This week" / "Last week" beat a date range for the two everybody actually wants, and the
+    // range is still shown for the rest. Derived from today rather than from the data, so an empty
+    // week is named correctly instead of shifting the labels up.
+    const thisWk = TW.bizWeekStart(new Date().toISOString());
+    const lastWk = TW.bizWeekStart(new Date(Date.now() - 7 * 86400000).toISOString());
+    const weekLabel = (w) => (w === thisWk ? "This week"
+      : w === lastWk ? "Last week" : TW.bizWeekLabel(w));
+
+    const opt = (v, label, n) => `<option value="${esc(v)}">${esc(label)} (${n})</option>`;
+    let html = '<option value="">Any period</option>';
+    if (shown.length) {
+      html += '<optgroup label="Weeks">'
+        + shown.map((w) => opt("w:" + w, weekLabel(w), weeks[w])).join("")
+        + "</optgroup>";
+    }
+    if (monthKeys.length) {
+      html += '<optgroup label="Months">'
+        + monthKeys.map((ym) => opt(ym, TW.bizMonthLabel(ym), months[ym])).join("")
+        + "</optgroup>";
+    }
+    sel.innerHTML = html;
+    sel.value = PERIOD;
   }
 
   async function load() {
@@ -1927,7 +1984,7 @@
       EST = est.value; ssSet(EST_KEY, EST); renderBoard();
     });
     if (month) month.addEventListener("change", () => {
-      MONTH = month.value; ssSet(MONTH_KEY, MONTH); renderBoard();
+      PERIOD = month.value; ssSet(PERIOD_KEY, PERIOD); renderBoard();
     });
     if (sort) {
       sort.value = SORTFIELD;
@@ -1965,8 +2022,8 @@
     if (clear) clear.addEventListener("click", () => {
       // Deliberately NOT the view or the Active/Test tab: those are which board the rep is
       // looking at, not a filter narrowing what's on it.
-      EST = ""; MONTH = ""; SORTFIELD = "activity"; SORTDIR = "desc";
-      [EST_KEY, MONTH_KEY, SORTFIELD_KEY, SORTDIR_KEY].forEach((k) => ssSet(k, ""));
+      EST = ""; PERIOD = ""; SORTFIELD = "activity"; SORTDIR = "desc";
+      [EST_KEY, PERIOD_KEY, SORTFIELD_KEY, SORTDIR_KEY].forEach((k) => ssSet(k, ""));
       $("search").value = "";
       syncDir(); renderBoard();
     });

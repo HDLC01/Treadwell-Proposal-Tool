@@ -594,6 +594,11 @@
   // "YYYY-MM" in the business timezone — matches the month fmtBizDate() shows, so
   // the Projects month filter buckets each job under the month on its card.
   function bizYM(iso) {
+    // Falsy in, empty out. `new Date(null)` is the epoch, not an invalid date, so the isNaN guard
+    // below lets a null timestamp through as "1969-12" — which the board's period dropdown would
+    // then offer as a real option. Never surfaced because every row that reaches it has a sent_at;
+    // found by feeding the filter a row with no activity at all.
+    if (!iso) return "";
     const d = new Date(iso);
     if (isNaN(d)) return "";
     const parts = new Intl.DateTimeFormat("en-CA", { timeZone: BIZ_TZ, year: "numeric", month: "2-digit" }).formatToParts(d);
@@ -623,6 +628,57 @@
   function bizMonthLabel(ym) {
     try { return new Date(ym + "-01T12:00:00Z").toLocaleString("en-US", { timeZone: BIZ_TZ, month: "long", year: "numeric" }); }
     catch { return ym; }
+  }
+
+  // The MONDAY of the week a timestamp falls in, as "YYYY-MM-DD" in Central — the bucket key for
+  // the board's week filter.
+  //
+  // Monday rather than Sunday because this board is read in a Monday sales meeting: "this week"
+  // has to mean the week that meeting is in, not one that ended the day before.
+  //
+  // The date parts are read in CENTRAL, which is the half that matters: bucketing on the viewer's
+  // clock puts a Friday-evening bid in Kansas into Saturday for anybody an hour east.
+  //
+  // The noon-UTC anchor is only defensive. Day arithmetic here happens in UTC, where there is no
+  // DST, and the result is read straight back off the ISO string — so midnight would work equally
+  // well today. Noon is kept so that formatting the anchor through a timezone later (the mistake
+  // `fmtBizDay` documents) cannot silently shift it across a day boundary. A mutation to midnight
+  // is therefore harmless, and this comment says so rather than claiming a guard that isn't there.
+  function bizWeekStart(iso) {
+    if (!iso) return "";                        // see bizYM: new Date(null) is the epoch, not NaN
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: BIZ_TZ, year: "numeric",
+      month: "2-digit", day: "2-digit", weekday: "short" }).formatToParts(d);
+    const get = (t) => (parts.find((p) => p.type === t) || {}).value;
+    const y = get("year"), m = get("month"), day = get("day"), wd = get("weekday");
+    const back = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[wd];
+    if (!y || !m || !day || back == null) return "";
+    const anchor = new Date(y + "-" + m + "-" + day + "T12:00:00Z");
+    anchor.setUTCDate(anchor.getUTCDate() - back);
+    return anchor.toISOString().slice(0, 10);
+  }
+
+  // "2026-08-10" (a Monday) → "Aug 10–16", or "Aug 31–Sep 6" across a month boundary, with the
+  // year appended only when it is not the current one. The end day is derived rather than stored,
+  // so a week can never be labelled as a range it does not cover.
+  function bizWeekLabel(startYmd) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(startYmd || ""))) return String(startYmd || "");
+    const s = new Date(startYmd + "T12:00:00Z");
+    const e = new Date(startYmd + "T12:00:00Z");
+    e.setUTCDate(e.getUTCDate() + 6);
+    const full = { timeZone: BIZ_TZ, month: "short", day: "numeric" };
+    const sTxt = s.toLocaleDateString("en-US", full);
+    const eTxt = e.toLocaleDateString("en-US", full);
+    // Same month → drop the repeated month name from the end of the range.
+    const sameMonth = sTxt.split(" ")[0] === eTxt.split(" ")[0];
+    const tail = sameMonth ? eTxt.split(" ")[1] : eTxt;
+    const sYear = startYmd.slice(0, 4);
+    const eYear = e.toISOString().slice(0, 4);
+    // A week that crosses new year gets BOTH years, short form. A single trailing year read as
+    // "Dec 29–Jan 4, 2025" says January was in 2025, and that week is offered every January.
+    if (sYear !== eYear) return sTxt + " '" + sYear.slice(2) + "–" + eTxt + " '" + eYear.slice(2);
+    return sTxt + "–" + tail + (sYear !== bizToday().slice(0, 4) ? ", " + sYear : "");
   }
 
   // ─── Number formatting ────────────────────────────────────────────
@@ -682,6 +738,8 @@
     bizToday,
     fmtBizDay,
     bizMonthLabel,
+    bizWeekStart,
+    bizWeekLabel,
     fmtUsd,
     absoluteUrl,
     resolveApiBase,

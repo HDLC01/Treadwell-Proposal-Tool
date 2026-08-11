@@ -118,7 +118,7 @@ def test_the_conversion_is_a_round_trip(hours, days):
     out = subprocess.run(
         ["node", "-e", to_days + "\nconsole.log(JSON.stringify([toDays(%d), toHours(toDays(%d))]));"
          % (hours, hours)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     import json
     got_days, back = json.loads(out.stdout)

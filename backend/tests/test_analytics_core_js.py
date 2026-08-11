@@ -27,7 +27,7 @@ def run(script: str):
         "const out = (v) => console.log(JSON.stringify(v));\n" % json.dumps(str(CORE))
     )
     proc = subprocess.run(["node", "-e", prelude + script],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 

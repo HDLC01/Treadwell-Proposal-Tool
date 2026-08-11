@@ -77,7 +77,7 @@ def _node(expr: str):
         "const S = %s;\n"
         "console.log(JSON.stringify(%s));\n" % (json.dumps(str(CORE)), FULL_STATE, expr)
     )
-    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=60)
+    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
