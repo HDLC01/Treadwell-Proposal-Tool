@@ -178,9 +178,12 @@ def test_lost_proposals_are_off_the_live_tabs_and_one_place_decides():
 
 
 def test_both_filter_dropdowns_count_the_same_pool_the_board_draws():
-    """A month or an estimator whose only proposals are lost (or on the other tab) must not be
-    offered: picking it empties the board and reads as a broken filter."""
-    for fn in ("populateEstimators", "populateMonths"):
+    """A period or an estimator whose only proposals are lost (or on the other tab) must not be
+    offered: picking it empties the board and reads as a broken filter.
+
+    populateMonths became populatePeriods on 2026-08-12 when the dropdown grew weeks alongside
+    months. The claim is unchanged — whatever fills that select counts the pool the board draws."""
+    for fn in ("populateEstimators", "populatePeriods"):
         body = _block("portal.js", fn)
         assert "boardPool()" in body, "%s still counts every row, lost ones included" % fn
         assert "ALL.forEach" not in body, "%s is back on the unfiltered list" % fn
@@ -390,7 +393,7 @@ def _run(script: str):
     prelude = ("const C = require(%s);\n"
                "const out = (v) => console.log(JSON.stringify(v));\n" % json.dumps(str(CORE)))
     proc = subprocess.run(["node", "-e", prelude + script],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 

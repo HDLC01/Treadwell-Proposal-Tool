@@ -50,7 +50,7 @@ def rendered():
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     proc = subprocess.run(["node", str(HARNESS), str(CORE), str(PORTAL_JS)],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, (
         "the harness itself failed — read this before assuming a product bug:\n" + proc.stderr)
     return json.loads(proc.stdout.strip().splitlines()[-1])
