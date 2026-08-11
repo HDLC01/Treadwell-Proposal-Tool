@@ -151,6 +151,16 @@
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
       '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
       '<nav class="tw-nav">' +
+      // ACTIVE PROJECTS IS THE FIRST THING IN THE SIDEBAR, on its own, above the work-order
+      // grouping below. Hanz, 2026-08-12: "This active Projects tab will be the Main tab for
+      // all. Majority of the Sales Meeting will be held in this tab."
+      //
+      // It used to be the second item under Proposals, below the Database. That ordering was
+      // right when the Database was where you started a bid; it is wrong now that this board can
+      // start one too (the + New proposal button in its Created but not sent column), because
+      // the page you run the meeting from should not be something you scroll past.
+      '<div class="tw-section">Sales</div>' +
+      navItem("/portal.html", "◆", "Active Projects") +
       // Grouped in the order the job actually happens: work comes in, you price
       // it and send it, then it's a record. Seven items under one "Workspace"
       // heading said nothing about which page did what — and buried Notification
@@ -163,13 +173,6 @@
       // due, and when". Both read the Basisboard bids; neither writes to them.
       navItem("/calendar.html", "▧", "Bid Calendar") +
       '<div class="tw-section">Proposals</div>' +
-      // Hanz, 2026-08-10, renamed both: "Projects" and "Customer Portal CRM" told you nothing
-      // about which one to open. /projects.html is every proposal we have ever drafted, most of
-      // them never sent, so it reads as a database. /portal.html is the short list of jobs that
-      // are actually live with a customer. The hrefs are untouched, which matters because
-      // navItem decides the active highlight from location.pathname and never from the label.
-      navItem("/projects.html", "▣", "Proposals Database") +
-      navItem("/portal.html", "◆", "Active Projects") +
       // Same glyph as the "📋 Info" button on the project cards, so the two
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
@@ -187,6 +190,17 @@
       // nearest relative, already lives there.
       //
       // /followups.html is not deleted, only unlinked: it still exists and still works by URL.
+
+      // ITS OWN CATEGORY, below the pages that make a proposal. Hanz, 2026-08-12: "Move the
+      // Proposal database down and create its own cateogry."
+      //
+      // It is every proposal ever drafted, most never sent — a filing cabinet you go to on
+      // purpose, not a step in the day. Sitting directly above Active Projects it read as the
+      // place to start, which is the opposite of how the board is meant to be used now.
+      // The href is untouched: navItem takes the active highlight from location.pathname, never
+      // from the label or position, so moving an item cannot break its highlight.
+      '<div class="tw-section">Database</div>' +
+      navItem("/projects.html", "▣", "Proposals Database") +
 
       // Its own heading rather than a third item under Leads & bids: those two
       // are the daily queue, this is the look back over all of it.

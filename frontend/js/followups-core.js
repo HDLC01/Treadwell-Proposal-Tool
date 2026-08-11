@@ -125,10 +125,34 @@
    *  chasing is meaningless. */
   function automation(p, today) {
     var col = column(p);
-    if (col === "lost" || col === "approved") return "";
+    // "approved" is no longer a blanket stop. Hanz, 2026-08-12: "followups should be automated
+    // until a deposit has been received." A won job with the money still out IS being chased, and
+    // returning "" here painted no badge at all — staff would read the page as "nothing is going
+    // out" while the worker emailed the customer every few days.
+    if (col === "lost") return "";
+    if (col === "approved" && depositIn(p)) return "";
     if (pausedUntil(p, today)) return "paused";
     var f = followup(p);
     return (f.enrolled && f.enabled) ? "chasing" : "off";
+  }
+
+  /** Is the money in, as far as the CUSTOMER's reminders are concerned?
+   *
+   *  `submitted` counts: once they have recorded ACH details or told us the cheque is posted,
+   *  their emails stop. The estimator's continue until `received`, but this function feeds a
+   *  page that talks about what the CUSTOMER is being sent. Mirrors
+   *  followup_rules.deposit_outstanding(for_customer=True) in the portal; a missing
+   *  `deposit_required` is a legacy row, which did collect one. */
+  function depositIn(p) {
+    if (!p) return true;
+    // `deposit_required === false` means none was asked for — UNLESS an invoice was raised anyway,
+    // which is staff deciding after the fact that money is due. Omitting that half made this
+    // function's own claim to mirror the portal rule false, and left it disagreeing with
+    // crm-core.depositSatisfied, which had it right: the card would have read "nothing going out"
+    // on a GC job the worker was actively chasing.
+    if (p.deposit_required === false && !p.deposit_requested_at) return true;
+    var st = String(p.deposit_status || "").toLowerCase();
+    return st === "submitted" || st === "received";
   }
 
   /** Can a person drag this card into that column?
@@ -235,7 +259,7 @@
     COLUMNS: COLUMNS, COLD_DAYS: COLD_DAYS, WARM_DAYS: WARM_DAYS,
     columnById: function (id) { return BY_ID[id] || null; },
     column: column, canMove: canMove, actionPlan: actionPlan, actionsFor: actionsFor,
-    automation: automation, hasSeen: hasSeen, hasReplied: hasReplied, seenHow: seenHow,
+    automation: automation, depositIn: depositIn, hasSeen: hasSeen, hasReplied: hasReplied, seenHow: seenHow,
     neglect: neglect, group: group, load: load, pausedUntil: pausedUntil, isLost: isLost,
   };
 });

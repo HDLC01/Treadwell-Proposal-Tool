@@ -23,10 +23,22 @@
   // copy is the one the refusal messages quote, so the two can never name the same email
   // differently — these are only here so the tabs are never blank.
   var LABELS = {
+    sent: "Proposal sent",
     not_viewed: "Not opened yet",
     next_steps: "After they open it",
     second_nudge: "Second reminder",
     checkin: "Recurring check-in",
+    deposit_nudge: "Deposit reminder",
+  };
+  // Fallback only — the portal serves these (editor_titles). Present so a failed or older GET
+  // still shows which email is open rather than an empty heading.
+  var EDITOR_TITLES = {
+    sent: "Proposal sent — the first email, when you publish it",
+    not_viewed: "First reminder — after not opening",
+    next_steps: "Next steps — after they open it",
+    second_nudge: "Second reminder — opened, still no decision",
+    checkin: "Recurring check-in — repeats until they decide",
+    deposit_nudge: "Deposit reminder — approved, deposit not yet in",
   };
   var TOKENS = ["{first_name}", "{project}", "{need}", "{link}"];
 
@@ -92,13 +104,35 @@
       if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
       CFG = j.settings;
       if (Array.isArray(j.tokens) && j.tokens.length) TOKENS = j.tokens;
-      // The server owns what each email is called, because its refusal messages quote those names.
+      // The server owns WHICH emails exist, what each is called, and the order they appear in.
+      //
+      // This used to walk the LOCAL keys and copy any label the server also had, which meant a
+      // template the server knew about and this file did not could never grow a tab. That is not
+      // hypothetical: it is exactly what happened to the "Proposal sent" email — the portal served
+      // it, this list did not contain it, and the whole feature was unreachable on the page. Taking
+      // the server's key set wholesale is what stops the next one repeating it.
+      //
+      // Safe because the portal asserts its LABELS cover exactly the editable templates, so every
+      // tab this paints has a template behind it. The local map above is the fallback for a failed
+      // or older GET, and nothing more.
       if (j.labels && typeof j.labels === "object") {
-        Object.keys(LABELS).forEach(function (k) {
-          if (j.labels[k]) LABELS[k] = j.labels[k];
+        var served = {};
+        Object.keys(j.labels).forEach(function (k) {
+          if (j.labels[k]) served[k] = j.labels[k];
         });
+        if (Object.keys(served).length) LABELS = served;
       }
-      $("loading").hidden = true;
+      // The open tab has to be one that exists. Otherwise a server that stopped serving
+      // `not_viewed` would leave KEY pointing at nothing: no tab selected, and fillTemplate
+      // writing into a template nobody can see.
+      if (!LABELS[KEY]) KEY = Object.keys(LABELS)[0];
+
+      // Longer when-it-fires wording for the heading under the tabs, same server-owns-it rule.
+      if (j.editor_titles && typeof j.editor_titles === "object") {
+        Object.keys(j.editor_titles).forEach(function (k) {
+          if (j.editor_titles[k]) EDITOR_TITLES[k] = j.editor_titles[k];
+        });
+      }      $("loading").hidden = true;
       $("main").hidden = false;
       showWhoChanged(j);
       lockForFailedRead(!!j.read_failed);
@@ -111,18 +145,34 @@
     }
   }
 
+  // ── days on screen, hours in the database ────────────────────────────────
+  // Hanz, 2026-08-12: "Change the timing to Days instead of Hours". Hours is what the WORKER
+  // reads (followup_rules compares against *_hours, and the bounds in followup_settings.py are
+  // in hours), so converting the stored unit would mean touching the rules engine, the bounds,
+  // the digest and every existing row. The unit people read is a presentation concern, so it is
+  // converted here and nowhere else.
+  //
+  // Rounded, not floored: a stored 36 hours from before this change shows as 2 days rather than
+  // 1, which is the nearer truth. Floor 1 day, because 0 would mean "chase instantly, for ever".
+  function toDays(hours) { return Math.max(1, Math.round(Number(hours || 0) / 24)); }
+  function toHours(days) { return Math.max(1, Math.round(Number(days || 0))) * 24; }
+
   function fillNumbers() {
     // The project-level subject lives here rather than in fillTemplate: it belongs to the
     // whole cadence, so switching tabs must not reload or clear it.
     $("thread-subject").value = CFG.thread_subject || "";
-    $("first").value = CFG.first_nudge_hours;
-    $("second").value = CFG.second_nudge_hours;
-    $("recurring").value = CFG.recurring_hours;
-    $("staff").value = CFG.staff_personal_hours;
+    $("first").value = toDays(CFG.first_nudge_hours);
+    $("second").value = toDays(CFG.second_nudge_hours);
+    $("recurring").value = toDays(CFG.recurring_hours);
+    $("staff").value = toDays(CFG.staff_personal_hours);
+    // NOT a duration — a count of reminders. It was always unitless and stays unitless.
     $("maxrec").value = CFG.max_recurring;
   }
 
   function paintTabs() {
+    // In paintTabs rather than in the tab click handler: this runs on load AND on every switch,
+    // so the heading cannot get out of step with the form under it.
+    $("which-email").textContent = EDITOR_TITLES[KEY] || LABELS[KEY] || "";
     $("tabs").innerHTML = Object.keys(LABELS).map(function (k) {
       return '<button type="button" role="tab" data-key="' + k + '" aria-selected="' +
              (k === KEY) + '">' + esc(LABELS[k]) + "</button>";
@@ -136,8 +186,13 @@
       // rather than once on the container: paintTabs rebuilds this strip on every tab switch, so
       // anything hung on the chips themselves is gone by the second email you edit. The listeners
       // avoid the same trap by being delegated on #tokens, which survives.
+      // The tooltip carries the HOW as well as the what. The sentence above the editor used to
+      // say "Drag a placeholder into the message, or click one to drop it where the cursor is";
+      // Hanz deleted it on 2026-08-12, and draggable="true" is invisible — so without this the
+      // drag-and-drop is a feature nobody would find. Costs no page copy.
       return '<button type="button" class="tok" draggable="true" data-tok="' + esc(t) +
-             '" title="' + esc(why) + '">' + esc(t) + "</button>";
+             '" title="' + esc(why) + ' — drag it in, or click to insert at the cursor' +
+             '">' + esc(t) + "</button>";
     }).join("");
   }
 
@@ -156,10 +211,10 @@
     CFG.templates = CFG.templates || {};
     CFG.templates[KEY] = t;
     return {
-      first_nudge_hours: $("first").value,
-      second_nudge_hours: $("second").value,
-      recurring_hours: $("recurring").value,
-      staff_personal_hours: $("staff").value,
+      first_nudge_hours: toHours($("first").value),
+      second_nudge_hours: toHours($("second").value),
+      recurring_hours: toHours($("recurring").value),
+      staff_personal_hours: toHours($("staff").value),
       max_recurring: $("maxrec").value,
       // THE SEND WINDOW IS ROUND-TRIPPED, NOT OMITTED, and that is not a style choice.
       //

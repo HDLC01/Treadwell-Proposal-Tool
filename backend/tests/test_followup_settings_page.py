@@ -163,24 +163,42 @@ def test_the_audit_line_and_the_previews_refresh_together(js):
         assert "renderPreview(" in block and "showWhoChanged(" in block
 
 
-def test_the_server_owns_what_each_email_is_called(js):
-    """The refusal messages quote these names ("the “Second reminder” email needs {link}"). If the
-    page kept its own copy, a message could name a tab that does not exist."""
-    assert "LABELS[k] = j.labels[k]" in js, "the page ignores the labels the server sends"
-    # Asserting only that "j.labels" appears somewhere is not enough: disabling the block with
-    # `if (false)` left the text in the file, inside code that can never run, and the test passed.
-    # Nor is it enough to look at the NEAREST `if` — that is the inner one, which still mentions
-    # j.labels while the outer one has been switched off. Check every condition on the way in.
-    i = js.index("LABELS[k] = j.labels[k]")
-    # From the guard that opens the block to the assignment — not a fixed window, which swept in
-    # the unrelated j.tokens check next door and failed on correct code.
-    start = js.rindex("if (", 0, js.index("Object.keys(LABELS)"))
+def test_the_server_owns_WHICH_emails_exist_and_what_they_are_called(js):
+    """The refusal messages quote these names ("the “Deposit reminder” email needs {link}"), so a
+    tab that disagrees points somebody at a form that does not exist.
+
+    THIS TEST USED TO PIN THE BUG. It asserted `LABELS[k] = j.labels[k]` — a loop over the page's
+    OWN keys that copied in any label the server also had. That adopts new WORDING and can never
+    adopt a new EMAIL, and on 2026-08-12 that is exactly what bit: the portal had grown an editable
+    "Proposal sent" template the day before and served it in `labels`, the local list did not contain
+    it, and the tab never rendered. The feature was unreachable on the page while every backend test
+    for it passed — and this test held the broken mechanism in place as a requirement.
+
+    Its claim was never wrong, only too narrow. The server owns the SET and the ORDER as well as the
+    names, so the fix is to take `j.labels` wholesale, and what this now checks is that nothing has
+    quietly gone back to merging into a hardcoded list."""
+    assert "LABELS = served" in js, (
+        "the page is filtering the served labels through its own key list again, so a template the "
+        "portal adds can never grow a tab")
+    assert "LABELS[k] = j.labels[k]" not in js, "the rename-only loop is back"
+
+    # Same anti-`if (false)` reasoning as before, and for the same reason: the text sitting in the
+    # file proves nothing about whether it runs. Every condition on the way in has to depend on the
+    # served labels.
+    i = js.index("LABELS = served")
+    start = js.rindex("if (", 0, js.index("var served"))
     conditions = re.findall(r"if \(([^)]*)\)", js[start:i])
     assert conditions, "no conditional guards the adoption at all"
     for cond in conditions:
-        assert "j.labels" in cond, (
+        assert "j.labels" in cond or "served" in cond, (
             "a condition gating the labels does not depend on them (%r) — the block is "
             "unreachable or gated on the wrong thing" % cond)
+
+    # An empty or missing `labels` must leave the shipped names in place rather than wiping the
+    # strip: the fallback is the only reason the page is not blank when a GET half-fails.
+    assert "if (Object.keys(served).length) LABELS = served" in js, (
+        "an empty labels object would replace the tab strip with nothing")
+
     i = js.index("var LABELS")
     assert "fall back" in js[max(0, i - 400):i + 200], (
         "the local copy needs to be marked as a fallback, or it reads as the source of truth")

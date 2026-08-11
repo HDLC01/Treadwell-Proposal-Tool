@@ -423,10 +423,15 @@ def test_the_crm_bubble_is_contents_date_and_whether_it_came_by_email():
     test_signature_and_bubble.py) — the two views are meant to be one conversation.
     """
     body = _block("portal.js", "msgHtml")
-    assert '"Treadwell" : "Customer"' not in body, "the author label is back on every bubble"
-    assert 'class="who"' not in body, "the who line is still rendered"
+    assert '"Treadwell" : "Customer"' not in body, (
+        "the unconditional TREADWELL / CUSTOMER label is back on every bubble")
     assert "via-email" in body, "an emailed reply is no longer marked as one"
     assert 'class="mbody"' in body, "the text is not in the element pre-wrap is written for"
+    # A `who` line DOES render again, but only for a customer message on a proposal with more
+    # than one recipient — see test_per_recipient_attribution.py. That is a different claim from
+    # the one Hanz made: with a single contact it still says nothing the side does not.
+    assert "DETAIL_RECIPIENTS" in body and "length > 1" in body, (
+        "the author name is no longer gated on there being more than one recipient")
 
 
 def test_the_emailed_reply_keeps_its_line_breaks():
@@ -437,5 +442,6 @@ def test_the_emailed_reply_keeps_its_line_breaks():
         "the message body does not preserve the sender's line breaks")
     assert re.search(r"\.msg \.mbody \{[^}]*overflow-wrap:anywhere", page), (
         "a long URL can push the bubble past its max-width")
-    assert ".msg .who {" not in page, (
-        "the rule for the removed label is still here, which reads as if the label remains")
+    # `.msg .who` came BACK on 2026-08-11 for the multi-recipient case. What must stay gone is
+    # the unconditional label in the markup, which the test above covers.
+    assert ".msg .who {" in page, "the conditional author name has no styling"

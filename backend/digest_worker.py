@@ -84,6 +84,20 @@ W_NEGLECT_MAX = 15.0
 W_UNREAD_BASE = 10.0        # an unanswered customer message outranks most things
 W_UNREAD_PER = 5.0
 W_UNREAD_MAX = 25.0
+# An approved job whose deposit has not arrived — the heaviest term here, and the only one that
+# outranks an unanswered message.
+#
+# It has to be, for a reason arithmetic rather than opinion: every OTHER signal on this list
+# measures a customer going quiet, and a job won yesterday has none of them. No age, no silence,
+# nothing unread. At 22 points a fresh approval with the money out scored 35 against a threshold of
+# 40 — eligible, and still never mentioned, on the morning it was most worth a call. The base alone
+# has to clear the bar with the small age/neglect terms a day-old row can muster.
+#
+# Grows per day and caps, like every other term, so a deposit outstanding for three weeks sorts
+# above one outstanding since yesterday.
+W_DEPOSIT_BASE = 30.0
+W_DEPOSIT_PER_DAY = 2.0
+W_DEPOSIT_MAX = 45.0
 
 QUIET_DAYS = 2              # chased within this many days → leave it alone today
 
@@ -201,19 +215,54 @@ def _fu(p: Dict[str, Any]) -> Dict[str, Any]:
     return p.get("followup_state") or {}
 
 
+def _deposit_outstanding(p: Dict[str, Any]) -> bool:
+    """Is this approved job still waiting on money?
+
+    The STAFF reading of it, which is the later of the two stops the portal uses: the customer's
+    own reminders end when they tell us it is on the way (`submitted`), and an estimator's do not
+    end until it arrives (`received`). A cheque that never shows up has to stay somebody's job.
+    Mirrors followup_rules.deposit_outstanding in the portal — the same tri-state read of
+    `deposit_required`, where a missing value is a legacy row that DID collect one."""
+    # A FALSE flag with an invoice raised against it anyway is staff deciding after the fact that
+    # money is due — the rule crm-core.depositSatisfied already used on the board, and the one the
+    # portal's followup_rules now uses too. Three copies of this predicate exist because they live
+    # in three languages and two repos; they have to give the same answer or a staff drawer says
+    # "chasing" while nothing goes out.
+    if p.get("deposit_required") is False and not p.get("deposit_requested_at"):
+        return False
+    return str(p.get("deposit_status") or "").strip().lower() != "received"
+
+
 def eligible(p: Dict[str, Any], now: datetime) -> bool:
     """Is this proposal something an estimator could usefully act on today?
 
     Everything excluded here is excluded because chasing it would be wrong, not
-    merely unproductive: a booked job is done, a closed-lost one was declined, and
-    a paused one was paused BY THE CUSTOMER — putting it back in front of an
-    estimator invites exactly the call they asked us not to make."""
+    merely unproductive: a closed-lost one was declined, and a paused one was paused
+    BY THE CUSTOMER — putting it back in front of an estimator invites exactly the
+    call they asked us not to make.
+
+    APPROVED IS NOT EXCLUDED WHILE THE DEPOSIT IS OUT. It used to be, and the comment
+    here said the deposit column and "its own reminders" owned it — there were no
+    deposit reminders. An approved job got one invoice email and then silence
+    everywhere. Hanz, 2026-08-12: "followups should be automated until a deposit has
+    been received." A won job with the money still out is the most actionable thing an
+    estimator has, because dates are not held until it lands."""
     status = str(p.get("proposal_status") or "")
-    if status in ("closed_lost", "approved"):
-        # Approved but unpaid still needs chasing — it just isn't THIS list's job;
-        # the deposit column and its own reminders own that.
+    if status == "closed_lost":
         return False
-    if str(p.get("schedule_status") or "") == "scheduled":
+    if status == "approved" and not _deposit_outstanding(p):
+        return False
+    # A booked job is done — UNLESS the money is still out. This gate used to be unconditional,
+    # which made it a third stop point on top of the two agreed ones (customer -> submitted,
+    # staff -> received) and, sitting one line below the approval fix above, it swallowed exactly
+    # the rows that fix exists to rescue: the portal would keep emailing a deposit reminder while
+    # this list said nothing, and the board's own badge said "chasing" on the same row.
+    #
+    # No live row is affected today — scheduling was removed from both UIs on 2026-08-11 and the
+    # only writer went with it, so the population is frozen at the rows that already had it, all of
+    # which are paid. It is corrected anyway because the portal's followup_rules has no schedule
+    # gate at all, and reinstating the Scheduled column is documented as putting two lines back.
+    if str(p.get("schedule_status") or "") == "scheduled" and not _deposit_outstanding(p):
         return False
     # Compared as plain dates in Central. `paused_until` is a DATE column, so
     # parsing it as a timestamp and shifting timezones is how a pause silently
@@ -280,6 +329,20 @@ def score(p: Dict[str, Any], now: datetime) -> Tuple[int, List[str]]:
         pts += min(W_UNREAD_MAX, W_UNREAD_BASE + W_UNREAD_PER * unread)
         facts.append("{} unanswered message{}".format(unread, "" if unread == 1 else "s"))
 
+    # Won, and the money is still out. Said LAST so it reads as the punchline of the line the
+    # estimator sees, and scored so the row clears the bar on its own: a job approved yesterday
+    # has almost no age, no silence and nothing unread, and would otherwise sit under the
+    # threshold on the very morning it is most worth a call.
+    if str(p.get("proposal_status") or "") == "approved" and _deposit_outstanding(p):
+        waited = days_since(p.get("approved_at"), now)
+        pts += min(W_DEPOSIT_MAX,
+                   W_DEPOSIT_BASE + W_DEPOSIT_PER_DAY * (waited or 0.0))
+        submitted = str(p.get("deposit_status") or "").strip().lower() == "submitted"
+        when = ("approved {} day{} ago".format(int(waited), "" if int(waited) == 1 else "s")
+                if waited is not None else "approved")
+        facts.append(when + (", deposit recorded but not arrived" if submitted
+                             else ", deposit not in yet"))
+
     return int(round(max(0.0, min(100.0, pts)))), facts
 
 
@@ -339,6 +402,10 @@ def _stage_label(p: Dict[str, Any]) -> str:
         return "Waiting on your reply"
     if str(p.get("deposit_status") or "") == "submitted":
         return "Deposit submitted"
+    # Above the viewed/sent branches: an approved proposal has been viewed, so without this it
+    # would be labelled "Viewed" — which reads as nobody having decided on a job that is won.
+    if str(p.get("proposal_status") or "") == "approved":
+        return "Approved — deposit outstanding" if _deposit_outstanding(p) else "Approved"
     if str(p.get("proposal_status") or "") == "viewed":
         return "Viewed, not approved"
     return "Sent, not opened" if not (p.get("last_viewed_at") or p.get("viewed_at")) else "Viewed"
@@ -363,6 +430,15 @@ def fallback_reason(item: Dict[str, Any]) -> str:
     if item.get("unread"):
         lead = "They're waiting on a reply"
         rest = [f for f in facts if "unanswered" not in f][:2]
+    elif any("deposit" in f for f in facts):
+        # "Worth a nudge" is wrong for a job already won — the ask is the deposit, not the
+        # decision, and an estimator reading "nudge" phones about the wrong thing.
+        #
+        # Keyed off the FACT rather than the stage label, because the label for a deposit the
+        # customer has recorded is "Deposit submitted" (more specific, and it wins) — so reading
+        # the label got the right sentence only for the pending half.
+        lead = "Won, waiting on the deposit"
+        rest = [f for f in facts if "deposit" not in f][:2]
     else:
         lead = "Worth a nudge"
         rest = facts[:3]
