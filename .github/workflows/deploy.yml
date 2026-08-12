@@ -188,18 +188,24 @@ jobs:
               sh -c 'pip install --quiet --no-input pytest pymupdf >/dev/null 2>&1 || {
                        echo "could not install pytest/pymupdf - skipping"; exit 0; }
                      cd /src/backend
-                     # test_box_resize.py is the only file with a genuinely LibreOffice-gated
-                     # test. test_pdf_export.py monkeypatches docx_to_pdf away in every case,
-                     # so running it here would imply PDF coverage that does not exist.
-                     python -m pytest tests/test_box_resize.py \
+                     # test_box_resize.py (size) and test_box_move.py (position) are the only
+                     # files with genuinely LibreOffice-gated tests. test_pdf_export.py
+                     # monkeypatches docx_to_pdf away in every case, so running it here would
+                     # imply PDF coverage that does not exist.
+                     python -m pytest tests/test_box_resize.py tests/test_box_move.py \
                        -q -p no:cacheprovider -p no:warnings
-                     # Fail loudly if the one test this step exists for silently skipped -
-                     # a green "46 passed" with the PDF case skipped is the exact false
-                     # reassurance this step was added to remove.
-                     python -m pytest tests/test_box_resize.py -p no:cacheprovider \
-                       -p no:warnings -q -k pdf 2>&1 | tee /tmp/pdf.out
-                     grep -q "1 passed" /tmp/pdf.out || {
-                       echo "PDF fidelity test did not RUN (skipped or missing)"; exit 1; }'
+                     # Fail loudly if the tests this step exists for silently skipped - a green
+                     # "150 passed, 3 skipped" with the PDF cases skipped is the exact false
+                     # reassurance this step was added to remove. Counted rather than hardcoded,
+                     # so adding another PDF case does not quietly turn the gate off.
+                     python -m pytest tests/test_box_resize.py tests/test_box_move.py \
+                       -p no:cacheprovider -p no:warnings -q -k pdf 2>&1 | tee /tmp/pdf.out
+                     grep -qE "[0-9]+ passed" /tmp/pdf.out || {
+                       echo "PDF fidelity tests did not RUN (skipped or missing)"; exit 1; }
+                     if grep -q "skipped" /tmp/pdf.out; then
+                       echo "a PDF fidelity test SKIPPED in the image that has LibreOffice"
+                       exit 1
+                     fi'
         env:
           # Each ssh-action step gets its own environment, so TW_IMAGE has to be passed again
           # here — without it `set -u` aborts on the first line and the step never runs the
