@@ -186,6 +186,18 @@
       $("filterbar").insertAdjacentHTML("beforeend",
         '<span class="fnote">— pick dates, or it counts everything</span>');
     }
+    // Asking for a slice this tool does not hold. The filter is NOT clamped to the pull window —
+    // silently moving somebody's dates is worse than an empty answer — but an empty chart has to
+    // say which of the two ranges is the reason.
+    var pw = pullWindow();
+    var outside = [];
+    if (pw.from && w.from && w.from < pw.from) outside.push("before " + esc(pw.from));
+    if (pw.to && w.to && w.to > pw.to) outside.push("after " + esc(pw.to));
+    if (outside.length) {
+      $("filterbar").insertAdjacentHTML("beforeend",
+        '<span class="fnote">— we only hold ' + esc(pw.from || "the beginning") + " → " +
+        esc(pw.to || "today") + ", so " + outside.join(" and ") + " is empty</span>");
+    }
   }
 
   /** The colour that belongs to one filter option, if it has one. */
@@ -488,9 +500,97 @@
     return out.join("");
   }
 
+  // ── the org's BasisBoard pull window ────────────────────────────────
+  // Hanz, 2026-08-12: "we need a date pciker like the custom date in the analytics for when it
+  // pulls data" — and, asked, one window for the whole company rather than per viewer.
+  //
+  // A DIFFERENT QUESTION from the filter bar below it. The filter slices what this tool holds;
+  // this sets what it holds at all, for everybody. Two people reading different win rates off the
+  // same dashboard is the thing a per-viewer version would cause.
+  //
+  // Always drawn from the PAYLOAD's window, never from what is typed in these boxes: the caption
+  // has to describe the dataset the numbers came from, or a half-finished edit reads as fact.
+  function pullWindow() {
+    var w = (DATA && DATA.pull_window) || {};
+    return { from: w.from || "", to: w.to || "",
+             updated_at: w.updated_at || "", updated_by: w.updated_by || "" };
+  }
+
+  function renderPullWindow(msg, bad) {
+    var el = $("pullwindow");
+    if (!el) return;
+    var w = pullWindow();
+    var by = "";
+    if (w.updated_at) {
+      var d = new Date(w.updated_at);
+      by = "set by " + esc(w.updated_by || "somebody") +
+        (isNaN(d.getTime()) ? "" : " on " + X.bizDay(w.updated_at));
+    }
+    el.innerHTML =
+      '<div class="pw">' +
+      '<span class="pw-lab">BasisBoard data</span>' +
+      '<span>' + (w.from || w.to
+        ? "pulling " + esc(w.from || "the beginning") + " → " + esc(w.to || "today")
+        : "pulling everything BasisBoard has") + "</span>" +
+      '<input type="date" id="pw-from" value="' + esc(w.from) + '" aria-label="Pull data from" ' +
+        'max="' + esc(w.to) + '" />' +
+      '<span class="fnote">to</span>' +
+      '<input type="date" id="pw-to" value="' + esc(w.to) + '" aria-label="Pull data to" ' +
+        'min="' + esc(w.from) + '" />' +
+      '<button type="button" class="pw-save" id="pw-save">Save range</button>' +
+      (msg ? '<span class="pw-msg' + (bad ? " bad" : "") + '">' + esc(msg) + "</span>"
+           : '<span class="pw-by">' + by + "</span>") +
+      "</div>";
+  }
+
+  function savePullWindow() {
+    var from = ($("pw-from") || {}).value || "";
+    var to = ($("pw-to") || {}).value || "";
+    if (from && to && from > to) {
+      renderPullWindow("Those dates are backwards.", true);
+      return;
+    }
+    var btn = $("pw-save");
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    // Returned so a test can await the outcome; nothing in the page depends on the value.
+    return api("/api/analytics/pull-window", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: from || null, to: to || null }),
+    }).then(function (r) {
+      if (!r.ok) throw new Error("save failed");
+      return r.json();
+    }).then(function () {
+      // The dataset is being rebuilt for the new dates behind this. Poll the payload rather than
+      // echoing what was typed, so the caption only changes once the numbers have.
+      renderPullWindow("Saved. Re-reading BasisBoard for those dates…");
+      pollForWindow(from, to, 0);
+    }).catch(function () {
+      renderPullWindow("Couldn't save that range — try again.", true);
+    });
+  }
+
+  // The window is set; the rows for it take a build (~10s). Keep asking until the payload agrees,
+  // then re-render everything off the new dataset.
+  function pollForWindow(from, to, n) {
+    if (n > 40) { renderPullWindow("Still re-reading BasisBoard. This page will catch up."); return; }
+    setTimeout(function () {
+      api("/api/analytics").then(function (r) { return r.json(); }).then(function (j) {
+        var w = (j && j.pull_window) || {};
+        if (j && j.ok && !j.building && (w.from || "") === from && (w.to || "") === to && !j.stale) {
+          adopt(j);
+          render();
+          return;
+        }
+        pollForWindow(from, to, n + 1);
+      }).catch(function () { pollForWindow(from, to, n + 1); });
+    }, 3000);
+  }
+
   function render() {
     if (!DATA || !DATA.ok) return;
     CARDS = {};
+    renderPullWindow();
     renderTabs();
     renderFilterBar();
     renderActiveFilters();
@@ -588,6 +688,12 @@
       if (!isNaN(d.getTime())) {
         bits.push("data as of " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       }
+    }
+    // Which window these numbers were built from — read off the payload, so a reader served the
+    // stale snapshot during a rebuild sees the window that dataset actually used.
+    var pwin = (payload.pull_window || {});
+    if (pwin.from || pwin.to) {
+      bits.push("bids " + (pwin.from || "the beginning") + " → " + (pwin.to || "today"));
     }
     $("sub").textContent = "Your BasisBoard bids — won and submitted, sliced any way you like." +
       (bits.length ? "  (" + bits.join(" · ") + ")" : "");
@@ -757,8 +863,26 @@
     return null;
   }
 
+  document.addEventListener("click", function (ev) {
+    if (ev.target && ev.target.id === "pw-save") savePullWindow();
+  });
+
   document.addEventListener("change", function (ev) {
     var el = ev.target;
+    // The pull-window inputs are a SETTING, not a filter: typing in them changes nothing until
+    // Save. Cross-bound them the way the filter inputs are, and stop here — falling through would
+    // re-render the whole page and discard what is half-typed.
+    if (el.id === "pw-from" || el.id === "pw-to") {
+      var pf = $("pw-from"), pt = $("pw-to");
+      if (pf && pt) {
+        if (pf.value && pt.value && pf.value > pt.value) {
+          if (el.id === "pw-from") pt.value = pf.value; else pf.value = pt.value;
+        }
+        pt.min = pf.value || "";
+        pf.max = pt.value || "";
+      }
+      return;
+    }
     if (el.id === "f-preset") {
       STATE.preset = el.value;
       persist(); render(); return;

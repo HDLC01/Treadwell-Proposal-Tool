@@ -627,6 +627,18 @@ function resolveBaseTab() {
   const ep = tabs.filter(t => t.role === "epoxy");           // epoxy / combo fallback derivation
   return ep.find(t => t.kind === "base") || ep[0] || pricedTabs()[0] || null;
 }
+// Is this sheet part of a COMBO job's combined base bid?
+//
+// Hanz, 2026-08-12: "If the work type is combo both epoxy and polish are base bids."
+//
+// ONE definition, used by the bid strip and by the rooms snapshot, because those two disagreeing
+// is the bug: the strip showed a single-sheet base while the money summed two, and the snapshot
+// would happily list a base sheet as an option against itself. `!state.base_tab_id` because an
+// explicit pick narrows a combo to that one sheet — the estimator's deliberate override.
+function isInCombinedBase(t) {
+  if (!t || t.kind !== "base" || t.role === "gyp") return false;
+  return (state.work_type || "epoxy").toLowerCase() === "combo" && !state.base_tab_id;
+}
 function ensureOpt(id) {
   if (!state.tab_opts[id]) state.tab_opts[id] =
     { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" };
@@ -681,21 +693,49 @@ function renderBidOptions() {
   const revealSystems = !!state.reveal_systems;
   const visible = revealSystems ? priced.slice() : priced.filter(defaultChipVisible);
   const hasHiddenSystems = priced.some(t => !defaultChipVisible(t));
-  // NO "Auto"/"combined" pseudo-chip on ANY job (Hanz: remove it from epoxy,
-  // polish, gyp — and combo too). The base bid is always a real, listed sheet:
-  // the estimator's explicit pick (baseId), or — until they pick one — the
-  // auto-resolved base tab (autoBase), shown with the "base bid" tag. Every
-  // other sheet, including the second base-kind tab on a combo, appears as an
-  // ordinary "add as option" chip.
-  const soloBase = baseId ? null
+  // On a COMBO job both base-kind sheets are the base bid.
+  //
+  // Hanz, 2026-08-12: "If the work type is combo both epoxy and polish are base bids."
+  //
+  // That is what the money has always done — with no explicit pick, the lump sum below sums
+  // Epoxy + Polish and the proposal prints an Option 1 / Option 2 breakout. This strip was the
+  // only thing that disagreed: it rendered Epoxy's radio CHECKED with the "base bid" tag via
+  // `soloBase` and offered Polish as "add as option", so the screen showed a single-system bid
+  // while charging for two. Worse, clicking the radio that already looked checked collapsed the
+  // sum to epoxy alone, dropped the breakout, and this screen had no control to undo it.
+  //
+  // The Proposal screen has told the truth about this all along (`isPartOfAutoBase` +
+  // "Epoxy + Polish (combined)"), so this is that same, already-shipped control one screen
+  // earlier — not the "Auto" pseudo-chip Hanz had removed, which named no real sheet.
+  //
+  // Off combo, nothing changes: the base bid is a real listed sheet, either the estimator's
+  // pick or the auto-resolved tab, and every other sheet is an ordinary option chip.
+  const comboBoth = wt === "combo" && !baseId;
+  const soloBase = (baseId || comboBoth) ? null
                  : (autoBase ? autoBase.id
                              : (visible.length ? visible[0].id : null));
-  // No hidden-under-auto-base tabs anymore: with a single resolved base, every
-  // other chip gets its normal option controls.
-  const isPartOfAutoBase = () => false;
+  // The two sheets the combined base bid is made of — the same predicate the rooms snapshot uses,
+  // and the same rule proposal-review.js applies, so one draft cannot be described three ways.
+  const isPartOfAutoBase = isInCombinedBase;
+  // The combined chip's price: the same sheets `isPartOfAutoBase` tags, so the number and the
+  // tags can never describe different pairs.
+  const comboComboTotal = () => priced
+    .filter(t => t.kind === "base" && t.role !== "gyp")
+    .reduce((s, t) => s + (HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0), 0);
   const baseRadio = (val, checked, label) =>
     `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
   let html = "";
+  // Combo's combined base, as a real named chip and — the part this screen never had — the way
+  // BACK from a single-sheet pick. Narrowing a combo to one sheet was one click and permanent
+  // here; only the Proposal screen could restore the pair.
+  if (wt === "combo") {
+    html += `<span class="bb-opt bb-combined">` +
+      baseRadio("", !baseId, "Epoxy + Polish (combined)") +
+      `<span class="bb-price">${_moneyBB(comboComboTotal())}</span>` +
+      (comboBoth ? `<span class="bb-tag">base bid</span>`
+                 : `<span class="bb-sub"><span class="bb-hint">Both sheets as one base bid</span></span>`) +
+      `</span>`;
+  }
   html += visible.map(t => {
     const o = state.tab_opts[t.id] || {};
     const isBase = baseId === t.id || soloBase === t.id;
@@ -705,11 +745,25 @@ function renderBidOptions() {
                 `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
     if (isBase) {
       inner += `<span class="bb-tag">base bid</span>`;
-    } else if (!isPartOfAutoBase(t)) {
+    } else if (isPartOfAutoBase(t)) {
+      // BOTH sheets carry the tag on a combo — that is the whole ask. No option controls: a
+      // sheet already inside the base bid cannot also be an option against it, which is the
+      // double-count the rooms snapshot used to build.
+      inner += `<span class="bb-tag">base bid</span>` +
+        `<span class="bb-sub"><span class="bb-hint">Part of the combined base bid — ` +
+        `tick this sheet to bid it on its own.</span></span>`;
+    } else {
       inner += `<span class="bb-sub">` +
         `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
         `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
         `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
+        // Marked an option but not shown = configured into thin air: the rooms snapshot drops
+        // `show === false` rows, so it reaches neither the PDF nor the customer portal. That
+        // combination was completely silent, and the ticked "add as option" reads as done.
+        // Hanz, 2026-08-13: "There are two options but the PDF Shows one."
+        ((isOpt && !show)
+          ? `<span class="bb-inert">Not shown anywhere until “show in proposal” is ticked.</span>`
+          : "") +
         `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct</option></select></span>` +
         `</span></span>`;
     }
@@ -723,7 +777,15 @@ function renderBidOptions() {
     html += `<span class="bb-opt bb-addsys"><button type="button" class="bb-addsys-btn">${_escBB(lbl)}</button></span>`;
   }
   list.innerHTML = html;
-  // The legend (#bid-options-hint) stays visible — it explains base vs. option.
+  // The legend explains base vs. option. On a combo it has to say the thing that is not obvious
+  // from the controls: the price already covers both sheets, and picking one is how you narrow
+  // the bid, not how you confirm it.
+  const hint = document.getElementById("bid-options-hint");
+  if (hint && wt === "combo") {
+    hint.innerHTML = "A combo bid is <b>both</b> sheets: Epoxy&nbsp;+&nbsp;Polish are the " +
+      "<b>base&nbsp;bid</b> and the proposal prices them as Option&nbsp;1 and Option&nbsp;2. " +
+      "Pick a single sheet only to bid that system <b>on its own</b>.";
+  }
 }
 
 // Delegated listeners on #bid-bar (static container — attach once).
@@ -753,7 +815,10 @@ function wireBidBar() {
     const o = ensureOpt(wrap.dataset.id);
     if (el.classList.contains("bb-isopt")) {
       o.is_option = el.checked;
-      if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+      // Reset `show`, don't merely default it: an option un-shown earlier stayed un-shown when
+      // re-enabled, so ticking "add as option" did nothing anywhere. Same fix as the Proposal
+      // screen's pr-isopt handler — the two strips write the same state and must agree.
+      if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
       const sub = wrap.querySelector(".bb-optsub"); if (sub) sub.style.display = el.checked ? "" : "none";
     } else if (el.classList.contains("bb-show")) {
       o.show = el.checked;
@@ -3438,7 +3503,13 @@ function snapshotLumpSumsToState() {
   const optionTabs = pricedTabs().filter(t =>
     (!baseTab || t.id !== baseTab.id) &&
     state.tab_opts[t.id] && state.tab_opts[t.id].is_option &&
-    state.tab_opts[t.id].show !== false);
+    state.tab_opts[t.id].show !== false &&
+    // A sheet inside the combined base bid is not also an option against it. Without this,
+    // ticking "add as option" on Polish in a combo put Polish in the base sum AND listed it as
+    // an extra, so the proposal quoted the same work twice. It only ever looked harmless because
+    // the Proposal screen rebuilds rooms on load and dropped it there (that screen has had this
+    // guard since it shipped — see proposal-review.js's optionTabs).
+    !isInCombinedBase(t));
   const shownOptions = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
   state.rooms = (shownOptions.length && baseTab) ? [mkRoom(baseTab, true), ...shownOptions] : [];
 

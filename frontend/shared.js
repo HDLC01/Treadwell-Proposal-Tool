@@ -194,11 +194,66 @@
     } catch {}
   }
 
+  // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
+  // Somebody else can change any of them from the CRM while this page holds an older copy.
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived"];
+
+  /** Re-read the server-owned keys for this draft and merge them into local state.
+   *
+   *  Hanz, 2026-08-13, on assigning an estimator from the CRM drawer: "that estimator picker
+   *  should also reflect in the Section 4 of the estimate."
+   *
+   *  It did not, and the reason is subtle. The full hydrate only runs when the local blob belongs
+   *  to a DIFFERENT draft — so assigning from the drawer and then opening the same project's Files
+   *  screen on the same machine skipped it entirely and the picker read a copy of the state from
+   *  before the assignment. The server value is authoritative for these keys by definition (that
+   *  is what server-owned means), so re-reading them costs one small GET and can never lose work.
+   *
+   *  Narrow on purpose: it merges ONLY these keys, so it cannot stomp anything the estimator has
+   *  typed on this page. Failure is silent — a blip must leave the page exactly as it was.
+   *
+   *  Resolves to the merged subset ({} when there was nothing to read). */
+  async function refreshServerOwned() {
+    const id = getDraftId();
+    if (!id || isUnverified(id)) return {};
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id),
+                              { headers: authHeaders() });
+      if (!res.ok) return {};
+      const body = await res.json();
+      const data = (body && body.data) || {};
+      const patch = {};
+      SERVER_OWNED_KEYS.forEach((k) => {
+        if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
+      });
+      // Compare before writing: an unconditional setState would mark the blob dirty on every
+      // page load and schedule a PUT that changes nothing.
+      const cur = getState();
+      const moved = Object.keys(patch).filter((k) => cur[k] !== patch[k]);
+      if (moved.length) setState(patch);
+      return patch;
+    } catch {
+      return {};
+    }
+  }
+
+  // The most recent server write, so flushState() can await it. A rejected promise is
+  // never stored — callers get a boolean, never an unhandled rejection.
+  let _inFlight = null;
+
   // One place that actually PUTs a blob to a draft id. Callers guarantee the
   // blob belongs to `id`; this never picks the id itself.
+  //
+  // RETURNS a promise resolving true on a stored write, false on anything else. It used to
+  // return nothing, which is what made the publish race possible: /api/portal/publish
+  // snapshots the SERVER's copy of the draft, and with no handle on the in-flight save
+  // there was no way for the Done page to wait for its own edits to land. On 2026-08-12 a
+  // resend of "Hanz Company 123" pinned revision 2 to a draft two minutes older than the
+  // base-bid change the estimator had just made, so the portal showed Epoxy as the base
+  // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
   function putDraft(id, blob) {
     try {
-      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
+      const p = fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
         method: "PUT",
         headers: authHeaders(),
         body: JSON.stringify({ data: blob }),
@@ -207,8 +262,37 @@
         // Only after the row exists: set_test_flag returns false on a missing draft, so filing
         // before the first save would be a silent no-op and the project would stay in Active.
         if (res && res.ok) applyPendingTestIntent(id);
-      }).catch(() => {/* offline / backend down — local copy still safe */});
-    } catch {}
+        return !!(res && res.ok);
+      }).catch(() => false /* offline / backend down — local copy still safe */);
+      _inFlight = p;
+      return p;
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+
+  /** Wait until this draft's edits are on the server. Resolves true when the server holds
+   *  what this page shows, false if the write failed or was refused.
+   *
+   *  Anything that makes the SERVER read the draft — publishing to the portal, generating
+   *  files — must await this first. The debounce is 2.5s; a person who edits and clicks
+   *  Send inside that window is the normal case, not an edge case.
+   *
+   *  Deliberately fires the pending save immediately rather than waiting out the timer:
+   *  the point is to be finished, not to be patient. Returns true when there was nothing
+   *  to do (no id, nothing dirty) — "the server is in sync" is the honest answer then. */
+  async function flushState() {
+    if (_saveTimer) {
+      clearTimeout(_saveTimer); _saveTimer = null;
+      const id = getDraftId();
+      const blob = getState();
+      // Same refusal rule as scheduleServerSave — never write a blob owned by another draft.
+      if (id && !(blob[STAMP] && blob[STAMP] !== id) && !isUnverified(id)) {
+        putDraft(id, blob);
+      }
+    }
+    if (!_inFlight) return true;
+    try { return await _inFlight; } catch { return false; }
   }
 
   // Before we evict a FOREIGN blob from localStorage (adopting a different
@@ -725,6 +809,8 @@
   window.TW = {
     getState,
     setState,
+    flushState,
+    refreshServerOwned,
     clearState,
     readForm,
     writeForm,
