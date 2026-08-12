@@ -678,8 +678,11 @@
       // Keep the last good view rather than replacing it with an error a poll caused. Only a
       // first open, with nothing to fall back on, has to show the failure.
       if (DETAIL_CACHE[pid]) return;
-      d.innerHTML = '<div class="dhead"><h2>Error</h2><button class="dclose">&times;</button></div>' +
-        '<div class="dbody"><p class="note">' + esc(err.message) + '</p></div>';
+      // Through drawerHead like every other panel, so this one keeps the labelled close
+      // button. It used to ship a bare `<button class="dclose">×</button>`, which is the only
+      // control on screen at that moment and read to a screen reader as "times".
+      d.innerHTML = drawerHead("Could not load this project", "") +
+        '<div class="dbody"><div class="dpanel"><p class="note">' + esc(err.message) + '</p></div></div>';
       d.querySelector(".dclose").addEventListener("click", closeDrawer);
       return;
     }
@@ -704,30 +707,41 @@
     const who = estimatorOf(row);
     const total = cardTotal(row);
     const d = $("drawer");
+    // Same head, same fact cells and the same layout column as the real drawer: a rep should not
+    // have to re-learn the panel because this project has not been sent yet. What is absent is
+    // absent because it does not exist — no customer link, no thread, no approval, no deposit.
+    //
+    // The head carries no meta line here. The real drawer puts the customer and the money up
+    // there because they have to survive a tab change; this panel has no tabs, so it would only
+    // be restating the two fact cells directly underneath.
     d.innerHTML = `
-      <div class="dhead">
-        <h2>${esc(row.project_name || "Proposal")}</h2>
-        <button class="dclose" aria-label="Close">&times;</button>
-      </div>
+      ${drawerHead(row.project_name, "")}
       <div class="dbody">
+       <div class="dpanel">
         <div class="sec">
           <div class="lbl">Not sent yet</div>
-          <p class="note" style="margin:0">The estimate and proposal are generated, but nobody has
-          sent them to the customer. Nothing is shared until you do.</p>
+          <p class="note">The estimate and the proposal are generated, and nobody has sent them to
+          the customer. Nothing reaches them until you do.</p>
         </div>
-        ${row.customer_email ? `<div class="sec"><div class="lbl">Addressed to</div>${esc(row.customer_email)}</div>` : ""}
         <div class="sec">
-          <div class="lbl">Estimator</div>
-          <div class="ns-est">${
-            who ? avatar(who, !isAssigned(row)) +
-                  `<span${isAssigned(row) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
-                    esc(nameOf(who))}${isAssigned(row) ? "" : "?"}</span>`
-                : '<span class="unassigned">Nobody is assigned</span>'}</div>
-          <!-- Assign it HERE, not only from the Projects tab. Hanz, 2026-08-13: "Allow to choose
-               the estimator on the Created but not sent". The name shown above is a guess until
-               somebody makes it real — hence the "?" — and the drawer was the one place that
-               displayed the guess without offering the fix. The picker sits on the DRAFT endpoint
-               because an unsent project has no portal row to assign against. -->
+          <div class="facts">
+            ${row.customer_email ? fact("Addressed to", esc(row.customer_email)) : ""}
+            ${fact("Estimator", who
+              ? avatar(who, !isAssigned(row)) + esc(nameOf(who)) + (isAssigned(row) ? "" : "?")
+              : '<span class="unassigned">Nobody is assigned</span>')}
+            ${total != null ? fact("Bid", `<span class="amt">${money(total)}</span>`) : ""}
+            ${row.drafted_at ? fact("Created", esc(TW.fmtBizDate(row.drafted_at))) : ""}
+          </div>
+        </div>
+        <!-- Assign it HERE, not only from the Projects tab. Hanz, 2026-08-13: "Allow to choose
+             the estimator on the Created but not sent". The Estimator fact above is a GUESS until
+             somebody picks — the draft's author, drawn with a "?" — and this drawer was the one
+             place that displayed the guess while offering no way to settle it. Under the facts
+             rather than inside them: a fact and the control that changes it are different things,
+             and the grid's job is to be scannable. The DRAFT endpoint, because an unsent project
+             has no portal row to assign against. -->
+        <div class="sec">
+          <div class="lbl">Assign an estimator</div>
           <div class="ns-assign">
             <select id="ns-assign" aria-label="Assign an estimator" disabled>
               <option value="">Loading…</option>
@@ -736,12 +750,11 @@
           </div>
           <p class="note ns-assign-note" id="ns-assign-note"></p>
         </div>
-        ${total != null ? `<div class="sec"><div class="lbl">Bid</div><strong>${money(total)}</strong></div>` : ""}
-        ${row.drafted_at ? `<div class="sec"><div class="lbl">Created</div>${esc(TW.fmtBizDate(row.drafted_at))}</div>` : ""}
         <div class="sec row3">
           <button type="button" class="btn btn-p" data-go-files>Open the files</button>
           <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
         </div>
+       </div>
       </div>`;
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
     const go = (u) => window.location.assign(u);
@@ -992,15 +1005,34 @@
     const seen = {}, people = [];
     (j.roster || []).forEach((m) => { const e = String(m.email).toLowerCase(); seen[e] = 1; people.push({ email: m.email, base: !!m.enabled }); });
     Object.keys(ov).forEach((e) => { if (!seen[e]) people.push({ email: e, base: false }); });   // 'add'ed non-roster person
+    // The summary before the detail: nine chips of which some are green is a thing you have to
+    // count, and "who is actually getting these" is the question the strip is scanned for.
+    // DERIVED, never stored — nothing here changes who is on, which is deliberate. Hanz
+    // confirmed the roster is meant to be partly off.
+    let on = 0;
+    let mine = false;
     wrap.innerHTML = people.map((p) => {
       const e = String(p.email).toLowerCase();
       const mode = ov[e];
       const eff = mode === "add" ? true : mode === "mute" ? false : p.base;
+      if (eff) on++;
+      if (eff && e === myEmail) mine = true;
       const canEdit = isAdmin || e === myEmail;
       return `<button class="nt-chip ${eff ? "on" : ""}" data-email="${esc(p.email)}" data-base="${p.base ? 1 : 0}" data-eff="${eff ? 1 : 0}"`
            + `${canEdit ? "" : " disabled"} title="${canEdit ? esc(p.email) : "Only admins can change others"}">`
            + `${plainAvatar(p.email)}${esc(nameOf(p.email))}</button>`;
-    }).join("") || '<span class="note">No roster yet — add people on the Notification Sending page.</span>';
+    }).join("") || '<span class="note">No roster yet. Add people on the Notification Sending page.</span>';
+    // Written into its own node rather than prepended to the strip: paintNtChips owns
+    // #nt-chips outright and rewrites it on every toggle, so anything that has to survive a
+    // toggle needs somewhere else to live. Says who as well as how many when it is you,
+    // because "am I on this one?" is the question people ask about their own name.
+    const count = $("nt-count");
+    if (count) {
+      count.textContent = !people.length ? ""
+        : on === 0 ? "Nobody is being emailed about this project."
+        : on + " of " + people.length + (on === 1 ? " person gets" : " people get")
+          + " this project's emails" + (mine ? ", including you." : ".");
+    }
     wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
       if (b.disabled) return;
       const email = b.dataset.email, base = b.dataset.base === "1", eff = b.dataset.eff === "1";
@@ -1107,12 +1139,12 @@
       add("Account name", x.account_name);
       add("Account type", ACCT_TYPE_LABEL[String(x.account_type || "").toLowerCase()] || x.account_type);
       add("Routing no.", x.routing_number,
-          { num: true, title: "Routing number — printed on every check, shown in full" });
+          { num: true, title: "Routing numbers are printed on every check, so this one shows in full" });
       if (x.account_number) {
         const i = secrets.push(String(x.account_number)) - 1;
         add("Account no.", mask4(x.account_number), {
           num: true, id: "dep-acct-" + i,
-          title: "Account number — hidden until you show it",
+          title: "Hidden until you show it",
           after: `<button type="button" class="dep-show" data-acct="${i}" aria-pressed="false"` +
                  ` aria-label="Show the full account number">Show</button>`,
         });
@@ -1356,6 +1388,202 @@
     </div>`;
   }
 
+  // ── the drawer's information design ────────────────────────────────────────
+  // Hanz, 2026-08-13, with a screenshot of the drawer on a sent project: "Improve this
+  // Container for better UI UX remove the URL for active projects. Redesign using claude
+  // design."
+  //
+  // What that panel was: five state cards, then flat stacked sections of tiny uppercase
+  // labels with run-on sentences under them. The worst of it was the Customer card, which
+  // printed the customer's whole magic link — sixty-odd characters of opaque token, wrapped
+  // over two lines and underlined — directly beneath the email address, which is the line a
+  // rep actually reads. A token is not information to a human: nobody checks it, nobody
+  // types it, and it shoved the identity it belongs to out of the way.
+  //
+  // The builders below carry the redesign. Every one of them takes payload and returns
+  // markup, holding no state and touching no DOM, so the whole panel can be executed under
+  // node — see backend/tests/js/drawer-render-harness.js, which runs the real renderDetail
+  // over real payloads. Source assertions were what let an unbound identifier take this
+  // board down on 2026-08-12; a panel this large has to be run, not read.
+
+  /** One labelled fact: the drawer's unit of information.
+   *
+   *  `v` is MARKUP, not text — the cells carry money spans, secondary lines and monospaced
+   *  references — so every caller escapes its own value. Same contract, and the same reason,
+   *  as `add()` inside depositHtml. The KEY is escaped here because it is a label, always
+   *  ours, and escaping it costs nothing. */
+  const fact = (k, v, wide) =>
+    `<div class="fact${wide ? " fact-wide" : ""}"><span class="fact-k">${esc(k)}</span>` +
+    `<span class="fact-v">${v}</span></div>`;
+
+  /** The head, with the two facts that stay true on every tab.
+   *
+   *  The step strip below it says which STAGE the project reached; this says what it IS —
+   *  who it is for and what it is worth. Both were previously only on the Proposal tab, so
+   *  replying to a customer on the Chat tab meant remembering whose job you were looking at.
+   *
+   *  `meta` is markup the caller has already escaped, for the same reason `fact` is. */
+  function drawerHead(title, meta) {
+    return `<div class="dhead">
+        <div class="dh-t">
+          <h2>${esc(title || "Proposal")}</h2>
+          ${meta ? `<div class="dh-meta">${meta}</div>` : ""}
+        </div>
+        <button class="dclose" aria-label="Close">&times;</button>
+      </div>`;
+  }
+
+  /** Head facts, middot-separated, with the empties dropped rather than leaving a dangling
+   *  separator on a project that has no total yet. */
+  const metaLine = (bits) => bits.filter(Boolean)
+    .join('<span class="dh-sep" aria-hidden="true">·</span>');
+
+  /** Money for the head. "Approved" only when somebody actually approved it: the portal
+   *  calls the field `approved_total` on every row, sent ones included, so labelling a
+   *  live bid "Approved" would put a word on it that nobody has earned. Same distinction
+   *  cardTotal's own comment draws. */
+  const headMoney = (approvedTotal, bidTotal) => {
+    if (approvedTotal != null) return `<span class="dh-amt amt">Approved ${money(approvedTotal)}</span>`;
+    if (bidTotal != null) return `<span class="dh-amt amt">Bid ${money(bidTotal)}</span>`;
+    return "";
+  };
+
+  /** Who the customer is, and the two ways to reach their view.
+   *
+   *  THE TOKEN IS NEVER PRINTED. It lives in the anchor's href and nowhere else: not as
+   *  text, not in a title, not in an aria-label. A browser already reveals a link's target
+   *  in the status bar on hover, which covers the one person who genuinely wants to see
+   *  where they are going, and costs the other ninety-nine nothing.
+   *
+   *  Two controls rather than one, because a link and a link you can send are different
+   *  jobs: "Open the customer's view" is a real <a> so middle-click and open-in-new-tab
+   *  behave, and "Copy the link" is what a rep needs when they are pasting it into an
+   *  email or a text.
+   */
+  function customerHtml(p) {
+    const name = String(p.customer_name || "").trim();
+    const email = String(p.customer_email || "").trim();
+    // http(s) only. esc() makes the value safe to put INSIDE an attribute, but it says nothing
+    // about the scheme, and `href="javascript:…"` is a script that runs on a staff click. The
+    // value comes from our own portal over a service token, so this is not a live hole — it is one
+    // condition standing between a compromised or misconfigured upstream and code execution in the
+    // CRM. Anything else falls through to the no-link branch rather than rendering a control that
+    // cannot be trusted. Matches http too: a local portal is http://localhost:8899/p/….
+    const url = /^https?:\/\//i.test(String(p.url || "")) ? String(p.url) : "";
+    // The name leads when we have one, otherwise the address is the identity — never an
+    // empty strong line with the email demoted underneath it.
+    const lead = name || email;
+    return `<div class="sec" id="dsec-customer">
+      <div class="lbl">Customer</div>
+      <div class="idn">
+        <div class="idn-n">${esc(lead || "No customer on this proposal")}</div>
+        ${name && email ? `<div class="idn-e">${esc(email)}</div>` : ""}
+      </div>
+      ${url ? `<div class="row3">
+        <a class="btn btn-s btn-sm is-link" data-portal-link href="${esc(url)}"
+           target="_blank" rel="noopener">Open the customer's view<span aria-hidden="true">↗</span></a>
+        <button type="button" class="btn btn-s btn-sm" id="cust-copy" data-copy-portal>Copy the link</button>
+      </div>
+      <p class="note">Anyone with this link can open the proposal, so send it to the customer and nobody else.</p>
+      <p class="note" id="cust-copy-say" role="status" aria-live="polite"></p>`
+      : '<p class="note">This proposal has no customer link yet.</p>'}
+    </div>`;
+  }
+
+  /** Put the customer's link on the clipboard, and SAY what happened.
+   *
+   *  Every branch has to leave a working button. `navigator.clipboard` is absent on an
+   *  insecure origin and can reject outright — a denied permission, or a browser that
+   *  decides this click did not count as a gesture — and an uncaught rejection here would
+   *  strand the one affordance that replaced the URL we removed. So the button label never
+   *  enters a pending state it could be stuck in, and the failure path names the way out
+   *  that always works: the Open control sitting next to it.
+   *
+   *  Deliberately NOT a document.execCommand fallback with a hidden textarea. That would
+   *  put the token back into the DOM to work around a browser that already said no, for a
+   *  case that cannot arise on https://proposals.wetreadwell.com.
+   *
+   *  Returns true/false so a test can assert every outcome: copied, no clipboard object, no
+   *  writeText on it, a rejected promise, and a synchronous throw.
+   */
+  async function copyPortalLink(url, btn, say) {
+    const tell = (m) => { if (say) say.textContent = m; };
+    const orig = btn.textContent;
+    tell("");
+    try {
+      const cb = (typeof navigator !== "undefined" && navigator.clipboard) || null;
+      if (!cb || !cb.writeText) throw new Error("no clipboard in this browser");
+      await cb.writeText(url);
+    } catch {
+      btn.textContent = orig;
+      tell("This browser blocked the copy. Open the customer's view and copy the address from there.");
+      return false;
+    }
+    btn.textContent = "Link copied";
+    tell("The link is on your clipboard.");
+    setTimeout(() => { btn.textContent = orig; }, 2200);
+    return true;
+  }
+
+  /** Wire the copy button to the anchor beside it.
+   *
+   *  The URL is read off the anchor's href rather than stored in a data attribute, so the
+   *  customer's token exists in exactly one place in the DOM. Both nodes are resolved HERE,
+   *  at bind time, rather than inside the handler: a lookup that only runs on click is a
+   *  lookup no test can see failing. */
+  function wirePortalLink(d) {
+    const btn = d.querySelector("[data-copy-portal]");
+    const link = d.querySelector("[data-portal-link]");
+    if (!btn || !link) return;
+    const say = $("cust-copy-say");
+    btn.addEventListener("click", () => copyPortalLink(link.href, btn, say));
+  }
+
+  /** The approval, as facts rather than a sentence.
+   *
+   *  It used to read "HANZ URIEL A DE LA CRUZ on 2026-08-10 — Polish, Epoxy at $22,763.00",
+   *  which buries the two things anybody scans for, the money and the date, in the middle of
+   *  a name in capitals. Labelled cells put the figure where the eye lands and let a long
+   *  name be long without hiding anything behind it.
+   *
+   *  The signed-in address stays visible. It is the one thing here that can differ from the
+   *  typed name — a customer approving from a colleague's login — and it is an email, not a
+   *  token: readable, checkable, and the thing you would search for. */
+  function approvalHtml(a) {
+    if (!a) return "";
+    const opts = a.options && a.options.length ? a.options.join(", ") : (a.option || "");
+    const signer = [a.name, a.title].filter(Boolean).map(esc).join(", ");
+    return `<div class="sec" id="dsec-approved">
+      <div class="lbl">Approved</div>
+      <div class="facts">
+        ${a.total != null ? fact("Amount", `<span class="amt amt-lg">${money(a.total)}</span>`) : ""}
+        ${opts ? fact("What they took", esc(opts)) : ""}
+        ${a.date ? fact("Date", esc(a.date)) : ""}
+        ${signer ? fact("Signed by", signer + (a.approver_email
+          ? `<span class="fact-s">signed in as ${esc(a.approver_email)}</span>` : ""), true) : ""}
+      </div>
+    </div>`;
+  }
+
+  /** The contacts the customer sent, role first.
+   *
+   *  "Who do I call about access" is the question this card gets opened for, so the role is
+   *  the column you scan and the name and the numbers hang off it. It used to be three
+   *  paragraphs of "Primary: Dave Smith · dave@x.com · (913) 555-0134", which reads as one
+   *  grey run at 12px. */
+  function contactsHtml(rows) {
+    const list = rows || [];
+    if (!list.length) return '<p class="note">The customer has not sent their project contacts yet.</p>';
+    return `<div class="ct-list">${list.map((c) => {
+      const reach = [c.email, c.phone].filter(Boolean).map(esc).join(" · ");
+      return `<div class="ct">
+        <div class="ct-role">${esc(ROLE_LABEL[c.role] || c.role || "Contact")}</div>
+        <div class="ct-n">${esc(c.name || "No name given")}</div>
+        ${reach ? `<div class="ct-m">${reach}</div>` : ""}
+      </div>`;
+    }).join("")}</div>`;
+  }
+
   function msgHtml(m) {
     const t = when(m.created_at);
     // These three render as CARDS, matching the customer portal exactly, so staff
@@ -1430,7 +1658,7 @@
   // `template`, not `rule` — the worker records what it SENT. The rule key that
   // deduped it is scheduling bookkeeping and means nothing to an estimator.
   const FU_TEMPLATE_LABEL = {
-    not_viewed: "Nudge — not opened yet",
+    not_viewed: "Nudge: not opened yet",
     next_steps: "Next steps after viewing",
     second_nudge: "Second nudge",
     checkin: "Check-in",
@@ -1481,7 +1709,7 @@
     if (isLost(p)) {
       const why = lostReason(p);
       return { val: "Closed lost", lead: "The customer said they aren't moving forward"
-        + (why ? " — " + why.toLowerCase() : "") + ". Nothing is being sent." };
+        + (why ? " (" + why.toLowerCase() + ")" : "") + ". Nothing is being sent." };
     }
     const until = pausedUntil(p);
     if (until) return { val: "Paused", lead: "The customer asked us to come back to this. Follow-ups resume "
@@ -1498,9 +1726,9 @@
     if (String(p.proposal_status || "") === "approved" && !C.depositSatisfied(p)) {
       const told = String(p.deposit_status || "") === "submitted";
       return { val: "On", lead: told
-        ? "Approved, and they've told us the deposit is on its way — so they aren't being emailed "
+        ? "Approved, and they've told us the deposit is on its way, so they aren't being emailed "
           + "about it any more. You keep getting reminded until it actually lands."
-        : "Approved — following up automatically until the deposit is in. Their reminders stop as "
+        : "Approved. Following up automatically until the deposit is in. Their reminders stop as "
           + "soon as they tell us it's on the way; yours continue until it lands." };
     }
     return { val: "On", lead:
@@ -1520,14 +1748,14 @@
 
         <div class="fu-line">
           <button class="btn btn-s" id="fu-toggle" ${isLost(p) ? "disabled" : ""}
-            title="${isLost(p) ? "This proposal is closed — reactivate it first"
+            title="${isLost(p) ? "This proposal is closed. Reactivate it first."
                    : enabled ? "Stop sending automatic follow-ups for this project"
                              : "Start the follow-up cadence from today"}">${
             enabled ? "Turn automation off" : "Turn automation on"}</button>
         </div>
 
         <div class="lbl fu-lbl">Log what you did</div>
-        <p class="note">Recording a call or a text keeps this proposal out of tomorrow's digest — and tells whoever picks it up next what already happened.</p>
+        <p class="note">Recording a call or a text keeps this proposal out of tomorrow's digest, and tells whoever picks it up next what already happened.</p>
         <div class="fu-line">
           <select id="fu-kind" class="tw-select" aria-label="What you did">
             <option value="call">Call</option>
@@ -1536,7 +1764,7 @@
             <option value="note">Note</option>
           </select>
           <input id="fu-note" type="text" class="fu-note" maxlength="2000"
-                 placeholder="Left a voicemail with Dave — will try Thursday" aria-label="Note" />
+                 placeholder="Left a voicemail with Dave, will try Thursday" aria-label="Note" />
           <button class="btn btn-s" id="fu-log">Log it</button>
         </div>
 
@@ -1597,11 +1825,11 @@
     return `
       <div class="lbl fu-lbl">Automated follow-ups go to</div>
       <p class="note">Un-tick somebody and they still get the proposal, the invoice and every
-        reply — they just stop being chased.</p>
+        reply. They just stop being chased.</p>
       <div class="fu-clist">${chips}</div>
       <div class="fu-line">
         <input id="fu-add-contact" class="tw-input" type="email" autocomplete="off"
-               placeholder="Add a contact — name@company.com">
+               placeholder="Add a contact: name@company.com">
         <button class="btn btn-s" id="fu-add-contact-btn">Add</button>
       </div>
       <p class="note" id="fu-c-alert"></p>`;
@@ -1781,16 +2009,12 @@
       : (data.questions || []).map((q) => Object.assign({ msg_type: "text" }, q));
     const thread = msgs.map(msgHtml).join("") || '<p class="note">No messages yet.</p>';
 
-    const contacts = (data.contacts || []).map((c) =>
-      `<div class="note" style="margin-bottom:4px"><strong>${esc(ROLE_LABEL[c.role] || c.role)}</strong>: ${esc(c.name)}` +
-      `${c.email ? " · " + esc(c.email) : ""}${c.phone ? " · " + esc(c.phone) : ""}</div>`).join("")
-      || '<p class="note">No contacts submitted yet.</p>';
+    const contacts = contactsHtml(data.contacts);
 
     // Full account numbers stay in this array, NOT in the markup — see depositHtml.
     const acctFull = [];
     const deposits = (data.deposits || []).map((x) => depositHtml(x, acctFull)).join("");
 
-    const approvedOpts = a && a.options && a.options.length ? a.options.join(", ") : (a ? a.option : "");
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
 
     const unread = unreadCount(pid, msgs);
@@ -1822,32 +2046,38 @@
 
     ACTIVE_SEC = defaultSection(p, unread);
 
+    // What the head says on every tab: who it is for, and what it is worth. The board row is
+    // the only place a total exists before approval (the drawer payload has no such field),
+    // and the drawer is always opened from a loaded board — the same lookup unreadCount and
+    // the not-sent branch already rely on.
+    const row = ALL.find((x) => x.proposal_id === pid);
+    const head = drawerHead(p.project_name, metaLine([
+      (p.customer_name || p.customer_email)
+        ? `<span class="dh-who">${esc(p.customer_name || p.customer_email)}</span>` : "",
+      headMoney(a && a.total != null ? a.total : null, row ? cardTotal(row) : null),
+    ]));
+
     // The tab strip is a THIRD flex item between .dhead and .dbody, not a child
     // of .dbody: #drawer is a flex column and .dhead pins by flex:0 0 auto, so a
     // sibling pins for free — no position:sticky, no z-index, and no fight with
     // .dbody's top padding.
     $("drawer").innerHTML = `
-      <div class="dhead">
-        <h2>${esc(p.project_name || "Proposal")}</h2>
-        <button class="dclose" aria-label="Close">&times;</button>
-      </div>
+      ${head}
       ${renderSecTabs({ approved, depositDone, depositSubmitted, depositNotRequired,
                         contactsDone,
                         requested: !!p.deposit_requested_at, unread,
                         lost: isLost(p), fuVal: followupState(p).val })}
       <div class="dbody">
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
-        <div class="sec" id="dsec-customer"><div class="lbl">Customer</div>${esc(p.customer_name || "")} &lt;${esc(p.customer_email)}&gt;<br>
-          <a class="link" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a></div>
+        ${customerHtml(p)}
         ${recipientsHtml(data.recipient_activity)}
-        ${a ? `<div class="sec" id="dsec-approved"><div class="lbl">Approved</div>${esc(a.name)}${a.title ? ", " + esc(a.title) : ""}
-          on ${esc(a.date || "")} — <strong>${esc(approvedOpts || "")}</strong> at <strong>${money(a.total)}</strong>${
-            a.approver_email ? `<div class="note" style="margin-top:2px">signed in as ${esc(nameOf(a.approver_email))} &lt;${esc(a.approver_email)}&gt;</div>` : ""}</div>` : ""}
+        ${approvalHtml(a)}
 
         <div class="sec" id="dsec-notify">
           <div class="lbl">Notifications for this project</div>
-          <p class="note" id="nt-help" style="margin:0 0 4px">Green = receives this project's emails. Overrides the global roster for this project only. Toggling never sends an email; it only sets who's notified when a customer next replies, approves, or pays.</p>
-          <div id="nt-alert" class="note" style="margin:4px 0"></div>
+          <p class="note" id="nt-help">Who gets an email when this customer replies, approves, or pays. Green means they are on. This overrides the global roster for this project only, and toggling somebody never sends them anything.</p>
+          <p class="note" id="nt-count"></p>
+          <div id="nt-alert" class="note"></div>
           <div id="nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
         </div>
        </div>
@@ -1856,12 +2086,16 @@
         <div class="sec" id="dsec-deposit">
           <div class="lbl">Deposit</div>
           ${depositNotRequired
-            ? `<div class="note">Sent without a deposit — nothing was invoiced and the customer sees no Deposit step. You can still send a request below if the terms change (25% would be ${depAmt != null ? money(depAmt) : "—"}).</div>`
-            : `<div class="note">Auto-calculated (25%): <strong>${depAmt != null ? money(depAmt) : "—"}</strong>${data.deposit_ref ? ` · match ref <strong>${esc(data.deposit_ref)}</strong> on the statement` : ""}${p.deposit_requested_at ? ` · requested ${when(p.deposit_requested_at)}` : ""}</div>`}
+            ? `<p class="note">This proposal went out without a deposit, so nothing was invoiced and the customer sees no Deposit step. You can still send a request below if the terms change.${depAmt != null ? ` A 25% deposit would be ${money(depAmt)}.` : ""}</p>`
+            : `<div class="facts">
+                ${fact("Deposit at 25%", depAmt != null ? `<span class="amt">${money(depAmt)}</span>` : "Not calculated")}
+                ${data.deposit_ref ? fact("Match on the statement", `<span class="dep-num">${esc(data.deposit_ref)}</span>`) : ""}
+                ${p.deposit_requested_at ? fact("Invoice sent", esc(when(p.deposit_requested_at))) : ""}
+              </div>`}
           ${deposits
-            ? `<div class="lbl dep-lbl">Deposit submissions</div>${deposits}`
-            : '<p class="note dep-none">Nothing submitted by the customer yet.</p>'}
-          <div class="row3" style="margin-top:8px">
+            ? `<div class="lbl dep-lbl">What the customer submitted</div>${deposits}`
+            : '<p class="note dep-none">The customer has not submitted a deposit yet.</p>'}
+          <div class="row3">
             <button class="btn btn-p" id="send-deposit-req" ${approved ? "" : "disabled"} title="${approved ? "" : "Available once the customer approves"}">${p.deposit_requested_at ? "Resend deposit request" : "Send deposit request"}</button>
             <button class="btn btn-s" id="mark-deposit" ${depositDone ? "disabled" : ""}>Mark deposit received</button>
           </div>
@@ -1880,9 +2114,9 @@
         <div class="sec" id="dsec-chat">
           <div id="thread">${thread}</div>
           <div id="chat-compose">
-            <div id="reply-alert" class="note" style="margin:6px 0;"></div>
+            <div id="reply-alert" class="note"></div>
             <textarea id="reply-body" placeholder="Reply to the customer…">${esc(REPLY_DRAFT[pid] || "")}</textarea>
-            <div style="margin-top:8px;"><button class="btn btn-p" id="reply-btn">Send reply</button></div>
+            <div class="row3"><button class="btn btn-p" id="reply-btn">Send reply</button></div>
           </div>
         </div>
        </div>
@@ -1910,6 +2144,7 @@
 
     const d = $("drawer");
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
+    wirePortalLink(d);
 
     // Reveal / re-hide a full account number. The value lives in `acctFull`, so it
     // only reaches the DOM when a human asks for it — and goes back on a second click.
@@ -1919,7 +2154,7 @@
       if (!el || acctFull[i] == null) return;
       const shown = b.getAttribute("aria-pressed") === "true";
       el.textContent = shown ? mask4(acctFull[i]) : acctFull[i];
-      el.title = shown ? "Account number — hidden until you show it" : "Full account number";
+      el.title = shown ? "Hidden until you show it" : "Full account number";
       b.setAttribute("aria-pressed", shown ? "false" : "true");
       b.setAttribute("aria-label", (shown ? "Show" : "Hide") + " the full account number");
       b.textContent = shown ? "Show" : "Hide";
@@ -1934,7 +2169,7 @@
         await openDetail(pid);   // refresh drawer
         load();                  // refresh board
       } catch (err) {
-        btn.textContent = "Failed — " + (err.message || "retry"); btn.disabled = false;
+        btn.textContent = "Failed: " + (err.message || "retry"); btn.disabled = false;
         setTimeout(() => { btn.textContent = orig; }, 2600);
       }
     };
@@ -1964,7 +2199,7 @@
       const ok = await TW.confirmDanger({
         title: "Mark the deposit as received?",
         before: "Record the deposit for ", name: p.project_name || "this project", after: " as received?",
-        detail: what + "Check the money has actually landed — the customer is told it's in.",
+        detail: what + "Check the money has actually landed. The customer is told it is in.",
         confirmText: "Mark received", cancelText: "Not yet", tone: "warn", icon: "💵",
       });
       if (!ok) return;
