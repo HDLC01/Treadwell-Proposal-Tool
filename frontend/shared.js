@@ -194,6 +194,49 @@
     } catch {}
   }
 
+  // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
+  // Somebody else can change any of them from the CRM while this page holds an older copy.
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived"];
+
+  /** Re-read the server-owned keys for this draft and merge them into local state.
+   *
+   *  Hanz, 2026-08-13, on assigning an estimator from the CRM drawer: "that estimator picker
+   *  should also reflect in the Section 4 of the estimate."
+   *
+   *  It did not, and the reason is subtle. The full hydrate only runs when the local blob belongs
+   *  to a DIFFERENT draft — so assigning from the drawer and then opening the same project's Files
+   *  screen on the same machine skipped it entirely and the picker read a copy of the state from
+   *  before the assignment. The server value is authoritative for these keys by definition (that
+   *  is what server-owned means), so re-reading them costs one small GET and can never lose work.
+   *
+   *  Narrow on purpose: it merges ONLY these keys, so it cannot stomp anything the estimator has
+   *  typed on this page. Failure is silent — a blip must leave the page exactly as it was.
+   *
+   *  Resolves to the merged subset ({} when there was nothing to read). */
+  async function refreshServerOwned() {
+    const id = getDraftId();
+    if (!id || isUnverified(id)) return {};
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id),
+                              { headers: authHeaders() });
+      if (!res.ok) return {};
+      const body = await res.json();
+      const data = (body && body.data) || {};
+      const patch = {};
+      SERVER_OWNED_KEYS.forEach((k) => {
+        if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
+      });
+      // Compare before writing: an unconditional setState would mark the blob dirty on every
+      // page load and schedule a PUT that changes nothing.
+      const cur = getState();
+      const moved = Object.keys(patch).filter((k) => cur[k] !== patch[k]);
+      if (moved.length) setState(patch);
+      return patch;
+    } catch {
+      return {};
+    }
+  }
+
   // The most recent server write, so flushState() can await it. A rejected promise is
   // never stored — callers get a boolean, never an unhandled rejection.
   let _inFlight = null;
@@ -767,6 +810,7 @@
     getState,
     setState,
     flushState,
+    refreshServerOwned,
     clearState,
     readForm,
     writeForm,
