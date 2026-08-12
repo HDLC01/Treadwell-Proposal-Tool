@@ -93,8 +93,15 @@ function source(name) {
  *  would prove nothing about the repaint. */
 function liftPair(deps) {
   const keys = Object.keys(deps);
-  const body = 'let DRAWER_SIG = "";\n' + source("renderNotSent") + "\n" +
-    source("wireNotSentAssign") + "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG };";
+  // The REAL head and fact helpers too, not stubs. The 2026-08-13 drawer redesign moved
+  // renderNotSent onto both of them, and this harness reported it as `drawerHead is not defined`
+  // — which is precisely the class of failure (a name used but not bound) that took the board
+  // down on prod once. Stubbing them would have hidden the coupling instead of proving it.
+  const fact = /^  const fact = [\s\S]*?;$/m.exec(SRC);
+  if (!fact) throw new Error("could not lift fact");
+  const body = 'let DRAWER_SIG = "";\n' + fact[0] + "\n" + source("drawerHead") + "\n" +
+    source("renderNotSent") + "\n" + source("wireNotSentAssign") +
+    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
 }
 
@@ -147,6 +154,14 @@ const out = {};
     // replace the fact that nobody has.
     stillShowsTheGuess: /Kyle Loseke\?/.test(html),
     unchangedActions: /data-go-files/.test(html) && /data-go-edit/.test(html),
+    // The two invariants the 2026-08-13 redesign merge had to preserve, both of which a
+    // mutation walked straight through until they were asserted:
+    //   the control is actually VISIBLE (a `hidden` wrapper renders the ids and reaches nobody)
+    pickerHidden: /class="ns-assign"[^>]*hidden/.test(html) ||
+                  /<div class="sec"[^>]*hidden[^>]*>\s*<div class="lbl">Assign/.test(html),
+    //   and the estimator is named ONCE — the merge's whole job was collapsing two renderers of
+    //   that line into the facts grid, and nothing noticed when both came back.
+    estimatorCells: (html.match(/fact-k">Estimator</g) || []).length,
   };
 }
 
