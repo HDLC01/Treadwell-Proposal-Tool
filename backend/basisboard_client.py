@@ -64,10 +64,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import cachetools
+
+import pull_window
 
 log = logging.getLogger("proposal_tool.basisboard")
 
@@ -865,6 +868,68 @@ def _analytics_dimensions(rows: List[Dict[str, Any]], stages: Dict[str, Dict[str
     }
 
 
+_BIZ_TZ = "America/Chicago"
+
+
+def _biz_tz():
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(_BIZ_TZ)
+    except Exception:                        # noqa: BLE001 — no tzdata: UTC days are close enough
+        return timezone.utc
+
+
+def _central_day(iso: Any) -> str:
+    """A BasisBoard timestamp as its Central calendar day, or "" if there isn't one.
+
+    The Python twin of `analytics-core.js`'s `bizDay`, and it has to be: a bid submitted at 7pm
+    Central is stamped the next day in UTC, so a window compared against raw ISO text would keep
+    or drop a different set of bids than the dashboard shows for the same dates."""
+    if not iso:
+        return ""
+    text = str(iso).strip()
+    if not text:
+        return ""
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_biz_tz()).date().isoformat()
+
+
+# The five dates a bid can carry. ANY of them inside the window keeps the row.
+_ROW_DATES = ("awarded_at", "submitted_at", "lost_at", "created_at", "bid_deadline_at")
+
+
+def _row_in_pull_window(row: Dict[str, Any], win: Dict[str, Any], today: str) -> bool:
+    """Does this bid belong in a pull bounded by `win`?
+
+    ANY-OF, not deadline-only. A job created in 2019 and awarded last month is last month's win,
+    and "Won this year" would lose it under a deadline test. Rows with no deadline at all are real
+    (`bidInviteIds: []`), and a deadline test drops every one of them the moment a bound is set.
+
+    A row with NO dates contributes to nothing on the dashboard, so dropping it costs no number.
+
+    FUTURE DEADLINES ARE ALWAYS KEPT. The Bid Calendar reads this same payload for its BasisBoard
+    rows, so a `to` bound in the past — a perfectly reasonable thing to set while looking at last
+    year — would otherwise blank next week's bids off the calendar."""
+    frm, to = win.get("from"), win.get("to")
+    if not frm and not to:
+        return True
+    days = [d for d in (_central_day(row.get(k)) for k in _ROW_DATES) if d]
+    if not days:
+        return False
+    deadline = _central_day(row.get("bid_deadline_at"))
+    if deadline and deadline >= today:
+        return True
+    for d in days:
+        if (not frm or d >= frm) and (not to or d <= to):
+            return True
+    return False
+
+
 def _build_analytics() -> Dict[str, Any]:
     """Fetch the bid history concurrently over one pooled client, then shape."""
     with _session() as client, ThreadPoolExecutor(max_workers=_CONCURRENCY) as ex:
@@ -882,12 +947,32 @@ def _build_analytics() -> Dict[str, Any]:
     # years from every total.
     rows = [_shape_analytics_row(p, invites, trade_field)
             for p in raw if not p.get("deletedAt")]
+
+    # The org's pull window. Read ONCE per build and echoed in the payload, so every reader knows
+    # which window the numbers in front of them were built from — including a reader served the
+    # stale snapshot while a new window is still being fetched.
+    #
+    # BasisBoard's API cannot do this for us: it offers `sort[bidDeadline]` and paging, and no date
+    # filter of any kind. So the window is enforced here, after the fetch. Early-stopping the
+    # pagination would save requests but is unsafe — the sort has an unsorted fallback, and a page
+    # that arrives out of order would truncate the history at the first old-looking row.
+    win = pull_window.get()
+    today = datetime.now(_biz_tz()).date().isoformat()
+    fetched = len(rows)                      # BEFORE the window: `truncated` is about the CAP
+    if not pull_window.is_open(win):
+        rows = [r for r in rows if _row_in_pull_window(r, win, today)]
+
     rows.sort(key=lambda r: (r.get("created_at") or ""), reverse=True)
 
     out = {"ok": True, "configured": True,
            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-           "stale": False, "projects": rows,
-           "shown": len(rows), "total": total, "truncated": total > len(rows)}
+           "stale": False, "projects": rows, "pull_window": win,
+           # `total`/`truncated` keep meaning THE CAP — how much history exists versus how much we
+           # are allowed to fetch, which is why `truncated` counts what was FETCHED and not what
+           # survived the window. `shown` is the post-window count. Comparing against the filtered
+           # list would make every deliberate date range announce "showing the most recent N of M
+           # bids", i.e. report a setting as lost data.
+           "shown": len(rows), "total": total, "truncated": total > fetched}
     out.update(_analytics_dimensions(rows, stages, users, companies))
     return out
 
@@ -997,7 +1082,19 @@ def _refresh_analytics() -> None:
     for what it is, still far too slow to hold a page load open, and slower again
     whenever Basisboard asks us to back off. No reader ever waits on it."""
     try:
+        # Build, then check the window didn't move underneath us, up to a bounded number of times.
+        #
+        # THE RACE: a build takes ~10s. If somebody changes the window while one is in flight, that
+        # build finishes carrying the OLD window and publishes it into the cache the save just
+        # cleared — pinning the stale window for a full TTL, with the page showing the new dates in
+        # its caption. Bounded rather than `while`, so a window somebody is editing rapidly cannot
+        # spin this thread against the API.
         result = _build_analytics()
+        for _ in range(2):
+            if result.get("pull_window", {}) == pull_window.get():
+                break
+            log.info("analytics pull window changed mid-build; rebuilding")
+            result = _build_analytics()
         _analytics_cache["analytics"] = result
         _analytics_last_good["snapshot"] = result
         _analytics_state["error"] = ""
@@ -1021,6 +1118,17 @@ def _spawn(fn, name: str) -> None:
     workers inside ThreadPoolExecutor, and the build then waits on futures no
     thread will ever complete."""
     threading.Thread(target=fn, name=name, daemon=True).start()
+
+
+def on_pull_window_changed() -> None:
+    """The window moved: drop the cached dataset and build one for the new dates.
+
+    `_analytics_last_good` is deliberately left alone. It is what a reader is served while the
+    rebuild runs, flagged `stale: true` and carrying its own `pull_window`, so the page can say
+    which dates the numbers on screen came from. Clearing it would replace real (if old) numbers
+    with an empty "building…" page for ten seconds, which is a worse answer than last week's."""
+    _analytics_cache.clear()
+    _start_refresh()                         # coalesced by the non-blocking lock: at most one build
 
 
 def _start_refresh() -> bool:
@@ -1068,6 +1176,9 @@ def get_analytics() -> Dict[str, Any]:
         "ok": True, "configured": True, "building": True, "stale": False,
         "generated_at": None, "projects": [], "stages": [], "estimators": [],
         "companies": [], "trades": [], "shown": 0, "total": 0, "truncated": False,
+        # Even with nothing to show, the page must be able to say which window it is waiting for —
+        # otherwise the control renders empty and reads as "no window is set".
+        "pull_window": pull_window.get(),
     }
     if _analytics_state.get("error"):
         out["last_error"] = _analytics_state["error"]

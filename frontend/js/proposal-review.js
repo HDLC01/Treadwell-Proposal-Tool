@@ -902,6 +902,16 @@
               r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
               r += `<div class="pr-optsub"${isOpt ? "" : ' style="display:none"'}>`;
               r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
+              // An option marked as an option but not shown is configured into thin air:
+              // rebuildPricing drops `show === false` rows, so it appears in NEITHER the PDF
+              // nor the customer portal. That combination used to be completely silent — the
+              // estimator sees a ticked "Show as a proposal option" and reasonably concludes
+              // the option exists. Say so where the mistake is made.
+              if (isOpt && !show) {
+                r += `<span class="op-hint pr-inert-warn">Not shown anywhere — this option `
+                   + `appears in neither the PDF nor the customer portal until “Show in `
+                   + `proposal” is ticked.</span>`;
+              }
               r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
               // vs the base; add/deduct now self-labels by sign (option − base):
@@ -960,12 +970,25 @@
             const iso = row.querySelector(".pr-isopt");
             if (iso) iso.addEventListener("change", () => {
               const o = ensureOpt(id); o.is_option = iso.checked;
-              if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+              // Turning an option ON resets `show` to true — it used to only default an
+              // UNDEFINED show, so an option un-shown earlier stayed un-shown when it was
+              // re-enabled, and "Show as a proposal option" did nothing at all: rebuildPricing
+              // drops `show === false` rows, so the option reached neither the PDF nor the
+              // portal. Hanz, 2026-08-13: "There are two options but the PDF Shows one."
+              // Ticking the outer box is somebody saying "put this in the proposal"; honour it.
+              if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
               if (sub) sub.style.display = iso.checked ? "" : "none";
+              const shBox = row.querySelector(".pr-show");
+              if (shBox) shBox.checked = o.show !== false;
               applyAndRefresh();
+              renderProposalExtras();   // repaint so the inert-option warning reflects the change
             });
             const sh = row.querySelector(".pr-show");
-            if (sh) sh.addEventListener("change", () => { ensureOpt(id).show = sh.checked; applyAndRefresh(); });
+            if (sh) sh.addEventListener("change", () => {
+              ensureOpt(id).show = sh.checked;
+              applyAndRefresh();
+              renderProposalExtras();   // show/hide the inert-option warning immediately
+            });
             const md = row.querySelector(".pr-mode");
             if (md) md.addEventListener("change", () => {
               ensureOpt(id).price_mode = md.value === "deduct" ? "deduct" : "total";

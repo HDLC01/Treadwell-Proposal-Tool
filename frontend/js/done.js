@@ -350,6 +350,13 @@
         listEl.appendChild(empty);
       }
       rows.forEach((r) => {
+        // Hanz, 2026-08-13: "ccan you put the follow up checkbox to the right of edit outside
+        // the container?" Each entry is a WRAPPER holding two things side by side: the bordered
+        // row (email · tag · Edit/×) and, outside that border, the Follow-ups checkbox. The
+        // checkbox is visibly not part of the recipient, which is the point — it is a decision
+        // ABOUT the recipient, not one of its fields.
+        const wrap = document.createElement("div");
+        wrap.className = "tw-em-rowwrap";
         const row = document.createElement("div");
         row.className = "tw-em-row";
 
@@ -374,7 +381,10 @@
             else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
           });
           row.appendChild(input); row.appendChild(save); row.appendChild(cancel);
-          listEl.appendChild(row);
+          // No Follow-ups control while the address is being edited: the checkbox belongs to a
+          // recipient, and mid-edit there is not a settled one to attach it to.
+          wrap.appendChild(row);
+          listEl.appendChild(wrap);
           // Focus only when the editor first opens — not on every incidental rebuild,
           // which would otherwise steal focus + reselect while the user is elsewhere.
           if (editJustOpened) { editJustOpened = false; setTimeout(() => { input.focus(); input.select(); }, 0); }
@@ -401,7 +411,8 @@
         });
         fu.appendChild(fuBox);
         fu.appendChild(document.createTextNode(" Follow-ups"));
-        row.appendChild(fu);
+        // NOT row.appendChild — it goes on the wrapper, after the row closes, so it renders
+        // outside the bordered container and to the right of Edit.
 
         if (r.fixed) {
           const tag = document.createElement("span");
@@ -429,7 +440,9 @@
           });
           row.appendChild(x);
         }
-        listEl.appendChild(row);
+        wrap.appendChild(row);
+        wrap.appendChild(fu);      // outside the border, right of Edit / ×
+        listEl.appendChild(wrap);
       });
     }
 
@@ -479,6 +492,41 @@
       window.location.assign(TW.withDraft("/proposal-review.html"));
     });
     document.getElementById("gen-btn").addEventListener("click", doGenerate);
+  }
+
+  /** Compare the pricing the server just SENT against the pricing this page is showing.
+   *  Returns a human sentence naming the difference, or "" when they agree.
+   *
+   *  The publish flush closes the same-tab race. This closes the rest: a second tab, another
+   *  device, a colleague editing while you send. Only ever warns — the send has already
+   *  happened and the portal is pinned, so the useful thing is to say WHAT differs.
+   *
+   *  Compares base label + lump sum + how many options a customer can pick, because those
+   *  are the three things a wrong version gets wrong in a way that costs money. */
+  function publishDrift(sent) {
+    if (!sent || typeof sent !== "object") return "";     // older backend — nothing to compare
+    const s = TW.getState() || {};
+    const rooms = Array.isArray(s.rooms) ? s.rooms : [];
+    const localBase = (rooms.find(r => r && r.is_base) || {}).name || null;
+    const localOpts = rooms.filter(r => r && !r.is_base && r.show !== false).length;
+    const localLump = s.proposal_lump_sum;
+    const bits = [];
+    if (sent.base_label && localBase && sent.base_label !== localBase) {
+      bits.push("the base bid sent was " + sent.base_label + ", not " + localBase);
+    }
+    // TW.fmtUsd, not the local `money` in mountRevisions — that one is scoped to its own
+    // function, and reaching for it here would be a ReferenceError at the moment somebody
+    // most needs the warning.
+    const usd = (n) => (window.TW && TW.fmtUsd) ? TW.fmtUsd(n) : String(n);
+    const near = (a, b) => (a == null || b == null) ? a === b : Math.abs(Number(a) - Number(b)) < 0.01;
+    if (!near(sent.lump_sum, localLump)) {
+      bits.push("the price sent was " + usd(sent.lump_sum) + ", not " + usd(localLump));
+    }
+    if (typeof sent.option_count === "number" && sent.option_count !== localOpts) {
+      bits.push("it sent " + sent.option_count + " option" + (sent.option_count === 1 ? "" : "s")
+                + ", not " + localOpts);
+    }
+    return bits.join("; ");
   }
 
   async function doGenerate() {
@@ -605,6 +653,23 @@
         const msgEl = document.getElementById("portal-message");
         const message = (msgEl && msgEl.value || "").trim();
         try {
+          // WAIT for this page's edits to reach the server before publishing. The publish
+          // route snapshots the SERVER's copy of the draft (main.py create_revision) and the
+          // portal pins the customer's view to that snapshot for good — so a debounced save
+          // still in flight means the customer is shown the version BEFORE the change that
+          // prompted the send.
+          //
+          // Hanz, 2026-08-13, on a resend of "Hanz Company 123": "I have made changes and
+          // resent the proposal but the new proposal does not appear correctly." Revision 2
+          // was stamped 16:00:28 with base_tab_id=Epoxy; his draft said Room 1 at 16:02:14.
+          // The portal showed the old base, the PDF (built from the live draft) showed the
+          // new one, and neither was wrong — the send had simply raced the autosave.
+          portalBtn.textContent = "Saving your changes…";
+          if (!await TW.flushState()) {
+            throw new Error("Couldn't save your latest changes, so nothing was sent — "
+                            + "check your connection and try again.");
+          }
+          portalBtn.textContent = "Sending…";
           const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
                                       { emails, message, require_deposit: requireDeposit,
                                         assigned_estimator: assignedEstimator,
@@ -643,6 +708,15 @@
             strong.textContent = recips.join(", ");
             r.appendChild(strong);
             r.appendChild(document.createTextNode("."));
+            const drift = publishDrift(j.sent_snapshot);
+            if (drift) {
+              const w = document.createElement("p");
+              w.className = "portal-drift";
+              w.textContent = "Heads up — what went to the customer isn't what this page is "
+                + "showing: " + drift + ". Reload this page to see the sent version, then "
+                + "re-send if that's wrong.";
+              r.appendChild(w);
+            }
           }
           setTimeout(() => { portalBtn.textContent = "\u2197 Re-send to customer portal"; portalBtn.disabled = false; }, 2500);
         } catch (err) {

@@ -194,11 +194,23 @@
     } catch {}
   }
 
+  // The most recent server write, so flushState() can await it. A rejected promise is
+  // never stored — callers get a boolean, never an unhandled rejection.
+  let _inFlight = null;
+
   // One place that actually PUTs a blob to a draft id. Callers guarantee the
   // blob belongs to `id`; this never picks the id itself.
+  //
+  // RETURNS a promise resolving true on a stored write, false on anything else. It used to
+  // return nothing, which is what made the publish race possible: /api/portal/publish
+  // snapshots the SERVER's copy of the draft, and with no handle on the in-flight save
+  // there was no way for the Done page to wait for its own edits to land. On 2026-08-12 a
+  // resend of "Hanz Company 123" pinned revision 2 to a draft two minutes older than the
+  // base-bid change the estimator had just made, so the portal showed Epoxy as the base
+  // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
   function putDraft(id, blob) {
     try {
-      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
+      const p = fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
         method: "PUT",
         headers: authHeaders(),
         body: JSON.stringify({ data: blob }),
@@ -207,8 +219,37 @@
         // Only after the row exists: set_test_flag returns false on a missing draft, so filing
         // before the first save would be a silent no-op and the project would stay in Active.
         if (res && res.ok) applyPendingTestIntent(id);
-      }).catch(() => {/* offline / backend down — local copy still safe */});
-    } catch {}
+        return !!(res && res.ok);
+      }).catch(() => false /* offline / backend down — local copy still safe */);
+      _inFlight = p;
+      return p;
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+
+  /** Wait until this draft's edits are on the server. Resolves true when the server holds
+   *  what this page shows, false if the write failed or was refused.
+   *
+   *  Anything that makes the SERVER read the draft — publishing to the portal, generating
+   *  files — must await this first. The debounce is 2.5s; a person who edits and clicks
+   *  Send inside that window is the normal case, not an edge case.
+   *
+   *  Deliberately fires the pending save immediately rather than waiting out the timer:
+   *  the point is to be finished, not to be patient. Returns true when there was nothing
+   *  to do (no id, nothing dirty) — "the server is in sync" is the honest answer then. */
+  async function flushState() {
+    if (_saveTimer) {
+      clearTimeout(_saveTimer); _saveTimer = null;
+      const id = getDraftId();
+      const blob = getState();
+      // Same refusal rule as scheduleServerSave — never write a blob owned by another draft.
+      if (id && !(blob[STAMP] && blob[STAMP] !== id) && !isUnverified(id)) {
+        putDraft(id, blob);
+      }
+    }
+    if (!_inFlight) return true;
+    try { return await _inFlight; } catch { return false; }
   }
 
   // Before we evict a FOREIGN blob from localStorage (adopting a different
@@ -725,6 +766,7 @@
   window.TW = {
     getState,
     setState,
+    flushState,
     clearState,
     readForm,
     writeForm,
