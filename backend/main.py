@@ -75,6 +75,7 @@ import pdf_writer
 import pricing
 import profiles
 import proposal_writer
+import pull_window
 import reference_tax
 import supabase_client
 
@@ -458,6 +459,40 @@ def api_analytics() -> Dict[str, Any]:
     return basisboard_client.get_analytics()
 
 
+class PullWindowIn(BaseModel):
+    """How far back we pull BasisBoard data, for the whole company.
+
+    `extra="forbid"` so a typo'd key is a 422 rather than a silently ignored save: the caller
+    would otherwise be told the window changed while the old one stayed in force."""
+    model_config = {"extra": "forbid"}
+    frm: Optional[str] = Field(default=None, alias="from")
+    to: Optional[str] = None
+
+
+@app.put("/api/analytics/pull-window")
+def api_set_pull_window(payload: PullWindowIn, request: Request) -> Dict[str, Any]:
+    """Set the org's BasisBoard pull window and rebuild the dataset for it.
+
+    Hanz, 2026-08-12: "we need a date pciker like the custom date in the analytics for when it
+    pulls data" — one window for everybody, not per viewer, so two people cannot read different
+    win rates off the same dashboard.
+
+    There is no matching GET: the window rides along on `/api/analytics`, which the page fetches
+    anyway, so the control cannot show a window the numbers beside it weren't built from.
+
+    A failed WRITE is a 500 and invalidates nothing. An org setting that saved into one container's
+    memory and nowhere else is worse than one that refused, because nobody can tell."""
+    try:
+        win = pull_window.set(payload.frm, payload.to, _user_email(request) or "")
+    except pull_window.PullWindowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except pull_window.PullWindowWriteError as exc:
+        log.error("analytics pull window save failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Couldn't save the date range") from exc
+    basisboard_client.on_pull_window_changed()
+    return {"ok": True, "pull_window": win}
+
+
 # ─── Bid Calendar: Treadwell's own entries ─────────────────────────────────────
 # The calendar draws two sources on one grid. Basisboard bids arrive via /api/analytics
 # and are READ-ONLY — our Basisboard integration never writes, so an edit there could not
@@ -777,6 +812,18 @@ def api_portal_publish(draft_id: str, request: Request,
         raise HTTPException(404, "Draft not found")
     by = _user_email(request)
     body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
+    # WHO BUILT THIS, which is not always who is sending it or who will chase it.
+    #
+    # Will, via Hanz on 2026-08-13: "There are set members for the global notification. And this
+    # estimator or treadwell employee created an estimate, by default this estimator should be
+    # included." So the draft's owner rides along and the portal records them as one of this
+    # project's notification recipients. Taken from the STORED owner, never from the caller: the
+    # person pressing Send is often somebody else, and it is the estimate's author Will is after.
+    #
+    # Absent on drafts created before owners were stamped, in which case nothing is claimed.
+    creator = (row.get("owner_email") or "").strip()
+    if creator:
+        body["created_by"] = creator
     emails = _clean_portal_emails(payload.emails if payload else [])
     if emails:
         body["emails"] = emails
@@ -820,7 +867,37 @@ def api_portal_publish(draft_id: str, request: Request,
                                                  "recipients": len(emails) or None})
     if isinstance(out, dict):
         out.setdefault("revision_no", rev_no)
+        # What the customer will actually see, echoed back so the sending page can check it
+        # against what IT is showing. The flush before publishing closes the same-tab race;
+        # this catches every other source of staleness — a second tab, another device, an
+        # estimator editing while a colleague sends — where no amount of waiting helps.
+        #
+        # A stale send is invisible and expensive: on 2026-08-13 a resend pinned the portal
+        # to a base bid the estimator had already changed, and nothing on any screen said so.
+        # Cheap to compute, and it only ever produces a warning.
+        out.setdefault("sent_snapshot", _publish_digest(row.get("data") or {}))
     return out
+
+
+def _publish_digest(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The few fields that decide what a customer is quoted, from the snapshot just sent.
+
+    Deliberately not a hash: the page shows the estimator WHICH pricing went out, so a
+    mismatch is actionable ("it sent Epoxy as the base, you're looking at Room 1") rather
+    than merely alarming. Kept to primitives so it can never leak a blob into a response."""
+    rooms = data.get("rooms")
+    rooms = rooms if isinstance(rooms, list) else []
+    base = next((r for r in rooms if isinstance(r, dict) and r.get("is_base")), None)
+    return {
+        "base_tab_id": data.get("base_tab_id") or None,
+        "base_label": (base or {}).get("name") or None,
+        "lump_sum": data.get("proposal_lump_sum"),
+        # Only the options a customer can actually pick — the same `show` rule the portal
+        # and the document use, so the count cannot disagree with the proposal.
+        "option_count": sum(1 for r in rooms
+                            if isinstance(r, dict) and not r.get("is_base")
+                            and r.get("show") is not False),
+    }
 
 
 @app.get("/api/draft/{draft_id}/revisions")

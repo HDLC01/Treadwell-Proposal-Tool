@@ -309,6 +309,25 @@
     el.className = "alert" + (stale ? " stale" : "");
   }
 
+  // What to say about the BasisBoard half of the grid, in the one line there is to say it in.
+  //
+  // STALE WINS. "These numbers are a saved copy" changes how you read every row; a bounded pull
+  // window only explains a thinner past.
+  //
+  // The window is worth mentioning at all because this page shares the analytics payload, and the
+  // range is set on a different page entirely — so a calendar that had quietly lost last spring
+  // would be a mystery here. Upcoming bids are never affected: the server keeps any future
+  // deadline regardless of the window, precisely so this page stays complete. An older payload
+  // with no `pull_window` key reads as no window, which is what it was.
+  function bbNotice(j) {
+    if (j.stale) return "Showing the last saved copy of the bid data while a fresh read finishes.";
+    const pw = j.pull_window || {};
+    if (!pw.from && !pw.to) return "";
+    return "BasisBoard bids are limited to the company data range "
+      + (pw.from || "the beginning") + " → " + (pw.to || "today")
+      + ". Upcoming bids always show. Change the range on the Analytics page.";
+  }
+
   // ── load ──────────────────────────────────────────────────────────
   function applyData(j) {
     BB = Array.isArray(j.projects) ? j.projects.map(markMirror) : [];
@@ -381,9 +400,7 @@
         return;
       }
       applyData(j);
-      showAlert(j.stale
-        ? "Showing the last saved copy of the bid data while a fresh read finishes."
-        : "", true);
+      showAlert(bbNotice(j), true);
     } catch (err) {
       if (first && !ROWS.length) {
         $("grid").className = "empty";

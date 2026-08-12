@@ -214,6 +214,16 @@
   .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); margin-bottom:4px; }
   .sec { margin-bottom:20px; }
   .row3 { display:flex; gap:8px; flex-wrap:wrap; }
+  /* Assigning an estimator on a project that has not been sent. The name above the control is a
+     GUESS (the draft's author, drawn with a "?") until somebody picks — so the control sits under
+     it as the way to settle it, rather than replacing a fact with a form. */
+  .ns-est { display:flex; align-items:center; gap:7px; }
+  .ns-assign { display:flex; gap:8px; align-items:center; margin-top:9px; flex-wrap:wrap; }
+  .ns-assign select { flex:1 1 190px; min-width:0; min-height:38px; padding:7px 9px;
+    border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font:inherit; }
+  .ns-assign .btn { min-height:38px; }
+  .ns-assign-note:empty { display:none; }
+  .ns-assign-note { margin:7px 0 0; color:var(--red-dark); font-weight:600; }
   .btn { min-height:42px; padding:0 16px; border-radius:7px; border:1px solid transparent; font:inherit; font-weight:700;
     cursor:pointer; }
   .btn-p { background:var(--red-dark); color:#fff; } .btn-p:hover { background:var(--red); }

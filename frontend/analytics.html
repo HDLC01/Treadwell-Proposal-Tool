@@ -37,6 +37,25 @@
     border-radius:10px; padding:10px 13px; color:var(--red-dark); font-size:12.5px;
     margin-bottom:14px; }
 
+  /* ── the org pull window ──
+     Quieter than the filter bar on purpose: this is a setting somebody changes a few times a
+     year, sitting above filters people touch constantly. It reads as a note with controls in it,
+     not as a second row of filters. */
+  .pw { display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin:0 0 16px;
+    padding:9px 13px; border:1px solid var(--line); border-radius:10px;
+    background:var(--surf-low); font-size:12.5px; color:var(--ink-v); }
+  .pw .pw-lab { font:700 10.5px system-ui; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--ink-mut); }
+  .pw input[type=date] { min-height:32px; padding:5px 9px; font-size:12.5px; }
+  .pw .pw-by { color:var(--ink-mut); }
+  .pw .pw-msg { font-weight:600; }
+  .pw .pw-msg.bad { color:var(--red-dark); }
+  .pw button.pw-save { min-height:32px; padding:5px 13px; border:1px solid var(--line);
+    border-radius:9px; background:var(--card); color:var(--ink); font:600 12.5px system-ui;
+    cursor:pointer; }
+  .pw button.pw-save:hover { background:var(--surf-high); }
+  .pw button.pw-save[disabled] { opacity:.55; cursor:default; }
+
   /* ── tabs ── */
   .tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:18px; }
   .tab { border:0; background:none; padding:10px 16px 12px; font:600 14px system-ui;
@@ -235,6 +254,9 @@
   <p class="sub" id="sub">Your BasisBoard bids — won and submitted, sliced any way you like.</p>
 
   <div id="alert"></div>
+  <!-- The org's BasisBoard pull window: which bids this tool HOLDS, as opposed to the filter bar
+       below, which slices what is held. Above the tabs because it applies to every tab. -->
+  <div id="pullwindow"></div>
   <div class="tabs" id="tabs"></div>
   <div class="filterbar" id="filterbar"></div>
   <div class="active-filters" id="active-filters"></div>
