@@ -235,6 +235,11 @@
   async function mountEstimatorPicker() {
     const sel = document.getElementById("portal-estimator");
     if (!sel) return;
+    // Somebody may have assigned this project from the CRM drawer while this machine still held
+    // an older copy of the blob — the full hydrate only runs for a DIFFERENT draft id, so that
+    // change would otherwise be invisible here and the picker would read blank. Hanz, 2026-08-13:
+    // "that estimator picker should also reflect in the Section 4 of the estimate."
+    try { await TW.refreshServerOwned(); } catch {}
     let st = {};
     try { st = TW.getState() || {}; } catch {}
     // Memoised: showPostGenerate can run more than once per page.
@@ -250,8 +255,10 @@
     // everywhere else; the colour is the one thing a select can't carry.
     sel.innerHTML = '<option value="">Choose the estimator…</option>'
       + list.map(e => `<option value="${esc(e.email)}">${esc(window.TWCrm.initialsOf(e.name || e.email))} · ${esc(e.name)}</option>`).join("");
-    // A re-send remembers the last explicit choice; a first send starts blank on
-    // purpose, so nobody assigns a colleague by accident.
+    // A re-send remembers the last explicit choice, and so does a first send whose project was
+    // assigned in the CRM — both are somebody's decision, which is the bar. What still starts
+    // blank is a project nobody has assigned at all: the "Kyle?" guess on a card is the draft's
+    // AUTHOR, not an assignment, and pre-selecting it would let one click promote a guess.
     if (prev && list.some(e => String(e.email).toLowerCase() === prev)) sel.value = prev;
     if (!list.length) {
       // Couldn't reach the list. Fail visibly rather than letting the send 400 with

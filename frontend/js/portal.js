@@ -716,9 +716,26 @@
           sent them to the customer. Nothing is shared until you do.</p>
         </div>
         ${row.customer_email ? `<div class="sec"><div class="lbl">Addressed to</div>${esc(row.customer_email)}</div>` : ""}
-        <div class="sec"><div class="lbl">Estimator</div>${
-          who ? avatar(who, !isAssigned(row)) + esc(nameOf(who)) + (isAssigned(row) ? "" : "?")
-              : '<span class="unassigned">Nobody is assigned</span>'}</div>
+        <div class="sec">
+          <div class="lbl">Estimator</div>
+          <div class="ns-est">${
+            who ? avatar(who, !isAssigned(row)) +
+                  `<span${isAssigned(row) ? "" : ' class="unassigned" title="Nobody is assigned — this is whoever built the estimate"'}>${
+                    esc(nameOf(who))}${isAssigned(row) ? "" : "?"}</span>`
+                : '<span class="unassigned">Nobody is assigned</span>'}</div>
+          <!-- Assign it HERE, not only from the Projects tab. Hanz, 2026-08-13: "Allow to choose
+               the estimator on the Created but not sent". The name shown above is a guess until
+               somebody makes it real — hence the "?" — and the drawer was the one place that
+               displayed the guess without offering the fix. The picker sits on the DRAFT endpoint
+               because an unsent project has no portal row to assign against. -->
+          <div class="ns-assign">
+            <select id="ns-assign" aria-label="Assign an estimator" disabled>
+              <option value="">Loading…</option>
+            </select>
+            <button type="button" class="btn btn-s" id="ns-assign-btn" disabled>Assign</button>
+          </div>
+          <p class="note ns-assign-note" id="ns-assign-note"></p>
+        </div>
         ${total != null ? `<div class="sec"><div class="lbl">Bid</div><strong>${money(total)}</strong></div>` : ""}
         ${row.drafted_at ? `<div class="sec"><div class="lbl">Created</div>${esc(TW.fmtBizDate(row.drafted_at))}</div>` : ""}
         <div class="sec row3">
@@ -732,6 +749,69 @@
       () => go("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
     d.querySelector("[data-go-edit]").addEventListener("click",
       () => go("/?d=" + encodeURIComponent(pid) + "&edit=1"));
+    wireNotSentAssign(pid, row);
+  }
+
+  /** The estimator picker on a "Created but not sent" project.
+   *
+   *  Deliberately the DRAFT endpoint (`/api/draft/{id}/assign`), not the portal one the sent
+   *  drawer uses: nothing has been published, so there is no portal row to assign against, and
+   *  the draft's own copy is exactly what pre-fills the Files-page picker on the first send.
+   *
+   *  Same shape as the sent drawer's reassign control — disabled until the roster arrives, the
+   *  currently-assigned person stays listed even if they have left it, and the button stays off
+   *  until the choice actually differs — so the two read as one feature rather than two. */
+  function wireNotSentAssign(pid, row) {
+    const sel = $("ns-assign"), btn = $("ns-assign-btn"), note = $("ns-assign-note");
+    if (!sel || !btn) return;
+    // `assigned_estimator` only. `estimatorOf` coalesces the draft's OWNER in as a fallback, which
+    // is what draws the "Kyle?" above — pre-selecting that guess would let one click promote it to
+    // a decision nobody made.
+    const cur = String(row.assigned_estimator || "").toLowerCase();
+    loadEstimators().then((people) => {
+      if (!$("ns-assign")) return;                         // drawer closed or re-rendered mid-fetch
+      if (!people.length) {
+        sel.innerHTML = '<option value="">Unavailable</option>';
+        if (note) note.textContent = "Couldn't load the estimator list — reload the page.";
+        return;
+      }
+      const known = people.some((x) => String(x.email).toLowerCase() === cur);
+      sel.innerHTML = (!cur ? '<option value="">Choose an estimator…</option>' : "")
+        + (cur && !known ? `<option value="${esc(cur)}">${esc(nameOf(cur))} (no longer listed)</option>` : "")
+        + people.map((x) => `<option value="${esc(x.email)}">${esc(x.name)}</option>`).join("");
+      sel.value = row.assigned_estimator || "";
+      sel.disabled = false;
+      btn.disabled = true;
+      sel.addEventListener("change", () => {
+        btn.disabled = !sel.value || sel.value.toLowerCase() === cur;
+      });
+    });
+    btn.addEventListener("click", async () => {
+      if (!sel.value) return;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = "Saving…";
+      if (note) note.textContent = "";
+      try {
+        const r = await api("/api/draft/" + encodeURIComponent(pid) + "/assign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ estimator_email: sel.value }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        // Force the repaint: renderNotSent is signature-guarded against the 12s poll, and the
+        // row in hand still carries the OLD assignment, so without this the drawer would show
+        // the guess it just replaced.
+        DRAWER_SIG = "";
+        renderNotSent(pid, Object.assign({}, row, { assigned_estimator: sel.value }));
+        load();                                            // the board's card says who owns it
+      } catch (err) {
+        btn.textContent = orig;
+        btn.disabled = false;
+        if (note) note.textContent = "Couldn't save that — " + (err.message || "try again.");
+      }
+    });
   }
 
   // ── drawer sections ────────────────────────────────────────────────────────

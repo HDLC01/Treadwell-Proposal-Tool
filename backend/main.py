@@ -812,6 +812,18 @@ def api_portal_publish(draft_id: str, request: Request,
         raise HTTPException(404, "Draft not found")
     by = _user_email(request)
     body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
+    # WHO BUILT THIS, which is not always who is sending it or who will chase it.
+    #
+    # Will, via Hanz on 2026-08-13: "There are set members for the global notification. And this
+    # estimator or treadwell employee created an estimate, by default this estimator should be
+    # included." So the draft's owner rides along and the portal records them as one of this
+    # project's notification recipients. Taken from the STORED owner, never from the caller: the
+    # person pressing Send is often somebody else, and it is the estimate's author Will is after.
+    #
+    # Absent on drafts created before owners were stamped, in which case nothing is claimed.
+    creator = (row.get("owner_email") or "").strip()
+    if creator:
+        body["created_by"] = creator
     emails = _clean_portal_emails(payload.emails if payload else [])
     if emails:
         body["emails"] = emails

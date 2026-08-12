@@ -321,3 +321,60 @@ def test_overrides_put_rejects_bad_mode(monkeypatch):
     r = client.put("/api/portal/proposal/p1/notify-overrides", json={"email": "a@x.com", "mode": "boss"})
     assert r.status_code == 400
     assert cap == {}
+
+
+# ── who BUILT the estimate rides along ────────────────────────────────────────
+# Will, via Hanz on 2026-08-13: "There are set members for the global notification. And this
+# estimator or treadwell employee created an estimate, by default this estimator should be
+# included." The portal turns this into one of the project's notification recipients.
+#
+# Three different people can be in one send and they are not interchangeable: `by` is whoever
+# pressed Send, `assigned_estimator` is who owns chasing it, and `created_by` is whose estimate
+# it is. RJ can price a bid and hand it to Kyle.
+def test_the_drafts_owner_is_forwarded_as_the_creator(monkeypatch):
+    cap = _wire(monkeypatch)
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: {"id": i, "data": {}, "owner_email": "rj@wetreadwell.com"})
+    r = client.post(URL, json={"assigned_estimator": EST})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["created_by"] == "rj@wetreadwell.com"
+
+
+def test_the_creator_comes_from_the_STORED_owner_not_the_caller(monkeypatch):
+    """The person pressing Send is usually somebody else, and a browser must not be able to claim
+    authorship of an estimate — that would put whoever it named on the project's notifications."""
+    cap = _wire(monkeypatch)
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: {"id": i, "data": {}, "owner_email": "rj@wetreadwell.com"})
+    r = client.post(URL, json={"assigned_estimator": EST, "created_by": "someone@else.com"})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["created_by"] == "rj@wetreadwell.com"
+    # And the field cannot be reached at all: the body model has no `created_by`, so a caller
+    # supplying one is not merely overridden, it is never parsed.
+    assert "created_by" not in main.PortalPublishIn.model_fields
+
+
+def test_an_ownerless_draft_claims_nothing(monkeypatch):
+    """Drafts created before owners were stamped have none. The send must look exactly as it did
+    before this existed — an empty `created_by` would be a roster row for nobody."""
+    cap = _wire(monkeypatch)
+    monkeypatch.setattr(main.drafts, "load_draft", lambda i: {"id": i, "data": {}})
+    r = client.post(URL, json={"assigned_estimator": EST})
+    assert r.status_code == 200, r.text
+    assert "created_by" not in cap["body"], cap["body"]
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: {"id": i, "data": {}, "owner_email": "   "})
+    client.post(URL, json={"assigned_estimator": EST})
+    assert "created_by" not in cap["body"], cap["body"]
+
+
+def test_the_creator_is_forwarded_on_a_resend_too(monkeypatch):
+    """Every publish carries it, so projects that predate this pick it up on their next send."""
+    cap = _wire(monkeypatch)
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda i: {"id": i, "data": {}, "owner_email": "rj@wetreadwell.com"})
+    monkeypatch.setattr(main.drafts, "create_revision", lambda did, data, by=None: 4)
+    r = client.post(URL, json={"assigned_estimator": EST, "emails": ["a@x.com"]})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["created_by"] == "rj@wetreadwell.com"
+    assert cap["body"]["revision_no"] == 4
