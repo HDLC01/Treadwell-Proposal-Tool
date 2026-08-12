@@ -85,6 +85,11 @@
   .tw-dlg--portal .tw-dlg-m { text-align: center; }
   .tw-dlg--portal .tw-dlg-go { background: var(--treadwell-red); color: #fff; }
   .tw-em-list { margin: 16px 0 4px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; }
+  /* One entry = the bordered row PLUS the follow-ups checkbox beside it. The checkbox lives
+     out here rather than inside the border (Hanz, 2026-08-13) because it is a decision about
+     the recipient, not one of the recipient's fields. */
+  .tw-em-rowwrap { display: flex; align-items: center; gap: 10px; }
+  .tw-em-rowwrap > .tw-em-row { flex: 1; min-width: 0; }
   .tw-em-row {
     display: flex; align-items: center; gap: 8px;
     background: var(--surface-low); border: 1px solid var(--surface-dim);

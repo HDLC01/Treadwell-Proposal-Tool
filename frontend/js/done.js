@@ -350,6 +350,13 @@
         listEl.appendChild(empty);
       }
       rows.forEach((r) => {
+        // Hanz, 2026-08-13: "ccan you put the follow up checkbox to the right of edit outside
+        // the container?" Each entry is a WRAPPER holding two things side by side: the bordered
+        // row (email · tag · Edit/×) and, outside that border, the Follow-ups checkbox. The
+        // checkbox is visibly not part of the recipient, which is the point — it is a decision
+        // ABOUT the recipient, not one of its fields.
+        const wrap = document.createElement("div");
+        wrap.className = "tw-em-rowwrap";
         const row = document.createElement("div");
         row.className = "tw-em-row";
 
@@ -374,7 +381,10 @@
             else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
           });
           row.appendChild(input); row.appendChild(save); row.appendChild(cancel);
-          listEl.appendChild(row);
+          // No Follow-ups control while the address is being edited: the checkbox belongs to a
+          // recipient, and mid-edit there is not a settled one to attach it to.
+          wrap.appendChild(row);
+          listEl.appendChild(wrap);
           // Focus only when the editor first opens — not on every incidental rebuild,
           // which would otherwise steal focus + reselect while the user is elsewhere.
           if (editJustOpened) { editJustOpened = false; setTimeout(() => { input.focus(); input.select(); }, 0); }
@@ -401,7 +411,8 @@
         });
         fu.appendChild(fuBox);
         fu.appendChild(document.createTextNode(" Follow-ups"));
-        row.appendChild(fu);
+        // NOT row.appendChild — it goes on the wrapper, after the row closes, so it renders
+        // outside the bordered container and to the right of Edit.
 
         if (r.fixed) {
           const tag = document.createElement("span");
@@ -429,7 +440,9 @@
           });
           row.appendChild(x);
         }
-        listEl.appendChild(row);
+        wrap.appendChild(row);
+        wrap.appendChild(fu);      // outside the border, right of Edit / ×
+        listEl.appendChild(wrap);
       });
     }
 
