@@ -710,6 +710,13 @@ function renderBidOptions() {
         `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
         `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
         `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
+        // Marked an option but not shown = configured into thin air: the rooms snapshot drops
+        // `show === false` rows, so it reaches neither the PDF nor the customer portal. That
+        // combination was completely silent, and the ticked "add as option" reads as done.
+        // Hanz, 2026-08-13: "There are two options but the PDF Shows one."
+        ((isOpt && !show)
+          ? `<span class="bb-inert">Not shown anywhere until “show in proposal” is ticked.</span>`
+          : "") +
         `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct</option></select></span>` +
         `</span></span>`;
     }
@@ -753,7 +760,10 @@ function wireBidBar() {
     const o = ensureOpt(wrap.dataset.id);
     if (el.classList.contains("bb-isopt")) {
       o.is_option = el.checked;
-      if (o.is_option) { if (o.show === undefined) o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+      // Reset `show`, don't merely default it: an option un-shown earlier stayed un-shown when
+      // re-enabled, so ticking "add as option" did nothing anywhere. Same fix as the Proposal
+      // screen's pr-isopt handler — the two strips write the same state and must agree.
+      if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
       const sub = wrap.querySelector(".bb-optsub"); if (sub) sub.style.display = el.checked ? "" : "none";
     } else if (el.classList.contains("bb-show")) {
       o.show = el.checked;

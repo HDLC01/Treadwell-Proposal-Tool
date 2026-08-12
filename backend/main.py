@@ -820,7 +820,37 @@ def api_portal_publish(draft_id: str, request: Request,
                                                  "recipients": len(emails) or None})
     if isinstance(out, dict):
         out.setdefault("revision_no", rev_no)
+        # What the customer will actually see, echoed back so the sending page can check it
+        # against what IT is showing. The flush before publishing closes the same-tab race;
+        # this catches every other source of staleness — a second tab, another device, an
+        # estimator editing while a colleague sends — where no amount of waiting helps.
+        #
+        # A stale send is invisible and expensive: on 2026-08-13 a resend pinned the portal
+        # to a base bid the estimator had already changed, and nothing on any screen said so.
+        # Cheap to compute, and it only ever produces a warning.
+        out.setdefault("sent_snapshot", _publish_digest(row.get("data") or {}))
     return out
+
+
+def _publish_digest(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The few fields that decide what a customer is quoted, from the snapshot just sent.
+
+    Deliberately not a hash: the page shows the estimator WHICH pricing went out, so a
+    mismatch is actionable ("it sent Epoxy as the base, you're looking at Room 1") rather
+    than merely alarming. Kept to primitives so it can never leak a blob into a response."""
+    rooms = data.get("rooms")
+    rooms = rooms if isinstance(rooms, list) else []
+    base = next((r for r in rooms if isinstance(r, dict) and r.get("is_base")), None)
+    return {
+        "base_tab_id": data.get("base_tab_id") or None,
+        "base_label": (base or {}).get("name") or None,
+        "lump_sum": data.get("proposal_lump_sum"),
+        # Only the options a customer can actually pick — the same `show` rule the portal
+        # and the document use, so the count cannot disagree with the proposal.
+        "option_count": sum(1 for r in rooms
+                            if isinstance(r, dict) and not r.get("is_base")
+                            and r.get("show") is not False),
+    }
 
 
 @app.get("/api/draft/{draft_id}/revisions")

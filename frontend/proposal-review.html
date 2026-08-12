@@ -333,6 +333,11 @@
     background: #fff; color: #222; }
   .options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
   .options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
+  /* Same amber as the estimate strip's .bb-inert — an option configured into thin air is a
+     mistake to correct, so it must not read as one more grey hint. */
+  .options-panel .pr-inert-warn { display: block; margin: 2px 0 4px; font-weight: 600;
+    color: #7a5c00; background: #fdf6e3; border: 1px solid #e8d9a8;
+    border-radius: 6px; padding: 4px 7px; }
   .options-panel .op-row { border-top: 1px solid #eee; padding: 8px 0; }
   .options-panel .op-name { font-weight: 700; margin-bottom: 4px; }
   .options-panel .op-price { font-weight: 400; color: #777; }

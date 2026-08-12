@@ -214,6 +214,10 @@
   .bb-opt .bb-baselbl { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
   .bb-opt .bb-price { color: var(--ink-variant); font-variant-numeric: tabular-nums; }
   .bb-opt .bb-sub, .bb-opt .bb-optsub { display: inline-flex; align-items: center; gap: 8px; }
+  /* An option that will appear nowhere. Amber rather than the grey hint colour: it is a
+     misconfiguration to fix, not background information. */
+  .bb-opt .bb-inert { font-size: 10.5px; font-weight: 600; color: #7a5c00;
+    background: #fdf6e3; border: 1px solid #e8d9a8; border-radius: 5px; padding: 1px 6px; }
   .bb-opt label { margin: 0; }
   .bb-opt .bb-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--treadwell-red, #c0392b); }
   .bb-opt .bb-modewrap { display: inline-flex; align-items: center; gap: 4px; }
