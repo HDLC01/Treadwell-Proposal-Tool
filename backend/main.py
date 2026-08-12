@@ -75,6 +75,7 @@ import pdf_writer
 import pricing
 import profiles
 import proposal_writer
+import pull_window
 import reference_tax
 import supabase_client
 
@@ -456,6 +457,40 @@ def api_analytics() -> Dict[str, Any]:
     date range is instant and costs nothing. Always HTTP 200 — a Basisboard
     outage degrades to ok:false and the page keeps its cached numbers."""
     return basisboard_client.get_analytics()
+
+
+class PullWindowIn(BaseModel):
+    """How far back we pull BasisBoard data, for the whole company.
+
+    `extra="forbid"` so a typo'd key is a 422 rather than a silently ignored save: the caller
+    would otherwise be told the window changed while the old one stayed in force."""
+    model_config = {"extra": "forbid"}
+    frm: Optional[str] = Field(default=None, alias="from")
+    to: Optional[str] = None
+
+
+@app.put("/api/analytics/pull-window")
+def api_set_pull_window(payload: PullWindowIn, request: Request) -> Dict[str, Any]:
+    """Set the org's BasisBoard pull window and rebuild the dataset for it.
+
+    Hanz, 2026-08-12: "we need a date pciker like the custom date in the analytics for when it
+    pulls data" — one window for everybody, not per viewer, so two people cannot read different
+    win rates off the same dashboard.
+
+    There is no matching GET: the window rides along on `/api/analytics`, which the page fetches
+    anyway, so the control cannot show a window the numbers beside it weren't built from.
+
+    A failed WRITE is a 500 and invalidates nothing. An org setting that saved into one container's
+    memory and nowhere else is worse than one that refused, because nobody can tell."""
+    try:
+        win = pull_window.set(payload.frm, payload.to, _user_email(request) or "")
+    except pull_window.PullWindowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except pull_window.PullWindowWriteError as exc:
+        log.error("analytics pull window save failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Couldn't save the date range") from exc
+    basisboard_client.on_pull_window_changed()
+    return {"ok": True, "pull_window": win}
 
 
 # ─── Bid Calendar: Treadwell's own entries ─────────────────────────────────────
