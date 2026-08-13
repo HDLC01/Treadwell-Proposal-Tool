@@ -2423,6 +2423,9 @@ def _notes_for(work_type: str, notes_in: list, phase_price=None) -> list:
 # called directly by tests, bypassing this layer), so this is defense in depth,
 # not the only guard.
 _PARAGRAPH_OVERRIDES_MAX = 500
+# Runs per paragraph. A formatted paragraph has a handful; 200 is far above any real edit and
+# bounds the work a hand-built request can ask the writer to do.
+_PARAGRAPH_RUNS_MAX = 200
 
 
 def _sanitize_paragraph_overrides(overrides_in: list) -> list:
@@ -2437,6 +2440,42 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
+        # RUNS FIRST — the formatted shape. `proposal_writer._apply_paragraph_overrides` has always
+        # accepted [{text, bold, italic, underline, size_pt}] and rebuilt the real w:r runs from it
+        # (see its own validation), but this sanitizer only ever emitted {id, text}. So the format
+        # bar's B / I / U / size showed on screen, travelled in the payload, and was thrown away one
+        # function before the writer could use it — including the SIZE the template itself defines.
+        # Hanz, 2026-08-13: "also can you follow the font size from the proposal templates?"
+        #
+        # Validation is deliberately duplicated rather than delegated: this runs on untrusted request
+        # bodies, and the writer's copy is its own last line of defence.
+        runs = o.get("runs")
+        if isinstance(runs, list) and runs:
+            clean = []
+            for r in runs[:_PARAGRAPH_RUNS_MAX]:
+                if not isinstance(r, dict):
+                    continue
+                t = r.get("text")
+                if not isinstance(t, str):
+                    continue
+                one: Dict[str, Any] = {"text": t}
+                for k in ("bold", "italic", "underline"):
+                    v = r.get(k)
+                    if isinstance(v, bool):
+                        one[k] = v
+                sz = r.get("size_pt")
+                # A bool is an int subclass: True would become 1pt, an invisible paragraph.
+                if isinstance(sz, (int, float)) and not isinstance(sz, bool) and 1 <= float(sz) <= 200:
+                    one["size_pt"] = float(sz)
+                clean.append(one)
+            if clean:
+                # `text` rides along as the plain-text fallback for any consumer that ignores runs.
+                entry: Dict[str, Any] = {"id": pid, "runs": clean,
+                                         "text": "".join(r["text"] for r in clean)}
+                out.append(entry)
+                continue
+            # Runs present but every one of them malformed: fall through to `text` below rather
+            # than emitting an entry that would blank the paragraph.
         text = o.get("text")
         if text is None:
             continue
