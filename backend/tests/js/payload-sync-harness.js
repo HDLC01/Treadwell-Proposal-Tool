@@ -74,8 +74,12 @@ function scopeFor(state, opts) {
   const formValues = o.form || {};
   // #tb-total is where computeTokenValues reads the lump sum from — the page writes it before
   // calling, so the harness models it as the rendered total, not as a state field.
+  // `noTotalEl: true` models PAGE INIT. #tb-total appears in NO html for this screen — the init
+  // block near the bottom of proposal-review.js creates it, which happens AFTER the page-init
+  // rebuildPricing() call. Stubbing it as always-present is exactly why a regression that wrote
+  // $0.00 into every opened project's document payload passed the whole suite.
   const doc = {
-    querySelector: (sel) => (sel === "#tb-total" ? { textContent: lumpText } : null),
+    querySelector: (sel) => (sel === "#tb-total" && !o.noTotalEl ? { textContent: lumpText } : null),
     getElementById: () => null,
   };
   const form = {
@@ -292,6 +296,37 @@ out.sheetSystems = (() => {
   return { resolved: pp.sheet_systems, keptOnFailure: pp2.sheet_systems };
 })();
 
+// ── 1c. PAGE INIT MUST NOT ZERO THE DOCUMENT ─────────────────────────────────
+// THE REGRESSION THIS FIX ITSELF SHIPPED TO STAGING (found by adversarial review, 2026-08-13).
+// rebuildPricing() runs once at page load, BEFORE the init block creates #tb-total, and
+// computeTokenValues falls back to "$0.00" when that element is missing. Merely OPENING an
+// already-generated project's Proposal step therefore wrote a $0.00 total — and a NEGATIVE
+// flooring line, (0 − remodel tax) — into the customer's document, and persisted it. Observed
+// live: a staging draft's stored total_formatted went from "$36,763.00" to "$0.00" on page load.
+out.pageInitNoTotalElement = (() => {
+  const s = baseState();
+  s.proposal_remodel_tax = 1494;
+  const before = JSON.parse(JSON.stringify(s.proposal_payload.values));
+  const sc = scopeFor(s, { noTotalEl: true, form: { tax_inclusion: "INCLUDED" } });
+  const pp = sc.syncPayloadPricing();
+  return {
+    returned: pp,                                   // must be null — nothing written, nothing persisted
+    valuesUnchanged: JSON.stringify(s.proposal_payload.values) === JSON.stringify(before),
+    stillTheOldTotal: s.proposal_payload.values.total_formatted,
+  };
+})();
+
+// The same refusal when the element exists but has not caught up with the pricing — a stale
+// element is the same hazard as a missing one, and it is the shape a future reorder would produce.
+out.totalElementDisagrees = (() => {
+  const s = baseState();
+  flipToEpoxy(s);                                   // state says 18,670 …
+  const sc = scopeFor(s, { lumpText: "$13,265.00", // … the element still shows the old 13,265
+                           form: { tax_inclusion: "INCLUDED" } });
+  const pp = sc.syncPayloadPricing();
+  return { returned: pp, stillTheOldTotal: s.proposal_payload.values.total_formatted };
+})();
+
 // ── 2. WHITELIST COMPLETENESS ────────────────────────────────────────────────
 // Derived, not restated: compute the token mapping before and after the flip and diff it. Every
 // key whose value MOVED is a key the payload must carry, so a token added to computeTokenValues
@@ -376,6 +411,7 @@ out.comboNarrowing = (() => {
   const s = baseState();
   s.work_type = "combo";
   s.base_tab_id = null;                      // combo with no base → both systems print
+  s.proposal_lump_sum = 31935;               // must match #tb-total; see the corroboration guard
   const sc = scopeFor(s, { lumpText: "$31,935.00", form: { tax_inclusion: "INCLUDED" } });
   const withBoth = sc.syncPayloadPricing();
   const comboBefore = withBoth.combo_options.map((l) => l.label);
@@ -383,6 +419,7 @@ out.comboNarrowing = (() => {
   const s2 = baseState();
   s2.work_type = "combo";
   s2.base_tab_id = "Epoxy";                  // narrowed to one
+  s2.proposal_lump_sum = 18670;
   s2.proposal_payload.combo_options = comboBefore.map((label) => ({ label, amount_formatted: "$1" }));
   const sc2 = scopeFor(s2, { lumpText: "$18,670.00", form: { tax_inclusion: "INCLUDED" } });
   const narrowed = sc2.syncPayloadPricing();
