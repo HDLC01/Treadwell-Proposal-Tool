@@ -117,9 +117,13 @@ def test_the_radio_round_trips_null_to_a_sheet_and_back(strip):
 # ── the predicate ─────────────────────────────────────────────────────────────
 def test_the_pair_is_exactly_the_two_base_kind_sheets(strip):
     """Not copies (they are extras), not gyp (a gyp variant is priced on every job, so a loose
-    predicate would tag a sheet nobody bid)."""
+    predicate would tag a sheet nobody bid), and — since 2026-08-13 — not the two SEAL sheets,
+    which are `kind: "base"` template tabs and were swept in by the old `role !== "gyp"` test the
+    moment seal became a priced role. Equality, not a subset, so the next priced system cannot
+    join the pair by default either."""
     assert dict(strip["predicate"]["combo"]) == {
-        "Epoxy": True, "Polish": True, "Copy1": False, "Gyp": False}
+        "Epoxy": True, "Polish": True, "Copy1": False, "Gyp": False,
+        "Seal": False, "Seal (+Jnts)": False, "Leveling": False}
 
 
 def test_an_explicit_pick_dissolves_the_pair(strip):
@@ -147,9 +151,14 @@ def test_one_predicate_serves_the_strip_and_the_rooms_snapshot():
     assert "isPartOfAutoBase = isInCombinedBase" in ESTIMATE
     assert "!isInCombinedBase(t)" in ESTIMATE, (
         "the rooms snapshot no longer excludes the combined base sheets")
-    # And the Proposal screen applies the same rule, which is what it always did.
-    assert re.search(r"!\(!state\.base_tab_id && wt === \"combo\" && t\.kind === \"base\"\)",
-                     PROPOSAL), "the proposal screen's own exclusion moved — check they agree"
+    # And the Proposal screen applies the same rule. It used to spell the condition out inline as
+    # `t.kind === "base"`, which was only ever right because epoxy/polish/copies were the whole
+    # world: both seal sheets are base-kind too, so that inline test dropped a Seal option from
+    # every combo proposal while this screen went on listing it. Now both screens name the roles.
+    assert "!inCombinedBase(t)" in PROPOSAL, (
+        "the proposal screen's exclusion moved — it must share the named-role predicate")
+    for src, name in ((ESTIMATE, "estimate-review.js"), (PROPOSAL, "proposal-review.js")):
+        assert re.search(r'COMBINED_BASE_ROLES = new Set\(\["epoxy", "polish"\]\)', src), name
 
 
 def test_the_estimate_screen_no_longer_fakes_a_single_base_on_combo():

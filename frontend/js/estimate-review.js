@@ -206,6 +206,52 @@ const CANONICAL_SHEET = "Epoxy";
 // project-info edits on any gyp tab must canonicalize to the gyp base — NOT Epoxy.
 const GYP_BASE = 'Gyp (USG 1-8")';
 const GYP_SHEETS = [GYP_BASE, 'Gyp (USG N12ULTRA)', 'Gyp (USG N25 1-4")', 'Gyp (GWorx SC190)', 'Gyp (FR)'];
+// The two sealed-concrete sheets. An estimator, 2026-08-13: "Working on an estimate and noticed
+// that 'Seal' doesn't come up as an optional system to add." They were priceable but invisible to
+// the bid strip, because `roleFor` returned "other" and `pricedTabs()` drops anything unpriced.
+//
+// They are the POLISH layout — every cell in TOTAL_CELLS.Polish holds an identical formula on both
+// (verified against the workbook), and the one difference is that Polish's phase cell C85 is empty
+// here, which `phaseAt` already guards. Hence no new coordinate map: TOTAL_CELLS.Seal is Polish
+// minus `phase`.
+//
+// Seal is deliberately an OPTION only — never a work type and never a base bid. There is no Direct
+// Sealer proposal template (only ("sealer","GC")), so a seal base bid would fall back to the epoxy
+// template and print the wrong document.
+const SEAL_SHEETS = ["Seal", "Seal (+Jnts)"];
+// What a seal option is called on the customer's proposal. The same words the backend already uses
+// for sealer work (`"sealer": "Sealed Concrete"` in main.py), so one job reads the same in both
+// places; test_seal_option.py fails if the two ever disagree.
+const SEAL_SYSTEM_NAME = "Sealed Concrete";
+// Keyed by template LAYOUT so a copy of a seal tab inherits the name. The joints sheet must NOT
+// share the plain one: both can be quoted on the same proposal, and two option lines with an
+// identical description are unreadable. Its own D84 is "=D82-Seal!D82", labelled "Add Joint
+// Filler" on the sheet, so the name says joints.
+const LAYOUT_SYSTEM_NAME = {
+  "Seal":         SEAL_SYSTEM_NAME,
+  "Seal (+Jnts)": SEAL_SYSTEM_NAME + " with Joint Filler",
+};
+
+// WHICH TEMPLATES CAN PRINT AN OPTION AT ALL.
+//
+// An option reaches the customer only through the `{{#price_line}}` block in the proposal template,
+// and four of the shipped templates do not have one: GC Polish, GC Resinous, GC Sealer and Direct
+// Budget. On one of those, ticking "add as option" is silent — the estimator sees a configured
+// option and the document has nothing, which is the complaint from 2026-08-13 ("There are two
+// options but the PDF Shows one") in a different disguise.
+//
+// Keyed exactly like the backend's TEMPLATE_PICKER (work_type, audience), with gyp
+// audience-agnostic. test_seal_option.py derives the truth from the .docx files themselves and
+// fails if this list disagrees — so annotating a GC template later breaks the test until this is
+// updated, which is the right way round.
+const OPTION_CAPABLE = new Set([
+  "epoxy:Direct", "polish:Direct", "combo:Direct", "gyp:*",
+]);
+function templatePrintsOptions(wt, audience) {
+  const w = String(wt || "epoxy").toLowerCase();
+  const a = String(audience || "Direct");
+  return OPTION_CAPABLE.has(w + ":*") || OPTION_CAPABLE.has(w + ":" + a);
+}
 function isProjectInfoCell(addr) {
   const m = (addr || "").match(/^([A-D])(\d+)$/);
   if (!m) return false;
@@ -467,6 +513,7 @@ let sheetCache = {};  // name → fetched cell data
 const MAX_COPIES = 12;
 const BASE_ROLE = { Epoxy: "epoxy", Polish: "polish" };
 GYP_SHEETS.forEach((s) => { BASE_ROLE[s] = "gyp"; });   // all 5 gyp variants are priced 'gyp'
+SEAL_SHEETS.forEach((s) => { BASE_ROLE[s] = "seal"; }); // both seal sheets are priced 'seal'
 
 // One-time migration of the old separate-"rooms" model → the tab model.
 if (Array.isArray(state.rooms) && state.rooms.length && !Array.isArray(state.tab_copies)) {
@@ -550,7 +597,19 @@ function layoutIdFor(id) {
 // "total" (its own price) or a "deduct" (savings vs. the base). These
 // controls live in #bid-bar here AND mirror onto the Proposal Review
 // sidebar — both edit state.base_tab_id + state.tab_opts[id].
-const PRICED_ROLES = new Set(["epoxy", "polish", "gyp"]);
+const PRICED_ROLES = new Set(["epoxy", "polish", "gyp", "seal"]);
+// Priced, and yet NEVER the base bid.
+//
+// The base tab's role drives the proposal TEMPLATE (pick_template) and the whole narrative through
+// proposal-review's effectiveWorkType, which deliberately has no seal branch — so a seal base bid
+// falls back to the intake work type and prints the EPOXY document carrying the seal's money. That
+// is one click away the moment a Seal chip renders, because renderBidOptions gives every visible
+// chip a Base-bid radio. Suppressing that radio is the guard; the resolver below is the belt for a
+// draft that already carries one.
+const OPTION_ONLY_ROLES = new Set(["seal"]);
+const isOptionOnlyRole = (r) => OPTION_ONLY_ROLES.has(r);
+/** Priced tabs that may legitimately BE the base bid. */
+const basePricedTabs = () => pricedTabs().filter(t => !isOptionOnlyRole(t.role));
 const isPricedRole = (r) => PRICED_ROLES.has(r);
 // role-aware total cells (fixes reading a polish tab at D88 instead of D82).
 // TEMPLATE coordinates translated through the sheet's structural edits, so a
@@ -561,6 +620,7 @@ function totalCellsFor(id) {
   const role = roleFor(id);
   const base = role === "polish" ? TOTAL_CELLS.Polish
              : role === "gyp"    ? TOTAL_CELLS.Gyp
+             : role === "seal"   ? TOTAL_CELLS.Seal
              : TOTAL_CELLS.Epoxy;
   if (!structOpsFor(id).length) return base;
   const out = {};
@@ -579,6 +639,8 @@ function sfFieldsFor(id) {
   const role = roleFor(id);
   const map = role === "gyp"    ? GYP_SF_CELLS
             : role === "polish" ? AREA_SF_CELLS.Polish
+            // Seal shares Polish's single SF input (E18, rolled up by B35 on both sheets).
+            : role === "seal"   ? AREA_SF_CELLS.Polish
             :                     AREA_SF_CELLS.Epoxy;
   const out = {};
   for (const f in map) out[f] = hfNumTx(id, map[f]);
@@ -613,19 +675,22 @@ function defaultBaseSheet() {
   return wt === "gyp" ? GYP_BASE : wt === "polish" ? "Polish" : "Epoxy";
 }
 function resolveBaseTab() {
-  const byId = tabs.find(t => t.id === state.base_tab_id && isPricedRole(t.role));
+  // `!isOptionOnlyRole` as well as `isPricedRole`: a draft can name a base that is priced but may
+  // never be one, and honouring it would price the bid off a seal sheet under the epoxy template.
+  const byId = tabs.find(t => t.id === state.base_tab_id && isPricedRole(t.role)
+                              && !isOptionOnlyRole(t.role));
   if (byId) return byId;
   const wt = (state.work_type || "epoxy").toLowerCase();
   if (wt === "gyp") {
     const g = tabs.filter(t => t.role === "gyp");             // gyp base = the USG 1-8" tab
-    return g.find(t => t.id === GYP_BASE) || g.find(t => t.kind === "base") || g[0] || pricedTabs()[0] || null;
+    return g.find(t => t.id === GYP_BASE) || g.find(t => t.kind === "base") || g[0] || basePricedTabs()[0] || null;
   }
   if (wt === "polish") {                                      // polish-only base = the Polish tab
     const po = tabs.filter(t => t.role === "polish");
-    return po.find(t => t.kind === "base") || po[0] || pricedTabs()[0] || null;
+    return po.find(t => t.kind === "base") || po[0] || basePricedTabs()[0] || null;
   }
   const ep = tabs.filter(t => t.role === "epoxy");           // epoxy / combo fallback derivation
-  return ep.find(t => t.kind === "base") || ep[0] || pricedTabs()[0] || null;
+  return ep.find(t => t.kind === "base") || ep[0] || basePricedTabs()[0] || null;
 }
 // Is this sheet part of a COMBO job's combined base bid?
 //
@@ -635,8 +700,14 @@ function resolveBaseTab() {
 // is the bug: the strip showed a single-sheet base while the money summed two, and the snapshot
 // would happily list a base sheet as an option against itself. `!state.base_tab_id` because an
 // explicit pick narrows a combo to that one sheet — the estimator's deliberate override.
+// COMBINED_BASE_ROLES, not "anything but gyp". Both seal sheets are `kind: "base"` template tabs,
+// so when seal became a priced role the old exclusion list swept them into a combo job's combined
+// base bid — tagging Seal "base bid", removing it from the options list it was just added for, and
+// adding its total to the combined price the customer is quoted. Stated as the two roles a combo
+// IS, so the next priced system cannot join by default.
+const COMBINED_BASE_ROLES = new Set(["epoxy", "polish"]);
 function isInCombinedBase(t) {
-  if (!t || t.kind !== "base" || t.role === "gyp") return false;
+  if (!t || t.kind !== "base" || !COMBINED_BASE_ROLES.has(t.role)) return false;
   return (state.work_type || "epoxy").toLowerCase() === "combo" && !state.base_tab_id;
 }
 function ensureOpt(id) {
@@ -664,9 +735,14 @@ function renderBidOptions() {
   if (!list) return;
   const wt = (state.work_type || "epoxy").toLowerCase();
   const priced = pricedTabs();
+  // Once per render, not per chip: the answer is the same for every option on the job.
+  const canPrintOptions = templatePrintsOptions(state.work_type, state.audience);
   // Guard a stale explicit base from an old draft; never overwrite base_tab_id with
   // the auto-derived default (null base = auto; for combo that's Epoxy + Polish).
-  if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id)) state.base_tab_id = null;
+  // An option-only base is as stale as a deleted one: nulling it lets the derivation below resolve
+  // and persist a real base instead of pricing the job off a seal sheet.
+  if (state.base_tab_id && !priced.some(t => t.id === state.base_tab_id
+                                             && !isOptionOnlyRole(t.role))) state.base_tab_id = null;
   let baseId = state.base_tab_id;
   const autoBase = resolveBaseTab();
   // Non-Combo bids always have one real worksheet as their base. Persist the
@@ -688,6 +764,9 @@ function renderBidOptions() {
   const chipEngaged = (t) =>
     t.id === baseId ||
     (state.tab_opts[t.id] && state.tab_opts[t.id].is_option);
+  // A gyp job shows gyp; every other job shows the non-gyp systems, which now includes Seal —
+  // that IS the estimator's request ("Seal doesn't come up as an optional system to add"). Anything
+  // cross-type stays behind "+ Add another system", engaged tabs always show.
   const defaultChipVisible = (t) => (wt === "gyp") ? (t.role === "gyp" || chipEngaged(t))
                                                    : (t.role !== "gyp" || chipEngaged(t));
   const revealSystems = !!state.reveal_systems;
@@ -719,8 +798,10 @@ function renderBidOptions() {
   const isPartOfAutoBase = isInCombinedBase;
   // The combined chip's price: the same sheets `isPartOfAutoBase` tags, so the number and the
   // tags can never describe different pairs.
+  // The same positive rule as isInCombinedBase, for the same reason: `role !== "gyp"` here would
+  // silently add Seal's total to the combined base price.
   const comboComboTotal = () => priced
-    .filter(t => t.kind === "base" && t.role !== "gyp")
+    .filter(t => t.kind === "base" && COMBINED_BASE_ROLES.has(t.role))
     .reduce((s, t) => s + (HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0), 0);
   const baseRadio = (val, checked, label) =>
     `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
@@ -741,7 +822,14 @@ function renderBidOptions() {
     const isBase = baseId === t.id || soloBase === t.id;
     const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
     const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
-    let inner = baseRadio(t.id, isBase, labelFor(t.id)) +
+    // An option-only sheet gets its NAME, not a Base-bid radio. Every visible chip used to carry
+    // one, so the moment Seal became visible the base bid was one click from a document the tool
+    // cannot produce: role "seal" has no template, so effectiveWorkType falls back to the intake
+    // type and the customer receives the Epoxy proposal carrying the seal's price.
+    const nameCell = isOptionOnlyRole(t.role)
+      ? `<span class="bb-name" title="Priced as an option only, never as the base bid">${_escBB(labelFor(t.id))}</span>`
+      : baseRadio(t.id, isBase, labelFor(t.id));
+    let inner = nameCell +
                 `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
     if (isBase) {
       inner += `<span class="bb-tag">base bid</span>`;
@@ -763,6 +851,12 @@ function renderBidOptions() {
         // Hanz, 2026-08-13: "There are two options but the PDF Shows one."
         ((isOpt && !show)
           ? `<span class="bb-inert">Not shown anywhere until “show in proposal” is ticked.</span>`
+          : "") +
+        // The other way an option reaches nobody: this job's template has no price-line block to
+        // print it in. Same amber treatment, because it is the same class of surprise — and worth
+        // saying even when the option is otherwise configured correctly.
+        ((isOpt && show && !canPrintOptions)
+          ? `<span class="bb-inert">This ${_escBB(state.audience || "Direct")} template does not print options, so nothing will reach the proposal.</span>`
           : "") +
         `<span class="bb-modewrap">price as <select class="bb-mode"><option value="total"${mode === "total" ? " selected" : ""}>total</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct</option></select></span>` +
         `</span></span>`;
@@ -1745,12 +1839,18 @@ const TOTAL_CELLS = {
   // snapshots 0). All 5 gyp variants share this layout, so it's keyed by role,
   // not sheet name (see totalCellsFor / updateTotalBar's gyp-aware guards).
   Gyp:    { total: "E87", psf: "E18", material: "E41", labor: "E52", tooling: "E61", sales_tax: "E79", remodel: "E80", costs: "G71", man_hours: "G72" },
+  // Seal + Seal (+Jnts) ARE the Polish layout — every address below holds an identical formula on
+  // all three sheets (pinned cell-by-cell by test_seal_option.py against the real workbook). NO
+  // phase key, deliberately, exactly as gyp has none: Polish's C85 carries 4500 and Seal's is
+  // empty, so a phase read here would quietly bill a phase the sheet never priced.
+  Seal:   { total: "D82", psf: "D15", material: "D33", labor: "D45", tooling: "D55", sales_tax: "D74", remodel: "D75", costs: "F66", man_hours: "F67" },
 };
 
 function updateTotalBar(data, byAddr) {
-  // Gyp variant tabs aren't named "Gyp", so the sheet-name lookup misses them —
-  // fall through to totalCellsFor (role-aware) when the sheet is a gyp layout.
-  const map = (TOTAL_CELLS[data.sheet] || roleFor(data.sheet) === "gyp") ? totalCellsFor(data.sheet) : {};
+  // Variant tabs aren't named after their layout — "Gyp (USG N12ULTRA)" and "Seal (+Jnts)" both
+  // miss the sheet-name lookup — so fall through to totalCellsFor (role-aware) for ANY priced
+  // role rather than naming each layout here. Without this the bar reads dashes on those tabs.
+  const map = (TOTAL_CELLS[data.sheet] || isPricedRole(roleFor(data.sheet))) ? totalCellsFor(data.sheet) : {};
   const cellVal = (addr) => {
     if (!addr) return null;
     const c = byAddr.get(addr);
@@ -3607,6 +3707,17 @@ function deriveSystemName() {
 // Per-tab system name — each room/copy can pick its own system. Reads the tab's
 // OWN A22/A26 dropdown picks from HF (resolves for non-active tabs too).
 function deriveSystemNameFor(id) {
+  // A seal tab has no system-name cell at all — the epoxy layout's A22/A26 are empty on both Seal
+  // sheets — so without this the description falls back to `labelFor(id)` and the customer's
+  // proposal reads "Seal", the internal worksheet name. Worse, if it came through blank the
+  // backend falls back to `_flooring_noun(work_type)`, keyed on the JOB's type, so a seal option
+  // on an epoxy job would print "Epoxy flooring".
+  //
+  // SEAL_SYSTEM_NAME is the same wording the backend already uses for sealer work
+  // (main.py's `"sealer": "Sealed Concrete"`), pinned by test_seal_option.py so the two cannot
+  // drift into describing one job two ways.
+  const _layoutName = LAYOUT_SYSTEM_NAME[layoutIdFor(id)];
+  if (_layoutName) return _layoutName;
   // Gyp layouts hold the system name in B16 (e.g. 'N12 1/8"'); fall back to the
   // tab label when the cell is blank.
   if (roleFor(id) === "gyp") {

@@ -471,6 +471,20 @@
   // Sum the Area buckets (SF / cove LF) from the BASE tab(s) ONLY — options
   // never contribute. MIRRORS estimate-review.js:baseAreaFrom. Stale snapshots
   // (priced_tabs without .sf) contribute nothing → callers fall back to intake.
+  // Must agree with estimate-review.js. Both sets are asserted present in BOTH files by
+  // test_seal_option.py, because two screens disagreeing about which sheets are base-eligible is
+  // how a sealed-concrete option ends up listed on one and dropped from the other.
+  const OPTION_ONLY_ROLES = new Set(["seal"]);
+  const COMBINED_BASE_ROLES = new Set(["epoxy", "polish"]);
+  const roleOfTab = (t) => String((t && t.role) || "").toLowerCase();
+  const isOptionOnlyTab = (t) => OPTION_ONLY_ROLES.has(roleOfTab(t));
+  /** Mirrors estimate-review.js:isInCombinedBase. `t.kind === "base"` ALONE was the bug: both seal
+   *  sheets are base-kind template tabs, so a Seal option was silently dropped from every combo
+   *  proposal while the Estimate screen went on listing it. */
+  const inCombinedBase = (t) => !state.base_tab_id
+    && (state.work_type || "epoxy").toLowerCase() === "combo"
+    && t.kind === "base" && COMBINED_BASE_ROLES.has(roleOfTab(t));
+
   function baseAreaFrom(tabsSnap, baseIds) {
     const acc = {};
     const ids = new Set((baseIds || []).filter(Boolean));
@@ -501,6 +515,13 @@
     const N = (v) => Number(v) || 0;
     const byId = (id) => all.find(t => t.id === id);
     let baseTab = state.base_tab_id ? byId(state.base_tab_id) : null;
+    // Refuse an option-only base before anything is priced off it. effectiveWorkType has no seal
+    // branch by design, so honouring one would price the bid off a seal sheet and then print the
+    // template the intake work type picked. Nulling it lets the migration below resolve a real base.
+    if (baseTab && String(baseTab.role || "").toLowerCase() === "seal") {
+      baseTab = null;
+      state.base_tab_id = null;
+    }
     // A non-Combo proposal must always name an actual worksheet as its base.
     // This migrates older null-base drafts before any total is displayed.
     if (!baseTab && wt !== "combo") {
@@ -555,7 +576,7 @@
     };
     const optionTabs = all.filter(t => (!baseTab || t.id !== baseTab.id) &&
       opts[t.id] && opts[t.id].is_option && opts[t.id].show !== false &&
-      !(!state.base_tab_id && wt === "combo" && t.kind === "base"));
+      !inCombinedBase(t));
     const shown = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
     state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
     // Recompute Area from the base tab(s) so a base switch / option toggle HERE
@@ -875,9 +896,11 @@
           const hasHiddenSystems = allTabs.some(t => !defaultVis(t));
           // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
           // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
+          // Same rule as rebuildPricing's inCombinedBase, and for the same reason: `role !== "gyp"`
+          // would tag both seal sheets as part of a combo's combined base bid.
           const isPartOfAutoBase = (t) => {
             if (baseId || wt !== "combo") return false;
-            return t.kind === "base" && t.role !== "gyp";
+            return t.kind === "base" && ["epoxy", "polish"].includes(String(t.role || "").toLowerCase());
           };
           optsPanel.hidden = false;
           // A "Base bid" radio toggle per sheet. Combo additionally retains its
@@ -892,8 +915,13 @@
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
             const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
-            r += `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}> ` +
-                 `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSD(N(t.total))}</span></span></label>`;
+            // No Base-bid radio on an option-only sheet — the same suppression the Estimate strip
+            // applies, so the two screens cannot offer different answers to "can this be the base?".
+            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSD(N(t.total))}</span></span>`;
+            r += isOptionOnlyTab(t)
+              ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
+              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}> ` +
+                nameRow + `</label>`;
             if (isBase) {
               r += `<div class="pr-optsub"><span class="op-hint">This sheet is the Base bid.</span></div>`;
             } else if (isPartOfAutoBase(t)) {
