@@ -883,24 +883,78 @@ def api_portal_publish(draft_id: str, request: Request,
     return out
 
 
+# Keys where the SAVED DRAFT outranks a /api/generate body's `values` echo.
+#
+# `values` is a spread of the page state as of the moment the generate payload was BUILT, so a
+# re-generate from a stored payload replays that moment. These are the keys where replaying it
+# would revert real work: the pricing the portal page renders, the engine totals its base-only
+# fallback reads, the estimator's typed notes, and the document payload itself (which nests the
+# previous generation's copy of all of the above). The payload may still SEED any of them on a
+# draft that has never been saved — that is the belt-and-suspenders case the write-back exists for.
+_GENERATE_WRITEBACK_DRAFT_AUTHORITY = (
+    "rooms", "base_tab_id", "tab_opts", "priced_tabs",
+    "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "sheet_area",
+    "price_lines", "price_overrides", "computed_bid", "alternate_computed_bid",
+    "tab_notes", "proposal_payload", "generate_result",
+)
+
+
 def _publish_digest(data: Dict[str, Any]) -> Dict[str, Any]:
     """The few fields that decide what a customer is quoted, from the snapshot just sent.
 
     Deliberately not a hash: the page shows the estimator WHICH pricing went out, so a
     mismatch is actionable ("it sent Epoxy as the base, you're looking at Room 1") rather
-    than merely alarming. Kept to primitives so it can never leak a blob into a response."""
-    rooms = data.get("rooms")
-    rooms = rooms if isinstance(rooms, list) else []
-    base = next((r for r in rooms if isinstance(r, dict) and r.get("is_base")), None)
-    return {
-        "base_tab_id": data.get("base_tab_id") or None,
-        "base_label": (base or {}).get("name") or None,
-        "lump_sum": data.get("proposal_lump_sum"),
+    than merely alarming. Kept to primitives so it can never leak a blob into a response.
+
+    BOTH HALVES OF THE SNAPSHOT, since 2026-08-13. One revision carries two descriptions of the
+    same pricing: the top-level fields the portal PAGE renders, and `proposal_payload`, which the
+    customer's PDF is rebuilt from on demand. They can drift apart — a base flip in the Pricing
+    sidebar updated the first and left the second frozen, so the page showed Epoxy as the base and
+    the PDF showed Polish, on the same pinned revision, with nothing anywhere saying so. Comparing
+    the two halves is pure server-side truth: it fires no matter which page, tab or device caused
+    the drift, which is what makes it the tripwire for the whole class rather than for one bug."""
+    def _rooms(v: Any) -> list:
+        return v if isinstance(v, list) else []
+
+    def _base(rooms: list) -> Dict[str, Any]:
+        return next((r for r in rooms if isinstance(r, dict) and r.get("is_base")), None) or {}
+
+    def _options(rooms: list) -> int:
         # Only the options a customer can actually pick — the same `show` rule the portal
         # and the document use, so the count cannot disagree with the proposal.
-        "option_count": sum(1 for r in rooms
-                            if isinstance(r, dict) and not r.get("is_base")
-                            and r.get("show") is not False),
+        return sum(1 for r in rooms
+                   if isinstance(r, dict) and not r.get("is_base") and r.get("show") is not False)
+
+    def _num(v: Any) -> Any:
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    rooms = _rooms(data.get("rooms"))
+    base = _base(rooms)
+
+    payload = data.get("proposal_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    pvalues = payload.get("values")
+    pvalues = pvalues if isinstance(pvalues, dict) else {}
+    prooms = _rooms(payload.get("rooms"))
+    pbase = _base(prooms)
+    # The base room's own total, falling back to the payload's mirror of the lump sum — a
+    # base-only proposal carries `rooms: []` (rooms exist only once there is an option to show).
+    doc_lump = _num((pbase.get("bid") or {}).get("total") if isinstance(pbase.get("bid"), dict) else None)
+    if doc_lump is None:
+        doc_lump = _num(pvalues.get("proposal_lump_sum"))
+
+    return {
+        "base_tab_id": data.get("base_tab_id") or None,
+        "base_label": base.get("name") or None,
+        "lump_sum": data.get("proposal_lump_sum"),
+        "option_count": _options(rooms),
+        # The DOCUMENT half. `has_document` is False on a snapshot taken before this project was
+        # ever generated, so the page stays silent on legacy sends instead of crying drift at
+        # something nobody can fix.
+        "has_document": bool(pvalues),
+        "doc_base_label": pbase.get("name") or None,
+        "doc_lump_sum": doc_lump,
+        "doc_option_count": _options(prooms) if prooms else (0 if pvalues else None),
     }
 
 
@@ -930,7 +984,9 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
         # Sent before the estimator ever generated documents — there is nothing to
         # replay, and inventing defaults would produce a file we never sent.
         raise HTTPException(422, "That revision has no generated documents to rebuild.")
-    return api_generate(GenerateIn(**payload), request)
+    # persist=False: this replays a payload frozen at revision `revision_no`. Writing it back
+    # would push an old revision's pricing over the live draft.
+    return _generate(GenerateIn(**payload), request, persist=False)
 
 
 @app.get("/api/portal/pipeline")
@@ -1466,7 +1522,10 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     pp = (row.get("data") or {}).get("proposal_payload")
     if not (isinstance(pp, dict) and pp.get("values")):
         raise HTTPException(422, "This proposal hasn't been generated yet.")
-    out = api_generate(GenerateIn(**pp), request)         # reuse the full generate logic
+    # persist=False — this is the CUSTOMER'S on-demand PDF render. It re-runs the payload frozen
+    # in the (possibly pinned, possibly superseded) revision; a customer opening an old link must
+    # never rewrite the estimator's draft.
+    out = _generate(GenerateIn(**pp), request, persist=False)  # reuse the full generate logic
     tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
     entry = _FILE_CACHE.get(tok)
     if not entry:
@@ -2844,8 +2903,19 @@ def _template_proposal_version(path: Path) -> str:
 
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
+    """The HTTP route. A real browser generate MAY write its values back to the draft."""
+    return _generate(payload, request, persist=True)
+
+
+def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
-    on-demand pdf). The estimator downloads + files them manually."""
+    on-demand pdf). The estimator downloads + files them manually.
+
+    `persist=False` for the SERVER-SIDE REPLAYS — the on-demand customer PDF, a revision's file
+    links, the To-Dropbox re-upload. Those re-run a payload that was frozen at some earlier
+    moment; writing its values back would push that moment over the live draft (an old revision's
+    replay is literally time travel). Only a browser POST, which carries the current state,
+    persists."""
     values = payload.values
     _ensure_state_name(values)
     # payload.work_type is authoritative; make sure it's in `values` so the
@@ -3313,17 +3383,31 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     # belt-and-suspenders so a proposal is never generated without a visible
     # project. Keyed on the draft id (X-Project-Id); non-fatal on failure.
     draft_id = (request.headers.get("x-project-id") or "").strip()
-    if draft_id and draft_id != "no-draft":
+    if persist and draft_id and draft_id != "no-draft":
         try:
             # MERGE onto the existing draft data — never DROP fields the payload
             # doesn't carry. Critically preserves proposal_payload / generate_result
             # (the step-5 "To Dropbox" re-upload + the portal PDF read them back);
             # a plain replace here wiped them, breaking re-generation server-side.
+            #
+            # AND NEVER LET THE PAYLOAD'S ECHO OF PRICING OVERWRITE THE DRAFT. `values` is a spread
+            # of the whole page state as it stood when the payload was BUILT (the last "Continue"),
+            # so any re-generate from a stored payload — "View files" from Projects, the download
+            # 404 self-heal, a revision replay — carries that moment's rooms, base_tab_id, lump sum
+            # and even its own nested proposal_payload. Merging those over a draft that has since
+            # been re-priced is how the newer pricing gets silently reverted: the portal page reads
+            # `rooms` straight from the draft, and its base-only price falls back to `computed_bid`.
+            # The draft is the authority for these keys whenever it already has them; the payload
+            # may only SEED them on the belt-and-suspenders first save.
             existing = (drafts.load_draft(draft_id) or {}).get("data") or {}
-            proj_data = {**existing, **dict(values)}
+            incoming = dict(values)
+            for _k in _GENERATE_WRITEBACK_DRAFT_AUTHORITY:
+                if _k in existing:
+                    incoming.pop(_k, None)
+            proj_data = {**existing, **incoming}
             proj_data["work_type"] = payload.work_type
             proj_data.setdefault("project_name", project_name)
-            if payload.computed_bid:
+            if payload.computed_bid and "computed_bid" not in existing:
                 proj_data["computed_bid"] = payload.computed_bid
             drafts.save_draft(draft_id, proj_data, owner_email=_user_email(request))
         except Exception as exc:  # noqa: BLE001 — never block the download
@@ -3706,7 +3790,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             lock_overrides=_dict(data.get("lock_overrides")),
         )
     try:
-        out = api_generate(gi, request)                    # reuse the full generate pipeline
+        # persist=False — the payload came OUT of this draft a moment ago; feeding its values back
+        # in can only ever re-age it. Re-filing to Dropbox is not an edit.
+        out = _generate(gi, request, persist=False)         # reuse the full generate pipeline
         xlsx_entry = _FILE_CACHE.get((out.xlsx_download_url or "").rsplit("/", 1)[-1])
         docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
         if not xlsx_entry or not docx_entry:
