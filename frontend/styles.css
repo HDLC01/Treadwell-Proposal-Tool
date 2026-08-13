@@ -856,6 +856,94 @@ button {
 }
 /* A floating text box placed at its Word anchor position. */
 .tw-txbx { position: absolute; z-index: 1; }
+
+/* ── the drag / resize handles ─────────────────────────────────────────────
+   Hanz asked to be able to drag and resize the proposal's text boxes, so every box
+   carries a move grip, three resize grips, a live size readout and a Reset.
+
+   ALL of it is absolutely positioned. fitTxbx measures the box's offsetHeight to
+   decide whether the content overflows, and anything in the normal flow here would
+   make every box measure taller than its text — i.e. would break the overflow
+   notice for the sake of a handle.
+
+   The container is pointer-events:none so a click still lands in the text
+   underneath; only the grips and the button take the pointer back. */
+.tw-box-tools {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.tw-box-tools > * { pointer-events: auto; }
+.tw-grip {
+  position: absolute;
+  opacity: 0;
+  background: var(--treadwell-red, #9e001f);
+  border: 1px solid #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  transition: opacity .12s ease;
+}
+/* The MOVE grip sits just ABOVE the box, not in its top-left corner. In the corner it
+   covered the first character of the first line — obscuring the text and, worse, taking
+   the click that should have put the caret at the start of it. Kyle's boxes have no
+   padding to spare, so the only place a move handle can live is outside.
+
+   The three RESIZE grips do stay on the box's own edges, where every editor puts them,
+   and they only appear on hover. */
+.tw-grip-move { left: 0; top: -13px; width: 11px; height: 11px; cursor: move; border-radius: 50%; }
+.tw-grip-e  { right: 0; top: 50%; width: 7px; height: 26px; margin-top: -13px; cursor: ew-resize; }
+.tw-grip-s  { bottom: 0; left: 50%; width: 26px; height: 7px; margin-left: -13px; cursor: ns-resize; }
+.tw-grip-se { right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+.tw-txbx:hover .tw-grip,
+.tw-txbx:focus-within .tw-grip,
+.tw-txbx.tw-box-dragging .tw-grip { opacity: .85; }
+.tw-grip:hover { opacity: 1; }
+/* The size/position readout, only while a drag is in progress — a permanent badge on
+   every box would compete with the document it is describing.
+
+   BELOW the box, unlike the other chrome: a box dragged to the very top of the sheet has
+   nothing above it (the page clips there), and the top of the drag is exactly when the
+   estimator wants to read the numbers. Left-aligned, so it never lands on the
+   "Too long for this box" badge, which sits bottom-right. */
+.tw-box-size {
+  position: absolute;
+  left: 0; bottom: -15px;
+  display: none;
+  font: 700 7.5pt/1.5 'Inter', system-ui, sans-serif;
+  color: #fff;
+  background: var(--treadwell-red, #9e001f);
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.tw-txbx.tw-box-dragging .tw-box-size { display: block; }
+/* Only offered once the box has actually been moved, so it reads as "undo this"
+   rather than as a permanent control. */
+.tw-box-reset {
+  position: absolute;
+  right: 0; top: -15px;
+  display: none;
+  font: 700 7.5pt/1.4 'Inter', system-ui, sans-serif;
+  color: var(--treadwell-red, #9e001f);
+  background: #fff;
+  border: 1px solid rgba(158, 0, 31, .4);
+  border-radius: 3px;
+  padding: 2px 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tw-txbx.tw-box-moved:hover .tw-box-reset,
+.tw-txbx.tw-box-moved:focus-within .tw-box-reset { display: block; }
+.tw-box-reset:hover { background: var(--treadwell-red-light, #fdeaec); }
+/* A box that no longer matches the template: a hairline, so the estimator can see at a
+   glance which boxes they have moved without the page stopping looking like the document. */
+.tw-txbx.tw-box-moved { outline: 1px dashed rgba(158, 0, 31, .35); outline-offset: 1px; }
+.tw-txbx.tw-box-dragging {
+  outline: 1px solid var(--treadwell-red, #9e001f);
+  outline-offset: 1px;
+  user-select: none;
+}
 /* A box whose content is longer than the space Kyle's template gives it, even at the
    smallest legible font. fitTxbx CLIPS it there — shrinking further stopped being a
    preview and started being unreadable — so this has to say plainly that text is

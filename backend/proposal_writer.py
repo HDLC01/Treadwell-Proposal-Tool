@@ -1281,34 +1281,60 @@ def _fmt_vml_pt(v):
     return ("%g" % round(float(v), 2)) + "pt"
 
 
-def _set_vml_size(shape, w_pt, h_pt) -> bool:
-    """Rewrite width/height in a VML @style, leaving every other declaration alone.
+def _set_vml_style(shape, wanted: dict) -> bool:
+    """Rewrite named declarations in a VML @style, leaving every other one alone.
 
-    Order is preserved rather than rebuilt: the style also carries position, z-index and
-    visibility, and reordering those is a needless diff in a customer-facing template.
+    `wanted` maps a declaration name to points, e.g. `{"width": 300.0, "margin-top": -36.0}`;
+    a None value means "leave that one as it is". Order is preserved rather than rebuilt: the
+    style also carries position, z-index and visibility, and reordering those is a needless
+    diff in a customer-facing template.
+
+    Matching is on the WHOLE declaration name, which is what keeps `margin-left` away from the
+    bare `left`. `Invoice_Deposit.docx` ships `position:absolute;left:0;text-align:left;
+    margin-left:-2.1pt;…` — so a substring match, or writing `left` when you meant
+    `margin-left`, would edit a decoy and leave the real offset untouched. That is the same
+    class of mistake as the `a:extLst/a:ext` decoy on the DrawingML side.
     """
     style = shape.get("style") or ""
     parts = [p for p in style.split(";") if p.strip()]
+    live = {k: v for k, v in wanted.items() if v is not None}
     out, seen = [], set()
     for part in parts:
         key = part.partition(":")[0].strip().lower()
-        if key == "width" and w_pt is not None:
-            out.append("width:" + _fmt_vml_pt(w_pt))
-            seen.add("width")
-        elif key == "height" and h_pt is not None:
-            out.append("height:" + _fmt_vml_pt(h_pt))
-            seen.add("height")
+        if key in live:
+            out.append(key + ":" + _fmt_vml_pt(live[key]))
+            seen.add(key)
         else:
             out.append(part)
-    if w_pt is not None and "width" not in seen:
-        out.append("width:" + _fmt_vml_pt(w_pt))
-    if h_pt is not None and "height" not in seen:
-        out.append("height:" + _fmt_vml_pt(h_pt))
+    for key, val in live.items():
+        if key not in seen:
+            out.append(key + ":" + _fmt_vml_pt(val))
     new = ";".join(out)
     if new == style:
         return False
     shape.set("style", new)
     return True
+
+
+def _set_vml_size(shape, w_pt, h_pt) -> bool:
+    """The size half of `_set_vml_style`."""
+    return _set_vml_style(shape, {"width": w_pt, "height": h_pt})
+
+
+def _set_vml_pos(shape, x_off_pt, y_off_pt) -> bool:
+    """The position half of `_set_vml_style`: `margin-left` / `margin-top`.
+
+    These carry the SAME numbers as the DrawingML `wp:posOffset` pair, because the twin also
+    carries `mso-position-horizontal-relative:text` / `-vertical-relative:text` — VML's name
+    for the `column`/`paragraph` frames the DrawingML anchor uses. Verified against every
+    template: box 0 of the GC Resinous file is `positionH posOffset 447040` (= 35.2pt) and
+    `margin-left:35.2pt`, `positionV posOffset -457200` (= -36pt) and `margin-top:-36pt`.
+
+    So what goes here is the OFFSET, never the absolute page coordinate. Writing an absolute
+    coordinate into a text-relative frame is how Word and the PDF end up disagreeing about a
+    box the estimator can see on screen.
+    """
+    return _set_vml_style(shape, {"margin-left": x_off_pt, "margin-top": y_off_pt})
 
 
 def _txbx_anchor(txbx):
@@ -1377,9 +1403,93 @@ def _resize_txbx(txbx, w_pt=None, h_pt=None) -> int:
     return wrote
 
 
-# The printable area of Kyle's templates: US Letter with 1in margins, so 432 x 648pt. Used when
-# no document is to hand; `_apply_box_overrides` measures the real one instead.
+# ── Moving a floating text box ────────────────────────────────────────────────
+#
+# Hanz, 2026-08-13: "Allow me to drag and resize the text box for the proposal please."
+#
+# Resizing already existed; nothing had ever WRITTEN a position. A box's position lives in two
+# places, the same split as its size:
+#
+#   1. wp:positionH/wp:posOffset + wp:positionV/wp:posOffset  — EMU, the DrawingML anchor
+#   2. mc:Fallback v:shape/@style margin-left / margin-top     — points, the legacy VML twin
+#
+# Both hold an OFFSET FROM A FRAME, not a page coordinate. Every box in every template anchors
+# `positionH relativeFrom="column"` and `positionV relativeFrom="paragraph"` (measured across all
+# nine .docx files), and the VML twins say `mso-position-*-relative:text`, which agrees.
+#
+# THE PARAGRAPH-RELATIVE PROBLEM, and why this writer never needs to solve it. The y the editor
+# shows is a CALIBRATED ESTIMATE — `_pos_of_anchor` resolves a paragraph-relative anchor as
+# `margin.top + paragraph_index * _ANCHOR_LINE_H_PT + posOffset`, because the rendered height of
+# the empty anchor paragraphs is a layout result that is not in the XML. Round-tripping an
+# absolute y through that formula would bake the calibration error into the document.
+#
+# So the move is applied as a DIFFERENCE against the very same estimate the estimator dragged
+# from: read where `_pos_of_anchor` thinks the box is now, and shift the offset by
+# `wanted - current`. Whatever the estimate gets wrong appears on both sides and cancels, exactly,
+# leaving `posOffset + (wanted - current)`. Drag a box down 40pt and it moves 40pt, whether or not
+# the anchor paragraphs are really 14pt tall.
+#
+# Which also answers the tempting alternative: rewriting `relativeFrom` to "page" or "margin" and
+# writing an absolute offset would make the arithmetic trivial and change the DOCUMENT's
+# behaviour — a page-relative box stops travelling with the text above it, so a template edit that
+# adds a line would slide Kyle's frame art out from under the box it belongs to. The frame is
+# baked into the letterhead PNG, so that is not a cosmetic difference. The anchor frame is left
+# exactly as Kyle authored it.
+def _set_anchor_offset(anchor, tag: str, off_pt) -> bool:
+    """Write one `wp:positionH`/`wp:positionV` offset, in points. True when written."""
+    p = anchor.find(qn("wp:" + tag))
+    if p is None:
+        return False
+    o = p.find(qn("wp:posOffset"))
+    if o is None:
+        # `wp:align` and `wp:posOffset` are the two arms of ONE xsd:choice, so a box positioned by
+        # keyword ("align: left") has no offset to shift. Replace the keyword instead of adding a
+        # sibling: both arms present at once is invalid OOXML, and Word's answer to that is a
+        # repair prompt on a customer-facing file. No template of Kyle's uses align — every box
+        # carries a posOffset — but declining to move a box the estimator dragged would look like
+        # the drag was broken, and the offset we write is measured from the same place
+        # `_pos_of_anchor` reads an absent one as (zero), so the box lands where the screen said.
+        al = p.find(qn("wp:align"))
+        if al is not None:
+            p.remove(al)
+        o = OxmlElement("wp:posOffset")
+        p.append(o)
+    o.text = str(int(round(float(off_pt) * _EMU_PER_PT)))
+    return True
+
+
+def _move_txbx(txbx, x_off_pt=None, y_off_pt=None) -> int:
+    """Set one text box's anchor OFFSETS everywhere they are recorded.
+
+    Offsets, not page coordinates — see the module note above. Either may be None to leave that
+    axis alone. Never raises: a template whose shape is built differently gets fewer sites
+    written, which is a box at its design position rather than a 500 on /api/generate.
+    """
+    wrote = 0
+    anchor = _txbx_anchor(txbx)
+    if anchor is not None:
+        if x_off_pt is not None and _set_anchor_offset(anchor, "positionH", x_off_pt):
+            wrote += 1
+        if y_off_pt is not None and _set_anchor_offset(anchor, "positionV", y_off_pt):
+            wrote += 1
+    # Both branches or neither. A drawing whose anchor carries no position at all — a `wp:inline`
+    # box, which no template of Kyle's uses — has nothing for the fallback to AGREE with, and a
+    # fallback written on its own is precisely the half-write this pair exists to avoid.
+    if wrote:
+        for shape in _txbx_vml_twins(txbx):
+            if _set_vml_pos(shape, x_off_pt, y_off_pt):
+                wrote += 1
+    return wrote
+
+
+# Kyle's page, for when no document is to hand; `_apply_box_overrides` measures the real one
+# instead. US Letter (612 x 792pt) with 1.25in side margins and 1in top/bottom, so the printable
+# area is 612-90-90 = 432 by 792-72-72 = 648. The three constants have to keep describing ONE
+# sheet — `_page_metrics` asserts as much in test_the_fallback_page_and_the_fallback_size_limit
+# _describe_one_sheet, because a mismatch here would let the size bound and the position bound
+# disagree about the same template.
 _DEFAULT_MAX_BOX_PT = (432.0, 648.0)
+_DEFAULT_PAGE_PT = (612.0, 792.0)
 _MIN_BOX_PT = 12.0
 
 
@@ -1418,22 +1528,55 @@ def box_size_limits(d: Document) -> tuple:
     return (w, h)
 
 
-def _sanitize_box_overrides(raw, limits=None) -> dict:
-    """`{"<box id>": {h_pt?, w_pt?}}`, coerced and bounded. Never raises.
+def page_size(d: Document) -> tuple:
+    """The sheet, `(w_pt, h_pt)` — the bound on where a box may be MOVED to.
+
+    Deliberately the paper and not the printable area, which is the bound on how big a box may
+    be MADE. The two differ because Kyle designs into the margins: measured across all nine
+    templates, EVERY box sits outside the printable area — the DATE/JOB NAME header box lands at
+    y=36pt against a 72pt top margin, the buffalo logo at x=27pt against a 90pt left margin — and
+    not one sits off the paper. So a printable-area bound would refuse to move any box in any
+    template, and a refused drag reads to the estimator as a broken drag.
+
+    What the paper bound does buy is the thing that actually goes wrong: a box cannot be pushed
+    off the sheet, where its text would be silently gone from the customer's PDF.
+    """
+    try:
+        w = float(d.sections[0].page_width.pt)
+        h = float(d.sections[0].page_height.pt)
+    except Exception:  # noqa: BLE001 — a template with no usable sectPr falls back to Letter
+        return _DEFAULT_PAGE_PT
+    if not (math.isfinite(w) and math.isfinite(h)) or w <= 0 or h <= 0:
+        return _DEFAULT_PAGE_PT
+    return (w, h)
+
+
+def _sanitize_box_overrides(raw, limits=None, page=None) -> dict:
+    """`{"<box id>": {h_pt?, w_pt?, x_pt?, y_pt?}}`, coerced and bounded. Never raises.
 
     A dict keyed by id rather than a list, for the reason the paragraph-override sanitizer
     already documents: a list's positions shift, and a stale draft would then resize a
     different box than the estimator dragged.
 
-    Bounds are the printable area (see `box_size_limits`). Out-of-range values are REFUSED, not
-    clamped: the drag handle stops at the same limit, so anything past it arrived from a stale
-    draft or a hand-built request, and leaving the design size gives a document that still reads
-    correctly. Nothing useful is under 12pt either way.
+    `h_pt`/`w_pt` are a size; `x_pt`/`y_pt` are the box's top-left corner in PAGE POINTS, the
+    same coordinate system `template_geometry` reports and therefore the same one the drag
+    handle works in. All four are independent: a box may be moved without being resized.
+
+    Size bounds are the printable area (see `box_size_limits`); position bounds are the sheet
+    (see `page_size`). Out-of-range values are REFUSED, not clamped: the drag handle stops at
+    the same limits, so anything past them arrived from a stale draft or a hand-built request,
+    and leaving the design geometry gives a document that still reads correctly. Nothing useful
+    is under 12pt either way.
+
+    Only the CORNER is bounded here. Whether the far edge stays on the paper depends on the
+    box's size, which is a property of the document rather than of the request, so that half of
+    the rule lives in `_apply_box_overrides` where the document is to hand.
     """
     out = {}
     if not isinstance(raw, dict):
         return out
     max_w, max_h = limits or _DEFAULT_MAX_BOX_PT
+    page_w, page_h = page or _DEFAULT_PAGE_PT
     for key, spec in list(raw.items())[:200]:
         try:
             box_id = int(key)
@@ -1442,12 +1585,13 @@ def _sanitize_box_overrides(raw, limits=None) -> dict:
         if box_id < 0 or not isinstance(spec, dict):
             continue
         one = {}
-        for field, hi in (("h_pt", max_h), ("w_pt", max_w)):
+        for field, lo, hi in (("h_pt", _MIN_BOX_PT, max_h), ("w_pt", _MIN_BOX_PT, max_w),
+                              ("x_pt", 0.0, page_w), ("y_pt", 0.0, page_h)):
             v = spec.get(field)
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 continue
             v = float(v)
-            if not math.isfinite(v) or not (_MIN_BOX_PT <= v <= hi):
+            if not math.isfinite(v) or not (lo <= v <= hi):
                 continue
             one[field] = v
         if one:
@@ -1456,7 +1600,7 @@ def _sanitize_box_overrides(raw, limits=None) -> dict:
 
 
 def _apply_box_overrides(d: Document, raw) -> int:
-    """Resize the boxes the estimator dragged.
+    """Move and resize the boxes the estimator dragged. Returns the number of boxes changed.
 
     MUST run before `_pad_frame_boxes`/`_shrink_overflowing_text_boxes`, because the shrink
     re-reads `template_geometry(d)` to decide what overflows. Applying the resize first is
@@ -1464,17 +1608,56 @@ def _apply_box_overrides(d: Document, raw) -> int:
     is the entire point of the feature: a box the estimator enlarged should show its text at
     full size, not get its runs scaled to 4.5pt anyway.
     """
-    # Bounded by THIS template's printable area, not a constant: the fallback is Kyle's page size,
-    # and a template with different margins should be held to its own page.
-    boxes = _sanitize_box_overrides(raw, box_size_limits(d))
+    # Bounded by THIS template's own page, not by constants: the fallbacks are Kyle's Letter
+    # sheet, and a template with different margins should be held to its own.
+    page = _page_metrics(d)
+    limits = (page["max_box"]["w_pt"], page["max_box"]["h_pt"])
+    boxes = _sanitize_box_overrides(raw, limits, (page["w_pt"], page["h_pt"]))
     if not boxes:
         return 0
+    body = d.element.body
+    top_ps = [c for c in body if c.tag == qn("w:p")]
     changed = 0
     for idx, txbx in enumerate(_iter_txbx(d)):
         spec = boxes.get(str(idx))
         if not spec:
             continue
-        if _resize_txbx(txbx, w_pt=spec.get("w_pt"), h_pt=spec.get("h_pt")):
+        wrote = 0
+        want_x, want_y = spec.get("x_pt"), spec.get("y_pt")
+        anchor = _txbx_anchor(txbx) if (want_x is not None or want_y is not None) else None
+        # Read the box's CURRENT place before touching it — the move is a difference against
+        # this reading, which is what makes the paragraph-relative estimate cancel out (see the
+        # "Moving a floating text box" note above).
+        cur = _pos_of_anchor(anchor, page, top_ps, body) if anchor is not None else None
+        # Asked for at all, before asked to do anything: `_resize_txbx` counts the sites it
+        # VISITED, so calling it with two Nones reports a write that never happened — and this
+        # count is what tells the caller (and the log line) whether the estimator's drag landed.
+        if ("w_pt" in spec or "h_pt" in spec) and _resize_txbx(
+                txbx, w_pt=spec.get("w_pt"), h_pt=spec.get("h_pt")):
+            wrote += 1
+        if cur is not None:
+            cur_x, cur_y, cur_w, cur_h = cur
+            new_w = spec.get("w_pt", cur_w) or cur_w
+            new_h = spec.get("h_pt", cur_h) or cur_h
+            tx = cur_x if want_x is None else want_x
+            ty = cur_y if want_y is None else want_y
+            # The far-edge half of the paper bound. A corner on the sheet with the box hanging
+            # off the right or the bottom loses text: LibreOffice CLIPS rather than spilling, so
+            # nothing errors and the customer's proposal is simply missing a paragraph.
+            #
+            # Half a point of slack, because the handle clamps to exactly `page - size` and then
+            # rounds to 2dp: without it, the furthest position the estimator can actually drag to
+            # would sometimes be refused by a rounding step of 0.005pt. Half a point is 1/144 of
+            # an inch, well inside the unprintable edge of any real printer.
+            if (tx + new_w <= page["w_pt"] + 0.5) and (ty + new_h <= page["h_pt"] + 0.5):
+                ox, _rfx = _anchor_offset(anchor, "positionH")
+                oy, _rfy = _anchor_offset(anchor, "positionV")
+                wrote += _move_txbx(
+                    txbx,
+                    x_off_pt=None if want_x is None else ox + (tx - cur_x),
+                    y_off_pt=None if want_y is None else oy + (ty - cur_y),
+                )
+        if wrote:
             changed += 1
     return changed
 
@@ -1635,6 +1818,21 @@ def _para_price_list(p_elem) -> bool:
     return numid is not None and numid.get(qn("w:val")) == "3"
 
 
+def _anchor_offset(anchor, tag: str) -> tuple:
+    """`(offset_pt, relativeFrom)` for one `wp:positionH`/`wp:positionV`.
+
+    Its own function so the READER (`_pos_of_anchor`) and the WRITER
+    (`_apply_box_overrides`, which shifts the offset by a difference) cannot drift apart about
+    what an absent or keyword-positioned anchor counts as.
+    """
+    p = anchor.find(qn("wp:" + tag))
+    if p is None:
+        return 0.0, "page"
+    o = p.find(qn("wp:posOffset"))
+    return (int(o.text) / _EMU_PER_PT if o is not None and o.text else 0.0,
+            p.get("relativeFrom") or "page")
+
+
 def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 
@@ -1642,21 +1840,17 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
     the paragraph-relative vertical (what these templates use) is resolved
     against the anchor's enclosing top-level paragraph index at the
     calibrated `_ANCHOR_LINE_H_PT` per empty line (see the constant's note).
+
+    The y this returns is therefore an ESTIMATE, and `_apply_box_overrides` depends on it being
+    the SAME estimate the editor was given rather than on it being right — read the
+    "Moving a floating text box" note before changing the arithmetic here.
     """
     ext = anchor.find(qn("wp:extent"))
     w = int(ext.get("cx")) / _EMU_PER_PT if ext is not None else 0.0
     h = int(ext.get("cy")) / _EMU_PER_PT if ext is not None else 0.0
 
-    def offset(tag):
-        p = anchor.find(qn("wp:" + tag))
-        if p is None:
-            return 0.0, "page"
-        o = p.find(qn("wp:posOffset"))
-        return (int(o.text) / _EMU_PER_PT if o is not None and o.text else 0.0,
-                p.get("relativeFrom") or "page")
-
-    ox, rfx = offset("positionH")
-    oy, rfy = offset("positionV")
+    ox, rfx = _anchor_offset(anchor, "positionH")
+    oy, rfy = _anchor_offset(anchor, "positionV")
 
     x = ox + (page["margin"]["left"] if rfx in ("column", "margin") else 0.0)
 
@@ -1676,6 +1870,35 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
     return x, y, w, h
 
 
+def _page_metrics(d: Document) -> dict:
+    """`{w_pt, h_pt, margin{top,left,right,bottom}, max_box{w_pt,h_pt,min_pt}}` from sectPr.
+
+    THE one reader of the section's page setup, shared by `template_geometry` (which hands it to
+    the editor) and `_apply_box_overrides` (which bounds a drag with it). Two independent
+    derivations of the same numbers is how a handle ends up letting somebody drag to a place the
+    server then throws away, which reads as the drag not having worked.
+    """
+    max_w, max_h = box_size_limits(d)
+    page_w, page_h = page_size(d)
+    try:
+        sec = d.sections[0]
+        margin = {"top": sec.top_margin.pt, "left": sec.left_margin.pt,
+                  "right": sec.right_margin.pt, "bottom": sec.bottom_margin.pt}
+    except Exception:  # noqa: BLE001 — Kyle's own page setup, so the three fallbacks agree
+        # 612-90-90 = 432 and 792-72-72 = 648, i.e. exactly `_DEFAULT_MAX_BOX_PT`. Picking a
+        # different guess here would make the size limit and the margins describe two different
+        # sheets on the one template that ever reaches this branch.
+        margin = {"top": 72.0, "left": 90.0, "right": 90.0, "bottom": 72.0}
+    return {
+        "w_pt": page_w, "h_pt": page_h, "margin": margin,
+        # Stated rather than left for the editor to derive, so the drag handle stops exactly where
+        # the sanitiser starts refusing. `max_box` is how BIG a box may be made (the printable
+        # area); the page above is how far it may be MOVED (the sheet) — see `page_size` for why
+        # those are two different rectangles.
+        "max_box": {"w_pt": max_w, "h_pt": max_h, "min_pt": _MIN_BOX_PT},
+    }
+
+
 def template_geometry(d: Document) -> dict:
     """Page metrics + floating-object placement for the editor's page view:
 
@@ -1688,18 +1911,7 @@ def template_geometry(d: Document) -> dict:
                (page 1's labeled/bordered art, then the plain terms-page
                letterhead — `para_index` orders them by where they anchor).
     """
-    sec = d.sections[0]
-    _max_w, _max_h = box_size_limits(d)
-    page = {
-        "w_pt": sec.page_width.pt, "h_pt": sec.page_height.pt,
-        "margin": {"top": sec.top_margin.pt, "left": sec.left_margin.pt,
-                   "right": sec.right_margin.pt, "bottom": sec.bottom_margin.pt},
-        # Stated rather than left for the editor to derive, so the drag handle stops exactly where
-        # the sanitiser starts refusing. Two independent subtractions of the same margins is how
-        # a handle ends up letting somebody drag to a size the server then throws away, which
-        # reads as the drag not having worked.
-        "max_box": {"w_pt": _max_w, "h_pt": _max_h, "min_pt": _MIN_BOX_PT},
-    }
+    page = _page_metrics(d)
     body = d.element.body
     top_ps = [c for c in body if c.tag == qn("w:p")]
 
@@ -2127,14 +2339,14 @@ def fill_proposal(
     # Double spacing after the base-bid Total, before the Options section (Kyle).
     if _space_before_options(d, 2):
         log.info("Added double spacing before the PRICE Options heading")
-    # Boxes the estimator resized, FIRST — before the padding and therefore before the
-    # shrink, which re-reads template_geometry(d) to decide what overflows. Applying a
+    # Boxes the estimator dragged or resized, FIRST — before the padding and therefore before
+    # the shrink, which re-reads template_geometry(d) to decide what overflows. Applying a
     # resize first is what lets the shrink stand down by itself on a box that is now big
     # enough: a box somebody enlarged precisely because its text was being cut off must show
     # that text at full size, not get its runs scaled down anyway.
-    _resized = _apply_box_overrides(d, box_overrides)
-    if _resized:
-        log.info("Resized %d text box(es) from the estimator's box overrides", _resized)
+    _laid_out = _apply_box_overrides(d, box_overrides)
+    if _laid_out:
+        log.info("Moved/resized %d text box(es) from the estimator's box overrides", _laid_out)
     # Pad affected framed boxes' top inset (so the first NOTES bullet / "Base Bid"
     # clear their red borders) BEFORE the shrink, so the shrink estimate sees the
     # reduced usable height and can't push the WORK box into overflow.

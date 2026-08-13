@@ -55,6 +55,21 @@ def test_the_existing_actions_are_untouched(drawer):
     assert drawer["offered"]["unchangedActions"] is True
 
 
+def test_the_picker_is_actually_visible(drawer):
+    """Rendered is not the same as reachable. A `hidden` wrapper still emits every id, so the
+    harness would resolve `#ns-assign`, wire it, and report a working control that nobody can see
+    — a mutation proved exactly that before this assertion existed."""
+    assert drawer["offered"]["pickerHidden"] is False
+
+
+def test_the_estimator_is_named_once(drawer):
+    """The whole job of the redesign merge. Two renderers of that line existed for a few minutes —
+    the redesign's facts grid and this feature's own section — and they would have drifted the
+    first time either changed how an unassigned estimator reads."""
+    assert drawer["offered"]["estimatorCells"] == 1, (
+        "the estimator is rendered %s times" % drawer["offered"]["estimatorCells"])
+
+
 def test_the_guess_is_still_shown_with_its_question_mark(drawer):
     """The picker settles the question; it does not hide that nobody has answered it. Replacing
     the name with a bare control would lose the one useful fact on the panel."""
@@ -189,9 +204,14 @@ def test_the_picker_still_starts_blank_when_nobody_has_assigned():
 
 # ── the styling exists ────────────────────────────────────────────────────────
 def test_the_control_is_styled():
-    """A flex row with no rule is a select and a button stacked oddly in a 380px drawer."""
-    for sel in (".ns-assign {", ".ns-est {"):
-        assert sel in PORTAL_HTML, sel
+    """A flex row with no rule is a select and a button stacked oddly in a 380px drawer.
+
+    `.ns-est` is deliberately gone: the 2026-08-13 redesign renders the estimator as a `fact` in
+    the panel's facts grid, so the picker no longer draws the name itself. One renderer for that
+    line, not two that can drift."""
+    assert ".ns-assign {" in PORTAL_HTML
+    assert ".ns-est" not in PORTAL_HTML, (
+        "dead rule: the facts grid draws the estimator now")
     rule = re.search(r"\.ns-assign \{([^}]*)\}", PORTAL_HTML).group(1)
     assert "flex" in rule, rule
     assert ".ns-assign-note:empty { display:none; }" in PORTAL_HTML, (

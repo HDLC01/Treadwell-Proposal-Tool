@@ -71,6 +71,16 @@
       // (proposal_payload above) carries them all.
       notes: String(s.notes_text || "").replace(/\n+$/, "").split("\n").map(t => t.trim()),
       system_overrides: Array.isArray(s.system_overrides) ? s.system_overrides : [],
+      // Boxes the estimator dragged or resized. Carried here as well as on the primary path,
+      // because this rebuild is what "View files" re-generates from: without it, a project whose
+      // boxes were laid out by hand would come back with them at the template's size, and the
+      // second download would disagree with the first one the estimator already checked.
+      // The version comes along so the backend can still drop a layout captured against an
+      // older .docx — an empty template_version means "legacy caller, apply unchanged", which is
+      // exactly the wrong answer for ids that may have shifted.
+      box_overrides: (s.box_overrides && typeof s.box_overrides === "object"
+                      && !Array.isArray(s.box_overrides)) ? s.box_overrides : {},
+      template_version: String((s.box_overrides_meta || {}).template_version || ""),
       // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
       // option + manual line label/amount). Display-only — never affects pricing.
       price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
