@@ -543,6 +543,30 @@
       bits.push("it sent " + sent.option_count + " option" + (sent.option_count === 1 ? "" : "s")
                 + ", not " + localOpts);
     }
+    // ── The DOCUMENT half of the same snapshot ────────────────────────────────────────────
+    // The portal page reads `rooms`; the customer's PDF is re-rendered from `proposal_payload`.
+    // One revision, two halves, and until the Proposal step's Continue runs they can disagree —
+    // which is exactly the "the PDF still shows the old base bid" report. This comparison is
+    // server truth vs server truth, so it fires no matter which tab, device or colleague caused
+    // the drift, and it survives a page whose own local state happens to match either half.
+    if (sent.has_document) {
+      const dbits = [];
+      if (sent.doc_base_label && sent.base_label && sent.doc_base_label !== sent.base_label) {
+        dbits.push("its base bid is " + sent.doc_base_label + ", not " + sent.base_label);
+      }
+      if (sent.doc_lump_sum != null && !near(sent.doc_lump_sum, sent.lump_sum)) {
+        dbits.push("its price is " + usd(sent.doc_lump_sum) + ", not " + usd(sent.lump_sum));
+      }
+      if (typeof sent.doc_option_count === "number" && typeof sent.option_count === "number"
+          && sent.doc_option_count !== sent.option_count) {
+        dbits.push("it shows " + sent.doc_option_count + " option"
+                   + (sent.doc_option_count === 1 ? "" : "s") + ", not " + sent.option_count);
+      }
+      if (dbits.length) {
+        bits.push("the customer's PDF is out of date — " + dbits.join(" and ")
+                  + ". Open the Proposal step, press Continue, then re-send");
+      }
+    }
     return bits.join("; ");
   }
 
