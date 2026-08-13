@@ -320,6 +320,11 @@ def _primary_floor(data: Dict[str, Any]) -> str:
 _SF_KEYS = {
     "epoxy":  (("epoxy_sf", "epoxy_sf_2"), ("system_1_sf", "system_2_sf")),
     "polish": (("polish_sf",), ("polish_sf",)),
+    # The seal sheets ARE the polish layout and snapshot their SF under the same key (the frontend's
+    # sfFieldsFor sends role "seal" to AREA_SF_CELLS.Polish, i.e. E18). Listed explicitly so the
+    # `.get(role, _SF_KEYS["epoxy"])` fallback below cannot quietly read EPOXY keys for a seal tab
+    # and answer with an intake number from a different scope.
+    "seal":   (("polish_sf",), ("polish_sf",)),
     "gyp":    (("gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"),) * 2,
 }
 _LF_KEYS = (("cove_lf", "cove_lf_2"), ("cove_1_lf", "cove_2_lf"))
@@ -370,6 +375,9 @@ def _second_system(data: Dict[str, Any], base_role: str):
     * **Marked as a proposal OPTION.** An option is an alternate the customer was
       quoted and did not buy; B57 covers the base scope only. Listing it here
       would have ops order material and book crews for scope that was never sold.
+    * **Sealed concrete, always.** It is priced as an option only and can never be a base bid, so
+      it is never sold base scope — see the comment at the skip below for why the option flag alone
+      is not enough.
     """
     opts = data.get("tab_opts") if isinstance(data.get("tab_opts"), dict) else {}
     for tab in data.get("priced_tabs") or []:
@@ -377,6 +385,15 @@ def _second_system(data: Dict[str, Any], base_role: str):
             continue
         role = _txt(tab.get("role")).lower()
         if not role or role == base_role:
+            continue
+        # * **Sealed concrete.** It is an OPTION-only system — there is no seal work type and no
+        #   seal base bid — so it is never part of the sold base scope that B57 covers. A seal tab
+        #   carrying real square footage is either the option the customer declined or the
+        #   estimator's scratch pricing, and listing it would have ops order sealer for work nobody
+        #   bought. It needs its own skip rather than relying on the option flag, because priced-tab
+        #   ORDER is the estimator's (they can drag tabs), so a Seal tab dragged ahead of Polish
+        #   would otherwise take the second-system slot from the polish half of a combo.
+        if role == "seal":
             continue
         opt = opts.get(tab.get("id"))
         if isinstance(opt, dict) and opt.get("is_option"):
