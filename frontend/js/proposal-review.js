@@ -1948,19 +1948,41 @@
     return next;
   }
 
+  /** One key out of the CURRENT stored blob, not out of the page's load-time snapshot.
+   *
+   *  `state` (line 2) is a one-shot `TW.getState()`. `TW.setState` re-reads localStorage into a
+   *  NEW object, merges, and writes it back — it never touches the caller's snapshot. Everything
+   *  else on this page gets away with that because it mutates a NESTED object in place
+   *  (`state.tab_notes`, `state.price_overrides`, `state.base_tab_id`), which the next persist
+   *  picks up. A top-level key REPLACED by setState does not propagate, so the keyed override
+   *  stores were frozen at page load.
+   *
+   *  What that cost, before this helper existed: drag a box on an epoxy job, switch the base bid
+   *  to a polish tab — which re-runs initDocumentEditor in place, with no page load — and come
+   *  back. The reader saw the load-time value and mounted Kyle's geometry, and the persist merged
+   *  onto that same stale value, so the store was REPLACED by a single-key object and the sibling
+   *  template's layout was dropped from the draft. Continue then shipped `box_overrides = {}` and
+   *  the customer's document carried the template's own geometry with the estimator's resize
+   *  silently discarded, which is the exact failure this feature exists to prevent.
+   *
+   *  The same flaw applied to the paragraph overrides, where the loss is typed text. */
+  const liveKey = (name) => {
+    try { return (TW.getState() || {})[name]; } catch { return undefined; }
+  };
+
   /** The saved override entry for one template, or null.
    *
    *  Falls back to the legacy single slot when the keyed store has no entry — that
    *  is the migration path for drafts saved before this change, and it must stay:
    *  a draft in progress right now has edits only in the old shape. */
   function savedOverridesFor(wt, audience) {
-    const all = state.paragraph_overrides_all;
+    const all = liveKey("paragraph_overrides_all");
     const hit = all && typeof all === "object" ? all[overrideKey(wt, audience)] : null;
     if (hit && Array.isArray(hit.items)) return hit;
-    const meta = state.paragraph_overrides_meta || {};
+    const meta = liveKey("paragraph_overrides_meta") || {};
     if (meta.work_type === wt && meta.audience === audience) {
       return { template_version: String(meta.template_version || ""),
-               items: Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [] };
+               items: Array.isArray(liveKey("paragraph_overrides")) ? liveKey("paragraph_overrides") : [] };
     }
     return null;
   }
@@ -1987,7 +2009,7 @@
   // template fetch failed) so earlier edits still reach the docx.
   function collectOverrides() {
     if (!templateBlocks) {
-      return Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [];
+      return Array.isArray(liveKey("paragraph_overrides")) ? liveKey("paragraph_overrides") : [];
     }
     const out = [];
     docSurface.querySelectorAll(".tw-block").forEach(el => {
@@ -2021,7 +2043,7 @@
         // switch that rewrote it.
         TW.setState({
           paragraph_overrides_all:
-            mergeOverrideEntry(state.paragraph_overrides_all, wt, audience, templateVersion, items),
+            mergeOverrideEntry(liveKey("paragraph_overrides_all"), wt, audience, templateVersion, items),
           // Kept in lockstep for the CURRENT template: /api/generate reads these two,
           // and so does collectOverrides()'s no-editor fallback.
           paragraph_overrides: items,
@@ -2033,7 +2055,7 @@
           // The dragged box layout, through the SAME merge for the same reason: one store per
           // template, so switching the base bid and coming back keeps each one's layout.
           box_overrides_all:
-            mergeOverrideEntry(state.box_overrides_all, wt, audience, templateVersion, boxes),
+            mergeOverrideEntry(liveKey("box_overrides_all"), wt, audience, templateVersion, boxes),
           box_overrides: boxes,
           box_overrides_meta: {
             template_version: templateVersion,
@@ -2549,13 +2571,13 @@
   // against another version would resize a box the estimator never touched.
   function savedBoxOverridesFor(wt, audience) {
     const isPlain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-    const all = state.box_overrides_all;
+    const all = liveKey("box_overrides_all");
     const hit = isPlain(all) ? all[overrideKey(wt, audience)] : null;
     if (hit && isPlain(hit.items)) return hit;
-    const meta = state.box_overrides_meta || {};
+    const meta = liveKey("box_overrides_meta") || {};
     if (meta.work_type === wt && meta.audience === audience) {
       return { template_version: String(meta.template_version || ""),
-               items: isPlain(state.box_overrides) ? state.box_overrides : {} };
+               items: isPlain(liveKey("box_overrides")) ? liveKey("box_overrides") : {} };
     }
     return null;
   }
@@ -2586,7 +2608,7 @@
    *  collectOverrides does for paragraphs, so an earlier drag still reaches the .docx. */
   function collectBoxOverrides() {
     if (!templateBlocks) {
-      const flat = state.box_overrides;
+      const flat = liveKey("box_overrides");
       return (flat && typeof flat === "object" && !Array.isArray(flat)) ? flat : {};
     }
     const out = {};
@@ -3458,10 +3480,10 @@
     // the debounce window — would be preserved for generation but lost from the
     // store, and would vanish on the next template switch.
     const _allOverrides = mergeOverrideEntry(
-      state.paragraph_overrides_all, effectiveWorkType(), state.audience || "Direct",
+      liveKey("paragraph_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, paragraphOverrides);
     const _allBoxOverrides = mergeOverrideEntry(
-      state.box_overrides_all, effectiveWorkType(), state.audience || "Direct",
+      liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, boxOverridesOut);
 
     TW.setState({

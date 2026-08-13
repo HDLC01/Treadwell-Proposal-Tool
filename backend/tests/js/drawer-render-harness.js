@@ -435,6 +435,13 @@ const body = `"use strict";
     eligible: () => Array.from(SEC_ELIGIBLE),
     activeSec: () => ACTIVE_SEC,
     secTabs: () => SEC_TABS,
+    // Drive eligibility DIRECTLY, so a card can be present in the markup and still not eligible.
+    // Every payload produces markup and eligibility together (an ineligible card renders as "" and
+    // the DOM stub never creates an element for it), so no payload can put the two halves of
+    // applySecPanel's condition in disagreement, and the SEC_ELIGIBLE half went unpinned: an
+    // adversarial review deleted that half of the toggle and the whole suite stayed green.
+    // NB no backticks in this string — it is inside a template literal.
+    setEligible: (id, on) => setSecEligible(id, on),
   };`;
 
 const page = new Function(...injected.map(([n]) => n), body)(...injected.map(([, v]) => v));
@@ -563,6 +570,28 @@ async function runScenario(name, s) {
     out.notSent = { html, chars: html.length, paints: before,
                     repaintedOnIdenticalPayload: dom.paints > before,
                     missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
+    // ── the eligibility half of applySecPanel, which no payload can reach ──────
+    // A card present in the markup but NOT eligible. Impossible to produce from a payload, because
+    // an ineligible card renders as "" — so this drives setSecEligible directly, which is the only
+    // way to put SEC_TABS and SEC_ELIGIBLE in disagreement and see which one applySecPanel obeys.
+    const rich = SCENARIOS.submitted;
+    page.open(rich.pid);
+    page.renderDetail(rich.pid, rich.data);
+    const everything = page.eligible();
+    const withheld = "dsec-notify";                  // on the Proposal tab in every arrangement
+    page.setEligible(withheld, false);               // markup stays, eligibility goes
+    page.focusSection("proposal");
+    const el = dom.els.get("#" + withheld);
+    out.eligibilityHalf = {
+      cardIsInTheMarkup: !!el,
+      wasEligibleBefore: everything.indexOf(withheld) >= 0,
+      hiddenWhenNotEligible: !!(el && el.classList.contains("hidden")),
+      // The others on that tab must still be on screen, or this proves nothing except that
+      // something broke.
+      siblingsStillShown: Object.values(page.secTabs()).flat()
+        .filter((id) => id !== withheld && page.secTabs().proposal.indexOf(id) >= 0)
+        .filter((id) => { const e2 = dom.els.get("#" + id); return e2 && !e2.classList.contains("hidden"); }),
+    };
   } catch (e) {
     out.errors.notSent = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }

@@ -352,6 +352,59 @@ def test_each_tab_shows_its_own_cards_and_hides_the_rest(out, name):
 
 @needs_node
 @pytest.mark.parametrize("name", SCENARIOS)
+def test_every_card_is_nested_in_the_panel_its_tab_claims(out, name):
+    """SEC_TABS must agree with where the markup actually PUTS each card.
+
+    The test above cannot see this, and an adversarial review proved it: `expect` is derived from
+    SEC_TABS, the same map applySecPanel consults, so both sides of that equality move together.
+    Moving "dsec-approved" from the proposal list to the contacts list left all 92 tests green
+    while the approval vanished from the drawer entirely, and swapping the proposal and deposit
+    lists left the Deposit tab completely blank — no amount, no buttons — also green.
+
+    It is blank rather than misplaced because cards are NESTED inside their panel div, and
+    `.hidden` applies through a hidden ancestor: a wrong entry un-hides a card inside a hidden
+    panel and hides it inside the visible one. That nesting is the independent source of truth, so
+    this reads the mapping out of the markup and compares it with SEC_TABS. The portal has shipped
+    an empty panel twice.
+    """
+    html = out["scenarios"][name]["html"]
+    # Slice each panel's own markup: from its own div to the next panel's (or the end).
+    starts = [(m.start(), m.group(1)) for m in re.finditer(r'<div class="dpanel" id="dpanel-(\w+)"', html)]
+    assert starts, "no panels rendered at all on the %s drawer" % name
+    from_markup = {}
+    for i, (pos, sec) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else len(html)
+        from_markup[sec] = set(re.findall(r'id="(dsec-\w+)"', html[pos:end]))
+
+    for sec, ids in out["secMap"].items():
+        rendered = from_markup.get(sec, set())
+        # Only cards this payload rendered at all — an ineligible card has no markup by design.
+        claimed = {i for i in ids if 'id="%s"' % i in html}
+        assert claimed == rendered, (
+            "SEC_TABS puts %s on the %s tab, but the markup nests %s inside dpanel-%s. A card in "
+            "the wrong panel is invisible on every tab, and its own tab renders empty."
+            % (sorted(claimed), sec, sorted(rendered), sec))
+
+
+@needs_node
+def test_a_card_that_is_not_eligible_is_hidden_even_though_it_rendered(out):
+    """The other half of applySecPanel's condition, which no payload can reach.
+
+    Markup and eligibility are produced together — an ineligible card renders as "" — so every
+    fixture agrees with itself, and deleting `SEC_ELIGIBLE.has(id)` from the toggle left the whole
+    suite green. The harness therefore drives `setSecEligible` directly, which is the only way to
+    make the two halves disagree and see which one the code obeys."""
+    e = out["eligibilityHalf"]
+    assert e["cardIsInTheMarkup"] and e["wasEligibleBefore"], e
+    assert e["hiddenWhenNotEligible"] is True, (
+        "a card withdrawn from SEC_ELIGIBLE stayed on screen, so only the SEC_TABS half of the "
+        "visibility toggle is doing any work")
+    assert e["siblingsStillShown"], (
+        "withdrawing one card hid its whole tab, so this proves nothing about eligibility")
+
+
+@needs_node
+@pytest.mark.parametrize("name", SCENARIOS)
 def test_exactly_one_step_reads_as_selected(out, name):
     """aria-selected is set in the same loop as the class precisely so a screen reader can never
     disagree with what is painted. Two selected steps, or none, is that promise broken."""

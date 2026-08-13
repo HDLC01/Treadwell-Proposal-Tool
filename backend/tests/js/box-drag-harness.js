@@ -287,10 +287,36 @@ const LIFTED = [
 
 const BOX_LOOP = renderBoxLoop();
 
+// THE PAGE'S OWN BINDING, not a friendlier one.
+//
+// This harness used to declare `let state = {}` with a `setState` that REBOUND it, and to merge
+// against a fresh `API.getState()`. Both are kinder than reality, and they hid a real bug:
+// proposal-review.js line 2 is `const state = TW.getState()` — a one-shot snapshot — while
+// TW.setState re-reads localStorage into a NEW object and never writes back onto it. So a
+// top-level key replaced by setState is frozen at page load for the whole visit, and an
+// adversarial review showed the consequence: drag a box on an epoxy job, switch the base bid to a
+// polish tab (the editor reloads in place, with no page load), come back, and the layout was gone
+// AND the sibling template's entry had been dropped from the draft.
+//
+// So: `STORE` stands in for localStorage, `TW.getState()` returns a fresh copy of it exactly as
+// shared.js does, `TW.setState` merges into STORE and leaves the snapshot alone, and the page's
+// `state` is bound ONCE from it with const. A test that passes here now passes for the same reason
+// the page works.
+const STORE = { blob: {} };
+const TWStub = {
+  getState: () => JSON.parse(JSON.stringify(STORE.blob)),
+  setState: (partial) => {
+    STORE.blob = Object.assign(JSON.parse(JSON.stringify(STORE.blob)), partial || {});
+    return STORE.blob;
+  },
+};
+
 const api = new Function(
   "document", "window", "docSurface", "docZoom", "boxDesign", "templateBlocks",
-  "overrideKey", "mergeOverrideEntry", "schedulePersistOverrides",
-  `let state = {}; let templateVersion = "TV1"; let boxOverrides = new Map(); let boxLimits = null;
+  "overrideKey", "mergeOverrideEntry", "schedulePersistOverrides", "TW", "STORE",
+  `const state = TW.getState();
+  const liveKey = (name) => { try { return (TW.getState() || {})[name]; } catch { return undefined; } };
+  let templateVersion = "TV1"; let boxOverrides = new Map(); let boxLimits = null;
 ` + LIFTED + `
   wireBoxDrag();
   wireOverflowExpand();
@@ -302,8 +328,11 @@ ${BOX_LOOP}
            effectiveBoxRect, applyBoxGeom, collectBoxOverrides, loadBoxOverrides,
            savedBoxOverridesFor, fitTxbx, zoomScale,
            setLimits: (l) => { boxLimits = l; },
-           getState: () => state,
-           setState: (s) => { state = s; },
+           // The STORE, i.e. what a reload would read — never the frozen snapshot.
+           getState: () => TW.getState(),
+           setState: (s) => TW.setState(s),
+           // The snapshot itself, so a test can prove it really is stale rather than assuming it.
+           snapshotKeys: () => Object.keys(state),
            getVersion: () => templateVersion,
            setVersion: (v) => { templateVersion = v; },
            setBlocks: (b) => { templateBlocks = b; },
@@ -311,7 +340,7 @@ ${BOX_LOOP}
            readOverrides: () => Array.from(boxOverrides.entries()) };
   `
 )(document, window, docSurface, docZoom, boxDesign, templateBlocks,
-  overrideKey, mergeOverrideEntry, schedulePersistOverrides);
+  overrideKey, mergeOverrideEntry, schedulePersistOverrides, TWStub, STORE);
 API = api;
 
 const st = () => api.getState();
@@ -568,7 +597,13 @@ out.mountedRestored = rectOf(p1.children[0]);
 
 // 16. The legacy/no-editor fallback: a saved layout still reaches the payload when the template
 //     fetch failed and there is no live map to read.
-api.setState({ box_overrides: { "3": { h_pt: 300 } },
+// `box_overrides_all: {}` is stated, not assumed. setState now MERGES into the store, exactly as
+// shared.js does, so the keyed entries cases 14-15 filed are still there — and savedBoxOverridesFor
+// checks the keyed store BEFORE the flat slot, so without clearing it this case would silently
+// exercise the keyed path and prove nothing about the fallback. The old stub replaced the whole
+// blob on every setState, which handed each case a clean slate the page never gets.
+api.setState({ box_overrides_all: {},
+               box_overrides: { "3": { h_pt: 300 } },
                box_overrides_meta: { template_version: "TV1", work_type: "epoxy", audience: "Direct" } });
 api.setBlocks(null);
 out.fallbackNoEditor = api.collectBoxOverrides();
