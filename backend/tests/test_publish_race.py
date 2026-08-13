@@ -154,6 +154,63 @@ def test_sub_cent_rounding_is_not_drift(ran):
     assert ran["drift"]["rounding"] == ""
 
 
+# ── defect 1c: the two halves of one revision ────────────────────────────────
+# The morning's fix pinned the customer's page to a revision. It did not make the revision
+# self-consistent: the page reads `rooms`, the customer's PDF is re-rendered from
+# `proposal_payload`, and only the Proposal step's Continue writes the second one. Hanz,
+# 2026-08-13: "I tried to resend and inversed the bids it doesnt update in the portal the new PDF".
+# `syncPayloadPricing` stops NEW revisions drifting; these cases are the safety net for the ones
+# already in the database, and for any path we haven't thought of.
+@needs_node
+def test_a_stale_document_inside_the_sent_revision_is_reported(ran):
+    """His exact case: the page half says Epoxy $18,670, the document half still says Polish
+    $13,265. Both numbers come from the SERVER's snapshot, so this fires no matter which tab,
+    device or colleague caused it — and no matter what this browser's local state says."""
+    msg = ran["drift"]["docStale"]
+    assert "PDF" in msg, msg
+    assert "Polish" in msg and "Epoxy" in msg, msg
+    assert "13265" in msg.replace(",", "") and "18670" in msg.replace(",", ""), msg
+    assert "press Continue" in msg, "the warning must say how to fix it"
+
+
+@needs_node
+def test_a_consistent_revision_says_nothing_about_the_document(ran):
+    assert ran["drift"]["docAgrees"] == ""
+
+
+@needs_node
+def test_a_base_only_document_is_not_reported_as_drift(ran):
+    """Base-only proposals have no base ROOM, so `doc_base_label` is null and the price comes
+    from the payload's own lump sum. Comparing a null label against a real one would warn on
+    every single-system send — the most common shape this tool produces."""
+    assert ran["drift"]["baseOnlyAgrees"] == "", ran["drift"]["baseOnlyAgrees"]
+
+
+@needs_node
+def test_a_snapshot_from_the_previous_build_stays_quiet(ran):
+    """Revisions already in the database carry no doc_* keys. Absent evidence is not evidence of
+    drift — and every one of these snapshots predates the fix, so warning on all of them would
+    train the estimators to ignore the banner."""
+    assert ran["drift"]["legacySnapshot"] == ""
+    assert ran["drift"]["noDocument"] == "", "has_document false must be treated as unknown"
+
+
+@needs_node
+def test_document_price_drift_alone_is_enough(ran):
+    """A re-price without a Continue keeps the base NAME and changes the money — the version of
+    this bug that costs the most and shows the least."""
+    msg = ran["drift"]["docPriceOnly"]
+    assert "PDF" in msg and "17110" in msg.replace(",", ""), msg
+
+
+@needs_node
+def test_document_option_count_drift_is_reported(ran):
+    """An option added on the page that never reached the document: the customer can't pick it,
+    and the approval total they see excludes work we intended to offer."""
+    msg = ran["drift"]["docOptionCount"]
+    assert "PDF" in msg and "1 option" in msg, msg
+
+
 # ── defect 2: the inert option, in BOTH strips ──────────────────────────────
 @needs_node
 @pytest.mark.parametrize("strip", ["proposalStrip", "estimateStrip"])
@@ -234,12 +291,121 @@ def test_the_digest_never_raises_on_a_malformed_blob():
     # bare truthiness check: `for r in 5` raises TypeError, and the downstream isinstance
     # checks never get the chance to save it. Without this input the guard was untested and a
     # mutation to `rooms or []` survived.
+    # The document half takes the same treatment: proposal_payload is a nested blob written by a
+    # browser, so every shape below has to fall through to "we can't read it" rather than raise.
     for blob in ({}, {"rooms": "not a list"}, {"rooms": [None, 7, {}]}, {"rooms": 5},
                  {"rooms": {"a": 1}}, {"rooms": True},
-                 {"rooms": [{"is_base": True}], "proposal_lump_sum": None}):
+                 {"rooms": [{"is_base": True}], "proposal_lump_sum": None},
+                 {"proposal_payload": "nope"}, {"proposal_payload": {}},
+                 {"proposal_payload": {"values": 5}},
+                 {"proposal_payload": {"values": {"rooms": "not a list"}}},
+                 {"proposal_payload": {"values": {"rooms": [{"is_base": True,
+                                                             "bid": "not a dict"}]}}}):
         d = main._publish_digest(blob)
-        assert set(d) == {"base_tab_id", "base_label", "lump_sum", "option_count"}
+        assert set(d) == {"base_tab_id", "base_label", "lump_sum", "option_count",
+                          "has_document", "doc_base_label", "doc_lump_sum", "doc_option_count"}
         assert isinstance(d["option_count"], int)
+        assert isinstance(d["has_document"], bool)
+
+
+# ── the document half of the digest ──────────────────────────────────────────
+# The 2026-08-13 evening report. Staff inverted the base bid — Epoxy $18,670 became the base,
+# Polish $13,265 the option — and re-sent. The page updated; the customer's PDF did not, because
+# it is re-rendered from `proposal_payload`, which only the Proposal step's Continue rewrites.
+# This is the blob a resend snapshotted: top half new, document half two edits old.
+#
+# Note WHERE the document's rooms live: `proposal_payload["rooms"]` is `GenerateIn.rooms`, the
+# field `fill_proposal` renders the price table from. `values` also carries a copy (it is a spread
+# of the whole page state), but the renderer never reads it, so the digest must not either.
+DOC_ROOMS = [{"name": "Polish", "is_base": True, "bid": {"total": 13265}},
+             {"name": "Epoxy", "is_base": False, "bid": {"total": 18670}, "show": True}]
+DRIFTED = {
+    "base_tab_id": "Epoxy", "proposal_lump_sum": 18670,
+    "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 18670}},
+              {"name": "Polish", "is_base": False, "bid": {"total": 13265}, "show": True}],
+    "proposal_payload": {"rooms": DOC_ROOMS,
+                         "values": {"proposal_lump_sum": 13265, "rooms": DOC_ROOMS}},
+}
+
+
+def test_the_digest_reads_the_document_that_will_actually_render():
+    """One revision, two halves. Until this existed the digest looked only at the half that was
+    already correct, so the drift check it feeds was structurally incapable of catching the
+    complaint it was built for."""
+    import main
+    d = main._publish_digest(DRIFTED)
+    assert d["base_label"] == "Epoxy" and d["lump_sum"] == 18670       # the page
+    assert d["has_document"] is True
+    assert d["doc_base_label"] == "Polish" and d["doc_lump_sum"] == 13265   # the PDF
+    assert d["doc_option_count"] == 1
+
+
+def test_a_consistent_payload_digests_to_matching_halves():
+    """The state after a Continue — and after `syncPayloadPricing`, the state after a base flip
+    too. Both halves must read the same or the estimator gets a warning on a correct send."""
+    import main
+    fixed = [{"name": "Epoxy", "is_base": True, "bid": {"total": 18670}},
+             {"name": "Polish", "is_base": False, "bid": {"total": 13265}, "show": True}]
+    good = {**DRIFTED, "proposal_payload": {
+        "rooms": fixed, "values": {"proposal_lump_sum": 18670, "rooms": fixed}}}
+    d = main._publish_digest(good)
+    assert (d["doc_base_label"], d["doc_lump_sum"], d["doc_option_count"]) == \
+           (d["base_label"], d["lump_sum"], d["option_count"])
+
+
+def test_a_base_only_document_falls_back_to_the_payloads_lump_sum():
+    """Single-system proposals carry no base ROOM at all. Reading only rooms[is_base] would make
+    every one of them look like a document with no price — a warning on the most common shape
+    this tool produces."""
+    import main
+    d = main._publish_digest({
+        "base_tab_id": "Epoxy", "proposal_lump_sum": 18670,
+        "rooms": [], "proposal_payload": {"values": {"proposal_lump_sum": 18670}}})
+    assert d["has_document"] is True
+    assert d["doc_base_label"] is None
+    assert d["doc_lump_sum"] == 18670
+    assert d["doc_option_count"] == 0
+
+
+def test_a_draft_with_no_payload_reports_no_document():
+    """Nothing has been generated yet, so there is nothing to be stale. `has_document` false is
+    what keeps the page's warning silent instead of guessing."""
+    import main
+    d = main._publish_digest({"rooms": [{"name": "Epoxy", "is_base": True,
+                                         "bid": {"total": 18670}}]})
+    assert d["has_document"] is False
+    assert d["doc_base_label"] is None and d["doc_lump_sum"] is None
+    assert d["doc_option_count"] is None
+
+
+def test_the_document_half_counts_options_the_same_way():
+    """Same `show is not False` rule as the page half. Two different counting rules would make
+    every proposal with a hidden option look drifted."""
+    import main
+    d = main._publish_digest({**DRIFTED, "proposal_payload": {
+        "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 18670}},
+                  {"name": "Polish", "is_base": False, "bid": {"total": 13265}, "show": False},
+                  {"name": "Seal", "is_base": False, "bid": {"total": 4000}}],
+        "values": {"proposal_lump_sum": 18670}}})
+    assert d["doc_option_count"] == 1      # Seal (no key = shown), not Polish (explicitly hidden)
+
+
+def test_the_document_half_reads_the_field_the_RENDERER_reads():
+    """`GenerateIn.rooms` is what fills the price table; `values.rooms` is an inert echo of the
+    page state that travels alongside it. Reading the echo would report the pricing the estimator
+    was LOOKING at rather than the pricing the customer's PDF prints — the same class of mistake
+    as the bug this digest exists to catch."""
+    import main
+    d = main._publish_digest({
+        "base_tab_id": "Epoxy", "proposal_lump_sum": 18670,
+        "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 18670}}],
+        "proposal_payload": {
+            "rooms": [{"name": "Polish", "is_base": True, "bid": {"total": 13265}}],
+            "values": {"proposal_lump_sum": 18670,
+                       "rooms": [{"name": "Epoxy", "is_base": True,
+                                  "bid": {"total": 18670}}]}}})
+    assert d["doc_base_label"] == "Polish", "the digest followed values.rooms, not the renderer's"
+    assert d["doc_lump_sum"] == 13265
 
 
 def test_the_digest_holds_only_primitives():

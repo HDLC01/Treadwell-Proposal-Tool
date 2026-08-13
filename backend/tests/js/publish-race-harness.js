@@ -200,7 +200,55 @@ out.drift = (() => {
         proposal_lump_sum: 15801 });
   const hiddenOption = fn({ base_label: "Room 1", lump_sum: 15801, option_count: 0 });
 
-  return { incident, agree, noSnapshot, optCount, rounding, hiddenOption };
+  // ── the DOCUMENT half of the snapshot ──────────────────────────────────────
+  // Server truth vs server truth, so the local state is deliberately made to AGREE with the page
+  // half in every case below: the drift being caught is inside the revision itself.
+  const pageOk = { rooms: [{ name: "Epoxy", is_base: true }, { name: "Polish", show: true }],
+                   proposal_lump_sum: 18670 };
+
+  // The 2026-08-13 report: page says Epoxy $18,670 base, the PDF still renders Polish $13,265.
+  set(pageOk);
+  const docStale = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 1,
+                        has_document: true, doc_base_label: "Polish", doc_lump_sum: 13265,
+                        doc_option_count: 1 });
+
+  set(pageOk);
+  const docAgrees = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 1,
+                         has_document: true, doc_base_label: "Epoxy", doc_lump_sum: 18670,
+                         doc_option_count: 1 });
+
+  // A snapshot minted by the previous build carries none of the doc keys — it must stay silent
+  // rather than claim the document is wrong because we can't see it.
+  set(pageOk);
+  const legacySnapshot = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 1 });
+
+  // The payload exists but is unreadable/legacy-shaped: has_document false → silent.
+  set(pageOk);
+  const noDocument = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 1,
+                          has_document: false, doc_base_label: null, doc_lump_sum: null,
+                          doc_option_count: null });
+
+  // Price-only drift (same base name, different money — a re-price without a Continue).
+  set(pageOk);
+  const docPriceOnly = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 1,
+                            has_document: true, doc_base_label: "Epoxy", doc_lump_sum: 17110,
+                            doc_option_count: 1 });
+
+  // Option-count drift only: an option added on the page never reached the document.
+  set(pageOk);
+  const docOptionCount = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 2,
+                              has_document: true, doc_base_label: "Epoxy", doc_lump_sum: 18670,
+                              doc_option_count: 1 });
+
+  // A base-only document: doc_lump_sum comes from values.proposal_lump_sum, doc_option_count 0.
+  set({ rooms: [{ name: "Epoxy", is_base: true }], proposal_lump_sum: 18670 });
+  const baseOnlyAgrees = fn({ base_label: "Epoxy", lump_sum: 18670, option_count: 0,
+                              has_document: true, doc_base_label: null, doc_lump_sum: 18670,
+                              doc_option_count: 0 });
+
+  return { incident, agree, noSnapshot, optCount, rounding, hiddenOption,
+           docStale, docAgrees, legacySnapshot, noDocument, docPriceOnly, docOptionCount,
+           baseOnlyAgrees };
 })();
 
 asyncCases().then(() => { console.log(JSON.stringify(out)); });
