@@ -299,6 +299,108 @@ def test_sanitize_paragraph_overrides_coerces_and_drops_bad_entries():
     ]
 
 
+def test_sanitize_paragraph_overrides_carries_run_formatting():
+    """THE FORMAT BAR HAS TO REACH THE DOCUMENT.
+
+    Hanz, 2026-08-13: "also can you follow the font size from the proposal templates?"
+
+    `proposal_writer._apply_paragraph_overrides` has always accepted
+    [{text, bold, italic, underline, size_pt}] and rebuilt real w:r runs from it — but this
+    sanitizer only ever emitted {id, text}, so B / I / U and the SIZE showed on screen, travelled in
+    the payload, and were discarded one function before the writer could use them. The template's
+    own sizes come through on the way OUT (`/api/proposal-template` reports `size_pt`); this is the
+    way back IN."""
+    out = main._sanitize_paragraph_overrides([{
+        "id": 12,
+        "text": "Base Bid 18,670",
+        "runs": [
+            {"text": "Base Bid ", "bold": True, "size_pt": 14},
+            {"text": "18,670", "italic": True, "underline": False, "size_pt": 11.5},
+        ],
+    }])
+    assert len(out) == 1
+    assert out[0]["id"] == 12
+    assert out[0]["runs"] == [
+        {"text": "Base Bid ", "bold": True, "size_pt": 14.0},
+        {"text": "18,670", "italic": True, "underline": False, "size_pt": 11.5},
+    ]
+    # The plain-text fallback is rebuilt FROM the runs, so it can never disagree with them.
+    assert out[0]["text"] == "Base Bid 18,670"
+
+
+def test_sanitize_paragraph_overrides_rejects_dangerous_run_values():
+    """Untrusted request bodies. A bool `size_pt` is the sharp one: bool is an int subclass, so
+    True would sail through a naive numeric check and set the paragraph to 1pt — invisible text on
+    a customer's proposal."""
+    out = main._sanitize_paragraph_overrides([{
+        "id": 3, "text": "fallback",
+        "runs": [
+            {"text": "keep", "bold": "yes", "size_pt": True},      # str bold + bool size dropped
+            {"text": "big", "size_pt": 5000},                       # out of range
+            {"text": "small", "size_pt": 0},                        # out of range
+            {"no_text": "dropped"},                                 # no text at all
+            "not-a-dict",
+        ],
+    }])
+    assert out[0]["runs"] == [{"text": "keep"}, {"text": "big"}, {"text": "small"}]
+    assert "bold" not in out[0]["runs"][0] and "size_pt" not in out[0]["runs"][0]
+
+
+def test_sanitize_paragraph_overrides_caps_runs_per_paragraph():
+    out = main._sanitize_paragraph_overrides([
+        {"id": 1, "text": "x", "runs": [{"text": str(i)} for i in range(400)]}])
+    assert len(out[0]["runs"]) == main._PARAGRAPH_RUNS_MAX
+
+
+def test_all_malformed_runs_fall_back_to_text_rather_than_blanking():
+    """An entry whose runs are all junk must not emit an empty paragraph — that would silently
+    delete a line of the customer's proposal."""
+    out = main._sanitize_paragraph_overrides([
+        {"id": 4, "text": "the real text", "runs": ["junk", {"nope": 1}]}])
+    assert out == [{"id": 4, "text": "the real text"}]
+
+
+def test_a_text_only_override_keeps_its_shape():
+    """The overwhelmingly common case, and the one every existing draft carries. No `runs` key
+    must appear, or a caller that inspects the shape would see a formatted edit where there is
+    none."""
+    assert main._sanitize_paragraph_overrides([{"id": 9, "text": "plain"}]) == \
+        [{"id": 9, "text": "plain"}]
+
+
+def test_run_formatting_survives_all_the_way_into_the_docx():
+    """End to end through the REAL route, because the sanitizer and the writer agreeing in
+    isolation is what shipped the bug: each half was correct and nothing connected them."""
+    import io
+    import docx as docxlib
+
+    r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
+    assert r.status_code == 200, r.text
+    blocks = r.json()["blocks"]
+    target = next(b for b in blocks if (b.get("text") or "").strip() and not b.get("in_block"))
+
+    body = {
+        "work_type": "epoxy", "audience": "Direct",
+        "values": {"project_name": "Runs E2E"},
+        "template_version": r.json()["template_version"],
+        "paragraph_overrides": [{
+            "id": target["id"], "text": "FORMATTED",
+            "runs": [{"text": "FORMATTED", "bold": True, "size_pt": 20}],
+        }],
+    }
+    g = client.post("/api/generate", json=body)
+    assert g.status_code == 200, g.text
+    tok = g.json()["docx_download_url"].rsplit("/", 1)[-1]
+    d = docxlib.Document(io.BytesIO(main._FILE_CACHE[tok]["content"]))
+    hits = [run for p in d.paragraphs for run in p.runs if run.text == "FORMATTED"]
+    hits += [run for t in d.tables for row in t.rows for c in row.cells
+             for p in c.paragraphs for run in p.runs if run.text == "FORMATTED"]
+    assert hits, "the formatted run never reached the document"
+    assert any(run.bold for run in hits), "bold was dropped between the API and the .docx"
+    assert any(run.font.size and run.font.size.pt == 20 for run in hits), \
+        "the font size was dropped between the API and the .docx"
+
+
 # ── fidelity metadata: runs / list flags / geometry ─────────────────────
 def test_template_endpoint_run_formatting_and_list_flags():
     r = client.get("/api/proposal-template?work_type=epoxy&audience=Direct")
