@@ -593,9 +593,110 @@
     state.sheet_area = baseAreaFrom(all, _areaBaseIds);
     const el = document.querySelector("#tb-total");
     if (el) el.textContent = fmtUSD(shownBase);
+    // The DOCUMENT payload must move with the pricing, not just the page's own keys — see
+    // syncPayloadPricing. Runs after #tb-total is written, because computeTokenValues reads the
+    // lump sum from that element.
+    const _pp = syncPayloadPricing();
     TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
       proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax,
-      sheet_area: state.sheet_area });
+      sheet_area: state.sheet_area, ...(_pp ? { proposal_payload: _pp } : {}) });
+  }
+
+  // ── the document payload's pricing must follow the sidebar ────────────────────
+  // THE 2026-08-13 INCIDENT. Hanz inverted the base bid here (Epoxy became the base at $18,670,
+  // Polish the option at $13,265), left via the "4 · Files" step pill, and re-sent. The portal PAGE
+  // showed the new arrangement; the customer's PDF showed the old one. Both were reading the SAME
+  // pinned revision — but two different halves of it. The page renders top-level `rooms`; the PDF
+  // is rebuilt from `proposal_payload`, and that sub-object was written by exactly ONE line of code:
+  // the Continue handler. A sidebar flip updated `rooms`/`base_tab_id`/`proposal_lump_sum` and left
+  // the payload frozen, so the revision snapshot was internally inconsistent and nothing noticed:
+  // the drift warning compares the page's fields to the page's fields.
+  //
+  // ONE MAPPING, USED TWICE. This deliberately calls `computeTokenValues` — the same function
+  // Continue uses — rather than re-deriving the money. A second copy of the token mapping is how
+  // the two halves drift again. What keeps a pricing flip from rewriting the narrative is the
+  // WHITELIST below, not a separate code path: only these keys are copied over.
+  const PAYLOAD_PRICING_KEYS = [
+    // The PRICE block's own three lines, plus the itemised breakdown the epoxy layout adds up.
+    "total_label", "lump_sum_label", "lump_sum_formatted", "tax_amount_formatted",
+    "total_formatted", "base_bid_formatted", "material_tax_formatted",
+    // The parenthetical after the base-bid line — changes with the tax treatment.
+    "base_tax_phrase", "tax_phrase", "sales_tax_handling", "tax_inclusion",
+    // Area tokens: rebuildPricing re-derives state.sheet_area from the base tab, so a flip
+    // changes the SF the proposal quotes.
+    "epoxy_sf", "polish_sf", "cove_lf", "lf", "sqft", "area_description",
+    "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf",
+    "gyp_soft_sf_formatted", "gyp_hard_sf_formatted", "gyp_corridor_sf_formatted",
+  ];
+
+  /** Patch the stored generate payload's PRICING slice from current state. Returns the patched
+   *  payload, or null when there is nothing to patch.
+   *
+   *  No-op before the first Continue: with no payload there is nothing stale to correct, and the
+   *  Done page builds a fresh one from raw state in that case.
+   *
+   *  Narrative keys (scope/schedule/exclusions/work_notes/system names/dates/estimator) are NOT in
+   *  the whitelist and are never touched here — a base flip must not silently rewrite the words. */
+  function syncPayloadPricing() {
+    const pp = state.proposal_payload;
+    if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") return null;
+    let fresh;
+    try { fresh = computeTokenValues(Object.assign({}, state, TW.readForm(form))); }
+    catch { return null; }                       // never let a persist fail over this
+    PAYLOAD_PRICING_KEYS.forEach((k) => { if (k in fresh) pp.values[k] = fresh[k]; });
+    // ── the TEMPLATE, not just the numbers ───────────────────────────────────────────────
+    // `work_type` picks which .docx the customer receives, and it is DERIVED from the base tab's
+    // role (effectiveWorkType) — so inverting an Epoxy/Polish base doesn't just move money, it
+    // changes the document. A frozen `polish` here is why his PDF still said "Polished Concrete
+    // Flooring" as the base line: the old template, rendered with its old prices.
+    const wt = effectiveWorkType();
+    const audience = state.audience || "Direct";
+    // Paragraph/box overrides are captured against ONE template's block ids, so when the template
+    // changes they cannot be replayed onto the new one — the backend already drops them on a
+    // template_version mismatch. Re-collect from the live editor (reloadForWorkType has already
+    // swapped it) so the estimator's edits to the NEW template travel; an editor that hasn't
+    // loaded yields [], which renders the pristine new template. Either beats old-template text.
+    // Guarded on an actual change, so a plain re-price never goes near the narrative.
+    // ONLY once the editor has actually loaded a template. `templateVersion` is "" until then —
+    // and rebuildPricing runs at page init, before it resolves. Writing "" would be worse than
+    // doing nothing: the backend reads an EMPTY version as "legacy caller, apply the overrides",
+    // so it would land the old template's edits on the new template's paragraphs. Leaving the
+    // stored (non-empty, now-mismatched) version is what makes it drop them instead.
+    if (pp.work_type !== wt || pp.audience !== audience) {
+      pp.work_type = wt;
+      pp.audience = audience;
+      try {
+        if (templateVersion) {
+          pp.template_version = templateVersion;
+          pp.paragraph_overrides = collectOverrides();
+          pp.box_overrides = collectBoxOverrides();
+        }
+      } catch { /* editor not mounted — leave what's there for the backend's version guard */ }
+    }
+    // `values` is also a spread of state (Continue builds it that way), so its mirrors of the
+    // pricing state have to move too — anything reading values.rooms must not see the old bid.
+    pp.values.work_type = wt;
+    pp.values.rooms = Array.isArray(state.rooms) ? state.rooms : [];
+    pp.values.base_tab_id = state.base_tab_id;
+    pp.values.proposal_lump_sum = state.proposal_lump_sum;
+    pp.values.proposal_sales_tax = state.proposal_sales_tax;
+    pp.values.proposal_remodel_tax = state.proposal_remodel_tax;
+    pp.values.sheet_area = state.sheet_area;
+    // Payload-level pricing structures, mirroring continueToDone's own construction.
+    const remodelTax = Number(state.proposal_remodel_tax) || 0;
+    pp.rooms = Array.isArray(state.rooms) ? state.rooms : [];
+    pp.remodel = remodelTax > 0 ? [{ amount_formatted: fmtUSD(remodelTax) }] : [];
+    // Clears itself when a combo is narrowed to one base — comboLinesForPayload returns [] then.
+    pp.combo_options = comboLinesForPayload();
+    // The WORK section's system rows are resolved from the BASE tab's own cells, so they follow a
+    // base flip as much as the price does. Same filter as continueToDone.
+    try {
+      pp.sheet_systems = (sheetSystems() || [])
+        .filter(s => (s.name && !s.name.includes("Options")) || s.sf > 0 || s.lf > 0);
+    } catch { /* leave the previous resolution rather than emptying the WORK rows */ }
+    pp.price_overrides = (state.price_overrides && typeof state.price_overrides === "object")
+      ? state.price_overrides : {};
+    return pp;
   }
 
   // Tax-treatment mode, read from the sidebar's dropdown. Shared by the
@@ -3468,7 +3569,15 @@
   let _persistTimer = null;
   form.addEventListener("input", () => {
     if (_persistTimer) clearTimeout(_persistTimer);
-    _persistTimer = setTimeout(() => { try { TW.setState(TW.readForm(form)); } catch {} }, 300);
+    _persistTimer = setTimeout(() => {
+      try {
+        // The tax treatment lives in this form and changes the PRICE block's own wording and
+        // layout (base_tax_phrase, and which of the three lines the backend fills), so it has to
+        // reach the document payload too — same reason as a base flip.
+        const _pp = syncPayloadPricing();
+        TW.setState(Object.assign(TW.readForm(form), _pp ? { proposal_payload: _pp } : {}));
+      } catch {}
+    }, 300);
   });
 
   document.getElementById("back-btn").addEventListener("click", () => {
@@ -3601,3 +3710,12 @@
   }
 
   form.addEventListener("submit", continueToDone);
+
+  // The "4 · Files" step pill was a bare <a href="/done.html">, so it reached the Done page
+  // WITHOUT ever running this handler — and this handler is the only thing that rebuilds the
+  // document payload. Flip the base bid, click the pill, press Re-send, and the customer received a
+  // PDF built from the state as of the previous Continue. syncPayloadPricing now keeps the PRICING
+  // slice honest on its own, but the narrative half (scope, schedule, exclusions, notes) is only
+  // rebuilt here, so the pill has to come through the same door as the button.
+  const _filesPill = document.querySelector('a.step[href="/done.html"]');
+  if (_filesPill) _filesPill.addEventListener("click", (e) => { e.preventDefault(); continueToDone(e); });

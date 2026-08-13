@@ -61,14 +61,19 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"revision_no": no, "data": {"proposal_payload": snapshot_payload}})
 
-    def fake_generate(payload, request):
+    def fake_generate(payload, request, *, persist=True):
         seen["values"] = payload.values
+        seen["persist"] = persist
         return _gen_out()
 
-    monkeypatch.setattr(main, "api_generate", fake_generate)
+    # `_generate`, not `api_generate`: the route is a thin wrapper that always persists, and the
+    # replay callers deliberately go around it. Stubbing the wrapper intercepted nothing.
+    monkeypatch.setattr(main, "_generate", fake_generate)
     r = client.post("/api/draft/d1/revisions/1/files", json={})
     assert r.status_code == 200, r.text
     assert seen["values"]["project_name"] == "Westport"
+    assert seen["persist"] is False, (
+        "replaying an old revision persisted its values — that writes March over the live draft")
 
 
 def test_missing_revision_is_404(monkeypatch):
@@ -96,16 +101,18 @@ def test_proposal_pdf_renders_a_specific_revision(monkeypatch):
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}
 
-    def fake_generate(payload, request):
+    def fake_generate(payload, request, *, persist=True):
         seen["name"] = payload.values.get("project_name")
+        seen["persist"] = persist
         return _gen_out("tok")
 
-    monkeypatch.setattr(main, "api_generate", fake_generate)
+    monkeypatch.setattr(main, "_generate", fake_generate)
     monkeypatch.setitem(main._FILE_CACHE, "tok", {"content": b"docx", "_pdf": b"%PDF-1.4"})
     r = client.get("/api/admin/proposal-pdf?draft_id=d1&revision_no=2",
                    headers={"X-Service-Token": "svc-test"})
     assert r.status_code == 200, r.text
     assert seen["name"] == "Snap"        # the snapshot, not the live draft
+    assert seen["persist"] is False, "a customer's PDF render wrote to the estimator's draft"
 
 
 def test_proposal_pdf_without_revision_still_uses_the_live_draft(monkeypatch):
@@ -116,12 +123,14 @@ def test_proposal_pdf_without_revision_still_uses_the_live_draft(monkeypatch):
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}
 
-    def fake_generate(payload, request):
+    def fake_generate(payload, request, *, persist=True):
         seen["name"] = payload.values.get("project_name")
+        seen["persist"] = persist
         return _gen_out("tok2")
 
-    monkeypatch.setattr(main, "api_generate", fake_generate)
+    monkeypatch.setattr(main, "_generate", fake_generate)
     monkeypatch.setitem(main._FILE_CACHE, "tok2", {"content": b"docx", "_pdf": b"%PDF-1.4"})
     r = client.get("/api/admin/proposal-pdf?draft_id=d1", headers={"X-Service-Token": "svc-test"})
     assert r.status_code == 200, r.text
     assert seen["name"] == "LIVE"
+    assert seen["persist"] is False, "a customer's PDF render wrote to the estimator's draft"
