@@ -14,6 +14,7 @@ import io
 import zipfile
 
 import docx
+import pytest
 from fastapi.testclient import TestClient
 
 import main
@@ -37,6 +38,14 @@ def _first_box_cy(docx_bytes):
     return int(anchor.find(pw.qn("wp:extent")).get("cy"))
 
 
+def _first_box_pos(docx_bytes):
+    """The first text box's anchor OFFSETS in points, straight out of the generated file."""
+    d = docx.Document(io.BytesIO(docx_bytes))
+    anchor = pw._txbx_anchor(next(iter(pw._iter_txbx(d))))
+    return (pw._anchor_offset(anchor, "positionH")[0],
+            pw._anchor_offset(anchor, "positionV")[0])
+
+
 def _generate(**extra):
     r = client.post("/api/generate", json={**BASE, **extra})
     assert r.status_code == 200, r.text
@@ -52,6 +61,30 @@ def test_a_resize_reaches_the_generated_document():
 
 def test_no_box_overrides_changes_nothing():
     assert _first_box_cy(_generate()) == _first_box_cy(_generate(box_overrides={}))
+
+
+def test_a_move_reaches_the_generated_document():
+    """The other half of the wire format. `x_pt`/`y_pt` ride the same dict as the size, so the
+    only thing that could go wrong between the browser and the .docx is a field name."""
+    plain = _first_box_pos(_generate())
+    # Box 0 is the DATE/JOB NAME header, 72 x 18pt at (18.35, 36) on Kyle's sheet — the corner is
+    # a legal position for it, which the sanitiser would refuse for a full-width box.
+    moved = _first_box_pos(_generate(box_overrides={"0": {"x_pt": 200.0, "y_pt": 300.0}}))
+    assert moved != plain, "the move never left the request"
+    dx, dy = moved[0] - plain[0], moved[1] - plain[1]
+    assert (dx, dy) != (0.0, 0.0)
+    # An OFFSET, not a page coordinate: 200pt across on a 90pt left margin is a 110pt offset.
+    assert moved[0] == pytest.approx(110.0, abs=0.02)
+
+
+def test_a_stale_template_version_drops_the_move_too():
+    """Same guard as the resize, because a box id means the same thing for both: a position in the
+    backend's walk over one specific .docx. A stale draft must not relocate whatever box now
+    happens to sit at that index."""
+    plain = _first_box_pos(_generate())
+    stale = _first_box_pos(_generate(box_overrides={"0": {"x_pt": 200.0, "y_pt": 300.0}},
+                                     template_version="STALE-NOPE"))
+    assert stale == plain, "a stale template_version still moved the box"
 
 
 def test_a_stale_template_version_drops_the_resize():
@@ -88,9 +121,6 @@ def test_the_guard_drops_paragraph_and_box_overrides_together():
         xml = z.read("word/document.xml").decode("utf-8", "replace")
     assert "BOTH-GUARD-TEST" not in xml
     assert _first_box_cy(blob) == _first_box_cy(_generate())
-
-
-import pytest
 
 
 @pytest.mark.parametrize("bad", [

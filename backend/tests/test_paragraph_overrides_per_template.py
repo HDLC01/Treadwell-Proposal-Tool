@@ -56,9 +56,23 @@ def _extract(src: str, *names: str) -> str:
         m = re.search(r"^(  (?:const|function) " + re.escape(name) + r"\b)", src, re.M)
         assert m, f"{name} not found — it was renamed or removed"
         i = m.start()
-        # An arrow const on one line ends at its newline; a function ends at its brace.
-        if src[i:].lstrip().startswith("const"):
-            out.append(src[i:src.index("\n", i)])
+        # A const ends at the first `;` OUTSIDE any bracket, which handles both a one-line arrow
+        # and a multi-line one. It used to stop at the newline, and lifting a two-line arrow then
+        # produced an unbalanced brace and `SyntaxError: Unexpected end of input` — a failure that
+        # says nothing about the code under test. A function ends at its matching brace.
+        if src[m.start():].lstrip().startswith("const"):
+            depth = 0
+            for k in range(i, len(src)):
+                ch = src[k]
+                if ch in "([{":
+                    depth += 1
+                elif ch in ")]}":
+                    depth -= 1
+                elif ch == ";" and depth == 0:
+                    out.append(src[i:k + 1])
+                    break
+            else:
+                raise AssertionError("unterminated const " + name)
             continue
         depth, j = 0, src.index("{", i)
         for k in range(j, len(src)):
@@ -78,20 +92,43 @@ def run(src: str, script: str):
     # copy of it — and when the shipped merge was deliberately broken, only the source-text
     # assertion noticed. A behavioural test that exercises a copy proves nothing about the
     # code that ships, so all three helpers come out of the real file.
-    helpers = _extract(src, "overrideKey", "mergeOverrideEntry", "savedOverridesFor")
-    # savedOverridesFor closes over the module-level `state`; give it a settable one.
-    prelude = "let state = {};\n" + helpers + "\n"
-    # persist() does only what schedulePersistOverrides does AROUND the shipped merge: call
-    # it, and keep the flat field in lockstep for /api/generate.
+    helpers = _extract(src, "overrideKey", "mergeOverrideEntry", "savedOverridesFor", "liveKey")
+    # THE PAGE'S BINDING, not a friendlier one.
+    #
+    # This said `let state = {}` and had persist() REASSIGN it, which is what let the real bug hide
+    # here for weeks: proposal-review.js line 2 is `const state = TW.getState()` — a one-shot
+    # snapshot — and `TW.setState` merges into a fresh read of localStorage and never writes back
+    # onto it. So `state.paragraph_overrides_all` was frozen at page load, every persist merged onto
+    # that frozen value and REPLACED the store with a single-key object, and an epoxy → polish →
+    # epoxy round trip lost the epoxy edits: the exact thing the test below claims to prove.
+    #
+    # A reassignable `state` cannot see that. So: STORE stands in for localStorage, getState returns
+    # a fresh copy of it exactly as shared.js does, setState merges into STORE and leaves the
+    # snapshot alone, and `state` is bound ONCE with const.
+    prelude = """
+const STORE = { blob: {} };
+const TW = {
+  getState: () => JSON.parse(JSON.stringify(STORE.blob)),
+  setState: (partial) => { STORE.blob = Object.assign(JSON.parse(JSON.stringify(STORE.blob)),
+                                                      partial || {}); return STORE.blob; },
+};
+const state = TW.getState();
+""" + helpers + "\n"
+    # persist() does only what schedulePersistOverrides does AROUND the shipped merge: call it, and
+    # keep the flat field in lockstep for /api/generate. Through TW.setState, because going straight
+    # to the store would skip the very mechanism that broke.
     prelude += """
 function persist(wt, audience, templateVersion, items) {
-  state = Object.assign({}, state, {
+  TW.setState({
     paragraph_overrides_all:
-      mergeOverrideEntry(state.paragraph_overrides_all, wt, audience, templateVersion, items),
+      mergeOverrideEntry(liveKey("paragraph_overrides_all"), wt, audience, templateVersion, items),
     paragraph_overrides: items,
     paragraph_overrides_meta: { template_version: templateVersion, work_type: wt, audience: audience },
   });
 }
+// Seed the STORE, i.e. what a page load would read. A test cannot assign to `state` any more, and
+// that is the point: `state` being reassignable is precisely what let the bug hide in this file.
+const seed = (blob) => { STORE.blob = JSON.parse(JSON.stringify(blob)); };
 const out = (v) => console.log(JSON.stringify(v));
 """
     proc = subprocess.run(["node", "-e", prelude + script],
@@ -138,8 +175,8 @@ def test_a_legacy_single_slot_draft_still_restores(src):
     """A draft in progress right now has its edits only in the old shape. Dropping that
     fallback would lose exactly the work this change exists to protect."""
     got = run(src, """
-      state = { paragraph_overrides: [{id: 2, text: "OLD"}],
-                paragraph_overrides_meta: {template_version: "v1", work_type: "epoxy", audience: "Direct"} };
+      seed({ paragraph_overrides: [{id: 2, text: "OLD"}],
+                paragraph_overrides_meta: {template_version: "v1", work_type: "epoxy", audience: "Direct"} });
       out(savedOverridesFor("epoxy", "Direct").items);
     """)
     assert got == [{"id": 2, "text": "OLD"}]
@@ -149,8 +186,8 @@ def test_the_legacy_slot_is_never_offered_to_a_different_template(src):
     """Its paragraph ids were captured against another file; replaying them would rewrite
     whichever paragraphs happen to share those numbers."""
     got = run(src, """
-      state = { paragraph_overrides: [{id: 2, text: "OLD"}],
-                paragraph_overrides_meta: {template_version: "v1", work_type: "epoxy", audience: "Direct"} };
+      seed({ paragraph_overrides: [{id: 2, text: "OLD"}],
+                paragraph_overrides_meta: {template_version: "v1", work_type: "epoxy", audience: "Direct"} });
       out(savedOverridesFor("polish", "Direct"));
     """)
     assert got is None
@@ -160,9 +197,9 @@ def test_the_keyed_store_wins_over_the_legacy_slot(src):
     """Once migrated, the per-template entry is authoritative — otherwise a stale flat field
     could shadow a newer edit."""
     got = run(src, """
-      state = { paragraph_overrides: [{id: 2, text: "STALE"}],
+      seed({ paragraph_overrides: [{id: 2, text: "STALE"}],
                 paragraph_overrides_meta: {template_version: "v1", work_type: "epoxy", audience: "Direct"},
-                paragraph_overrides_all: {"epoxy:Direct": {template_version: "v1", items: [{id: 2, text: "FRESH"}]}} };
+                paragraph_overrides_all: {"epoxy:Direct": {template_version: "v1", items: [{id: 2, text: "FRESH"}]}} });
       out(savedOverridesFor("epoxy", "Direct").items[0].text);
     """)
     assert got == "FRESH"
@@ -177,7 +214,7 @@ def test_a_malformed_entry_does_not_throw(src):
     """State is user data round-tripped through the draft store; a garbled entry must read as
     absent rather than break the page on load."""
     got = run(src, """
-      state = { paragraph_overrides_all: {"epoxy:Direct": {template_version:"v1", items:"nope"}} };
+      seed({ paragraph_overrides_all: {"epoxy:Direct": {template_version:"v1", items:"nope"}} });
       out(savedOverridesFor("epoxy","Direct"));
     """)
     assert got is None
@@ -198,11 +235,15 @@ def test_the_version_is_stored_per_entry(src):
 
 def test_the_flat_field_still_describes_the_current_template(src):
     """/api/generate and collectOverrides()'s fallback read the FLAT field. After a switch it
-    must describe what is on screen now, not what was there before."""
+    must describe what is on screen now, not what was there before.
+
+    Read out of the STORE, not out of `state`: the snapshot is empty for the whole visit and
+    reading it here was how this test managed to pass while the flat field was being written to a
+    place nothing else could see."""
     got = run(src, """
       persist("epoxy","Direct","v1",[{id:1,text:"X"}]);
       persist("polish","Direct","v1",[]);
-      out([state.paragraph_overrides.length, state.paragraph_overrides_meta.work_type]);
+      out([liveKey("paragraph_overrides").length, liveKey("paragraph_overrides_meta").work_type]);
     """)
     assert got == [0, "polish"]
 

@@ -70,10 +70,40 @@ def test_the_tab_and_its_panel_are_both_rendered():
     assert "followupPanelHtml(p, data)" in PORTAL_JS
 
 
-def test_the_tab_strip_has_room_for_six_tabs():
-    """The strip is a CSS grid with a fixed column count. Adding a sixth tab without
-    widening it silently wraps one onto a second row, half-clipped."""
-    assert "grid-template-columns:repeat(6,1fr)" in PORTAL_HTML
+def test_the_tab_strip_cannot_disagree_with_the_number_of_tabs():
+    """This used to read `assert "grid-template-columns:repeat(6,1fr)" in PORTAL_HTML`, and by
+    2026-08-13 it was asserting a bug: Schedule was removed on 2026-08-11 leaving FIVE tabs in a
+    six-column grid, so the strip carried a dead sixth of its width and every card was narrower
+    than it needed to be. The claim was also weak in the other direction — with a seventh tab the
+    string is still there and one card wraps onto a second row, half-clipped, which is the exact
+    failure the original docstring described.
+
+    So: no hard count at all. A wrapping flex row with a per-card basis shares whatever room there
+    is, for any number of tabs, and only wraps at phone widths where wrapping is the intent. The
+    second assertion is the one with real teeth — every key in SEC_TABS gets a tab and every tab
+    has a key, checked by counting both rather than by trusting a number in a stylesheet.
+    """
+    css = re.sub(r"/\*.*?\*/", "", PORTAL_HTML, flags=re.S)      # or this matches its own comment
+    strip = re.search(r"\.dtabs\s*\{([^}]*)\}", css)
+    assert strip, ".dtabs has no rule at all"
+    assert "display:flex" in strip.group(1) and "flex-wrap:wrap" in strip.group(1), strip.group(1)
+    assert "grid-template-columns" not in strip.group(1), (
+        "the strip is back on a fixed column count, which can disagree with SEC_TABS")
+    step = re.search(r"\.dtabs \.step\s*\{([^}]*)\}", css)
+    assert step and re.search(r"flex:\s*1 1 \d+px", step.group(1)), (
+        "the cards do not share the strip's width, so they cannot adapt to a tab being added")
+
+    tabs = re.findall(r'secTab\("([a-z]+)"', PORTAL_JS)
+    # The SEC_TABS literal ONLY, not everything after it. An unbounded slice would sweep up any
+    # later four-space-indented `key: [` in the file and fail on code that has nothing to do with
+    # the tab strip — a test that cries wolf gets deleted by the next person, which is worse than
+    # not having it.
+    start = PORTAL_JS.index("const SEC_TABS = {")
+    keys = re.findall(r"^\s{4}([a-z]+):\s*\[", PORTAL_JS[start:PORTAL_JS.index("\n  };", start)], re.M)
+    assert tabs, "renderSecTabs renders no tabs"
+    assert tabs == keys, (
+        "the tab strip and SEC_TABS disagree: rendered %s, mapped %s. One of them shows a tab "
+        "whose cards are unreachable, or hides cards nothing can reach." % (tabs, keys))
 
 
 def test_the_panel_is_wired_from_render_detail():

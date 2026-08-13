@@ -1235,6 +1235,13 @@
   const pristineById  = new Map();   // id -> plain-text pristine rendering
   const artUrlCache   = new Map();   // media name -> object-URL promise
 
+  // Box layout the estimator dragged — see "dragging and resizing a text box" below.
+  // boxDesign is the template's own geometry (the thing Reset goes back to); boxOverrides holds
+  // only what DIFFERS from it, which is also what ships as `box_overrides`.
+  const boxDesign    = new Map();    // box id -> {x_pt, y_pt, w_pt, h_pt} from the template
+  let   boxOverrides = new Map();    // box id -> {x_pt?, y_pt?, w_pt?, h_pt?}
+  let   boxLimits    = null;         // {pageW, pageH, maxW, maxH, minPt}, from geometry.page
+
   // Terms & Conditions pagination state (Feature C): the ordered terms block
   // elements (identity preserved across repaginations), the page geometry to
   // paginate against, and the resolved terms-letterhead art URL.
@@ -1941,19 +1948,41 @@
     return next;
   }
 
+  /** One key out of the CURRENT stored blob, not out of the page's load-time snapshot.
+   *
+   *  `state` (line 2) is a one-shot `TW.getState()`. `TW.setState` re-reads localStorage into a
+   *  NEW object, merges, and writes it back — it never touches the caller's snapshot. Everything
+   *  else on this page gets away with that because it mutates a NESTED object in place
+   *  (`state.tab_notes`, `state.price_overrides`, `state.base_tab_id`), which the next persist
+   *  picks up. A top-level key REPLACED by setState does not propagate, so the keyed override
+   *  stores were frozen at page load.
+   *
+   *  What that cost, before this helper existed: drag a box on an epoxy job, switch the base bid
+   *  to a polish tab — which re-runs initDocumentEditor in place, with no page load — and come
+   *  back. The reader saw the load-time value and mounted Kyle's geometry, and the persist merged
+   *  onto that same stale value, so the store was REPLACED by a single-key object and the sibling
+   *  template's layout was dropped from the draft. Continue then shipped `box_overrides = {}` and
+   *  the customer's document carried the template's own geometry with the estimator's resize
+   *  silently discarded, which is the exact failure this feature exists to prevent.
+   *
+   *  The same flaw applied to the paragraph overrides, where the loss is typed text. */
+  const liveKey = (name) => {
+    try { return (TW.getState() || {})[name]; } catch { return undefined; }
+  };
+
   /** The saved override entry for one template, or null.
    *
    *  Falls back to the legacy single slot when the keyed store has no entry — that
    *  is the migration path for drafts saved before this change, and it must stay:
    *  a draft in progress right now has edits only in the old shape. */
   function savedOverridesFor(wt, audience) {
-    const all = state.paragraph_overrides_all;
+    const all = liveKey("paragraph_overrides_all");
     const hit = all && typeof all === "object" ? all[overrideKey(wt, audience)] : null;
     if (hit && Array.isArray(hit.items)) return hit;
-    const meta = state.paragraph_overrides_meta || {};
+    const meta = liveKey("paragraph_overrides_meta") || {};
     if (meta.work_type === wt && meta.audience === audience) {
       return { template_version: String(meta.template_version || ""),
-               items: Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [] };
+               items: Array.isArray(liveKey("paragraph_overrides")) ? liveKey("paragraph_overrides") : [] };
     }
     return null;
   }
@@ -1980,7 +2009,7 @@
   // template fetch failed) so earlier edits still reach the docx.
   function collectOverrides() {
     if (!templateBlocks) {
-      return Array.isArray(state.paragraph_overrides) ? state.paragraph_overrides : [];
+      return Array.isArray(liveKey("paragraph_overrides")) ? liveKey("paragraph_overrides") : [];
     }
     const out = [];
     docSurface.querySelectorAll(".tw-block").forEach(el => {
@@ -2008,16 +2037,27 @@
         const wt = effectiveWorkType();
         const audience = state.audience || "Direct";
         const items = collectOverrides();
+        const boxes = collectBoxOverrides();
         // Merge, never replace. Reading state fresh here (rather than closing over an
         // earlier copy) matters because the 800ms debounce can straddle a template
         // switch that rewrote it.
         TW.setState({
           paragraph_overrides_all:
-            mergeOverrideEntry(state.paragraph_overrides_all, wt, audience, templateVersion, items),
+            mergeOverrideEntry(liveKey("paragraph_overrides_all"), wt, audience, templateVersion, items),
           // Kept in lockstep for the CURRENT template: /api/generate reads these two,
           // and so does collectOverrides()'s no-editor fallback.
           paragraph_overrides: items,
           paragraph_overrides_meta: {
+            template_version: templateVersion,
+            work_type: wt,
+            audience: audience,
+          },
+          // The dragged box layout, through the SAME merge for the same reason: one store per
+          // template, so switching the base bid and coming back keeps each one's layout.
+          box_overrides_all:
+            mergeOverrideEntry(liveKey("box_overrides_all"), wt, audience, templateVersion, boxes),
+          box_overrides: boxes,
+          box_overrides_meta: {
             template_version: templateVersion,
             work_type: wt,
             audience: audience,
@@ -2267,6 +2307,9 @@
       if (!box) return;
       // Don't fight the paragraph editor: a click meant for a block should edit it.
       if (e.target.closest(".tw-block, .tw-line-edit, [contenteditable=true]")) return;
+      // Nor the drag handles: releasing a resize grip fires a click on the box, and peeking at
+      // the hidden text is the opposite of what somebody who just made the box bigger wanted.
+      if (e.target.closest(".tw-box-tools")) return;
       const open = box.classList.toggle("tw-notes-open");
       box.style.maxHeight = open ? "none" : Math.round(
         parseFloat(box.dataset.boxHPt) * 96 / 72 + 1) + "px";
@@ -2279,6 +2322,298 @@
   // Fit every mounted positioned text box (WORK / PRICE / NOTES / …).
   function fitNotesBox() {
     document.querySelectorAll(".tw-txbx").forEach(fitTxbx);
+  }
+
+  // ── dragging and resizing a text box ──────────────────────────────────────
+  // Hanz, 2026-08-13: "Allow me to drag and resize the text box for the proposal please."
+  //
+  // Until now the estimator could edit the WORDS in a box but not the box, so a long WORK scope
+  // shrank its own font to fit (fitTxbx above, and _shrink_overflowing_text_boxes on the server)
+  // instead of the obvious human answer: make the box taller. The backend could already resize;
+  // nothing in the browser ever asked it to, and nothing anywhere could move a box.
+  //
+  // THE ARITHMETIC, once, because getting it wrong is silent. The page renders at TRUE point
+  // sizes and #doc-zoom carries `transform: scale(k)`, so a pointer travels k CSS px on screen
+  // for every 1 px of layout. Points are what the document is measured in, and 1pt = 96/72 CSS
+  // px. So a client-px delta becomes document points by dividing by BOTH: (72/96)/k. Skip the k
+  // and the box drifts away from the cursor at every zoom but 1 — and the zoom here is automatic
+  // (0.45-1.7, fitted to the canvas), so 1 is the case nobody actually has.
+  //
+  // k is MEASURED rather than remembered: getBoundingClientRect is scaled by the transform and
+  // offsetWidth is not, so their ratio is the live factor. applyZoom can run between a pointerdown
+  // and the pointerup (a window resize, a font swap, the terms repaginating) and a remembered k
+  // would then be describing the previous zoom.
+  const PT_PER_CSS_PX = 72 / 96;
+  // Below this a drag is a click — the box must not be marked as moved just because somebody
+  // grabbed a grip and let go, or every box they touched would show a Reset button.
+  const BOX_DRAG_SLOP_PT = 0.4;
+  // Rounded to the template's own precision. Kyle's boxes are authored to 2dp (162.35pt), and
+  // full float noise would make every payload look edited.
+  const BOX_EPS_PT = 0.05;
+
+  function zoomScale() {
+    if (!docZoom) return 1;
+    const laid = docZoom.offsetWidth;
+    if (!laid) return 1;
+    const k = docZoom.getBoundingClientRect().width / laid;
+    return (k > 0.01 && k < 100) ? k : 1;
+  }
+
+  /** A pointer delta in CLIENT px as document points, through the zoom transform. */
+  function ptFromClientPx(dPx, k) {
+    const scale = (Number(k) > 0.01 && Number(k) < 100) ? Number(k) : 1;
+    return (Number(dPx) || 0) * PT_PER_CSS_PX / scale;
+  }
+
+  /** clamp, biased to the FLOOR when the window is inverted.
+   *
+   *  An inverted window (hi < lo) means a box so close to the right or bottom edge that the
+   *  12pt minimum and the sheet disagree. Returning `lo` keeps the result something the server's
+   *  sanitiser accepts; returning `hi` would send a 5pt box that is silently refused, which the
+   *  estimator reads as the drag not working. */
+  function clampPt(v, lo, hi) {
+    return Math.max(lo, Math.min(Number(v), hi));
+  }
+
+  /** The rect a drag lands on: pure, so the harness can drive it directly.
+   *
+   *  `mode` is "move" | "e" | "s" | "se"; `start` is the rect at pointerdown; `dPt` is the
+   *  pointer delta already converted to points; `lim` is the page + max_box the server stated.
+   *
+   *  The two bounds are DIFFERENT rectangles, on purpose, and match the server exactly:
+   *    * SIZE is bounded by the printable area (max_box), because a box taller than that cannot
+   *      fit from any position — so accepting one guarantees text outside the margins.
+   *    * POSITION is bounded by the SHEET, because Kyle designs into the margins: every box in
+   *      every template already sits outside the printable area (the DATE/JOB NAME header at
+   *      y=36pt against a 72pt margin, the logo at x=27pt against a 90pt one). Bounding position
+   *      by the printable area would refuse to move any box in any template.
+   *  Both are the same numbers proposal_writer bounds with, so a drag that stops here is never a
+   *  request the server then throws away. */
+  function dragBoxRect(mode, start, dPt, lim) {
+    const L = lim || {};
+    const pageW = Number(L.pageW) || 612, pageH = Number(L.pageH) || 792;
+    const minPt = Number(L.minPt) || 12;
+    const maxW = Number(L.maxW) || pageW, maxH = Number(L.maxH) || pageH;
+    let x = Number(start.x), y = Number(start.y);
+    let w = Number(start.w), h = Number(start.h);
+    if (mode === "move") {
+      x = clampPt(x + dPt.x, 0, Math.max(0, pageW - w));
+      y = clampPt(y + dPt.y, 0, Math.max(0, pageH - h));
+    } else {
+      if (mode === "e" || mode === "se") w = clampPt(w + dPt.x, minPt, Math.min(maxW, pageW - x));
+      if (mode === "s" || mode === "se") h = clampPt(h + dPt.y, minPt, Math.min(maxH, pageH - y));
+    }
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  /** The override entry for a rect, holding ONLY what differs from the template. Null = nothing.
+   *
+   *  Storing differences rather than the whole rect is what makes three things fall out for free:
+   *  the payload stays empty when nobody dragged (so generation is byte-identical), dragging a
+   *  box back to where Kyle put it is an undo, and an axis the estimator never touched keeps
+   *  following the template if Kyle ever edits it. */
+  function boxOverrideEntry(design, rect) {
+    const out = {};
+    const d = design || {};
+    const pairs = [["x_pt", rect.x, d.x_pt], ["y_pt", rect.y, d.y_pt],
+                   ["w_pt", rect.w, d.w_pt], ["h_pt", rect.h, d.h_pt]];
+    for (const [key, got, was] of pairs) {
+      if (!Number.isFinite(Number(got))) continue;
+      if (Math.abs(Number(got) - Number(was)) <= BOX_EPS_PT) continue;
+      out[key] = Math.round(Number(got) * 100) / 100;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  /** What the estimator reads while dragging. Numbers, because "bigger" is not a size. */
+  function boxReadout(mode, rect) {
+    const n = (v) => String(Math.round(Number(v)));
+    return mode === "move"
+      ? "x " + n(rect.x) + " · y " + n(rect.y) + " pt"
+      : n(rect.w) + " × " + n(rect.h) + " pt";
+  }
+
+  /** The box's live rect: the template's geometry with any override laid over it. */
+  function effectiveBoxRect(id) {
+    const d = boxDesign.get(id) || { x_pt: 0, y_pt: 0, w_pt: 0, h_pt: 0 };
+    const o = boxOverrides.get(id) || {};
+    const pick = (a, b) => (Number.isFinite(Number(a)) ? Number(a) : Number(b) || 0);
+    return { x: pick(o.x_pt, d.x_pt), y: pick(o.y_pt, d.y_pt),
+             w: pick(o.w_pt, d.w_pt), h: pick(o.h_pt, d.h_pt) };
+  }
+
+  /** Paint one box's live rect onto its element. */
+  function applyBoxGeom(el) {
+    const id = Number(el.dataset.boxId);
+    const r = effectiveBoxRect(id);
+    el.style.left = r.x + "pt";
+    el.style.top = r.y + "pt";
+    el.style.width = r.w + "pt";
+    el.style.minHeight = r.h + "pt";
+    // fitTxbx and the overflow-expand toggle both read the height from here, and neither knows
+    // anything about dragging. Writing it means a box the estimator enlarged stops being reported
+    // as overflowing, and stops having its font shrunk on screen — which is the whole point.
+    el.dataset.boxHPt = String(r.h);
+    el.classList.toggle("tw-box-moved", boxOverrides.has(id));
+    return r;
+  }
+
+  /** The grips + the size readout + Reset. Absolutely positioned, so they add no height:
+   *  fitTxbx measures offsetHeight to decide what overflows, and a grip in the flow would make
+   *  every box look taller than its text. */
+  function addBoxTools(el) {
+    const tools = document.createElement("div");
+    tools.className = "tw-box-tools";
+    tools.innerHTML =
+      '<span class="tw-grip tw-grip-move" data-grip="move" title="Drag to move this box"></span>' +
+      '<span class="tw-box-size"></span>' +
+      '<button type="button" class="tw-box-reset" data-box-reset="1" ' +
+        'title="Put this box back where the template has it">Reset box</button>' +
+      '<span class="tw-grip tw-grip-e" data-grip="e" title="Drag to change the width"></span>' +
+      '<span class="tw-grip tw-grip-s" data-grip="s" title="Drag to change the height"></span>' +
+      '<span class="tw-grip tw-grip-se" data-grip="se" title="Drag to resize this box"></span>';
+    el.appendChild(tools);
+    return tools;
+  }
+
+  function showBoxReadout(el, mode, rect) {
+    const out = el.querySelector(".tw-box-size");
+    if (out) out.textContent = rect ? boxReadout(mode, rect) : "";
+  }
+
+  /** Record a dragged rect, dropping the entry entirely when it matches the template again. */
+  function setBoxOverride(id, rect) {
+    const entry = boxOverrideEntry(boxDesign.get(id), rect);
+    if (entry) boxOverrides.set(id, entry);
+    else boxOverrides.delete(id);
+    return entry;
+  }
+
+  /** Delegated pointer gesture on the grips.
+   *
+   *  pointerdown is delegated on the surface because boxes are re-created on every render (same
+   *  reason as wireOverflowExpand). move/up are on the WINDOW, not the surface: a fast drag
+   *  leaves the box, and if setPointerCapture is unavailable those events would never reach a
+   *  surface-scoped listener — the box would stick mid-drag. */
+  function wireBoxDrag() {
+    if (docSurface.dataset.boxDragWired) return;
+    docSurface.dataset.boxDragWired = "1";
+    let drag = null;
+
+    docSurface.addEventListener("pointerdown", (e) => {
+      const grip = e.target.closest("[data-grip]");
+      if (!grip) return;
+      const box = grip.closest(".tw-txbx");
+      if (!box) return;
+      const id = Number(box.dataset.boxId);
+      if (!boxDesign.has(id)) return;
+      // Not a text edit: no caret, no selection, and no overflow-peek toggle.
+      e.preventDefault();
+      e.stopPropagation();
+      drag = { id: id, box: box, grip: grip, mode: grip.dataset.grip,
+               start: effectiveBoxRect(id), x0: e.clientX, y0: e.clientY, moved: false };
+      box.classList.add("tw-box-dragging");
+      box.style.zIndex = "40";      // over the neighbouring boxes while being dragged
+      try { grip.setPointerCapture(e.pointerId); } catch { /* mouse fallback below */ }
+      showBoxReadout(box, drag.mode, drag.start);
+    });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      // Re-measured every move: applyZoom can fire mid-drag.
+      const k = zoomScale();
+      const d = { x: ptFromClientPx(e.clientX - drag.x0, k),
+                  y: ptFromClientPx(e.clientY - drag.y0, k) };
+      if (Math.abs(d.x) > BOX_DRAG_SLOP_PT || Math.abs(d.y) > BOX_DRAG_SLOP_PT) drag.moved = true;
+      const rect = dragBoxRect(drag.mode, drag.start, d, boxLimits);
+      setBoxOverride(drag.id, rect);
+      applyBoxGeom(drag.box);
+      showBoxReadout(drag.box, drag.mode, rect);
+    });
+
+    const endDrag = () => {
+      if (!drag) return;
+      const { box, moved } = drag;
+      drag = null;
+      box.classList.remove("tw-box-dragging");
+      box.style.zIndex = "";
+      showBoxReadout(box, "", null);
+      // Re-measure the overflow badge against the new height: a box just made big enough must
+      // stop saying its text is cut off, and one made smaller must start.
+      fitTxbx(box);
+      if (moved) schedulePersistOverrides();
+    };
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+
+    // Reset is a click, not a gesture. An estimator who has nudged three boxes needs a way back
+    // that is not "reload the page and lose the text you typed".
+    docSurface.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-box-reset]");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const box = btn.closest(".tw-txbx");
+      if (!box) return;
+      boxOverrides.delete(Number(box.dataset.boxId));
+      applyBoxGeom(box);
+      fitTxbx(box);
+      schedulePersistOverrides();
+    });
+  }
+  wireBoxDrag();
+
+  // ── box layout, saved PER TEMPLATE ────────────────────────────────────────
+  // Same shape and the same shared merge as the paragraph overrides: a keyed store so an
+  // epoxy → polish → epoxy round trip keeps each template's layout, plus the flat field
+  // /api/generate actually reads. The version guard is the load-bearing part — a box id is a
+  // position in the backend's walk over one specific template file, so replaying an id captured
+  // against another version would resize a box the estimator never touched.
+  function savedBoxOverridesFor(wt, audience) {
+    const isPlain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const all = liveKey("box_overrides_all");
+    const hit = isPlain(all) ? all[overrideKey(wt, audience)] : null;
+    if (hit && isPlain(hit.items)) return hit;
+    const meta = liveKey("box_overrides_meta") || {};
+    if (meta.work_type === wt && meta.audience === audience) {
+      return { template_version: String(meta.template_version || ""),
+               items: isPlain(liveKey("box_overrides")) ? liveKey("box_overrides") : {} };
+    }
+    return null;
+  }
+
+  /** Load this template's saved box layout into `boxOverrides`. Called BEFORE the render, so a
+   *  restored box is created at its saved size instead of jumping there a frame later. */
+  function loadBoxOverrides(wt, audience) {
+    boxOverrides = new Map();
+    const saved = savedBoxOverridesFor(wt, audience);
+    if (!saved || String(saved.template_version || "") !== templateVersion) return;
+    for (const key of Object.keys(saved.items || {})) {
+      const id = Number(key);
+      const spec = saved.items[key];
+      if (!Number.isFinite(id) || !spec || typeof spec !== "object") continue;
+      const one = {};
+      for (const f of ["x_pt", "y_pt", "w_pt", "h_pt"]) {
+        // typeof, not Number(): `Number(null)` and `Number("")` are both 0, and 0 is a LEGAL
+        // position, so coercing here would read a corrupt entry as "this box belongs against the
+        // top-left edge of the page" and move it there. Every value we write is a number.
+        if (typeof spec[f] === "number" && Number.isFinite(spec[f])) one[f] = spec[f];
+      }
+      if (Object.keys(one).length) boxOverrides.set(id, one);
+    }
+  }
+
+  /** The dragged layout as the generate payload's `box_overrides`.
+   *  Falls back to the state-persisted dict when the editor never loaded, exactly as
+   *  collectOverrides does for paragraphs, so an earlier drag still reaches the .docx. */
+  function collectBoxOverrides() {
+    if (!templateBlocks) {
+      const flat = liveKey("box_overrides");
+      return (flat && typeof flat === "object" && !Array.isArray(flat)) ? flat : {};
+    }
+    const out = {};
+    boxOverrides.forEach((spec, id) => { out[String(id)] = spec; });
+    return out;
   }
 
   // Letterhead artwork, fetched WITH the auth header (a plain <img src>
@@ -2384,6 +2719,22 @@
     docSurface.classList.remove("tw-flow");
     clearDocSurface();
 
+    // What a drag is allowed to do, taken from the server's own statement of it. max_box is only
+    // re-derived from the margins for a browser holding a pre-v4 cached response, which is the
+    // one case where the field can be missing — two independent subtractions of the same margins
+    // is otherwise exactly how a handle ends up offering a size the server refuses.
+    //
+    // Set AFTER the clear, not before: test_preview_survives_rerender pins clearDocSurface() as
+    // the FIRST thing this function does, because a surface clear that skips the island reclaim
+    // is what made the Epoxy price box render empty.
+    const maxBox = page.max_box || {};
+    boxLimits = {
+      pageW: pageWpt, pageH: pageH,
+      maxW: Number(maxBox.w_pt) || (pageWpt - (margin.left || 0) - (margin.right || 0)),
+      maxH: Number(maxBox.h_pt) || (pageH - (margin.top || 0) - (margin.bottom || 0)),
+      minPt: Number(maxBox.min_pt) || 12,
+    };
+
     const arts = (geo.images || []).slice().sort((a, b) => (a.para_index || 0) - (b.para_index || 0));
 
     // Page 1 — fixed page-size sheet, artwork behind, boxes on top.
@@ -2416,17 +2767,22 @@
       if (!byBox.has(b.txbx)) byBox.set(b.txbx, []);
       byBox.get(b.txbx).push(b);
     });
+    boxDesign.clear();
     for (const box of (geo.boxes || [])) {
       const list = byBox.get(box.id);
       if (!list || box.x_pt == null) continue;
       const el = document.createElement("div");
       el.className = "tw-txbx";
-      el.style.left = box.x_pt + "pt";
-      el.style.top = box.y_pt + "pt";
-      el.style.width = (box.w_pt || 200) + "pt";
-      el.style.minHeight = (box.h_pt || 0) + "pt";
-      el.dataset.boxHPt = box.h_pt || "";          // inert metadata for fitNotesBox()
+      el.dataset.boxId = String(box.id);
+      // The template's own geometry, kept so Reset has somewhere to go back TO and so an
+      // override can be stored as a difference from it rather than as an absolute rect.
+      boxDesign.set(box.id, { x_pt: Number(box.x_pt) || 0, y_pt: Number(box.y_pt) || 0,
+                              w_pt: Number(box.w_pt) || 200, h_pt: Number(box.h_pt) || 0 });
+      // Writes left/top/width/minHeight AND dataset.boxHPt, laying any saved drag over the
+      // design — so a restored box is created at its saved size rather than jumping there.
+      applyBoxGeom(el);
       renderBlockList(el, list, tokens);
+      addBoxTools(el);
       p1.appendChild(el);
     }
 
@@ -2653,6 +3009,10 @@
       const geo = j.geometry || {};
       const hasBoxes = Array.isArray(geo.boxes) && geo.boxes.some(b => b.x_pt != null)
         && templateBlocks.some(b => b.txbx != null);
+      // BEFORE the render, and after templateVersion is known (the guard reads it): every box is
+      // then created at its saved size and position instead of appearing at the template's and
+      // moving a frame later.
+      loadBoxOverrides(wt, audience);
       if (hasBoxes) renderPositioned(geo, tokens);
       else renderFlow(tokens);
 
@@ -3108,6 +3468,8 @@
     // rendering, as {id, text} against the pristine template's ids. Persisted
     // too so re-opening this screen restores the edits.
     const paragraphOverrides = collectOverrides();
+    // Boxes the estimator dragged or resized, as {id: {x_pt?, y_pt?, w_pt?, h_pt?}}.
+    const boxOverridesOut = collectBoxOverrides();
 
     // We no longer call /api/generate here. The actual file generation
     // moved to the Done page so the user has one final review screen before
@@ -3118,14 +3480,24 @@
     // the debounce window — would be preserved for generation but lost from the
     // store, and would vanish on the next template switch.
     const _allOverrides = mergeOverrideEntry(
-      state.paragraph_overrides_all, effectiveWorkType(), state.audience || "Direct",
+      liveKey("paragraph_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, paragraphOverrides);
+    const _allBoxOverrides = mergeOverrideEntry(
+      liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
+      templateVersion, boxOverridesOut);
 
     TW.setState({
       ...mergedValues,
       paragraph_overrides_all: _allOverrides,
       paragraph_overrides: paragraphOverrides,
       paragraph_overrides_meta: {
+        template_version: templateVersion,
+        work_type: effectiveWorkType(),
+        audience: state.audience || "Direct",
+      },
+      box_overrides_all: _allBoxOverrides,
+      box_overrides: boxOverridesOut,
+      box_overrides_meta: {
         template_version: templateVersion,
         work_type: effectiveWorkType(),
         audience: state.audience || "Direct",
@@ -3174,6 +3546,11 @@
         // Document-editor edits -> proposal_writer paragraph overrides,
         // applied to the pristine template BEFORE block expansion (id-safe).
         paragraph_overrides: paragraphOverrides,
+        // Boxes the estimator dragged or resized -> proposal_writer._apply_box_overrides, which
+        // writes size and anchor offset into BOTH the DrawingML anchor and its VML fallback.
+        // Guarded by the same template_version as the paragraph overrides above: a box id is a
+        // position in the same walk over the same file.
+        box_overrides: boxOverridesOut,
         // Doc-editor per-option DISPLAY overrides for the WORK {{#system}}
         // rows (epoxy only) — edit the shown system name/texture/area without
         // touching cell_values or the price.

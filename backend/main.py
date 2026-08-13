@@ -326,8 +326,12 @@ class GenerateIn(BaseModel):
     # Sanitized in api_generate (cap 500, coerce id->int/text->str) before
     # reaching proposal_writer.fill_proposal — see _sanitize_paragraph_overrides.
     paragraph_overrides: list = Field(default_factory=list)
-    # Proposal Review's document editor: boxes the estimator dragged taller/wider.
-    # {"<box id from /api/proposal-template geometry>": {"h_pt": <float>, "w_pt": <float>}}.
+    # Proposal Review's document editor: boxes the estimator dragged or resized.
+    # {"<box id from /api/proposal-template geometry>":
+    #     {"h_pt": <float>, "w_pt": <float>, "x_pt": <float>, "y_pt": <float>}}.
+    # All four fields optional and independent: a box can be moved without being resized. x/y are
+    # the box's top-left corner in PAGE POINTS, the same coordinate system the geometry payload
+    # reports, so the number the handle showed is the number the writer receives.
     # A DICT keyed by id, not a list — a list's positions shift, and a stale draft would then
     # resize a different box than the one that was dragged. Rides the SAME template_version
     # guard as paragraph_overrides below (the ids are positions in the same template file), and

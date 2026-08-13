@@ -134,7 +134,7 @@
     display:none; flex-direction:column; }
   #drawer.open { display:flex; }
   /* per-project notification chips (in the detail drawer) */
-  .nt-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .nt-chips { display:flex; flex-wrap:wrap; gap:6px; margin:0; }
   .nt-chip { border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700;
     cursor:pointer; background:var(--surf-high); color:var(--ink-v); }
   .nt-chip.on { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
@@ -151,18 +151,42 @@
     font:800 9.5px/1 system-ui; letter-spacing:.02em; vertical-align:middle; text-transform:uppercase;
     background:rgba(27,28,28,.09); color:var(--ink-v); }
   .nt-chip.on .nt-av { background:rgba(31,122,52,.15); color:var(--ok); }
-  .dhead { flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:18px 20px; border-bottom:1px solid var(--line); }
-  .dhead h2 { margin:0; font-size:18px; }
-  .dclose { border:none; background:none; font-size:22px; cursor:pointer; color:var(--ink-v); line-height:1; }
+  .dhead { flex:0 0 auto; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:15px 20px 13px; border-bottom:1px solid var(--line); }
+  .dhead .dh-t { min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .dhead h2 { margin:0; font-size:18px; line-height:1.25; letter-spacing:-.01em; }
+  /* The one line that holds still on every tab: who the project is for, and what it is
+     worth. The step strip below says which STAGE it has reached; this says what it IS,
+     so replying on the Chat tab no longer means guessing whose job this is. Money is
+     tabular so two drawers opened in turn line their figures up. */
+  .dh-meta { display:flex; align-items:baseline; flex-wrap:wrap; gap:2px 7px; font-size:12.5px; color:var(--ink-v); }
+  .dh-meta .dh-who { font-weight:600; color:var(--ink); }
+  .dh-meta .dh-amt { font-weight:700; color:var(--ink); }
+  .dh-meta .dh-sep { opacity:.45; }
+  .dclose { border:none; background:none; font-size:22px; cursor:pointer; color:var(--ink-v); line-height:1;
+    align-self:flex-start; padding:0 2px; }
+  .dclose:hover { color:var(--red-dark); }
   .dbody { flex:1 1 auto; min-height:0; overflow-y:auto; padding:18px 20px; }
   /* drawer section tabs — a third flex item between .dhead and .dbody, so it
      pins without position:sticky (#drawer is a flex column; .dhead is flex:0 0 auto).
      Every attention state is carried by WORDS and a badge as well as colour: the
      rep's browser synthesizes dark mode over this page, so tint can be rewritten. */
-  .dtabs { flex:0 0 auto; display:grid; grid-template-columns:repeat(6,1fr); gap:6px;
+  /* WRAPPING FLEX, NOT A FIXED COLUMN COUNT. It was `grid-template-columns:repeat(6,1fr)`
+     while renderSecTabs rendered five tabs — Schedule went on 2026-08-11 and the sixth
+     column stayed — so the strip carried a dead sixth of its width and every card was
+     narrower than it needed to be. A hard count is also a number that can silently
+     disagree with SEC_TABS in the other direction: add a tab and one of them wraps onto a
+     second row, half-clipped. `flex:1 1 120px` cannot disagree with anything — the cards
+     share whatever room there is, and only genuinely run out at phone widths, where they
+     wrap on purpose instead of being squeezed to nothing. */
+  .dtabs { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:6px;
     padding:10px 20px 12px; border-bottom:1px solid var(--line); background:#fff; }
-  .dtabs .step { position:relative; display:block; width:100%; text-align:left; font:inherit; cursor:pointer;
-    border:1px solid var(--line); border-radius:8px; padding:8px 9px; background:var(--surf-low); }
+  .dtabs .step { position:relative; flex:1 1 120px; min-width:0; display:block; text-align:left; font:inherit; cursor:pointer;
+    border:1px solid var(--line); border-radius:8px; padding:7px 9px 8px; background:var(--surf-low); }
+  /* Hover as an OUTLINE, not a border or a background: `border-color` here would repaint the
+     red of a tab that needs a human, and `background` would repaint the white that marks the
+     one you are on — so hovering would erase the two states this strip exists to show.
+     :focus-visible below re-declares outline and comes later, so the keyboard ring still wins. */
+  .dtabs .step:hover { outline:1px solid var(--ink-v); outline-offset:-1px; }
   .dtabs .step .lbl { margin-bottom:2px; }
   .dtabs .step .val { display:block; font-size:11.5px; font-weight:700; color:var(--ink-v); }
   .dtabs .step.is-done { border-color:#bfe3c8; background:#e3f3e6; }
@@ -171,24 +195,35 @@
   .dtabs .step.needs .lbl, .dtabs .step.needs .val { color:var(--red-dark); }
   .dtabs .step[aria-selected="true"] { background:#fff; border-color:var(--red-dark);
     box-shadow:inset 0 -3px 0 0 var(--red-dark); }
-  .dtabs .step[aria-selected="true"] .lbl { color:var(--ink); }
+  /* The one you are on carries the strongest label on the strip. Weight as well as tint,
+     because this page gets a synthesized dark theme in some browsers, which rewrites tint. */
+  .dtabs .step[aria-selected="true"] .lbl { color:var(--ink); font-weight:800; }
   .dtabs .step:focus-visible { outline:2px solid var(--red); outline-offset:1px; }
   .tab-badge { display:inline-block; min-width:16px; height:16px; padding:0 4px; margin-left:4px; border-radius:999px;
     background:var(--red); color:#fff; font-size:10px; font-weight:800; line-height:16px; text-align:center; }
+  /* One flex column per tab, so the gap between cards is declared once here instead of by
+     every card carrying its own bottom margin. That matters because applySecPanel hides
+     cards: a margin on a hidden card leaves a hole, a gap on the container does not. */
+  .dpanel { display:flex; flex-direction:column; gap:18px; }
   .dpanel:focus { outline:none; }
+  /* The drawer's paragraphs are all `.note`, and a <p>'s 1em margins do NOT collapse inside
+     a flex column — they would stack on top of the gaps. Spacing belongs to the layout. */
+  .dpanel p { margin:0; }
   .hidden { display:none !important; }
-  @media (max-width:520px) { .dtabs { grid-template-columns:repeat(3,1fr); } }
   /* ── follow-up section ────────────────────────────────────────────────────
      Each control row is one line that wraps rather than squeezing: the drawer is
      780px at most and the note input has to stay wide enough to type a sentence in. */
-  .fu-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0 4px; }
+  /* margin:0 — the panel is a flex column with a gap, and a margin here would add to it. */
+  .fu-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0; }
   .fu-line .tw-select { min-height:38px; }
   .fu-note { flex:1 1 220px; min-height:38px; padding:8px 10px; border:1px solid var(--line);
     border-radius:7px; font:inherit; }
   .fu-note:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
-  .fu-lbl { margin-top:18px; }
+  /* The follow-up panel is one long section of six groups, so its sub-headings buy the break
+     the panel-level gap gives every other card: 11px on top of the 7px section gap. */
+  .fu-lbl { margin-top:11px; }
   .fu-alert:empty { display:none; }
-  .fu-alert { color:var(--red-dark); margin:4px 0; }
+  .fu-alert { color:var(--red-dark); margin:0; }
   /* The log. Three columns so the WHAT lines up down the page — scanning "did anyone
      call?" should not mean reading every row. Fixed-width first column, date last. */
   .fu-log { border:1px solid var(--line); border-radius:8px; background:var(--surf-low);
@@ -204,38 +239,98 @@
   /* Chat owns its own scroll so a long thread never pushes the composer away. */
   .dbody[data-sec="chat"] { display:flex; flex-direction:column; overflow:hidden; padding-bottom:0; }
   .dbody[data-sec="chat"] #dpanel-chat,
-  .dbody[data-sec="chat"] #dsec-chat { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; margin-bottom:0; }
+  .dbody[data-sec="chat"] #dsec-chat { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+  /* gap:0 on the chat section only: the composer brings its own border-top and padding, and
+     the section gap would open a stripe of white between the thread and that rule. */
+  .dbody[data-sec="chat"] #dsec-chat { gap:0; }
   /* A flex column, so each row can choose its own side with align-self and the
      gap does the spacing. Auto-margins can't centre a system note. */
   .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto;
     display:flex; flex-direction:column; gap:10px; }
+  /* The composer spaces itself too, so the alert can be empty without leaving a gap above
+     the box somebody is typing in. :empty hides it outright rather than reserving a line. */
   .dbody[data-sec="chat"] #chat-compose { flex:0 0 auto; padding:10px 0 16px; background:#fff;
-    border-top:1px solid var(--line); }
-  .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); margin-bottom:4px; }
-  .sec { margin-bottom:20px; }
-  .row3 { display:flex; gap:8px; flex-wrap:wrap; }
-  /* Assigning an estimator on a project that has not been sent. The name above the control is a
-     GUESS (the draft's author, drawn with a "?") until somebody picks — so the control sits under
-     it as the way to settle it, rather than replacing a fact with a form. */
-  .ns-est { display:flex; align-items:center; gap:7px; }
-  .ns-assign { display:flex; gap:8px; align-items:center; margin-top:9px; flex-wrap:wrap; }
+    border-top:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  #reply-alert:empty, #nt-alert:empty, #nt-count:empty, #cust-copy-say:empty { display:none; }
+  .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); }
+  /* A section heading outranks the fact keys underneath it. Both are 700 uppercase, so at
+     ink-v against ink-v "APPROVED" and "AMOUNT" read as the same level and the card loses its
+     top. Scoped with > so the tab strip's own .lbl keeps its quieter colour, which is what the
+     selected state then brightens. */
+  .sec > .lbl { color:var(--ink); }
+  /* No bottom margin any more: a section is its own flex column, so the gap holds the label
+     off its content and a section can be hidden without leaving the space behind. */
+  .sec { display:flex; flex-direction:column; gap:7px; margin:0; }
+  /* direction stated, because renderNotSent uses `class="sec row3"` on its button row and
+     .sec's `column` would otherwise stack the two buttons on top of each other. */
+  .row3 { display:flex; flex-direction:row; gap:8px; flex-wrap:wrap; }
+  /* Assigning an estimator on a project nobody has sent. The name in the facts grid above is a
+     GUESS (the draft's author, drawn with a "?") until somebody picks, so the control sits under
+     the facts as the way to settle it rather than replacing a fact with a form. `margin-top` is
+     not needed now that .sec is a flex column with its own gap. */
+  .ns-assign { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .ns-assign select { flex:1 1 190px; min-width:0; min-height:38px; padding:7px 9px;
     border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font:inherit; }
   .ns-assign .btn { min-height:38px; }
   .ns-assign-note:empty { display:none; }
-  .ns-assign-note { margin:7px 0 0; color:var(--red-dark); font-weight:600; }
+  .ns-assign-note { margin:0; color:var(--red-dark); font-weight:600; }
   .btn { min-height:42px; padding:0 16px; border-radius:7px; border:1px solid transparent; font:inherit; font-weight:700;
     cursor:pointer; }
   .btn-p { background:var(--red-dark); color:#fff; } .btn-p:hover { background:var(--red); }
   .btn-s { background:#fff; color:var(--ink); border-color:var(--line); } .btn-s:hover { background:var(--surf-low); }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
+  /* A utility action beside a fact, rather than the action a panel is FOR — the 42px primary
+     height would make "Copy the link" shout as loud as "Send deposit request". */
+  .btn-sm { min-height:34px; padding:0 12px; font-size:12.5px; }
+  /* .btn is written for <button>: an <a class="btn"> has no display and keeps its underline.
+     "Open the customer's view" has to be a real link (middle-click, open-in-new-tab, and the
+     href is the only place the customer's token exists), so the anchor gets the geometry. */
+  .btn.is-link { display:inline-flex; align-items:center; justify-content:center; gap:5px;
+    text-decoration:none; }
+  .btn:focus-visible, .nt-chip:focus-visible, .dep-show:focus-visible, .dclose:focus-visible {
+    outline:2px solid var(--red); outline-offset:1px; }
+  /* ── labelled facts ───────────────────────────────────────────────────────
+     The drawer's unit of information. It replaced two run-on sentences — the approval
+     ("NAME on 2026-08-10 — Polish, Epoxy at $22,763.00") and the deposit auto-calc line —
+     which buried the two things anybody scans for, the money and the date, mid-sentence
+     inside a name in capitals.
+     auto-fit rather than a column count: the approval card has four cells and the deposit
+     card three, and a media query per card is how those two drift apart. */
+  .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:11px 16px; }
+  .fact { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  /* A cell whose value is a name rather than a number. In a 148px column "HANZ URIEL A DE LA
+     CRUZ, Owner" wraps three times and drags the whole row down with it; on its own line it is
+     one line. Only for the cells that hold prose, so the figures stay side by side. */
+  .fact-wide { grid-column:1 / -1; }
+  .fact-k { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-v); }
+  .fact-v { font-size:13px; color:var(--ink); overflow-wrap:anywhere; }
+  .fact-s { display:block; font-size:11.5px; color:var(--ink-v); overflow-wrap:anywhere; }
+  /* Money is money: tabular figures so a column of them lines up, and the approved total
+     gets the size because it is the number the whole drawer is about. */
+  .amt { font-variant-numeric:tabular-nums; }
+  .amt-lg { font-size:20px; font-weight:800; letter-spacing:-.01em; line-height:1.15; }
+  /* Who the proposal is for, first-class: the name reads at a glance and the address sits
+     under it. This is the line the removed portal URL used to push out of the way. */
+  .idn { display:flex; flex-direction:column; gap:1px; }
+  .idn-n { font-size:15.5px; font-weight:700; letter-spacing:-.005em; overflow-wrap:anywhere; }
+  .idn-e { font-size:12.5px; color:var(--ink-v); overflow-wrap:anywhere; }
+  /* Project contacts: the ROLE leads, because "who do I call about access" is the question
+     this card gets opened for. A row each, so two contacts cannot run together. */
+  .ct-list { display:flex; flex-direction:column; gap:6px; }
+  .ct { display:grid; grid-template-columns:94px 1fr; gap:1px 10px; align-items:baseline;
+    padding:7px 10px; border:1px solid var(--line); border-radius:9px; background:#fff; }
+  .ct-role { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-v); }
+  .ct-n { font-size:13px; font-weight:600; overflow-wrap:anywhere; }
+  .ct-m { grid-column:2; font-size:12px; color:var(--ink-v); overflow-wrap:anywhere; }
+  @media (max-width:560px) { .ct { grid-template-columns:1fr; } .ct-m { grid-column:1; } }
   /* Deposit submissions — what the CUSTOMER sent, rendered directly above the
      deposit buttons so staff read it before they act. The account number ships
      masked; .dep-show swaps in the full value on click (wired in portal.js). */
+  /* margins off, gaps on: these all sit in .sec, a flex column. See .dpanel above. */
   .dep { border:1px solid var(--line); border-left:3px solid var(--ok); border-radius:8px;
-    background:var(--surf-low); padding:9px 11px; margin-top:6px; }
-  .dep-lbl { margin-top:14px; }
-  .dep-none { margin:8px 0 0; }
+    background:var(--surf-low); padding:9px 11px; margin:0; }
+  .dep-lbl { margin-top:7px; }
+  .dep-none { margin:0; }
   .dep-h { display:flex; justify-content:space-between; align-items:baseline; gap:8px;
     flex-wrap:wrap; margin-bottom:6px; }
   .dep-m { font-size:12.5px; font-weight:800; }
@@ -276,7 +371,7 @@
   .deal .meta.rc-line { color:var(--ink-v); font-weight:600; font-size:11.5px; }
   /* "Automated follow-ups go to" — one tickable contact per row inside the Follow-up tab.
      Always visible, because the question it answers is "is this person being chased". */
-  .fu-clist { display:flex; flex-direction:column; gap:5px; margin:2px 0 10px; }
+  .fu-clist { display:flex; flex-direction:column; gap:5px; margin:0; }
   .fu-c { display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; }
   .fu-c input { margin:0; }
   .tw-input { flex:1; min-width:0; border:1px solid var(--line); border-radius:7px;
@@ -286,15 +381,21 @@
   .rc-chip { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:6px 8px;
     border:1px solid var(--line); border-radius:9px; background:#fff; }
   .rc-chip .rc-n { font-weight:600; margin-right:2px; }
+  /* var(--line), not var(--surf-dim) — that token is defined nowhere on this page, so the
+     border shorthand was invalid at computed-value time and every badge fell back to a
+     currentColor edge. It looked deliberate because .rc-b also sets color: it was not. */
   .rc-b { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
-    border:1px solid var(--surf-dim); border-radius:999px; padding:1px 7px; color:var(--ink-v); }
+    border:1px solid var(--line); border-radius:999px; padding:1px 7px; color:var(--ink-v); }
   .rc-b.on { border-color:#0f7b3f; color:#0f7b3f; }
   .msg .who { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
     color:var(--ink-v); margin-bottom:2px; }
   .msg .via-email { border:1px solid var(--ink-v); border-radius:999px; padding:0 5px; margin-left:4px; font-size:9px; }
   .msg .when { font-size:10px; color:var(--ink-v); margin-top:3px; }
   textarea { width:100%; min-height:74px; padding:10px; border:1px solid var(--line); border-radius:7px; font:inherit; resize:vertical; }
-  a.link { color:var(--red-dark); word-break:break-all; }
+  /* `a.link` lived here for exactly one element: the customer's portal URL, printed in full
+     under their email address. `word-break:break-all` is the tell — nothing but a 60-character
+     token needs to be broken mid-word. Hanz, 2026-08-13: "remove the URL for active projects."
+     The link is now two controls in the Customer card, so the rule has nothing left to style. */
   .note { color:var(--ink-v); font-size:12px; }
   /* margin:0 so the thread's gap is the only spacing — a <p>'s default 1em
      would otherwise stack on top of it and float the note away from its event. */
