@@ -123,6 +123,36 @@ def test_the_whitelist_covers_every_token_a_flip_changes(ran):
 
 # ── the template, not just the numbers ───────────────────────────────────────
 @needs_node
+def test_opening_the_page_never_zeroes_the_document(ran):
+    """THE REGRESSION THIS FIX SHIPPED TO STAGING, caught by adversarial review the same evening.
+
+    `rebuildPricing()` runs once at page load — BEFORE the init block creates `#tb-total`, which
+    exists in no HTML for this screen. `computeTokenValues` falls back to "$0.00" when it is
+    missing, so merely OPENING an already-generated project wrote a $0.00 total (and a negative
+    flooring line, 0 − remodel tax) into the customer's document and persisted it. Observed live on
+    staging: a draft's stored `total_formatted` went from "$36,763.00" to "$0.00" on page load.
+
+    Refusing to sync is the right failure: the payload stays exactly as stale as it was, which the
+    publish digest now warns about. A zero is a $0.00 proposal on a real bid.
+
+    The harness previously stubbed `#tb-total` as always present, which is precisely why 38
+    mutations and a 2509-test suite all passed over this."""
+    p = ran["pageInitNoTotalElement"]
+    assert p["returned"] is None, "the sync ran without a lump sum to read"
+    assert p["valuesUnchanged"], "the payload was modified at page init"
+    assert p["stillTheOldTotal"] == "$13,265.00"
+
+
+@needs_node
+def test_a_stale_total_element_is_refused_too(ran):
+    """A `#tb-total` that has not caught up with the pricing is the same hazard as a missing one —
+    and it is the shape any future reorder of the init sequence would produce."""
+    t = ran["totalElementDisagrees"]
+    assert t["returned"] is None
+    assert t["stillTheOldTotal"] == "$13,265.00"
+
+
+@needs_node
 def test_the_template_follows_the_base_role(ran):
     """`work_type` is derived from the base tab's ROLE and picks which .docx the customer receives.
     A frozen "polish" here is why his PDF's base line still read "Polished Concrete Flooring": the

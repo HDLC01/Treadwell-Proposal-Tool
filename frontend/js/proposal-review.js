@@ -640,9 +640,26 @@
   function syncPayloadPricing() {
     const pp = state.proposal_payload;
     if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") return null;
+    // NEVER WRITE MONEY WE CANNOT CORROBORATE. computeTokenValues reads the lump sum from
+    // #tb-total — and that element does not exist in proposal-review.html at all: the init block
+    // near the bottom of this file CREATES it, which happens AFTER the page-init rebuildPricing()
+    // call. computeTokenValues falls back to "$0.00" when it is missing, so syncing at that moment
+    // wrote a $0.00 total — and a NEGATIVE flooring line, (0 − remodel tax) — into the customer's
+    // document and persisted it, just for opening the screen. Refusing to sync leaves the payload
+    // exactly as stale as it was, which the publish digest now warns about; a zero would be a
+    // $0.00 proposal on a real bid, which is strictly worse than the bug this function fixes.
     let fresh;
-    try { fresh = computeTokenValues(Object.assign({}, state, TW.readForm(form))); }
-    catch { return null; }                       // never let a persist fail over this
+    try {
+      const _tb = document.querySelector("#tb-total");
+      if (!_tb) return null;
+      const _tbNum = Number(String(_tb.textContent || "").replace(/[^0-9.-]/g, ""));
+      const _stateLump = Number(state.proposal_lump_sum) || 0;
+      // rebuildPricing assigns state.proposal_lump_sum (line ~556) and paints #tb-total before
+      // calling this, so in the normal path they agree to the cent. A disagreement means the
+      // element has not caught up with the pricing — the same hazard as it being absent.
+      if (!Number.isFinite(_tbNum) || Math.abs(_tbNum - _stateLump) > 0.01) return null;
+      fresh = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+    } catch { return null; }                     // never let a persist fail over this
     PAYLOAD_PRICING_KEYS.forEach((k) => { if (k in fresh) pp.values[k] = fresh[k]; });
     // ── the TEMPLATE, not just the numbers ───────────────────────────────────────────────
     // `work_type` picks which .docx the customer receives, and it is DERIVED from the base tab's
