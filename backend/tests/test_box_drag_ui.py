@@ -406,17 +406,31 @@ def test_the_view_files_rebuild_also_carries_the_layout():
 
 
 def test_both_writers_file_the_layout_under_this_template(ran):
-    """The debounced save and Continue. Both must merge INTO the existing store rather than build
-    a fresh one, or the sibling template's layout disappears again — the bug the keyed store was
-    added for. Asserting on the argument, not just on the key name, because `mergeOverrideEntry(
-    null, …)` reads as a merge and is a replace."""
+    """The debounced save and Continue. Both must merge into the store AS IT IS NOW, not as it was
+    when the page loaded, or the sibling template's layout disappears — the bug the keyed store was
+    added for and did not actually prevent.
+
+    This asserted `mergeOverrideEntry(state.box_overrides_all, …)` until 2026-08-13, i.e. it
+    asserted the defect. `state` is a one-shot snapshot taken on line 2; `TW.setState` merges into a
+    fresh read of localStorage and never writes back onto it, so a top-level key it replaces is
+    frozen for the whole visit. Merging onto the frozen value REPLACED the store with a single-key
+    object and dropped the other template's entry. `liveKey()` re-reads the stored blob, and
+    `test_a_template_round_trip_keeps_each_layout` is the behavioural half of this claim — it now
+    runs against the page's real binding, where it used to run against a friendlier one."""
     for anchor in ("function schedulePersistOverrides()",
                    "const boxOverridesOut = collectBoxOverrides();"):
         i = JS.index(anchor)
         block = JS[i:i + 2500]
         assert "box_overrides_all" in block, "%s does not file the box layout" % anchor
-        assert re.search(r"mergeOverrideEntry\(\s*state\.box_overrides_all,", block), (
-            "%s does not merge into the EXISTING box store" % anchor)
+        assert re.search(r'mergeOverrideEntry\(\s*liveKey\("box_overrides_all"\),', block), (
+            "%s merges onto the page's load-time snapshot instead of the live store" % anchor)
+    # And the same for the paragraph edits, which had the identical flaw and cost typed text.
+    i = JS.index("function schedulePersistOverrides()")
+    assert re.search(r'mergeOverrideEntry\(\s*liveKey\("paragraph_overrides_all"\),',
+                     JS[i:i + 2500]), "the paragraph store is still merged onto the snapshot"
+    assert not re.search(r"state\.(box|paragraph)_overrides", JS), (
+        "an override store is read off the load-time snapshot again: %s"
+        % re.findall(r"state\.(?:box|paragraph)_overrides\w*", JS))
 
 
 def test_the_layout_is_loaded_before_the_render(ran):
