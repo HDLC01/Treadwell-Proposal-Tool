@@ -445,7 +445,7 @@
             <div class="foot-actions">
               ${testBtn(p)}
               <button type="button" class="files-btn" title="${p.sent_revision>0?"Files, sent versions, and re-send to the customer":"Generate + download the files (no need to re-walk intake)"}">📄 Files</button>
-              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info</button>
+              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info sheet</button>
               <!-- Already sent: say "Revise", because opening and changing it is
                    exactly what produces the next revision. Same destination — the
                    label is what was unclear, not the route. -->

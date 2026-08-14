@@ -1626,6 +1626,42 @@ function colLetter(n) {
   return s;
 }
 
+// ── Track sizing: Excel units → CSS pixels ─────────────────────────────────
+// One place, used by BOTH the initial layout and the dblclick auto-fit, so the two can never
+// disagree about how wide a character is. Pure functions so tests can execute them with the real
+// workbook's measured values instead of grepping constants out of the source.
+//
+// THE CLIPPING BUG THESE NUMBERS FIX (Hanz, 2026-08-14, screenshot: "make sure we can see the
+// text (default size for all rows, the text must be visible)"). Cell text paints in POINTS from
+// the xlsx — the dominant cell in Kyle's workbook is 12pt (×467 cells), rendered at
+// 12 × 0.92 = 11.04pt ≈ 14.7px, line box ≈ 17px — while the tracks were sized in px from
+// constants calibrated for ~11px text. Worse, the cell's own padding and border were taken OUT
+// of the Excel-sized track: Excel's row height is a LINE box (no padding, no border), ours is a
+// border-box. A height-less row became a 20px track minus 5px of chrome = 15px of content for a
+// 17px line box — glyphs sliced through the middle ("MATERIAL - Patch", "Quantity"). Columns cut
+// "MATERIAL - Epoxy Liquids" to "MATERIAL - Epoxy Liq" the same way: 7.5px/char was measured for
+// a smaller face than the one actually painted.
+//
+// 10px per character matches the 14.7px face the grid actually renders (Excel's own char unit is
+// ~7px at its default 11pt — Kyle's sheet is mostly 12pt, and Excel hides the difference by
+// letting text SPILL into empty neighbours, which inputs cannot do).
+const PX_PER_CHAR = 10;
+
+/** A column track in px from an xlsx width in Excel character units. 56px floor per
+ *  info-sheet.js's grid, which never had the clipping complaint. */
+function colTrackPx(w) {
+  return Math.max(56, Math.round((w || 9) * PX_PER_CHAR));
+}
+
+/** A row track in px from an xlsx height in points.
+ *  ×4/3 is pt→px at 96dpi; +5 adds the border-box chrome (2×2px padding + 1px border) ON TOP of
+ *  Excel's line-box height instead of stealing it from the text; the 24px floor clears the
+ *  dominant 12pt line box (~17px) plus chrome with a margin, so a row with no stored height —
+ *  432 of the Epoxy tab's 648 rows — still shows its text whole. */
+function rowTrackPx(h, defaultH) {
+  return Math.max(24, Math.round((h || defaultH || 15.6) * (4 / 3)) + 5);
+}
+
 function renderSheet(data) {
   // Clip to a viewable size. Most sheets only really use rows 1-100 / cols A-H
   // for the actual estimate; the rest is reference tables we still want
@@ -1654,17 +1690,15 @@ function renderSheet(data) {
     }
   }
 
-  // Column widths — Excel "characters" ≈ ~7.5px wide
   const colPx = [];
   for (let c = 1; c <= maxCol; c++) {
-    const letter = colLetter(c);
-    const w = data.col_widths[letter];
-    colPx.push(Math.max(48, Math.round((w || 9) * 7.5)));
+    colPx.push(colTrackPx(data.col_widths[colLetter(c)]));
   }
   const rowPx = [];
   for (let r = 1; r <= maxRow; r++) {
-    const h = data.row_heights[r];
-    rowPx.push(Math.max(20, Math.round((h || 15) * 1.33)));
+    // default_row_height is the workbook's own sheet_format value (15.6 in Kyle's file); older
+    // cached payloads without the key fall back inside rowTrackPx.
+    rowPx.push(rowTrackPx(data.row_heights[r], data.default_row_height));
   }
 
   // Build grid container
@@ -1979,7 +2013,9 @@ function attachResizers(grid, colPx, rowPx) {
       grid.style.gridTemplateColumns = `40px ${colPx.map(p => p + "px").join(" ")}`;
     } else {
       const delta = e.clientY - startY;
-      rowPx[index - 1] = Math.max(14, startSize + delta);
+      // Same 24px floor as rowTrackPx: the old 14px floor let a drag shrink a row below anything
+      // the renderer would ever produce, hand-recreating the clipped-glyph bug this fixes.
+      rowPx[index - 1] = Math.max(24, startSize + delta);
       grid.style.gridTemplateRows = `22px ${rowPx.map(p => p + "px").join(" ")}`;
     }
     ghost.remove();
@@ -2009,7 +2045,9 @@ function attachResizers(grid, colPx, rowPx) {
         maxLen = Math.max(maxLen, (inp.value || "").length);
       }
     }
-    colPx[idx - 1] = Math.max(48, Math.min(360, maxLen * 7.5 + 12));
+    // PX_PER_CHAR — the SAME constant the initial layout uses, or a dblclick auto-fit would
+    // disagree with the first paint about how wide a character is.
+    colPx[idx - 1] = Math.max(56, Math.min(480, maxLen * PX_PER_CHAR + 12));
     grid.style.gridTemplateColumns = `40px ${colPx.map(p => p + "px").join(" ")}`;
   });
 }
@@ -2157,6 +2195,11 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
       displayVal = "";
     }
     inp.value = displayVal;
+    // Long text that outgrows its column shows whole on hover. Excel handles this by SPILLING
+    // into empty neighbours; an <input> can't, so the extreme strings — "System 2 Options /
+    // Walls (scroll down)" is 38 characters in a 19.8-char column — still clip even with the
+    // widened tracks, and there'd otherwise be no way to read the tail short of clicking in.
+    if (String(displayVal).length > 18) inp.title = displayVal;
     // Formula cells are editable but visually marked — matches Excel,
     // where you CAN overwrite a formula by typing over it (you just
     // lose the formula). Untouched formula cells still pass through
