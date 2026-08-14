@@ -738,6 +738,9 @@ class LibraryItemIn(BaseModel):
     # `Any`, because these arrive pasted from a spreadsheet as "$85.38" and "2,875".
     unit_cost: Optional[Any] = None
     coverage: Optional[Any] = None
+    # How many units are in the purchase — the "5" of "5 Gal", with unit_cost the price of that
+    # pack. Same `Any`: it is typed into a text input beside a dropdown.
+    buy_qty: Optional[Any] = None
     sku: Optional[str] = None
     vendor: Optional[str] = None
     notes: Optional[str] = None
@@ -830,6 +833,53 @@ def api_library_assembly_delete(asm_id: str) -> Dict[str, Any]:
     if not library.delete_assembly(asm_id):
         raise HTTPException(404, "That assembly no longer exists.")
     return {"ok": True, "deleted": asm_id}
+
+
+class LibraryVendorIn(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# Vendors: READING is open to every signed-in user, because the Items tab's dropdown needs it and
+# an estimator has to be able to say who a material came from. WRITING is admin-only (Hanz,
+# 2026-08-15) — the list is the thing that keeps one supplier from having three spellings, so who
+# may add to it is the whole control.
+@app.get("/api/library/vendors")
+def api_library_vendors() -> Dict[str, Any]:
+    return {"ok": True, "vendors": library.list_vendors(), "usage": library.vendor_usage()}
+
+
+@app.post("/api/library/vendors")
+def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_vendor(payload.model_dump(exclude_unset=True), _user_email(request))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "vendor": row}
+
+
+@app.patch("/api/library/vendors/{vendor_id}")
+def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
+                              request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_vendor(vendor_id, payload.model_dump(exclude_unset=True))
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        raise HTTPException(404, "That vendor is no longer on the list.")
+    return {"ok": True, "vendor": row}
+
+
+@app.delete("/api/library/vendors/{vendor_id}")
+def api_library_vendor_delete(vendor_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_vendor(vendor_id):
+        raise HTTPException(404, "That vendor is no longer on the list.")
+    # Items naming it keep saying so — they store the name, and a delete here must not rewrite what
+    # a past purchase recorded. The dropdown simply stops offering it.
+    return {"ok": True, "deleted": vendor_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
