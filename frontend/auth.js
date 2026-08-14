@@ -207,13 +207,17 @@
       // place to start, which is the opposite of how the board is meant to be used now.
       // The href is untouched: navItem takes the active highlight from location.pathname, never
       // from the label or position, so moving an item cannot break its highlight.
-      '<div class="tw-section">Database</div>' +
-      navItem("/projects.html", "▣", "Proposals Database") +
-
       // Its own heading rather than a third item under Leads & bids: those two
       // are the daily queue, this is the look back over all of it.
+      //
+      // Above the Database at Hanz's ask (2026-08-15). It reads better there for the same reason
+      // the Database moved down in the first place: Analytics is something an estimator opens to
+      // answer a question, while the Database is a filing cabinet you go to on purpose.
       '<div class="tw-section">Analytics</div>' +
       navItem("/analytics.html", "◫", "Analytics") +
+
+      '<div class="tw-section">Database</div>' +
+      navItem("/projects.html", "▣", "Proposals Database") +
       // Reference data, not a daily page — the materials Treadwell buys and the assemblies
       // built out of them. Its own heading for the same reason Analytics has one: filed under
       // Proposals it would read as a step in making one, which it deliberately is not (nothing
