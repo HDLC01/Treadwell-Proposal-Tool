@@ -126,6 +126,25 @@ def test_typed_cells_travel_rather_than_formatted_strings(ran):
 
 # ── the download ─────────────────────────────────────────────────────────────
 @needs_node
+def test_a_render_reveals_the_export_button(ran):
+    """It ships hidden in the static markup — static so that #filterbar's constant re-rendering
+    (including the 4-second build poll) cannot resurrect it enabled mid-download. Which leaves one
+    thing to remember, and the first version of this feature forgot it: the markup was there, the
+    handler was there, and nothing ever set hidden=false. It reached staging complete and
+    unreachable, and no test noticed because none of them looked at `hidden`."""
+    b = ran["exportButton"]
+    assert b["hiddenBeforeRender"] is True, "the button no longer ships hidden"
+    assert b["hiddenAfterRender"] is False, "revealExport does not reveal the export button"
+    assert b["noteRevealed"], "the button appeared without the sentence explaining what it exports"
+    # Calling the lifted function proves it works, not that anything calls it — the two mutations
+    # "delete the call from render()" and "reveal only the button" both survived until these.
+    assert b["calledByRender"], "render() never calls revealExport, so the button stays hidden"
+    assert b["calledBeforeTheEarlyReturn"], (
+        "revealExport is called after the trailing-12 early return, so that tab has no button")
+
+
+
+@needs_node
 def test_the_download_asks_the_server_to_build_then_fetches_the_file(ran):
     d = ran["download"]
     assert d["posted"] == ["POST /api/analytics/export"]

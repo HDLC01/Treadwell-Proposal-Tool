@@ -590,11 +590,27 @@
     }, 3000);
   }
 
+  /** Show the export button, once there is something worth exporting.
+   *
+   *  It ships hidden in the static markup rather than being rendered, because #filterbar is
+   *  rewritten on every render — including the 4-second poll while a build finishes — and a
+   *  re-rendered button would come back enabled in the middle of a download. Which leaves exactly
+   *  one thing to remember: something has to reveal it. Nothing did, first time round, and the
+   *  feature reached staging complete and unreachable. */
+  function revealExport() {
+    ["export-xlsx", "export-note"].forEach(function (id) {
+      var el = $(id);
+      if (el) el.hidden = false;
+    });
+  }
+
   function render() {
     if (!DATA || !DATA.ok) return;
     CARDS = {};
     renderPullWindow();
     renderTabs();
+
+    revealExport();
 
     // Before the filter bar: this tab replaces it rather than being sliced by it.
     if (tab().id === "trailing12") { renderTrailing12(); return; }
