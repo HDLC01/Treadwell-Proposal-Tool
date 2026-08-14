@@ -61,3 +61,7 @@ test_output_*.docx
 
 # Local SQLite drafts (runtime data — production uses a Docker volume)
 backend/data/
+
+# Kyle's trailing-12 workbook: real win rates and revenue by trade. This repo is public.
+# A sanitized copy of its LAYOUT lives at backend/tests/fixtures/trailing12_layout.xlsx.
+Trailing 12TH MONTH.xlsx

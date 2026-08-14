@@ -97,6 +97,30 @@
     return monthKey + "-" + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0");
   }
 
+  /** "YYYY-MM-DD" shifted n months, the way a spreadsheet means it (Excel EDATE):
+   *  keep the day of the month, and clamp to the target month's last day.
+   *  2026-05-31 minus 15 months is 2025-02-28, not "2025-03-03".
+   *
+   *  Deliberately NOT `new Date(y, m + n, d)`: JS rolls an out-of-range day forward into the next
+   *  month, so a 31st would silently land days later and a trailing window would start on the
+   *  wrong side of a month boundary. Integer month arithmetic keeps it in day-string space, which
+   *  is the only space inWin understands. */
+  function shiftMonths(day, n) {
+    var y = Number(day.slice(0, 4)), m = Number(day.slice(5, 7)), d = Number(day.slice(8, 10));
+    var idx = y * 12 + (m - 1) + n;
+    var key = Math.floor(idx / 12) + "-" + String(((idx % 12) + 12) % 12 + 1).padStart(2, "0");
+    var last = Number(lastDayOf(key).slice(8, 10));
+    return key + "-" + String(Math.min(d, last)).padStart(2, "0");
+  }
+
+  /** "YYYY-MM-DD" shifted n days. UTC arithmetic on the day string itself, so a daylight-saving
+   *  boundary can never move the answer by a day. */
+  function shiftDays(day, n) {
+    var t = new Date(day + "T00:00:00Z");
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+  }
+
   /** Is this Central day inside the window? Bounds are INCLUSIVE, matching how
    *  the captions read ("between 01/01/2026 - 07/31/2026"). A row with no date
    *  never counts — not even for "All time", because the metric asking is
@@ -327,6 +351,61 @@
     return out;
   }
 
+  // ── Kyle's trailing-12 ritual ──────────────────────────────────────────────
+  // He does this by hand in "Trailing 12TH MONTH.xlsx": pull BasisBoard twice with two custom
+  // date ranges, paste six numbers per trade into a fresh dated tab, and read the win rates off
+  // the formulas. The point of the 15-month span is the SUBTRACTION, in his words: "if its a
+  // normal 12 month trail then its including 3 months worth of projects that is too early to
+  // know" — a bid submitted last month has not been decided yet, so counting it in the
+  // denominator understates the win rate. So: award numerator over a 15-month window, denominator
+  // that same window MINUS the last 90 days of submissions. What is left is a true trailing
+  // twelve months that ended 90 days ago.
+  var T12_TRADES = ["Gyp", "Epoxy", "Polish"];
+
+  /** The whole ritual, computed.
+   *
+   *  `todayStr` is REQUIRED rather than read from the clock: the page passes today(), and tests
+   *  inject a fixed day, so nothing in here is time-dependent.
+   *
+   *  Built ON metrics()/sets() rather than beside them — the won and submitted definitions are
+   *  then the SAME ones the Overview tab shows, by construction rather than by two formulas that
+   *  agree today. Ratios come back as ratio() objects, so an empty denominator is null ("—")
+   *  instead of a divide-by-zero. */
+  function trailing12(rows, todayStr, trades) {
+    var w15 = { from: shiftMonths(todayStr, -15), to: todayStr };
+    var w90 = { from: shiftDays(todayStr, -90), to: todayStr };
+
+    function col(key, label, subset) {
+      var m = metrics(subset, w15);
+      var s90 = sets(subset, w90);
+      var sub90 = sum(s90.sub, "submitted_amount");
+      var nSub90 = s90.sub.length;
+      return {
+        key: key, label: label,
+        wonAmount: m.wonAmount, nAwarded: m.nAwarded,                 // sheet C4, C12
+        submittedAmount: m.submittedAmount, nSubmitted: m.nSubmitted, // sheet C5, C13
+        sub90Amount: sub90, nSub90: nSub90,                           // sheet C8, C16
+        winVol: ratio(m.wonAmount, m.submittedAmount),                // sheet C6
+        winVolEx90: ratio(m.wonAmount, m.submittedAmount - sub90),    // sheet C10
+        winProj: ratio(m.nAwarded, m.nSubmitted),                     // sheet C14
+        winProjEx90: ratio(m.nAwarded, m.nSubmitted - nSub90),        // sheet C18
+        avgBid: ratio(m.submittedAmount, m.nSubmitted),               // sheet C20
+        avgWin: ratio(m.wonAmount, m.nAwarded),                       // sheet C21
+      };
+    }
+
+    var out = { today: todayStr, w15: w15, w90: w90,
+                columns: [col("all", "All Bids", rows)] };
+    // Same multi-tag rule as DIMS.trade: a project tagged Gyp AND Epoxy counts under both, so the
+    // trade columns can add to more than All Bids. The card says so out loud.
+    (trades || T12_TRADES).forEach(function (t) {
+      out.columns.push(col(t, t, rows.filter(function (r) {
+        return (r.trades || []).indexOf(t) !== -1;
+      })));
+    });
+    return out;
+  }
+
   /** Biggest first by default — a ranked list is the point of these cards. */
   function sortBy(items, key, dir) {
     var asc = dir === "asc";
@@ -342,9 +421,11 @@
   return {
     BIZ_TZ: BIZ_TZ, NO_TRADE: NO_TRADE, PRESETS: PRESETS, DIMS: DIMS,
     bizDay: bizDay, monthLabel: monthLabel, today: today, lastDayOf: lastDayOf,
+    shiftMonths: shiftMonths, shiftDays: shiftDays,
     decorate: decorate, presetRange: presetRange, inWin: inWin,
     applyFilters: applyFilters, sets: sets, sum: sum, ratio: ratio,
     metrics: metrics, byMonth: byMonth, byStage: byStage, byDimension: byDimension,
+    trailing12: trailing12, T12_TRADES: T12_TRADES,
     sortBy: sortBy,
   };
 });

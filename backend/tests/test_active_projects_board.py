@@ -544,3 +544,18 @@ def test_the_two_pages_agree_about_the_same_project(monkeypatch):
     board = _pipeline()
     for p in projects:
         assert board[p["id"]]["is_test"] is p["is_test"]
+
+
+def test_the_tabs_read_active_lost_test():
+    """Hanz, 2026-08-15: "Active and Lost should be the beside move the Test to the right most".
+
+    Active and Lost are both real customer work; Test is scratch, so it belongs at the far end.
+    Behaviour-neutral — every click resolves through `data-tab` and the badges fill by
+    `dataset.tab` — which is why the ORDER is the only thing holding it, and why it needs saying.
+    No assertion covered tab order before this one."""
+    html = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "portal.html").read_text(
+        encoding="utf-8")
+    active = html.index('data-tab="active"')
+    lost = html.index('data-tab="lost"')
+    test = html.index('data-tab="test"')
+    assert active < lost < test, "the board tabs are not Active | Lost | Test"

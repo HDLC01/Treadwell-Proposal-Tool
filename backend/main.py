@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import cachetools
 
@@ -56,8 +56,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+import analytics_export
 import audit
 import basisboard_client
 import calendar_events
@@ -495,6 +496,159 @@ def api_set_pull_window(payload: PullWindowIn, request: Request) -> Dict[str, An
         raise HTTPException(status_code=500, detail="Couldn't save the date range") from exc
     basisboard_client.on_pull_window_changed()
     return {"ok": True, "pull_window": win}
+
+
+# ─── Analytics: the page as a workbook ────────────────────────────────────────
+# THE BROWSER SENDS THE NUMBERS, and that is deliberate. Every figure on the Analytics page is
+# computed by frontend/js/analytics-core.js from one payload the page already holds, and the server
+# has no idea what the viewer has filtered. Re-deriving the totals here would put two engines on
+# the same question — they agree until somebody fixes a definition in one of them. So the browser
+# computes and the server formats.
+#
+# Which makes this route's real job VALIDATION: it takes a staff-supplied blob and hands it to
+# openpyxl, so every bound is stated here and anything malformed is a 422, never a 500.
+_EXPORT_MAX_TABS = 6
+_EXPORT_MAX_TABLES = 12
+_EXPORT_MAX_COLS = 12
+_EXPORT_MAX_ROWS = 2000
+_EXPORT_MAX_TEXT = 300
+_EXPORT_CELL_TYPES = ("money", "money2", "int", "pct")
+
+
+class ExportCell(BaseModel):
+    """A numeric cell: the value, and how to format it. `None` prints blank, matching the "—" the
+    page shows — a 0 would read as a real answer."""
+    model_config = {"extra": "forbid"}
+    v: Optional[float] = None
+    t: str = "int"
+
+    @field_validator("t")
+    @classmethod
+    def _known(cls, v: str) -> str:
+        if v not in _EXPORT_CELL_TYPES:
+            raise ValueError("unknown cell type %r" % v)
+        return v
+
+
+class ExportColumn(BaseModel):
+    model_config = {"extra": "forbid"}
+    label: str = ""
+
+
+class ExportTable(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str = ""
+    columns: List[ExportColumn] = Field(default_factory=list, max_length=_EXPORT_MAX_COLS)
+    rows: List[List[Union[str, ExportCell, None]]] = Field(default_factory=list,
+                                                           max_length=_EXPORT_MAX_ROWS)
+
+
+class ExportTab(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = "Sheet"
+    tables: List[ExportTable] = Field(default_factory=list, max_length=_EXPORT_MAX_TABLES)
+
+
+class ExportT12Column(BaseModel):
+    """Kyle's six raw sums per trade. NO ratios: every derived cell in his sheet is a live formula,
+    so shipping our own percentages would put two answers in one workbook."""
+    model_config = {"extra": "forbid"}
+    label: str = ""
+    won_amount: float = 0.0
+    submitted_amount: float = 0.0
+    sub90_amount: float = 0.0
+    n_awarded: float = 0.0
+    n_submitted: float = 0.0
+    n_sub90: float = 0.0
+
+
+class ExportT12(BaseModel):
+    model_config = {"extra": "forbid"}
+    as_of: str = ""
+    w15_from: str = ""
+    w90_from: str = ""
+    # All Bids + Kyle's three trades.
+    columns: List[ExportT12Column] = Field(default_factory=list, max_length=4)
+
+
+class ExportWindow(BaseModel):
+    model_config = {"extra": "forbid"}
+    frm: Optional[str] = Field(default=None, alias="from")
+    to: Optional[str] = None
+
+
+class AnalyticsExportIn(BaseModel):
+    model_config = {"extra": "forbid", "populate_by_name": True}
+    generated_at: str = ""
+    filters: str = ""
+    pull_window: Optional[ExportWindow] = None
+    truncated: bool = False
+    tabs: List[ExportTab] = Field(default_factory=list, max_length=_EXPORT_MAX_TABS)
+    trailing12: Optional[ExportT12] = None
+
+
+@app.post("/api/analytics/export")
+def api_analytics_export(payload: AnalyticsExportIn) -> Dict[str, Any]:
+    """Build the workbook and hand back a one-hour download link.
+
+    Two calls rather than streaming the bytes straight back, because /api/file/* is bearer-gated
+    like every other route: the browser fetches the link with its token and saves a blob. Same
+    shape the estimate and info-sheet downloads use."""
+    def _text(s: str) -> str:
+        return str(s or "")[:_EXPORT_MAX_TEXT]
+
+    def _num(x: Optional[float], where: str) -> Optional[float]:
+        """Reject NaN/Infinity here rather than in a field validator.
+
+        Pydantic treats them as perfectly good floats, so the only way to refuse one is after
+        parsing — and it has to be refused, because openpyxl writes the cell happily and Excel then
+        declines to open the whole workbook. Doing it in a validator looked tidier and was worse:
+        FastAPI's 422 body echoes the offending `input` back, and encoding a NaN into JSON throws,
+        so the caller got a broken response instead of an error. The message names the field and
+        never the value."""
+        if x is not None and not math.isfinite(x):
+            raise HTTPException(status_code=422,
+                                detail=f"{where} must be a finite number")
+        return x
+
+    blob: Dict[str, Any] = {
+        "generated_at": _text(payload.generated_at),
+        "filters": _text(payload.filters),
+        "truncated": bool(payload.truncated),
+        "tabs": [
+            {"name": _text(t.name),
+             "tables": [
+                 {"title": _text(tb.title),
+                  "columns": [{"label": _text(c.label)} for c in tb.columns],
+                  "rows": [[({"v": _num(cell.v, "a table cell"), "t": cell.t}
+                             if isinstance(cell, ExportCell)
+                             else (_text(cell) if cell is not None else None))
+                            for cell in row[:_EXPORT_MAX_COLS]]
+                           for row in tb.rows]}
+                 for tb in t.tables],
+             } for t in payload.tabs],
+    }
+    if payload.trailing12:
+        t12 = payload.trailing12
+        blob["trailing12"] = {
+            "as_of": _text(t12.as_of), "w15_from": _text(t12.w15_from),
+            "w90_from": _text(t12.w90_from),
+            "columns": [
+                {"label": _text(c.label),
+                 "won_amount": _num(c.won_amount, "a trailing-12 sum"),
+                 "submitted_amount": _num(c.submitted_amount, "a trailing-12 sum"),
+                 "sub90_amount": _num(c.sub90_amount, "a trailing-12 sum"),
+                 "n_awarded": _num(c.n_awarded, "a trailing-12 count"),
+                 "n_submitted": _num(c.n_submitted, "a trailing-12 count"),
+                 "n_sub90": _num(c.n_sub90, "a trailing-12 count")}
+                for c in t12.columns],
+        }
+
+    content = analytics_export.build_workbook(blob)
+    stamp = (payload.trailing12.as_of if payload.trailing12 else "") or "export"
+    token = _cache_file(content, f"Treadwell Analytics {stamp}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return {"ok": True, "xlsx_download_url": f"/api/file/{token}"}
 
 
 # ─── Bid Calendar: Treadwell's own entries ─────────────────────────────────────

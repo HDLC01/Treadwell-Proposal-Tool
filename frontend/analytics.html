@@ -200,6 +200,21 @@
   tbody tr.ch-mark:hover td { background:var(--surf-low); }
   td .sw { margin-right:7px; vertical-align:-1px; }
 
+  /* ── export ── */
+  .exportrow { display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin:0 0 14px; }
+  .exportrow button.pw-save { min-height:32px; padding:5px 13px; border:1px solid var(--line);
+    border-radius:8px; background:var(--card); color:var(--ink); font:600 12px system-ui;
+    cursor:pointer; }
+  .exportrow button.pw-save:hover { background:var(--surf-high); }
+  .exportrow button.pw-save[disabled] { opacity:.55; cursor:default; }
+
+  /* ── Trailing 12 ── */
+  /* Four trade columns plus labels overflow a narrow window; scroll the table, never the page. */
+  .t12-wrap { overflow-x:auto; }
+  .t12tab td:first-child { white-space:nowrap; }
+  /* The two rows Kyle actually reads — the ones that drop the undecided last 90 days. */
+  .t12tab tr.t12-key td { font-weight:700; background:var(--surf-low); }
+
   /* ── breakdown drawer ── */
   #scrim { position:fixed; inset:0; background:rgba(26,25,21,.44); z-index:10000; display:none;
     backdrop-filter:blur(1.5px); }
@@ -252,6 +267,15 @@
     <h1>Analytics</h1>
   </div>
   <p class="sub" id="sub">Your BasisBoard bids — won and submitted, sliced any way you like.</p>
+
+  <!-- STATIC, not rendered by render(): #filterbar is rewritten on every render (including the
+       4-second poll while a build finishes), so a JS-rendered button would come back enabled in
+       the middle of an export. Hidden until the payload lands. -->
+  <div class="exportrow">
+    <button type="button" id="export-xlsx" class="pw-save" hidden>Download Excel</button>
+    <span class="fnote" id="export-note" hidden>Every tab, as it is filtered right now, plus the
+      trailing-12 sheet.</span>
+  </div>
 
   <div id="alert"></div>
   <!-- The org's BasisBoard pull window: which bids this tool HOLDS, as opposed to the filter bar
