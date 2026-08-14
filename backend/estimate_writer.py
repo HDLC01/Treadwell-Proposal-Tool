@@ -1602,11 +1602,18 @@ def read_sheet_grid(sheet_name: str, *, path: Path = TEMPLATE_PATH,
         if dim.width:
             col_widths[letter] = dim.width
 
-    # Row heights (Excel points; multiply by ~1.33 for px)
+    # Row heights (Excel points; the frontend converts pt→px at 4/3). Rows with no explicit
+    # height — 432 of the Epoxy tab's 648 — are absent here on purpose; they take the sheet's
+    # own default below rather than a hardcoded frontend guess (Kyle's file says 15.6, and the
+    # guess of 15 was one of the reasons text rendered sliced through the middle).
     row_heights: Dict[int, float] = {}
     for idx, dim in ws.row_dimensions.items():
         if dim.height:
             row_heights[int(idx)] = dim.height
+    try:
+        default_row_height = float(ws.sheet_format.defaultRowHeight or 15.0)
+    except (AttributeError, TypeError, ValueError):
+        default_row_height = 15.0
 
     # Cells with data validations (e.g. dropdowns).
     # Two sources combine here:
@@ -1713,6 +1720,7 @@ def read_sheet_grid(sheet_name: str, *, path: Path = TEMPLATE_PATH,
         "merged":     merged,
         "col_widths": col_widths,
         "row_heights": row_heights,
+        "default_row_height": default_row_height,
         "dropdowns":  dropdowns,
     }
     _SHEET_GRID_CACHE[cache_key] = result

@@ -265,7 +265,12 @@
        border. */
     border-right: 1px solid #d4d4d4;
     border-bottom: 1px solid #d4d4d4;
-    padding: 2px 4px;
+    /* 1px vertical, not 2px: Excel row heights are LINE boxes with no padding, so every vertical
+       pixel of ours comes out of the glyphs. Paired with the explicit line-height below and the
+       +5px chrome allowance in rowTrackPx — the 12pt (14.7px) text this sheet mostly uses was
+       being sliced through the middle in the default 20px rows ("MATERIAL - Patch", "Quantity"). */
+    padding: 1px 4px;
+    line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -347,6 +352,10 @@
     background: transparent;
     font: inherit;
     color: inherit;
+    /* The input IS the cell (height:100%), so IT is what clips the glyphs — the div's own
+       line-height doesn't reach an input's internal line box. Without this a 12pt value in a
+       short row rendered sliced even after the track math was fixed. */
+    line-height: 1.15;
     padding: 0 4px;
     margin: 0;
     min-height: 0;
