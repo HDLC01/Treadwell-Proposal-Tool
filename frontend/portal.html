@@ -454,12 +454,14 @@
          because it is the other thing that isn't on the board. -->
     <div id="crm-tabs" class="tw-tabs">
       <button type="button" class="tw-tab on" data-tab="active" aria-pressed="true">Active <span class="n">0</span></button>
-      <button type="button" class="tw-tab" data-tab="test" aria-pressed="false">Test <span class="n">0</span></button>
       <!-- Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where the lost projects
            will be held". This REPLACED a "0 closed lost →" link that pointed at the Proposals
            Database, which could not filter to the dead ones — /projects.html lists our drafts and
-           has no notion of closed_lost, so the link landed you on an unfiltered list. -->
+           has no notion of closed_lost, so the link landed you on an unfiltered list.
+           Beside Active since 2026-08-15, at his ask: Active and Lost are both real work, so they
+           read together and the scratch tab sits at the far end. -->
       <button type="button" class="tw-tab" data-tab="lost" aria-pressed="false">Lost <span class="n">0</span></button>
+      <button type="button" class="tw-tab" data-tab="test" aria-pressed="false">Test <span class="n">0</span></button>
     </div>
     <div class="toolbar">
       <input id="search" type="search" placeholder="Search project, customer, estimator…" />

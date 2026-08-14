@@ -118,6 +118,9 @@
     { id: "trades", label: "Trades", dim: "trade", noun: "Trade" },
     { id: "estimators", label: "Estimators", dim: "estimator", noun: "Estimator" },
     { id: "companies", label: "Companies", dim: "company", noun: "Company" },
+    // No `dim`: this one answers a fixed question about the whole company rather than slicing the
+    // filtered rows, so render() gives it its own branch. See renderTrailing12.
+    { id: "trailing12", label: "Trailing 12" },
   ];
   function tab() { return TABS.filter(function (t) { return t.id === STATE.tab; })[0] || TABS[0]; }
 
@@ -587,11 +590,31 @@
     }, 3000);
   }
 
+  /** Show the export button, once there is something worth exporting.
+   *
+   *  It ships hidden in the static markup rather than being rendered, because #filterbar is
+   *  rewritten on every render — including the 4-second poll while a build finishes — and a
+   *  re-rendered button would come back enabled in the middle of a download. Which leaves exactly
+   *  one thing to remember: something has to reveal it. Nothing did, first time round, and the
+   *  feature reached staging complete and unreachable. */
+  function revealExport() {
+    ["export-xlsx", "export-note"].forEach(function (id) {
+      var el = $(id);
+      if (el) el.hidden = false;
+    });
+  }
+
   function render() {
     if (!DATA || !DATA.ok) return;
     CARDS = {};
     renderPullWindow();
     renderTabs();
+
+    revealExport();
+
+    // Before the filter bar: this tab replaces it rather than being sliced by it.
+    if (tab().id === "trailing12") { renderTrailing12(); return; }
+
     renderFilterBar();
     renderActiveFilters();
 
@@ -615,6 +638,92 @@
       '<div class="grid2">' +
       '<div class="col"><div class="colhead">Won</div>' + side("won") + "</div>" +
       '<div class="col"><div class="colhead">Submitted</div>' + side("sub") + "</div></div>";
+  }
+
+  // ── Trailing 12 ─────────────────────────────────────────────────────
+  // Kyle's manual ritual, computed. He pulls BasisBoard twice with two custom date ranges and
+  // pastes six numbers per trade into a dated tab of "Trailing 12TH MONTH.xlsx". Hanz, 2026-08-14:
+  // "The 15 months past until today excludes 90 day because it takes some time for the contractor
+  // to owner to make a decision… if its a normal 12 month trail then its including 3 months worth
+  // of projects that is too early to know."
+  //
+  // ORG-WIDE ON PURPOSE. It reads ROWS, not filtered() — the whole-company rate is the number he
+  // compares week to week, and a stray estimator filter would quietly change what he is comparing.
+  // That is why this tab replaces the filter bar with a sentence instead of leaving controls that
+  // look like they do something.
+  var T12_ROWS = [
+    { key: "wonAmount",        label: '"Won Amount"',                              fmt: "money" },
+    { key: "submittedAmount",  label: '"Total Submitted Amount"',                  fmt: "money" },
+    { key: "winVol",           label: "Win % by volume",                           fmt: "pct" },
+    { key: "sub90Amount",      label: 'Last 90 days "Total Submitted Amount"',     fmt: "money" },
+    { key: "winVolEx90",       label: "Win % by Volume Excluding last 90 days",    fmt: "pct",
+      strong: true },
+    { key: "nAwarded",         label: '"# Awarded Projects"',                      fmt: "int" },
+    { key: "nSubmitted",       label: '"# Submitted Projects"',                    fmt: "int" },
+    { key: "winProj",          label: "Win % by number of projects",               fmt: "pct" },
+    { key: "nSub90",           label: 'Last 90 days "# Submitted Projects"',       fmt: "int" },
+    { key: "winProjEx90",      label: "Win % by # Projects Excluding last 90 days", fmt: "pct",
+      strong: true },
+    { key: "avgBid",           label: "Average Size of Bid",                       fmt: "money" },
+    { key: "avgWin",           label: "Average Size of Win",                       fmt: "money" },
+  ];
+
+  function t12Cell(col, spec) {
+    var v = col[spec.key];
+    if (spec.fmt === "pct") return v && v.ratio !== null ? C.fmtPct(v.ratio) : "—";
+    if (spec.fmt === "int") return C.fmtInt(v && v.ratio !== undefined ? v.ratio : v);
+    // money: raw sums are plain numbers, averages are ratio objects
+    var n = (v && typeof v === "object") ? v.ratio : v;
+    return n === null || n === undefined ? "—" : C.fmtMoney(n);
+  }
+
+  function renderTrailing12() {
+    $("filterbar").innerHTML = '<span class="fnote">This tab always reads the whole company, ' +
+      "trailing back from today — the date range and filters above don’t apply here.</span>";
+    $("active-filters").innerHTML = "";
+
+    var t12 = X.trailing12(ROWS, X.today());
+    var head = "<th></th>" + t12.columns.map(function (c) {
+      return '<th class="r">' + esc(c.label) + "</th>";
+    }).join("");
+    var body = T12_ROWS.map(function (spec) {
+      return "<tr" + (spec.strong ? ' class="t12-key"' : "") + "><td>" + esc(spec.label) + "</td>" +
+        t12.columns.map(function (c) {
+          return '<td class="r">' + esc(t12Cell(c, spec)) + "</td>";
+        }).join("") + "</tr>";
+    }).join("");
+
+    // Every caveat the numbers carry, said where they are read.
+    var notes = [
+      "Awards and submissions between " + esc(t12.w15.from) + " and today (" + esc(t12.today) +
+      "); the 90-day rows from " + esc(t12.w90.from) + ".",
+      "The rows that matter are the two <strong>Excluding last 90 days</strong> ones: a bid " +
+      "submitted in the last three months has not been decided yet, so leaving it in the " +
+      "denominator understates the win rate.",
+      "A project with two trades counts under each column, so the trade columns can add up to " +
+      "more than All Bids.",
+    ];
+    var pw = pullWindow();
+    if (pw.from && pw.from > t12.w15.from) {
+      notes.push("<strong>Under-reported:</strong> we only hold bids from " + esc(pw.from) +
+        ", so " + esc(t12.w15.from) + " to " + esc(pw.from) + " is missing from this view.");
+    }
+    if (pw.to && pw.to < t12.today) {
+      notes.push("<strong>Under-reported:</strong> we only hold bids up to " + esc(pw.to) +
+        ", so the days since are missing from this view.");
+    }
+    if (DATA && DATA.truncated) {
+      notes.push("<strong>Capped:</strong> this org has more bids than the dashboard loads, and " +
+        "the ones dropped are not chosen by date — treat these as approximate.");
+    }
+
+    $("cards").innerHTML =
+      '<div class="acard t12"><div class="ah"><h4>Trailing 12 months, ending 90 days ago</h4>' +
+      "</div>" +
+      '<div class="t12-wrap"><table class="t12tab"><thead><tr>' + head + "</tr></thead><tbody>" +
+      body + "</tbody></table></div>" +
+      notes.map(function (n) { return '<p class="fnote">' + n + "</p>"; }).join("") +
+      "</div>";
   }
 
   // ── breakdown drawer ────────────────────────────────────────────────
@@ -865,7 +974,138 @@
 
   document.addEventListener("click", function (ev) {
     if (ev.target && ev.target.id === "pw-save") savePullWindow();
+    if (ev.target && ev.target.id === "export-xlsx") exportExcel();
   });
+
+  // ── Excel export ────────────────────────────────────────────────────
+  // The browser computes; the server only formats. analytics-core.js stays the single place any
+  // number on this page comes from, so a figure in the workbook cannot disagree with the same
+  // figure on screen. The alternative — re-deriving the totals in Python — is two engines that
+  // agree until the day they don't.
+
+  /** One table's worth of the current tab, as typed cells the workbook can format. */
+  function exportTable(title, columns, rows) {
+    return { title: title, columns: columns, rows: rows };
+  }
+  function cellMoney(n) { return { v: n === null || n === undefined ? null : n, t: "money" }; }
+  function cellInt(n) { return { v: n === null || n === undefined ? null : n, t: "int" }; }
+  function cellPct(r) { return { v: r && r.ratio !== null ? r.ratio : null, t: "pct" }; }
+
+  /** The filters in one sentence, so a saved file says what it is a slice of. */
+  function filterSentence() {
+    var w = win(), parts = [];
+    var preset = X.PRESETS.filter(function (p) { return p.id === STATE.preset; })[0];
+    parts.push("Dates: " + (preset ? preset.label : STATE.preset) +
+      (w.from || w.to ? " (" + (w.from || "the beginning") + " to " + (w.to || "today") + ")" : ""));
+    DIMENSIONS.forEach(function (d) {
+      var ids = STATE[d.key] || [];
+      if (!ids.length) return;
+      var opts = options(d.key);
+      parts.push(d.label + ": " + ids.map(function (id) {
+        var hit = opts.filter(function (o) { return o.id === id; })[0];
+        return hit ? hit.name : id;
+      }).join(", "));
+    });
+    parts.push(C.fmtInt(filtered().length) + " of " + C.fmtInt(ROWS.length) + " projects");
+    return parts.join(" · ");
+  }
+
+  function buildExportPayload() {
+    var rows = filtered(), w = win();
+    var m = X.metrics(rows, w);
+    var overview = exportTable("Overview",
+      [{ label: "Metric" }, { label: "Value" }],
+      [["Won amount", cellMoney(m.wonAmount)],
+       ["# Awarded projects", cellInt(m.nAwarded)],
+       ["Submitted amount", cellMoney(m.submittedAmount)],
+       ["# Submitted projects", cellInt(m.nSubmitted)],
+       ["Win % by projects (of submitted)", cellPct(m.winProjSub)],
+       ["Win % by amount (of submitted)", cellPct(m.winAmtSub)],
+       ["Win % by projects (of awarded)", cellPct(m.winProjAw)],
+       ["Win % by amount (of awarded)", cellPct(m.winAmtAw)]]);
+
+    var stages = X.byStage(rows, w, STAGES);
+    var stageTable = exportTable("By stage (current)",
+      [{ label: "Stage" }, { label: "Submitted amount" }, { label: "# Projects" }],
+      stages.map(function (s) { return [s.label, cellMoney(s.amount), cellInt(s.count)]; }));
+
+    /** A dimension tab's table, using the same byDimension the cards use. */
+    function dimTable(t) {
+      var groups = X.byDimension(rows, w, t.dim, {
+        name: function (k) { return NAMES[t.dim][k] || k; },
+      });
+      return exportTable(t.label,
+        [{ label: t.noun }, { label: "Submitted amount" }, { label: "# Submitted" },
+         { label: "Won amount" }, { label: "# Awarded" },
+         { label: "Win % by amount" }, { label: "Win % by projects" }],
+        X.sortBy(groups, "submittedAmount").map(function (g) {
+          return [g.label, cellMoney(g.submittedAmount), cellInt(g.nSubmitted),
+                  cellMoney(g.wonAmount), cellInt(g.nAwarded),
+                  cellPct(g.winAmt), cellPct(g.winProj)];
+        }));
+    }
+
+    var t12 = X.trailing12(ROWS, X.today());     // org-wide, like the tab
+    return {
+      generated_at: (DATA && DATA.generated_at) || "",
+      filters: filterSentence(),
+      pull_window: { from: pullWindow().from || null, to: pullWindow().to || null },
+      truncated: !!(DATA && DATA.truncated),
+      tabs: [
+        { name: "Overview", tables: [overview, stageTable] },
+        { name: "Trades", tables: [dimTable(TABS[1])] },
+        { name: "Estimators", tables: [dimTable(TABS[2])] },
+        { name: "Companies", tables: [dimTable(TABS[3])] },
+      ],
+      // RAW SUMS ONLY. Every derived cell in Kyle's sheet is a live formula, so shipping our own
+      // ratios would put two answers in one workbook and let them drift apart on the first edit.
+      trailing12: {
+        as_of: t12.today, w15_from: t12.w15.from, w90_from: t12.w90.from,
+        columns: t12.columns.map(function (c) {
+          return { label: c.label, won_amount: c.wonAmount, submitted_amount: c.submittedAmount,
+                   sub90_amount: c.sub90Amount, n_awarded: c.nAwarded,
+                   n_submitted: c.nSubmitted, n_sub90: c.nSub90 };
+        }),
+      },
+    };
+  }
+
+  function exportExcel() {
+    var btn = $("export-xlsx");
+    if (!DATA || !DATA.ok || DATA.building) return;      // nothing to export mid-build
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Building…";
+    api("/api/analytics/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildExportPayload()),
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok || !j.xlsx_download_url) throw new Error(j.detail || ("HTTP " + r.status));
+        // /api/file/* is bearer-gated like every other route, so this cannot be a plain link.
+        return fetch(TW.absoluteUrl(j.xlsx_download_url), { headers: TW.authHeaders() });
+      });
+    }).then(function (resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.arrayBuffer();
+    }).then(function (buf) {
+      var url = URL.createObjectURL(new Blob([buf], { type: "application/octet-stream" }));
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "Treadwell Analytics " + X.today() + ".xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+    }).catch(function (e) {
+      $("alert").innerHTML = '<div class="alert">Could not build the workbook: ' +
+        esc(e.message || String(e)) + "</div>";
+    }).then(function () {
+      btn.disabled = false;
+      btn.textContent = label;
+    });
+  }
 
   document.addEventListener("change", function (ev) {
     var el = ev.target;
