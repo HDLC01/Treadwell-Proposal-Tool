@@ -110,7 +110,25 @@
   // not conflict with the change we just made.
   function adoptSaved(kind, fresh) {
     var known = byId(kind, fresh.id);
-    if (known) known.updated_at = fresh.updated_at;
+    if (!known) return;
+    known.updated_at = fresh.updated_at;
+    // …and the price date, which only the SERVER can decide: it moves when the cost actually
+    // changed, not when a PATCH was sent. Without adopting it the row goes on saying "not since we
+    // started tracking" until a reload — the stamp Hanz asked for, looking like it doesn't work.
+    if (kind === "items" && fresh.cost_updated_at !== known.cost_updated_at) {
+      known.cost_updated_at = fresh.cost_updated_at;
+      paintDates(known);
+    }
+  }
+
+  /** Rewrite one row's Dates cell in place.
+   *
+   *  In place, not renderItems(): the debounce fires 600ms after the last keystroke, so the reply
+   *  routinely lands while somebody is still in the field. Rebuilding the row would move their
+   *  caret to the end of it. The Dates cell holds no inputs, so replacing it is safe. */
+  function paintDates(it) {
+    var cell = document.querySelector('[data-item="' + it.id + '"] .datescell');
+    if (cell) cell.innerHTML = datesHtml(it);
   }
 
   // Somebody else got there first. Show THEIR version rather than leaving a screen that quietly
@@ -290,7 +308,7 @@
         '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase" style="width:92px;"></span></td>' +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor",
                       ' style="width:100%;min-width:130px;"') + "</td>" +
-        "<td>" + datesHtml(it) + "</td>" +
+        '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td><button class="icon" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">🗑</button></td>' +
       "</tr>";
     }
@@ -496,7 +514,7 @@
     var it = itemOf(row.getAttribute("data-item"));
     if (!it) return;
     var raw = e.target.value;
-    it[f] = NUMERIC_ITEM_FIELDS.indexOf(f) !== -1 ? L.num(raw) : raw;
+    it[f] = raw;
     if (f === "name") {
       // Redrawn in place: rebuilding the row would move the caret out of the name being typed.
       var cell = e.target.parentNode;
@@ -611,9 +629,9 @@
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
       if (r.ok && r.priced) {
-        tds[QTY_TD].innerHTML = '<span class="qty">' + esc(L.qtyLabel(r)) +
+        tds[COST_TD].innerHTML = '<span class="qty">' + esc(L.qtyLabel(r)) +
                            '</span><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
-        tds[COST_TD].innerHTML = '<span class="qty">' + L.money(r.cost) +
+        tds[QTY_TD].innerHTML = '<span class="qty">' + L.money(r.cost) +
                            '</span><div class="calc mono">' + esc(L.costWorking(r)) + "</div>";
         rows[i].classList.remove("broken");
       } else {

@@ -158,6 +158,31 @@ def test_a_material_whose_price_never_moved_does_not_look_freshly_priced(ran):
 
 
 @needs_node
+def test_the_price_date_appears_without_a_reload(ran):
+    """FOUND ON STAGING IN THE BROWSER, not by these tests. The server stamped the price revision
+    correctly and the page went on saying "not since we started tracking" until F5, because the save
+    handler adopted only `updated_at` — the stamp Hanz asked for, looking broken.
+
+    Only the server can decide this date: it moves when the cost actually changed, not when a PATCH
+    was sent. So the page has to take it from the reply."""
+    p = ran["priceDate"]
+    assert p["modelAdopted"] == "2026-08-15T00:00:01Z", "the reply's price date was thrown away"
+    assert p["repainted"], "nothing was repainted, so the cell still shows the old date"
+    assert p["repaintedSelector"] == '[data-item="i1"] .datescell'
+    assert p["repaintShowsTheNewDate"] and p["repaintDroppedTheNeverLine"]
+
+
+@needs_node
+def test_a_patch_that_did_not_touch_the_cost_repaints_nothing(ran):
+    """Repainting on every save would be harmless-looking and wrong: it would put a date on a
+    material whose price has never moved. It also costs a DOM write while somebody is typing."""
+    p = ran["priceDate"]
+    assert p["quietPatchNoRepaint"], "a name edit repainted the price date"
+    assert p["quietPatchStillBumpedVersion"], "the version stamp stopped being adopted"
+    assert p["assemblySaveDoesNotRepaintItems"]
+
+
+@needs_node
 def test_the_pack_size_is_coerced_to_a_number_like_the_other_two(ran):
     """Executed: the list the handler actually consults. A string "5" in the model works by luck
     while dividing and concatenates the first time anything multiplies."""
