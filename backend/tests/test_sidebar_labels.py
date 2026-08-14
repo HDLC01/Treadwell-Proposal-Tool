@@ -183,6 +183,20 @@ def test_the_removal_did_not_take_its_neighbours_with_it(sidebar):
         "Proposals and Analytics have been reordered, which was not part of this change")
 
 
+def test_analytics_sits_above_the_database(sidebar):
+    """Hanz, 2026-08-15: "move Analytics above the Proposal Database Please".
+
+    Both are look-back sections rather than steps in a day, so nothing about the page breaks if
+    they swap — which is exactly why the order needs an assertion. Nothing pinned it before, so
+    the previous arrangement could have come back on any edit to this function."""
+    assert sidebar.index('tw-section">Analytics') < sidebar.index('tw-section">Database'), (
+        "the Database heading is back above Analytics")
+    # And the item still belongs to its own heading rather than drifting under the other one.
+    assert (sidebar.index('tw-section">Analytics')
+            < sidebar.index("/analytics.html")
+            < sidebar.index('tw-section">Database')), "Analytics is filed under the wrong heading"
+
+
 # ── unlinked must not become deleted ──────────────────────────────────────────
 @pytest.mark.parametrize("page,script", [
     ("followup-settings.html", "/js/followup-settings.js"),
