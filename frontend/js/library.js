@@ -200,19 +200,47 @@
    *  the row the next time anybody touched it. */
   function pick(field, value, list, label, extra) {
     var v = String(value == null ? "" : value);
-    var known = list.indexOf(v) !== -1;
+    // Case-insensitively, so a row holding "sherwin-williams" selects the curated
+    // "Sherwin-Williams" instead of appearing beside it as a second supplier. A value that differs
+    // by more than case ("Gal" against "Gallon") is genuinely off-list and gets its own option.
+    var lower = v.toLowerCase();
+    var match = "";
+    for (var k = 0; k < list.length; k++) {
+      if (String(list[k]).toLowerCase() === lower) { match = list[k]; break; }
+    }
     var s = '<select data-f="' + field + '" aria-label="' + esc(label) + '"' + (extra || "") + ">";
     s += '<option value=""' + (v ? "" : " selected") + ">—</option>";
-    if (v && !known) s += '<option value="' + esc(v) + '" selected>' + esc(v) + "</option>";
+    if (v && !match) s += '<option value="' + esc(v) + '" selected>' + esc(v) + "</option>";
     for (var i = 0; i < list.length; i++) {
-      s += '<option value="' + esc(list[i]) + '"' + (list[i] === v ? " selected" : "") + ">" +
+      s += '<option value="' + esc(list[i]) + '"' + (list[i] === match ? " selected" : "") + ">" +
            esc(list[i]) + "</option>";
     }
     return s + "</select>";
   }
 
+  /** What the Vendor dropdown offers: the curated list, plus any supplier already named on a
+   *  material that isn't on it yet.
+   *
+   *  The union matters because only an admin may add to the list. Without it, an estimator on a
+   *  fresh install could not record a vendor at all — the box they used to type into would be a
+   *  dropdown with nothing in it. Names already on materials ARE Treadwell's vendors; they just
+   *  haven't been curated yet.
+   *
+   *  Matched case-insensitively with the curated spelling winning, so "sika" typed last month
+   *  doesn't reappear beside "Sika" and re-create the duplication this list exists to end. */
   function vendorNames() {
-    return VENDORS.map(function (v) { return v.name; });
+    var names = VENDORS.map(function (v) { return v.name; });
+    var seen = {};
+    names.forEach(function (n) { seen[String(n).toLowerCase()] = true; });
+    var extra = [];
+    ITEMS.forEach(function (it) {
+      var v = String(it.vendor || "").trim();
+      if (!v || seen[v.toLowerCase()]) return;
+      seen[v.toLowerCase()] = true;
+      extra.push(v);
+    });
+    extra.sort(function (a, b) { return a.localeCompare(b); });
+    return names.concat(extra);
   }
 
   /** Materials whose name looks like this one's, so two people don't enter the same product twice

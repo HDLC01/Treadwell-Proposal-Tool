@@ -97,6 +97,19 @@ def test_a_pasted_pack_size_survives_the_paste(store):
     assert r.status_code == 200 and r.json()["item"]["buy_qty"] == 5.0
 
 
+def test_a_division_or_unit_typed_in_the_wrong_case_becomes_the_offered_spelling():
+    """So a pasted "epoxy" reads as the Division the dropdown offers rather than as an off-list
+    value sitting beside the identical real one. Case only — this column was free text until today
+    and old rows hold anything, so an unrecognised division is left exactly as typed."""
+    assert library.validate_item({"name": "x", "category": "epoxy"})["category"] == "Epoxy"
+    assert library.validate_item(
+        {"name": "x", "category": "  gypsum   UNDERLAYMENT "})["category"] == "Gypsum Underlayment"
+    assert library.validate_item({"name": "x", "unit": "gallon"})["unit"] == "Gallon"
+    # Untouched: not one of the three, and not one of the three units.
+    assert library.validate_item({"name": "x", "category": "Sealer"})["category"] == "Sealer"
+    assert library.validate_item({"name": "x", "unit": "Gal"})["unit"] == "Gal"
+
+
 # ── the price date: a revision, not an edit ───────────────────────────
 def test_a_brand_new_material_has_no_price_history(store):
     assert _mk_item()["cost_updated_at"] is None

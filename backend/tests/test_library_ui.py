@@ -111,6 +111,22 @@ def test_the_vendor_is_a_dropdown_that_keeps_an_off_list_value(ran):
 
 
 @needs_node
+def test_a_vendor_can_still_be_recorded_before_an_admin_curates_the_list(ran):
+    """Only an admin may add to the vendor list, so a dropdown fed ONLY by that list would leave an
+    estimator on a fresh install unable to say where a material came from — a text box replaced by
+    an empty menu. Suppliers already named on materials are offered too."""
+    assert ran["vendorOptions"]["withNoCuratedList"] == [True, True]
+    assert ran["vendorOptions"]["uncuratedStillOffered"]
+
+
+@needs_node
+def test_the_curated_spelling_wins_over_a_sloppier_one_on_an_item(ran):
+    """Otherwise the union re-creates the duplication the list exists to end: "sika" typed last
+    month reappearing beside "Sika"."""
+    assert ran["vendorOptions"]["curatedSpellingWins"], ran["vendorOptions"]["messyOpts"]
+
+
+@needs_node
 def test_the_material_name_offers_the_existing_names(ran):
     assert ran["items"]["nameOffersAutosuggest"] and ran["items"]["datalistFilled"]
 

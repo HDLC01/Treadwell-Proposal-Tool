@@ -91,6 +91,17 @@ def _clean_text(value: Any, limit: int = _MAX_TEXT) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _canonical(value: str, offered: tuple) -> str:
+    """The offered spelling when `value` is one of them in any case; otherwise `value` untouched.
+
+    Case only, and never a rejection. Both lists are OFFERED, not enforced — a legacy row holds
+    whatever somebody typed, and refusing to save it would make that row uneditable."""
+    for known in offered:
+        if value.casefold() == known.casefold():
+            return known
+    return value
+
+
 def _number(raw: Any, *, field: str, maximum: float) -> Optional[float]:
     """A non-negative number, or None. Tolerates "$1,200" and " 275 ".
 
@@ -136,7 +147,8 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         # Freeform on purpose. The page offers Gallon / Kit / Bag, but Kyle's earlier rows say
         # Gal, Pint, Quart, Each, Roll — and the next product will use a unit nobody has thought
         # of. A closed list would block the purchase rather than the typo.
-        out["unit"] = _clean_text(payload.get("unit"), 24) or DEFAULT_ITEM_UNIT
+        out["unit"] = _canonical(_clean_text(payload.get("unit"), 24), ITEM_UNITS) \
+            or DEFAULT_ITEM_UNIT
 
     if "buy_qty" in payload or not partial:
         # How many units come in the purchase — the "5" of "5 Gal". `unit_cost` is what that pack
@@ -161,6 +173,12 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
         if col in payload or not partial:
             out[col] = _clean_text(payload.get(col), limit) or None
+
+    # "epoxy" pasted from somewhere becomes the Division the dropdown offers, so the row reads as a
+    # known value instead of an off-list one. Case only — a division we don't recognise is left
+    # exactly as typed, because this is a rename of a free-text column and old rows hold anything.
+    if out.get("category"):
+        out["category"] = _canonical(out["category"], DIVISIONS)
 
     return out
 

@@ -156,6 +156,37 @@ const out = {};
     (vendSel.match(/<option value="Gone Supply Co"/g) || []).length === 1;
 }
 
+// ── the vendor dropdown offers more than the curated list ────────────────────
+{
+  // No curated vendors at all — a fresh install, or before an admin has got to it. The estimator
+  // must still be able to record where a material came from, or a dropdown replaces a text box
+  // with nothing in it and only two people in the company can fix that.
+  const bare = build({ VENDORS: [] });
+  bare.api.renderItems();
+  const rows = bare.dom.nodes["items-body"].innerHTML;
+  const sel = (i) =>
+    (rows.split("</tr>")[i].match(/<select data-f="vendor"[\s\S]*?<\/select>/) || [""])[0];
+  // Same supplier, two spellings on two items: the curated one wins and the other is not offered
+  // back, or the list would re-create the duplication it exists to end.
+  const messy = build({
+    VENDORS: [{ id: "v1", name: "Sherwin-Williams", notes: "" }],
+    ITEMS: JSON.parse(JSON.stringify(ITEMS)).map((it, i) =>
+      Object.assign(it, { vendor: i === 0 ? "sherwin-williams" : "Gone Supply Co" })),
+  });
+  messy.api.renderItems();
+  const messyOpts = (messy.dom.nodes["items-body"].innerHTML
+    .match(/<select data-f="vendor"[\s\S]*?<\/select>/) || [""])[0]
+    .split("<option").slice(1).map((o) => (/value="([^"]*)"/.exec(o) || ["", ""])[1]);
+  out.vendorOptions = {
+    withNoCuratedList: [0, 1].map((i) => /<option value="Sherwin-Williams"/.test(sel(i)) ||
+      /<option value="Gone Supply Co"/.test(sel(i))),
+    messyOpts,
+    curatedSpellingWins: messyOpts.indexOf("Sherwin-Williams") !== -1 &&
+      messyOpts.indexOf("sherwin-williams") === -1,
+    uncuratedStillOffered: messyOpts.indexOf("Gone Supply Co") !== -1,
+  };
+}
+
 // ── the duplicate hint ───────────────────────────────────────────────────────
 {
   const { api } = build();
