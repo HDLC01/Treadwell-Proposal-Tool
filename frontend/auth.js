@@ -181,7 +181,7 @@
       // due, and when". Both read the Basisboard bids; neither writes to them.
       navItem("/calendar.html", "▧", "Bid Calendar") +
       '<div class="tw-section">Proposals</div>' +
-      // Same glyph as the "📋 Info" button on the project cards, so the two
+      // Same glyph as the "Info sheet" button on the project cards, so the two
       // entry points read as one destination. shared.js appends ?d= for the
       // project in hand; with none it lands on its own choose-a-project state.
       navItem("/info-sheet.html", "📋", "Info Sheet") +
