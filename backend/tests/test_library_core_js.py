@@ -238,14 +238,14 @@ def test_a_row_can_explain_its_own_arithmetic():
     should be able to see where the extra gallon came from without doing the division."""
     got = run("const p = L.priceAssembly(ASM, ITEMS, 2875);"
               "out(L.explain(p.rows[0], 2875))")
-    assert got == "2,875 ÷ 275 = 10.45 → 11 Gal", \
+    assert got == "2,875 ÷ 275 = 10.4545 → 11 Gal", \
         "unit abbreviations don't pluralise on Kyle's sheet"
 
 
 def test_the_working_names_the_waste_factor_when_there_is_one():
     got = run("out(L.explain(L.priceLine({item_id:'i1', coverage:275, waste_pct:5},"
               " ITEMS, 2875), 2875))")
-    assert got == "2,875 ÷ 275 +5% = 10.98 → 11 Gal"
+    assert got == "2,875 ÷ 275 +5% = 10.9773 → 11 Gal"
 
 
 def test_the_working_does_not_claim_rounding_that_did_not_happen():
@@ -333,8 +333,11 @@ def test_not_rounding_up_buys_the_fraction_at_the_single_unit_price():
     assert got["packs"] is None, "an unrounded line does not buy packs"
     assert got["unit_price"] == 85.382
     assert got["cost"] == 937.26         # 10.9773 gal × $85.382, vs $939.21 for 11 whole gallons
-    assert got["label"] == "10.98 Gallon"
-    assert got["working"] == "10.98 × $85.38"
+    assert got["label"] == "10.98 Gallon", "the QUANTITY still reads at two places"
+    # The working names the PACK price and divides by the pack, so every figure in it is exact —
+    # $426.91/5 is $85.382 here but $89.99/7 repeats, and a repeating per-unit price cannot be
+    # printed in a way that multiplies back to the cost.
+    assert got["working"] == "10.9773 ÷ 5 × $426.91"
 
 
 def test_the_two_modes_differ_by_exactly_the_unused_material():
@@ -355,6 +358,68 @@ def test_an_absent_roundup_flag_still_rounds_up():
     assert got == [4, 4, 4]
     assert run("out(Number(L.priceLine({item_id:'i3', coverage:775, waste_pct:0, roundup:false},"
                " ITEMS, 2875).qty.toFixed(3)))") == 3.71
+
+
+# ── the working under each row must multiply out to the cost beside it ────────
+# Found by an adversarial review, not by the tests above: every figure in the working line was run
+# through a DISPLAY formatter (2dp) while the Cost cell beside it renders the full-precision
+# product. So "11 × $85.38" sat under $939.21 (it multiplies to $939.18), and the three working
+# lines of Kyle's own sheet added to $4,303.46 under a $4,303.42 total. An estimator checking a row
+# by hand concludes the tool is wrong — which is the opposite of what showing the working is for.
+#
+# The fixtures below are chosen to BREAK naive formatting: 4-decimal unit costs, and a pack price
+# that divides into a repeating decimal ($89.99 for 7 bags = $12.855714…/bag).
+_TIE_OUT_CASES = [
+    # (label, buy_qty, unit_cost, coverage, waste, roundup, area)
+    ("Kyle's OPF, whole gallons", 1, 85.3827, 275, 0, "true", 2875),
+    ("Kyle's Armor Top, 4-dp kit price", 1, 382.4475, 775, 0, "true", 2875),
+    ("five-gallon pail, rounded up", 5, 426.91, 275, 5, "true", 2875),
+    ("five-gallon pail, fractional", 5, 426.91, 275, 5, "false", 2875),
+    ("$89.99 per 7 bags, fractional", 7, 89.99, 25, 0, "false", 40000),
+    ("repeating unit price, big floor", 3, 100.00, 40, 5, "false", 12000),
+    ("4-dp price and a 50-unit pack", 50, 1234.5678, 40, 5, "false", 12000),
+]
+
+
+@pytest.mark.parametrize("label,pack,cost,cov,waste,ru,area", _TIE_OUT_CASES)
+def test_the_working_multiplies_out_to_the_cost_it_explains(label, pack, cost, cov, waste, ru, area):
+    """Parses what the row LITERALLY SAYS and multiplies it, then compares with the cost cell."""
+    got = run(
+        "const items=[{id:'t', name:'X', unit:'Gallon', buy_qty:%s, unit_cost:%s, coverage:%s}];"
+        "const r=L.priceLine({item_id:'t', waste_pct:%s, roundup:%s}, items, %s);"
+        "out({working: L.costWorking(r), cost: L.money(r.cost)})"
+        % (pack, cost, cov, waste, ru, area))
+    # Read the sentence back the way a person would: "a × $b", or "a ÷ n × $b".
+    import re as _re
+    nums = [float(x.replace(",", "").replace("$", ""))
+            for x in _re.findall(r"[\d,]+\.?\d*", got["working"].replace("$", "$ ").replace("$ ", "$"))]
+    if " ÷ " in got["working"]:
+        stated = nums[0] / nums[1] * nums[2]
+    else:
+        stated = nums[0] * nums[1]
+    shown = float(got["cost"].replace("$", "").replace(",", ""))
+    assert abs(stated - shown) <= 0.011, (
+        "%s: the row says %s (= %.4f) under a cost of %s"
+        % (label, got["working"], stated, got["cost"]))
+
+
+def test_the_quantity_line_and_the_cost_line_agree_with_each_other(ran=None):
+    """Both describe the same needed quantity, so both show it to the same precision. One saying
+    10.98 while the other says 10.9773 invites somebody to work out which is lying."""
+    got = run("const items=[{id:'t', unit:'Gallon', buy_qty:5, unit_cost:426.91, coverage:275}];"
+              "const r=L.priceLine({item_id:'t', waste_pct:5, roundup:false}, items, 2875);"
+              "out({q: L.explain(r, 2875), c: L.costWorking(r)})")
+    assert "10.9773" in got["q"] and "10.9773" in got["c"], got
+
+
+def test_a_price_held_to_four_places_is_shown_to_four_in_the_working():
+    """Not in the Cost cell — money stays money — but inside the multiplication, where two
+    decimals is the difference between explaining a number and contradicting it."""
+    assert run("out(L.price4(382.4475))") == "$382.4475"
+    assert run("out(L.price4(426.91))") == "$426.91", "trailing zeros are noise"
+    assert run("out(L.price4(1200))") == "$1,200.00"
+    assert run("out(L.qty4(10.977272727))") == "10.9773"
+    assert run("out(L.qty4(15))") == "15"
 
 
 @pytest.mark.parametrize("qty,expect", [

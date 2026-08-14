@@ -52,8 +52,45 @@ function makeDom() {
   const nodes = {};
   const el = (id) => (nodes[id] = nodes[id] || {
     id, innerHTML: "", textContent: "", hidden: false, value: "",
+    // Filled in on demand by tests that need to walk a rendered table.
+    rows: null,
+    querySelectorAll(sel) {
+      if (sel !== "[data-line]") return [];
+      if (!this.rows) this.rows = tableFromHtml(this.innerHTML);
+      return this.rows;
+    },
   });
   return { el, nodes };
+}
+
+/** Turn rendered table HTML into the minimum object graph `refreshNumbers` walks.
+ *
+ *  Built FROM renderPanel's own output rather than hand-written, which is the whole point: the
+ *  updater addresses cells by position on a table that function produced, and a hand-made fixture
+ *  could agree with the updater while disagreeing with the page. Recorded per cell index so a
+ *  transposition — the exact bug that reached staging — shows up as content in the wrong slot. */
+function tableFromHtml(html) {
+  const rows = html.split("</tr>").filter((r) => /data-line=/.test(r));
+  return rows.map((rowHtml) => {
+    const cells = rowHtml.split("<td").slice(1).map((c) => ({
+      initial: c, written: null,
+      set innerHTML(v) { this.written = v; },
+      get innerHTML() { return this.written === null ? this.initial : this.written; },
+    }));
+    const classes = new Set((/class="([^"]*)"/.exec(rowHtml.split(">")[0]) || ["", ""])[1]
+      .split(/\s+/).filter(Boolean));
+    return {
+      cells,
+      classList: {
+        add: (c) => classes.add(c), remove: (c) => classes.delete(c),
+        toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
+        has: (c) => classes.has(c),
+      },
+      querySelectorAll: (sel) => (sel === "td" ? cells : []),
+      getAttribute: (k) => (k === "data-line"
+        ? (/data-line="(\d+)"/.exec(rowHtml) || [0, "0"])[1] : null),
+    };
+  });
 }
 
 /** A document stub that records what `paintDates` looked for and what it wrote.
@@ -99,9 +136,14 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("renderPanel")}
   ${fn("refreshNumbers")}
   ${grab(/^  var NUMERIC_ITEM_FIELDS = \[[^\]]*\];$/m, "NUMERIC_ITEM_FIELDS")}
+  // The real handler, with only the network stubbed. Everything it touches on the way to the
+  // model — the coercion list, the duplicate hint, the queued body — is the code the page runs.
+  var QUEUED = [];
+  function patchSoon(kind, id, body) { QUEUED.push({ kind: kind, id: id, body: body }); }
+  ${fn("onItemEdit")}
   return { renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
-           NUMERIC_ITEM_FIELDS, ITEMS, VENDORS };
+           onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS };
 `);
 
 // Two materials: a legacy pack-of-one and a five-gallon pail, so the pack column has something to
@@ -346,6 +388,188 @@ const out = {};
     (/colspan="(\d+)"/.exec(empty.dom.nodes["lines-body"].innerHTML) || [0, 0])[1]);
 }
 
+// ── EXECUTED: the live updater, on the table renderPanel actually built ──────
+// The earlier version of this check regex-scraped `var QTY_TD = 4, COST_TD = 5;` out of the source
+// and compared the numbers with the rendered column positions. Both agreed — and the two writes
+// were transposed, so the constants were right and the content went into the wrong cells. That
+// version reached staging. This one runs the function.
+{
+  const { api, dom: d } = build();
+  api.renderPanel();
+  const rows = d.nodes["lines-body"].querySelectorAll("[data-line]");
+  // Nothing has been written yet: refreshNumbers is what fires on a keystroke.
+  const before = rows.map((r) => r.cells.map((c) => c.written));
+  api.refreshNumbers();
+  const first = rows[0].cells.map((c) => c.written);
+  const second = rows[1].cells.map((c) => c.written);
+  out.liveUpdate = {
+    untouchedBefore: before.every((r) => r.every((c) => c === null)),
+    // Cell 4 is Quantity, cell 5 is Cost — per the <thead> the page ships.
+    qtyCellGotTheQuantity: /class="qty">11 Gal</.test(first[4] || ""),
+    costCellGotTheMoney: /class="qty">\$939/.test(first[5] || ""),
+    // …and neither got the other's content, which is the transposition, stated directly.
+    qtyCellHasNoDollarAmount: !/\$[\d,]+\.\d\d</.test(first[4] || ""),
+    costCellHasNoUnitLabel: !/>1?1 Gal</.test(first[5] || ""),
+    // The columns a user types in must not be written at all, or the input under the caret dies.
+    inputCellsUntouched: [0, 1, 2, 3].every((i) => first[i] === null),
+    deleteCellUntouched: first[6] === null,
+    // The fractional row shows its own working, not the rounded one's.
+    secondRowQty: (/class="qty">([^<]*)</.exec(second[4] || "") || ["", ""])[1],
+    secondRowWorking: (/class="calc mono">([^<]*)</.exec(second[5] || "") || ["", ""])[1],
+    totalWritten: d.nodes["t-total"].textContent,
+    perUnitWritten: d.nodes["t-unit"].textContent,
+  };
+
+  // A broken line must be reported in the Quantity cell and cleared out of the Cost cell.
+  const broken = build({ ASMS: [{ id: "a1", name: "Broken", unit: "SF", lines: [
+    { item_id: "deleted-material", coverage: 275, waste_pct: 5, roundup: true }] }] });
+  broken.api.renderPanel();
+  const brows = broken.dom.nodes["lines-body"].querySelectorAll("[data-line]");
+  broken.api.refreshNumbers();
+  const bcells = brows[0].cells.map((c) => c.written);
+  out.liveUpdate.brokenSaysSoInTheQtyCell = /Material removed/.test(bcells[4] || "");
+  out.liveUpdate.brokenCostCellCleared = bcells[5] === "—";
+  out.liveUpdate.brokenRowFlagged = brows[0].classList.has("broken");
+}
+
+// ── EXECUTED: the item edit handler, not just its field list ─────────────────
+// The earlier check read the NUMERIC_ITEM_FIELDS array literal. Deleting the ternary that CONSULTS
+// it left the array intact, so the test passed while every typed number went into the model as a
+// string. That also reached staging.
+{
+  // `keep` lets two consecutive edits share one cell — required to observe the hint being REMOVED.
+  // A fresh cell per call made "the hint went away" true no matter what the handler did.
+  function edit(api, dom, itemId, field, raw, keep) {
+    const cell = keep || { hint: null,
+      querySelector: (sel) => (sel === ".dupe" ? cell.hint : null),
+      insertAdjacentHTML: (_where, html) => { cell.hint = { textContent: html, remove() { cell.hint = null; } }; } };
+    api.onItemEdit({ target: {
+      getAttribute: (k) => (k === "data-f" ? field : null),
+      value: raw,
+      parentNode: cell,
+      closest: (sel) => (sel === "[data-item]"
+        ? { getAttribute: () => itemId } : null),
+    } });
+    return cell;
+  }
+  const { api, dom: d } = build();
+  api.renderItems();
+  edit(api, d, "i1", "buy_qty", "5");
+  edit(api, d, "i1", "unit_cost", "$1,200.50");
+  edit(api, d, "i1", "coverage", " 275 ");
+  edit(api, d, "i1", "vendor", "Sika");
+  const it = api.ITEMS[0];
+  out.itemEdit = {
+    // Numbers, not strings: "5" divides by luck and concatenates the first time anything multiplies.
+    buyQtyType: typeof it.buy_qty, buyQty: it.buy_qty,
+    costType: typeof it.unit_cost, cost: it.unit_cost,
+    coverageType: typeof it.coverage, coverage: it.coverage,
+    // Text stays text.
+    vendorType: typeof it.vendor, vendor: it.vendor,
+    // Every edit is queued for the server as typed, in field-level bodies.
+    queued: api.QUEUED.map((q) => q.kind + ":" + Object.keys(q.body).join(",")),
+    queuedRaw: api.QUEUED.map((q) => Object.values(q.body)[0]),
+  };
+  // The duplicate hint appears and disappears through the same handler, in ONE cell — the same
+  // field being typed in, which is the only way "it was removed" can fail.
+  const cell = edit(api, d, "i1", "name", "OPF Primer II");
+  out.itemEdit.hintShown = !!cell.hint && /Already in the list/.test(cell.hint.textContent);
+  edit(api, d, "i1", "name", "Totally Different Product", cell);
+  out.itemEdit.hintRemovedWhenNoLongerSimilar = !cell.hint;
+  edit(api, d, "i1", "name", "OPF Primer III", cell);
+  out.itemEdit.hintNotDuplicatedOnRetype =
+    !!cell.hint && (String(cell.hint.textContent).match(/Already in the list/g) || []).length === 1;
+}
+
+// ── EXECUTED: the debounced save, and what a 409 does to a queued edit ───────
+// Its own scope, because this needs the REAL patchSoon while the block above needs it stubbed.
+// Driven by a hand-cranked clock so the race is deterministic: type → PATCH in flight → keep
+// typing (re-arming the timer) → 409 lands → the repaint empties the buffer.
+async function conflictChecks() {
+  const saveScope = new Function("api", "clock", "hooks", "state", `
+    "use strict";
+    var timers = {};
+    var pendingPatch = {};
+    var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
+    var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
+    function saving(m) { hooks.saving.push(m); }
+    function say(m) { hooks.said.push(m); }
+    function renderList() { hooks.renders.push("list"); }
+    function renderPanel() { hooks.renders.push("panel"); }
+    function paintDates() {}
+    function datesHtml() { return ""; }
+    ${fn("byId")}
+    ${fn("adoptSaved")}
+    ${fn("adoptConflict")}
+    ${fn("patchSoon")}
+    return { patchSoon: patchSoon, adoptConflict: adoptConflict,
+             armed: function () { return Object.keys(timers).length; },
+             pending: function () { return Object.keys(pendingPatch).length; },
+             // Empties the buffer WITHOUT disarming, which is the state the empty-payload guard
+             // exists for. adoptConflict no longer produces it — that is the point of the fix —
+             // so the guard is defence for the next code path that empties this buffer, and a
+             // test of it has to construct the state deliberately rather than pretend otherwise.
+             dropBuffer: function () { pendingPatch = {}; } };
+  `);
+
+  function run409(fix) {
+    const hooks = { saving: [], said: [], renders: [], requests: [], errors: [] };
+    let due = [];
+    // Handles start at 1, as every browser's do — a 0 handle would make `if (timers[key])` skip,
+    // which is a condition the real page never meets and would fake a pass here.
+    const clock = {
+      setTimeout: (fn2) => { due.push({ fn: fn2, live: true }); return due.length; },
+      clearTimeout: (id) => { if (due[id - 1]) due[id - 1].live = false; },
+    };
+    let release;
+    const inflight = new Promise((r) => { release = r; });
+    const api = (path, opts) => {
+      hooks.requests.push(((opts || {}).method || "GET") + " " + path);
+      return inflight;
+    };
+    const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF", lines: [], updated_at: "T1" }],
+                    ITEMS: [], VENDORS: [] };
+    const s = saveScope(api, clock, hooks, state);
+    return { hooks, clock, s, release, fire: async () => {
+      const now = due; due = [];
+      for (const t of now) if (t.live) { try { await t.fn(); } catch (e) { hooks.errors.push(String(e)); } }
+    }, cancelledCount: () => due.filter((t) => !t.live).length };
+  }
+
+  // Scenario: the 409 arrives while a newer keystroke is already queued.
+  const c = run409();
+  c.s.patchSoon("assemblies", "a1", { name: "A" });
+  const firing = c.fire();                       // the timer callback starts and awaits api()
+  await new Promise((r) => setTimeout(r, 0));
+  c.s.patchSoon("assemblies", "a1", { name: "AB" });   // …the user keeps typing: timer re-armed
+  const armedBeforeConflict = c.s.armed();
+  c.release({ status: 409, json: async () => ({ error: "changed", assembly:
+    { id: "a1", name: "B's version", unit: "SF", lines: [], updated_at: "T2" } }) });
+  await firing;
+  const afterConflict = { pending: c.s.pending(), cancelled: c.cancelledCount() };
+  await c.fire();                                 // whatever is still armed gets its turn
+  out.conflict = {
+    armedBeforeConflict,
+    bufferEmptied: afterConflict.pending === 0,
+    // THE FIX: the re-armed timer is disarmed too. Leaving it armed meant it fired 600ms later on
+    // an empty buffer and threw before the try block — a dropped write with nothing on screen.
+    timerDisarmed: afterConflict.cancelled === 1,
+    noSecondRequest: c.hooks.requests.length === 1,
+    noUnhandledError: c.hooks.errors.length === 0,
+    screenRepainted: c.hooks.renders.join(",") === "list,panel",
+    toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
+  };
+
+  // And the belt to that brace: a timer that fires with nothing queued must be a quiet no-op,
+  // not a TypeError thrown outside the try.
+  const d2 = run409();
+  d2.s.patchSoon("assemblies", "a1", { name: "A" });
+  d2.s.dropBuffer();          // armed, with nothing left to send
+  await d2.fire();
+  out.conflict.emptyTimerIsQuiet = d2.hooks.errors.length === 0;
+  out.conflict.emptyTimerSendsNothing = d2.hooks.requests.length === 0;
+}
+
 // ── the picker resolves typed text to a material ─────────────────────────────
 {
   const { api } = build();
@@ -379,4 +603,6 @@ out.page = {
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };
 
-console.log(JSON.stringify(out));
+conflictChecks().then(
+  () => console.log(JSON.stringify(out)),
+  (err) => { console.error(err); process.exit(1); });
