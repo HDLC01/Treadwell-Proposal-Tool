@@ -183,10 +183,73 @@ def test_a_patch_that_did_not_touch_the_cost_repaints_nothing(ran):
 
 
 @needs_node
-def test_the_pack_size_is_coerced_to_a_number_like_the_other_two(ran):
-    """Executed: the list the handler actually consults. A string "5" in the model works by luck
-    while dividing and concatenates the first time anything multiplies."""
+def test_the_pack_size_is_on_the_numeric_field_list(ran):
     assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty"]
+
+
+@needs_node
+def test_a_typed_number_reaches_the_model_as_a_number(ran):
+    """EXECUTED THROUGH THE HANDLER, which is what the previous version of this test did not do.
+
+    It asserted the contents of `NUMERIC_ITEM_FIELDS`. Deleting the ternary that CONSULTS that list
+    left the array sitting there intact, so the test passed while every typed figure went into the
+    model as a string — and that shipped to staging. A string "5" divides by luck and concatenates
+    the first time anything multiplies it."""
+    e = ran["itemEdit"]
+    assert (e["buyQtyType"], e["buyQty"]) == ("number", 5)
+    assert (e["costType"], e["cost"]) == ("number", 1200.5), "a pasted $1,200.50 must survive"
+    assert (e["coverageType"], e["coverage"]) == ("number", 275)
+    assert (e["vendorType"], e["vendor"]) == ("string", "Sika"), "text was coerced to a number"
+
+
+@needs_node
+def test_each_edit_is_queued_for_the_server_exactly_as_typed(ran):
+    """The model gets the parsed number; the server gets the raw string, because `validate_item` is
+    the single authority on what is acceptable and it does its own parsing."""
+    e = ran["itemEdit"]
+    assert e["queued"] == ["items:buy_qty", "items:unit_cost", "items:coverage", "items:vendor"]
+    assert e["queuedRaw"] == ["5", "$1,200.50", " 275 ", "Sika"]
+
+
+@needs_node
+def test_the_duplicate_hint_appears_and_disappears_through_the_handler(ran):
+    """Not by calling similarNames() — by typing, into ONE cell across three keystrokes. An earlier
+    version of this used a fresh cell per edit, which made "the hint went away" true no matter what
+    the handler did; the mutation that never removes the hint survived it."""
+    e = ran["itemEdit"]
+    assert e["hintShown"], "typing a name similar to an existing one showed no hint"
+    assert e["hintRemovedWhenNoLongerSimilar"], "the hint stayed after the name stopped matching"
+    assert e["hintNotDuplicatedOnRetype"], "a second hint stacked under the first"
+
+
+# ── two people editing one assembly ───────────────────────────────────────────
+@needs_node
+def test_a_conflict_disarms_the_edit_that_was_still_queued(ran):
+    """FOUND BY ADVERSARIAL REVIEW. The 409 handler emptied the pending body but left the debounce
+    timer armed, so a keystroke made during the ~300ms the conflicting PATCH was in flight scheduled
+    a write whose payload was then wiped. 600ms later it fired on nothing and threw BEFORE the try
+    block: no request, no "Not saved", no trace — on a page with no Save button, and immediately
+    after we had told the estimator to re-apply their change."""
+    c = ran["conflict"]
+    assert c["armedBeforeConflict"] == 1, "the fixture never re-armed the timer, so it proves nothing"
+    assert c["bufferEmptied"], "the conflicting body would be re-sent over the winner"
+    assert c["timerDisarmed"], "the re-armed timer survived the conflict repaint"
+    assert c["noSecondRequest"] and c["noUnhandledError"]
+
+
+@needs_node
+def test_a_conflict_shows_the_other_persons_version_and_says_so(ran):
+    c = ran["conflict"]
+    assert c["screenRepainted"], "the screen kept showing a version the database disagrees with"
+    assert c["toldTheUser"], "a silent redraw mid-edit is worse than the conflict"
+
+
+@needs_node
+def test_a_timer_that_fires_with_nothing_queued_is_a_quiet_no_op(ran):
+    """The belt to that brace. Whatever else empties the buffer, the callback must not throw
+    outside its try block and turn a dropped write into an unhandled rejection."""
+    c = ran["conflict"]
+    assert c["emptyTimerIsQuiet"] and c["emptyTimerSendsNothing"]
 
 
 # ── Vendors ───────────────────────────────────────────────────────────
@@ -249,16 +312,60 @@ def test_the_two_rounding_modes_render_differently(ran):
 
 @needs_node
 def test_the_live_updater_writes_into_the_cells_the_row_actually_has(ran):
-    """THE POSITIONAL CONTRACT, and the reason this file exists. `refreshNumbers` avoids rebuilding
-    the row — that is what keeps the caret in the coverage field somebody is typing in — so it
-    writes tds[4] and tds[5] on a table built by a different function. Adding a column ahead of
-    them would put the quantity in the waste box, with no error anywhere."""
+    """THE POSITIONAL CONTRACT. `refreshNumbers` avoids rebuilding the row — that is what keeps the
+    caret in the coverage field somebody is typing in — so it writes tds[4] and tds[5] on a table
+    built by a different function. Adding a column ahead of them puts the quantity in the waste box
+    with no error anywhere."""
     lines = ran["lines"]
     assert lines["qtyIdx"] == 4 and lines["costIdx"] == 5, \
         "the rendered row moved its computed cells: %s" % lines
     assert lines["indexesAgree"], (
         "refreshNumbers writes %s but the row's qty/cost cells are at %s"
         % (lines["updaterIndexes"], [lines["qtyIdx"], lines["costIdx"]]))
+
+
+@needs_node
+def test_the_live_updater_puts_the_quantity_and_the_cost_in_the_right_columns(ran):
+    """EXECUTED, and the reason the test above is not enough.
+
+    Its predecessor scraped `var QTY_TD = 4, COST_TD = 5;` out of the source and compared those
+    numbers with the rendered column positions. Both agreed — and the two writes were transposed,
+    so the constants were correct while `qtyLabel()` went into the Cost cell and the money went
+    into Quantity. That shipped to staging: first paint looked right, then one keystroke in Coverage
+    swapped them, and the estimator read a dollar amount out of the Quantity column.
+
+    This runs refreshNumbers against the table renderPanel actually built and looks at where the
+    content landed."""
+    u = ran["liveUpdate"]
+    assert u["untouchedBefore"], "the harness recorded writes before refreshNumbers ran"
+    assert u["qtyCellGotTheQuantity"], "the Quantity cell did not get the quantity"
+    assert u["costCellGotTheMoney"], "the Cost cell did not get the cost"
+    assert u["qtyCellHasNoDollarAmount"], "a dollar amount was written into the Quantity column"
+    assert u["costCellHasNoUnitLabel"], "a unit quantity was written into the Cost column"
+
+
+@needs_node
+def test_the_live_updater_never_touches_the_cells_holding_inputs(ran):
+    """Rebuilding those is exactly what refreshNumbers exists to avoid: it fires on every keystroke,
+    and rewriting the field being typed in would move the caret to the end of it."""
+    u = ran["liveUpdate"]
+    assert u["inputCellsUntouched"], "Material / Coverage / Waste / Roundup were rewritten"
+    assert u["deleteCellUntouched"]
+
+
+@needs_node
+def test_the_live_updater_reports_a_broken_line_rather_than_pricing_it(ran):
+    u = ran["liveUpdate"]
+    assert u["brokenSaysSoInTheQtyCell"] and u["brokenCostCellCleared"] and u["brokenRowFlagged"]
+
+
+@needs_node
+def test_the_live_updater_recomputes_each_rounding_mode_separately(ran):
+    """The fractional row must not inherit the rounded row's numbers — same material, same
+    coverage, and the only difference is the checkbox."""
+    u = ran["liveUpdate"]
+    assert u["secondRowQty"] == "10.45 Gallon"
+    assert u["totalWritten"] == "$1,831.84" and u["perUnitWritten"] == "$0.637"
 
 
 @needs_node

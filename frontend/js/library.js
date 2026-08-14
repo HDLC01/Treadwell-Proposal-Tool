@@ -139,7 +139,18 @@
     for (var i = 0; i < ASMS.length; i++) {
       if (ASMS[i].id === id) { ASMS[i] = fresh; break; }
     }
-    delete pendingPatch["assemblies:" + id];
+    // Disarm the timer as well as emptying the buffer. Somebody typing during the ~300ms the
+    // conflicting PATCH is in flight re-arms it, and dropping only the payload left a timer that
+    // fired 600ms later on nothing — throwing before the try block, so the write never left the
+    // browser and the screen said nothing. On a page with no Save button, that is a lost edit with
+    // no trace, arriving right after we told them to re-apply their change.
+    var key = "assemblies:" + id;
+    // Unconditional: clearTimeout(undefined) is a harmless no-op, while `if (timers[key])` would
+    // skip a falsy handle. Browsers never hand out 0, but a guard that depends on that is a trap
+    // for whoever reuses this pattern next.
+    clearTimeout(timers[key]);
+    delete timers[key];
+    delete pendingPatch[key];
     renderList();
     renderPanel();
   }
@@ -151,6 +162,10 @@
     timers[key] = setTimeout(async function () {
       var payload = pendingPatch[key];
       delete pendingPatch[key];
+      // Nothing to send is not an error — a conflict repaint empties the buffer, and this used to
+      // throw on the missing payload BEFORE the try block, which turned a dropped write into an
+      // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
+      if (!payload) return;
       // Declare the version being edited. A line change rewrites the WHOLE lines array, so
       // without this two people with the same assembly open overwrite each other in silence:
       // the second save replaces the first person's lines with a snapshot taken before they
@@ -514,7 +529,7 @@
     var it = itemOf(row.getAttribute("data-item"));
     if (!it) return;
     var raw = e.target.value;
-    it[f] = raw;
+    it[f] = NUMERIC_ITEM_FIELDS.indexOf(f) !== -1 ? L.num(raw) : raw;
     if (f === "name") {
       // Redrawn in place: rebuilding the row would move the caret out of the name being typed.
       var cell = e.target.parentNode;
@@ -629,9 +644,9 @@
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
       if (r.ok && r.priced) {
-        tds[COST_TD].innerHTML = '<span class="qty">' + esc(L.qtyLabel(r)) +
+        tds[QTY_TD].innerHTML = '<span class="qty">' + esc(L.qtyLabel(r)) +
                            '</span><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
-        tds[QTY_TD].innerHTML = '<span class="qty">' + L.money(r.cost) +
+        tds[COST_TD].innerHTML = '<span class="qty">' + L.money(r.cost) +
                            '</span><div class="calc mono">' + esc(L.costWorking(r)) + "</div>";
         rows[i].classList.remove("broken");
       } else {

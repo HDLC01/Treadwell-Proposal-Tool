@@ -196,6 +196,28 @@
     return r.toLocaleString("en-US", { maximumFractionDigits: 2 });
   }
 
+  /** A quantity for ARITHMETIC that is shown: four places, trailing zeros trimmed.
+   *
+   *  Two places is right for reading a quantity and wrong for showing a multiplication. 10.98 ×
+   *  $85.38 does not reach the $937.26 printed above it, and an estimator who checks the row by
+   *  hand concludes the total is wrong. Four places is what the costs themselves are held to. */
+  function qty4(n) {
+    var v = num(n);
+    if (v === null) return "—";
+    return (Math.round(v * 1e4) / 1e4).toLocaleString("en-US", { maximumFractionDigits: 4 });
+  }
+
+  /** A price for arithmetic that is shown: up to four places, trailing zeros trimmed.
+   *
+   *  Kyle's per-gallon prices are $85.3827 and $79.7574. Rounding them to the cent inside the
+   *  working makes "4 × $382.45" print $1,529.80 under a cost cell that says $1,529.79. */
+  function price4(n) {
+    var v = num(n);
+    if (v === null) return "—";
+    return "$" + (Math.round(v * 1e4) / 1e4).toLocaleString("en-US",
+      { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  }
+
   /** What to buy, in the vocabulary of the purchase.
    *
    *  Rounded up it names the PACKS, because "3 × 5 Gallon" is what goes on an order and "15
@@ -219,7 +241,9 @@
     var a = num(area) || 0;
     var s = a.toLocaleString("en-US") + " ÷ " + row.coverage.toLocaleString("en-US");
     if (row.waste_pct) s += " +" + qtyText(row.waste_pct) + "%";
-    s += " = " + qtyText(row.needed);
+    // Four places, matching the cost working below it — the two lines describe the same quantity
+    // and disagreeing with each other is worse than either being long.
+    s += " = " + qty4(row.needed);
     // Only worth saying when rounding actually moved the number.
     if (row.roundup && Math.abs(row.units - row.needed) > 1e-9) {
       s += " → " + qtyText(row.units);
@@ -227,18 +251,28 @@
     return s + " " + ((row.item && row.item.unit) || "unit");
   }
 
-  /** How the cost was reached: packs at the pack price, or units at the unit price. Two different
-   *  multiplications, and which one ran is exactly what the Roundup? checkbox decides. */
+  /** How the cost was reached, stated so that it MULTIPLIES OUT to the cost shown beside it.
+   *
+   *  Two different sums, and which one ran is exactly what the Roundup? checkbox decides:
+   *
+   *      rounded up   packs × pack price
+   *      fractional   units ÷ pack size × pack price
+   *
+   *  The fractional branch deliberately divides by the pack size rather than showing a per-unit
+   *  price, because a pack price divided by its size is usually a repeating decimal: $89.99 for
+   *  seven bags is $12.855714…/bag, and "1,680 × $12.86" prints $21,604.80 under a cost cell
+   *  reading $21,597.60. Naming the pack price keeps every figure on the line exact. */
   function costWorking(row) {
     if (!row || !row.ok || !row.priced) return "";
-    if (row.roundup) return qtyText(row.packs) + " × " + money(row.pack_cost);
-    return qtyText(row.needed) + " × " + money(row.unit_price);
+    if (row.roundup) return qtyText(row.packs) + " × " + price4(row.pack_cost);
+    if (row.buy_qty === 1) return qty4(row.needed) + " × " + price4(row.pack_cost);
+    return qty4(row.needed) + " ÷ " + qtyText(row.buy_qty) + " × " + price4(row.pack_cost);
   }
 
   return {
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
     money: money, perUnit: perUnit, explain: explain,
-    wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qtyLabel: qtyLabel,
-    costWorking: costWorking,
+    wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
+    qtyLabel: qtyLabel, costWorking: costWorking,
   };
 });
