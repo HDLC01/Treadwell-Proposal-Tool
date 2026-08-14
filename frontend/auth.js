@@ -226,7 +226,7 @@
       // 🧱 rather than another shaded square: ▤ already belongs to Lead Inbox, and the
       // geometric set is low-distinction enough without two items sharing a glyph. A brick
       // also says "materials" at a glance, which none of the squares do.
-      navItem("/library.html", "🧱", "Item Library", "BETA") +
+      navItem("/library.html", "🧱", "Items and Assemblies", "BETA") +
       '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
