@@ -34,7 +34,7 @@ client = TestClient(main.app)
 
 @pytest.fixture()
 def store(fake_supabase, monkeypatch):
-    st = {"library_items": [], "library_assemblies": []}
+    st = {"library_items": [], "library_assemblies": [], "library_vendors": []}
     fake = fake_supabase(st)
     monkeypatch.setattr(library, "get_client", lambda: fake)
     return st
@@ -91,10 +91,13 @@ def test_zero_coverage_is_stored_as_not_set():
 
 
 def test_the_purchase_unit_is_freeform_with_a_sensible_default():
-    """Kyle buys by Gal, Kit, Pint, Quart, Each, Bag and Roll, and the next product will use
-    something nobody has thought of. A closed list would block it."""
-    assert library.validate_item({"name": "x"})["unit"] == "Gal"
+    """The page offers Gallon / Kit / Bag (Hanz, 2026-08-15), but the column stays freeform: Kyle's
+    earlier rows say Gal, Pint, Quart, Each and Roll, and the next product will use something
+    nobody has thought of. A closed list would block the purchase rather than the typo."""
+    assert library.validate_item({"name": "x"})["unit"] == "Gallon"
     assert library.validate_item({"name": "x", "unit": "Pail"})["unit"] == "Pail"
+    # A legacy abbreviation is neither rewritten nor refused.
+    assert library.validate_item({"name": "x", "unit": "Gal"})["unit"] == "Gal"
 
 
 def test_unknown_keys_are_ignored_not_stored():
@@ -344,9 +347,15 @@ def test_every_request_waits_for_the_token_in_one_place():
     src = (pathlib.Path(__file__).resolve().parents[2]
            / "frontend" / "js" / "library.js").read_text(encoding="utf-8")
     code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("//"))
-    assert code.count("await window.TWAuth.ready") == 1
     # Nothing may call fetch() directly and skip the wait.
     assert code.count("fetch(") == 1, "a fetch outside the api() helper would skip the token wait"
+    # The wait belongs to the REQUEST helper, not to whichever loader remembered it. Sliced from
+    # `var api =` to its closing brace, so the second await added on 2026-08-15 — load() resolving
+    # the caller's admin role before the first paint, which is not a request — cannot satisfy this.
+    body = code[code.index("var api = async function"):]
+    body = body[:body.index("\n  };")]
+    assert body.count("await window.TWAuth.ready") == 1, \
+        "api() no longer waits for the bearer token"
 
 
 def test_pending_edits_are_merged_not_replaced():
@@ -401,7 +410,7 @@ def test_the_page_and_the_sidebar_both_say_it_is_a_beta():
     auth = (root / "auth.js").read_text(encoding="utf-8")
     assert 'class="beta"' in html and "Beta test" in html
     assert ".beta {" in html, "the marker has no style and would inherit body text"
-    assert 'navItem("/library.html", "\U0001f9f1", "Item Library", "BETA")' in auth
+    assert 'navItem("/library.html", "\U0001f9f1", "Items and Assemblies", "BETA")' in auth
     assert ".tw-nav-tag{" in auth, "the sidebar tag has no style"
 
 

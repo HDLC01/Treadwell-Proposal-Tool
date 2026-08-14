@@ -10,10 +10,13 @@ tables, and this module imports nothing from `pricing.py`. That is Hanz's instru
 also the safer order: the shape of an assembly is still being worked out, and a table the
 estimator depends on cannot be changed freely.
 
-TWO TABLES, NOT THREE.
+THREE TABLES, AND NO LINES TABLE.
 
     library_items       one purchasable material, and the single source of truth for its price
     library_assemblies  a named system; its lines live in a `lines` JSONB column
+    library_vendors     who Treadwell buys from — a list, so the Items tab can offer a dropdown
+                        instead of a free-text box that grows three spellings of one supplier.
+                        Managing the list is admin-only; picking from it is not.
 
 Lines are JSONB rather than their own table because they are ordered, always read and written
 as a whole, and never queried across assemblies — the same call already made for
@@ -44,20 +47,36 @@ log = logging.getLogger(__name__)
 
 ITEMS = "library_items"
 ASSEMBLIES = "library_assemblies"
+VENDORS = "library_vendors"
 
 # What a caller may set. Anything else in the payload is ignored rather than stored: an unknown
 # key is a client bug, and persisting it makes the row shape unpredictable for later readers.
-ITEM_WRITABLE = ("name", "category", "unit", "unit_cost", "coverage", "sku", "vendor", "notes")
+ITEM_WRITABLE = ("name", "category", "unit", "buy_qty", "unit_cost", "coverage",
+                 "sku", "vendor", "notes")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines")
+VENDOR_WRITABLE = ("name", "notes")
 
-DEFAULT_ITEM_UNIT = "Gal"       # what Kyle's sheet buys most things by
+DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
+DEFAULT_WASTE_PCT = 5.0         # Hanz, 2026-08-15: "by default is 5%"
+
+# The three divisions Treadwell estimates in (Hanz, 2026-08-15 — this replaced a free-text
+# "Category"). NOT enforced: a legacy row already holds whatever somebody typed, and refusing to
+# save it would make those rows uneditable. The dropdown offers these three and shows an
+# off-list value as its own option, so a legacy category stays visible and correctable.
+DIVISIONS = ("Polished Concrete", "Epoxy", "Gypsum Underlayment")
+
+# What the Unit dropdown offers. Same posture as DIVISIONS: offered, not enforced. Kyle's earlier
+# rows say "Gal", "Kit", "Pint", "Roll", and the next product will use a unit nobody has thought
+# of — a check constraint would block the purchase, not the typo.
+ITEM_UNITS = ("Gallon", "Kit", "Bag")
 
 _MAX_TEXT = 200
 _MAX_NOTES = 4000
 _MAX_LINES = 60                 # a system with 60 coats is a mistake, not a system
 _MAX_UNIT_COST = 1e7            # $10M for one gallon is a typo
 _MAX_COVERAGE = 1e6             # SF covered by one unit
+_MAX_BUY_QTY = 1e5              # a 100,000-unit pack is a typo, not a pallet
 
 
 class ValidationError(ValueError):
@@ -114,9 +133,19 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         out["name"] = name
 
     if "unit" in payload or not partial:
-        # Freeform on purpose. Kyle buys by Gal, Kit, Pint, Quart, Each, Bag, Roll — and the
-        # next product will use a unit nobody has thought of. A closed list would block it.
+        # Freeform on purpose. The page offers Gallon / Kit / Bag, but Kyle's earlier rows say
+        # Gal, Pint, Quart, Each, Roll — and the next product will use a unit nobody has thought
+        # of. A closed list would block the purchase rather than the typo.
         out["unit"] = _clean_text(payload.get("unit"), 24) or DEFAULT_ITEM_UNIT
+
+    if "buy_qty" in payload or not partial:
+        # How many units come in the purchase — the "5" of "5 Gal". `unit_cost` is what that pack
+        # costs, so this is what turns a needed 16.8 gallons into four pails.
+        #
+        # Zero or blank means 1, not "free": a pack of nothing would divide the cost by zero, and
+        # every row written before this column existed is genuinely a pack of one.
+        qty = _number(payload.get("buy_qty"), field="Qty", maximum=_MAX_BUY_QTY)
+        out["buy_qty"] = qty if (qty is not None and qty > 0) else 1.0
 
     if "unit_cost" in payload or not partial:
         out["unit_cost"] = _number(payload.get("unit_cost"),
@@ -146,12 +175,19 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         # as strings, so the coercion happens here rather than in every caller.
         "unit_cost": _as_float(row.get("unit_cost")),
         "coverage": _as_float(row.get("coverage")),
+        # A row written before this column existed reads as a pack of one, which prices exactly as
+        # it did then. Read-shaped rather than backfilled: rewriting somebody's hand-typed rows to
+        # add a column is a migration that can go wrong, and this cannot.
+        "buy_qty": _as_float(row.get("buy_qty")) or 1.0,
         "sku": row.get("sku") or "",
         "vendor": row.get("vendor") or "",
         "notes": row.get("notes") or "",
         "owner_email": row.get("owner_email") or "",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
+        # When the PRICE last moved, which is not when the row last changed — fixing a spelling
+        # does not make a cost newer. None means "not since we started recording it".
+        "cost_updated_at": row.get("cost_updated_at"),
     }
 
 
@@ -197,10 +233,17 @@ def update_item(item_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any
         return get_item(item_id)
     patch["updated_at"] = _now_iso()
     sb = get_client()
-    cur = (sb.table(ITEMS).select("id")
+    cur = (sb.table(ITEMS).select("id,unit_cost")
            .eq("id", item_id).is_("deleted_at", "null").limit(1).execute())
-    if not (cur.data or []):
+    rows = cur.data or []
+    if not rows:
         return None
+    # A PRICE REVISION, which is what Hanz asked to be able to see: "Date modified update should
+    # only trigger when cost is modified". So the stamp moves when the number actually changes —
+    # not when the name is corrected, and not when the same cost is saved again by the debounced
+    # PATCH that fires as somebody tabs out of the field.
+    if "unit_cost" in patch and _as_float(patch["unit_cost"]) != _as_float(rows[0].get("unit_cost")):
+        patch["cost_updated_at"] = patch["updated_at"]
     sb.table(ITEMS).update(patch).eq("id", item_id).execute()
     return get_item(item_id)
 
@@ -241,11 +284,22 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
         coverage = _number(entry.get("coverage"), field="Coverage", maximum=_MAX_COVERAGE)
         if coverage is not None and coverage <= 0:
             coverage = None
-        # A line with neither a material nor a role is an empty row nobody filled in.
+        # How much extra to buy over what the area needs: 5% by default, per Hanz. A line that
+        # arrives without it is either legacy or a client bug, and either way 5 is the number the
+        # screen shows — reading it as 0 would make the row lie about its own arithmetic.
+        waste = _number(entry.get("waste_pct"), field="Waste factor", maximum=100)
+        if waste is None:
+            waste = DEFAULT_WASTE_PCT
+        # Whole packs, or a fraction of one. True for a legacy line because CEIL is what it was
+        # priced with — the screen has promised "you cannot buy 3.7 kits" since this page shipped.
+        roundup = entry.get("roundup")
+        roundup = True if roundup is None else bool(roundup)
+        # A line with neither a material nor a role is an empty row nobody filled in. (Role left
+        # the UI on 2026-08-15 but stays in the data, so an older line keeps its label.)
         if not item_id and not role:
             continue
-        out.append({"role": role, "item_id": item_id or None,
-                    "coverage": coverage, "note": note or None})
+        out.append({"role": role, "item_id": item_id or None, "coverage": coverage,
+                    "waste_pct": waste, "roundup": roundup, "note": note or None})
     return out
 
 
@@ -274,6 +328,17 @@ def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict
     return out
 
 
+def _waste_of(line: Any) -> float:
+    """A line's waste factor, defaulting to 5% and clamped to something sane.
+
+    Read-shaping rather than a migration: a legacy line has no waste factor at all, and the
+    alternative to defaulting here is a row whose visible 5% is not the 5% it was priced with."""
+    v = _as_float((line or {}).get("waste_pct"))
+    if v is None or v < 0:
+        return DEFAULT_WASTE_PCT
+    return min(v, 100.0)
+
+
 def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
     lines = row.get("lines")
     if not isinstance(lines, list):
@@ -288,6 +353,10 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             "role": (ln or {}).get("role") or "",
             "item_id": (ln or {}).get("item_id") or "",
             "coverage": _as_float((ln or {}).get("coverage")),
+            # Both read-shaped with the same defaults the writer applies, so a line stored before
+            # these columns existed prices identically whether or not it has been re-saved since.
+            "waste_pct": _waste_of(ln),
+            "roundup": bool((ln or {}).get("roundup", True)),
             "note": (ln or {}).get("note") or "",
         } for ln in lines if isinstance(ln, dict)],
         "owner_email": row.get("owner_email") or "",
@@ -370,3 +439,128 @@ def delete_assembly(asm_id: str) -> bool:
         return False
     sb.table(ASSEMBLIES).update({"deleted_at": _now_iso()}).eq("id", asm_id).execute()
     return True
+
+
+# ── vendors ───────────────────────────────────────────────────────────────────
+# Who Treadwell buys from. A list rather than a free-text box on each item, because typing the
+# supplier per row is how one company becomes "Sherwin", "Sherwin Williams" and "SW" — and then
+# nobody can total what they spend with them.
+#
+# The item still stores the vendor NAME, not an id (see the schema comment). So this table governs
+# what the dropdown OFFERS; it does not own what past items say. Renaming a vendor here therefore
+# does not retitle old items, which is the safer of the two behaviours: an item records what it was
+# bought from at the time.
+def _shape_vendor(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "name": row.get("name") or "Untitled",
+        "notes": row.get("notes") or "",
+        "owner_email": row.get("owner_email") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def validate_vendor(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValidationError("Nothing to save.")
+    out: Dict[str, Any] = {}
+    if "name" in payload or not partial:
+        name = _clean_text(payload.get("name"))
+        if not name:
+            raise ValidationError("Give the vendor a name.")
+        out["name"] = name
+    if "notes" in payload or not partial:
+        out["notes"] = _clean_text(payload.get("notes"), _MAX_NOTES) or None
+    return out
+
+
+def list_vendors() -> List[Dict[str, Any]]:
+    sb = get_client()
+    res = (sb.table(VENDORS).select("*")
+           .is_("deleted_at", "null")
+           .order("name")
+           .limit(500).execute())
+    return [_shape_vendor(r) for r in (res.data or [])]
+
+
+def get_vendor(vendor_id: str) -> Optional[Dict[str, Any]]:
+    sb = get_client()
+    res = (sb.table(VENDORS).select("*")
+           .eq("id", vendor_id).is_("deleted_at", "null").limit(1).execute())
+    rows = res.data or []
+    return _shape_vendor(rows[0]) if rows else None
+
+
+def _clashing_vendor(name: str, *, ignore_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """An existing live vendor with the same name, ignoring case and surrounding space.
+
+    Compared in Python rather than with an `ilike` filter on purpose: vendor names contain commas
+    and parentheses ("Sherwin-Williams, Inc."), and those are PostgREST filter syntax — a raw value
+    would either error or silently match the wrong rows. The list is a few dozen names."""
+    target = name.casefold()
+    for v in list_vendors():
+        if v.get("id") != ignore_id and str(v.get("name") or "").casefold() == target:
+            return v
+    return None
+
+
+def create_vendor(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str, Any]:
+    row = validate_vendor(payload)
+    clash = _clashing_vendor(row["name"])
+    if clash:
+        # Refused, not silently merged: this table exists to stop one supplier having three
+        # spellings, and a second "Sherwin Williams" defeats the whole point of it.
+        raise ValidationError("“%s” is already on the list." % clash["name"])
+    row["id"] = str(uuid.uuid4())
+    row["owner_email"] = (owner_email or "").lower() or None
+    row["created_at"] = row["updated_at"] = _now_iso()
+    sb = get_client()
+    sb.table(VENDORS).insert(row).execute()
+    return _shape_vendor(row)
+
+
+def update_vendor(vendor_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    patch = validate_vendor(payload, partial=True)
+    if not patch:
+        return get_vendor(vendor_id)
+    sb = get_client()
+    cur = (sb.table(VENDORS).select("id")
+           .eq("id", vendor_id).is_("deleted_at", "null").limit(1).execute())
+    if not (cur.data or []):
+        return None
+    if patch.get("name"):
+        clash = _clashing_vendor(patch["name"], ignore_id=vendor_id)
+        if clash:
+            raise ValidationError("“%s” is already on the list." % clash["name"])
+    patch["updated_at"] = _now_iso()
+    sb.table(VENDORS).update(patch).eq("id", vendor_id).execute()
+    return get_vendor(vendor_id)
+
+
+def delete_vendor(vendor_id: str) -> bool:
+    """Soft-delete a vendor.
+
+    Items naming it keep saying so — they store the name, and rewriting somebody's purchase record
+    because the supplier left the list would be a lie about where the material came from. The
+    dropdown stops offering it; an item that already carries it shows it as its own option."""
+    sb = get_client()
+    cur = (sb.table(VENDORS).select("id")
+           .eq("id", vendor_id).is_("deleted_at", "null").limit(1).execute())
+    if not (cur.data or []):
+        return False
+    sb.table(VENDORS).update({"deleted_at": _now_iso()}).eq("id", vendor_id).execute()
+    return True
+
+
+def vendor_usage() -> Dict[str, int]:
+    """How many live items name each vendor, keyed by casefolded name.
+
+    So the Vendors tab can say what a delete affects before it happens, the same way removing a
+    material says how many assemblies use it."""
+    counts: Dict[str, int] = {}
+    for it in list_items():
+        key = str(it.get("vendor") or "").casefold()
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
