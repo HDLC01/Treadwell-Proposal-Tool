@@ -319,7 +319,7 @@
     const id = encodeURIComponent(p.proposal_id);
     return `<div class="deal-acts">
       <button type="button" class="deal-act" data-files="${id}" title="Estimate and proposal files">Files</button>
-      <button type="button" class="deal-act" data-info="${id}" title="Project Info Sheet — the hand-off to accounting and ops">Info</button>
+      <button type="button" class="deal-act" data-info="${id}" title="Project Info Sheet — the hand-off to accounting and ops">Info sheet</button>
     </div>`;
   }
 
