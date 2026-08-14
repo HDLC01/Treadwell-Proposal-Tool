@@ -32,6 +32,28 @@ function fn(name) {
   }
   throw new Error("unbalanced braces reading " + name);
 }
+/** render()'s body with comment-only lines removed.
+ *
+ *  Calling the lifted revealExport() proves the function works and says nothing about whether
+ *  anything calls it — which is exactly how the unreachable first version passed. This is the
+ *  wiring check, and the comments are stripped so a line MENTIONING revealExport cannot satisfy it.
+ */
+function renderBody() {
+  const NL = String.fromCharCode(10);
+  const m = new RegExp(NL + "  function render\\(\\) \\{").exec(src);
+  if (!m) throw new Error("render() is gone from analytics.js — rewrite this harness");
+  const i = src.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) {
+      return src.slice(m.index, j + 1).split(NL)
+        .filter((l) => !l.trim().startsWith("//")).join(NL);
+    }
+  }
+  throw new Error("unbalanced braces reading render");
+}
+
 function grab(re, what) {
   const m = re.exec(src);
   if (!m) throw new Error("could not lift " + what + " — rewrite this harness");
@@ -68,7 +90,8 @@ function dom(ids) {
 /** Build the page scope. `opts.state` overrides STATE, `opts.data` overrides DATA. */
 function scope(opts) {
   const o = opts || {};
-  const nodes = dom(["filterbar", "active-filters", "cards", "alert", "export-xlsx"]);
+  const nodes = dom(["filterbar", "active-filters", "cards", "alert",
+                     "export-xlsx", "export-note"]);
   const requests = [];
   const downloads = [];
 
@@ -95,6 +118,7 @@ function scope(opts) {
 
   const body = [
     "var esc = C.esc;",                       // analytics.js:29, module-level alias
+    fn("revealExport"),                       // the one thing that makes the button usable
     grab(/^  var T12_ROWS = \[[\s\S]*?\];$/m, "T12_ROWS"),
     fn("win"), fn("filtered"), fn("options"), fn("pullWindow"),
     fn("t12Cell"), fn("renderTrailing12"),
@@ -120,7 +144,7 @@ function scope(opts) {
   const api2 = new Function(
     "X", "C", "ROWS", "STATE", "DATA", "STAGES", "NAMES", "TABS", "DIMENSIONS", "$", "api",
     "fetch", "TW", "URL", "Blob", "document", "setTimeout",
-    body + "\nreturn { renderTrailing12, buildExportPayload, exportExcel };");
+    body + "\nreturn { renderTrailing12, buildExportPayload, exportExcel, revealExport };");
 
   const handles = api2(
     X, C, X.decorate(o.rows || FIXTURE), STATE, DATA, DATA.stages,
@@ -219,6 +243,28 @@ const flush = () => new Promise((r) => setImmediate(r));
     out.filteredPayload = {
       filters: p.filters,
       t12Unchanged: p.trailing12.columns[0].won_amount,
+    };
+  }
+
+  // The button ships hidden — a render has to reveal it, or the whole export is unreachable.
+  // It shipped to staging that way once: the markup and the handler were both there and nothing
+  // ever set hidden=false.
+  {
+    const s = scope({});
+    const before = s.nodes["export-xlsx"].hidden;
+    s.handles.revealExport();
+    out.exportButton = {
+      hiddenBeforeRender: before,
+      hiddenAfterRender: s.nodes["export-xlsx"].hidden,
+      // The sentence beside it explains what lands in the file; revealing one without the other
+      // gives a bare button whose scope nobody can guess.
+      noteRevealed: s.nodes["export-note"].hidden === false,
+      // WIRED, not just present: lifting revealExport and calling it proves the function works and
+      // nothing about whether render() ever calls it. Deleting the call left every executed
+      // assertion green, which is how the unreachable version passed in the first place.
+      calledByRender: /revealExport\(\);/.test(renderBody()),
+      calledBeforeTheEarlyReturn:
+        renderBody().indexOf("revealExport()") < renderBody().indexOf('if (tab().id === "trailing12")'),
     };
   }
 
