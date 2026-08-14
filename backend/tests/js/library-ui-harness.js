@@ -56,8 +56,24 @@ function makeDom() {
   return { el, nodes };
 }
 
+/** A document stub that records what `paintDates` looked for and what it wrote.
+ *
+ *  Deliberately NOT a DOM emulator. It answers one question — does the repaint address a selector
+ *  the rendered row actually carries, and does it write the dates markup? — and the harness feeds
+ *  it the class list taken from the real renderItems output, so a renamed cell breaks the test. */
+function makeDocument(presentSelectors) {
+  const writes = [];
+  return {
+    writes,
+    querySelector(sel) {
+      if (presentSelectors.indexOf(sel) === -1) return null;
+      return { set innerHTML(v) { writes.push({ sel, html: v }); } };
+    },
+  };
+}
+
 const dom = makeDom();
-const scope = new Function("L", "$", "TW", "state", `
+const scope = new Function("L", "$", "TW", "state", "document", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
   var VENDOR_USE = state.VENDOR_USE, ADMIN = state.ADMIN;
@@ -67,6 +83,9 @@ const scope = new Function("L", "$", "TW", "state", `
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${fn("current")}
   ${fn("itemOf")}
+  ${fn("byId")}
+  ${fn("adoptSaved")}
+  ${fn("paintDates")}
   ${fn("pick")}
   ${fn("vendorNames")}
   ${fn("similarNames")}
@@ -81,7 +100,7 @@ const scope = new Function("L", "$", "TW", "state", `
   ${fn("refreshNumbers")}
   ${grab(/^  var NUMERIC_ITEM_FIELDS = \[[^\]]*\];$/m, "NUMERIC_ITEM_FIELDS")}
   return { renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
-           pickerFor, itemByName, similarNames, pick, datesHtml,
+           pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
            NUMERIC_ITEM_FIELDS, ITEMS, VENDORS };
 `);
 
@@ -105,7 +124,7 @@ const ASMS = [{
 const VENDORS = [{ id: "v1", name: "Sherwin-Williams", notes: "KC branch" },
                  { id: "v2", name: "Sika", notes: "" }];
 
-function build(overrides) {
+function build(overrides, docSelectors) {
   const d = makeDom();
   const st = Object.assign({
     ITEMS: JSON.parse(JSON.stringify(ITEMS)),
@@ -115,9 +134,10 @@ function build(overrides) {
     ADMIN: false, openId: "a1",
   }, overrides || {});
   const TW = { fmtBizDateTime: (iso) => "BIZ(" + iso + ")" };
-  const api = scope(L, d.el, TW, st);
+  const doc = makeDocument(docSelectors || []);
+  const api = scope(L, d.el, TW, st, doc);
   d.el("area").value = "2875";
-  return { api, dom: d, st };
+  return { api, dom: d, st, doc };
 }
 
 const out = {};
@@ -154,6 +174,47 @@ const out = {};
   out.items.offListVendorKept = /<option value="Gone Supply Co" selected>/.test(vendSel);
   out.items.offListVendorNotDuplicated =
     (vendSel.match(/<option value="Gone Supply Co"/g) || []).length === 1;
+}
+
+// ── the price date lands on screen without a reload ──────────────────────────
+{
+  // The selector list is taken from what renderItems ACTUALLY emits, so renaming the cell's class
+  // breaks this rather than quietly making the repaint a no-op.
+  const rendered = build();
+  rendered.api.renderItems();
+  const cellClass = /<td class="([a-z]+)">\s*<div class="dates"/.exec(
+    rendered.dom.nodes["items-body"].innerHTML);
+  const sel = '[data-item="i1"] .' + (cellClass ? cellClass[1] : "MISSING");
+
+  const b = build({}, [sel]);
+  // The server replies to a cost PATCH with the row it stored: same updated_at bump, plus a
+  // cost_updated_at that only it can decide.
+  b.api.adoptSaved("items", { id: "i1", updated_at: "2026-08-15T00:00:01Z",
+                              cost_updated_at: "2026-08-15T00:00:01Z" });
+  const wrote = b.doc.writes;
+  out.priceDate = {
+    cellClass: cellClass ? cellClass[1] : null,
+    modelAdopted: b.api.ITEMS[0].cost_updated_at,
+    repainted: wrote.length === 1,
+    repaintedSelector: wrote.length ? wrote[0].sel : null,
+    repaintShowsTheNewDate: wrote.length
+      ? /BIZ\(2026-08-15T00:00:01Z\)/.test(wrote[0].html) : false,
+    repaintDroppedTheNeverLine: wrote.length
+      ? !/not since we started tracking/.test(wrote[0].html) : false,
+  };
+
+  // A patch that did NOT change the cost must not repaint — and must not invent a date.
+  const quiet = build({}, [sel]);
+  quiet.api.adoptSaved("items", { id: "i1", updated_at: "2026-08-15T00:00:02Z",
+                                  cost_updated_at: null });
+  out.priceDate.quietPatchNoRepaint = quiet.doc.writes.length === 0;
+  out.priceDate.quietPatchStillBumpedVersion =
+    quiet.api.ITEMS[0].updated_at === "2026-08-15T00:00:02Z";
+
+  // An assembly save must never reach into the items table.
+  const asm = build({}, [sel]);
+  asm.api.adoptSaved("assemblies", { id: "a1", updated_at: "2026-08-15T00:00:03Z" });
+  out.priceDate.assemblySaveDoesNotRepaintItems = asm.doc.writes.length === 0;
 }
 
 // ── the vendor dropdown offers more than the curated list ────────────────────
