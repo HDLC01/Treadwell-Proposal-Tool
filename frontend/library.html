@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Item Library · Treadwell Proposal Generator</title>
+  <title>Items and Assemblies · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <!-- Styles itself, like calendar.html and followups.html, so it needs its own opt-out:
        without it Chromium synthesizes a dark theme and flattens the amber "material
@@ -112,6 +112,44 @@
     .tot.head { border-color:var(--ok); }
     .tot.head .v { color:var(--ok); }
 
+    /* One sentence under each tab saying what belongs in it. Hanz asked for these by name: the
+       two tabs hold the same materials seen two ways, and which way is not self-evident from a
+       table of numbers. */
+    .paneintro { color:var(--ink-v); font-size:12.5px; margin:0 0 12px; max-width:80ch; }
+    .paneintro b { color:var(--ink); font-weight:600; }
+
+    /* A cost is money, so it wears the sign. The prefix sits inside the field's box rather than
+       beside it, or the column stops lining up the moment a number gets wider. */
+    .money { display:inline-flex; align-items:center; gap:0; border:1px solid var(--line);
+      border-radius:7px; background:var(--card); padding-left:8px; }
+    .money:hover { border-color:var(--red); }
+    .money span { color:var(--ink-v); font-size:12.5px; }
+    .money input { border:0; border-radius:0 7px 7px 0; padding-left:4px; background:none; }
+    .money input:hover { border-color:transparent; }
+    .money:focus-within { outline:2px solid var(--red); outline-offset:2px; }
+
+    /* Two dates, both muted: when the material was added, and when its price last moved. The
+       second is the one an estimator actually asks about. */
+    .dates { font-size:11px; color:var(--ink-v); line-height:1.45; white-space:nowrap; }
+    .dates b { font-weight:600; color:var(--ink); }
+    .dates .never { font-style:italic; }
+
+    /* The duplicate hint. Not a block — the same product legitimately appears twice at different
+       coverages, so this says "look" and gets out of the way. */
+    .dupe { font-size:11px; color:var(--warn); margin-top:3px; font-weight:600; }
+
+    .qtycell { display:flex; gap:6px; align-items:center; }
+    .qtycell input { width:64px; }
+    .qtycell select { width:100%; min-width:96px; }
+    .lines .waste { width:74px; }
+    .lines .ru { text-align:center; }
+    .lines input[type="checkbox"] { width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
+
+    /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
+       a disabled table — it says who to ask. */
+    .ronote { background:var(--warn-bg); border:1px solid rgba(122,92,0,.25); color:var(--warn);
+      border-radius:9px; padding:9px 12px; font-size:12.5px; margin:0 0 12px; font-weight:600; }
+
     .empty { padding:46px 24px; text-align:center; color:var(--ink-v); }
     .empty h3 { color:var(--ink); font-size:15px; margin:0 0 6px; }
     .empty p { margin:0 auto 14px; max-width:48ch; font-size:13px; }
@@ -123,7 +161,7 @@
 <body>
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
-    <h1>Item Library</h1>
+    <h1>Items and Assemblies</h1>
     <span class="beta" title="Being tested. The shape of an assembly may still change, and nothing here feeds an estimate or a proposal yet.">Beta test</span>
   </div>
   <div class="wrap">
@@ -132,41 +170,81 @@
       or a proposal yet — it is a place to work the systems out.</p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
 
-    <div class="views" role="tablist" aria-label="Library">
+    <div class="views" role="tablist" aria-label="Items and assemblies">
       <button type="button" role="tab" id="tab-items" aria-selected="false"
               aria-controls="pane-items">Items<span class="n" id="n-items"></span></button>
       <button type="button" role="tab" id="tab-asm" aria-selected="true"
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
+      <button type="button" role="tab" id="tab-vendors" aria-selected="false"
+              aria-controls="pane-vendors">Vendors<span class="n" id="n-vendors"></span></button>
     </div>
 
     <!-- ── Items ──────────────────────────────────────────────────────── -->
     <section id="pane-items" role="tabpanel" aria-labelledby="tab-items" hidden>
+      <p class="paneintro"><b>Items are entered as we buy them.</b> One row per thing on the
+        invoice — the pack you order, and what that pack costs. A five-gallon pail is
+        <b>5</b> · <b>Gallon</b>, priced as the pail.</p>
       <div class="card tw">
         <table>
           <thead>
             <tr>
-              <th>Material</th><th>Category</th><th>Buy by</th>
-              <th class="n">Cost / unit</th><th class="n">Coverage (SF)</th><th>Vendor</th><th></th>
+              <th>Material <span style="font-weight:400;text-transform:none;letter-spacing:0;">(how the manufacturer names it)</span></th>
+              <th>Division</th><th class="n">Qty</th><th>Unit</th>
+              <th class="n">Cost</th><th>Vendor</th><th>Dates</th><th></th>
             </tr>
           </thead>
           <tbody id="items-body"></tbody>
         </table>
         <div id="items-empty" class="empty" hidden>
           <h3>No materials yet</h3>
-          <p>Add the products you buy — a name, what you buy it by, and what it costs. Coverage
-            is how much area one unit covers.</p>
+          <p>Add the products you buy, named the way the manufacturer names them — how much comes
+            in a purchase, and what that purchase costs.</p>
           <button class="btn" type="button" data-add-item>+ Add your first material</button>
         </div>
       </div>
       <div style="margin-top:12px;">
         <button class="btn ghost" type="button" data-add-item>+ Add material</button>
       </div>
+      <!-- The material names feed the assemblies' picker AND this tab's duplicate hint. One list,
+           so a name typed here is searchable there the moment it saves. -->
+      <datalist id="dl-materials"></datalist>
       <p class="foot">Costs are held to four decimal places, because a per-gallon price rounded
-        to the cent drifts by dollars across a large floor.</p>
+        to the cent drifts by dollars across a large floor. <b>Price</b> is the date the cost last
+        changed — correcting a spelling doesn't make a number newer.</p>
+    </section>
+
+    <!-- ── Vendors ────────────────────────────────────────────────────── -->
+    <section id="pane-vendors" role="tabpanel" aria-labelledby="tab-vendors" hidden>
+      <p class="paneintro"><b>Who we buy from.</b> This list is what the Vendor dropdown offers on
+        the Items tab, so one supplier keeps one spelling. Only an admin can change it.</p>
+      <p class="ronote" id="vendors-ro" hidden>You can see the list and pick vendors on your
+        materials. Adding, renaming and removing them is admin-only — ask Hanz or Kyle.</p>
+      <div class="card tw">
+        <table>
+          <thead>
+            <tr><th>Vendor</th><th>Notes</th><th class="n">Materials</th><th></th></tr>
+          </thead>
+          <tbody id="vendors-body"></tbody>
+        </table>
+        <div id="vendors-empty" class="empty" hidden>
+          <h3 id="vendors-empty-h">No vendors yet</h3>
+          <p id="vendors-empty-why">Add the suppliers you buy from and they become a dropdown on
+            every material.</p>
+          <button class="btn" type="button" id="vendor-add-first">+ Add your first vendor</button>
+        </div>
+      </div>
+      <div style="margin-top:12px;" id="vendor-addrow">
+        <button class="btn ghost" type="button" id="vendor-add">+ Add vendor</button>
+      </div>
+      <p class="foot">Removing a vendor stops it being offered; materials already bought from it
+        keep saying so, because an item records where it actually came from.</p>
     </section>
 
     <!-- ── Assemblies ─────────────────────────────────────────────────── -->
     <section id="pane-asm" role="tabpanel" aria-labelledby="tab-asm">
+      <p class="paneintro"><b>Assemblies are how we estimate them.</b> Build a system out of the
+        materials — a primer, a body coat, a top coat — and see what it costs per square foot at a
+        test area.</p>
       <div class="work">
         <div class="card alist" id="asm-list" hidden></div>
 
@@ -190,10 +268,11 @@
             <table class="lines">
               <thead>
                 <tr>
-                  <th style="width:150px;">Role</th>
                   <th>Material</th>
-                  <th class="n" style="width:120px;">Coverage</th>
-                  <th class="n" style="width:124px;">Quantity</th>
+                  <th class="n" style="width:116px;">Coverage per Unit</th>
+                  <th class="n" style="width:104px;">Waste Factor</th>
+                  <th style="width:78px;text-align:center;">Roundup?</th>
+                  <th class="n" style="width:132px;">Quantity</th>
                   <th class="n" style="width:132px;">Cost</th>
                   <th style="width:34px;"></th>
                 </tr>
@@ -225,8 +304,10 @@
       <div id="asm-newrow" style="margin-top:12px;" hidden>
         <button class="btn ghost" type="button" id="asm-new-2">+ New assembly</button>
       </div>
-      <p class="foot">Quantities round <b>up</b> to whole units: you cannot buy 3.7 kits. That is
-        why a 2,875 SF floor takes 4 kits of a 775 SF top coat and not 3.71.</p>
+      <p class="foot">Coverage is per single unit, and waste is added <b>on top</b> — 5% means buy
+        5% more than the area needs. With <b>Roundup?</b> ticked the quantity climbs to whole
+        purchases, because you cannot buy 3.7 kits; untick it for anything measured out of the bag
+        rather than bought by it, and the line prices the fraction at the single-unit price.</p>
     </section>
   </div>
 
