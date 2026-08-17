@@ -513,7 +513,16 @@
     (function wireList() {
       const el = document.getElementById("list");
       if (!el) return;
-      const open = (id) => window.location.assign("/?d=" + id + "&edit=1");   // ?edit = open intake
+      // A project opens on the intake it was BUILT on. `polish_beta` comes off the draft summary
+      // (backend/drafts.py: data.polish_estimate.version === 2), because a bid priced in the beta
+      // calculator has no spreadsheet behind it — resuming it on the live intake walks the
+      // estimator into the Excel grid for a project whose numbers are not there.
+      // Same id in both branches: it arrives already encodeURIComponent'd from the card/row.
+      const open = (id) => {
+        const p = ALL_PROJECTS.find(x => x.id === decodeURIComponent(id));   // no fetch: the list is in hand
+        if (p && p.polish_beta) return window.location.assign("/polish-intake.html?d=" + id);
+        window.location.assign("/?d=" + id + "&edit=1");   // ?edit = open intake
+      };
       el.addEventListener("click", (e) => {
         const th = e.target.closest("[data-sortby]");
         if (th) {

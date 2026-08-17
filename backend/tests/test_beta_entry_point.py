@@ -219,11 +219,15 @@ def test_the_copy_says_it_opens_a_test_copy(anchor):
 def test_the_link_is_marked_beta_the_way_the_sidebar_marks_its_own(anchor):
     """Kills: dropping the BETA tag.
 
-    Polish Estimate and Item Library both carry it in auth.js's navItem, and this is the same
-    destination as the first of those. An unmarked link reads as a finished feature.
+    Polish Estimate and Item Library both carry it in auth.js's navItem, and both doors into the
+    beta should read the same way. An unmarked link reads as a finished feature.
+
+    The two doors go to different STEPS on purpose — the sidebar opens the beta intake (step 1),
+    this one opens the calculator directly, because by the time somebody is looking at Estimate
+    Review the project already exists. What they must agree on is the marking.
     """
     assert ">BETA<" in anchor, "the toolbar link is not marked BETA"
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    i = auth.index('navItem("/polish-estimate.html"')
+    i = auth.index('navItem("/polish-intake.html"')
     assert "BETA" in auth[i:i + 120], (
         "the sidebar entry lost its BETA tag; the two doors should agree")
