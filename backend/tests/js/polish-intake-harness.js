@@ -30,8 +30,15 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.resolve(process.argv[2]);
-const src = fs.readFileSync(path.join(ROOT, "js", "polish-intake.js"), "utf8");
-const pageHtml = fs.readFileSync(path.join(ROOT, "polish-intake.html"), "utf8");
+
+// Normalised on read: this harness matches the page's source text, and git hands these files out
+// with CRLF on a Windows checkout. See the longer note in polish-estimate-harness.js — an
+// exact-substring anchor misses on CRLF, CI stays green on LF, and the developer sees every test
+// in the file report "the harness crashed" instead of anything about the product.
+const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+
+const src = read(path.join(ROOT, "js", "polish-intake.js"));
+const pageHtml = read(path.join(ROOT, "polish-intake.html"));
 const P = require(path.join(ROOT, "js", "polish-bid-core.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced. */
@@ -531,8 +538,8 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   // with the id the page opened on, skips both beta pages entirely, and the sandbox then has to
   // move all of them onto the draft it settled on.
   {
-    const sbSrc = fs.readFileSync(path.join(ROOT, "js", "polish-sandbox.js"), "utf8");
-    const sharedSrc = fs.readFileSync(path.join(ROOT, "shared.js"), "utf8");
+    const sbSrc = read(path.join(ROOT, "js", "polish-sandbox.js"));
+    const sharedSrc = read(path.join(ROOT, "shared.js"));
     const wizardSrc = (/const _WIZARD_PATH = \/(.*)\/;/.exec(sharedSrc) || [])[1];
     if (!wizardSrc) throw new Error("_WIZARD_PATH is gone from shared.js — rewrite this block");
     const wizard = new RegExp(wizardSrc);

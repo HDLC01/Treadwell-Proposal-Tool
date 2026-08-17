@@ -34,8 +34,18 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.resolve(process.argv[2]);
-const src = fs.readFileSync(path.join(ROOT, "js", "polish-estimate.js"), "utf8");
-const pageHtml = fs.readFileSync(path.join(ROOT, "polish-estimate.html"), "utf8");
+
+// Line endings normalised on read, because this harness matches the page's SOURCE TEXT and git
+// hands these files out with CRLF on a Windows checkout. The HEAD anchor below then misses — the
+// carriage return sits between the brace and the newline it is looking for — and every test in the
+// file reports "the harness crashed" rather than anything about the product. CI checks out LF and
+// stays perfectly green while a developer's machine shows 36 errors, which is the worst possible
+// split. The fn()-style regex anchors elsewhere in the suite survive CRLF only by luck: they start
+// AT the newline, so the stray \r falls outside the match.
+const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+
+const src = read(path.join(ROOT, "js", "polish-estimate.js"));
+const pageHtml = read(path.join(ROOT, "polish-estimate.html"));
 const B = require(path.join(ROOT, "js", "polish-bid-core.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 

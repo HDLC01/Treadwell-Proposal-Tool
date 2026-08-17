@@ -30,10 +30,14 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.resolve(process.argv[2]);
-const indexJs = fs.readFileSync(path.join(ROOT, "js", "index.js"), "utf8");
-const indexHtml = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
-const sharedJs = fs.readFileSync(path.join(ROOT, "shared.js"), "utf8");
-const projectsJs = fs.readFileSync(path.join(ROOT, "js", "projects.js"), "utf8");
+// Normalised on read: these harnesses match the pages' source text, and git hands the files out
+// with CRLF on a Windows checkout. See the note in polish-estimate-harness.js.
+const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+
+const indexJs = read(path.join(ROOT, "js", "index.js"));
+const indexHtml = read(path.join(ROOT, "index.html"));
+const sharedJs = read(path.join(ROOT, "shared.js"));
+const projectsJs = read(path.join(ROOT, "js", "projects.js"));
 
 const DRAFT_ID = "d1e2f3a4";
 
