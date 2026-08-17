@@ -695,10 +695,19 @@
       return;
     }
     if (k === "assembly_name") {
-      // Committed (blurred, or picked off the list): now a full re-render is welcome, because the
-      // row's hint, its unit and its price should all settle together.
+      // Committed — blurred, or picked off the list. A TARGETED repaint, not a re-render.
+      //
+      // `change` on this field fires when the estimator leaves it, and the ordinary way to leave it
+      // is Tab into Measurement. A full re-render at that moment rebuilds the row, destroys the
+      // field they have just tabbed into, and drops focus onto <body> — so the number they type
+      // next goes nowhere at all. Found by tabbing between the two fields on staging; every unit
+      // test passed, because a test never has to reach for the keyboard.
+      //
+      // Nothing is lost by repainting instead: the hint, the per-unit line, the measurement label
+      // and the cost are all keyed and refreshed by repaintNumbers, and setAssembly already syncs
+      // the unit select in place.
       setAssembly(i, el.value);
-      changed(true);
+      changed(false);
     }
   });
 

@@ -627,6 +627,32 @@ const rendered = [];      // every string the page put on screen, for the Labour
       L.priceAssembly(ASMS[1], ITEMS, 200).total +
       L.priceAssembly(ASMS[2], ITEMS, 5000).total;
 
+    // LEAVING the assembly field must not rebuild the row either. `change` fires when the
+    // estimator tabs out of it, and the field they tab INTO is Measurement — so a rebuild here
+    // destroys the box under their cursor and the number they type next goes nowhere. Node
+    // identity is the assertion: an htmlWrite on #panels replaces every child object.
+    {
+      const c = build();
+      await c.api.init();
+      const cPanels = c.dom.get("panels");
+      const before = cPanels.htmlWrites;
+      const measureBefore = need(c, '[data-tk="0"][data-k="measurement"]');
+      const asmField = need(c, '[data-tk="0"][data-k="assembly_name"]');
+      asmField.value = ASMS[1].name;                 // retyped by hand, then tabbed away
+      c.doc.fire("change", { target: asmField });
+      const measureAfter = need(c, '[data-tk="0"][data-k="measurement"]');
+      out.leavingTheAssemblyField = {
+        rebuilds: cPanels.htmlWrites - before,
+        measurementSurvived: measureBefore === measureAfter,
+        // The pick still took effect, which is what the rebuild was there for.
+        idNow: (c.api.model().takeoff[0] || {}).assembly_id,
+        expectedId: ASMS[1].id,
+        unitSyncedInPlace: need(c, 'select[data-tk="0"][data-k="unit"]').value,
+        expectedUnit: ASMS[1].unit,
+        hintNow: txt(c, '[data-asmhint-for="0"]'),
+      };
+    }
+
     // The same, on the labour side.
     b.api.go(1);
     rendered.push(panels.innerHTML);

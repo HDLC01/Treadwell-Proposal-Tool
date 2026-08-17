@@ -940,3 +940,31 @@ def test_the_sidebar_entry_is_marked_beta_and_has_its_own_glyph():
     assert "BETA" in auth[i:i + 120]
     glyphs = re.findall(r'navItem\("[^"]+", "([^"]+)"', auth)
     assert len(glyphs) == len(set(glyphs)), "two sidebar items share a glyph: %s" % glyphs
+
+
+@needs_node
+def test_leaving_the_assembly_field_does_not_destroy_the_box_you_tabbed_into(ran):
+    """FOUND IN A BROWSER, on staging, with all 43 other tests green.
+
+    `change` on the assembly field fires when the estimator leaves it, and the ordinary way to
+    leave it is Tab into Measurement. A full re-render at that moment rebuilds the row, destroys
+    the field they have just tabbed into, and drops focus onto <body> — so the number they type
+    next goes nowhere and nothing on screen explains why. No unit test reaches for the keyboard,
+    which is why this needed a browser to see and why it is pinned here now.
+
+    Node identity is the assertion, because an innerHTML write on #panels replaces every child
+    object: if the measurement box is a different object afterwards, the caret was in the old one.
+
+    Mutation: `changed(true)` in the assembly_name branch of the `change` handler."""
+    r = ran["leavingTheAssemblyField"]
+    assert r["rebuilds"] == 0, (
+        "leaving the assembly field rebuilt the panel %d time(s), taking the field the estimator "
+        "tabbed into with it" % r["rebuilds"])
+    assert r["measurementSurvived"], (
+        "the measurement box was replaced when the assembly field was left, so a caret sitting in "
+        "it is now on <body> and the next keystroke is lost")
+    # And the pick still lands — the repaint has to do everything the rebuild used to.
+    assert r["idNow"] == r["expectedId"], "the newly typed assembly was not adopted"
+    assert r["unitSyncedInPlace"] == r["expectedUnit"], (
+        "the unit select still shows the previous assembly's unit")
+    assert "item line" in (r["hintNow"] or ""), "the hint under the picker was not refreshed"
