@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polish intake (beta) · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Styles itself, like polish-estimate.html and library.html, so it needs its own opt-out. -->
+  <meta name="color-scheme" content="only light" />
+  <!-- NO HyperFormula and no xl-core.js here on purpose. This page writes intake fields and five
+       toggles onto the draft; the workbook is the calculator's business, and loading a formula
+       engine to render eight text boxes would cost every estimator a second of nothing. -->
+  <style>
+    :root { color-scheme: only light;
+      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;
+      --ink:#1b1c1c; --ink-v:#5c403f; --ink-3:#8a7a79;
+      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea;
+      --line:rgba(27,28,28,.11); --line-2:rgba(27,28,28,.06);
+      --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3;
+      --mono:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;
+      --sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+      --r:12px; --r-s:7px; --shadow:0 1px 3px rgba(0,0,0,.05); }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--surf);color:var(--ink);font:400 14px/1.55 var(--sans);
+         padding:26px 22px 60px}
+    [hidden]{display:none!important}
+    .wrap{max-width:1000px;margin:0 auto}
+
+    .head{display:flex;align-items:flex-start;gap:14px;margin-bottom:4px}
+    .logo{width:52px;height:33px;display:block;flex:none}
+    .head h1{font-size:20px;margin:0 0 3px;letter-spacing:-.01em}
+    .head p{margin:0;color:var(--ink-v);font-size:13px}
+    .beta{font:700 10px/1 var(--sans);letter-spacing:.09em;background:var(--red-tint);
+          color:var(--red-dark);border:1px solid var(--line);border-radius:20px;
+          padding:5px 9px;white-space:nowrap;margin-left:auto}
+
+    .steps{display:flex;gap:5px;flex-wrap:wrap;margin:15px 0 16px;font-size:12.5px}
+    .steps span,.steps a{padding:6px 12px;border-radius:20px;border:1px solid var(--line);
+          color:var(--ink-v);background:var(--card);text-decoration:none}
+    .steps .on{background:var(--red);color:#fff;border-color:transparent;font-weight:600}
+
+    /* The beta works on a test COPY of a real project (see enterSandbox in js/polish-sandbox.js).
+       Silently editing a different project than the one that was clicked would be worse than the
+       bug that fixes, so the copy says so before the form is filled in. */
+    .sandbox{display:flex;gap:9px;align-items:flex-start;background:var(--warn-bg);
+          border:1px solid #e8d9a8;color:var(--warn);border-radius:9px;padding:10px 13px;
+          font-size:12.5px;margin:0 0 12px}
+    .sandbox b{color:var(--ink)}
+    .sandbox .ic{font-size:14px;line-height:1.25;flex:none}
+
+    .loading{color:var(--ink-v);text-align:center;padding:44px}
+
+    .sec{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+         box-shadow:var(--shadow);overflow:hidden;margin:0 0 14px}
+    .sec-h{padding:16px 19px;border-bottom:1px solid var(--line-2)}
+    .sec-h h2{font-size:16px;margin:0 0 2px}
+    .sec-h p{margin:0;color:var(--ink-3);font-size:12.5px}
+    .sec-b{padding:18px 19px}
+    .nav{display:flex;align-items:center;gap:10px;padding:14px 19px;
+         border-top:1px solid var(--line-2);background:var(--surf-low)}
+    .nav .step-of{font-size:12px;color:var(--ink-3);margin-right:auto}
+    .btn{background:var(--red);color:#fff;border:0;border-radius:8px;padding:9px 17px;
+         font:600 13px var(--sans);cursor:pointer}
+    .btn:hover{background:var(--red-dark)}
+
+    .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+    .f label{display:flex;align-items:baseline;gap:6px;font:600 12.5px var(--sans);
+             margin:0 0 5px;flex-wrap:wrap}
+    .unit{font:600 10.5px var(--mono);color:var(--ink-3);background:var(--surf-low);
+          border-radius:4px;padding:2px 5px}
+    .f input{width:100%;font:inherit;color:var(--ink);background:var(--card);
+          border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px}
+    .f input:hover{border-color:var(--red)}
+    :where(input,button,a,[tabindex]):focus-visible{outline:2px solid var(--red);
+          outline-offset:1px}
+    .f .hint{color:var(--ink-3);font-size:11.5px;margin:5px 0 0}
+    .f.wide{grid-column:1/-1}
+    .cap{color:var(--ink-3);font-size:11.5px;margin:12px 0 0}
+
+    /* The five job-condition toggles, in the switch shape they had as step 2 of the calculator.
+       The spreadsheet cell chips (B4/B5/D5/B6/D6) are gone with the step: this page writes the
+       draft, not the workbook, so naming a cell here would point at something it never touches. */
+    .sw{display:flex;align-items:flex-start;gap:11px;padding:11px 0;
+        border-bottom:1px solid var(--line-2);cursor:pointer}
+    .sw:last-child{border-bottom:0}
+    .track{width:38px;height:22px;border-radius:12px;background:var(--surf-low);
+        border:1px solid var(--line);position:relative;flex:none;margin-top:1px}
+    .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;
+        border-radius:50%;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.2);
+        transition:left .13s}
+    .sw.on .track{background:var(--red);border-color:transparent}
+    .sw.on .track::after{left:18px;background:#fff}
+    .sw .t{font-weight:600;font-size:13px}
+    .sw .c{color:var(--ink-3);font-size:11.5px;margin-top:2px;display:block}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
+      <div>
+        <h1>Polish intake</h1>
+        <p id="proj-line">Loading…</p>
+      </div>
+      <span class="beta">BETA</span>
+    </div>
+
+    <nav class="steps">
+      <span class="on">1 · Intake</span>
+      <a href="/polish-estimate.html">2 · Estimate</a>
+      <a href="/proposal-review.html">3 · Proposal</a>
+      <a href="/done.html">4 · Files</a>
+    </nav>
+
+    <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
+    <div class="loading" id="loading">Loading this project…</div>
+
+    <div id="main" hidden>
+      <p class="cap" style="margin:0 0 14px">This intake belongs to the <b>beta polish
+        calculator</b> and is deliberately separate from the live intake form at
+        <b>/</b> — beta work is filed under the Test tab and never touches a real bid.</p>
+
+      <form id="intake-form">
+        <section class="sec">
+          <div class="sec-h">
+            <h2>Project</h2>
+            <p>Who and where. The same field names the live intake uses, so a project can be
+              opened on either form.</p>
+          </div>
+          <div class="sec-b">
+            <div class="grid">
+              <div class="f">
+                <label>Bid date <span class="unit">date</span></label>
+                <input type="date" name="bid_date" />
+                <p class="hint">Names the project and drives its due-date reminders.</p>
+              </div>
+              <div class="f">
+                <label>Project name / company</label>
+                <input type="text" name="project_name" autocomplete="off" />
+              </div>
+              <div class="f wide">
+                <label>Address</label>
+                <input type="text" name="address" autocomplete="off" />
+              </div>
+              <div class="f">
+                <label>City</label>
+                <input type="text" name="city" />
+              </div>
+              <div class="f">
+                <label>State <span class="unit">2</span></label>
+                <input type="text" name="state" maxlength="2" style="text-transform:uppercase" />
+              </div>
+              <div class="f">
+                <label>Zip</label>
+                <input type="text" name="zip" maxlength="10" inputmode="numeric" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sec">
+          <div class="sec-h">
+            <h2>Contact</h2>
+            <p>Who we send the proposal to.</p>
+          </div>
+          <div class="sec-b">
+            <div class="grid">
+              <div class="f">
+                <label>Contact name</label>
+                <input type="text" name="contact_name" />
+              </div>
+              <div class="f">
+                <label>Email</label>
+                <input type="email" name="contact_email" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sec">
+          <div class="sec-h">
+            <h2>Job conditions</h2>
+            <p>The five things that move the price. Each says what it does.</p>
+          </div>
+          <div class="sec-b">
+            <div id="conditions"></div>
+            <p class="cap">These used to be step 2 of the beta calculator. They live on intake now,
+              because they describe the job rather than the takeoff — and the estimate carries them
+              through to the bid either way.</p>
+          </div>
+          <div class="nav">
+            <span class="step-of">Step 1 of 4</span>
+            <button type="submit" class="btn">Continue to the estimate →</button>
+          </div>
+        </section>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <!-- polish-bid-core owns the model's shape and the condition keys the pricing chain reads. This
+       page states the conditions, so it writes through the same module the calculator prices with —
+       which is also what stamps the model's version, the flag the Projects page routes on. Loaded
+       before the page script because `var B = window.TWPolishBid` runs at parse time. -->
+  <script src="/js/polish-bid-core.js"></script>
+  <!-- The sandbox, before the page's own script: polish-intake.js calls into it as it boots, and
+       nothing may be rendered until it has settled which draft this page may write to. -->
+  <script src="/js/polish-sandbox.js"></script>
+  <script src="/js/polish-intake.js"></script>
+</body>
+</html>

@@ -312,6 +312,12 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # Test/demo, as set by hand on the Projects page. Tri-state (see _tribool):
                 # absent leaves the name heuristic in charge for legacy rows.
                 "is_test:data->>is_test,"
+                # Which step 2 this project was priced in. The beta polish calculator stamps
+                # polish_estimate.version = 2, and the Projects page has to know before it
+                # opens a card: resuming a beta bid on the live (spreadsheet) intake is the
+                # bug this exists to stop. One scalar out of the object, not the object —
+                # polish_estimate carries every area, material and crew line.
+                "polish_beta:data->polish_estimate->>version,"
                 # Who owns the follow-up. Persisted on the draft when staff send,
                 # so the Projects list can say who is chasing each bid without
                 # asking the portal for every row.
@@ -343,6 +349,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
             "is_test": _tribool(r.get("is_test")),
+            "polish_beta": _polish_beta(r.get("polish_beta")),
             "owner_email": r.get("owner_email"),
             "assigned_estimator": r.get("assigned_estimator"),
             "contact_email": r.get("contact_email"),
@@ -507,6 +514,26 @@ def _tribool(v: Any) -> Optional[bool]:
     return None                      # "null", "", or anything unrecognised = nobody has said
 
 
+def _polish_beta(version: Any) -> bool:
+    """Does `data.polish_estimate.version` say this project belongs to the beta calculator?
+
+    ONE helper for BOTH read paths, because they see different types for the same value:
+    PostgREST hands `data->polish_estimate->>version` back as TEXT (so the fast path in
+    `_build_summaries` sees the string "2"), while `_summary` reads the parsed blob and sees the
+    int 2. Two separate coercions would eventually disagree, and the disagreement would show up
+    as "resuming this project from the Projects page lands on the wrong step 2, but only
+    sometimes" — the fallback path only runs when PostgREST is already misbehaving.
+
+    Absent/None is False on purpose: a v1 polish estimate (the spreadsheet workflow) and a
+    project with no polish estimate at all both belong to the live intake."""
+    if version is None or isinstance(version, bool):
+        return False
+    try:
+        return float(str(version).strip()) == 2.0
+    except ValueError:
+        return False
+
+
 def _bid_total(data: Dict[str, Any]) -> Optional[float]:
     cb = (data or {}).get("computed_bid") or {}
     fb = cb.get("full_bid") or {}
@@ -535,6 +562,9 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "total": _bid_total(data),
         "archived": _truthy(data.get("archived")),
         "is_test": _tribool(data.get("is_test")),
+        # Same question as the fast path's jsonb scalar, asked of the parsed blob: was this
+        # priced in the beta calculator (polish_estimate.version 2) rather than the spreadsheet.
+        "polish_beta": _polish_beta((data.get("polish_estimate") or {}).get("version")),
         "lump_sum_display": data.get("lump_sum_display"),
         "owner_email": row.get("owner_email"),
         "assigned_estimator": data.get("assigned_estimator"),

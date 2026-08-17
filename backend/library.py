@@ -5,10 +5,14 @@ baked into the estimate sheet: pick a primer, a body coat, a top coat, and see t
 square foot. On the sheet today a system's materials are fixed — the top coat is Armor Top and
 nothing else — so this exists to make them interchangeable.
 
-DELIBERATELY STANDALONE. Nothing in the intake / estimate / proposal path reads or writes these
-tables, and this module imports nothing from `pricing.py`. That is Hanz's instruction and it is
-also the safer order: the shape of an assembly is still being worked out, and a table the
-estimator depends on cannot be changed freely.
+ONE READER, AND IT IS ALSO A BETA. From 2026-08-18 the Polish Estimate BETA prices its takeoff
+from these assemblies (`GET /api/library/assemblies` → `priceAssembly` in
+frontend/js/library-core.js). That page only ever edits test projects, so the shape of an assembly
+is still free to change — but it is no longer true that nothing depends on it, and a change here
+can now move a number on a screen somebody is reading.
+
+Still standalone in the direction that matters: this module imports nothing from `pricing.py`, and
+nothing on the LIVE intake / estimate / proposal path reads these tables.
 
 THREE TABLES, AND NO LINES TABLE.
 

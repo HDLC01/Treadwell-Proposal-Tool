@@ -103,10 +103,16 @@ def test_the_proposals_database_has_its_own_category():
 
 
 def test_nothing_else_left_the_sidebar():
-    """Reordering is easy to do destructively. Every page that was linked stays linked."""
+    """Reordering is easy to do destructively. Every page that was linked stays linked.
+
+    The polish beta is listed by its INTAKE, which is its own step 1. That door moved there on
+    2026-08-17, when the five job conditions moved off the calculator onto the beta intake form:
+    opening at step 2 would start an estimator pricing before the switches that change the price
+    have been seen. The calculator is still reachable — from the beta's own step nav and from the
+    toolbar link on Estimate Review — so what this list guards is the DOOR, not every page."""
     bar = _sidebar()
     for href in ("/portal.html", "/projects.html", "/leads.html", "/crm.html", "/calendar.html",
-                 "/info-sheet.html", "/polish-estimate.html", "/analytics.html", "/library.html",
+                 "/info-sheet.html", "/polish-intake.html", "/analytics.html", "/library.html",
                  "/history.html", "/trash.html", "/notifications.html",
                  "/followup-settings.html", "/admin.html"):
         assert '"%s"' % href in bar, "%s is no longer reachable from the sidebar" % href

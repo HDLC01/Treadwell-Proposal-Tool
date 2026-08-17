@@ -60,6 +60,9 @@
   // Gyp jobs use 3 SF buckets instead of the epoxy/polish system fields — show
   // the right scope inputs for the selected work type (and on a restored draft).
   const gypBox = document.getElementById("gyp-sf-container");
+  // The SECOND Continue — the one that goes to the polish beta calculator instead of the
+  // spreadsheet. Shown for polish jobs only; see the comment on the button in index.html.
+  const betaBtn = document.getElementById("beta-continue");
 
   // Which quantity fields belong to which work type. Cove is an epoxy detail, so a
   // polish-only job never shows it (Hanz, 2026-08-06).
@@ -90,6 +93,13 @@
       const anyShown = [...fields].some((el) => el.style.display !== "none");
       if (fields.length) row.style.display = anyShown ? "" : "none";
     });
+    // The beta calculator prices POLISH and nothing else, so its door only exists on a polish
+    // job. Toggled from here rather than from a listener of its own so it can never disagree
+    // with the fields on screen, and hidden rather than removed for the same reason as those
+    // fields: switching work type away and back has to bring the same door back, listener and
+    // all. Deliberately the LAST thing in this function — test_intake_work_type_scope.py reads
+    // a fixed-length window from the top of it.
+    if (betaBtn) betaBtn.style.display = wt === "polish" ? "" : "none";
   }
   form.querySelectorAll("[name='work_type']").forEach(r => r.addEventListener("change", syncScopeToWorkType));
   syncScopeToWorkType();
@@ -269,4 +279,36 @@
       num_systems: 2,
     });
     window.location.assign(TW.withDraft("/estimate-review.html"));
+  });
+
+  // ── the beta door: same save, different step 2 ────────────────────────────
+  // The handler above belongs to the SPREADSHEET workflow and keeps /estimate-review.html for
+  // every work type. This one saves the identical state and then walks into the polish beta.
+  //
+  // Its own copy of the composition, deliberately: the submit handler is the live path for
+  // epoxy, combo and gyp bids and is not being restructured for the sake of the beta.
+  // test_beta_intake_routing.py runs BOTH handlers on one form and compares the saved state key
+  // for key, so the two cannot drift apart quietly.
+  if (betaBtn) betaBtn.addEventListener("click", () => {
+    // type="button" never triggers the browser's required-field check, which is the only thing
+    // making Continue refuse a project with no name and no bid date. Without this the beta door
+    // would be the way to skip validation the spreadsheet path enforces.
+    if (form.reportValidity && !form.reportValidity()) return;
+    const values = TW.readForm(form);
+    const cs = [values.city, (values.state || "").toUpperCase()].filter(Boolean).join(", ");
+    // A no-op on a polish job (the only work type that sees this button), kept so the two
+    // handlers save byte-for-byte the same blob.
+    if ((values.work_type || "epoxy") !== "gyp") {
+      values.gyp_soft_sf = ""; values.gyp_hard_sf = ""; values.gyp_corridor_sf = "";
+    }
+    TW.setState({
+      ...values,
+      city_state: cs,
+      work_type: values.work_type || "epoxy",
+      deadline: values.bid_date || values.deadline || "",
+      num_systems: 2,
+    });
+    // withDraft, not a bare path: shared.js's anchor rewriter only covers the four wizard pages
+    // (_WIZARD_PATH), so a literal href would open the beta with no project.
+    window.location.assign(TW.withDraft("/polish-intake.html"));
   });

@@ -7,14 +7,6 @@
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <!-- Styles itself, like library.html and followup-settings.html, so it needs its own opt-out. -->
   <meta name="color-scheme" content="only light" />
-  <!-- The workbook stays the calculation engine: HyperFormula recalculates the Polish tab's own
-       formulas so the figure on screen is the one in the downloaded file. Pinned + SRI, matching
-       estimate-review.html and info-sheet.html. -->
-  <script src="https://cdn.jsdelivr.net/npm/hyperformula@2.7.1/dist/hyperformula.full.min.js" integrity="sha384-mL8xIzdJNHBlFY+1tgjim6oUyvoCQpvhxipvuvmbN6xCaJzrausWuA16r/ktXKcm" crossorigin="anonymous"></script>
-  <!-- Excel-compatible ROUNDUP/CEILING. Must load after HyperFormula and before any page
-       script builds an engine: registration is global and one-time. Without it every
-       ROUNDUP in the workbook can read a dollar or more high. See the file header. -->
-  <script src="/js/xl-excel-rounding.js"></script>
   <style>
     :root { color-scheme: only light;
       --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;
@@ -45,10 +37,10 @@
           color:var(--ink-v);background:var(--card);text-decoration:none}
     .steps .on{background:var(--red);color:#fff;border-color:transparent;font-weight:600}
 
-    /* The beta works on a test COPY of a real project (see enterSandbox in polish-estimate.js).
-       Silently editing a different project than the one that was clicked would be worse than the
-       bug that fixes, so the copy says so before the workbook has even finished loading. Amber,
-       like every other "this figure was touched by hand" mark in the tool. */
+    /* The beta works on a test COPY of a real project (see polish-sandbox.js). Silently editing a
+       different project than the one that was clicked would be worse than the bug that fixes, so
+       the copy says so before anything can be typed. Amber, like every other "this figure was
+       touched by hand" mark in the tool. */
     .sandbox{display:flex;gap:9px;align-items:flex-start;background:var(--warn-bg);
           border:1px solid #e8d9a8;color:var(--warn);border-radius:9px;padding:10px 13px;
           font-size:12.5px;margin:0 0 12px}
@@ -85,7 +77,7 @@
     .nav .step-of{font-size:12px;color:var(--ink-3);margin-right:auto;
          font-variant-numeric:tabular-nums}
     .btn{background:var(--red);color:#fff;border:0;border-radius:8px;padding:9px 17px;
-         font:600 13px var(--sans);cursor:pointer}
+         font:600 13px var(--sans);cursor:pointer;text-decoration:none;display:inline-block}
     .btn:hover{background:var(--red-dark)}
     .btn.ghost{background:transparent;color:var(--ink-v);border:1px solid var(--line)}
     .btn.ghost:hover{color:var(--red);border-color:var(--red)}
@@ -96,10 +88,6 @@
              margin:0 0 5px;flex-wrap:wrap}
     .unit{font:600 10.5px var(--mono);color:var(--ink-3);background:var(--surf-low);
           border-radius:4px;padding:2px 5px}
-    /* Kyle knows the workbook by cell. Naming the destination makes every field checkable
-       against the file he already trusts. */
-    .cell{font:600 10.5px var(--mono);color:var(--red-dark);background:var(--red-tint);
-          border-radius:4px;padding:2px 5px;margin-left:auto;opacity:.75}
     .f input,.f select{width:100%;font:inherit;color:var(--ink);background:var(--card);
           border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px}
     .f input.n{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
@@ -108,13 +96,22 @@
           outline-offset:1px}
     .f .hint{color:var(--ink-3);font-size:11.5px;margin:5px 0 0}
 
-    .area{border:1px solid var(--line);border-radius:10px;padding:15px;margin:0 0 11px;
-          background:var(--surf-low)}
-    .area-h{display:flex;align-items:center;gap:9px;margin:0 0 13px}
-    .area-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
-    .area-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
+    /* ── takeoff rows ──────────────────────────────────────────────────────── */
+    .tk{border:1px solid var(--line);border-radius:10px;padding:15px;margin:0 0 11px;
+        background:var(--surf-low)}
+    .tk-h{display:flex;align-items:center;gap:9px;margin:0 0 13px}
+    .tk-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
+    .tk-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
+    .tk-g{display:grid;gap:14px;grid-template-columns:2.1fr 1fr .75fr 1.15fr;align-items:start}
+    @media (max-width:760px){ .tk-g{grid-template-columns:1fr} }
     .x{background:none;border:0;color:var(--ink-3);cursor:pointer;font-size:15px}
     .x:hover{color:var(--red)}
+    /* The row's own money. A box rather than bare text so it reads as a field's answer, but
+       never an input: it is the library's price for the measurement beside it. */
+    .costbox{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-s);
+        background:var(--card);text-align:right;font:600 14px var(--mono);
+        font-variant-numeric:tabular-nums;min-height:37px}
+    .costbox.empty{color:var(--ink-3);font-weight:400}
 
     table{width:100%;border-collapse:collapse;font-size:13px}
     th{text-align:left;font:600 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;
@@ -122,27 +119,16 @@
     th.r,td.r{text-align:right}
     td{padding:6px 9px;border-top:1px solid var(--line-2)}
     td.calc{font-family:var(--mono);font-variant-numeric:tabular-nums}
-    tr.head-row td{background:var(--surf-low);font-weight:700;font-size:11px;
-       letter-spacing:.05em;text-transform:uppercase;color:var(--ink-v)}
     td input{width:100%;font:inherit;color:var(--ink);background:transparent;
        border:1px solid transparent;border-radius:5px;padding:5px 7px}
     td input:hover{border-color:var(--line);background:var(--card)}
     td input.n{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
-    /* A figure the worksheet computes for itself. Deliberately not a box: an empty-looking
-       input invites a number, and a number typed here would replace the formula. Dotted
-       underline + help cursor, so it reads as "explained" rather than "disabled". */
-    .derived{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3);
-       border-bottom:1px dotted var(--line);cursor:help}
-    .derived-box{padding:8px 10px;border:1px dashed var(--line);border-radius:var(--r-s);
-       background:var(--surf-low);text-align:right}
-    /* A formula somebody typed over in Estimate Review. The bid is built from THEIR number, so
-       it is shown in full ink, not dimmed — with the amber ⚠ the rest of the tool uses for a
-       hand-edited figure. */
-    .overridden{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink);
-       background:#fff8e1;border-radius:4px;padding:2px 5px;cursor:help}
-    tr.added td{background:#fff8e1}
+    /* A rate is money, so it wears the sign. Outside the input, because a "$" inside the box gets
+       parsed as part of the number the estimator typed. */
+    .mny{display:inline-flex;align-items:center;gap:1px;color:var(--ink-3);
+       font:400 12px var(--mono)}
+    .mny input{min-width:48px}
     .flag{color:var(--amber-ink);font-weight:700;cursor:help}
-    .rowcell{font:600 10px var(--mono);color:var(--ink-3)}
     .sum-row td{border-top:2px solid var(--line);font-weight:700;font-family:var(--mono);
        font-variant-numeric:tabular-nums}
     .addbtn{margin-top:11px;background:transparent;border:1px dashed var(--line);
@@ -151,42 +137,45 @@
     .addbtn:hover:not([disabled]){border-color:var(--red);color:var(--red)}
     .addbtn[disabled]{opacity:.5;cursor:not-allowed}
     .cap{color:var(--ink-3);font-size:11.5px;margin:8px 0 0}
+    .warnline{color:var(--warn);font-size:11.5px;margin:6px 0 0}
 
-    .sw{display:flex;align-items:flex-start;gap:11px;padding:11px 0;
-        border-bottom:1px solid var(--line-2)}
-    .sw:last-child{border-bottom:0}
-    .track{width:38px;height:22px;border-radius:12px;background:var(--surf-low);
-        border:1px solid var(--line);position:relative;flex:none;cursor:pointer;margin-top:1px}
-    .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;
-        border-radius:50%;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .13s}
-    .sw.on .track{background:var(--red);border-color:transparent}
-    .sw.on .track::after{left:18px;background:#fff}
-    .sw .t{font-weight:600;font-size:13px}
-    .sw .c{color:var(--ink-3);font-size:11.5px;margin-top:2px;display:block}
-    .sw .cell{margin-left:auto;align-self:center}
-
-    .opt{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--line);
-         border-radius:9px;margin:0 0 9px}
-    .opt .nm{font-weight:600;font-size:13px;display:block}
-    .opt .rate{color:var(--ink-3);font-size:11.5px}
-    .opt .adds{margin-left:auto;text-align:right}
-    .opt .adds b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:14px}
-    .opt .adds span{display:block;color:var(--ink-3);font-size:11px}
-
+    /* ── review ───────────────────────────────────────────────────────────── */
     .rev{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 11px}
     .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surf-low);
            font:600 12.5px var(--sans)}
     .rev-h .amt{margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
            cursor:pointer;text-decoration:underline}
-    .rev-b{padding:10px 14px;font-size:12.5px;color:var(--ink-v);display:grid;gap:4px 16px;
-           grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
-    .rev-b div{display:flex;gap:8px}
-    .rev-b b{font-weight:600;color:var(--ink)}
-    .rev-b span{margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums}
+    .rev-t{width:100%;border-collapse:collapse;font-size:12.5px}
+    .rev-t td{padding:7px 14px;border-top:1px solid var(--line-2);color:var(--ink-v)}
+    .rev-t td.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;
+           color:var(--ink)}
+    .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink)}
     .blockers{background:var(--warn-bg);border:1px solid #e8d9a8;color:var(--warn);
            border-radius:9px;padding:11px 13px;font-size:12.5px;margin:0 0 12px}
     .blockers ul{margin:6px 0 0;padding-left:18px}
+
+    /* The markup block, laid out like rows 64-82 of the Polish tab so an estimator who knows
+       Kyle's sheet can read down it and recognise every line. */
+    .mk{width:100%;border-collapse:collapse;font-size:13px;margin:0}
+    .mk td{padding:7px 12px;border-top:1px solid var(--line-2)}
+    .mk td.pct,.mk td.amt{text-align:right;font-family:var(--mono);
+        font-variant-numeric:tabular-nums}
+    .mk td.pct{color:var(--ink-3);width:104px}
+    .mk td.amt{width:126px}
+    .mk tr.band td{background:var(--surf-low);font:700 10.5px var(--sans);letter-spacing:.06em;
+        text-transform:uppercase;color:var(--ink-v);border-top:1px solid var(--line)}
+    .mk tr.sub td,.mk tr.tot td{border-top:2px solid var(--line);font-weight:700;color:var(--ink)}
+    .mk tr.grand td{border-top:2px solid var(--line);font-weight:700;
+        background:var(--red-tint);color:var(--red-dark)}
+    .mk tr.grand td.amt{font:700 18px var(--mono);font-variant-numeric:tabular-nums}
+    .mk tr.off td{color:var(--ink-3)}
+    .mk .note{font-size:11px;color:var(--ink-3);font-family:var(--sans)}
+    .mk .note a{color:var(--red-dark)}
+    .mk input{width:104px;text-align:right;font:inherit;font-family:var(--mono);
+        font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:5px;
+        padding:4px 7px;background:var(--card);color:var(--ink)}
+    .mk input:hover{border-color:var(--red)}
 
     .bid{position:fixed;left:0;right:0;bottom:0;background:var(--card);
          border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9}
@@ -195,7 +184,7 @@
     .maths{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;
          color:var(--ink-v);font-family:var(--mono);font-variant-numeric:tabular-nums}
     .maths i{font-style:normal;color:var(--ink-3)}
-    .src{font-size:11px;color:var(--ink-3);max-width:210px;line-height:1.35}
+    .src{font-size:11px;color:var(--ink-3);max-width:230px;line-height:1.35}
     .total{margin-left:auto;text-align:right}
     .total .lbl{font:600 10.5px var(--sans);letter-spacing:.08em;text-transform:uppercase;
          color:var(--ink-3)}
@@ -217,7 +206,7 @@
     </div>
 
     <nav class="steps">
-      <a href="/?edit=1">1 · Intake</a>
+      <a href="/polish-intake.html">1 · Intake</a>
       <span class="on">2 · Estimate</span>
       <a href="/proposal-review.html">3 · Proposal</a>
       <a href="/done.html">4 · Files</a>
@@ -225,7 +214,7 @@
 
     <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
-    <div class="loading" id="loading">Loading the workbook into the formula engine…</div>
+    <div class="loading" id="loading">Loading the item library…</div>
 
     <div id="main" hidden>
       <div class="rail" id="rail"></div>
@@ -233,13 +222,17 @@
     </div>
   </div>
 
+  <!-- Populated from the assemblies in the Items &amp; Assemblies library. A list= input searches
+       anywhere in the name, which is how somebody who remembers "grind" finds the assembly. -->
+  <datalist id="dl-assemblies"></datalist>
+
   <div class="bid" id="bidbar" hidden>
     <div class="bid-in">
       <div class="maths" id="maths"></div>
-      <p class="src">Read from the Polish worksheet at <b>D82</b>, so this is the figure in the
-        file you download.</p>
+      <p class="src">Priced from the <b>Items &amp; Assemblies</b> library through the Polish tab's
+        own markup chain.</p>
       <div class="total">
-        <div class="lbl">Total base bid</div>
+        <div class="lbl">Total lump sum</div>
         <div class="v" id="bid-total">—</div>
         <div class="psf" id="bid-psf"></div>
       </div>
@@ -249,8 +242,12 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
-  <script src="/js/xl-core.js"></script>
-  <script src="/js/polish-estimate-core.js"></script>
+  <!-- library-core before the page script: the page does `var L = window.TWLib` at parse time.
+       Same reason library.html loads it first. polish-bid-core is the markup chain; it is pinned
+       to Kyle's worksheet by backend/tests/test_polish_markup_parity.py. -->
+  <script src="/js/library-core.js"></script>
+  <script src="/js/polish-bid-core.js"></script>
+  <script src="/js/polish-sandbox.js"></script>
   <script src="/js/polish-estimate.js"></script>
 </body>
 </html>

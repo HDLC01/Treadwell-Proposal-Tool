@@ -124,7 +124,18 @@ const out = {
     unknownWeek: ids(runFilter(ROWS, "w:1999-01-04")),
   },
   dropdown: (() => {
-    const r = populate(ROWS, "");
+    // "This week" and "Last week" are named RELATIVE TO TODAY, and a period with no rows is never
+    // offered — so proving those two labels needs rows in those two weeks, whenever the suite runs.
+    // ROWS is pinned to August 2026 because its other job is the Central-midnight and DST
+    // boundaries, which only mean anything at fixed instants. It stopped being "this week" on
+    // 2026-08-17 and the label test went red on a calendar roll, having tested nothing about the
+    // code. These two rows are the fix: derived from now, so the labels stay checkable forever.
+    const NOW = Date.now();
+    const named = ROWS.concat([
+      { id: "in-this-week", ts: new Date(NOW).toISOString() },
+      { id: "in-last-week", ts: new Date(NOW - 7 * 86400000).toISOString() },
+    ]);
+    const r = populate(named, "");
     return { groups: groups(r.html), options: options(r.html), value: r.value };
   })(),
   capped: (() => {

@@ -190,6 +190,23 @@
     </fieldset>
 
     <div class="actions sticky-bottom">
+      <!-- TWO DOORS OUT OF INTAKE, and the red one keeps the spreadsheet.
+           Hanz, 2026-08-11: "The current polish excel sheet and the beta shuold be two
+           different workflows okay?" — so the primary Continue below still goes to
+           /estimate-review.html for every work type (pinned by
+           test_polish_estimate_page.py::test_the_old_estimate_review_still_exists...), and the
+           beta gets a button of its own rather than stealing that target.
+           Reported as: "When I click on intake on the Polish beta then click on the red button
+           below it leads me to the old estimate sheet with excel not the Beta."
+           Secondary, and to the LEFT of the primary: the bar is justify-content:flex-end, so
+           this is the usual lesser-action-then-primary order. Ships display:none (the same
+           technique #gyp-sf-container uses on this page) and is unhidden for polish jobs ONLY,
+           by syncScopeToWorkType() in js/index.js — there is no beta calculator to send an
+           epoxy, combo or gyp bid to. -->
+      <button type="button" id="beta-continue" class="btn-secondary" style="display:none;"
+              title="Price this polish job in the beta calculator: the same intake, then three short steps instead of the spreadsheet.">
+        Continue with Beta Calculator → <span class="tw-nav-tag">BETA</span>
+      </button>
       <button type="submit" class="btn-primary">
         Continue to Estimate Review →
       </button>
