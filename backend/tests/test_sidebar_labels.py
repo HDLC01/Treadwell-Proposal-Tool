@@ -176,10 +176,14 @@ def test_the_follow_ups_heading_went_with_them(sidebar):
 
 def test_the_removal_did_not_take_its_neighbours_with_it(sidebar):
     """The section sat between Polish Estimate and the Analytics heading, so an over-wide delete
-    lands on those. Kills losing the last item of Proposals or the whole Analytics heading."""
-    assert "/polish-estimate.html" in sidebar, "Polish Estimate was removed along with the section"
+    lands on those. Kills losing the last item of Proposals or the whole Analytics heading.
+
+    Polish Estimate's href became /polish-intake.html on 2026-08-17 — the beta's own step 1, after
+    the job conditions moved onto its intake form. Matched on the LABEL here rather than the path,
+    because what this test is about is the item still being in the list, not where it goes."""
+    assert '"Polish Estimate"' in sidebar, "Polish Estimate was removed along with the section"
     assert 'tw-section">Analytics' in sidebar, "the Analytics heading went with the section"
-    assert sidebar.index("/polish-estimate.html") < sidebar.index('tw-section">Analytics'), (
+    assert sidebar.index('"Polish Estimate"') < sidebar.index('tw-section">Analytics'), (
         "Proposals and Analytics have been reordered, which was not part of this change")
 
 

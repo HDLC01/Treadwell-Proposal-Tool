@@ -725,10 +725,10 @@ def api_calendar_delete(event_id: str, request: Request) -> Dict[str, Any]:
 
 
 # ── Item Library ──────────────────────────────────────────────────────────────
-# Materials Treadwell buys, and the assemblies built out of them. STANDALONE: nothing in the
-# intake / estimate / proposal path reads these, by instruction and by design — the shape of an
-# assembly is still being worked out, and a table the estimator depends on cannot change
-# freely. See backend/library.py.
+# Materials Treadwell buys, and the assemblies built out of them. Read by ONE page: the Polish
+# Estimate BETA prices its takeoff rows from these assemblies (2026-08-18). Nothing on the live
+# intake / estimate / proposal path reads them, and the beta only edits test projects, so the
+# shape of an assembly is still free to change. See backend/library.py.
 class LibraryItemIn(BaseModel):
     """Loose on purpose — library.validate_item() is the single authority on what is
     acceptable, so the rules can't drift between a Pydantic model and the writer."""

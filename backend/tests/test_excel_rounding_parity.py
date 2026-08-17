@@ -36,8 +36,17 @@ import pytest
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 ROUNDING_JS = FRONTEND / "js" / "xl-excel-rounding.js"
 
-# Every page that builds a HyperFormula engine.
-ENGINE_PAGES = ["estimate-review.html", "info-sheet.html", "polish-estimate.html"]
+# Every page that builds a HyperFormula engine — DISCOVERED, not listed. A hand-kept list drifts
+# both ways: it went stale when polish-estimate.html stopped loading the engine (2026-08-18, when
+# the beta started pricing itself from the item library), and a new engine page added tomorrow
+# would simply not be checked. Asking the pages themselves is right in both directions.
+# The test is the SCRIPT TAG, not the word: polish-intake.html says in a comment that it does not
+# load the engine, and a page that mentions HyperFormula to disclaim it is not an engine page.
+_LOADS_ENGINE = re.compile(r"<script[^>]+src=[\"'][^\"']*hyperformula[^\"']*[\"']", re.I)
+ENGINE_PAGES = sorted(
+    p.name for p in FRONTEND.glob("*.html")
+    if _LOADS_ENGINE.search(p.read_text(encoding="utf-8"))
+)
 
 
 @pytest.fixture()

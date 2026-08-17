@@ -189,7 +189,13 @@
       // getting its own heading: it IS part of making a proposal, unlike the Item Library.
       // The old Estimate Review is untouched and still reachable, so a polish bid can be run
       // both ways and compared while this is in beta.
-      navItem("/polish-estimate.html", "◐", "Polish Estimate", "BETA") +
+      // Opens at the beta's INTAKE, which is step 1 of its own four. A door straight into step 2
+      // starts an estimator on a project with no name, no bid date and no job conditions, and the
+      // conditions are exactly what moved onto the intake form in the 2026-08-17 rework — so
+      // pricing first means pricing before the five switches that change the price have been seen.
+      // The mid-flow door is different and stays different: the toolbar link on Estimate Review
+      // goes straight to /polish-estimate.html, because there the project already exists.
+      navItem("/polish-intake.html", "◐", "Polish Estimate", "BETA") +
       // The FOLLOW-UPS section used to sit here with two items, Follow-ups and Cadence & emails.
       // Hanz, 2026-08-10: "Remove the followups on the sidebar", then on 2026-08-11, having seen
       // both gone: "Keep the Cadence and EMAILs... Just the follow up tab." So the BOARD is what
@@ -220,8 +226,8 @@
       navItem("/projects.html", "▣", "Proposals Database") +
       // Reference data, not a daily page — the materials Treadwell buys and the assemblies
       // built out of them. Its own heading for the same reason Analytics has one: filed under
-      // Proposals it would read as a step in making one, which it deliberately is not (nothing
-      // in the estimate or proposal path reads it yet).
+      // Proposals it would read as a step in making one, which it deliberately is not. (The
+      // Polish Estimate beta does price its takeoff from these assemblies, but no live bid does.)
       '<div class="tw-section">Library</div>' +
       // 🧱 rather than another shaded square: ▤ already belongs to Lead Inbox, and the
       // geometric set is low-distinction enough without two items sharing a glyph. A brick
