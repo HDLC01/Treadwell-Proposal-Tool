@@ -1,99 +1,66 @@
-// Polish estimating, step 2 for polish jobs — the spreadsheet replaced by seven sub-steps.
+// Polish estimating, step 2 for polish jobs — three steps, priced from the item library.
 // Externalized (CSP: no inline scripts). Do not add inline scripts.
 //
-// WHAT THIS PAGE IS, AND WHAT IT IS CAREFUL NOT TO BE.
+// WHAT CHANGED, AND WHY THE WORKBOOK IS GONE FROM THIS PAGE.
 //
-// It is a form over the Polish worksheet. Every field writes a cell; HyperFormula recalculates
-// the worksheet's OWN formulas; the bid is read back out of D82. Nothing here prices anything,
-// so the figure on screen is the figure in the downloaded .xlsx by construction rather than by
-// reconciliation — the whole reason the spreadsheet could stop being the interface without
-// ceasing to be the engine.
+// The first version of this page was a form over the Polish worksheet: every field wrote a cell,
+// HyperFormula recalculated the sheet's own formulas, and the bid was read back out of D82. That
+// held as long as the beta only re-arranged inputs the worksheet already had.
 //
-// Two details that are load-bearing rather than incidental:
+// Will's 2026-08-17 pass asked for things the worksheet cannot represent — a takeoff whose rows are
+// ASSEMBLIES out of the Items & Assemblies library, labour lines an estimator can add, and the
+// markup chain shown as its own reviewable block. There is no cell to write an assembly into. So
+// the beta now prices itself, and the connection to Kyle's file is kept a different way: every
+// percentage and every step of the chain is transcribed in polish-bid-core.js, and
+// backend/tests/test_polish_markup_parity.py fails if his workbook and that transcription ever
+// disagree. The pin replaces the engine.
 //
-//   * EVERY sheet is loaded, not just Polish. The polish formulas reference `Epoxy!` (the whole
-//     job header mirrors it) and `validation!` (pad and tooling rate bands). Loading Polish
-//     alone leaves those as #REF and the bid reads as nonsense.
-//   * Values are persisted into `state.cell_values`, the same store estimate-review writes and
-//     done.js posts to /api/generate. That is what makes the screen and the file one thing
-//     instead of two agreeing things. MERGED, never replaced: the draft may carry Epoxy!* from
-//     a job that changed work type.
+// Two consequences worth stating plainly:
+//
+//   * This page NO LONGER writes state.cell_values. The downloaded .xlsx therefore shows the
+//     template's own Polish tab, not what was priced here. That is survivable only because the
+//     beta works on test projects by construction (see polish-sandbox.js) — it must be revisited
+//     before any of this prices a real bid.
+//   * computed_bid is REPLACED on every save, not merged. On a sandbox copy the source project's
+//     computed_bid arrived with the blob, and merging would leave a real project's total sitting
+//     underneath a beta price.
 (function () {
   "use strict";
 
-  var P = window.TWPolish;
-  var X = window.TWXL;
+  var B = window.TWPolishBid;      // the markup chain, pinned to Kyle's Polish tab
+  var L = window.TWLib;            // priceAssembly — the same maths the library page shows
+  var S = window.TWPolishSandbox;  // never edit a live bid
   var $ = function (id) { return document.getElementById(id); };
 
-  // The draft this page is working ON, and the two views derived from it. Reassigned together by
+  // The draft this page is working ON, and the model derived from it. Reassigned together by
   // adopt(), because the page can switch drafts mid-boot: opening a real bid here works on a test
-  // copy instead (see enterSandbox), and rendering the copy with the real bid's numbers still in
-  // hand would be the same silent mix-up in a different direction.
+  // copy instead, and rendering the copy with the real bid's numbers still in hand would be the
+  // same silent mix-up in a different direction.
   var state = {};
-  var cellValues = {};
   var M = null;
 
-  /** An estimator's DELIBERATE override of a worksheet formula, kept exactly as they left it.
-   *
-   *  This page must never CREATE one - writing a number into "=E18" because a form field
-   *  happened to be filled is the bug that put materials at $0. cellWrites refuses that.
-   *
-   *  But an override that already exists is a different thing entirely, and the difference is
-   *  the whole point. Estimate Review is a spreadsheet: typing over a formula there is an
-   *  ordinary, intentional act, the same as it is in Excel. Kyle does it - a real prod job has
-   *  Polish!B37 = 2.5 where the template says "=E37", because he judged the days himself.
-   *
-   *  An earlier version of this file STRIPPED every such entry, on the theory that they were all
-   *  poison left by the broken build. They are not. On production there was no poison at all -
-   *  this page had never run there - so stripping only destroyed real work, silently, and made
-   *  the two screens disagree about the same job by $5,634.
-   *
-   *  So: keep it, show it, and mark it. Same amber convention the rest of the tool uses for a
-   *  hand-edited figure. */
-  function overrideFor(addr) {
-    var v = (state.cell_values || {})["Polish!" + addr];
-    return (v === undefined || v === null || v === "") ? null : v;
-  }
+  // The library, loaded once at boot. Prices are recomputed from these on every keystroke rather
+  // than stored on the row: an item's cost can move, and a stored line total would then disagree
+  // with the same assembly priced on the library page.
+  var ASMS = [];
+  var ITEMS = [];
 
-  var engine = null;
-  var sheetNames = [];
   var at = 0;
 
-  // The page's own model. Kept under one key so it round-trips with the draft and cannot
-  // collide with the epoxy page's fields.
-  function freshModel(s) {
-    return Object.assign({
-      areas: [{ name: "", sf: "" }],
-      system: "S&P",
-      tooling: "traditional",
-      conditions: { local: true, hard_bid: false, prevailing_wage: false,
-                    taxable: true, remodel_tax: false },
-      materials: {},
-      added: [],
-      labour: {},
-      adds: {},
-      options: {},
-    }, (s || {}).polish_estimate || {});
-  }
-
-  /** Point the page at one draft's blob: its state, its cell map, its model. */
   function adopt(blob) {
     state = blob || {};
-    cellValues = Object.assign({}, state.cell_values || {});
-    M = freshModel(state);
+    M = B.migrateModel(state.polish_estimate);
   }
 
   adopt(TW.getState());
 
   var STEPS = [
-    { key: "areas",      label: "Areas" },
-    { key: "conditions", label: "Conditions" },
-    { key: "materials",  label: "Materials" },
-    { key: "labour",     label: "Crew" },
-    { key: "adds",       label: "Adds" },
-    { key: "options",    label: "Options" },
-    { key: "review",     label: "Review" },
+    { key: "takeoff", label: "Takeoff and Material" },
+    { key: "labor",   label: "Labor" },
+    { key: "review",  label: "Review" },
   ];
+
+  var UNITS = ["SF", "LF"];
 
   function say(msg, ok) {
     var el = $("alert");
@@ -107,49 +74,97 @@
     });
   };
 
-  // ── reading the workbook ────────────────────────────────────────────────────
-  function read(addr) {
-    if (!engine) return null;
-    var v = engine.getValue(P.SHEET, addr);
-    return typeof v === "number" ? v : null;
+  /** A form value: the estimator's own text, or empty. Never "0" for a field they left alone. */
+  function nv(v) { return v == null ? "" : String(v); }
+
+  /** Money with cents only when there are cents.
+   *
+   *  Kyle's sheet shows whole dollars, and a column of "$3,864.00" reads heavy. But hiding cents
+   *  under a total that sums the exact figures is how "11 × $85.38" ended up printed under
+   *  $939.21 on the library page. So: round figures stay round, and a fraction says so. */
+  function moneyAuto(n) {
+    var v = B.num(n);
+    return Math.abs(v - Math.round(v)) < 0.005 ? B.money(v) : B.money2(v);
   }
 
-  /** Push the form's cells into the engine, and remember them for the .xlsx.
-   *  Only what changed is written: setCellValue triggers a recalculation each time, and the
-   *  material block alone is thirty cells. */
-  function pushCells() {
-    var want = P.cellWrites(M);
-    for (var addr in want) {
-      var v = want[addr];
-      if (cellValues[addr] === v) continue;
-      cellValues[addr] = v;
-      var parts = addr.split("!");
-      engine.setCellValue(parts[0], parts[1], v === null ? "" : v);
+  var api = async function (path, opts) {
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch (e) {}
+    return fetch(TW.resolveApiBase() + path,
+      Object.assign({}, opts || {}, { headers: TW.authHeaders((opts || {}).headers) }));
+  };
+
+  // ── pricing ─────────────────────────────────────────────────────────────────
+  function asmById(id) {
+    if (!id) return null;
+    for (var i = 0; i < ASMS.length; i++) { if (ASMS[i].id === id) return ASMS[i]; }
+    return null;
+  }
+
+  /** Resolve typed text to an assembly: exact name first, then a UNIQUE case-insensitive match.
+   *
+   *  Never a fuzzy guess — the same rule as the material picker on the library page. Two
+   *  assemblies whose names differ only by case is a library problem to fix in the library, not
+   *  something to resolve by picking one of them here. */
+  function assemblyByName(text) {
+    var want = String(text == null ? "" : text).trim();
+    if (!want) return null;
+    var i;
+    for (i = 0; i < ASMS.length; i++) {
+      if (String(ASMS[i].name == null ? "" : ASMS[i].name) === want) return ASMS[i];
     }
+    var lc = want.toLowerCase();
+    var hits = [];
+    for (i = 0; i < ASMS.length; i++) {
+      if (String(ASMS[i].name == null ? "" : ASMS[i].name).toLowerCase() === lc) hits.push(ASMS[i]);
+    }
+    return hits.length === 1 ? hits[0] : null;
   }
 
+  /** What one takeoff row costs: the library's own price for that assembly at that measurement.
+   *  null when the row has no assembly picked yet — which is not an error, just unfinished. */
+  function rowPrice(row) {
+    var r = row || {};
+    var asm = asmById(r.assembly_id);
+    if (!asm) return null;
+    return L.priceAssembly(asm, ITEMS, B.num(r.measurement));
+  }
+
+  /** The row's cost as it should READ: a figure only when something was actually priced.
+   *
+   *  An assembly picked with no measurement yet prices to a perfectly legitimate 0 —
+   *  priceAssembly returns {total: 0, priced_lines: 0} — and printing "$0" there tells the
+   *  estimator the row is FREE, when the truth is that nobody has said how much of it there is.
+   *  That is the state every row sits in for the whole time between picking an assembly and typing
+   *  a number, so it is the state most likely to be read.
+   *
+   *  Both engines already refuse to do this with their own per-unit figures for exactly this
+   *  reason (library-core.js's per_unit and polish-bid-core.js's per_sf are null rather than 0),
+   *  and the cost box has to agree with them. Same for an assembly whose items cannot price: the
+   *  warning line beneath it says why, and "—" is what invites reading it. */
+  function rowCost(row) {
+    var p = rowPrice(row);
+    if (!p || !p.priced_lines) return { text: "—", empty: true, price: p };
+    return { text: moneyAuto(p.total), empty: false, price: p };
+  }
+
+  function materialTotal() {
+    var sum = 0;
+    M.takeoff.forEach(function (r) {
+      var p = rowPrice(r);
+      if (p) sum += p.total;
+    });
+    return sum;
+  }
+
+  /** The whole bid, recomputed from the model. Cheap enough to call on every keystroke. */
   function bid() {
-    return {
-      material: read(P.CELLS.material_total),
-      labour:   read(P.CELLS.labour_total),
-      tooling:  read(P.CELLS.tooling_total),
-      total:    read(P.CELLS.total),
-      perSf:    read(P.CELLS.per_sf),
-      area:     P.totalArea(M.areas),
-    };
-  }
-
-  function paintBid() {
-    var b = bid();
-    $("bidbar").hidden = false;
-    $("bid-total").textContent = b.total == null ? "—" : P.fmtMoney(b.total);
-    $("bid-psf").textContent = (b.perSf == null ? "" : P.fmtRate(b.perSf) + " / SF")
-      + (b.area ? " · " + P.fmtSf(b.area) : "");
-    var bits = [];
-    if (b.material != null) bits.push("Materials " + Math.round(b.material).toLocaleString());
-    if (b.labour != null) bits.push("Labour " + Math.round(b.labour).toLocaleString());
-    if (b.tooling != null) bits.push("Tooling " + Math.round(b.tooling).toLocaleString());
-    $("maths").innerHTML = bits.map(esc).join(' <i>+</i> ');
+    return B.markupChain({
+      material: materialTotal(),
+      labor: B.laborTotal(M.labor),
+      contingency: M.contingency,
+      conditions: M.conditions,
+      sf: B.takeoffSf(M.takeoff),
+    });
   }
 
   // ── saving ──────────────────────────────────────────────────────────────────
@@ -157,35 +172,77 @@
   function saveSoon() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
-      // Merge, never replace: cell_values may carry Epoxy!* entries from before this job's
-      // work type changed, and the generate path reads the whole map.
-      var merged = Object.assign({}, TW.getState().cell_values || {}, cellValues);
+      var b = bid();
+      M.totals = b;                        // a snapshot for the card and for reading later; the
+                                           // page never prices FROM it
       TW.setState(Object.assign({}, TW.getState(), {
-        cell_values: merged,
         polish_estimate: M,
-        // What the rest of the app reads for the card and the proposal.
-        computed_bid: Object.assign({}, TW.getState().computed_bid || {}, {
-          lump_sum: read(P.CELLS.total),
-          price_per_sf: read(P.CELLS.per_sf),
-          polish_sf: P.totalArea(M.areas),
-        }),
+        // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
+        // gates on it.
+        polish_sf: b.sf,
+        // Replaced, not merged — see the file header.
+        computed_bid: {
+          lump_sum: b.total,
+          price_per_sf: b.per_sf,
+          polish_sf: b.sf,
+          // What the rest of the app reads: _bid_total in backend/drafts.py for the projects card,
+          // and proposal-review for the lump sum and the two tax lines it itemizes.
+          full_bid: {
+            total_base_bid: b.total,
+            sales_tax: b.sales_tax,
+            remodel_tax: b.remodel_tax,
+          },
+        },
       }));
     }, 600);
   }
 
-  /** One place every edit funnels through, so nothing can change a value without the bid,
-   *  the rail and the draft all catching up. */
+  /** One place every edit funnels through, so nothing can change a value without the bid, the
+   *  rail and the draft all catching up.
+   *
+   *  `rerender` false repaints the computed figures in place instead of rebuilding the panel:
+   *  rebuilding mid-keystroke moves the caret out of the field being typed in. */
   function changed(rerender) {
-    pushCells();
     paintBid();
     paintRail();
     saveSoon();
-    if (rerender) renderPanel();
+    if (rerender) renderPanel(); else repaintNumbers();
+  }
+
+  // ── the bid bar ─────────────────────────────────────────────────────────────
+  function paintBid() {
+    var b = bid();
+    $("bidbar").hidden = false;
+    $("bid-total").textContent = b.total ? B.money(b.total) : "—";
+    $("bid-psf").textContent = (b.per_sf == null ? "" : B.money2(b.per_sf) + " / SF")
+      + (b.sf ? " · " + B.fmtSf(b.sf) + " SF" : "");
+    var bits = [];
+    if (b.material_total) bits.push("Material " + B.money(b.material_total));
+    if (b.labor_total) bits.push("Labor " + B.money(b.labor_total));
+    $("maths").innerHTML = bits.map(esc).join(' <i>+</i> ');
   }
 
   // ── the rail ────────────────────────────────────────────────────────────────
+  /** Untouched, done, or needs attention. Untouched is deliberately blank rather than a warning:
+   *  a page that opens shouting at the estimator has said nothing. */
+  function stepStatus() {
+    var priced = 0, half = 0;
+    M.takeoff.forEach(function (r) {
+      var measured = B.num(r.measurement) > 0;
+      if (r.assembly_id && measured) priced += 1;
+      else if (r.assembly_id || measured) half += 1;
+    });
+    var lab = 0;
+    M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });
+    return {
+      takeoff: half ? "att" : (priced ? "ok" : ""),
+      labor: lab ? "ok" : "",
+      review: (priced && lab && !B.blockers(M).length) ? "ok" : "",
+    };
+  }
+
   function paintRail() {
-    var st = P.stepStatus(M);
+    var st = stepStatus();
     var rail = $("rail");
     rail.innerHTML = "";
     STEPS.forEach(function (s, i) {
@@ -228,737 +285,431 @@
       '</span>' + prev + next + '</div></section>';
   }
 
-  function areasPanel() {
-    var html = M.areas.map(function (a, i) {
-      var sys = P.systemByValue(M.system);
-      return '<div class="area"><div class="area-h">' +
-        '<span class="tag">AREA ' + (i + 1) + '</span>' +
-        '<span class="area-sub">' + esc(P.fmtSf(a.sf || 0)) + '</span>' +
-        (M.areas.length > 1
-          ? '<button class="x" data-del-area="' + i + '" title="Remove this area">✕</button>'
-          : '') +
-        '</div><div class="grid">' +
-        '<div class="f"><label>Area name <span class="unit">text</span></label>' +
-        '<input data-area="' + i + '" data-k="name" value="' + esc(a.name || "") + '">' +
-        '<p class="hint">Yours, for reading the bid later. Not printed.</p></div>' +
-        '<div class="f"><label>Floor area <span class="unit">SF</span>' +
-        (i === 0 ? '<span class="cell">' + P.CELLS.area + '</span>' : '') + '</label>' +
-        '<input class="n" data-area="' + i + '" data-k="sf" value="' + esc(a.sf || "") + '">' +
-        '<p class="hint">' + (i === 0
-          ? 'Every area adds into this one cell — the sheet prices one figure.'
-          : 'Adds to the total measured area.') + '</p></div>' +
-        '</div></div>';
-    }).join("");
-
-    html += '<button class="addbtn" data-add-area="1">+ Add another area</button>';
-    html += '<div class="grid" style="margin-top:18px">' +
-      '<div class="f"><label>Polish system <span class="cell">' + P.CELLS.system +
-      '</span></label><select data-m="system">' +
-      P.SYSTEMS.map(function (s) {
-        return '<option value="' + esc(s.value) + '"' +
-          (s.value === M.system ? " selected" : "") + '>' + esc(s.label) + '</option>';
-      }).join("") +
-      '</select><p class="hint">One system per bid — the worksheet has one selector, and every' +
-      ' rate lookup keys off it.</p></div>' +
-      '<div class="f"><label>Tooling <span class="cell">' + P.CELLS.tooling +
-      '</span></label><select data-m="tooling">' +
-      P.TOOLINGS.map(function (t) {
-        return '<option value="' + esc(t.value) + '"' +
-          (t.value === M.tooling ? " selected" : "") + '>' + esc(t.label) + '</option>';
-      }).join("") + '</select></div></div>' +
-      '<p class="cap">Total measured area <b>' + esc(P.fmtSf(P.totalArea(M.areas))) + '</b>.</p>';
-
-    return shell("What are we polishing?",
-      "Area and system. Everything downstream is priced off these numbers.", html);
-  }
-
-  function conditionsPanel() {
-    var html = P.CONDITIONS.map(function (c) {
-      var on = !!M.conditions[c.key];
-      return '<div class="sw' + (on ? " on" : "") + '" data-cond="' + esc(c.key) + '">' +
-        '<span class="track"></span><span><span class="t">' + esc(c.label) + '</span>' +
-        '<span class="c">' + esc(c.why) + '</span></span>' +
-        '<span class="cell">' + esc(c.cell) + '</span></div>';
-    }).join("");
-    return shell("Job conditions", "The five things that move the price. Each says what it does.",
-      html);
-  }
-
-  /** A worksheet cell the estimator may type into, OR the value the worksheet works out itself.
-   *
-   *  The difference matters more than it looks. A derived cell holds a FORMULA — B20 is "=E18",
-   *  so the densifier quantity follows the area on its own. Rendering it as an input invites a
-   *  number that overwrites the formula, in the download as well as on screen, and the line
-   *  stops tracking the area for good.
-   *
-   *  So a derived cell is shown, never offered: the computed figure, dimmed, with the formula in
-   *  its tooltip so the estimator can see WHY it says what it says and which field to change to
-   *  move it. */
-  function fmtCell(v) {
-    if (v == null || v === "") return "—";
-    if (typeof v === "number") {
-      return P.num(v).toLocaleString("en-US",
-        { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 0 });
+  /** The hint under an assembly picker: what was matched, or that nothing was. */
+  function asmHint(row) {
+    var asm = asmById((row || {}).assembly_id);
+    if (asm) {
+      var n = (asm.lines || []).length;
+      return n + " item line" + (n === 1 ? "" : "s") + " · priced per " + (asm.unit || "SF");
     }
-    return String(v);
-  }
-
-  function derivedCell(addr) {
-    var ov = overrideFor(addr);
-    if (ov !== null) {
-      // Somebody typed over the formula in Estimate Review. Show THEIR number - it is what the
-      // bid is built from - and mark it, so the figure is not mistaken for the worksheet's own.
-      return '<span class="overridden" title="' + esc(
-        addr + " was set by hand to " + ov + ", replacing " + P.DERIVED[addr] +
-        ". Clear it in Estimate Review to go back to the worksheet’s own figure."
-      ) + '">' + esc(fmtCell(ov)) + ' <span class="flag">⚠</span></span>';
+    if (String((row || {}).assembly_name || "").trim()) {
+      return "No assembly by that name — pick one from the list.";
     }
-    return '<span class="derived" title="' + esc(addr + "  " + P.DERIVED[addr]) +
-      '">' + esc(fmtCell(read(addr))) + '</span>';
+    return "From the Items &amp; Assemblies library.";
   }
 
-  function qtyOrCostCell(addr, row, k, value) {
-    if (P.isDerived(addr)) return derivedCell(addr);
-    return '<input class="n" data-mat="' + row + '" data-k="' + k + '" value="' +
-      esc(value == null ? "" : value) + '">';
+  function measureText(row) {
+    var r = row || {};
+    return B.num(r.measurement) ? B.fmtSf(r.measurement) + " " + (r.unit || "SF") : "";
   }
 
-  function materialsPanel() {
-    var rows = "";
-    var lastGroup = null;
-    P.MATERIAL_LINES.forEach(function (l) {
-      if (l.group !== lastGroup) {
-        rows += '<tr class="head-row"><td class="rowcell"></td><td colspan="4">' +
-          esc(l.group) + '</td></tr>';
-        lastGroup = l.group;
+  function takeoffPanel() {
+    var html = M.takeoff.map(function (r, i) {
+      var rc = rowCost(r);
+      var p = rc.price;
+      var warn = "";
+      if (p && p.broken_lines) {
+        warn = '<p class="warnline" data-broken-for="' + i + '">' + p.broken_lines + ' line' +
+          (p.broken_lines === 1 ? '' : 's') + ' in this assembly cannot price yet — check the ' +
+          'cost and coverage of its items in the library.</p>';
       }
-      var m = M.materials[l.row] || {};
-      var d = read("D" + l.row);
-      rows += '<tr><td class="rowcell">' + l.row + '</td><td>' + esc(l.label) + '</td>' +
-        '<td class="r">' + qtyOrCostCell("B" + l.row, l.row, "qty", m.qty) + '</td>' +
-        '<td class="r">' + qtyOrCostCell("C" + l.row, l.row, "cost", m.cost) + '</td>' +
-        '<td class="r calc">' + (d == null ? "" : Math.round(d).toLocaleString()) + '</td></tr>';
-    });
+      return '<div class="tk"><div class="tk-h">' +
+        '<span class="tag">ROW ' + (i + 1) + '</span>' +
+        '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
+        (M.takeoff.length > 1
+          ? '<button class="x" data-del-row="' + i + '" title="Remove this row">✕</button>'
+          : '') +
+        '</div><div class="tk-g">' +
 
-    M.added.forEach(function (a, i) {
-      var row = P.slotForAdded(i);
-      var d = row == null ? null : read("D" + row);
-      rows += '<tr class="added"><td class="rowcell">' + (row == null ? "—" : row) + '</td>' +
-        '<td><input data-add-line="' + i + '" data-k="name" value="' + esc(a.name || "") + '"> ' +
-        '<span class="flag" title="Your own line. It writes into a spare worksheet row, so it ' +
-        'bills like any other material.">⚠</span>' +
-        (row == null ? ' <b style="color:var(--warn)">no room in the worksheet</b>' : '') +
-        '</td>' +
-        '<td class="r"><input class="n" data-add-line="' + i + '" data-k="qty" value="' +
-        esc(a.qty == null ? "" : a.qty) + '"></td>' +
-        '<td class="r"><input class="n" data-add-line="' + i + '" data-k="cost" value="' +
-        esc(a.cost == null ? "" : a.cost) + '"></td>' +
-        '<td class="r calc">' + (d == null ? "" : Math.round(d).toLocaleString()) + '</td>' +
-        '</tr>';
-    });
+        '<div class="f"><label>Assembly</label>' +
+        '<input list="dl-assemblies" data-tk="' + i + '" data-k="assembly_name" ' +
+        'placeholder="Search assemblies…" value="' + esc(nv(r.assembly_name)) + '">' +
+        '<p class="hint" data-asmhint-for="' + i + '">' + asmHint(r) + '</p></div>' +
 
-    var sub = read(P.CELLS.material_total);
-    rows += '<tr class="sum-row"><td></td><td>Material subtotal</td><td></td>' +
-      '<td class="r rowcell">' + P.CELLS.material_total + '</td><td class="r">' +
-      (sub == null ? "" : Math.round(sub).toLocaleString()) + '</td></tr>';
+        '<div class="f"><label>Measurement</label>' +
+        '<input class="n" data-tk="' + i + '" data-k="measurement" value="' +
+        esc(nv(r.measurement)) + '">' +
+        '<p class="hint">How much of it there is.</p></div>' +
 
-    var left = P.slotsLeft(M.added.length);
-    var html = '<table><thead><tr><th style="width:34px"></th><th>Item</th>' +
-      '<th class="r" style="width:104px">Quantity</th>' +
-      '<th class="r" style="width:104px">Cost each</th>' +
-      '<th class="r" style="width:104px">Line total</th></tr></thead><tbody>' + rows +
-      '</tbody></table>' +
-      '<button class="addbtn" data-add-line-new="1"' + (left ? "" : " disabled") + '>' +
-      (left ? "+ Add your own material line" : "No spare worksheet rows left") + '</button>' +
-      '<p class="cap">' + left + ' spare worksheet row' + (left === 1 ? "" : "s") +
-      ' left. Your lines total into <b>' + P.CELLS.material_total +
-      '</b> like every other material, so the bid and the file agree.</p>';
+        '<div class="f"><label>Unit</label><select data-tk="' + i + '" data-k="unit">' +
+        UNITS.map(function (u) {
+          return '<option value="' + u + '"' + (r.unit === u ? " selected" : "") + '>' + u +
+            '</option>';
+        }).join("") + '</select>' +
+        '<p class="hint">SF or LF.</p></div>' +
 
-    return shell("Materials",
-      "Quantity × cost each. The row number is where it lands in the worksheet.", html);
-  }
+        '<div class="f"><label>Total cost</label>' +
+        '<div class="costbox' + (rc.empty ? " empty" : "") + '" data-cost-for="' + i + '">' +
+        esc(rc.text) + '</div>' +
+        '<p class="hint" data-perunit-for="' + i + '">' +
+        esc(p && p.per_unit != null ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "") +
+        '</p></div>' +
 
-  function labourPanel() {
-    var rows = P.LABOUR_LINES.map(function (l) {
-      var v = M.labour[l.key] || {};
-      var d = read("D" + l.crew.replace(/\D/g, ""));
-      var fld = function (addr, k, val) {
-        if (P.isDerived(addr)) return derivedCell(addr);
-        return '<input class="n" data-lab="' + esc(l.key) + '" data-k="' + k + '" value="' +
-          esc(val == null ? "" : val) + '">';
-      };
-      return '<tr><td>' + esc(l.label) + ' <span class="rowcell">' + esc(l.crew) + '</span></td>' +
-        '<td class="r">' + fld(l.crew, "crew", v.crew) + '</td>' +
-        '<td class="r">' + fld(l.days, "days", v.days) + '</td>' +
-        '<td class="r">' + fld(l.rate, "rate", v.rate) + '</td>' +
-        '<td class="r calc">' + (d == null ? "" : Math.round(d).toLocaleString()) + '</td></tr>';
+        '</div>' + warn + '</div>';
     }).join("");
-    var tot = read(P.CELLS.labour_total);
-    rows += '<tr class="sum-row"><td>Labour total</td><td></td><td></td>' +
-      '<td class="r rowcell">' + P.CELLS.labour_total + '</td><td class="r">' +
-      (tot == null ? "" : Math.round(tot).toLocaleString()) + '</td></tr>';
 
-    var pw = M.conditions.prevailing_wage;
-    return shell("Crew and days",
-      "Change what's wrong. The worksheet's own heuristic fills what you leave blank.",
-      '<table><thead><tr><th>Task</th><th class="r" style="width:90px">Guys</th>' +
-      '<th class="r" style="width:90px">Days</th>' +
-      '<th class="r" style="width:104px">Rate / day</th>' +
-      '<th class="r" style="width:104px">Cost</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-      '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>, so these are ' +
-      (pw ? "prevailing" : "standard") + ' rates. Change it in step 2.</p>');
+    html += '<button class="addbtn" data-add-row="1">＋ Add another assembly</button>';
+    html += '<p class="cap">Material total <b data-mat-total>' +
+      esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
+      esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
+      'not count toward the square footage the price-per-SF is divided by.</p>';
+
+    return shell("Takeoff and material",
+      "One row per assembly. The library prices it against the measurement you give it.", html);
   }
 
-  function addsPanel() {
-    var html = '<div class="grid">' + P.ADDS.map(function (a) {
-      var v = M.adds[a.key];
-      var k = read(a.cell.replace("J", "K"));
-      // Ram board and joint filler follow B35; the two coves follow E19. The worksheet already
-      // knows the quantity, so showing an empty box beside it would be asking for a number that
-      // has an answer — and any answer typed would cut the link.
-      var derived = P.isDerived(a.cell);
-      var field = derived
-        ? '<div class="derived-box">' + derivedCell(a.cell) + '</div>'
-        : '<input class="n" data-add="' + esc(a.key) + '" value="' + esc(v == null ? "" : v) + '">';
-      var hint = derived
-        ? "Follows the area. Change the area in step 1."
-        : (k ? "<b>" + esc(P.fmtMoney(k)) + "</b> at this quantity"
-             : "Leave at zero if the job has none.");
-      return '<div class="f"><label>' + esc(a.label) + ' <span class="unit">' + esc(a.unit) +
-        '</span><span class="cell">' + esc(a.cell) + '</span></label>' + field +
-        '<p class="hint">' + hint + '</p></div>';
-    }).join("") + '</div>';
-    return shell("Standard adds",
-      "Enter a quantity and it prices itself off the worksheet's rate bands.",
-      html + '<p class="cap">Rates step by quantity, so the per-unit price changes as you type.' +
-      ' Zero means the add is off.</p>');
-  }
-
-  function optionsPanel() {
-    var total = read(P.CELLS.total);
-    var html = P.OPTIONS.map(function (o) {
-      var on = !!M.options[o.key];
-      var rate = read(o.rateCell);
-      var add = read(o.addCell);
-      return '<div class="opt" data-opt="' + esc(o.key) + '">' +
-        '<span class="track' + '"' + (on ? ' style="background:var(--red);border-color:transparent"' : '') +
-        '></span>' +
-        '<span><span class="nm">' + esc(o.label) + '</span><span class="rate">' +
-        (rate == null ? "" : esc(P.fmtRate(rate)) + "/SF") + '</span></span>' +
-        '<span class="adds"><b>' + (add == null ? "—" : "+ " + esc(P.fmtMoney(add))) +
-        '</b><span>' + (add != null && total != null
-          ? "bid with option " + esc(P.fmtMoney(add + total)) : "") + '</span></span></div>';
+  function laborPanel() {
+    var rows = M.labor.map(function (r, i) {
+      return '<tr>' +
+        '<td><input data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
+        '" placeholder="Task"></td>' +
+        '<td class="r"><input class="n" data-lab="' + i + '" data-k="guys" value="' +
+        esc(nv(r.guys)) + '"></td>' +
+        '<td class="r"><input class="n" data-lab="' + i + '" data-k="days" value="' +
+        esc(nv(r.days)) + '"></td>' +
+        '<td class="r"><span class="mny">$<input class="n" data-lab="' + i +
+        '" data-k="rate" value="' + esc(nv(r.rate)) + '"></span></td>' +
+        '<td class="r calc" data-lcost-for="' + i + '">' +
+        esc(moneyAuto(B.laborCost(r))) + '</td>' +
+        '<td class="r">' + (M.labor.length > 1
+          ? '<button class="x" data-del-lab="' + i + '" title="Remove this line">✕</button>'
+          : '') + '</td></tr>';
     }).join("");
-    return shell("Options to quote alongside",
-      "Upgrades priced per SF and shown to the customer beside the base bid.",
-      html + '<p class="cap">These never change the base bid — the worksheet adds them to it' +
-      ' for the customer to choose.</p>');
+
+    rows += '<tr class="sum-row"><td>Labor total</td><td></td><td></td><td></td>' +
+      '<td class="r" data-labor-total>' + esc(moneyAuto(B.laborTotal(M.labor))) +
+      '</td><td></td></tr>';
+
+    var pw = !!(M.conditions || {}).prevailing_wage;
+    return shell("Labor",
+      "Guys × days × rate, at " + B.HOURS_PER_DAY + " hours a day.",
+      '<table><thead><tr><th>Task</th><th class="r" style="width:84px">Guys</th>' +
+      '<th class="r" style="width:84px">Days</th>' +
+      '<th class="r" style="width:112px">Rate / day</th>' +
+      '<th class="r" style="width:112px">Cost</th><th style="width:28px"></th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>' +
+      '<button class="addbtn" data-add-lab="1">＋ Add a labor line</button>' +
+      '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
+      (pw ? ", so a 5% escalation is added on the review step" : "") +
+      '. Change it on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
+      '">the intake step</a>.</p>');
+  }
+
+  // ── review ──────────────────────────────────────────────────────────────────
+  function card(title, step, amt, inner) {
+    return '<div class="rev"><div class="rev-h">' + esc(title) +
+      ' <button data-go="' + step + '">Edit</button>' +
+      (amt ? '<span class="amt">' + esc(amt) + '</span>' : '') + '</div>' + inner + '</div>';
+  }
+
+  /** rows: [label, middle, money, rowClass]. `money` may be pre-built HTML for a keyed cell. */
+  function revTable(rows) {
+    return '<table class="rev-t"><tbody>' + rows.map(function (r) {
+      return '<tr' + (r[3] ? ' class="' + r[3] + '"' : '') + '><td>' + esc(r[0]) +
+        '</td><td class="r">' + esc(r[1] == null ? "" : r[1]) + '</td><td class="r">' +
+        (r[2] == null ? "" : r[2]) + '</td></tr>';
+    }).join("") + '</tbody></table>';
+  }
+
+  /** An amount the chain computes, keyed so repaintNumbers can refresh it without a rebuild. */
+  function mkAmt(b, key) {
+    return '<span data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</span>';
   }
 
   function reviewPanel() {
     var b = bid();
-    var blk = P.blockers(M);
+    var blk = B.blockers(M);
     var html = "";
     if (blk.length) {
       html += '<div class="blockers"><b>Not finished yet.</b><ul>' +
         blk.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + '</ul></div>';
     }
-    var sys = P.systemByValue(M.system);
-    html += card("Areas", 0, P.fmtSf(b.area),
-      M.areas.filter(function (a) { return a.sf; }).map(function (a) {
-        return [a.name || "Unnamed area", P.fmtSf(a.sf)];
-      }).concat([["System", sys ? sys.label : "—"]]));
-    html += card("Job conditions", 1, "",
-      P.CONDITIONS.map(function (c) {
-        return [c.label, M.conditions[c.key] ? "Yes" : "No"];
-      }));
-    html += card("Materials", 2, b.material == null ? "" : P.fmtMoney(b.material),
-      [["Lines", String(P.MATERIAL_LINES.length + M.added.length)],
-       ["Your own", String(M.added.length)]]);
-    html += card("Labour", 3, b.labour == null ? "" : P.fmtMoney(b.labour),
-      P.LABOUR_LINES.map(function (l) {
-        var v = M.labour[l.key] || {};
-        return [l.label, (v.crew || 0) + " × " + (v.days || 0)];
-      }));
-    var addOn = Object.keys(M.adds).filter(function (k) { return P.num(M.adds[k]) > 0; });
-    html += card("Standard adds", 4, "",
-      addOn.length ? addOn.map(function (k) {
-        var a = P.ADDS.filter(function (x) { return x.key === k; })[0];
-        return [a ? a.label : k, M.adds[k] + " " + (a ? a.unit : "")];
-      }) : [["None", ""]]);
-    var optOn = Object.keys(M.options).filter(function (k) { return M.options[k]; });
-    html += card("Options quoted", 5, "",
-      optOn.length ? optOn.map(function (k) {
-        var o = P.OPTIONS.filter(function (x) { return x.key === k; })[0];
-        return [o ? o.label : k, "quoted"];
-      }) : [["None", ""]]);
+
+    // Takeoff and material
+    var tkRows = [];
+    M.takeoff.forEach(function (r) {
+      if (!r.assembly_id && !B.num(r.measurement)) return;
+      tkRows.push([r.assembly_name || "(no assembly picked)", measureText(r),
+                   esc(rowCost(r).text)]);
+    });
+    if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
+    tkRows.push(["Materials", "", mkAmt(b, "material")]);
+    tkRows.push(["Shipping", B.pct(B.RATES.SHIPPING), mkAmt(b, "shipping")]);
+    tkRows.push(["Material total", "", mkAmt(b, "material_total"), "tot"]);
+    html += card("Takeoff and Material", 0, moneyAuto(b.material_total), revTable(tkRows));
+
+    // Labor
+    var labRows = [];
+    M.labor.forEach(function (r) {
+      if (!B.laborCost(r)) return;
+      labRows.push([r.label || "Labor line",
+                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(r.rate),
+                    esc(moneyAuto(B.laborCost(r)))]);
+    });
+    if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
+    labRows.push(["Labor", "", mkAmt(b, "labor")]);
+    labRows.push(["Labor escalation", b.escalation
+      ? B.pct(B.RATES.ESCALATION) : "prevailing wage off", mkAmt(b, "escalation")]);
+    labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
+    labRows.push(["Labor total", "", mkAmt(b, "labor_total"), "tot"]);
+    html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
+
+    html += '<div class="rev">' + markupTable(b) + '</div>';
     return shell("Review the bid",
-      "Everything on one screen before it becomes a proposal. Any line jumps back to its step.",
-      html);
+      "Costs, then the markup Kyle's sheet applies, then the lump sum.", html);
   }
 
-  function card(title, step, amt, pairs) {
-    return '<div class="rev"><div class="rev-h">' + esc(title) +
-      ' <button data-go="' + step + '">Edit</button>' +
-      (amt ? '<span class="amt">' + esc(amt) + '</span>' : '') + '</div>' +
-      '<div class="rev-b">' + pairs.map(function (p) {
-        return '<div><b>' + esc(p[0]) + '</b><span>' + esc(p[1]) + '</span></div>';
-      }).join("") + '</div></div>';
+  /** Built at RENDER time, never at parse time.
+   *
+   *  withDraft has to be asked for the id the page settled on, and this module is parsed before
+   *  shared.js has finished deciding — on a sandbox copy the id at parse time is still the REAL
+   *  project's, so a link baked in then walks the estimator onto the live bid. Same reason shell()
+   *  builds its Continue href inside the function. */
+  function intakeNote() {
+    return ' <span class="note">off · <a href="' +
+      esc(TW.withDraft("/polish-intake.html")) + '">edit in Intake</a></span>';
   }
 
-  var PANELS = [areasPanel, conditionsPanel, materialsPanel, labourPanel,
-                addsPanel, optionsPanel, reviewPanel];
+  /** Rows 64-82 of the Polish tab, in the same order, so an estimator who knows Kyle's sheet can
+   *  read down it and recognise every line. Percentages are the sheet's own and not editable —
+   *  the workbook locks these cells in the generated download for the same reason. Contingency is
+   *  the one exception, because the sheet leaves D71 open too. */
+  function markupTable(b) {
+    var r = "";
+    var row = function (label, pctHtml, key, cls) {
+      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + label + '</td>' +
+        '<td class="pct">' + pctHtml + '</td>' +
+        '<td class="amt" data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</td></tr>';
+    };
+    var keyedPct = function (key) {
+      return '<span data-mkpct="' + key + '">' + esc(B.pct(b[key])) + '</span>';
+    };
+
+    r += '<tr class="sub"><td>Sub-total costs</td><td class="pct"></td>' +
+      '<td class="amt" data-mk="sub_total">' + esc(moneyAuto(b.sub_total)) + '</td></tr>';
+
+    r += '<tr class="band"><td colspan="3">Markup</td></tr>';
+    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct"), "gp");
+    r += row("Hard bid discount" + (b.hard_bid_pct ? "" :
+      ' <span class="note">' + ((M.conditions || {}).hard_bid
+        ? "under the discount threshold" : "hard bid off") + '</span>'),
+      keyedPct("hard_bid_pct"), "hard_bid", b.hard_bid_pct ? "" : "off");
+    r += row("Superintendent &amp; PTO", esc(B.pct(B.RATES.SUPER_PTO)), "super_pto");
+    r += row("Soft costs", esc(B.pct(B.RATES.SOFT_COSTS)), "soft_costs");
+    r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +
+      '<td class="pct"></td><td class="amt"><input data-contingency value="' +
+      esc(nv(M.contingency)) + '" inputmode="decimal"></td></tr>';
+
+    r += '<tr class="band"><td colspan="3">Taxes &amp; fees</td></tr>';
+    r += row("Sales tax <span class=\"note\">on materials</span>" +
+      ((M.conditions || {}).taxable ? "" : intakeNote()),
+      keyedPct("sales_tax_pct"), "sales_tax", b.sales_tax_pct ? "" : "off");
+    r += row("Kansas remodel tax" + ((M.conditions || {}).remodel_tax ? "" : intakeNote()),
+      keyedPct("remodel_pct"), "remodel_tax", b.remodel_pct ? "" : "off");
+    r += row("Total taxes", "", "taxes", "tot");
+    r += row("Fees + Textura", "", "fees", b.fees ? "" : "off");
+    r += row("Bond", esc(B.pct(B.RATES.BOND)), "bond", b.bond ? "" : "off");
+    r += row("Total fees + bond", "", "fees_and_bond", "tot");
+
+    r += '<tr class="grand"><td>Total lump sum</td>' +
+      '<td class="pct" data-mk-persf>' + esc(perSfText(b)) + '</td>' +
+      '<td class="amt" data-mk="total">' + esc(moneyAuto(b.total)) + '</td></tr>';
+
+    return '<table class="mk"><tbody>' + r + '</tbody></table>';
+  }
+
+  function perSfText(b) {
+    if (!b.sf) return "";
+    return B.money2(b.per_sf) + " / SF";
+  }
+
+  var PANELS = [takeoffPanel, laborPanel, reviewPanel];
 
   function renderPanel() { $("panels").innerHTML = PANELS[at](); }
 
+  function renderDatalist() {
+    var dl = $("dl-assemblies");
+    if (!dl) return;
+    dl.innerHTML = ASMS.map(function (a) {
+      return '<option value="' + esc(a.name) + '"></option>';
+    }).join("");
+  }
+
+  /** Refresh every computed figure in place, without rebuilding the panel.
+   *
+   *  Keyed by data-attribute, never by column position. The library page addressed its computed
+   *  cells by column index and shipped Quantity and Cost written into each other's columns; the
+   *  test agreed with the constants and missed it entirely. An attribute cannot be off by one. */
+  function repaintNumbers() {
+    var b = bid();
+
+    document.querySelectorAll("[data-cost-for]").forEach(function (el) {
+      var rc = rowCost(M.takeoff[parseInt(el.getAttribute("data-cost-for"), 10)]);
+      el.textContent = rc.text;
+      el.className = "costbox" + (rc.empty ? " empty" : "");
+    });
+    document.querySelectorAll("[data-perunit-for]").forEach(function (el) {
+      var i = parseInt(el.getAttribute("data-perunit-for"), 10);
+      var p = rowPrice(M.takeoff[i]);
+      var r = M.takeoff[i] || {};
+      el.textContent = (p && p.per_unit != null)
+        ? B.money2(p.per_unit) + " / " + (r.unit || "SF") : "";
+    });
+    document.querySelectorAll("[data-measure-for]").forEach(function (el) {
+      el.textContent = measureText(M.takeoff[parseInt(el.getAttribute("data-measure-for"), 10)]);
+    });
+    document.querySelectorAll("[data-asmhint-for]").forEach(function (el) {
+      el.innerHTML = asmHint(M.takeoff[parseInt(el.getAttribute("data-asmhint-for"), 10)]);
+    });
+    document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
+      el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
+        el.getAttribute("data-lcost-for"), 10)]));
+    });
+
+    var one = function (sel, txt) {
+      var el = document.querySelector(sel);
+      if (el) el.textContent = txt;
+    };
+    one("[data-mat-total]", moneyAuto(materialTotal()));
+    one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
+    one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor)));
+    one("[data-mk-persf]", perSfText(b));
+
+    document.querySelectorAll("[data-mk]").forEach(function (el) {
+      el.textContent = moneyAuto(b[el.getAttribute("data-mk")]);
+    });
+    // The GP band and the two tax rates move with the sub-total and the toggles, so the percentage
+    // column is as computed as the money column is.
+    document.querySelectorAll("[data-mkpct]").forEach(function (el) {
+      el.textContent = B.pct(b[el.getAttribute("data-mkpct")]);
+    });
+  }
+
   // ── events ──────────────────────────────────────────────────────────────────
   // Delegated, because every panel is re-rendered from state rather than mutated in place.
+  // Monotonic, not derived from the row count: add-delete-add inside one millisecond used to
+  // regenerate an id that had already been used. Nothing indexes labor rows by id today (the page
+  // works by array position), so this is closing a door rather than fixing a symptom.
+  var laborSeq = 0;
+  function newLaborRow() {
+    laborSeq += 1;
+    return { id: "u_" + Date.now() + "_" + laborSeq, label: "", guys: "", days: "", rate: "" };
+  }
+
   document.addEventListener("click", function (e) {
     var t = e.target;
+    if (!t || !t.closest) return;
+
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
 
-    var sw = t.closest("[data-cond]");
-    if (sw) {
-      var k = sw.getAttribute("data-cond");
-      M.conditions[k] = !M.conditions[k];
+    if (t.closest("[data-add-row]")) {
+      M.takeoff.push({ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" });
       changed(true);
       return;
     }
-    var opt = t.closest("[data-opt]");
-    if (opt) {
-      var ok = opt.getAttribute("data-opt");
-      M.options[ok] = !M.options[ok];
-      changed(true);
-      return;
-    }
-    if (t.closest("[data-add-area]")) { M.areas.push({ name: "", sf: "" }); changed(true); return; }
-    var da = t.closest("[data-del-area]");
-    if (da) {
-      M.areas.splice(parseInt(da.getAttribute("data-del-area"), 10), 1);
-      if (!M.areas.length) M.areas.push({ name: "", sf: "" });
-      changed(true);
-      return;
-    }
-    if (t.closest("[data-add-line-new]")) {
-      if (P.slotsLeft(M.added.length) <= 0) {
-        say("The worksheet has no spare material rows left, so there is nowhere for another " +
-            "line to bill from. Kyle would need to extend the template.");
-        return;
+    var dr = t.closest("[data-del-row]");
+    if (dr) {
+      M.takeoff.splice(parseInt(dr.getAttribute("data-del-row"), 10), 1);
+      if (!M.takeoff.length) {
+        M.takeoff.push({ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" });
       }
-      M.added.push({ name: "", qty: "", cost: "" });
       changed(true);
+      return;
+    }
+    if (t.closest("[data-add-lab]")) {
+      M.labor.push(newLaborRow());
+      changed(true);
+      return;
+    }
+    var dl = t.closest("[data-del-lab]");
+    if (dl) {
+      M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
+      if (!M.labor.length) M.labor.push(newLaborRow());
+      changed(true);
+      return;
     }
   });
+
+  /** Point a takeoff row at an assembly, by the name that was typed or picked. */
+  function setAssembly(i, text) {
+    var row = M.takeoff[i];
+    if (!row) return false;
+    var before = row.assembly_id || "";
+    row.assembly_name = text;
+    var asm = assemblyByName(text);
+    row.assembly_id = asm ? asm.id : "";
+    // Adopt the assembly's own unit only when the pick actually CHANGES. Doing it on every
+    // keystroke would snap a row whose unit the estimator switched by hand back to the library's.
+    if (asm && row.assembly_id !== before) {
+      var u = String(asm.unit == null ? "" : asm.unit).toUpperCase();
+      if (u === "SF" || u === "LF") {
+        row.unit = u;
+        var sel = document.querySelector('select[data-tk="' + i + '"][data-k="unit"]');
+        if (sel) sel.value = u;        // in place: a rebuild here would take the caret with it
+      }
+    }
+    return !!asm;
+  }
 
   document.addEventListener("input", function (e) {
     var el = e.target;
-    if (!el.matches || !el.matches("input")) return;
+    if (!el || !el.matches) return;
+
+    if (el.matches("[data-contingency]")) {
+      M.contingency = el.value;
+      changed(false);
+      return;
+    }
+    if (!el.matches("input")) return;
     var k = el.getAttribute("data-k");
 
-    var ai = el.getAttribute("data-area");
-    if (ai !== null) { M.areas[+ai][k] = el.value; changed(false); repaintAreaSub(); return; }
+    var ti = el.getAttribute("data-tk");
+    if (ti !== null && k) {
+      var i = parseInt(ti, 10);
+      if (k === "assembly_name") setAssembly(i, el.value);
+      else if (M.takeoff[i]) M.takeoff[i][k] = el.value;
+      changed(false);
+      return;
+    }
 
-    var mi = el.getAttribute("data-mat");
-    if (mi !== null) {
-      M.materials[mi] = M.materials[mi] || {};
-      M.materials[mi][k] = el.value;
-      changed(false); repaintCalcs(); return;
+    var li = el.getAttribute("data-lab");
+    if (li !== null && k) {
+      var j = parseInt(li, 10);
+      if (M.labor[j]) M.labor[j][k] = el.value;
+      changed(false);
+      return;
     }
-    var li = el.getAttribute("data-add-line");
-    if (li !== null) {
-      M.added[+li] = M.added[+li] || {};
-      M.added[+li][k] = el.value;
-      changed(false); repaintCalcs(); return;
-    }
-    var lk = el.getAttribute("data-lab");
-    if (lk !== null) {
-      M.labour[lk] = M.labour[lk] || {};
-      M.labour[lk][k] = el.value;
-      changed(false); repaintCalcs(); return;
-    }
-    var ak = el.getAttribute("data-add");
-    if (ak !== null) { M.adds[ak] = el.value; changed(false); return; }
   });
 
   document.addEventListener("change", function (e) {
-    var m = e.target.getAttribute && e.target.getAttribute("data-m");
-    if (!m) return;
-    M[m] = e.target.value;
-    changed(true);
+    var el = e.target;
+    if (!el || !el.getAttribute) return;
+    var ti = el.getAttribute("data-tk");
+    if (ti === null) return;
+    var i = parseInt(ti, 10);
+    var k = el.getAttribute("data-k");
+    if (k === "unit") {
+      if (M.takeoff[i]) M.takeoff[i].unit = el.value;
+      changed(false);
+      return;
+    }
+    if (k === "assembly_name") {
+      // Committed — blurred, or picked off the list. A TARGETED repaint, not a re-render.
+      //
+      // `change` on this field fires when the estimator leaves it, and the ordinary way to leave it
+      // is Tab into Measurement. A full re-render at that moment rebuilds the row, destroys the
+      // field they have just tabbed into, and drops focus onto <body> — so the number they type
+      // next goes nowhere at all. Found by tabbing between the two fields on staging; every unit
+      // test passed, because a test never has to reach for the keyboard.
+      //
+      // Nothing is lost by repainting instead: the hint, the per-unit line, the measurement label
+      // and the cost are all keyed and refreshed by repaintNumbers, and setAssembly already syncs
+      // the unit select in place.
+      setAssembly(i, el.value);
+      changed(false);
+    }
   });
-
-  /** Refresh the computed columns without rebuilding the table — re-rendering mid-keystroke
-   *  would move the caret out of the field being typed in. */
-  function repaintCalcs() {
-    document.querySelectorAll("#panels td.calc").forEach(function (td) {
-      var tr = td.closest("tr");
-      var rowCell = tr.querySelector(".rowcell");
-      var n = rowCell ? parseInt(rowCell.textContent, 10) : NaN;
-      if (!isFinite(n)) return;
-      var v = read("D" + n);
-      td.textContent = v == null ? "" : Math.round(v).toLocaleString();
-    });
-    var sum = document.querySelector("#panels tr.sum-row td:last-child");
-    if (sum) {
-      var which = at === 2 ? P.CELLS.material_total : P.CELLS.labour_total;
-      var t = read(which);
-      sum.textContent = t == null ? "" : Math.round(t).toLocaleString();
-    }
-  }
-
-  function repaintAreaSub() {
-    document.querySelectorAll("#panels .area").forEach(function (el, i) {
-      var sub = el.querySelector(".area-sub");
-      if (sub) sub.textContent = P.fmtSf((M.areas[i] || {}).sf || 0);
-    });
-  }
-
-  /** Fill the form from what the workbook already holds.
-   *
-   *  The template arrives with Kyle's own figures in it - material rates, crew sizes, day rates.
-   *  Showing blanks beside a bid computed FROM those figures would misrepresent where the number
-   *  came from, and leave the estimator nothing to change. So the page reads the sheet and shows
-   *  what is really there.
-   *
-   *  Only fills what the estimator has not already set: a returning visit must show their work,
-   *  not the template's defaults.
-   *
-   *  A DERIVED CELL IS NEVER HYDRATED. Reading a formula's current result into form state is how
-   *  it gets written back as a constant on the next save - the formula is gone, and the line
-   *  stops following the area. That is precisely the bug this pass fixes, and hydrate was half
-   *  of it: B20 ("=E18") was read as 0 while the area was still loading, then saved as 0.
-   */
-  function hydrateFromSheet() {
-    var raw = function (addr) {
-      if (P.isDerived(addr)) return null;       // see above - never freeze a formula
-      var v = engine.getValue(P.SHEET, addr);
-      return typeof v === "number" ? v : null;
-    };
-    var blank = function (v) { return v === undefined || v === ""; };
-
-    P.MATERIAL_LINES.forEach(function (l) {
-      var m = M.materials[l.row] = M.materials[l.row] || {};
-      if (blank(m.qty))  { var q = raw("B" + l.row); if (q !== null) m.qty = q; }
-      if (blank(m.cost)) { var c = raw("C" + l.row); if (c !== null) m.cost = c; }
-    });
-    P.LABOUR_LINES.forEach(function (l) {
-      var v = M.labour[l.key] = M.labour[l.key] || {};
-      if (blank(v.crew)) { var a = raw(l.crew); if (a !== null) v.crew = a; }
-      if (blank(v.days)) { var b = raw(l.days); if (b !== null) v.days = b; }
-      if (blank(v.rate)) { var c = raw(l.rate); if (c !== null) v.rate = c; }
-    });
-    P.ADDS.forEach(function (a) {
-      if (blank(M.adds[a.key])) {
-        var v = raw(a.cell);
-        if (v !== null && v !== 0) M.adds[a.key] = v;
-      }
-    });
-    var sys = engine.getValue(P.SHEET, P.CELLS.system);
-    if (typeof sys === "string" && P.systemByValue(sys)) M.system = sys;
-    var tool = engine.getValue(P.SHEET, P.CELLS.tooling);
-    if (typeof tool === "string" && tool) M.tooling = String(tool).toLowerCase();
-  }
-
-  // ── the beta is a sandbox: it never edits a live bid ────────────────────────
-  //
-  // Hanz, 2026-08-11: "The current polish excel sheet and the beta shuold be two different
-  // workflows okay? The BETA is for testing and which means all data from that leads to the
-  // 'test' Category of the proposals database." Asked what should happen when somebody opens a
-  // REAL project in the beta, he chose: make a test copy, leave the real bid alone. It sits
-  // under his standing rule from 2026-08-07: never test against a live Active project.
-  //
-  // So Kyle opening Nearman Creek here leaves Nearman Creek in Active exactly as it was, and
-  // works on "Nearman Creek (beta test)" under Test. He can price one job both ways and compare
-  // them, which is the whole reason the beta runs beside the old screen instead of replacing it.
-  var BETA_SUFFIX = " (beta test)";
-
-  /** The copy's id is DERIVED from the source's, not minted.
-   *
-   *  Idempotence is the reason, and there is no other cheap way to get it. Reopening the beta on
-   *  the same real project has to find the copy it made last time or it mints a second, third and
-   *  fourth; the projects list cannot be searched for it (_build_summaries in backend/drafts.py
-   *  selects a fixed set of columns, and a "copy of" field is not one of them); and the obvious
-   *  alternative, a pointer written onto the SOURCE, is exactly the write this whole feature
-   *  exists to avoid. A derived id needs neither: one GET answers whether the copy exists. It
-   *  also reads plainly in the database, which matters when Kyle is looking at two rows for one
-   *  job. */
-  function sandboxIdFor(id) { return id + "-beta"; }
-
-  /** Recognisable at a glance in the Proposals Database, and it never stacks up: run the logic
-   *  twice and the name still ends in ONE " (beta test)". */
-  function betaName(name) {
-    var n = String(name == null ? "" : name).trim();
-    if (!n) return "Untitled" + BETA_SUFFIX;
-    return n.slice(-BETA_SUFFIX.length) === BETA_SUFFIX ? n : n + BETA_SUFFIX;
-  }
-
-  function draftUrl(id, tail) {
-    return TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + (tail || "");
-  }
-
-  /** Has anything actually been typed into this draft yet?
-   *
-   *  __draft_id is not content: it is shared.js's ownership stamp, and shared.js writes a
-   *  stamped-EMPTY blob on purpose (initDraftSync's 404 floor, and again when its hydration guard
-   *  trips). Counting it would read "nobody has touched this" as "there is work here". Same rule,
-   *  and the same reason, as flushEvictedBlob in shared.js. */
-  function hasContent(blob) {
-    if (!blob) return false;
-    return Object.keys(blob).filter(function (k) { return k !== "__draft_id"; }).length > 0;
-  }
-
-  /** Ask shared.js to file this project as a test on its FIRST real save, instead of creating the
-   *  row here to have something to file.
-   *
-   *  The sidebar door is a bare /polish-estimate.html with no ?d=, so shared.js has already minted
-   *  an id by the time enterSandbox runs, and saving unconditionally filed a nameless "Untitled"
-   *  row under Test every time somebody opened the beta to look at it, `created` event and all.
-   *  That is the same thing ae23c5d stopped the server doing ("the server stops creating projects
-   *  nobody asked for").
-   *
-   *  Bound to this id ("<id>:1", the format pendingTestIntentFor reads) rather than the bare "1"
-   *  that setNewProjectTestIntent writes: an unbound intent lands on whatever project is saved
-   *  next, which is how a real customer bid would end up filed as a test. */
-  function markNewProjectAsTest(id) {
-    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}
-  }
-
-  /** A draft's blob, or null when that id has never been saved.
-   *
-   *  READ ONLY, deliberately: no method, no body. This is the one call that touches the real
-   *  project, and it must not be able to change it.
-   *
-   *  Anything other than 200/404 throws rather than answering. An indeterminate reply read as
-   *  "not filed as a test" would copy a project needlessly; read as "filed" it would edit a live
-   *  bid, which is the one outcome there is no undoing. The caller stops the page instead. */
-  async function loadRow(id) {
-    var res = await fetch(draftUrl(id), { headers: TW.authHeaders() });
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    var body = await res.json();
-    return (body && body.data) || {};
-  }
-
-  /** File a draft under the Projects page's Test tab.
-   *
-   *  The route is "/test". An earlier pass named it after the handler instead
-   *  (api_test_flag_draft), got a silent 405 on every call, and the project sat in Active looking
-   *  fine. projects.js has always posted to "/test" and this has to agree with it.
-   *
-   *  keepalive because the estimator can navigate while this is in flight; a plain fetch is
-   *  cancelled on unload, same reason shared.js carries its own saves that way. */
-  function fileAsTest(id) {
-    return fetch(draftUrl(id, "/test"), {
-      method: "POST",
-      headers: TW.authHeaders(),
-      body: JSON.stringify({ is_test: true }),
-      keepalive: true,
-    });
-  }
-
-  /** Write `blob` under `id`, and file it as a test only once that has actually landed.
-   *
-   *  Ordering is not stylistic. set_test_flag returns False on a missing draft, so filing before
-   *  the first successful save is a silent no-op and the project stays in Active.
-   *
-   *  And "landed" is not res.ok: api_save_draft catches its own failures and answers 200 with
-   *  {"ok": false, "error": ...}, so a save that never happened looks like a success to anyone
-   *  checking the status alone.
-   *
-   *  The flag POST is best-effort on purpose. If it fails the copy still exists and is still safe
-   *  to edit (it is not the real bid), and its "(beta test)" name puts it in the Test tab via
-   *  the projects-page name heuristic anyway. Refusing to open over that would be worse. */
-  async function saveThenFileAsTest(id, blob) {
-    var res = await fetch(draftUrl(id), {
-      method: "PUT",
-      headers: TW.authHeaders(),
-      body: JSON.stringify({ data: blob }),
-      keepalive: true,
-    });
-    var body = res.ok ? await res.json().catch(function () { return null; }) : null;
-    if (!res.ok || (body && body.ok === false)) {
-      throw new Error("save refused: " + ((body && body.error) || res.status));
-    }
-    await fileAsTest(id).catch(function (e) { console.warn("[polish beta] test flag failed", e); });
-  }
-
-  /** The source's numbers under a new name, plus the marks that make the copy a copy. */
-  function buildCopy(srcData, srcId) {
-    var blob = Object.assign({}, srcData);
-    // Server-owned (_SERVER_OWNED_KEYS in backend/drafts.py). is_test especially: the source may
-    // carry `false`, meaning a human said "this IS a real bid", and this page PUTs the whole blob
-    // on every autosave, so copying that key across would file the copy as a test through /test
-    // and then quietly put it back in Active a couple of seconds later.
-    delete blob.is_test;
-    delete blob.archived;
-    delete blob.assigned_estimator;
-    delete blob.__draft_id;              // shared.js's ownership stamp; it belongs to the source
-    blob.project_name = betaName(srcData.project_name);
-    // Paired with the derived id, this is what makes reopening idempotent: a draft that says
-    // whose sandbox it is never gets copied again, even if its test flag went missing.
-    blob.beta_sandbox_of = srcId;
-    blob.beta_sandbox_of_name = srcData.project_name || "";
-    return blob;
-  }
-
-  /** Move the page, and the address bar, onto `id`, with `blob` as its state.
-   *
-   *  The URL matters as much as the id. A reload that still said ?d=<the real project> would land
-   *  back on the live bid, and the next autosave would write to it.
-   *
-   *  clearState first so the source's blob is out of localStorage before anything is written: with
-   *  it still there and stamped, shared.js refuses the setState below as a foreign write. */
-  function adoptDraft(id, blob) {
-    TW.clearState();
-    try {
-      var url = new URL(window.location.href);
-      url.searchParams.set("d", id);
-      window.history.replaceState({}, "", url);
-    } catch (e) {}
-    // shared.js keeps the id here for navigations that drop the query string and exports no
-    // setter for it; projects.js reaches for the same key when it starts a fresh project.
-    try { localStorage.setItem("treadwell.proposal_tool.draft_id", id); } catch (e) {}
-    adopt(blob);
-    TW.setState(state);
-    repointWizardLinks();
-  }
-
-  /** shared.js stamps ?d= onto the static wizard links at DOMContentLoaded, which is long before
-   *  this page has settled which draft it is on. Left alone, "3 · Proposal" walks the estimator
-   *  straight back onto the real bid. */
-  function repointWizardLinks() {
-    var id = TW.getDraftId();
-    if (!id) return;
-    document.querySelectorAll("a[href]").forEach(function (a) {
-      try {
-        var u = new URL(a.getAttribute("href"), location.origin);
-        if (u.origin !== location.origin || !u.searchParams.has("d")) return;
-        u.searchParams.set("d", id);
-        a.setAttribute("href", u.pathname + u.search + u.hash);
-      } catch (e) {}
-    });
-  }
-
-  /** Say so, on screen. Working on a different project than the one clicked is worse than the bug
-   *  being fixed if nobody is told. textContent throughout: a project name is not markup. */
-  function showCopyNote(srcName, copyName) {
-    var el = $("sandbox-note");
-    if (!el) return;
-    el.textContent = "";
-    var ic = document.createElement("span");
-    ic.className = "ic";
-    ic.textContent = "⧉";
-    el.appendChild(ic);
-    var p = document.createElement("span");
-    p.appendChild(document.createTextNode("You are editing a test copy. Everything here saves to "));
-    var b1 = document.createElement("b");
-    b1.textContent = copyName;
-    p.appendChild(b1);
-    p.appendChild(document.createTextNode(" under the Test tab. The real project, "));
-    var b2 = document.createElement("b");
-    b2.textContent = srcName || "the one you opened";
-    p.appendChild(b2);
-    p.appendChild(document.createTextNode(", is untouched in Active."));
-    el.appendChild(p);
-    el.hidden = false;
-  }
-
-  /** `pending` = the row does not exist yet, so nothing has been filed yet either. Saying "this
-   *  project is filed as a test" over an empty page would be a claim about a row that is not
-   *  there. */
-  function showDirectNote(pending) {
-    var el = $("sandbox-note");
-    if (!el) return;
-    el.textContent = "";
-    var ic = document.createElement("span");
-    ic.className = "ic";
-    ic.textContent = "⧉";
-    el.appendChild(ic);
-    var p = document.createElement("span");
-    p.textContent = pending
-      ? "Nothing has been priced here yet. Whatever you enter is saved as a NEW test project, " +
-        "under the Test tab. No real bid is involved."
-      : "This project is filed as a test, so the beta is editing it directly. " +
-        "No real bid is involved.";
-    el.appendChild(p);
-    el.hidden = false;
-  }
-
-  /** Settle which draft this page may write to, BEFORE it can be typed into.
-   *
-   *  Returns false when it could not settle that safely, in which case the caller leaves the page
-   *  on its loading message. Stopping is the correct failure: the alternative is a beta that
-   *  edits a customer's bid because a fetch blipped. */
-  async function enterSandbox() {
-    var id = TW.getDraftId();
-    if (!id) return true;                        // no project at all, nothing to protect
-
-    var row;
-    try { row = await loadRow(id); }
-    catch (e) {
-      $("loading").textContent = "Couldn't check whether this project is filed as a test, so the " +
-        "beta stopped rather than risk editing a real bid. Reload to try again.";
-      return false;
-    }
-
-    // Never saved: this id IS the sandbox, there is nothing to copy, and Hanz asked for
-    // everything the beta touches to land under Test. Save it so the row exists, then file it.
-    //
-    // Only when there is something to save, though. Opening the beta must not CREATE a project:
-    // see markNewProjectAsTest, which hands the filing to the first save the estimator earns.
-    if (row === null) {
-      if (hasContent(state)) {
-        try { await saveThenFileAsTest(id, state); }
-        catch (e) { console.warn("[polish beta] could not file the new project as a test", e); }
-        showDirectNote(false);
-      } else {
-        markNewProjectAsTest(id);
-        showDirectNote(true);
-      }
-      return true;
-    }
-
-    // Already filed as a test, or a copy this page made earlier. Work on it directly: no copy, no
-    // rename. This is the normal path once somebody is working in the sandbox.
-    //
-    // `=== true` exactly, because is_test is a tri-state (see _tribool in backend/drafts.py):
-    // `false` is a human saying "this IS a real bid" and absent is nobody having said. Both of
-    // those are projects to copy, and a truthiness check would have read absent as filed.
-    if (row.is_test === true || row.beta_sandbox_of) {
-      showDirectNote(false);
-      return true;
-    }
-
-    var copyId = sandboxIdFor(id);
-    var copy;
-    try { copy = await loadRow(copyId); }
-    catch (e) {
-      $("loading").textContent = "Couldn't check for this project's test copy, so the beta " +
-        "stopped rather than risk editing the real bid. Reload to try again.";
-      return false;
-    }
-
-    if (copy) {
-      // Second visit. Reuse the copy AS IT IS: re-seeding it from the source would throw away
-      // whatever was priced here last time, which is the comparison the beta exists for.
-      if (copy.is_test !== true) {
-        fileAsTest(copyId).catch(function (e) { console.warn("[polish beta] refiling failed", e); });
-      }
-      adoptDraft(copyId, copy);
-    } else {
-      var blob = buildCopy(row, id);
-      try { await saveThenFileAsTest(copyId, blob); }
-      catch (e) {
-        $("loading").textContent = "Couldn't make the test copy, so the beta stopped rather than " +
-          "edit the real project itself. Reload to try again.";
-        return false;
-      }
-      adoptDraft(copyId, blob);
-    }
-    showCopyNote(row.project_name, state.project_name);
-    return true;
-  }
 
   // ── boot ────────────────────────────────────────────────────────────────────
   async function init() {
@@ -968,82 +719,43 @@
     try { await TW.draftReady; } catch (e) {}
     adopt(TW.getState());
 
-    // Before the workbook, before the form, before anything can be typed: whatever happens after
+    // Before the library, before the form, before anything can be typed: whatever happens after
     // this line writes to a test project. A save timer started against the real bid and fired
     // after the switch would be the bug with extra steps.
-    if (!(await enterSandbox())) return;
+    if (!(await S.enterSandbox(adopt))) return;
 
     $("proj-line").textContent = [state.project_name, state.city && state.state
       ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";
 
     try {
-      var r = await fetch("/api/sheets", { headers: TW.authHeaders() });
-      sheetNames = (await r.json()).sheets || [];
-      if (!sheetNames.length) throw new Error("no sheets returned");
+      var res = await Promise.all([
+        api("/api/library/assemblies"),
+        api("/api/library/items"),
+      ]);
+      var aj = await res[0].json();
+      var ij = await res[1].json();
+      ASMS = (aj && aj.assemblies) || [];
+      ITEMS = (ij && ij.items) || [];
     } catch (err) {
-      $("loading").textContent = "Couldn't load the workbook. " + (err.message || "");
+      $("loading").textContent = "Couldn't load the item library, so there is nothing to price " +
+        "against. " + (err.message || "") + " Reload to try again.";
       return;
     }
 
-    // EVERY sheet, not just Polish: the polish formulas reference Epoxy! for the whole job
-    // header and validation! for the pad and tooling rate bands.
-    engine = X.createEngine(sheetNames);
-
-    // Named expressions, or the product blocks resolve to #NAME?. HyperFormula rejects names
-    // shaped like a cell reference ("Glaze4"), so those get an alias and loadSheet rewrites the
-    // same token in every formula.
-    try {
-      var nr = await fetch("/api/named-expressions", { headers: TW.authHeaders() });
-      var nd = await nr.json();
-      (nd.names || []).forEach(function (n) {
-        var scopeId = (n.scope && engine.sheetIdByName[n.scope] !== undefined)
-          ? engine.sheetIdByName[n.scope] : undefined;
-        var reg = n.name;
-        try {
-          if (!engine.instance.isItPossibleToAddNamedExpression(reg, n.expression, scopeId)) {
-            reg = n.name.replace(/(\d+)$/, "_$1");
-            if (reg === n.name) reg = n.name + "_n";
-            engine.nameAliases[n.name] = reg;
-          }
-          if (scopeId !== undefined) engine.instance.addNamedExpression(reg, n.expression, scopeId);
-          else engine.instance.addNamedExpression(reg, n.expression);
-        } catch (e) { delete engine.nameAliases[n.name]; }
-      });
-    } catch (err) { console.warn("named expressions unavailable", err); }
-
-    await Promise.all(sheetNames.map(async function (name) {
-      try {
-        var res = await fetch("/api/sheet/" + encodeURIComponent(name),
-                              { headers: TW.authHeaders() });
-        engine.loadSheet(name, (await res.json()).cells);
-      } catch (err) { console.warn("could not load " + name, err); }
-    }));
-
-    // Replay what was typed before, then push this page's own state over the top.
-    for (var addr in cellValues) {
-      var p = addr.split("!");
-      if (p.length === 2) engine.setCellValue(p[0], p[1], cellValues[addr]);
+    if (!ASMS.length) {
+      say("The item library has no assemblies yet, so a takeoff row has nothing to point at. " +
+          "Add one under Items & Assemblies first.");
     }
 
-    // Seed the area from intake if the estimator has not measured here yet, so the page opens
-    // with the number they already gave us rather than a blank.
-    if (!P.totalArea(M.areas) && P.num(state.polish_sf) > 0) {
-      M.areas[0].sf = P.num(state.polish_sf);
-    }
-    // If intake had no area but the sheet does, take the sheet's.
-    if (!P.totalArea(M.areas)) {
-      var sheetArea = engine.getValue(P.SHEET, P.CELLS.area);
-      if (typeof sheetArea === "number" && sheetArea > 0) M.areas[0].sf = sheetArea;
+    // Seed the measurement from intake if nothing has been measured here yet, so the page opens
+    // with the number the estimator already gave us rather than a blank.
+    if (!B.takeoffSf(M.takeoff) && B.num(state.polish_sf) > 0) {
+      M.takeoff[0].measurement = B.num(state.polish_sf);
     }
 
-    // Read the workbook's own figures into the form BEFORE pushing anything back, or the page
-    // overwrites Kyle's rates with blanks. On a real staging project that dropped the bid from
-    // $17,431 to $6,194 the instant the page opened.
-    hydrateFromSheet();
-
+    renderDatalist();
     $("loading").hidden = true;
     $("main").hidden = false;
-    pushCells();
     paintBid();
     paintRail();
     renderPanel();

@@ -28,6 +28,15 @@ POST went to a route that does not exist (the handler is api_test_flag_draft; th
 fine). The failures this file covers are all of that shape (an ordering, an exact route, a
 tri-state compared with the wrong operator), so they are checked in the source, and each test
 names the mutation it exists to kill.
+
+WHERE THE CODE LIVES NOW.
+
+2026-08-17: the beta became two pages, so the sandbox became frontend/js/polish-sandbox.js and
+both of them load it. The bodies were MOVED VERBATIM, deliberately — this is the one thing standing
+between the beta and a customer's bid — so these tests follow them file-for-file rather than being
+rewritten around a refactor. The beta intake form is the reason the guarantee matters more than it
+did: it opens straight onto the project you came from and saves a toggle within a second of the
+first click.
 """
 import pathlib
 import re
@@ -36,7 +45,18 @@ import pytest
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 
-PAGE = "polish-estimate.js"
+# The sandbox left the calculator for a file of its own when the beta became TWO pages: the beta
+# intake form (polish-intake.html) writes the five job-condition toggles, the calculator
+# (polish-estimate.html) writes the takeoff, and both must be unable to touch a live bid. The
+# function bodies were moved verbatim, so every assertion below is the one that was written against
+# them — it just reads them where they live now.
+PAGE = "polish-sandbox.js"
+
+# The module's two callers. The only thing this file asks of them is ORDER: the sandbox settles
+# before the page can be typed into. What each does afterwards belongs to its own test.
+ESTIMATE = "polish-estimate.js"
+INTAKE = "polish-intake.js"
+BOOT = {ESTIMATE: "init", INTAKE: "boot"}
 
 
 def _src(name: str) -> str:
@@ -222,20 +242,35 @@ def test_the_content_check_ignores_shared_js_s_own_stamp():
     assert "__draft_id" in body, "shared.js's ownership stamp is counted as typed-in content"
 
 
-def test_nothing_can_be_typed_in_before_the_sandbox_is_settled():
+@pytest.mark.parametrize("caller", sorted(BOOT), ids=lambda c: c.replace(".js", ""))
+def test_nothing_can_be_typed_in_before_the_sandbox_is_settled(caller):
     """A save timer started against the real bid and fired after the switch would be this bug with
-    extra steps, so the switch happens before the page is interactive at all.
+    extra steps, so the switch happens before the page is interactive at all. Checked on BOTH beta
+    pages: the intake form is the faster of the two to be clicked, since a toggle needs no typing.
 
     Mutation: move `await enterSandbox()` below the workbook load or the un-hide, and the first
     keystroke lands on the live project."""
-    init = _block(PAGE, "init")
-    sb = init.index("await enterSandbox()")
-    assert init.index("TW.draftReady") < sb, (
+    boot = _block(caller, BOOT[caller])
+    # The call site is `TWPolishSandbox.enterSandbox(adopt)` now that the module is shared, and each
+    # page passes its own adopt callback.
+    m = re.search(r"await\s+(?:\w+\.)?enterSandbox\(", boot)
+    assert m, "%s() does not await the sandbox at all" % BOOT[caller]
+    sb = m.start()
+    assert boot.index("TW.draftReady") < sb, (
         "the sandbox decides before shared.js has settled which draft the page is on")
-    assert sb < init.index("/api/sheets"), "the workbook loads before the draft is settled"
-    assert sb < init.index("pushCells();")
-    assert sb < init.index('$("main").hidden = false'), (
+    assert sb < boot.index('$("main").hidden = false'), (
         "the form is exposed to the estimator before the page knows which draft it may write to")
+    # Everything else each page does on the way to being usable. Checked when present, because the
+    # two pages do different work: the calculator loads a workbook, the intake form does not.
+    later = ["/api/sheets", "pushCells();", "hydrate();", "wire();", "renderPanel();"]
+    present = [step for step in later if step in boot]
+    assert present, (
+        "%s() no longer does any of %r before revealing the page — rewrite this test rather than "
+        "deleting it" % (BOOT[caller], later))
+    for step in present:
+        assert sb < boot.index(step), (
+            "%s runs before the draft is settled, so it works on whatever project the page was "
+            "opened from" % step)
 
 
 # ── the filing route, and its ordering ───────────────────────────────────────
@@ -328,10 +363,40 @@ def test_the_wizard_links_follow_the_copy():
     assert "repointWizardLinks()" in _block(PAGE, "adoptDraft")
     body = _block(PAGE, "repointWizardLinks")
     assert "TW.getDraftId()" in body and 'searchParams.set("d", id)' in body
-    shell = _block(PAGE, "shell")
+    shell = _block(ESTIMATE, "shell")
     assert 'TW.withDraft("/proposal-review.html")' in shell, (
         "the Continue button is a bare path, so it relies on whatever draft id happens to be "
         "stored rather than the one being edited")
+    # Same rule on the beta intake form, whose Continue leads INTO the beta calculator.
+    assert 'TW.withDraft("/polish-estimate.html")' in _block(INTAKE, "onSubmit"), (
+        "the beta intake form's Continue is a bare path, so on a test copy it would carry the real "
+        "project's stored id and walk the estimator back onto the live bid")
+
+
+def test_the_beta_pages_own_links_are_stamped_too():
+    """shared.js's _WIZARD_PATH lists the four wizard pages and deliberately excludes both beta
+    pages, so /polish-intake.html and /polish-estimate.html hrefs arrive carrying no ?d= AT ALL —
+    and the rule above only follows a link that already has one.
+
+    Mutation: keep the original "has('d') or skip" test. Then "2 · Estimate" out of the beta intake
+    form opens whatever draft happens to be in localStorage, which on a test copy is the real
+    project. Executed end-to-end, against the real anchors, by test_polish_intake_page.py."""
+    code = _code(PAGE)
+    m = re.search(r"var BETA_PATH = /(\S+)/;", code)
+    assert m, "the beta pages are no longer recognised by path; rewrite this test"
+    # Compiled and MATCHED rather than read: the pattern is an alternation, so neither page's name
+    # appears in it as a literal string and a grep for one would fail on a rule that works.
+    pattern = re.compile(m.group(1))
+    for path in ("/polish-intake.html", "/polish-estimate.html"):
+        assert pattern.match(path), "%s is not covered by %s" % (path, m.group(1))
+    for path in ("/done.html", "/proposal-review.html", "/polish-intake.html.evil"):
+        assert not pattern.match(path), (
+            "%s is treated as a beta page, so an unstamped link to it would be given this page's "
+            "draft id" % path)
+    body = _block(PAGE, "repointWizardLinks")
+    assert "BETA_PATH.test(" in body, "the beta-page rule is declared and never consulted"
+    assert re.search(r"!u\.searchParams\.has\(\"d\"\)\s*&&\s*!BETA_PATH", body), (
+        "a link with no ?d= is skipped unconditionally again, which is every beta link")
 
 
 # ── reopening does not mint a second copy ────────────────────────────────────
@@ -397,8 +462,11 @@ def test_a_copy_names_its_source_so_it_is_never_copied_again(sandbox):
 def test_the_notice_names_the_source_and_says_it_is_untouched(sandbox):
     """Silently working on a different project than the one clicked is worse than the bug being
     fixed. Mutation: switch drafts quietly."""
-    html = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
-    assert 'id="sandbox-note"' in html, "there is nowhere on the page for the notice to render"
+    for page in ("polish-estimate.html", "polish-intake.html"):
+        html = (FRONTEND / page).read_text(encoding="utf-8")
+        assert 'id="sandbox-note"' in html, (
+            "there is nowhere on %s for the notice to render, and showCopyNote is null-guarded — "
+            "so it would silently stop telling the estimator they were moved onto a copy" % page)
     assert re.search(r"showCopyNote\(\s*row\.project_name", sandbox), (
         "the notice does not name the project that was opened")
     body = _block(PAGE, "showCopyNote")
