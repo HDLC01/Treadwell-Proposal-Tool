@@ -100,7 +100,7 @@ const CONST_NAMES = [
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
 const LET_NAMES = ["ALL", "ACTIVE_SEC", "CUR_PID", "RENDER_GEN", "DEEPLINK_USED", "DRAWER_SIG",
-                   "DETAIL_RECIPIENTS", "DETAIL_GEN", "THREAD_SCROLL"];
+                   "DETAIL_RECIPIENTS", "DETAIL_GEN", "THREAD_SCROLL", "NS_MODE"];
 const FN_NAMES = [
   "drawerHead", "customerHtml", "copyPortalLink", "wirePortalLink", "approvalHtml",
   "contactsHtml", "recipientsHtml", "msgHtml", "splitSystem", "depositHtml", "mask4",
@@ -442,6 +442,7 @@ const body = `"use strict";
     eligible: () => Array.from(SEC_ELIGIBLE),
     activeSec: () => ACTIVE_SEC,
     secTabs: () => SEC_TABS,
+    allSecCards: () => ALL_SEC_CARDS,
     // Drive eligibility DIRECTLY, so a card can be present in the markup and still not eligible.
     // Every payload produces markup and eligibility together (an ineligible card renders as "" and
     // the DOM stub never creates an element for it), so no payload can put the two halves of
@@ -459,6 +460,10 @@ page.setBoard(BOARD_ROWS);
 // assert that a tab shows those and only those. Read out of the running module, so it is the map
 // applySecPanel actually consulted rather than a copy that can drift.
 const out = { imported: destructured.map(([n]) => n), tabs: Object.keys(page.secTabs()),
+  // The sent drawer's card ids. applySecPanel looks up every one of them to decide what to
+  // hide and tolerates absence by design, so a panel that does not render them is not
+  // "wiring an id it never rendered" — the not-sent test subtracts these.
+  allSecCards: page.allSecCards(),
               secMap: page.secTabs(),
               scenarios: {}, clipboard: {}, notSent: {}, errors: {} };
 

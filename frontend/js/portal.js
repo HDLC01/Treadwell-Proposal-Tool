@@ -709,18 +709,38 @@
     const who = estimatorOf(row);
     const total = cardTotal(row);
     const d = $("drawer");
-    // Same head, same fact cells and the same layout column as the real drawer: a rep should not
-    // have to re-learn the panel because this project has not been sent yet. What is absent is
-    // absent because it does not exist — no customer link, no thread, no approval, no deposit.
+    // THE SAME FIVE TABS AS A SENT PROJECT. Hanz, 2026-08-19: "For those not sent just please have
+    // the same set of tabs so that its clear."
     //
-    // The head carries no meta line here. The real drawer puts the customer and the money up
-    // there because they have to survive a tab change; this panel has no tabs, so it would only
-    // be restating the two fact cells directly underneath.
+    // This panel deliberately had none, on the reasoning that a deposit and a thread do not exist
+    // yet so a tab pointing at them would be pointing at nothing. That was wrong about what a tab
+    // strip is FOR: it is the shape of a project, and dropping four fifths of it made this drawer
+    // look like a different feature rather than the same project earlier in its life. Somebody who
+    // learns the strip on a sent project should not have to re-learn this one.
+    //
+    // So every tab is present and says what it is waiting for. A tab whose content genuinely does
+    // not exist yet says so in the panel, which is a fact about the project rather than an empty
+    // box that reads as broken.
+    const nsTabs = `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("proposal", "Proposal", { val: "Not sent",
+        hint: "Customer, estimator, who hears about it when it goes out" }) +
+      secTab("deposit", "Deposit", { val: "—", hint: "Nothing until the customer approves" }) +
+      secTab("contacts", "Contacts", { val: "—", hint: "The customer supplies these after approving" }) +
+      secTab("chat", "Chat", { val: "—", hint: "Opens when the customer can see the proposal" }) +
+      secTab("followup", "Follow-up", { val: "Off", hint: "Chasing starts when you send it" }) +
+      `</div>`;
+    // These sections carry `dsec-ns-*` ids, deliberately outside ALL_SEC_CARDS: applySecPanel's
+    // per-card eligibility pass is for the sent drawer, where a card can be present but not
+    // applicable. Here the PANEL-level hiding is the whole job — one panel per tab, always the
+    // right one — so borrowing the card machinery would add a second switch that has to agree
+    // with the first.
+    NS_MODE = true;
     d.innerHTML = `
       ${drawerHead(row.project_name, "")}
+      ${nsTabs}
       <div class="dbody">
-       <div class="dpanel">
-        <div class="sec">
+       <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
+        <div class="sec" id="dsec-ns-proposal">
           <div class="lbl">Not sent yet</div>
           <p class="note">The estimate and the proposal are generated, and nobody has sent them to
           the customer. Nothing reaches them until you do.</p>
@@ -771,6 +791,43 @@
           <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
         </div>
        </div>
+
+       <!-- The other four. Each says what has to happen before it has anything in it, which is a
+            fact about where the project is rather than an empty panel that reads as a bug. The
+            wording names the trigger, so the strip doubles as an explanation of the sequence. -->
+       <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
+        <div class="sec" id="dsec-ns-deposit">
+          <div class="lbl">Deposit</div>
+          <p class="note">Nothing to collect yet. A deposit can be requested once the customer has
+          approved the proposal, and whether one is required is chosen on the Files screen when you
+          send it.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-contacts" role="tabpanel" aria-labelledby="dtab-contacts" tabindex="-1">
+        <div class="sec" id="dsec-ns-contacts">
+          <div class="lbl">Contacts</div>
+          <p class="note">The customer fills these in themselves — who to reach for scheduling and
+          for invoices — and they are asked for them after they approve.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-chat" role="tabpanel" aria-labelledby="dtab-chat" tabindex="-1">
+        <div class="sec" id="dsec-ns-chat">
+          <div class="lbl">Chat</div>
+          <p class="note">The conversation opens when the customer can see the proposal. Send it and
+          anything they ask lands here, with your replies going back to them by email.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-followup" role="tabpanel" aria-labelledby="dtab-followup" tabindex="-1">
+        <div class="sec" id="dsec-ns-followup">
+          <div class="lbl">Follow-up</div>
+          <p class="note">Chasing starts when you send this. From then on the assigned estimator
+          gets the reminders and this project appears in the morning digest until the deposit is
+          in. Nobody is chased before a proposal exists.</p>
+        </div>
+       </div>
       </div>`;
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
     const go = (u) => window.location.assign(u);
@@ -778,6 +835,11 @@
       () => go("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
     d.querySelector("[data-go-edit]").addEventListener("click",
       () => go("/?d=" + encodeURIComponent(pid) + "&edit=1"));
+    // Land on Proposal, and paint the strip so one tab reads as selected. Without this the five
+    // tabs render with nothing active and every panel visible at once — the strip has to be applied,
+    // not merely present.
+    if (!SEC_TABS[ACTIVE_SEC]) ACTIVE_SEC = "proposal";
+    applySecPanel();
     wireNotSentAssign(pid, row);
     loadNotSentNotify(pid);
   }
@@ -964,6 +1026,10 @@
   const REV_CACHE = {};          // sent versions per PROJECT, for the same reason
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
+  // True while the drawer is showing a project nobody has sent. The tab strip is the same one, but
+  // the Proposal tab's two lazy fetches are not: both address a portal row this project does not
+  // have yet, so firing them would answer a tab click with "could not load".
+  let NS_MODE = false;
 
   // What the drawer currently shows, same idea as BOARD_SIG. renderDetail replaces the drawer's
   // whole innerHTML including the chat thread, so an unchanged repaint tears down and rebuilds
@@ -1006,7 +1072,12 @@
     });
     const body = drawer.querySelector(".dbody");
     if (body) body.dataset.sec = sec;                      // arms the chat-scroll CSS
-    if (sec === "proposal") { loadNotifyChips(CUR_PID, RENDER_GEN); loadRevisions(CUR_PID, RENDER_GEN); }
+    // Both of these read the portal's copy of a project, which an unsent one does not have. The
+    // not-sent panel carries its own notification picker (draft-backed) and has no versions to list.
+    if (sec === "proposal" && !NS_MODE) {
+      loadNotifyChips(CUR_PID, RENDER_GEN);
+      loadRevisions(CUR_PID, RENDER_GEN);
+    }
     if (sec === "chat") requestAnimationFrame(() => {
       const t = $("thread");
       if (!t) return;
@@ -2239,6 +2310,7 @@
     const sig = JSON.stringify([pid, data, unread]);
     if (sig === DRAWER_SIG) return;
     DRAWER_SIG = sig;
+    NS_MODE = false;                 // a sent project: the portal-backed loads apply again
 
     // Set BEFORE the markup below is built: msgHtml reads it to decide whether to name the
     // author, and a message rendered before it is populated would go unnamed. `data` is already
