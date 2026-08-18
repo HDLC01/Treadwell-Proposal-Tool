@@ -25,8 +25,17 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.resolve(process.argv[2]);
-const src = fs.readFileSync(path.join(ROOT, "js", "library.js"), "utf8");
-const html = fs.readFileSync(path.join(ROOT, "library.html"), "utf8");
+
+// Line endings normalised on read, because this harness matches the page's SOURCE TEXT and git
+// hands these files out with CRLF on a Windows checkout. The `grab()` patterns below are
+// multiline-anchored (`/^  var DIVISIONS = \[[^\]]*\];$/m`), and on CRLF the character before the
+// newline is `\r`, not `;` — so every one of them misses and the whole file reports "the harness
+// itself failed" while CI, which checks out LF, stays perfectly green. Found the moment a
+// `git checkout --` restored this file mid-session.
+const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+
+const src = read(path.join(ROOT, "js", "library.js"));
+const html = read(path.join(ROOT, "library.html"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced. */
@@ -117,6 +126,9 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
   var ADMIN = state.ADMIN;
   var openId = state.openId;
+  // Which line's item picker is showing its results. pickerFor() reads it, so a test can render
+  // the closed state (null, the default) or the open one by passing state.pickerOpen.
+  var pickerOpen = state.pickerOpen === undefined ? null : state.pickerOpen;
   ${grab(/^  var DIVISIONS = \[[^\]]*\];$/m, "DIVISIONS")}
   ${grab(/^  var UNITS = \[[^\]]*\];$/m, "UNITS")}
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
@@ -144,7 +156,9 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("singular")}
   ${fn("renderRefSection")}
   ${fn("renderVendors")}
-  ${fn("itemMatchesFilters")}
+  ${fn("itemMatches")}
+  ${fn("itemResultsHtml")}
+  ${fn("lineForSave")}
   ${fn("pickerFor")}
   ${fn("itemByName")}
   ${fn("renderList")}
@@ -158,7 +172,8 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("onItemEdit")}
   return { renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
-           onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS };
+           onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
+           itemMatches, itemResultsHtml, lineForSave };
 `);
 
 // Two materials: a legacy pack-of-one and a five-gallon pail, so the pack column has something to
@@ -391,11 +406,15 @@ const out = {};
       !/data-lf="roundup" checked/.test(body.split("</tr>")[1]),
     // A search box with autofill, not a <select>: the list is going to get long.
     pickerIsSearchable: /<div class="item-picker">/.test(firstRow) &&
-      /data-lf="item_search"/.test(firstRow) &&
-      /data-lf="item_division_filter"/.test(firstRow) &&
-      /data-lf="item_vendor_filter"/.test(firstRow),
-    pickerShowsTheDivisionLabel: /<label class="filter-field"><span>Divisions<\/span><select data-lf="item_division_filter"/.test(firstRow),
-    pickerShowsTheCurrentMaterial: /<b>OPF<\/b>/.test(firstRow),
+      /data-lf="item_search"/.test(firstRow),
+    // ONE LINE ITEM, ONE ROW. No filter dropdowns and no "Divisions" label inside the row — those
+    // belong to the header, and having them in the cell made one line item a tall block.
+    pickerHasNoInRowFilters: !/item_division_filter|item_vendor_filter/.test(body) &&
+      !/<span>Divisions<\/span>/.test(body),
+    // Closed, the box shows the chosen item rather than an open list of candidates.
+    pickerShowsTheCurrentMaterial: /data-lf="item_search" value="OPF"/.test(firstRow),
+    pickerStartsClosed: !/class="item-results"/.test(body),
+    rowCount: (body.match(/<tr/g) || []).length,
     pickerIsNotASelect: !/<select data-lf="item_id"/.test(body),
     rowCellsTopAligned: /\.lines td \{ vertical-align:top; \}/.test(html),
     primaryLineCount: (firstRow.match(/class="line-primary/g) || []).length,
@@ -420,6 +439,60 @@ const out = {};
   empty.api.renderPanel();
   out.lines.placeholderColspan = Number(
     (/colspan="(\d+)"/.exec(empty.dom.nodes["lines-body"].innerHTML) || [0, 0])[1]);
+}
+
+// ── EXECUTED: one row per line item, and a search that looks at three fields ─
+// Hanz, 2026-08-19: "divisions should be a label up top like before not on the row. Make one line
+// item, one row." The previous picker rendered an always-open panel — search box, a Divisions
+// label, two filter selects, twelve results — inside every ITEMS cell, so one line was a tall
+// block. These run the real matcher and the real renderer rather than reading the source.
+{
+  const { api } = build();
+  // The fixtures differ in BOTH fields the search now reaches: i1 is Epoxy / Sherwin-Williams,
+  // i2 is Polished Concrete / Gone Supply Co. A matcher that only read `name` would answer these
+  // identically, since both names begin "OPF".
+  const names = (q) => api.ITEMS.filter((it) => api.itemMatches(it, q)).map((it) => it.name);
+  out.itemSearch = {
+    byName: names("primer"),
+    byDivision: names("polished"),
+    byVendor: names("sherwin"),
+    // "combination of those" — a division word AND a name word, which must narrow rather than
+    // find nothing. This is the case a single-field matcher gets wrong.
+    byCombination: names("polished primer"),
+    caseInsensitive: names("SHERWIN"),
+    blankFindsEverything: names("").length,
+    nonsenseFindsNothing: names("zzz not a material"),
+  };
+
+  // The results markup, from the real builder: every row names its division and vendor, so a match
+  // on something other than the name is never a mystery.
+  const openLine = { item_id: "i1", _item_search: "polished" };
+  const resultsHtml = api.itemResultsHtml(openLine);
+  out.itemSearch.resultNamesDivisionAndVendor =
+    /Polished Concrete &middot; Gone Supply Co/.test(resultsHtml);
+  out.itemSearch.resultsAreButtonsKeyedByItemId = /data-pick-item="i2"/.test(resultsHtml);
+  out.itemSearch.emptySearchSaysSo =
+    /No items match that search/.test(api.itemResultsHtml({ _item_search: "zzzz" }));
+
+  // CLOSED: the box shows the chosen item and emits no list, so the row is one row high.
+  const closed = api.pickerFor({ item_id: "i1", _item_search: "polished" }, 0);
+  // OPEN: the same line, with its picker open, gains the floating list — and nothing else.
+  const openApi = build({ pickerOpen: 0 }).api;
+  const opened = openApi.pickerFor({ item_id: "i1", _item_search: "polished" }, 0);
+  out.itemSearch.closedShowsTheItem = /value="OPF"/.test(closed);
+  out.itemSearch.closedHasNoResults = !/item-results/.test(closed);
+  out.itemSearch.openShowsResults = /class="item-results"/.test(opened);
+  // Open, the box holds the QUERY, not the item name — otherwise 30 characters must be deleted
+  // before three can be typed.
+  out.itemSearch.openShowsTheQuery = /value="polished"/.test(opened);
+  // A different line's picker being open must not open this one's.
+  out.itemSearch.onlyTheOpenLineExpands =
+    !/item-results/.test(openApi.pickerFor({ item_id: "i2" }, 1));
+
+  // The transient query rides on the line while typing; the SAVE must not carry it.
+  out.itemSearch.savePayloadIsClean = Object.keys(
+    api.lineForSave({ item_id: "i1", coverage: 275, waste_pct: 5, roundup: true,
+                      _item_search: "polished", _division_filter: "Epoxy" })).sort();
 }
 
 // ── EXECUTED: the live updater, on the table renderPanel actually built ──────
