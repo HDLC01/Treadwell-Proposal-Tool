@@ -869,10 +869,14 @@
   /** Close an unsent bid lost, or put it back. Hanz, 2026-08-19: "Allow to mark a proposal as lost
    *  tho in the Created not sent category."
    *
-   *  Same two-step shape as the sent drawer's control — the reason dialog first, the request
-   *  second — and the same repaint discipline as wireNotSentAssign: clear DRAWER_SIG so the
-   *  signature guard cannot swallow the redraw, then reload the board, because a closed bid has to
-   *  leave the Created column and appear under Lost. */
+   *  Same two-step shape as the sent drawer's control: the reason dialog first, the request second,
+   *  then a redraw from the patched row and a board reload — the board matters because a closed bid
+   *  has to leave the Created column and appear under Lost, which the drawer repaint does not do.
+   *
+   *  The `DRAWER_SIG = ""` below is belt-and-braces, not load-bearing, and mutation testing says so:
+   *  the guard only suppresses an IDENTICAL signature, and the patch always adds fields, so the
+   *  redraw would go through without it. Kept to match wireNotSentAssign and so a future patch that
+   *  happens to be a no-op still repaints. */
   function wireNotSentLost(pid, row) {
     const note = $("ns-lost-note");
     const post = async (btn, body, optimistic) => {

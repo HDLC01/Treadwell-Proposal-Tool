@@ -41,6 +41,13 @@ def test_a_live_bid_is_offered_the_close(out):
         "there is no way to close an unsent bid lost, which is the whole request")
     assert not out["live"]["hasReopen"], (
         "a live bid offers Reactivate, which reads as though it were already closed")
+    # The heading, not only the button. Mutation-found gap: hardcoding it to "Closed lost" left
+    # every test green while a live bid displayed "Closed lost" as a section heading directly above
+    # a button offering to close it — which reads as a bid that is already dead.
+    html = out["live"]["html"]
+    assert "Not going ahead?" in html, (
+        "the section heading does not ask the question; a live bid is being labelled as closed")
+    assert "Closed lost</div>" not in html
 
 
 @needs_node
@@ -99,17 +106,24 @@ def test_it_closes_the_bid_through_the_DRAFT_endpoint(out):
 
 @needs_node
 def test_the_panel_shows_the_decision_it_just_made(out):
-    """renderNotSent is signature-guarded against the 12s board poll, and the row in hand still
-    says the bid is live. Without clearing DRAWER_SIG the drawer keeps offering "Mark closed lost"
-    on a bid that is already closed, and the rep presses it again."""
+    """The drawer has to redraw from the patched row, or the rep is left looking at a panel still
+    offering to close a bid that is already closed and presses it again.
+
+    On the `DRAWER_SIG = ""` line in that handler, honestly: mutation testing says removing it
+    changes nothing here, and that is correct rather than a hole in this test. The guard only
+    suppresses a repaint when the signature is IDENTICAL, and the optimistic patch adds
+    proposal_status and followup_state — so the new signature always differs and the redraw goes
+    through either way. The line is defensive, matching wireNotSentAssign beside it, and this test
+    does not pretend to pin it. What it does pin is that the redraw HAPPENS and that the guard is
+    left holding the new state, both of which mutations 12 and 13 confirm it catches."""
     c = out["confirmed"]
     assert c["hasReopen"], "the drawer did not repaint — it still shows the pre-close panel"
     assert not c["hasLost"], "it still offers to close a bid it just closed"
     assert "Timing" in c["html"], "the redrawn panel does not name the reason"
     sig = c["sigAfter"]
-    assert sig != "guard-me", "the guard still holds the old signature"
+    assert sig != "guard-me", "the guard still holds the pre-render signature"
     assert "closed_lost" in sig, (
-        "the guard was reset but re-armed with the OLD state, so the next poll repaints it back")
+        "the guard was re-armed with the OLD state, so the next 12s poll repaints it back to live")
 
 
 @needs_node
