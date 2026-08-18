@@ -24,10 +24,111 @@
   const plainAvatar = (who) =>
     '<span class="nt-av" aria-hidden="true">' + (esc(window.TWCrm.initialsOf(who)) || "—") + "</span>";
 
+  // The one place that decides what a project IS — the same module the CRM board reads, so
+  // "test", "lost" and "deposit settled" cannot mean one thing there and another here.
+  const C = window.TWCrm;
+
   let ADMIN = false, MY_EMAIL = "";
   let ROSTER = [];                 // [{email, enabled}] — the global base
   let PROJECTS = [];               // [{proposal_id, project_name, customer_email, ...}]
   let OVERRIDES = {};              // { proposal_id: { emailLower: 'add'|'mute' } }
+
+  // ── per-project categories + paging ─────────────────────────────────────────
+  // Hanz, 2026-08-19: "the per project Notification sending should be separate for active and
+  // test projects", "for it not to populate the per projects tab there should also be a lost,
+  // won category for that. Where it moves the project to there", "add a pagination".
+  //
+  // One flat list of every project the portal knows about was the complaint: scratch bids,
+  // dead deals and finished work all sat in the working list, and it only ever grew.
+  //
+  // Won sits beside Active because both are news worth reading; Test is at the far end, which
+  // is the order Hanz asked for on the CRM board on 2026-08-15 ("Active and Lost are both real
+  // work, so they read together and the scratch tab sits at the far end").
+  const PP_TABS = [["active", "Active"], ["won", "Won"], ["lost", "Lost"], ["test", "Test"]];
+  const PP_IDS = PP_TABS.map((t) => t[0]);
+  const PP_LABEL = {};
+  PP_TABS.forEach((t) => { PP_LABEL[t[0]] = t[1]; });
+  const PP_PER_PAGE = 10;
+  const PP_TAB_KEY = "tw_notify_pp_tab", PP_PAGE_KEY = "tw_notify_pp_page";
+  // sessionStorage, exactly as the CRM board keeps its own tab: a chip toggle re-renders the
+  // list, and reaching for the same person on page 3 of Won after every click is the bug.
+  const ss = (k, d) => { try { return sessionStorage.getItem(k) || d; } catch (e) { return d; } };
+  const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, String(v)) : sessionStorage.removeItem(k); } catch (e) {} };
+  let PP_TAB = PP_IDS.indexOf(ss(PP_TAB_KEY, "")) >= 0 ? ss(PP_TAB_KEY, "") : "active";
+  let PP_PAGE = Math.max(1, parseInt(ss(PP_PAGE_KEY, "1"), 10) || 1);
+
+  /** WON, and deliberately not `depositSatisfied` on its own.
+   *
+   *  That predicate is true for any job that collects no deposit — including a proposal emailed
+   *  this morning that nobody has opened. It answers "is money outstanding", not "did we win".
+   *
+   *  Approval on its own is too generous the other way. An approved job whose deposit is still
+   *  outstanding is the single most worth-chasing project on the board, and filing it under Won
+   *  would hide it from the person whose job is to chase it — so it stays under Active, which is
+   *  also where the CRM board keeps it (its Approved and Deposit-submitted columns are both live).
+   *
+   *  So Won is BOTH: the customer said yes AND the money question is settled — received, or a job
+   *  that legitimately collects none. followups.js draws the same line from the other side: its
+   *  bucket is internally called `won` and LABELLED "Approved", because approval alone does not
+   *  earn the word. This page has the deposit signal in the same row, so it can afford the
+   *  stricter test and keep the honest label.
+   *
+   *  `approved_at` as well as the status, because the portal moves a row forward past approval —
+   *  crm-core's stage() reads deposit state before proposal_status for exactly that reason — and
+   *  the stamp never unsets. */
+  function isWon(p) {
+    const approved = String(p.proposal_status || "") === "approved" || !!p.approved_at;
+    return approved && C.depositSatisfied(p);
+  }
+
+  /** Exactly one category per project. The ORDER is the whole content of this function.
+   *
+   *  LOST FIRST, above Test, because that is what the CRM board does: crm-core's stage() returns
+   *  Closed lost before it looks at anything else, and portal.js's boardPool puts a lost test
+   *  project on the Lost tab carrying a Test chip. Two screens disagreeing about where a dead deal
+   *  lives is worse than either answer, so this page copies the board and carries the same chip.
+   *
+   *  TEST ABOVE WON, because a test project's outcome is fiction. Won is a number a human reads as
+   *  real work, and somebody's scratch bid must not be able to inflate it. The board agrees here
+   *  too — it has no Won tab, and a won test project sits on its Test tab.
+   *
+   *  ACTIVE IS THE REMAINDER, never a predicate of its own. That is what makes these four a
+   *  partition: a project the categories don't recognise lands in the working list, where someone
+   *  will see it, rather than in no tab at all. */
+  function ppCategory(p) {
+    if (C.isLost(p)) return "lost";
+    if (C.isTest(p)) return "test";
+    if (isWon(p)) return "won";
+    return "active";
+  }
+
+  /** Counted THROUGH ppCategory, never by re-testing the predicates: a pill must not be able to
+   *  advertise a number the tab then refuses to show. */
+  function ppCounts(rows) {
+    const n = {};
+    PP_IDS.forEach((id) => { n[id] = 0; });
+    rows.forEach((p) => { n[ppCategory(p)]++; });
+    return n;
+  }
+
+  function ppPageCount(total) { return Math.max(1, Math.ceil(total / PP_PER_PAGE)); }
+
+  function ppSlice(rows, page) {
+    const start = (Math.max(1, page) - 1) * PP_PER_PAGE;
+    return rows.slice(start, start + PP_PER_PAGE);
+  }
+
+  function ppMatches(p, q) {
+    return !q ||
+      String(p.project_name || "").toLowerCase().includes(q) ||
+      String(p.customer_email || "").toLowerCase().includes(q);
+  }
+
+  function ppGoto(page) {
+    PP_PAGE = Math.max(1, page);
+    ssSet(PP_PAGE_KEY, PP_PAGE);
+    renderProjects();
+  }
 
   async function boot() {
     try { await window.TWAuth.ready; } catch (e) { /* auth.js handles redirect */ }
@@ -60,14 +161,40 @@
         '<p class="note" style="margin:0 0 8px">Green = receives THIS project’s emails. Overrides the global default above for that project only. ' +
         (ADMIN ? "Toggle anyone." : "You can toggle only yourself.") + '</p>' +
         '<input id="pp-search" type="search" class="pp-search" placeholder="Filter by project or customer…" />' +
+        // Static markup, updated in place by syncPpTabs/syncPpPager rather than re-rendered:
+        // pressing a pill or Next repaints the list under it, and replacing the node you just
+        // pressed throws away the keyboard focus that got you there.
+        '<div id="pp-tabs" class="tw-tabs">' +
+          PP_TABS.map((t) => '<button type="button" class="tw-tab" data-pptab="' + t[0] + '"'
+            + ' aria-pressed="false">' + t[1] + ' <span class="n">0</span></button>').join("") +
+        '</div>' +
         '<div id="pp-alert" class="alert"></div>' +
         '<div id="pp-list"><span class="note">Loading…</span></div>' +
+        '<nav id="pp-pager" class="pp-pager" hidden aria-label="Project pages">' +
+          '<button type="button" class="pp-pg" id="pp-prev">‹ Prev</button>' +
+          // aria-live so the page you just moved to is ANNOUNCED; without it the only feedback
+          // for a keyboard user is a list they cannot see changing under them.
+          '<span class="pp-pgn" id="pp-pgn" aria-live="polite"></span>' +
+          '<button type="button" class="pp-pg" id="pp-next">Next ›</button>' +
+        '</nav>' +
       '</div>';
     if (ADMIN) {
       $("nn-add").addEventListener("click", addEmail);
       $("nn-email").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } });
     }
-    $("pp-search").addEventListener("input", renderProjects);
+    // Typing narrows the pool, so page 3 of the old pool is meaningless — back to the first.
+    $("pp-search").addEventListener("input", () => ppGoto(1));
+    $("pp-tabs").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-pptab]");
+      if (!b || b.dataset.pptab === PP_TAB) return;
+      // Against the known set, not trusted from the attribute: an unrecognised tab must fall
+      // back to the working list rather than filter everything out and blank the card.
+      PP_TAB = PP_IDS.indexOf(b.dataset.pptab) >= 0 ? b.dataset.pptab : "active";
+      ssSet(PP_TAB_KEY, PP_TAB);
+      ppGoto(1);                                   // a new category starts at its first page
+    });
+    $("pp-prev").addEventListener("click", () => ppGoto(PP_PAGE - 1));
+    $("pp-next").addEventListener("click", () => ppGoto(PP_PAGE + 1));
   }
 
   function alert(kind, msg) { const a = $("nn-alert"); if (a) { a.className = "alert " + kind; a.textContent = msg || ""; } }
@@ -177,35 +304,83 @@
     return people;
   }
 
+  /** The pills, updated in place. Counts follow the SEARCH, not the raw list, because the search
+   *  box sits directly above them: a pill reading 40 that then shows 2 rows is describing a list
+   *  nobody can see. */
+  function syncPpTabs(counts) {
+    const wrap = $("pp-tabs");
+    if (!wrap) return;
+    wrap.querySelectorAll("[data-pptab]").forEach((b) => {
+      const on = b.dataset.pptab === PP_TAB;
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      const c = b.querySelector(".n");
+      if (c) c.textContent = counts[b.dataset.pptab] || 0;
+    });
+  }
+
+  /** Hidden at one page: "Page 1 of 1" beside two dead buttons is noise on the common case. */
+  function syncPpPager(total, pages) {
+    const nav = $("pp-pager");
+    if (!nav) return;
+    nav.hidden = pages < 2;
+    const n = $("pp-pgn");
+    if (n) n.textContent = "Page " + PP_PAGE + " of " + pages
+      + " · " + total + " project" + (total === 1 ? "" : "s");
+    const prev = $("pp-prev"), next = $("pp-next");
+    if (prev) prev.disabled = PP_PAGE <= 1;
+    if (next) next.disabled = PP_PAGE >= pages;
+  }
+
+  function ppRowHtml(p) {
+    const pid = p.proposal_id;
+    const ov = OVERRIDES[pid] || {};
+    const custom = Object.keys(ov).length;
+    // The only tab that needs the tag: Lost holds every dead deal, scratch ones included (see
+    // ppCategory), so it is the one place test and real work sit side by side. On the other three
+    // the tab IS the label — the same call the CRM board makes on its own Lost cards.
+    const tag = (PP_TAB === "lost" && C.isTest(p))
+      ? '<span class="pp-badge pp-badge-test">Test</span>' : "";
+    const chips = peopleFor(pid).map((person) => {
+      const e = person.email.toLowerCase();
+      const mode = ov[e];
+      const eff = mode === "add" ? true : mode === "mute" ? false : person.base;
+      const canEdit = ADMIN || e === MY_EMAIL;
+      return '<button class="nt-chip ' + (eff ? "on" : "") + '" data-pid="' + esc(pid) + '" data-email="' + esc(person.email) + '"'
+           + ' data-base="' + (person.base ? 1 : 0) + '" data-eff="' + (eff ? 1 : 0) + '"'
+           + (canEdit ? "" : " disabled") + ' title="' + esc(person.email) + '">'
+           + plainAvatar(person.email) + esc(nameOf(person.email)) + '</button>';
+    }).join("");
+    return '<div class="pp-row">' +
+      '<div class="pp-head"><span class="pp-name">' + esc(p.project_name || "Proposal") + '</span>' +
+      '<span class="pp-cust">' + esc(p.customer_email || "") + '</span>' + tag +
+      (custom ? '<span class="pp-badge">' + custom + ' custom</span>' : "") +
+      (ADMIN && custom ? '<button class="pp-reset" data-pid="' + esc(pid) + '" type="button">Reset to global</button>' : "") +
+      '</div><div class="nt-chips">' + chips + '</div></div>';
+  }
+
   function renderProjects() {
     const list = $("pp-list");
     if (!list) return;
     const q = ($("pp-search").value || "").toLowerCase().trim();
-    const rows = PROJECTS.filter((p) => !q ||
-      String(p.project_name || "").toLowerCase().includes(q) ||
-      String(p.customer_email || "").toLowerCase().includes(q));
-    if (!rows.length) { list.innerHTML = '<span class="note">No published proposals' + (q ? " match your search." : " yet.") + '</span>'; return; }
-    list.innerHTML = rows.map((p) => {
-      const pid = p.proposal_id;
-      const ov = OVERRIDES[pid] || {};
-      const custom = Object.keys(ov).length;
-      const chips = peopleFor(pid).map((person) => {
-        const e = person.email.toLowerCase();
-        const mode = ov[e];
-        const eff = mode === "add" ? true : mode === "mute" ? false : person.base;
-        const canEdit = ADMIN || e === MY_EMAIL;
-        return '<button class="nt-chip ' + (eff ? "on" : "") + '" data-pid="' + esc(pid) + '" data-email="' + esc(person.email) + '"'
-             + ' data-base="' + (person.base ? 1 : 0) + '" data-eff="' + (eff ? 1 : 0) + '"'
-             + (canEdit ? "" : " disabled") + ' title="' + esc(person.email) + '">'
-             + plainAvatar(person.email) + esc(nameOf(person.email)) + '</button>';
-      }).join("");
-      return '<div class="pp-row">' +
-        '<div class="pp-head"><span class="pp-name">' + esc(p.project_name || "Proposal") + '</span>' +
-        '<span class="pp-cust">' + esc(p.customer_email || "") + '</span>' +
-        (custom ? '<span class="pp-badge">' + custom + ' custom</span>' : "") +
-        (ADMIN && custom ? '<button class="pp-reset" data-pid="' + esc(pid) + '" type="button">Reset to global</button>' : "") +
-        '</div><div class="nt-chips">' + chips + '</div></div>';
-    }).join("");
+    const matched = PROJECTS.filter((p) => ppMatches(p, q));
+    syncPpTabs(ppCounts(matched));
+    const pool = matched.filter((p) => ppCategory(p) === PP_TAB);
+    const pages = ppPageCount(pool.length);
+    // Clamped on the way OUT, not only when a tab or the search changes: a project that just
+    // moved category — someone's deposit landed — can shorten the pool under a page you are
+    // already standing on, and a silently blank list reads as a broken page.
+    if (PP_PAGE > pages) { PP_PAGE = pages; ssSet(PP_PAGE_KEY, PP_PAGE); }
+    syncPpPager(pool.length, pages);
+    if (!pool.length) {
+      // Three different kinds of empty, three different answers: nothing loaded at all, this
+      // category is genuinely empty, or the search hid it. Only the last one means "clear it".
+      list.innerHTML = '<span class="note">' + (!PROJECTS.length
+        ? "No published proposals yet."
+        : "No " + esc(PP_LABEL[PP_TAB]) + " projects" + (q ? " match your search." : " yet."))
+        + '</span>';
+      return;
+    }
+    list.innerHTML = ppSlice(pool, PP_PAGE).map(ppRowHtml).join("");
     list.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", () => {
       if (b.disabled) return;
       toggleProject(b.dataset.pid, b.dataset.email, b.dataset.base === "1", b.dataset.eff === "1", b);
