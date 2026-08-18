@@ -260,6 +260,24 @@ def test_the_panel_says_the_server_is_what_enforces_this(ran):
 
 
 @needs_node
+def test_the_note_only_calls_auto_followups_ungated_while_it_actually_is(ran):
+    """The panel names the one write that is broader than the rest: saving Auto Followups needs no
+    admin, replaces the settings row with no history, and rewrites four emails that go to
+    customers. Naming it is only honest while it is true — so this fails the day somebody gates
+    it, and the sentence should come out with the same commit.
+    """
+    main = (BACKEND / "main.py").read_text(encoding="utf-8")
+    i = main.index('@app.put("/api/followup-settings")')
+    body = main[i:main.index("@app.", i + 10)]
+    ungated = "_require_admin" not in body
+    flat = re.sub(r"\s+", " ", ran["panelHtml"]["admin"])
+    said = "Auto Followups is the exception" in flat
+    assert ungated == said, (
+        "PUT /api/followup-settings is %s but the panel says %s"
+        % ("ungated" if ungated else "admin-gated", "ungated" if said else "nothing about it"))
+
+
+@needs_node
 def test_the_note_names_every_member_visible_tab_that_gates_controls_on_role(ran):
     """Derived, so the note cannot fall behind the code.
 

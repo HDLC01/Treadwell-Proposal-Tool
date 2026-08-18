@@ -104,10 +104,14 @@
           <p>${roleDiffSentence(nav, count)}</p>
           <p><strong>This is the sidebar, not a permission model.</strong> Hiding a tab hides a
             link and nothing else — every page stays reachable by typing its URL. What actually
-            stops someone is the server: <code>_require_admin</code> guards
-            <code>/api/admin/*</code> (the users, stats and digest calls on this page, and admin
-            project deletes), the Item Library's vendor / division / unit writes, and the
-            notification-recipient writes.</p>
+            stops someone is the server: <code>_require_admin</code> guards every
+            <code>/api/admin/*</code> route (this page's users and stats, admin project deletes,
+            the digest run and preview), the Item Library's vendor / division / unit writes, and
+            the notification-recipient writes.</p>
+          <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
+            admin-gated: any signed-in member may rewrite the four recurring customer emails, and
+            the save replaces the settings row with no history. The sidebar and the server agree
+            here — it is the permission itself that is broader than the ones above.</p>
           <p>Three tabs everybody can open still gate controls <em>inside</em> the page on role:
             <strong>Items and Assemblies</strong> (only an admin edits vendors, divisions and
             units; everyone may pick from them), <strong>Notification Sending</strong> (only an
