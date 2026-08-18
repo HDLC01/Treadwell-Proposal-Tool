@@ -331,6 +331,10 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # every Projects page load. work_type is always present when the object is (see
                 # GenerateOut), so its presence is the cheapest honest existence test.
                 "has_files:data->generate_result->>work_type,"
+                # The card's money. The base tab's TOTAL LUMP SUM as a scalar, plus the legacy
+                # engine object for the drafts that predate it — see _bid_total for why the
+                # order matters and what showing only the second one cost.
+                "proposal_lump_sum:data->>proposal_lump_sum,"
                 "computed_bid:data->computed_bid")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
@@ -344,7 +348,11 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
         return [{
             "id": r["id"],
             "project_name": r.get("project_name") or "(untitled)",
-            "total": _bid_total({"computed_bid": r.get("computed_bid")}),
+            "total": _bid_total({"proposal_lump_sum": r.get("proposal_lump_sum"),
+                                 "computed_bid": r.get("computed_bid"),
+                                 # Already selected for the card's own beta badge; passed in so
+                                 # the fast path resolves money in the same order as the slow one.
+                                 "polish_beta": _polish_beta(r.get("polish_beta"))}),
             "work_type": r.get("work_type"),
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
@@ -534,11 +542,63 @@ def _polish_beta(version: Any) -> bool:
         return False
 
 
+def _pos_num(v: Any) -> Optional[float]:
+    """A positive number, or None. Accepts the string a `->>` projection returns."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def _bid_total(data: Dict[str, Any]) -> Optional[float]:
-    cb = (data or {}).get("computed_bid") or {}
-    fb = cb.get("full_bid") or {}
-    if isinstance(fb.get("total_base_bid"), (int, float)):
-        return float(fb["total_base_bid"])
+    """The money on a card, resolved the way the proposal itself resolves it.
+
+    `proposal_lump_sum` FIRST, because that is the estimate sheet's own TOTAL LUMP SUM for the
+    base tab (D88/D82) — the figure the estimator is looking at and the one the proposal prints.
+    `computed_bid` is the removed Reference Bid engine and is the FALLBACK ONLY, which is the
+    precedence proposal-review.js has documented all along (see its comment at the `#tb-total`
+    stash). This function had only the fallback, and the consequences were both halves bad:
+
+      - 21 of 31 live drafts (2026-08-19) were priced but showed no money at all, because
+        estimate-review.js nulls `computed_bid` on the way out of step 2 — Kyle's "why not all
+        containers have the dollar amount?".
+      - the 6 that did show one showed the WRONG one. Every row where both figures exist
+        disagrees, in both directions: draft 17117b50 showed $30,960 against a real bid of
+        $45,629, and 89b3498b showed $11,573 against $7,861. The engine is known to be ~30% out
+        on polish, which is why it was removed.
+
+    Sharing one order with the proposal is the point: a card can no longer name a price the
+    document would not.
+
+    THE ORDER INVERTS FOR A POLISH BETA PROJECT, and it has to. That calculator prices itself and
+    writes `computed_bid` on every save (polish-estimate.js:202) but never touches
+    `proposal_lump_sum` — so on a project that was first priced on the spreadsheet and then
+    re-priced in the beta, the lump sum is the STALE figure and the engine object is the live one.
+    Preferring the lump sum there would show the old spreadsheet number on a bid nobody quotes
+    any more, which is the same class of leak the beta's own file header warns about."""
+    data = data or {}
+    beta = data.get("polish_beta")
+    if beta is None:
+        beta = _polish_beta((data.get("polish_estimate") or {}).get("version"))
+
+    def engine() -> Optional[float]:
+        cb = data.get("computed_bid") or {}
+        fb = cb.get("full_bid") or {}
+        if isinstance(fb.get("total_base_bid"), (int, float)):
+            return float(fb["total_base_bid"])
+        if isinstance(cb.get("grand_total"), (int, float)):
+            return float(cb["grand_total"])      # material-only mode, as on Proposal Review
+        return None
+
+    order = (engine, lambda: _pos_num(data.get("proposal_lump_sum"))) if beta else \
+            (lambda: _pos_num(data.get("proposal_lump_sum")), engine)
+    for src in order:
+        got = src()
+        if got is not None:
+            return got
     return None
 
 
