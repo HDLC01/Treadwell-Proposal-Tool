@@ -30,6 +30,14 @@
   var ADMIN = false;               // may change administration lists; everyone may pick from them
   var openId = null;
   var view = "asm";
+  /** Which line's item picker is showing its results, by index within the current assembly.
+   *
+   *  Deliberately NOT stored on the line object. The line is what `patchSoon("assemblies", …,
+   *  { lines })` sends to the server, so transient UI state living there gets persisted — the
+   *  previous version's `_division_filter` / `_vendor_filter` rode along in every save. `null`
+   *  means every picker is closed, which is the state a row should be in while somebody is reading
+   *  the table rather than editing it. */
+  var pickerOpen = null;
 
   // Offered by the dropdowns, not enforced by the server: a legacy row holds whatever somebody
   // typed, and refusing to save it would make those rows uneditable. An off-list value is rendered
@@ -178,8 +186,24 @@
     renderPanel();
   }
 
+  /** Strip the picker's scratch keys out of a lines payload.
+   *
+   *  A line carries `_item_search` while somebody is typing in that row, and `patchSoon` sends the
+   *  whole lines array. The server rebuilds each line from known keys, so this cannot corrupt
+   *  anything — but a save should not carry one screen's half-typed search string, and doing it
+   *  here rather than at the five call sites means a sixth cannot forget. Underscore prefix is the
+   *  convention: `_`-keyed fields are this page's, not the row's. */
+  function lineForSave(ln) {
+    var out = {};
+    Object.keys(ln).forEach(function (k) { if (k.charAt(0) !== "_") out[k] = ln[k]; });
+    return out;
+  }
+
   function patchSoon(kind, id, body) {
     var key = kind + ":" + id;
+    if (body && Array.isArray(body.lines)) {
+      body = Object.assign({}, body, { lines: body.lines.map(lineForSave) });
+    }
     pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
     if (timers[key]) clearTimeout(timers[key]);
     timers[key] = setTimeout(async function () {
@@ -491,25 +515,34 @@
     $("n-asm").textContent = ASMS.length;
   }
 
-  function itemMatchesFilters(it, search, division, vendor) {
-    var q = String(search || "").trim().toLowerCase();
-    var div = String(division || "").trim().toLowerCase();
-    var ven = String(vendor || "").trim().toLowerCase();
-    if (q && String(it.name || "").toLowerCase().indexOf(q) === -1) return false;
-    if (div && itemDivisions(it).map(function (d) { return d.toLowerCase(); }).indexOf(div) === -1) return false;
-    if (ven && String(it.vendor || "").trim().toLowerCase() !== ven) return false;
+  /** Does this item answer to `query`, whatever the searcher happened to remember about it?
+   *
+   *  Hanz, 2026-08-19: "The search option for the Items must be multi dimensional. Could be from
+   *  name, divison or vendor or comibation of those." So ONE box matched against all three rather
+   *  than a box plus two filter dropdowns — "glaze" finds the product, "polished" finds everything
+   *  in that division, "sherwin" finds everything from that supplier, and each result prints its
+   *  division and vendor underneath so the match is never a mystery.
+   *
+   *  Every word has to land somewhere, so "polished glaze" narrows instead of finding nothing:
+   *  the fields are searched as one haystack, which is what "combination of those" asks for. */
+  function itemMatches(it, query) {
+    var words = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    var hay = [String(it.name || ""), itemDivisions(it).join(" "), String(it.vendor || "")]
+      .join(" ").toLowerCase();
+    for (var i = 0; i < words.length; i++) {
+      if (hay.indexOf(words[i]) === -1) return false;
+    }
     return true;
   }
 
-  function pickerFor(line) {
-    var it = itemOf(line.item_id);
-    var search = line._item_search == null ? "" : line._item_search;
-    var div = line._division_filter || "";
-    var ven = line._vendor_filter || "";
+  function itemResultsHtml(line) {
+    var query = line._item_search == null ? "" : line._item_search;
     var matches = ITEMS.filter(function (candidate) {
-      return itemMatchesFilters(candidate, search, div, ven);
+      return itemMatches(candidate, query);
     }).slice(0, 12);
-    var rows = matches.map(function (candidate) {
+    if (!matches.length) return '<div class="gone">No items match that search.</div>';
+    return matches.map(function (candidate) {
       var divs = itemDivisions(candidate).join(", ") || "No division";
       var vendor = candidate.vendor || "No vendor";
       return '<button class="item-result" type="button" data-pick-item="' + esc(candidate.id) + '"' +
@@ -518,18 +551,31 @@
         "<span>" + esc(divs) + " &middot; " + esc(vendor) + " &middot; " + esc(orderAmount(candidate)) + "</span>" +
         "</button>";
     }).join("");
-    if (!rows) rows = '<div class="gone">No items match those filters.</div>';
+  }
+
+  /** ONE ROW per line item.
+   *
+   *  Hanz, 2026-08-19: "divisions should be a label up top like before not on the row. Make one
+   *  line item, one row." The previous version rendered a permanently-open panel in this cell — a
+   *  search box, a "Divisions" label with a division select, a vendor select, and an expanded list
+   *  of twelve results — so one line filled a tall block, and a column label sat in the data area
+   *  where the header already labels things.
+   *
+   *  Now: one input, showing the chosen item. The results list is emitted only for the line whose
+   *  picker is open and is positioned absolutely (see .item-results in library.html), so opening it
+   *  cannot change the row's height. */
+  function pickerFor(line, index) {
+    var it = itemOf(line.item_id);
+    var open = pickerOpen === index;
+    var typed = line._item_search;
+    // Closed, the box reads as the answer ("OPF — 5 gal pail"). Open, it reads as the question, so
+    // the whole name does not have to be deleted before searching for a different product.
+    var value = open ? (typed == null ? "" : typed) : (it ? it.name : "");
     return '<div class="item-picker">' +
-      '<div class="filters">' +
-        '<input data-lf="item_search" value="' + esc(search) + '" placeholder="' +
-        esc(it ? it.name : "Search items") + '" aria-label="Search items by name">' +
-        '<label class="filter-field"><span>Divisions</span>' +
-          '<select data-lf="item_division_filter" aria-label="Filter items by division">' +
-            optionsHtml(divisionNames(), div) + '</select></label>' +
-        '<div class="filter-field unlabeled">' +
-          '<select data-lf="item_vendor_filter" aria-label="Filter items by vendor">' +
-            optionsHtml(vendorNames(), ven) + '</select></div>' +
-      '</div><div class="item-results">' + rows + '</div></div>';
+      '<input data-lf="item_search" value="' + esc(value) + '" autocomplete="off"' +
+        ' placeholder="Search items" aria-label="Search items by name, division or vendor">' +
+      (open ? '<div class="item-results">' + itemResultsHtml(line) + "</div>" : "") +
+      "</div>";
   }
 
   /** Resolve typed text to a material. Exact name first, then a unique case-insensitive match —
@@ -597,7 +643,7 @@
       }
       var lineItem = itemOf(ln.item_id);
       out += '<tr data-line="' + i + '"' + (r.ok ? "" : ' class="broken"') + ">" +
-        "<td>" + pickerFor(ln) +
+        "<td>" + pickerFor(ln, i) +
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
         '<td class="n"><div class="line-primary">' + esc(orderAmount(lineItem)) + "</div></td>" +
@@ -738,7 +784,10 @@
     if (!ctx) return;
     if (f === "item_search") {
       ctx.ln._item_search = e.target.value;
-      renderPanel();
+      // Repaint the RESULTS ONLY. renderPanel() rebuilds `lines-body`, which destroys the very
+      // input being typed into and takes the caret with it — the same reason refreshNumbers()
+      // exists below, and a bug class this project has shipped twice.
+      repaintItemResults(e.target);
       return;
     }
     ctx.ln[f] = (f === "coverage" || f === "waste_pct") ? L.num(e.target.value) : e.target.value;
@@ -751,22 +800,73 @@
 
   $("lines-body").addEventListener("change", function (e) {
     var f = e.target.getAttribute("data-lf");
-    if (f !== "item_division_filter" && f !== "item_vendor_filter" && f !== "roundup") return;
+    if (f !== "roundup") return;
     var ctx = lineOf(e.target);
     if (!ctx) return;
+    ctx.ln.roundup = !!e.target.checked;
+    // Rebuilding is safe here: a checkbox has no caret to lose, and the quantity cell changes
+    // shape entirely — "3 × 5 Gallon" becomes "13.09 Gallon".
+    renderList(); refreshNumbers();
+    patchSoon("assemblies", ctx.asm.id, { lines: ctx.asm.lines });
+  });
 
-    if (f === "roundup") {
-      ctx.ln.roundup = !!e.target.checked;
-      // Rebuilding is safe here: a checkbox has no caret to lose, and the quantity cell changes
-      // shape entirely — "3 × 5 Gallon" becomes "13.09 Gallon".
-      renderList(); refreshNumbers();
-      patchSoon("assemblies", ctx.asm.id, { lines: ctx.asm.lines });
-      return;
+  /** Redraw one picker's floating results beside the input the estimator is typing in.
+   *
+   *  Finds the list relative to the input rather than rebuilding the table, so the element with
+   *  focus is never replaced. */
+  function repaintItemResults(input) {
+    var ctx = lineOf(input);
+    if (!ctx) return;
+    var picker = input.parentNode;
+    if (!picker) return;
+    var list = picker.querySelector(".item-results");
+    if (!list) {
+      list = document.createElement("div");
+      list.className = "item-results";
+      picker.appendChild(list);
     }
+    list.innerHTML = itemResultsHtml(ctx.ln);
+  }
 
-    if (f === "item_division_filter") ctx.ln._division_filter = e.target.value;
-    if (f === "item_vendor_filter") ctx.ln._vendor_filter = e.target.value;
+  /** Open a line's picker for searching, without disturbing what is already chosen.
+   *
+   *  The typed query starts EMPTY rather than pre-filled with the item's name: somebody opening
+   *  this wants a different product, and pre-filling means deleting thirty characters before they
+   *  can type three. */
+  $("lines-body").addEventListener("focusin", function (e) {
+    if (e.target.getAttribute("data-lf") !== "item_search") return;
+    var ctx = lineOf(e.target);
+    if (!ctx) return;
+    var idx = ctx.asm.lines.indexOf(ctx.ln);
+    if (pickerOpen === idx) return;
+    pickerOpen = idx;
+    ctx.ln._item_search = "";
+    e.target.value = "";
+    repaintItemResults(e.target);
+  });
+
+  // Escape closes the list and puts the chosen item's name back, so the box never lies about what
+  // the line is priced from.
+  $("lines-body").addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || e.target.getAttribute("data-lf") !== "item_search") return;
+    closeItemPicker();
+  });
+
+  function closeItemPicker() {
+    if (pickerOpen === null) return;
+    var asm = current();
+    var ln = asm && asm.lines ? asm.lines[pickerOpen] : null;
+    if (ln) delete ln._item_search;
+    pickerOpen = null;
     renderPanel();
+  }
+
+  // Clicking anywhere else closes it. Without this the list stays open over the rows below and the
+  // table reads as though that line were still being edited.
+  document.addEventListener("mousedown", function (e) {
+    if (pickerOpen === null) return;
+    if (e.target.closest && e.target.closest(".item-picker")) return;
+    closeItemPicker();
   });
 
   /** Redraw the computed cells and totals WITHOUT rebuilding the inputs.
@@ -825,7 +925,10 @@
       var picked = itemOf(pickItem.getAttribute("data-pick-item"));
       if (!ctxPick || !picked) return;
       ctxPick.ln.item_id = picked.id;
-      ctxPick.ln._item_search = "";
+      // Picking answers the question, so the list closes and the box goes back to showing the
+      // chosen item. Leaving it open over the rows below reads as "still editing this line".
+      delete ctxPick.ln._item_search;
+      pickerOpen = null;
       if (!(Number(ctxPick.ln.coverage) > 0)) ctxPick.ln.coverage = picked.coverage;
       say("");
       paint();

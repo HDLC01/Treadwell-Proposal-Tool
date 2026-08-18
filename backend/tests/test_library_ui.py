@@ -304,12 +304,84 @@ def test_the_material_picker_is_a_search_box(ran):
 
 
 @needs_node
-def test_the_assembly_picker_keeps_the_divisions_label_and_top_alignment(ran):
+def test_one_line_item_is_one_row(ran):
+    """Hanz, 2026-08-19: "divisions should be a label up top like before not on the row. Make one
+    line item, one row."
+
+    The picker used to render an always-open panel in every ITEMS cell — a search box, a "Divisions"
+    label, a division select, a vendor select, and an expanded list of twelve results. One line item
+    filled a tall block, and a column label sat in the data area where the header already labels
+    things. Two assembly lines must produce two rows and no expanded list.
+
+    Mutation: emit the results list unconditionally in pickerFor() instead of only for the open
+    line."""
     lines = ran["lines"]
-    assert lines["pickerShowsTheDivisionLabel"], "the division filter lost its visible label"
-    assert lines["rowCellsTopAligned"], "expanded picker rows should align from the top"
+    assert lines["rowCount"] == 2, (
+        "two line items rendered %s rows" % lines["rowCount"])
+    assert lines["pickerStartsClosed"], (
+        "the results list is rendered before anyone opened it, so every row is a tall block")
+    assert lines["pickerHasNoInRowFilters"], (
+        "a Divisions label or a filter dropdown is still inside the row")
     assert lines["primaryLineCount"] >= 6, "numeric/action cells lost their first-line wrappers"
     assert lines["deleteControlAligned"], "the delete icon no longer shares the first-line height"
+
+
+@needs_node
+def test_the_item_search_looks_at_the_name_the_division_and_the_vendor(ran):
+    """Hanz's original ask: "The search option for the Items must be multi dimensional. Could be
+    from name, divison or vendor or comibation of those."
+
+    One box, three fields — which is why the filter dropdowns could go. The fixtures differ in both
+    of the non-name fields (OPF is Epoxy / Sherwin-Williams, OPF Primer is Polished Concrete / Gone
+    Supply Co), so a matcher reading only `name` would answer these identically: both names start
+    "OPF".
+
+    Mutation: drop the division or vendor term from itemMatches' haystack."""
+    s = ran["itemSearch"]
+    assert s["byName"] == ["OPF Primer"], s["byName"]
+    assert s["byDivision"] == ["OPF Primer"], (
+        "searching a DIVISION found %r — the division is not in the haystack" % (s["byDivision"],))
+    assert s["byVendor"] == ["OPF"], (
+        "searching a VENDOR found %r — the vendor is not in the haystack" % (s["byVendor"],))
+    assert s["byCombination"] == ["OPF Primer"], (
+        "a division word plus a name word should narrow, not find nothing: %r"
+        % (s["byCombination"],))
+    assert s["caseInsensitive"] == ["OPF"], "the search is case-sensitive"
+    assert s["blankFindsEverything"] == 2, "an empty box should offer everything"
+    assert s["nonsenseFindsNothing"] == []
+    assert s["emptySearchSaysSo"], "no-matches renders an empty list instead of saying so"
+    assert s["resultNamesDivisionAndVendor"], (
+        "a result matched on division or vendor does not show which — the match looks arbitrary")
+    assert s["resultsAreButtonsKeyedByItemId"], "results are not selectable by stable item id"
+
+
+@needs_node
+def test_the_picker_opens_only_the_line_being_edited(ran):
+    """Closed, the box answers "which item is this line?". Open, it asks "which item do you want?"
+    — with the query in the box rather than the current name, so a different product can be found
+    without deleting thirty characters first.
+
+    Mutation: key the open state off the line object instead of the open index, and every row
+    expands at once."""
+    s = ran["itemSearch"]
+    assert s["closedShowsTheItem"] and s["closedHasNoResults"]
+    assert s["openShowsResults"], "the open line shows no results"
+    assert s["openShowsTheQuery"], "the open box shows the item name instead of what was typed"
+    assert s["onlyTheOpenLineExpands"], (
+        "opening one line's picker expanded another line's too")
+
+
+@needs_node
+def test_the_typed_query_never_reaches_the_server(ran):
+    """`_item_search` rides on the line while somebody types, and patchSoon sends the whole lines
+    array. The server rebuilds each line from known keys so this cannot corrupt data — but a save
+    should not carry one screen's half-typed search string.
+
+    Mutation: return the line unchanged from lineForSave()."""
+    assert ran["itemSearch"]["savePayloadIsClean"] == [
+        "coverage", "item_id", "roundup", "waste_pct"], (
+        "the save payload carries the picker's scratch keys: %r"
+        % (ran["itemSearch"]["savePayloadIsClean"],))
 
 
 @needs_node

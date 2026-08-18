@@ -62,6 +62,9 @@
 
     /* tables */
     .tw { overflow-x:auto; }
+    /* Same table, no scroller — see the comment on the assemblies lines table. An overflow value
+       other than `visible` would clip the item picker's floating results. */
+    .tw-nolimit { overflow:visible; }
     table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
     th, td { text-align:left; padding:9px 11px; border-bottom:1px solid rgba(27,28,28,.08); }
     thead th { background:var(--surf-low); font:700 10px system-ui; letter-spacing:.06em;
@@ -154,15 +157,17 @@
     .division-picks label { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line);
       border-radius:7px; padding:4px 7px; background:var(--card); font-size:12px; white-space:nowrap; }
     .division-picks input { width:14px; height:14px; accent-color:var(--red); }
-    .item-picker { display:grid; gap:6px; min-width:260px; }
-    .item-picker .filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-    .item-picker .filters input { grid-column:1/-1; width:100%; }
-    .item-picker .filter-field { display:grid; gap:3px; min-width:0; }
-    .item-picker .filter-field span { font:700 9.5px system-ui; letter-spacing:.06em;
-      text-transform:uppercase; color:var(--ink-v); }
-    .item-picker .filter-field.unlabeled { padding-top:17px; }
-    .item-picker select { min-width:0; }
-    .item-results { display:grid; gap:4px; max-height:170px; overflow:auto; }
+    /* ONE ROW PER LINE ITEM. The picker is a single input; its results float over the table rather
+       than expanding the cell, so opening the list cannot change a row's height. Hanz, 2026-08-19:
+       "Make one line item, one row." The division and vendor filters that used to sit in here are
+       gone — one search box matches name, division and vendor (itemMatches in library.js), and
+       every result prints its division and vendor underneath. */
+    .item-picker { position:relative; min-width:220px; }
+    .item-picker > input { width:100%; }
+    .item-results { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:30;
+      display:grid; gap:4px; max-height:230px; overflow:auto; background:var(--card);
+      border:1px solid var(--line); border-radius:9px; padding:6px;
+      box-shadow:0 8px 22px rgba(27,28,28,.16); }
     .item-result { text-align:left; background:var(--card); border:1px solid var(--line); border-radius:7px;
       padding:6px 8px; cursor:pointer; color:var(--ink); }
     .item-result[aria-pressed="true"] { border-color:var(--red); background:var(--red-tint); }
@@ -328,7 +333,10 @@
               it is not saved with the assembly.</span>
           </div>
 
-          <div class="tw">
+          <!-- Not `.tw`: that wrapper sets overflow-x:auto, which becomes a clipping context and
+               cuts off the item picker's floating results at the cell edge. This table's columns
+               are fixed-width and fit the panel, so it does not need the scroller. -->
+          <div class="tw-nolimit">
             <table class="lines">
               <thead>
                 <tr>
