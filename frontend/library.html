@@ -94,10 +94,14 @@
     .areaband input { width:116px; font-weight:600; }
     .areaband .why { color:var(--ink-v); font-size:12px; }
 
-    .lines td { vertical-align:middle; }
+    .lines td { vertical-align:top; }
     .lines .role input { width:100%; min-width:96px; }
     .lines select { width:100%; min-width:150px; }
     .lines .cov input { width:82px; }
+    .lines .line-primary { min-height:32px; display:flex; align-items:center; justify-content:flex-end; }
+    .lines .line-primary .gone { margin-top:0; }
+    .lines .line-action { justify-content:center; }
+    .lines td > .icon { min-height:32px; display:inline-flex; align-items:center; justify-content:center; }
     /* The arithmetic, shown rather than implied: a wrong coverage should be visible in the
        working, not inferred from a total that looks slightly off. */
     .calc { font-size:11px; color:var(--ink-v); margin-top:3px; }
@@ -153,6 +157,10 @@
     .item-picker { display:grid; gap:6px; min-width:260px; }
     .item-picker .filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
     .item-picker .filters input { grid-column:1/-1; width:100%; }
+    .item-picker .filter-field { display:grid; gap:3px; min-width:0; }
+    .item-picker .filter-field span { font:700 9.5px system-ui; letter-spacing:.06em;
+      text-transform:uppercase; color:var(--ink-v); }
+    .item-picker .filter-field.unlabeled { padding-top:17px; }
     .item-picker select { min-width:0; }
     .item-results { display:grid; gap:4px; max-height:170px; overflow:auto; }
     .item-result { text-align:left; background:var(--card); border:1px solid var(--line); border-radius:7px;

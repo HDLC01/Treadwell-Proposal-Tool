@@ -394,8 +394,12 @@ const out = {};
       /data-lf="item_search"/.test(firstRow) &&
       /data-lf="item_division_filter"/.test(firstRow) &&
       /data-lf="item_vendor_filter"/.test(firstRow),
+    pickerShowsTheDivisionLabel: /<label class="filter-field"><span>Divisions<\/span><select data-lf="item_division_filter"/.test(firstRow),
     pickerShowsTheCurrentMaterial: /<b>OPF<\/b>/.test(firstRow),
     pickerIsNotASelect: !/<select data-lf="item_id"/.test(body),
+    rowCellsTopAligned: /\.lines td \{ vertical-align:top; \}/.test(html),
+    primaryLineCount: (firstRow.match(/class="line-primary/g) || []).length,
+    deleteControlAligned: /\.lines td > \.icon \{[^}]*min-height:32px/.test(html),
     tdCount: tds.length,
     qtyIdx, costIdx,
     // The two modes, rendered: whole packs vs the fraction.
@@ -459,6 +463,8 @@ const out = {};
   const bcells = brows[0].cells.map((c) => c.written);
   out.liveUpdate.brokenSaysSoInTheQtyCell = /Item removed/.test(bcells[5] || "");
   out.liveUpdate.brokenCostCellCleared = bcells[6] === "—";
+  out.liveUpdate.brokenCostCellClearedInsideAlignment = /line-primary/.test(bcells[6] || "") &&
+    !/\$|Item removed|Needs/.test(bcells[6] || "");
   out.liveUpdate.brokenRowFlagged = brows[0].classList.has("broken");
 }
 
