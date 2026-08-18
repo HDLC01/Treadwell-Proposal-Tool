@@ -52,6 +52,7 @@ runs them against the real crm-core.js and a DOM stub, and reports what actually
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -510,6 +511,22 @@ def test_the_pager_is_real_buttons_so_the_keyboard_reaches_it():
             "%s is not a real button, so the keyboard cannot reach it" % ctl)
     assert 'id="pp-pgn" aria-live="polite"' in js, (
         "the page indicator is not announced, so a keyboard user gets no feedback from Next")
+
+
+def test_every_id_the_page_looks_up_is_one_it_actually_renders():
+    """The gap the harness cannot see: it supplies the ids by hand, so a typo in render() would
+    still resolve there. In the browser `$("pp-prev")` returns null, every sync guards with
+    `if (prev)`, and the pager is silently inert — a control that renders and does nothing.
+
+    Both lists come out of the file, so a renamed node has to be renamed in both places."""
+    js = PAGE_JS.read_text(encoding="utf-8")
+    written = set(re.findall(r'id="((?:pp|nn)-[a-z]+)"', js))
+    looked_up = set(re.findall(r'\$\("((?:pp|nn)-[a-z]+)"\)', js))
+    assert written, "render() writes no ids at all — this test is reading the wrong thing"
+    missing = looked_up - written
+    assert not missing, (
+        "these are looked up but never rendered, so they resolve to null and their control does "
+        "nothing at all: %s" % sorted(missing))
 
 
 def test_the_tabs_are_real_buttons_with_a_count_badge():
