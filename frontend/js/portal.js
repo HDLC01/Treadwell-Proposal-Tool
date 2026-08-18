@@ -827,6 +827,27 @@
           gets the reminders and this project appears in the morning digest until the deposit is
           in. Nobody is chased before a proposal exists.</p>
         </div>
+        <!-- Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent
+             category." The commonest dead bid there is: priced, generated, and then the GC went
+             elsewhere before we sent it. Until now the only place to close a bid lost was the sent
+             drawer, so these could only be archived — which hides a project instead of counting it.
+
+             In the FOLLOW-UP tab because that is where somebody who learned this control on a sent
+             project will look for it. Posts to the DRAFT endpoint: there is no portal row to close. -->
+        <div class="sec" id="dsec-ns-lost">
+          <div class="lbl">${isLost(row) ? "Closed lost" : "Not going ahead?"}</div>
+          ${isLost(row) ? `
+            <p class="note">This bid is closed lost${lostReason(row)
+              ? ' — <strong>' + esc(lostReason(row)) + '</strong>' : ""}. It sits on the Lost tab and
+            counts in the numbers there. Reactivating puts it back under Created but not sent.</p>
+            <button type="button" class="btn btn-s" id="ns-reopen">Reactivate this bid</button>`
+          : `
+            <p class="note">Close it lost and it moves to the Lost tab under a reason, instead of
+            sitting here as work nobody is going to do. The customer is never emailed, and you can
+            put it back.</p>
+            <button type="button" class="btn btn-s" id="ns-lost">Mark closed lost</button>`}
+          <p class="note" id="ns-lost-note"></p>
+        </div>
        </div>
       </div>`;
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
@@ -841,7 +862,60 @@
     if (!SEC_TABS[ACTIVE_SEC]) ACTIVE_SEC = "proposal";
     applySecPanel();
     wireNotSentAssign(pid, row);
+    wireNotSentLost(pid, row);
     loadNotSentNotify(pid);
+  }
+
+  /** Close an unsent bid lost, or put it back. Hanz, 2026-08-19: "Allow to mark a proposal as lost
+   *  tho in the Created not sent category."
+   *
+   *  Same two-step shape as the sent drawer's control: the reason dialog first, the request second,
+   *  then a redraw from the patched row and a board reload — the board matters because a closed bid
+   *  has to leave the Created column and appear under Lost, which the drawer repaint does not do.
+   *
+   *  The `DRAWER_SIG = ""` below is belt-and-braces, not load-bearing, and mutation testing says so:
+   *  the guard only suppresses an IDENTICAL signature, and the patch always adds fields, so the
+   *  redraw would go through without it. Kept to match wireNotSentAssign and so a future patch that
+   *  happens to be a no-op still repaints. */
+  function wireNotSentLost(pid, row) {
+    const note = $("ns-lost-note");
+    const post = async (btn, body, optimistic) => {
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = "Saving…";
+      if (note) note.textContent = "";
+      try {
+        const r = await api("/api/draft/" + encodeURIComponent(pid) + "/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        DRAWER_SIG = "";
+        renderNotSent(pid, Object.assign({}, row, optimistic));
+        load();
+      } catch (err) {
+        btn.textContent = orig;
+        btn.disabled = false;
+        if (note) note.textContent = "Couldn't save that — " + (err.message || "try again.");
+      }
+    };
+
+    const lost = $("ns-lost");
+    if (lost) lost.addEventListener("click", async () => {
+      const why = await lostReasonDialog(row, { unsent: true });
+      if (!why) return;
+      // Shaped as the portal's own closed-lost state, exactly as the synthesised row is, so the
+      // redrawn drawer and the reloaded board agree without a second vocabulary.
+      await post(lost, { status: "closed_lost", reason: why },
+                 { proposal_status: "closed_lost",
+                   followup_state: { closed_lost_reason: why } });
+    });
+
+    const reopen = $("ns-reopen");
+    if (reopen) reopen.addEventListener("click", () =>
+      post(reopen, { status: "active" }, { proposal_status: "", followup_state: {} }));
   }
 
   /** The notification picker on a project that has not been sent.
@@ -2229,14 +2303,20 @@
   /** Why we lost it. Free text would make the reasons uncountable, so this offers
    *  the same six the customer's own form does — the two have to agree for a
    *  "why do we lose bids?" question to have an answer. */
-  function lostReasonDialog(p) {
+  function lostReasonDialog(p, opts) {
+    // `unsent` swaps one sentence. "All follow-ups stop" is the reassurance that matters on a
+    // proposal the customer has — and it is not true of a bid that was never sent, where nothing
+    // was ever chasing. Promising to stop something that is not running reads as a system that
+    // does not know its own state.
+    const unsent = !!(opts && opts.unsent);
     return new Promise((resolve) => {
       const ov = document.createElement("div");
       ov.className = "inv-ov";
       ov.innerHTML = `<div class="inv-dlg" role="dialog" aria-modal="true" aria-label="Mark closed lost">
         <div class="inv-h">Mark this closed lost?</div>
-        <p class="inv-sub">${esc(p.project_name || "This project")} moves out of the pipeline and all follow-ups stop.
-          The customer is not emailed. You can reactivate it later.</p>
+        <p class="inv-sub">${esc(p.project_name || "This project")} ${unsent
+          ? "moves to the Lost tab under the reason you pick. It was never sent, so nothing changes for the customer"
+          : "moves out of the pipeline and all follow-ups stop.\n          The customer is not emailed"}. You can reactivate it later.</p>
         <label class="inv-f" style="text-transform:none;letter-spacing:0;font-size:12.5px">
           <span>Why?</span>
           <select data-why>${Object.keys(C.LOST_REASON).map((k) =>

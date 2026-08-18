@@ -119,6 +119,11 @@ const FN_NAMES = [
   // it caught this the first time it ran.
   "loadRevisions", "paintRevisions", "downloadRevision",
   "loadNotSentNotify", "paintNotSentNotify",
+  // Closing an unsent bid lost (2026-08-19). Third time this list has had to grow for the same
+  // reason: renderNotSent calls it unconditionally, so leaving it out is a ReferenceError for the
+  // whole panel rather than a missing button. lostReasonDialog comes with it because the handler
+  // awaits it.
+  "wireNotSentLost", "lostReasonDialog",
 ];
 
 // ── the DOM stub ─────────────────────────────────────────────────────────────

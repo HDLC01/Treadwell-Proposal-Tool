@@ -281,6 +281,10 @@ CONDITIONAL_IDS = {
     "fu-lost": "not rendered on a closed-lost proposal",
     "fu-add-contact": "only rendered when the portal knows a recipient",
     "fu-add-contact-btn": "only rendered when the portal knows a recipient",
+    # The not-sent panel's own pair, same shape as fu-lost/fu-reopen above: exactly one of
+    # the two renders, and wireNotSentLost looks up both and guards on the result.
+    "ns-reopen": "only rendered on a bid already closed lost",
+    "ns-lost": "not rendered on a bid already closed lost",
 }
 
 
@@ -578,7 +582,10 @@ def test_the_not_sent_panel_does_not_wire_the_sent_drawers_cards(out):
     check."""
     missing = set(out["notSent"]["missing"])
     shared_cards = set(out["allSecCards"])
-    unexpected = missing - shared_cards
+    # CONDITIONAL_IDS too: this panel now has a mutually-exclusive pair of its own
+    # (ns-lost / ns-reopen), which is the same guarded-lookup shape the sent drawer has had
+    # for fu-lost / fu-reopen since it shipped, and it is checked by the same list.
+    unexpected = missing - shared_cards - set(CONDITIONAL_IDS)
     assert not unexpected, "it wires ids it never rendered: %s" % sorted(unexpected)
 
 
