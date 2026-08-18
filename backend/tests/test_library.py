@@ -396,8 +396,9 @@ def test_both_schema_files_declare_the_tables():
     root = pathlib.Path(__file__).resolve().parents[1]
     for path in (root / "supabase_schema.sql", root / "staging" / "schema_pg.sql"):
         sql = path.read_text(encoding="utf-8")
-        for table in ("library_items", "library_assemblies"):
+        for table in ("library_items", "library_assemblies", "library_divisions", "library_units"):
             assert ("create table if not exists public.%s" % table) in sql, (path.name, table)
+        assert "add column if not exists divisions jsonb" in sql
 
 
 def test_the_page_and_the_sidebar_both_say_it_is_a_beta():

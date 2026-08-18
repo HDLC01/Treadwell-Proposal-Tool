@@ -110,6 +110,34 @@ def test_a_division_or_unit_typed_in_the_wrong_case_becomes_the_offered_spelling
     assert library.validate_item({"name": "x", "unit": "Gal"})["unit"] == "Gal"
 
 
+def test_an_item_can_belong_to_multiple_divisions_without_losing_legacy_category(store):
+    it = _mk_item(divisions=["epoxy", "Polished Concrete", "EPOXY"])
+    got = library.get_item(it["id"])
+    assert got["divisions"] == ["Epoxy", "Polished Concrete"]
+    assert got["category"] == "Epoxy"
+    stored = store["library_items"][0]
+    assert stored["divisions"] == ["Epoxy", "Polished Concrete"]
+    assert stored["category"] == "Epoxy"
+
+
+def test_a_legacy_category_reads_as_one_division_without_being_rewritten(store):
+    it = _mk_item(category="Gypsum Underlayment")
+    store["library_items"][0].pop("divisions", None)
+    got = library.get_item(it["id"])
+    assert got["divisions"] == ["Gypsum Underlayment"]
+    assert "divisions" not in store["library_items"][0]
+
+
+def test_the_item_endpoint_round_trips_multiple_divisions(store):
+    it = _mk_item()
+    r = client.patch("/api/library/items/%s" % it["id"],
+                     json={"divisions": ["Epoxy", "Polished Concrete"]})
+    assert r.status_code == 200
+    body = r.json()["item"]
+    assert body["divisions"] == ["Epoxy", "Polished Concrete"]
+    assert body["category"] == "Epoxy"
+
+
 # ── the price date: a revision, not an edit ───────────────────────────
 def test_a_brand_new_material_has_no_price_history(store):
     assert _mk_item()["cost_updated_at"] is None
@@ -281,6 +309,37 @@ def test_vendor_usage_counts_the_materials_naming_each_one(store):
     assert library.vendor_usage() == {"sika": 2, "sherwin-williams": 1}
 
 
+# ── divisions and units: admin lists too ─────────────────────────────────────
+def test_division_and_unit_usage_count_live_items(store):
+    _mk_item(name="Primer", divisions=["Epoxy", "Polished Concrete"], unit="Gallon")
+    _mk_item(name="Top", category="epoxy", unit="gallon")
+    _mk_item(name="Bag", divisions=["Gypsum Underlayment"], unit="Bag")
+    assert library.division_usage() == {
+        "epoxy": 2, "polished concrete": 1, "gypsum underlayment": 1}
+    assert library.unit_usage() == {"gallon": 2, "bag": 1}
+
+
+def test_a_deleted_division_or_unit_leaves_items_alone(store):
+    d = library.create_ref(library.DIVISION_REFS, {"name": "Sealer"}, None, label="division")
+    u = library.create_ref(library.UNIT_REFS, {"name": "Pail"}, None, label="unit")
+    it = _mk_item(divisions=["Sealer"], unit="Pail")
+    assert library.delete_ref(library.DIVISION_REFS, d["id"]) is True
+    assert library.delete_ref(library.UNIT_REFS, u["id"]) is True
+    got = library.get_item(it["id"])
+    assert got["divisions"] == ["Sealer"]
+    assert got["unit"] == "Pail"
+
+
+@pytest.mark.parametrize("table,label", [
+    (library.DIVISION_REFS, "division"),
+    (library.UNIT_REFS, "unit"),
+])
+def test_reference_lists_refuse_case_insensitive_duplicates(store, table, label):
+    library.create_ref(table, {"name": "Sika"}, None, label=label)
+    with pytest.raises(library.ValidationError):
+        library.create_ref(table, {"name": " sika "}, None, label=label)
+
+
 # ── the admin gate on the vendor list ─────────────────────────────────
 def test_anybody_signed_in_can_read_the_vendor_list(store, as_user):
     """The Items tab's dropdown needs it, and an estimator has to be able to record where a
@@ -292,10 +351,28 @@ def test_anybody_signed_in_can_read_the_vendor_list(store, as_user):
     assert r.json()["usage"] == {}
 
 
+@pytest.mark.parametrize("path,key,table,label", [
+    ("/api/library/divisions", "divisions", library.DIVISION_REFS, "division"),
+    ("/api/library/units", "units", library.UNIT_REFS, "unit"),
+])
+def test_anybody_signed_in_can_read_admin_reference_lists(store, as_user, path, key, table, label):
+    library.create_ref(table, {"name": "Sika"}, None, label=label)
+    r = client.get(path)
+    assert r.status_code == 200
+    assert [v["name"] for v in r.json()[key]] == ["Sika"]
+    assert r.json()["usage"] == {}
+
+
 @pytest.mark.parametrize("method,path,body", [
     ("post", "/api/library/vendors", {"name": "Sika"}),
     ("patch", "/api/library/vendors/v1", {"name": "Sika"}),
     ("delete", "/api/library/vendors/v1", None),
+    ("post", "/api/library/divisions", {"name": "Sealer"}),
+    ("patch", "/api/library/divisions/d1", {"name": "Sealer"}),
+    ("delete", "/api/library/divisions/d1", None),
+    ("post", "/api/library/units", {"name": "Pail"}),
+    ("patch", "/api/library/units/u1", {"name": "Pail"}),
+    ("delete", "/api/library/units/u1", None),
 ])
 def test_a_regular_user_cannot_change_the_list(store, as_user, method, path, body):
     kw = {"json": body} if body is not None else {}
@@ -311,6 +388,20 @@ def test_an_admin_can_add_rename_and_remove(store, as_admin):
                         json={"name": "Sika USA"}).json()["vendor"]["name"] == "Sika USA"
     assert client.delete("/api/library/vendors/%s" % vid).status_code == 200
     assert client.delete("/api/library/vendors/%s" % vid).status_code == 404
+
+
+@pytest.mark.parametrize("path,key,new_name,renamed", [
+    ("/api/library/divisions", "division", "Sealer", "Sealer Systems"),
+    ("/api/library/units", "unit", "Pail", "Pail 5"),
+])
+def test_an_admin_can_add_rename_and_remove_reference_values(store, as_admin, path, key,
+                                                            new_name, renamed):
+    r = client.post(path, json={"name": new_name})
+    assert r.status_code == 200
+    rid = r.json()[key]["id"]
+    assert client.patch("%s/%s" % (path, rid), json={"name": renamed}).json()[key]["name"] == renamed
+    assert client.delete("%s/%s" % (path, rid)).status_code == 200
+    assert client.delete("%s/%s" % (path, rid)).status_code == 404
 
 
 def test_the_duplicate_refusal_reaches_the_caller_as_a_readable_400(store, as_admin):

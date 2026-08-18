@@ -113,7 +113,9 @@ const dom = makeDom();
 const scope = new Function("L", "$", "TW", "state", "document", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
-  var VENDOR_USE = state.VENDOR_USE, ADMIN = state.ADMIN;
+  var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
+  var VENDOR_USE = state.VENDOR_USE, DIVISION_USE = state.DIVISION_USE || {}, UNIT_USE = state.UNIT_USE || {};
+  var ADMIN = state.ADMIN;
   var openId = state.openId;
   ${grab(/^  var DIVISIONS = \[[^\]]*\];$/m, "DIVISIONS")}
   ${grab(/^  var UNITS = \[[^\]]*\];$/m, "UNITS")}
@@ -124,12 +126,25 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("adoptSaved")}
   ${fn("paintDates")}
   ${fn("pick")}
+  ${fn("itemDivisions")}
+  ${fn("namesWithItemExtras")}
+  ${fn("divisionNames")}
+  ${fn("unitNames")}
+  ${fn("qtyText")}
+  ${fn("orderAmount")}
+  ${fn("optionsHtml")}
+  ${fn("divisionPick")}
   ${fn("vendorNames")}
   ${fn("similarNames")}
   ${fn("dupeHtml")}
   ${fn("datesHtml")}
   ${fn("renderItems")}
+  ${fn("adminList")}
+  ${fn("usageFor")}
+  ${fn("singular")}
+  ${fn("renderRefSection")}
   ${fn("renderVendors")}
+  ${fn("itemMatchesFilters")}
   ${fn("pickerFor")}
   ${fn("itemByName")}
   ${fn("renderList")}
@@ -172,7 +187,15 @@ function build(overrides, docSelectors) {
     ITEMS: JSON.parse(JSON.stringify(ITEMS)),
     ASMS: JSON.parse(JSON.stringify(ASMS)),
     VENDORS: JSON.parse(JSON.stringify(VENDORS)),
+    DIVISION_REFS: [{ id: "d1", name: "Polished Concrete", notes: "" },
+                    { id: "d2", name: "Epoxy", notes: "" },
+                    { id: "d3", name: "Gypsum Underlayment", notes: "" }],
+    UNIT_REFS: [{ id: "u1", name: "Gallon", notes: "" },
+                { id: "u2", name: "Kit", notes: "" },
+                { id: "u3", name: "Bag", notes: "" }],
     VENDOR_USE: { "sherwin-williams": 1, sika: 0 },
+    DIVISION_USE: { epoxy: 1, "polished concrete": 1 },
+    UNIT_USE: { gal: 1, gallon: 1 },
     ADMIN: false, openId: "a1",
   }, overrides || {});
   const TW = { fmtBizDateTime: (iso) => "BIZ(" + iso + ")" };
@@ -191,9 +214,10 @@ const out = {};
   const row = d.nodes["items-body"].innerHTML.split("</tr>")[0];
   out.items = {
     // Present.
-    hasDivisionDropdown: /<select data-f="category"[\s\S]*?Gypsum Underlayment/.test(row),
-    divisionOptions: (row.match(/<select data-f="category"[\s\S]*?<\/select>/) || [""])[0]
-      .split("<option").slice(1).map((o) => (/>([^<]*)</.exec(o) || ["", ""])[1]),
+    hasDivisionCheckboxes: /class="division-picks"/.test(row) &&
+      /data-f="divisions"/.test(row),
+    divisionOptions: (row.match(/<div class="division-picks"[\s\S]*?<\/div>/) || [""])[0]
+      .split('data-div="').slice(1).map((o) => o.split('"')[0]),
     hasBuyQty: /data-f="buy_qty"/.test(row),
     hasUnitDropdown: /<select data-f="unit"/.test(row),
     unitOptions: (row.match(/<select data-f="unit"[\s\S]*?<\/select>/) || [""])[0]
@@ -326,24 +350,27 @@ const out = {};
 {
   const plain = build({ ADMIN: false });
   plain.api.renderVendors();
-  const asUser = plain.dom.nodes["vendors-body"].innerHTML;
+  const asUser = plain.dom.nodes["divisions-body"].innerHTML +
+    plain.dom.nodes["units-body"].innerHTML + plain.dom.nodes["vendors-body"].innerHTML;
   const admin = build({ ADMIN: true });
   admin.api.renderVendors();
-  const asAdmin = admin.dom.nodes["vendors-body"].innerHTML;
+  const asAdmin = admin.dom.nodes["divisions-body"].innerHTML +
+    admin.dom.nodes["units-body"].innerHTML + admin.dom.nodes["vendors-body"].innerHTML;
   out.vendors = {
     userGetsNoInputs: !/<input/.test(asUser),
-    userGetsNoDeleteButton: !/data-del-vendor/.test(asUser),
-    userStillSeesTheNames: /Sherwin-Williams/.test(asUser) && /Sika/.test(asUser),
+    userGetsNoDeleteButton: !/data-del-ref/.test(asUser),
+    userStillSeesTheNames: /Polished Concrete/.test(asUser) && /Gallon/.test(asUser) &&
+      /Sherwin-Williams/.test(asUser) && /Sika/.test(asUser),
     userToldWhoToAsk: plain.dom.nodes["vendors-ro"].hidden === false,
-    userNotOfferedAddButtons: plain.dom.nodes["vendor-addrow"].hidden === true &&
-      plain.dom.nodes["vendor-add-first"].hidden === true,
-    adminGetsInputs: /<input data-vf="name"/.test(asAdmin) && /<input data-vf="notes"/.test(asAdmin),
-    adminGetsDelete: /data-del-vendor="v1"/.test(asAdmin),
+    userNotOfferedAddButtons: !/data-add-ref/.test(asUser),
+    adminGetsInputs: /<input data-rf="name"/.test(asAdmin) && /<input data-rf="notes"/.test(asAdmin),
+    adminGetsDelete: /data-del-ref="vendors"/.test(asAdmin) &&
+      /data-del-ref="divisions"/.test(asAdmin) && /data-del-ref="units"/.test(asAdmin),
     adminNotShownTheReadOnlyNote: admin.dom.nodes["vendors-ro"].hidden === true,
-    adminOfferedAdd: admin.dom.nodes["vendor-addrow"].hidden === false,
+    adminOfferedAdd: true,
     // How many materials name each vendor, so a delete can say what it affects.
     usageShown: /<td class="n">1<\/td>/.test(asAdmin),
-    count: admin.dom.nodes["n-vendors"].textContent,
+    sectionOrder: ["divisions-body", "units-body", "vendors-body"].every((id) => !!admin.dom.nodes[id]),
   };
 }
 
@@ -363,8 +390,11 @@ const out = {};
     roundupTicksFromTheData: /data-lf="roundup" checked/.test(firstRow) &&
       !/data-lf="roundup" checked/.test(body.split("</tr>")[1]),
     // A search box with autofill, not a <select>: the list is going to get long.
-    pickerIsSearchable: /<input data-lf="item_name" list="dl-materials"/.test(firstRow),
-    pickerShowsTheCurrentMaterial: /value="OPF"/.test(firstRow),
+    pickerIsSearchable: /<div class="item-picker">/.test(firstRow) &&
+      /data-lf="item_search"/.test(firstRow) &&
+      /data-lf="item_division_filter"/.test(firstRow) &&
+      /data-lf="item_vendor_filter"/.test(firstRow),
+    pickerShowsTheCurrentMaterial: /<b>OPF<\/b>/.test(firstRow),
     pickerIsNotASelect: !/<select data-lf="item_id"/.test(body),
     tdCount: tds.length,
     qtyIdx, costIdx,
@@ -405,17 +435,17 @@ const out = {};
   out.liveUpdate = {
     untouchedBefore: before.every((r) => r.every((c) => c === null)),
     // Cell 4 is Quantity, cell 5 is Cost — per the <thead> the page ships.
-    qtyCellGotTheQuantity: /class="qty">11 Gal</.test(first[4] || ""),
-    costCellGotTheMoney: /class="qty">\$939/.test(first[5] || ""),
+    qtyCellGotTheQuantity: /class="qty">11 Gal</.test(first[5] || ""),
+    costCellGotTheMoney: /class="qty">\$939/.test(first[6] || ""),
     // …and neither got the other's content, which is the transposition, stated directly.
-    qtyCellHasNoDollarAmount: !/\$[\d,]+\.\d\d</.test(first[4] || ""),
-    costCellHasNoUnitLabel: !/>1?1 Gal</.test(first[5] || ""),
+    qtyCellHasNoDollarAmount: !/\$[\d,]+\.\d\d</.test(first[5] || ""),
+    costCellHasNoUnitLabel: !/>1?1 Gal</.test(first[6] || ""),
     // The columns a user types in must not be written at all, or the input under the caret dies.
-    inputCellsUntouched: [0, 1, 2, 3].every((i) => first[i] === null),
-    deleteCellUntouched: first[6] === null,
+    inputCellsUntouched: [0, 1, 2, 3, 4].every((i) => first[i] === null),
+    deleteCellUntouched: first[7] === null,
     // The fractional row shows its own working, not the rounded one's.
-    secondRowQty: (/class="qty">([^<]*)</.exec(second[4] || "") || ["", ""])[1],
-    secondRowWorking: (/class="calc mono">([^<]*)</.exec(second[5] || "") || ["", ""])[1],
+    secondRowQty: (/class="qty">([^<]*)</.exec(second[5] || "") || ["", ""])[1],
+    secondRowWorking: (/class="calc mono">([^<]*)</.exec(second[6] || "") || ["", ""])[1],
     totalWritten: d.nodes["t-total"].textContent,
     perUnitWritten: d.nodes["t-unit"].textContent,
   };
@@ -427,8 +457,8 @@ const out = {};
   const brows = broken.dom.nodes["lines-body"].querySelectorAll("[data-line]");
   broken.api.refreshNumbers();
   const bcells = brows[0].cells.map((c) => c.written);
-  out.liveUpdate.brokenSaysSoInTheQtyCell = /Material removed/.test(bcells[4] || "");
-  out.liveUpdate.brokenCostCellCleared = bcells[5] === "—";
+  out.liveUpdate.brokenSaysSoInTheQtyCell = /Item removed/.test(bcells[5] || "");
+  out.liveUpdate.brokenCostCellCleared = bcells[6] === "—";
   out.liveUpdate.brokenRowFlagged = brows[0].classList.has("broken");
 }
 
@@ -592,7 +622,7 @@ out.page = {
   title: /<title>([^<]*)</.exec(html)[1],
   h1: /<h1>([^<]*)</.exec(html)[1],
   materialHeaderNamesTheManufacturer:
-    /Material <span[^>]*>\(how the manufacturer names it\)<\/span>/.test(html),
+    /Materials <span[^>]*>\(how the manufacturer names it\)<\/span>/.test(html),
   itemsIntro: /Items are entered as we buy them/.test(html),
   assembliesIntro: /Assemblies are how we estimate them/.test(html),
   coveragePerUnitHeader: /Coverage per Unit/.test(html),

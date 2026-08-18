@@ -22,8 +22,12 @@
   var ITEMS = [];
   var ASMS = [];
   var VENDORS = [];
+  var DIVISION_REFS = [];
+  var UNIT_REFS = [];
   var VENDOR_USE = {};             // casefolded vendor name → how many materials name it
-  var ADMIN = false;               // may change the VENDOR LIST; everyone may pick from it
+  var DIVISION_USE = {};
+  var UNIT_USE = {};
+  var ADMIN = false;               // may change administration lists; everyone may pick from them
   var openId = null;
   var view = "asm";
 
@@ -32,6 +36,8 @@
   // as its own option so it stays visible and correctable.
   var DIVISIONS = ["Polished Concrete", "Epoxy", "Gypsum Underlayment"];
   var UNITS = ["Gallon", "Kit", "Bag"];
+  var DEFAULT_DIVISIONS = DIVISIONS.slice();
+  var DEFAULT_UNITS = UNITS.slice();
 
   // Every request waits for the bearer token in ONE place. Doing it per-call is how the Bid
   // Calendar shipped with a 401 that hid the estimator's own entries: `load()` waited and its
@@ -63,7 +69,8 @@
     } catch (e) { ADMIN = false; }
     try {
       var rs = await Promise.all([api("/api/library/items"), api("/api/library/assemblies"),
-                                 api("/api/library/vendors")]);
+                                 api("/api/library/vendors"), api("/api/library/divisions"),
+                                 api("/api/library/units")]);
       if (!rs[0].ok || !rs[1].ok) throw new Error("HTTP " + rs[0].status + "/" + rs[1].status);
       var items = await rs[0].json(), asms = await rs[1].json();
       ITEMS = items.items || [];
@@ -74,6 +81,18 @@
         var vs = await rs[2].json();
         VENDORS = vs.vendors || [];
         VENDOR_USE = vs.usage || {};
+      }
+      if (rs[3].ok) {
+        var ds = await rs[3].json();
+        DIVISION_REFS = ds.divisions || [];
+        DIVISION_USE = ds.usage || {};
+        DIVISIONS = (DIVISION_REFS.length ? DIVISION_REFS.map(function (d) { return d.name; }) : DEFAULT_DIVISIONS.slice());
+      }
+      if (rs[4].ok) {
+        var us = await rs[4].json();
+        UNIT_REFS = us.units || [];
+        UNIT_USE = us.usage || {};
+        UNITS = (UNIT_REFS.length ? UNIT_REFS.map(function (u) { return u.name; }) : DEFAULT_UNITS.slice());
       }
       if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
       say("");
@@ -101,7 +120,11 @@
    *  three costs had saved. Typing a name and tabbing straight to a price is the normal way to
    *  fill a row, so this was going to happen constantly. */
   function byId(kind, id) {
-    var list = (kind === "assemblies") ? ASMS : (kind === "vendors") ? VENDORS : ITEMS;
+    var list = (kind === "assemblies") ? ASMS
+      : (kind === "vendors") ? VENDORS
+      : (kind === "divisions") ? DIVISION_REFS
+      : (kind === "units") ? UNIT_REFS
+      : ITEMS;
     for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return list[i];
     return null;
   }
@@ -196,7 +219,7 @@
         }
         // Adopt the new version stamp, or the NEXT save conflicts with our own write.
         var saved = await r.json().catch(function () { return {}; });
-        var fresh = saved.assembly || saved.item || saved.vendor;
+        var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit;
         if (fresh && fresh.id) adoptSaved(kind, fresh);
         say(""); saving("Saved");
         setTimeout(function () { saving(""); }, 1200);
@@ -251,6 +274,17 @@
     return s + "</select>";
   }
 
+  function divisionPick(it) {
+    var selected = {};
+    itemDivisions(it).forEach(function (d) { selected[d.toLowerCase()] = true; });
+    var names = divisionNames();
+    return '<div class="division-picks" role="group" aria-label="Divisions">' +
+      names.map(function (d) {
+        return '<label><input type="checkbox" data-f="divisions" data-div="' + esc(d) + '"' +
+          (selected[String(d).toLowerCase()] ? " checked" : "") + "> " + esc(d) + "</label>";
+      }).join("") + "</div>";
+  }
+
   /** What the Vendor dropdown offers: the curated list, plus any supplier already named on a
    *  material that isn't on it yet.
    *
@@ -274,6 +308,60 @@
     });
     extra.sort(function (a, b) { return a.localeCompare(b); });
     return names.concat(extra);
+  }
+
+  function itemDivisions(it) {
+    var raw = Array.isArray((it || {}).divisions) ? it.divisions.slice() : [];
+    if (!raw.length && (it || {}).category) raw.push(it.category);
+    var seen = {}, out = [];
+    raw.forEach(function (d) {
+      var v = String(d || "").trim();
+      var key = v.toLowerCase();
+      if (!v || seen[key]) return;
+      seen[key] = true;
+      out.push(v);
+    });
+    return out;
+  }
+
+  function namesWithItemExtras(refs, field, listGetter) {
+    var names = refs.slice();
+    var seen = {};
+    names.forEach(function (n) { seen[String(n).toLowerCase()] = true; });
+    ITEMS.forEach(function (it) {
+      var vals = listGetter ? listGetter(it) : [it[field]];
+      vals.forEach(function (raw) {
+        var v = String(raw || "").trim();
+        if (!v || seen[v.toLowerCase()]) return;
+        seen[v.toLowerCase()] = true;
+        names.push(v);
+      });
+    });
+    return names;
+  }
+
+  function divisionNames() { return namesWithItemExtras(DIVISIONS, "divisions", itemDivisions); }
+  function unitNames() { return namesWithItemExtras(UNITS, "unit"); }
+
+  function qtyText(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return "";
+    return String(Math.round(n * 1000) / 1000).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  }
+
+  function orderAmount(it) {
+    if (!it) return "—";
+    return qtyText((it.buy_qty == null ? 1 : it.buy_qty)) + " " + String(it.unit || "Unit");
+  }
+
+  function optionsHtml(list, selected) {
+    var out = '<option value="">—</option>';
+    var sel = String(selected || "").toLowerCase();
+    list.forEach(function (name) {
+      out += '<option value="' + esc(name) + '"' +
+        (String(name).toLowerCase() === sel ? " selected" : "") + ">" + esc(name) + "</option>";
+    });
+    return out;
   }
 
   /** Materials whose name looks like this one's, so two people don't enter the same product twice
@@ -316,10 +404,9 @@
       out += '<tr data-item="' + esc(it.id) + '">' +
         '<td><input data-f="name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials" style="width:100%;min-width:150px;">' +
           dupeHtml(similarNames(it.name, it.id)) + "</td>" +
-        "<td>" + pick("category", it.category, DIVISIONS, "Division",
-                      ' style="width:100%;min-width:150px;"') + "</td>" +
+        "<td>" + divisionPick(it) + "</td>" +
         '<td class="n"><input data-f="buy_qty" class="num" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase" style="width:64px;"></td>' +
-        "<td>" + pick("unit", it.unit, UNITS, "Unit", ' style="width:100%;min-width:96px;"') + "</td>" +
+        "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' style="width:100%;min-width:96px;"') + "</td>" +
         '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase" style="width:92px;"></span></td>' +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor",
                       ' style="width:100%;min-width:130px;"') + "</td>" +
@@ -336,37 +423,53 @@
     }).join("");
   }
 
-  // ── vendors ────────────────────────────────────────────────────────────────
-  function renderVendors() {
+  // ── administration ─────────────────────────────────────────────────────────
+  function adminList(kind) {
+    return kind === "divisions" ? DIVISION_REFS : kind === "units" ? UNIT_REFS : VENDORS;
+  }
+
+  function usageFor(kind, name) {
+    var key = String(name || "").toLowerCase();
+    return (kind === "divisions" ? DIVISION_USE : kind === "units" ? UNIT_USE : VENDOR_USE)[key] || 0;
+  }
+
+  function singular(kind) {
+    return kind === "divisions" ? "division" : kind === "units" ? "unit" : "vendor";
+  }
+
+  function renderRefSection(kind) {
+    var list = adminList(kind);
     var out = "";
-    for (var i = 0; i < VENDORS.length; i++) {
-      var v = VENDORS[i];
-      var used = VENDOR_USE[String(v.name || "").toLowerCase()] || 0;
-      out += '<tr data-vendor="' + esc(v.id) + '">' +
+    for (var i = 0; i < list.length; i++) {
+      var v = list[i], one = singular(kind);
+      var used = usageFor(kind, v.name);
+      out += '<tr data-ref-kind="' + kind + '" data-ref-id="' + esc(v.id) + '">' +
         "<td>" + (ADMIN
-          ? '<input data-vf="name" value="' + esc(v.name) + '" aria-label="Vendor name" maxlength="200" style="width:100%;min-width:170px;">'
+          ? '<input data-rf="name" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200" style="width:100%;min-width:170px;">'
           : "<b>" + esc(v.name) + "</b>") + "</td>" +
         "<td>" + (ADMIN
-          ? '<input data-vf="notes" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000" style="width:100%;min-width:190px;">'
+          ? '<input data-rf="notes" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000" style="width:100%;min-width:190px;">'
           : esc(v.notes)) + "</td>" +
         '<td class="n">' + used + "</td>" +
         "<td>" + (ADMIN
-          ? '<button class="icon" type="button" data-del-vendor="' + esc(v.id) + '" title="Remove this vendor" aria-label="Remove ' + esc(v.name) + '">🗑</button>'
+          ? '<button class="icon" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">🗑</button>'
           : "") + "</td>" +
       "</tr>";
     }
-    $("vendors-body").innerHTML = out;
-    $("vendors-empty").hidden = VENDORS.length > 0;
-    $("n-vendors").textContent = VENDORS.length;
+    $(kind + "-body").innerHTML = out;
+    $(kind + "-empty").hidden = list.length > 0;
+    var addrow = document.querySelector('[data-addrow-ref="' + kind + '"]');
+    if (addrow) addrow.hidden = !ADMIN;
+    var first = $(kind + "-empty").querySelector
+      ? $(kind + "-empty").querySelector("[data-add-ref]") : null;
+    if (first) first.hidden = !ADMIN;
+  }
+
+  function renderVendors() {
+    renderRefSection("divisions");
+    renderRefSection("units");
+    renderRefSection("vendors");
     $("vendors-ro").hidden = ADMIN;
-    $("vendor-addrow").hidden = !ADMIN;
-    $("vendor-add-first").hidden = !ADMIN;
-    if (!VENDORS.length && !ADMIN) {
-      // An empty table with an Add button they cannot use would read as a broken page.
-      $("vendors-empty-h").textContent = "No vendors yet";
-      $("vendors-empty-why").textContent =
-        "An admin adds the suppliers here, and they become a dropdown on every material.";
-    }
   }
 
   // ── assemblies ─────────────────────────────────────────────────────────────
@@ -388,19 +491,43 @@
     $("n-asm").textContent = ASMS.length;
   }
 
-  /** The material picker: a search box with autofill, not a dropdown.
-   *
-   *  Hanz asked for "a search bar and auto fill" because the list is going to get long, and a
-   *  <select> can only be searched by typing its first letters. A `list=` input searches anywhere
-   *  in the name, which is how somebody who remembers "glaze" finds "Ultra Glaze #4".
-   *
-   *  It stores the NAME in the field and resolves to an id on change (see itemByName), so what is
-   *  on screen is what a person would say out loud. */
-  function pickerFor(itemId) {
-    var it = itemOf(itemId);
-    return '<input data-lf="item_name" list="dl-materials" value="' + esc(it ? it.name : "") +
-      '" placeholder="Search materials…" aria-label="Material" ' +
-      'style="width:100%;min-width:170px;">';
+  function itemMatchesFilters(it, search, division, vendor) {
+    var q = String(search || "").trim().toLowerCase();
+    var div = String(division || "").trim().toLowerCase();
+    var ven = String(vendor || "").trim().toLowerCase();
+    if (q && String(it.name || "").toLowerCase().indexOf(q) === -1) return false;
+    if (div && itemDivisions(it).map(function (d) { return d.toLowerCase(); }).indexOf(div) === -1) return false;
+    if (ven && String(it.vendor || "").trim().toLowerCase() !== ven) return false;
+    return true;
+  }
+
+  function pickerFor(line) {
+    var it = itemOf(line.item_id);
+    var search = line._item_search == null ? "" : line._item_search;
+    var div = line._division_filter || "";
+    var ven = line._vendor_filter || "";
+    var matches = ITEMS.filter(function (candidate) {
+      return itemMatchesFilters(candidate, search, div, ven);
+    }).slice(0, 12);
+    var rows = matches.map(function (candidate) {
+      var divs = itemDivisions(candidate).join(", ") || "No division";
+      var vendor = candidate.vendor || "No vendor";
+      return '<button class="item-result" type="button" data-pick-item="' + esc(candidate.id) + '"' +
+        (candidate.id === line.item_id ? ' aria-pressed="true"' : ' aria-pressed="false"') + ">" +
+        "<b>" + esc(candidate.name) + "</b>" +
+        "<span>" + esc(divs) + " &middot; " + esc(vendor) + " &middot; " + esc(orderAmount(candidate)) + "</span>" +
+        "</button>";
+    }).join("");
+    if (!rows) rows = '<div class="gone">No items match those filters.</div>';
+    return '<div class="item-picker">' +
+      '<div class="filters">' +
+        '<input data-lf="item_search" value="' + esc(search) + '" placeholder="' +
+        esc(it ? it.name : "Search items") + '" aria-label="Search items by name">' +
+        '<select data-lf="item_division_filter" aria-label="Filter items by division">' +
+          optionsHtml(divisionNames(), div) + '</select>' +
+        '<select data-lf="item_vendor_filter" aria-label="Filter items by vendor">' +
+          optionsHtml(vendorNames(), ven) + '</select>' +
+      '</div><div class="item-results">' + rows + '</div></div>';
   }
 
   /** Resolve typed text to a material. Exact name first, then a unique case-insensitive match —
@@ -425,10 +552,10 @@
       // An assembly with nothing to choose from cannot be built, so say that rather than
       // offering a button that opens an empty dropdown.
       var bare = ITEMS.length === 0;
-      $("asm-empty-h").textContent = bare ? "Add some materials first" : "No assemblies yet";
+      $("asm-empty-h").textContent = bare ? "Add some items first" : "No assemblies yet";
       $("asm-empty-why").textContent = bare
-        ? "An assembly is built out of your materials, so there is nothing to pick from yet. Add a few on the Items tab."
-        : "Build a system out of your materials — a primer, a body coat, a top coat — and see what it costs per square foot.";
+        ? "An assembly is built out of your items, so there is nothing to pick from yet. Add a few on the Items tab."
+        : "Build a system out of your items - a primer, a body coat, a top coat - and see what it costs per square foot.";
       $("asm-new").hidden = bare;
       return;
     }
@@ -451,7 +578,7 @@
         qtyCell = '<span style="color:var(--ink-v)">—</span>';       // no area typed yet
         costCell = '<span style="color:var(--ink-v)">—</span>';
       } else if (r.reason === "missing_item") {
-        qtyCell = '<span class="gone">Material removed</span>';
+        qtyCell = '<span class="gone">Item removed</span>';
         costCell = "—";
       } else if (r.reason === "no_coverage") {
         qtyCell = '<span class="gone">Needs a coverage</span>';
@@ -460,10 +587,12 @@
         qtyCell = '<span class="gone">Needs a cost</span>';
         costCell = "—";
       }
+      var lineItem = itemOf(ln.item_id);
       out += '<tr data-line="' + i + '"' + (r.ok ? "" : ' class="broken"') + ">" +
-        "<td>" + pickerFor(ln.item_id) +
+        "<td>" + pickerFor(ln) +
           (!r.ok && r.reason === "missing_item"
-            ? '<div class="gone">Pick a replacement — this line is not priced</div>' : "") + "</td>" +
+            ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
+        '<td class="n">' + esc(orderAmount(lineItem)) + "</td>" +
         '<td class="n cov"><input data-lf="coverage" class="num" value="' +
           (ln.coverage == null ? "" : ln.coverage) + '" aria-label="Coverage per unit"></td>' +
         '<td class="n"><input data-lf="waste_pct" class="num waste" value="' +
@@ -477,8 +606,8 @@
       "</tr>";
     }
     if (!asm.lines.length) {
-      out = '<tr><td colspan="7" style="color:var(--ink-v);padding:22px;text-align:center;">' +
-            "No lines yet. Add one and search for a material.</td></tr>";
+      out = '<tr><td colspan="8" style="color:var(--ink-v);padding:22px;text-align:center;">' +
+            "No lines yet. Add one and search for an item.</td></tr>";
     }
     $("lines-body").innerHTML = out;
 
@@ -528,6 +657,16 @@
     if (!row) return;
     var it = itemOf(row.getAttribute("data-item"));
     if (!it) return;
+    if (f === "divisions") {
+      var vals = Array.from(row.querySelectorAll('input[data-f="divisions"]:checked'))
+        .map(function (x) { return x.getAttribute("data-div"); })
+        .filter(Boolean);
+      it.divisions = vals;
+      it.category = vals[0] || "";
+      renderList(); renderPanel();
+      patchSoon("items", it.id, { divisions: vals });
+      return;
+    }
     var raw = e.target.value;
     it[f] = NUMERIC_ITEM_FIELDS.indexOf(f) !== -1 ? L.num(raw) : raw;
     if (f === "name") {
@@ -548,26 +687,33 @@
   $("items-body").addEventListener("input", onItemEdit);
   $("items-body").addEventListener("change", onItemEdit);
 
-  // ── vendors ────────────────────────────────────────────────────────────────
+  // ── administration ────────────────────────────────────────────────────────
   // Writes are admin-only on the server too (`_require_admin`). The read-only render is what keeps
   // a non-admin from being offered a control that would 403 — not the only line of defence.
-  function onVendorEdit(e) {
-    var f = e.target.getAttribute && e.target.getAttribute("data-vf");
+  function onRefEdit(e) {
+    var f = e.target.getAttribute && e.target.getAttribute("data-rf");
     if (!f) return;
-    var row = e.target.closest("[data-vendor]");
+    var row = e.target.closest("[data-ref-kind]");
     if (!row) return;
-    var id = row.getAttribute("data-vendor");
+    var kind = row.getAttribute("data-ref-kind");
+    var id = row.getAttribute("data-ref-id");
+    var list = adminList(kind);
     var v = null;
-    for (var i = 0; i < VENDORS.length; i++) if (VENDORS[i].id === id) v = VENDORS[i];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) v = list[i];
     if (!v) return;
     v[f] = e.target.value;
-    // A rename changes what the Items tab offers, but NOT what an item already says: items store
-    // the name, on purpose. So the dropdowns are redrawn and existing values stay put — an off-list
-    // value renders as its own option.
-    if (f === "name") renderItems();
-    patchSoon("vendors", id, (function () { var b = {}; b[f] = e.target.value; return b; })());
+    // A rename changes what the Items tab offers, but NOT what an item already says. Existing
+    // values stay put and render as off-list choices until someone changes that item.
+    if (f === "name") {
+      if (kind === "divisions") DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; });
+      if (kind === "units") UNITS = UNIT_REFS.map(function (u) { return u.name; });
+      renderItems();
+    }
+    patchSoon(kind, id, (function () { var b = {}; b[f] = e.target.value; return b; })());
   }
-  $("vendors-body").addEventListener("input", onVendorEdit);
+  ["divisions-body", "units-body", "vendors-body"].forEach(function (id) {
+    $(id).addEventListener("input", onRefEdit);
+  });
 
   function lineOf(target) {
     var asm = current(), row = target.closest && target.closest("[data-line]");
@@ -578,11 +724,15 @@
 
   $("lines-body").addEventListener("input", function (e) {
     var f = e.target.getAttribute("data-lf");
-    // item_name resolves on `change` (a half-typed name is not a material), and the checkbox
-    // reports through `change` as well.
-    if (!f || f === "item_name" || f === "roundup") return;
+    // Picker filters are temporary UI state; item selection itself happens by stable item id.
+    if (!f || f === "roundup") return;
     var ctx = lineOf(e.target);
     if (!ctx) return;
+    if (f === "item_search") {
+      ctx.ln._item_search = e.target.value;
+      renderPanel();
+      return;
+    }
     ctx.ln[f] = (f === "coverage" || f === "waste_pct") ? L.num(e.target.value) : e.target.value;
     renderList();
     // Only the totals need redrawing, and re-rendering the table would move the caret out of
@@ -593,7 +743,7 @@
 
   $("lines-body").addEventListener("change", function (e) {
     var f = e.target.getAttribute("data-lf");
-    if (f !== "item_name" && f !== "roundup") return;
+    if (f !== "item_division_filter" && f !== "item_vendor_filter" && f !== "roundup") return;
     var ctx = lineOf(e.target);
     if (!ctx) return;
 
@@ -606,22 +756,9 @@
       return;
     }
 
-    var typed = e.target.value;
-    var it = itemByName(typed);
-    if (!it) {
-      // Left as typed rather than cleared, and said out loud. Silently blanking somebody's search
-      // because it didn't match yet is how a line loses its material.
-      say(typed ? "No material called “" + typed + "”. Add it on the Items tab first." : "");
-      if (!typed) { ctx.ln.item_id = ""; paint();
-                    patchSoon("assemblies", ctx.asm.id, { lines: ctx.asm.lines }); }
-      return;
-    }
-    say("");
-    ctx.ln.item_id = it.id;
-    // Coverage follows the material just picked, unless one was already set by hand.
-    if (!(Number(ctx.ln.coverage) > 0)) ctx.ln.coverage = it.coverage;
-    paint();
-    patchSoon("assemblies", ctx.asm.id, { lines: ctx.asm.lines });
+    if (f === "item_division_filter") ctx.ln._division_filter = e.target.value;
+    if (f === "item_vendor_filter") ctx.ln._vendor_filter = e.target.value;
+    renderPanel();
   });
 
   /** Redraw the computed cells and totals WITHOUT rebuilding the inputs.
@@ -634,10 +771,10 @@
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var rows = $("lines-body").querySelectorAll("[data-line]");
-    // BY POSITION, so these two indexes are load-bearing: Material · Coverage · Waste · Roundup?
-    // · Quantity · Cost · delete. Adding a column ahead of them without moving these writes the
+    // BY POSITION, so these two indexes are load-bearing: Items · Order Amount · Coverage ·
+    // Waste · Roundup? · Quantity · Cost · delete. Adding a column ahead of them without moving these writes the
     // quantity into the waste box.
-    var QTY_TD = 4, COST_TD = 5;
+    var QTY_TD = 5, COST_TD = 6;
     for (var i = 0; i < rows.length; i++) {
       var r = p.rows[i];
       if (!r) continue;
@@ -652,7 +789,7 @@
       } else {
         tds[QTY_TD].innerHTML = r.ok
           ? '<span style="color:var(--ink-v)">—</span>'
-          : '<span class="gone">' + (r.reason === "missing_item" ? "Material removed"
+          : '<span class="gone">' + (r.reason === "missing_item" ? "Item removed"
               : r.reason === "no_coverage" ? "Needs a coverage" : "Needs a cost") + "</span>";
         tds[COST_TD].innerHTML = "—";
         rows[i].classList.toggle("broken", !r.ok);
@@ -667,6 +804,20 @@
 
     var open = t.closest && t.closest("[data-open]");
     if (open) { openId = open.getAttribute("data-open"); paint(); return; }
+
+    var pickItem = t.closest && t.closest("[data-pick-item]");
+    if (pickItem) {
+      var ctxPick = lineOf(pickItem);
+      var picked = itemOf(pickItem.getAttribute("data-pick-item"));
+      if (!ctxPick || !picked) return;
+      ctxPick.ln.item_id = picked.id;
+      ctxPick.ln._item_search = "";
+      if (!(Number(ctxPick.ln.coverage) > 0)) ctxPick.ln.coverage = picked.coverage;
+      say("");
+      paint();
+      patchSoon("assemblies", ctxPick.asm.id, { lines: ctxPick.asm.lines });
+      return;
+    }
 
     if (t.closest && t.closest("[data-add-item]")) {
       try {
@@ -696,7 +847,7 @@
         // they just show a line that needs repointing.
         detail: used
           ? used + " assembl" + (used === 1 ? "y uses" : "ies use") +
-            " it. Their lines will show “Material removed” until you pick a replacement."
+            " it. Their lines will show \"Item removed\" until you pick a replacement."
           : "No assemblies are using it.",
         confirmText: "Remove material",
       });
@@ -731,6 +882,61 @@
                        waste_pct: 5, roundup: true, note: "" });
       paint();
       patchSoon("assemblies", asm.id, { lines: asm.lines });
+      return;
+    }
+
+    var addRef = t.getAttribute && t.getAttribute("data-add-ref");
+    if (addRef) {
+      try {
+        var one = singular(addRef);
+        var made = await post(addRef, { name: "New " + one });
+        var row = made[one];
+        adminList(addRef).push(row);
+        adminList(addRef).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        if (addRef === "divisions") DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; });
+        if (addRef === "units") UNITS = UNIT_REFS.map(function (u) { return u.name; });
+        showView("vendors"); paint();
+        var rf = $(addRef + "-body")
+          .querySelector('[data-ref-id="' + row.id + '"] input[data-rf="name"]');
+        if (rf) { rf.focus(); rf.select(); }
+      } catch (err) {
+        say("Couldn't add that value. " + err.message);
+      }
+      return;
+    }
+
+    var delRef = t.getAttribute && t.getAttribute("data-del-ref");
+    if (delRef) {
+      var rid = t.getAttribute("data-ref-id");
+      var listRef = adminList(delRef);
+      var refRow = null;
+      for (var ri = 0; ri < listRef.length; ri++) if (listRef[ri].id === rid) refRow = listRef[ri];
+      var usedRef = usageFor(delRef, (refRow || {}).name);
+      var oneRef = singular(delRef);
+      var okRef = await TW.confirmDanger({
+        title: "Remove this " + oneRef + "?",
+        name: refRow ? refRow.name : "This value",
+        after: " will stop being offered on items.",
+        detail: usedRef
+          ? usedRef + " item" + (usedRef === 1 ? "" : "s") + " still use" +
+            (usedRef === 1 ? "s" : "") + " it and will keep doing so until manually changed."
+          : "No items use it.",
+        confirmText: "Remove " + oneRef,
+      });
+      if (!okRef) return;
+      try {
+        await del(delRef, rid);
+        if (delRef === "divisions") {
+          DIVISION_REFS = DIVISION_REFS.filter(function (x) { return x.id !== rid; });
+          DIVISIONS = DIVISION_REFS.map(function (d) { return d.name; });
+        } else if (delRef === "units") {
+          UNIT_REFS = UNIT_REFS.filter(function (x) { return x.id !== rid; });
+          UNITS = UNIT_REFS.map(function (u) { return u.name; });
+        } else {
+          VENDORS = VENDORS.filter(function (x) { return x.id !== rid; });
+        }
+        paint();
+      } catch (err) { say("Couldn't remove that value. " + err.message); }
       return;
     }
 

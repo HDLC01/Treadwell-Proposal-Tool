@@ -287,6 +287,30 @@ create table if not exists public.library_vendors (
 create index if not exists library_vendors_live_name_idx
   on public.library_vendors (name) where deleted_at is null;
 
+create table if not exists public.library_divisions (
+  id           text primary key,
+  name         text not null,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_divisions_live_name_idx
+  on public.library_divisions (name) where deleted_at is null;
+
+create table if not exists public.library_units (
+  id           text primary key,
+  name         text not null,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_units_live_name_idx
+  on public.library_units (name) where deleted_at is null;
+
 -- ── Items and Assemblies, 2026-08-15 (Hanz) ───────────────────────────────
 -- Additive only, and safe to run against a database that already holds BETA rows.
 --
@@ -294,16 +318,35 @@ create index if not exists library_vendors_live_name_idx
 -- separately from the unit so `unit_cost` can mean what the pail costs. Existing rows get 1,
 -- which reproduces exactly what they priced before this column existed.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
+alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
 -- Distinct from updated_at, which moves on every patch and is the assemblies' concurrency token.
 -- This one marks a PRICE REVISION, so it moves only when the cost changes — that is the date an
 -- estimator wants when they ask how old a number is.
 alter table public.library_items add column if not exists cost_updated_at timestamptz;
+
+insert into public.library_divisions (id, name)
+values
+  ('default-polished-concrete', 'Polished Concrete'),
+  ('default-epoxy', 'Epoxy'),
+  ('default-gypsum-underlayment', 'Gypsum Underlayment')
+on conflict (id) do nothing;
+
+insert into public.library_units (id, name)
+values
+  ('default-gallon', 'Gallon'),
+  ('default-kit', 'Kit'),
+  ('default-bag', 'Bag')
+on conflict (id) do nothing;
 
 -- Same posture as drafts/events/calendar_events: RLS on, no policies here; the proposal tool
 -- holds the service-role key.
 alter table public.library_items enable row level security;
 alter table public.library_assemblies enable row level security;
 alter table public.library_vendors enable row level security;
+alter table public.library_divisions enable row level security;
+alter table public.library_units enable row level security;
 grant select, insert, update, delete on public.library_items to service_role;
 grant select, insert, update, delete on public.library_assemblies to service_role;
 grant select, insert, update, delete on public.library_vendors to service_role;
+grant select, insert, update, delete on public.library_divisions to service_role;
+grant select, insert, update, delete on public.library_units to service_role;
