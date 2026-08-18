@@ -523,10 +523,12 @@
       '<div class="filters">' +
         '<input data-lf="item_search" value="' + esc(search) + '" placeholder="' +
         esc(it ? it.name : "Search items") + '" aria-label="Search items by name">' +
-        '<select data-lf="item_division_filter" aria-label="Filter items by division">' +
-          optionsHtml(divisionNames(), div) + '</select>' +
-        '<select data-lf="item_vendor_filter" aria-label="Filter items by vendor">' +
-          optionsHtml(vendorNames(), ven) + '</select>' +
+        '<label class="filter-field"><span>Divisions</span>' +
+          '<select data-lf="item_division_filter" aria-label="Filter items by division">' +
+            optionsHtml(divisionNames(), div) + '</select></label>' +
+        '<div class="filter-field unlabeled">' +
+          '<select data-lf="item_vendor_filter" aria-label="Filter items by vendor">' +
+            optionsHtml(vendorNames(), ven) + '</select></div>' +
       '</div><div class="item-results">' + rows + '</div></div>';
   }
 
@@ -570,9 +572,9 @@
       var ln = asm.lines[i], r = p.rows[i];
       var qtyCell, costCell;
       if (r.ok && r.priced) {
-        qtyCell = '<span class="qty">' + esc(L.qtyLabel(r)) + '</span><div class="calc mono">' +
+        qtyCell = '<div class="line-primary"><span class="qty">' + esc(L.qtyLabel(r)) + '</span></div><div class="calc mono">' +
                   esc(L.explain(r, area)) + "</div>";
-        costCell = '<span class="qty">' + L.money(r.cost) + '</span><div class="calc mono">' +
+        costCell = '<div class="line-primary"><span class="qty">' + L.money(r.cost) + '</span></div><div class="calc mono">' +
                    esc(L.costWorking(r)) + "</div>";
       } else if (r.ok) {
         qtyCell = '<span style="color:var(--ink-v)">—</span>';       // no area typed yet
@@ -587,19 +589,25 @@
         qtyCell = '<span class="gone">Needs a cost</span>';
         costCell = "—";
       }
+      if (qtyCell.indexOf("line-primary") === -1) {
+        qtyCell = '<div class="line-primary">' + qtyCell + "</div>";
+      }
+      if (costCell.indexOf("line-primary") === -1) {
+        costCell = '<div class="line-primary">' + costCell + "</div>";
+      }
       var lineItem = itemOf(ln.item_id);
       out += '<tr data-line="' + i + '"' + (r.ok ? "" : ' class="broken"') + ">" +
         "<td>" + pickerFor(ln) +
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
-        '<td class="n">' + esc(orderAmount(lineItem)) + "</td>" +
-        '<td class="n cov"><input data-lf="coverage" class="num" value="' +
-          (ln.coverage == null ? "" : ln.coverage) + '" aria-label="Coverage per unit"></td>' +
-        '<td class="n"><input data-lf="waste_pct" class="num waste" value="' +
-          (ln.waste_pct == null ? "" : ln.waste_pct) + '" aria-label="Waste factor, percent"> %</td>' +
-        '<td class="ru"><input type="checkbox" data-lf="roundup"' +
+        '<td class="n"><div class="line-primary">' + esc(orderAmount(lineItem)) + "</div></td>" +
+        '<td class="n cov"><div class="line-primary"><input data-lf="coverage" class="num" value="' +
+          (ln.coverage == null ? "" : ln.coverage) + '" aria-label="Coverage per unit"></div></td>' +
+        '<td class="n"><div class="line-primary"><input data-lf="waste_pct" class="num waste" value="' +
+          (ln.waste_pct == null ? "" : ln.waste_pct) + '" aria-label="Waste factor, percent"> %</div></td>' +
+        '<td class="ru"><div class="line-primary"><input type="checkbox" data-lf="roundup"' +
           (ln.roundup === false ? "" : " checked") +
-          ' aria-label="Round up to whole purchases"></td>' +
+          ' aria-label="Round up to whole purchases"></div></td>' +
         '<td class="n">' + qtyCell + "</td>" +
         '<td class="n">' + costCell + "</td>" +
         '<td><button class="icon" type="button" data-del-line="' + i + '" title="Remove this line" aria-label="Remove line">🗑</button></td>' +
@@ -781,10 +789,10 @@
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
       if (r.ok && r.priced) {
-        tds[QTY_TD].innerHTML = '<span class="qty">' + esc(L.qtyLabel(r)) +
-                           '</span><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
-        tds[COST_TD].innerHTML = '<span class="qty">' + L.money(r.cost) +
-                           '</span><div class="calc mono">' + esc(L.costWorking(r)) + "</div>";
+        tds[QTY_TD].innerHTML = '<div class="line-primary"><span class="qty">' + esc(L.qtyLabel(r)) +
+                           '</span></div><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
+        tds[COST_TD].innerHTML = '<div class="line-primary"><span class="qty">' + L.money(r.cost) +
+                           '</span></div><div class="calc mono">' + esc(L.costWorking(r)) + "</div>";
         rows[i].classList.remove("broken");
       } else {
         tds[QTY_TD].innerHTML = r.ok
@@ -792,6 +800,12 @@
           : '<span class="gone">' + (r.reason === "missing_item" ? "Item removed"
               : r.reason === "no_coverage" ? "Needs a coverage" : "Needs a cost") + "</span>";
         tds[COST_TD].innerHTML = "—";
+        if (tds[QTY_TD].innerHTML.indexOf("line-primary") === -1) {
+          tds[QTY_TD].innerHTML = '<div class="line-primary">' + tds[QTY_TD].innerHTML + "</div>";
+        }
+        if (tds[COST_TD].innerHTML.indexOf("line-primary") === -1) {
+          tds[COST_TD].innerHTML = '<div class="line-primary">' + tds[COST_TD].innerHTML + "</div>";
+        }
         rows[i].classList.toggle("broken", !r.ok);
       }
     }

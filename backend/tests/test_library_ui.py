@@ -304,6 +304,15 @@ def test_the_material_picker_is_a_search_box(ran):
 
 
 @needs_node
+def test_the_assembly_picker_keeps_the_divisions_label_and_top_alignment(ran):
+    lines = ran["lines"]
+    assert lines["pickerShowsTheDivisionLabel"], "the division filter lost its visible label"
+    assert lines["rowCellsTopAligned"], "expanded picker rows should align from the top"
+    assert lines["primaryLineCount"] >= 6, "numeric/action cells lost their first-line wrappers"
+    assert lines["deleteControlAligned"], "the delete icon no longer shares the first-line height"
+
+
+@needs_node
 def test_the_two_rounding_modes_render_differently(ran):
     """A rounded line names the packs it buys; an unrounded one names the fraction it uses. If both
     read the same, the checkbox looks decorative."""
@@ -357,7 +366,7 @@ def test_the_live_updater_never_touches_the_cells_holding_inputs(ran):
 @needs_node
 def test_the_live_updater_reports_a_broken_line_rather_than_pricing_it(ran):
     u = ran["liveUpdate"]
-    assert u["brokenSaysSoInTheQtyCell"] and u["brokenCostCellCleared"] and u["brokenRowFlagged"]
+    assert u["brokenSaysSoInTheQtyCell"] and u["brokenCostCellClearedInsideAlignment"] and u["brokenRowFlagged"]
 
 
 @needs_node
