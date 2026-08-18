@@ -146,9 +146,23 @@
     SUPER_PTO: 0.027,     // B69
     SOFT_COSTS: 0.16,     // B70
     SALES_TAX: 0.09475,   // B74, when the job is taxable
-    REMODEL: 0.10,        // B75, when it is a remodel
     BOND: 0,              // B78 — the sheet ships it at zero
-    FEES: 0               // D77 — B77 and C77 are blank, so the line is zero
+    FEES: 0,              // D77 — B77 and C77 are blank, so the line is zero
+
+    /* THE ONE PLACE THIS ENGINE DELIBERATELY DEPARTS FROM KYLE'S SHEET.
+     *
+     * B75 hardcodes the remodel tax at 10%. That figure is not a real rate anywhere: Kansas
+     * charges sales tax on commercial remodel LABOUR at the state rate plus the county portion
+     * only, which is 7.975% in Johnson County and lower in most others. The live estimating tool
+     * has looked the real rate up per county since 2026-06-02 (see backend/reference_tax.py,
+     * pulled from the KS DOR Address Tax Rate Locator), and Hanz's instruction on 2026-08-18 was
+     * to do the same here: "please use the real state tax or city tax, DONT USE 10%".
+     *
+     * So markupChain takes `remodel_rate` as an input. SHEET_REMODEL is kept only so the parity
+     * test can pin the sheet's own number and prove the departure is the one we intended rather
+     * than drift. Nothing prices from it. */
+    SHEET_REMODEL: 0.10,  // B75 — what the workbook says, NOT what this engine charges
+    KS_STATE: 0.065       // the floor when nobody has picked a county yet
   };
 
   /** B67, as bands: [ceiling, rate]. Strictly BELOW the ceiling, and the last band is the floor
@@ -255,7 +269,23 @@
       (sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * RATES.SOFT_COSTS);
 
     // ── the remodel tax, on the labour side and the markups. NEVER on materials. ──
-    var remodel_pct = cond.remodel_tax ? RATES.REMODEL : 0;              // B75
+    //
+    // The RATE is the county's real one, handed in by the caller from the project's county (see
+    // RATES.SHEET_REMODEL for why this is not the sheet's 10%). With the remodel toggle on and no
+    // county picked yet, fall back to the Kansas state rate rather than to 10% — a low answer an
+    // estimator can correct beats an invented one they might not question.
+    // NULL AND ZERO MEAN DIFFERENT THINGS HERE, and conflating them overcharges a whole state.
+    // `null`/absent is "nobody has said which county" → stand the state rate up until they do.
+    // An explicit `0` is "we know, and it is nothing": Missouri taxes remodel labour as exempt, so
+    // a Missouri county has no remodel rate on purpose. Reading that 0 as "unknown" would charge a
+    // Missouri job the Kansas rate. Same null-is-not-zero rule as per_unit and per_sf.
+    var remodel_pct = 0;                                                 // B75
+    if (cond.remodel_tax) {
+      var given = input.remodel_rate;
+      remodel_pct = (given === null || given === undefined || given === "")
+        ? RATES.KS_STATE
+        : num(given);
+    }
     var remodel_tax = roundUp(
       (labor + escalation + burden + gp + hard_bid + super_pto + soft_costs + contingency + fees)
       * remodel_pct);                                                    // D75

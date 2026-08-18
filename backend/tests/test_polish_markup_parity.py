@@ -28,6 +28,16 @@ THE FAILURES THIS IS SHAPED AROUND.
   * **The two tax bases swapped.** Sales tax is on MATERIALS only; the remodel tax is on the
     labour side plus the markups and never on materials. Both bases are exercised with real
     material and real labour on the job, so swapping them moves the total instead of cancelling.
+  * **The remodel tax charged at the sheet's 10%.** B75 hardcodes a rate that exists nowhere in
+    Kansas law. The engine charges the county's real one instead — the state 6.5% plus the county
+    portion, 7.975% in Johnson County, handed in as `remodel_rate` — and keeps the sheet's figure
+    in `RATES.SHEET_REMODEL` purely so Layer 1 can still pin B75. Both halves are asserted here:
+    that the pin holds, and that nothing prices from it. This is the ONE cell where the two files
+    are meant to disagree, so it is the one place drift could hide behind "that's deliberate".
+  * **A missing county rate confused with a zero one.** Absent/null/"" is "nobody has picked a
+    county" and falls back to the Kansas state 6.5%; an explicit 0 is a KNOWN rate of nothing,
+    because Missouri taxes remodel labour as exempt. Flatten the two through `num()` and every
+    Missouri remodel is charged a Kansas tax on a screen that looks completely normal.
   * **`SUM(D64:D68)` read as five live rows.** D65 is empty and D66 holds the TEXT "Totals".
   * **Rounding once at the end.** The sheet rounds up at every step and the difference compounds
     through GP, super/PTO, soft costs and the remodel tax.
@@ -58,6 +68,15 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is no
 
 FIX_BOTH = ("update frontend/js/polish-bid-core.js AND this pin together — the engine no longer "
             "matches Kyle's workbook, and nothing on the polish screen can tell")
+
+# B75 is the one cell the engine departs from ON PURPOSE, so its drift message has to be different:
+# there is no "make them match" fix here, there is a decision to re-take.
+FIX_SHEET_REMODEL = (
+    "B75's rate is transcribed into RATES.SHEET_REMODEL and deliberately NOT charged — the engine "
+    "prices the county's real Kansas rate (backend/reference_tax.py) because 10% is not a real "
+    "rate anywhere. If Kyle has edited B75, reconcile SHEET_REMODEL, the PINNED formula string "
+    "and this assertion TOGETHER and decide whether the departure still says what we mean; do not "
+    "re-point either side at a rate this engine actually charges")
 
 
 # ── Layer 1: the formulas this engine was transcribed from ────────────────────
@@ -159,7 +178,7 @@ def ran():
 @needs_node
 def test_the_module_loads_and_priced_every_vector(ran):
     """A syntax error would otherwise surface as thirty identical opaque failures."""
-    assert len(ran["vectors"]) >= 25, "the vector list has shrunk"
+    assert len(ran["vectors"]) >= 35, "the vector list has shrunk"
     for v in ran["vectors"]:
         assert isinstance(v["out"]["total"], (int, float)), v["label"]
 
@@ -191,10 +210,14 @@ def test_the_flat_rates_come_from_the_cells_that_hold_them(ran, polish):
             "Polish!%s is %r but RATES.%s is %r — %s"
             % (addr, polish[addr].value, key, rates[key], FIX_BOTH))
     # The three rates that live inside an IF, so the cell holds a formula rather than a number.
-    for addr, key in [("C46", "ESCALATION"), ("B74", "SALES_TAX"), ("B75", "REMODEL")]:
+    # B75 maps to SHEET_REMODEL, not to a rate the engine charges: the sheet still says 10%, the
+    # engine records that same 10% so this pin can exist, and it prices the county's rate instead.
+    # The test below is the other half — that SHEET_REMODEL reaches no bid.
+    for addr, key, fix in [("C46", "ESCALATION", FIX_BOTH), ("B74", "SALES_TAX", FIX_BOTH),
+                           ("B75", "SHEET_REMODEL", FIX_SHEET_REMODEL)]:
         assert _rate_in(polish[addr].value) == pytest.approx(rates[key]), (
             "Polish!%s is %s but RATES.%s is %r — %s"
-            % (addr, polish[addr].value, key, rates[key], FIX_BOTH))
+            % (addr, polish[addr].value, key, rates[key], fix))
 
 
 @needs_node
@@ -299,6 +322,30 @@ def _gp_pct(sub_total):
     return 0.30
 
 
+KS_STATE_RATE = 0.065       # RATES.KS_STATE — the floor when no county has been picked yet
+SHEET_REMODEL_RATE = 0.10   # B75's own figure, transcribed and never charged
+
+
+def _remodel_pct(inp, cond):
+    """B75's rate — the ONE place this re-derivation departs from the formula string it pins.
+
+    B75 is `=IF(D6="yes",0.1,0)`. Transliterating that literally is exactly what must NOT happen:
+    Kansas charges sales tax on commercial remodel LABOUR at the state 6.5% plus the county portion
+    only, so the engine takes the county's rate as an input and this mirrors that rule instead.
+    Nothing here resolves to SHEET_REMODEL_RATE, and nothing in the engine does either.
+
+    NULL IS NOT ZERO, and `_num` would flatten the two. Absent / None / "" is "no county picked
+    yet" and stands the state rate up until one is; an explicit 0 is a KNOWN rate of nothing —
+    Missouri taxes remodel labour as exempt — and must be charged as nothing. Reading that 0 as
+    "unknown" would put a Kansas tax on every Missouri remodel."""
+    if not cond.get("remodel_tax"):
+        return 0.0
+    given = inp.get("remodel_rate")
+    if given is None or given == "":
+        return KS_STATE_RATE
+    return _num(given)
+
+
 def _hard_bid_pct(sub_total, cond):
     """B68. The else-less inner IF yields Excel's FALSE, which sums as 0."""
     if not cond.get("hard_bid"):
@@ -343,7 +390,7 @@ def chain(inp):
     soft_costs = round_up(
         (sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * 0.16)
 
-    remodel_pct = 0.10 if cond.get("remodel_tax") else 0                        # B75
+    remodel_pct = _remodel_pct(inp, cond)                                       # B75, the county's
     remodel_tax = round_up(                                                     # D75
         (labor + escalation + burden + gp + hard_bid + super_pto + soft_costs + contingency + fees)
         * remodel_pct)
@@ -394,9 +441,21 @@ def test_every_vector_agrees_to_the_cent(ran):
 
 
 def _by(ran, needle):
+    """The one vector whose label contains `needle`. Exactly one: a needle that matches two labels
+    would quietly hand a test the wrong job — and since the vectors below are deliberately near
+    duplicates of each other, that is a real way for a passing test to prove nothing."""
     hits = [v for v in ran["vectors"] if needle in v["label"]]
-    assert hits, "no vector labelled %r — the harness list has changed" % needle
+    assert len(hits) == 1, (
+        "%r matches %d vectors, not 1 — %r" % (needle, len(hits), [v["label"] for v in hits]))
     return hits[0]["out"]
+
+
+def _remodel_base(out):
+    """D75's base: `SUM(D45:D47,D55,D61,D67:D71,D77)` — the labour side and every markup. D33 is
+    deliberately absent; D55 (tooling) and D61 (travel) are zero in the beta. Note the base does
+    not depend on the RATE, which is what lets these tests re-price it at a different one."""
+    return (out["labor"] + out["escalation"] + out["burden"] + out["gp"] + out["hard_bid"]
+            + out["super_pto"] + out["soft_costs"] + out["contingency"] + out["fees"])
 
 
 @needs_node
@@ -444,19 +503,157 @@ def test_sales_tax_is_charged_on_materials_only(ran):
 
 @needs_node
 def test_the_remodel_tax_skips_materials(ran):
-    """D75 sums D45:D47 and D67:D71 — the labour side and the markups. D33 is deliberately absent,
-    and this vector carries $12,000 of material so the two bases give different answers."""
-    on = _by(ran, "10% on labour + markups")
-    off = _by(ran, "not a remodel")
+    """D75 sums D45:D47 and D67:D71 — the labour side and the markups. D33 is deliberately absent.
+
+    This is a test about the BASE, so it is re-expressed against whatever rate its vector actually
+    prices at rather than a hardcoded one. The vector carries $12,000 of material and a real,
+    non-zero county rate, so a base that wrongly included D33 answers a DIFFERENT number — the two
+    cannot agree by cancellation, which is the only thing that makes a base test worth running."""
+    on = _by(ran, "on labour + markups, never on materials")
+    off = _by(ran, "not a remodel: no remodel-tax line")
     assert off["remodel_tax"] == 0 and off["remodel_pct"] == 0
-    assert on["remodel_pct"] == 0.10
-    base = (on["labor"] + on["escalation"] + on["burden"] + on["gp"] + on["hard_bid"]
-            + on["super_pto"] + on["soft_costs"] + on["contingency"] + on["fees"])
-    assert on["remodel_tax"] == round_up(base * 0.10)
-    with_materials = round_up((base + on["material_total"]) * 0.10)
+    rate = on["remodel_pct"]
+    assert rate == pytest.approx(0.07975), (
+        "this vector is meant to price at Johnson County's 7.975%% and priced at %r — the base "
+        "check below only means something at a real, non-zero rate" % rate)
+
+    base = _remodel_base(on)
+    assert on["remodel_tax"] == round_up(base * rate), (
+        "D75 came out %r; the labour side plus the markups at %r is %r"
+        % (on["remodel_tax"], rate, round_up(base * rate)))
+    with_materials = round_up((base + on["material_total"]) * rate)
     assert with_materials != on["remodel_tax"], (
         "this vector has no materials on it, so it cannot prove the base excludes them")
-    assert on["remodel_tax"] < with_materials
+    assert on["remodel_tax"] < with_materials, (
+        "the remodel tax is being charged on the $%d of material too — %r of tax nobody owes"
+        % (on["material_total"], with_materials - on["remodel_tax"]))
+    assert on["total"] > off["total"]
+
+
+@needs_node
+def test_the_remodel_rate_is_the_countys_and_only_the_toggle_charges_it(ran):
+    """Hanz, 2026-08-18: "For the Remodel tax please use the real state tax or city tax, DONT USE
+    10%". `markupChain` resolves B75's rate from the project's county, and each step of that can be
+    wrong in a way that still prints something an estimator would send:
+
+      * a rate that arrived from a county lookup must NOT switch the tax on by itself — only the
+        remodel toggle (D6) may, or every non-remodel job in Johnson County is over-bid;
+      * a supplied rate is charged verbatim, not snapped to a house figure: a county 0.8 points
+        cheaper has to reach the BID (D82), not just the D75 line;
+      * a job with no county on it yet falls back to the Kansas state 6.5%.
+
+    The silent one is the last. A bid at the sheet's 10% on a job whose county nobody has picked
+    looks entirely ordinary on the screen, and is 3.5 points of invented tax."""
+    johnson = _by(ran, "Johnson County's 7.975%")
+    lower = _by(ran, "a lower county rate of 7.15%")
+    assert johnson["remodel_pct"] == pytest.approx(0.07975)
+    assert lower["remodel_pct"] == pytest.approx(0.0715), (
+        "a supplied county rate must be charged as given; 7.15%% came out as %r"
+        % lower["remodel_pct"])
+    assert lower["remodel_tax"] < johnson["remodel_tax"], (
+        "the cheaper county charged %r of tax against Johnson's %r — the rate is being ignored"
+        % (lower["remodel_tax"], johnson["remodel_tax"]))
+    assert lower["total"] < johnson["total"], (
+        "the county rate moves D75 but not the bid — the customer is quoted the same price in "
+        "both counties")
+
+    # A rate on the input is a lookup result, not a decision to tax.
+    with_rate_off = _by(ran, "remodel toggle OFF")
+    plain_off = _by(ran, "not a remodel: no remodel-tax line")
+    assert with_rate_off["remodel_pct"] == 0 and with_rate_off["remodel_tax"] == 0, (
+        "a county rate on the input switched the remodel tax on with the toggle OFF — %r of tax on "
+        "a job that is not a remodel" % with_rate_off["remodel_tax"])
+    assert with_rate_off["total"] == plain_off["total"], (
+        "the same non-remodel job bids %r with a county rate attached and %r without one; the "
+        "rate has to be inert until the toggle is on"
+        % (with_rate_off["total"], plain_off["total"]))
+
+
+@needs_node
+def test_no_county_yet_is_the_state_floor_and_a_zero_county_rate_is_exempt(ran):
+    """The null-is-not-zero rule, on the one input where flattening it mis-taxes a whole state.
+
+    Absent / null / "" all mean "nobody has picked a county", and the engine stands the Kansas STATE
+    rate up until somebody does. An explicit 0 is the opposite: a KNOWN rate of nothing. Missouri
+    taxes remodel LABOUR as exempt, so a Missouri county carries no remodel rate on purpose and the
+    page hands down a 0.
+
+    Read that 0 as "unknown" and every Missouri remodel job is charged 6.5% of Kansas tax it does
+    not owe — on this job, $1,731 — while the screen shows a perfectly plausible bid. `num()` would
+    flatten the two, which is exactly why the engine tests the raw value before converting it."""
+    needles = ("no county picked yet", "a null county rate", "an empty-string county rate")
+    floors = [_by(ran, n) for n in needles]
+    for needle, out in zip(needles, floors):
+        assert out["remodel_pct"] == pytest.approx(KS_STATE_RATE), (
+            "%s should fall back to the Kansas state %r and used %r instead"
+            % (needle, KS_STATE_RATE, out["remodel_pct"]))
+        assert out["remodel_tax"] > 0, (
+            "%s charged no remodel tax at all — the fallback is not standing the state rate up"
+            % needle)
+    assert len(set(f["total"] for f in floors)) == 1, (
+        "an absent rate, a null one and an empty string all mean 'no county yet' and must bid "
+        "alike; they bid %r" % [f["total"] for f in floors])
+
+    exempt = _by(ran, "an explicit 0")
+    plain_off = _by(ran, "not a remodel: no remodel-tax line")
+    assert exempt["remodel_pct"] == 0, (
+        "a county rate of exactly 0 is Missouri's exempt labour, and it resolved to %r — a 0 read "
+        "as 'unknown' taxes every Missouri remodel at a Kansas rate" % exempt["remodel_pct"])
+    assert exempt["remodel_tax"] == 0, (
+        "an exempt county was charged %r of remodel tax" % exempt["remodel_tax"])
+    assert exempt["remodel_tax"] != floors[0]["remodel_tax"], (
+        "an explicit 0 and no county at all price the same, so this vector cannot tell the two "
+        "apart — the whole point of the distinction")
+    assert exempt["total"] == plain_off["total"], (
+        "an exempt remodel must bid what the same job bids with the remodel toggle off: %r vs %r"
+        % (exempt["total"], plain_off["total"]))
+
+
+@needs_node
+def test_the_sheets_ten_percent_remodel_rate_is_recorded_and_never_charged(ran, polish):
+    """The deliberate departure, asserted from both ends.
+
+    B75 is `=IF(D6="yes",0.1,0)`. RATES.SHEET_REMODEL holds that same 10% so the Layer-1 pin above
+    has something to compare Kyle's cell against — and nothing may price from it. There is a silent
+    failure available in each direction:
+
+      * the sheet's 10% creeping back in as a constant, a default or a fallback, which is the bid
+        Hanz explicitly told us not to send;
+      * somebody "tidying" SHEET_REMODEL to the rate we DO charge, after which the B75 pin compares
+        6.5% against a cell that says 10%, fails for a reason nobody can act on, and gets loosened
+        — and then a real edit to Kyle's file goes unnoticed for ever."""
+    rates = ran["constants"]["rates"]
+    assert "REMODEL" not in rates, (
+        "RATES.REMODEL is back. The remodel rate is a per-county INPUT now, not a constant — a "
+        "flat rate in RATES is exactly how the sheet's 10% gets charged again")
+    assert rates["SHEET_REMODEL"] == pytest.approx(SHEET_REMODEL_RATE), (
+        "SHEET_REMODEL is %r. It exists to record what Kyle's B75 says, which is %r — %s"
+        % (rates["SHEET_REMODEL"], SHEET_REMODEL_RATE, FIX_SHEET_REMODEL))
+    assert _rate_in(polish["B75"].value) == pytest.approx(rates["SHEET_REMODEL"]), (
+        "Polish!B75 is %s and SHEET_REMODEL is %r — %s"
+        % (polish["B75"].value, rates["SHEET_REMODEL"], FIX_SHEET_REMODEL))
+    assert rates["KS_STATE"] == pytest.approx(KS_STATE_RATE), (
+        "the fallback floor is the Kansas STATE rate, %r, and the engine ships %r"
+        % (KS_STATE_RATE, rates["KS_STATE"]))
+    assert rates["SHEET_REMODEL"] != rates["KS_STATE"], (
+        "SHEET_REMODEL and KS_STATE have converged, so nothing here can tell the sheet's invented "
+        "rate apart from the one we charge — %s" % FIX_SHEET_REMODEL)
+
+    # And the engine, executed. The fallback is where 10% would come back if it ever did: it is the
+    # branch with no county to argue with. It prices at the state floor, NOT at what B75 would say.
+    fallback = _by(ran, "no county picked yet")
+    assert fallback["remodel_pct"] == pytest.approx(rates["KS_STATE"])
+    base = _remodel_base(fallback)
+    if_the_sheet_ran_it = round_up(base * rates["SHEET_REMODEL"])
+    assert if_the_sheet_ran_it - fallback["remodel_tax"] > 1, (
+        "remodel on with no county charged %r and the sheet's 10%% would charge %r. Those are the "
+        "same bid, so either B75's rate is being used after all or this vector's base is too small "
+        "to tell the two apart" % (fallback["remodel_tax"], if_the_sheet_ran_it))
+    # No vector anywhere may land on the sheet's rate, whatever its label claims.
+    charged = sorted(set(v["out"]["remodel_pct"] for v in ran["vectors"]))
+    assert rates["SHEET_REMODEL"] not in charged, (
+        "a vector priced its remodel tax at %r, the sheet's own rate — rates in play: %r"
+        % (rates["SHEET_REMODEL"], charged))
 
 
 @needs_node

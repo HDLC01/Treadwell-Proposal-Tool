@@ -21,8 +21,15 @@
  * polish-estimate-core.js, and now they have to match the pricing engine that consumes them —
  * a toggle whose key the chain does not read is a toggle that silently does nothing.
  *
- * Only the network's stand-in (TW + the sandbox module) and the clock are stubbed. The renders,
- * the model arithmetic, the handlers and the boot sequence are the page's own code.
+ * The COUNTY picker is executed the same way, and for the same reason. "The pick writes
+ * county_remodel_rate" is a claim about a draft: it fails as a Kansas job priced at the state
+ * fallback, or a Missouri job charged a Kansas rate, with the right-looking sentence on screen
+ * either way. So the list is fetched, a search is typed, a row is clicked, and what landed on the
+ * draft is priced through the real markupChain.
+ *
+ * Only the network's stand-in (TW, the sandbox module, fetch) and the clock are stubbed. The
+ * renders, the model arithmetic, the handlers and the boot sequence are the page's own code, and
+ * the county rows are the server's own reference table.
  *
  * Usage: node polish-intake-harness.js <frontend-dir>   →  one line of JSON
  */
@@ -40,6 +47,28 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const src = read(path.join(ROOT, "js", "polish-intake.js"));
 const pageHtml = read(path.join(ROOT, "polish-intake.html"));
 const P = require(path.join(ROOT, "js", "polish-bid-core.js"));
+
+// ── the REAL county table, out of the server module that serves it ────────────
+//
+// backend/reference_tax.py is what GET /api/reference/counties returns, and its rates were pulled
+// one by one from the KS DOR Address Tax Rate Locator. Parsed here rather than retyped so that
+// 0.07975 is the DOR's number for Johnson County and not one this test invented: a fixture with a
+// made-up rate would keep passing after the table it is meant to be pinning had changed.
+//
+// Each row in that file is one line of double-quoted keys and plain numbers, which is already JSON.
+const COUNTIES = (function () {
+  const py = read(path.join(ROOT, "..", "backend", "reference_tax.py"));
+  const from = py.indexOf("COUNTIES: list[dict] = [");
+  if (from < 0) throw new Error("COUNTIES is gone from backend/reference_tax.py — rewrite this");
+  const rows = (py.slice(from).match(/\{"name":[^}]*\}/g) || []).map((s) => JSON.parse(s));
+  if (rows.length < 20) throw new Error("only parsed " + rows.length + " counties — rewrite this");
+  return rows;
+})();
+
+const JOHNSON_KS = COUNTIES.filter((c) => c.name === "Johnson" && c.state === "KS")[0];
+if (!JOHNSON_KS || JOHNSON_KS.remodel_rate == null) {
+  throw new Error("Johnson County, KS has no remodel_rate in reference_tax.py");
+}
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced. */
 function fn(name) {
@@ -92,8 +121,18 @@ function makeDom(log, formValues) {
         return null;
       },
       querySelectorAll() { return []; },
-      // What a delegated document click walks up to reach the switch it was aimed at.
-      closest(sel) { return sel === "[data-cond]" && self.attrs["data-cond"] ? self : null; },
+      // What a delegated document click walks up to reach the thing it was aimed at. Attribute and
+      // id selectors only, and SELF only — every click fired below is aimed at the element the page
+      // rendered, so a real ancestor walk would only be able to invent a match.
+      closest(sel) {
+        const attr = /^\[([a-z-]+)\]$/.exec(sel);
+        if (attr) {
+          return Object.prototype.hasOwnProperty.call(self.attrs, attr[1]) ? self : null;
+        }
+        const byId = /^#([\w-]+)$/.exec(sel);
+        if (byId) return self.id === byId[1] ? self : null;
+        return null;
+      },
     };
     return self;
   }
@@ -146,23 +185,43 @@ function makeClock() {
   };
 }
 
-const scope = new Function("$", "TW", "SB", "document", "window", "clock", `
+const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetch", `
   "use strict";
   var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${grab(/^  var B = window\.TWPolishBid;[^\n]*$/m, "the window.TWPolishBid binding")}
   ${grab(/^  var CONDITIONS = \[[\s\S]*?\n  \];$/m, "CONDITIONS")}
   ${grab(/^  var DEFAULT_CONDITIONS = [^\n]*;$/m, "DEFAULT_CONDITIONS")}
+  ${grab(/^  var COUNTY_LIMIT = [^\n]*$/m, "COUNTY_LIMIT")}
   var state = {};
   var M = null;
   var form = null;
   var saveTimer = null;
+  var counties = [];
+  var countyMatches = [];
+  var countyHighlight = -1;
+  var countyPick = null;
   ${fn("adoptModel")}
   ${fn("isCondition")}
   ${fn("switchHtml")}
   ${fn("renderConditions")}
   ${fn("paintCondition")}
   ${fn("toggleCondition")}
+  ${fn("loadCounties")}
+  ${fn("countyStateOf")}
+  ${fn("countyRowRate")}
+  ${fn("filterCounties")}
+  ${fn("closeCountyResults")}
+  ${fn("renderCountyResults")}
+  ${fn("paintCountyHighlight")}
+  ${fn("countyKeys")}
+  ${fn("pickCounty")}
+  ${fn("clearCounty")}
+  ${fn("countyNoteText")}
+  ${fn("renderCountyNote")}
+  ${fn("hydrateCounty")}
+  ${fn("onCountyInput")}
+  ${fn("onCountyKeydown")}
   ${fn("saveSoon")}
   ${fn("save")}
   ${fn("hydrate")}
@@ -173,8 +232,10 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", `
   return { boot: boot, save: save, saveSoon: saveSoon, toggleCondition: toggleCondition,
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
-           DEFAULT_CONDITIONS: DEFAULT_CONDITIONS,
-           model: function () { return M; }, state: function () { return state; } };
+           DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: COUNTY_LIMIT,
+           loadCounties: loadCounties, countyKeys: countyKeys,
+           model: function () { return M; }, state: function () { return state; },
+           countyPick: function () { return countyPick; } };
 `);
 
 // ── a project, with the calculator's own work already on it ───────────────────
@@ -218,7 +279,7 @@ const FORM_VALUES = {
 function build(opts) {
   opts = opts || {};
   const log = [];
-  const rec = { saves: [], written: [], navigated: [] };
+  const rec = { saves: [], written: [], navigated: [], fetched: [] };
   const store = { blob: JSON.parse(JSON.stringify(opts.blob === undefined ? blob() : opts.blob)),
                   id: opts.id || "proj-1" };
   const dom = makeDom(log, opts.formValues || FORM_VALUES);
@@ -267,7 +328,21 @@ function build(opts) {
     location: { href: "https://x/polish-intake.html?d=proj-1",
                 assign: (u) => rec.navigated.push(u) },
   };
-  const api = scope(dom.el, TW, SB, doc, win, clock);
+  // The ONLY source of the county list. Nothing is seeded into the page, so a hardcoded table in
+  // polish-intake.js would show up here as a search that works with the fetch never called.
+  const fetchStub = async function (url, init) {
+    rec.fetched.push({ url: String(url), headers: (init || {}).headers || null });
+    // Reference data is a READ. A method or a body here would mean this page had started writing
+    // through a path that bypasses the sandbox's draft check entirely.
+    if (init && init.method) throw new Error("the intake page must not " + init.method + " " + url);
+    if (init && init.body) throw new Error("the intake page must not send a body to " + url);
+    return { ok: true, json: async () => ({ counties: JSON.parse(JSON.stringify(COUNTIES)) }) };
+  };
+
+  const api = scope(dom.el, TW, SB, doc, win, clock, opts.countyFetchFails
+    ? async function (url) { rec.fetched.push({ url: String(url), failed: true });
+                             throw new Error("reference data is down"); }
+    : fetchStub);
   return { api, dom, doc, TW, SB, clock, log, rec, store };
 }
 
@@ -292,6 +367,97 @@ function clickSwitch(built, key) {
   if (!el) throw new Error("nothing was rendered with id cond-" + key);
   built.doc.fire("click", { target: el });
   return el;
+}
+
+/** Fire the page's own delegated click listener at any element it rendered, by id. */
+function clickId(built, id) {
+  const el = built.dom.nodes[id];
+  if (!el) throw new Error("nothing was rendered with id " + id);
+  built.doc.fire("click", { target: el });
+  return el;
+}
+
+/** Fire a listener the page attached to one of its own elements. */
+function fireOn(built, id, type, event) {
+  const el = built.dom.nodes[id];
+  if (!el) throw new Error("the page never reached for #" + id);
+  const hits = el.listeners.filter((l) => l.type === type);
+  if (!hits.length) throw new Error("#" + id + " has no " + type + " listener — wire() forgot it");
+  hits.forEach((l) => l.handler(event || {}));
+}
+
+/** Type into the search box the way an estimator does: set the value, then let the page's own
+ *  `input` handler see it. */
+function typeCounty(built, text) {
+  built.dom.nodes["county-input"].value = text;
+  fireOn(built, "county-input", "input");
+  return readCountyRows(built);
+}
+
+/** The county rows as they were rendered: id, index, name and the rate line. */
+function readCountyRows(built) {
+  const box = built.dom.nodes["county-results"];
+  return String((box && box.innerHTML) || "").split('<div class="c-row').slice(1).map((chunk) => ({
+    id: (/id="([^"]*)"/.exec(chunk) || [])[1] || null,
+    idx: (/data-county="([^"]*)"/.exec(chunk) || [])[1] || null,
+    name: (/<span class="c-name">([^<]*)</.exec(chunk) || [])[1] || null,
+    rate: (/<span class="c-rate">([^<]*)</.exec(chunk) || [])[1] || null,
+  }));
+}
+
+/** Which rendered row currently carries the keyboard cursor, by index. */
+function highlightedRow(built) {
+  const rows = readCountyRows(built);
+  for (let i = 0; i < rows.length; i++) {
+    const el = built.dom.nodes["county-row-" + i];
+    if (el && / on$/.test(el.className)) return i;
+  }
+  return -1;
+}
+
+/** What the county field is showing, all of it, in one object. */
+function readCountyField(built) {
+  const n = built.dom.nodes;
+  return {
+    input: n["county-input"] ? n["county-input"].value : null,
+    note: n["county-note"] ? n["county-note"].textContent : null,
+    resultsHidden: n["county-results"] ? n["county-results"].hidden : null,
+    clearShown: !!n["county-clear"] && n["county-clear"].hidden === false,
+  };
+}
+
+/** What markupChain charges for the remodel tax, given a save this page wrote.
+ *
+ *  TWO calls on purpose, and the pair is the point. The engine documents `null` ("nobody has said
+ *  which county" → stand the Kansas state rate up) and an explicit `0` ("we know, and it is
+ *  nothing" → Missouri exempts remodel labour) as DIFFERENT inputs. js/polish-estimate.js hands it
+ *  `B.num(state.county_remodel_rate)`, which flattens both to 0. So `raw` is the engine's contract
+ *  and `asWired` is what a beta bid is actually charged today; where they disagree, the disagreement
+ *  belongs in the open rather than inside one number.
+ */
+function enginePcts(save) {
+  const call = (rate) => P.markupChain({
+    material: 10000, labor: 20000, sf: 10000,
+    conditions: save.polish_estimate.conditions, remodel_rate: rate,
+  }).remodel_pct;
+  return { raw: call(save.county_remodel_rate), asWired: call(P.num(save.county_remodel_rate)) };
+}
+
+/** The four draft keys off a recorded save. */
+function countyOf(save) {
+  return { county: save.county, county_tax_rate: save.county_tax_rate,
+           county_remodel_rate: save.county_remodel_rate, county_notes: save.county_notes };
+}
+
+// Everything the page ever painted, across every scenario below. The remodel rate the workbook
+// hardcodes must not appear in any of it — see the note on out.rendered.
+const RENDERED = [];
+function snap(built) {
+  ["conditions", "county-results", "county-note", "proj-line"].forEach((id) => {
+    const n = built.dom.nodes[id];
+    if (!n) return;
+    RENDERED.push(String(n.innerHTML || "") + " " + String(n.textContent || ""));
+  });
 }
 
 // The keys the PRICING engine reads. freshModel() is where markupChain's conditions come from, so
@@ -529,6 +695,223 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     b.doc.fire("click", { target: { closest: () => null } });
     out.strayKey.plainClickIsQuiet = b.clock.armed() === 0;
   }
+
+  // ── the county, and the real remodel-tax rate ───────────────────────────────
+  //
+  // Kyle's workbook hardcodes the remodel tax at 10%. That is not a real rate anywhere: Kansas
+  // charges sales tax on commercial remodel LABOUR at the state rate plus the county portion, which
+  // is 7.975% in Johnson County. Hanz, 2026-08-18: "For the Remodel tax please use the real state
+  // tax or city tax, DONT USE 10%". markupChain() takes `remodel_rate` as an input, and this field
+  // is where it comes from — so what is executed here is: the list arrives from the API, a search
+  // narrows it, a click writes the four keys the live estimate screen also writes, and the note on
+  // screen says what that does to the price.
+  out.ksStateRate = P.RATES.KS_STATE;
+  out.johnsonKs = JOHNSON_KS;
+
+  {
+    const b = build();
+    await b.api.boot();
+    // The list is not on the page. It arrives from GET /api/reference/counties, and until it does
+    // there is nothing to match — a hardcoded copy in the page would search fine right here.
+    const beforeLoad = typeCounty(b, "johnson");
+    await b.api.loadCounties();
+
+    const rows = typeCounty(b, "johnson");
+    const ksIdx = rows.map((r) => r.name).indexOf("Johnson County, KS");
+    if (ksIdx < 0) throw new Error("the picker never offered Johnson County, KS for 'johnson'");
+
+    const before = b.rec.saves.length;
+    clickId(b, "county-row-" + ksIdx);
+    const queued = { armed: b.clock.armed(), savedYet: b.rec.saves.length - before };
+    b.clock.fire();
+    const save = b.rec.saves[b.rec.saves.length - 1];
+
+    out.county = {
+      // Where the rows came from, and what the page sent to get them.
+      fetched: b.rec.fetched,
+      searchedBeforeTheListArrived: beforeLoad.length,
+      // Both Johnsons are real and they charge different rates, so the picker has to offer both.
+      offeredForJohnson: rows.map((r) => [r.name, r.rate]),
+      clicked: rows[ksIdx].name,
+      // THE FOUR KEYS.
+      keys: countyOf(save),
+      // Through the page's own debounced save, like every other write on this form.
+      debounced: queued.armed === 1 && queued.savedYet === 0,
+      savedOnce: b.rec.saves.length - before === 1,
+      // THE MERGE REGRESSION, from the county's direction this time: the pick shares one save with
+      // the calculator's model, and that model must arrive intact.
+      takeoffKept: JSON.stringify(save.polish_estimate.takeoff),
+      laborKept: JSON.stringify(save.polish_estimate.labor),
+      versionKept: save.polish_estimate.version,
+      conditionsKept: save.polish_estimate.conditions,
+      field: readCountyField(b),
+    };
+
+    // The consequence, with the toggle off and then on. Same county, two different sentences,
+    // because with Remodel tax off the county is not moving any money yet.
+    clickSwitch(b, "remodel_tax");
+    b.clock.fire();
+    out.county.noteWithRemodelOn = readCountyField(b).note;
+    out.county.remodelRateReachedTheDraft =
+      b.rec.saves[b.rec.saves.length - 1].county_remodel_rate;
+    // The whole point of the field, priced through the real engine: 7.975% on the bid, not 10%.
+    out.county.enginePct = enginePcts(b.rec.saves[b.rec.saves.length - 1]);
+
+    // The cap: "county" matches every row in the table, and the box offers a typed-down list
+    // rather than a scrollable copy of the whole thing.
+    out.county.cappedRows = typeCounty(b, "county").length;
+    out.county.cap = b.api.COUNTY_LIMIT;
+    snap(b);
+  }
+
+  // ── a Missouri county ───────────────────────────────────────────────────────
+  // MO rows carry no `remodel_rate` and that is CORRECT, not missing data: Missouri remodel labour
+  // is generally exempt. The note has to say so, and the key has to stay null rather than being
+  // filled in with a Kansas number.
+  {
+    const b = build();
+    await b.api.boot();
+    await b.api.loadCounties();
+    // Searched by TOWN, which is what is on the drawing set. Warrensburg is in Johnson County, MO.
+    const rows = typeCounty(b, "warrensburg");
+    if (!rows.length) throw new Error("searching the notes for a town found nothing");
+    clickId(b, "county-row-0");
+    b.clock.fire();
+    out.countyMo = {
+      offered: rows.map((r) => [r.name, r.rate]),
+      keys: countyOf(b.rec.saves[b.rec.saves.length - 1]),
+      noteWithRemodelOff: readCountyField(b).note,
+    };
+    clickSwitch(b, "remodel_tax");
+    b.clock.fire();
+    out.countyMo.noteWithRemodelOn = readCountyField(b).note;
+    // What the ENGINE charges on this bid, priced through the real module the calculator prices
+    // with, off the keys this page just wrote. A Missouri job must not be charged a Kansas rate.
+    out.countyMo.enginePct = enginePcts(b.rec.saves[b.rec.saves.length - 1]);
+    snap(b);
+  }
+
+  // ── Remodel tax on, no county ───────────────────────────────────────────────
+  // The engine falls back to the Kansas state rate. The page has to say which rate that is, and
+  // must never offer the workbook's 10% as an alternative.
+  {
+    const b = build();
+    await b.api.boot();
+    out.countyFallback = { noteWithRemodelOff: readCountyField(b).note };
+    clickSwitch(b, "remodel_tax");
+    b.clock.fire();
+    const save = b.rec.saves[b.rec.saves.length - 1];
+    out.countyFallback.note = readCountyField(b).note;
+    out.countyFallback.field = readCountyField(b);
+    // Nothing invented on the draft: no county was picked, so no rate was written.
+    out.countyFallback.keys = countyOf(save);
+    // And the rate the engine stands up for that draft — the number the note on screen promises.
+    out.countyFallback.enginePct = enginePcts(save);
+    snap(b);
+  }
+
+  // ── hydration: the county was picked on the LIVE estimate screen ────────────
+  // The four keys are that screen's own. A project that chose its county there has to show it here,
+  // or the estimator picks it a second time — and an unrelated toggle on this page must not wipe it.
+  {
+    const picked = { county: "Wyandotte County, KS", county_tax_rate: 0.01,
+                     county_remodel_rate: 0.075, county_notes: "KCK, Bonner Springs." };
+    const b = build({ blob: blob(Object.assign({}, picked, { polish_estimate: {
+      version: 2, takeoff: JSON.parse(JSON.stringify(TAKEOFF)),
+      labor: JSON.parse(JSON.stringify(LABOR)),
+      conditions: { local: true, hard_bid: false, prevailing_wage: false,
+                    taxable: true, remodel_tax: true } } })) });
+    await b.api.boot();
+    out.countyHydrated = { field: readCountyField(b) };
+    // An unrelated toggle, whose save rewrites the whole blob.
+    clickSwitch(b, "hard_bid");
+    b.clock.fire();
+    out.countyHydrated.keysAfterAnUnrelatedToggle = countyOf(b.rec.saves[b.rec.saves.length - 1]);
+
+    // Hydration reads the DRAFT, not the API: with reference data down the field still shows the
+    // county this project chose. Anything else would look like the county had been lost.
+    const down = build({ countyFetchFails: true, blob: blob(picked) });
+    await down.api.boot();
+    await down.api.loadCounties();
+    out.countyHydrated.withReferenceDataDown = readCountyField(down).input;
+    out.countyHydrated.searchWithReferenceDataDown = typeCounty(down, "johnson").length;
+    snap(b);
+  }
+
+  // ── the keyboard, and Clear ─────────────────────────────────────────────────
+  {
+    const b = build();
+    await b.api.boot();
+    await b.api.loadCounties();
+    typeCounty(b, "johnson");
+    const openedOnTyping = b.dom.nodes["county-results"].hidden === false;
+    let prevented = 0;
+    const steps = [];
+    const press = (key) => {
+      fireOn(b, "county-input", "keydown", { key, preventDefault: () => { prevented++; } });
+      steps.push(highlightedRow(b));
+    };
+    press("ArrowDown"); press("ArrowDown"); press("ArrowUp"); press("ArrowDown");
+    const before = b.rec.saves.length;
+    press("Enter");
+    b.clock.fire();
+    out.countyKeyboard = {
+      openedOnTyping,
+      highlightSteps: steps,
+      preventedDefaults: prevented,
+      picked: countyOf(b.rec.saves[b.rec.saves.length - 1]).county,
+      savedOnce: b.rec.saves.length - before === 1,
+      closedAfterPick: b.dom.nodes["county-results"].hidden,
+      // Enter inside the form must NEVER reach the submit handler while the list is open: that
+      // handler navigates to the estimate, and the estimator was choosing a row.
+      navigated: b.rec.navigated,
+    };
+
+    // Escape closes without choosing anything.
+    typeCounty(b, "wyandotte");
+    const savesBeforeEscape = b.rec.saves.length;
+    fireOn(b, "county-input", "keydown", { key: "Escape", preventDefault: () => {} });
+    b.clock.fire();
+    out.countyKeyboard.escapeClosed = b.dom.nodes["county-results"].hidden;
+    out.countyKeyboard.escapeSaved = b.rec.saves.length - savesBeforeEscape;
+    // The abandoned search is put back to the county that is actually saved, rather than left
+    // showing "wyandotte" on a draft that says Johnson.
+    out.countyKeyboard.escapeRestoredTheField = readCountyField(b).input;
+
+    // Clear puts the four keys back to empty — the same shape a project that never picked one has.
+    typeCounty(b, "johnson");
+    clickId(b, "county-clear");
+    b.clock.fire();
+    out.countyClear = {
+      keys: countyOf(b.rec.saves[b.rec.saves.length - 1]),
+      field: readCountyField(b),
+    };
+    snap(b);
+  }
+
+  // ── the list closes when you click away, and not when you click into it ─────
+  {
+    const b = build();
+    await b.api.boot();
+    await b.api.loadCounties();
+    typeCounty(b, "johnson");
+    // The page's own markup puts data-county-keep on the input; test_..._page.py pins that, so this
+    // stand-in is not making the attribute up.
+    b.dom.nodes["county-input"].attrs["data-county-keep"] = "";
+    b.doc.fire("click", { target: b.dom.nodes["county-input"] });
+    out.countyOutside = { openAfterClickingTheBox: b.dom.nodes["county-results"].hidden === false };
+    b.doc.fire("click", { target: { closest: () => null } });
+    out.countyOutside.closedAfterClickingAway = b.dom.nodes["county-results"].hidden;
+    // Nothing was ever chosen, so the abandoned search text does not stay in the box pretending to
+    // be a county.
+    out.countyOutside.inputAfterClickingAway = readCountyField(b).input;
+    out.countyOutside.savedNothing = b.clock.armed();
+    snap(b);
+  }
+
+  // Every string the page painted, in every scenario above. The workbook's flat 10% must not be in
+  // any of it — not as a rate, not as an "or", not as a leftover from the sheet's own wording.
+  out.rendered = RENDERED;
 
   // ── EXECUTED: the real sandbox module, on this page's real pill links ───────
   //
