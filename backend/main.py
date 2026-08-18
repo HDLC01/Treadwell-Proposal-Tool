@@ -1334,10 +1334,25 @@ def api_portal_pipeline() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 (the board matters more than the split)
         log.warning("pipeline test flags unavailable: %s", exc)
     flags = {s["id"]: s.get("is_test") for s in summaries}   # tri-state: True / False / None
+    # The bid, for a proposal the customer HAS. The portal row carries `approved_total`, which is
+    # null until somebody approves, so a sent-but-not-yet-approved card had no money on it at all —
+    # the other half of Kyle's "why not all containers have the dollar amount?" and of Hanz's "every
+    # project should show the basebid total lump sum". Fixing _bid_total (2026-08-19) only reached
+    # the synthesised not-sent rows; a browser walk on staging found these two still blank.
+    #
+    # Sent as `bid_total`, NOT as approved_total, and that distinction is the whole point:
+    # cardTotal() prefers the approved figure because it is what the customer was actually given,
+    # and falls back to this one. Writing the draft's working number into `approved_total` would put
+    # the word "approved" on a bid nobody has agreed to — and would overwrite the real approved
+    # figure on the rows that have one.
+    totals = {s["id"]: s.get("total") for s in summaries}
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
             row["is_test"] = flags[pid]
+        # Never clobber a figure the portal already has, and never write a null over nothing.
+        if row.get("bid_total") is None and totals.get(pid) is not None:
+            row["bid_total"] = totals[pid]
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
     return data
 
