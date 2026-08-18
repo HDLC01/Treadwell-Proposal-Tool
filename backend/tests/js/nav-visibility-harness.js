@@ -237,8 +237,11 @@ roles.forEach((r) => {
 });
 
 // ── run 2: a probe item spliced into the sidebar, nothing else changed ───────
+// Anchored on the end of the nav and on an item that is not itself gated, so this run stays
+// independent of the ONE real gate. Anchoring the gated probe on the Admin item would mean a
+// mutation that drops that gate breaks the harness instead of failing the test that is about it.
 const OPEN_ANCHOR = 'navItem("/trash.html", "🗑", "Trash") +';
-const GATED_ANCHOR = '(isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +';
+const GATED_ANCHOR = "      '</nav>' +";
 if (AUTH_SRC.indexOf(OPEN_ANCHOR) === -1 || AUTH_SRC.indexOf(GATED_ANCHOR) === -1) {
   throw new Error("the sidebar expression has moved; re-point the probe anchors in this harness");
 }
@@ -246,7 +249,7 @@ const probeSrc = AUTH_SRC
   .replace(OPEN_ANCHOR,
     OPEN_ANCHOR + '\n      navItem("/probe-open.html", "★", "Probe Open", "NEW") +')
   .replace(GATED_ANCHOR,
-    GATED_ANCHOR + '\n      (isAdmin ? navItem("/probe-gated.html", "☆", "Probe Gated") : "") +');
+    '      (isAdmin ? navItem("/probe-gated.html", "☆", "Probe Gated") : "") +\n' + GATED_ANCHOR);
 const probeWin = loadAuth(probeSrc);
 const probeMatrix = probeWin.TWAuth.navMatrix();
 const probePanel = rowsFromPanel(renderAdminMatrix(probeWin, "admin"));
