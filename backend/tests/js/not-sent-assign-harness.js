@@ -99,9 +99,14 @@ function liftPair(deps) {
   // down on prod once. Stubbing them would have hidden the coupling instead of proving it.
   const fact = /^  const fact = [\s\S]*?;$/m.exec(SRC);
   if (!fact) throw new Error("could not lift fact");
-  const body = 'let DRAWER_SIG = "";\n' + fact[0] + "\n" + source("drawerHead") + "\n" +
+  const body = 'let DRAWER_SIG = ""; const notifyCalls = [];\n' + fact[0] + "\n" + source("drawerHead") + "\n" +
     source("renderNotSent") + "\n" + source("wireNotSentAssign") +
-    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG };";
+    // renderNotSent also kicks off the notification picker, which is a network read this file has
+    // no business making — it tests the ESTIMATOR control. Recorded as a call rather than lifted,
+    // so a rename in portal.js still fails loudly here instead of being silently absent.
+    "\nfunction loadNotSentNotify(pid) { notifyCalls.push(pid); }" +
+    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
+    "         notifyCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
 }
 

@@ -95,7 +95,7 @@ const CONST_NAMES = [
   "ACCT_TYPE_LABEL", "METHOD_LABEL", "METHOD_PHRASE", "CUSTOMER_EVENTS", "sideOf",
   "FU_KIND_LABEL", "FU_TEMPLATE_LABEL", "FU_ACTION", "STATUS_LABEL",
   "SEC_TABS", "ALL_SEC_CARDS", "SEC_ELIGIBLE", "setSecEligible",
-  "REPLY_DRAFT", "NT_CACHE", "DETAIL_CACHE", "fact", "metaLine", "headMoney",
+  "REPLY_DRAFT", "NT_CACHE", "REV_CACHE", "DETAIL_CACHE", "fact", "metaLine", "headMoney",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -112,6 +112,13 @@ const FN_NAMES = [
   // nobody has sent). Omitting it made the whole panel a ReferenceError rather than a partial
   // render — which is the failure this harness exists to catch, so it caught its own gap.
   "wireNotSentAssign",
+  // Sent versions, and the notification picker on an unsent project. Same gap as
+  // wireNotSentAssign above: applySecPanel calls loadRevisions on the Proposal tab and
+  // renderNotSent calls loadNotSentNotify at the end, so omitting either turns the whole panel
+  // into a ReferenceError instead of a partial render — which is what this harness is for, and
+  // it caught this the first time it ran.
+  "loadRevisions", "paintRevisions", "downloadRevision",
+  "loadNotSentNotify", "paintNotSentNotify",
 ];
 
 // ── the DOM stub ─────────────────────────────────────────────────────────────
