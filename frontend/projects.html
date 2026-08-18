@@ -46,12 +46,23 @@
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
     /* active/inactive filter chips */
     .filters { display:flex; gap:8px; margin:0 0 16px; flex-wrap:wrap; }
+    /* Same cascade trap as .toolbar below: projects.js hides this chip row on an empty list
+       (`f.hidden = ALL_PROJECTS.length === 0`) and the class rule above beat the UA `[hidden]`
+       rule, so a brand-new install showed Active 0 / Inactive 0 / All 0 / Test 0. */
+    .filters[hidden] { display:none; }
     .chip { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:999px; padding:6px 14px; font:600 12.5px system-ui; cursor:pointer; transition:all .12s; }
     .chip:hover { border-color:var(--red); color:var(--red); }
     .chip.sel { background:var(--ink); color:#fff; border-color:var(--ink); }
     .chip .n { opacity:.6; margin-left:5px; font-weight:500; }
     /* search / month / sort toolbar */
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 16px; }
+    /* The UA stylesheet's `[hidden]{display:none}` loses to any author rule that sets `display`, so
+       the line above silently un-hid this toolbar: projects.js hides it when the list is empty
+       (`tb.hidden = ALL_PROJECTS.length === 0`) and the markup ships it hidden, and neither had any
+       effect. calendar.html and followups.html already carry this guard with the same note; this
+       page was missed. Found by a staging walk that caught the identical bug on the notification
+       page's pager — no DOM-level test can see it, because the JS is correct. */
+    .toolbar[hidden] { display:none; }
     .tw-search { flex:1; min-width:180px; max-width:320px; background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 12px; font:600 12.5px system-ui; }
     .tw-select { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 10px; font:600 12.5px system-ui; cursor:pointer; }
     .tw-dir { min-width:74px; text-align:center; font-variant-numeric:tabular-nums; }

@@ -847,12 +847,15 @@
             <p class="note">This bid is closed lost${lostReason(row)
               ? ' — <strong>' + esc(lostReason(row)) + '</strong>' : ""}. It sits on the Lost tab and
             counts in the numbers there. Reactivating puts it back under Created but not sent.</p>
-            <button type="button" class="btn btn-s" id="ns-reopen">Reactivate this bid</button>`
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-reopen">Reactivate this bid</button></div>`
           : `
             <p class="note">Close it lost and it moves to the Lost tab under a reason, instead of
             sitting here as work nobody is going to do. The customer is never emailed, and you can
             put it back.</p>
-            <button type="button" class="btn btn-s" id="ns-lost">Mark closed lost</button>`}
+            <!-- .fu-line, the same wrapper the sent drawer's identical buttons sit in. A bare
+                 button inside .sec stretches to the full drawer width, which a staging walk showed
+                 reads as a banner rather than a control. -->
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-lost">Mark closed lost</button></div>`}
           <p class="note" id="ns-lost-note"></p>
         </div>
        </div>

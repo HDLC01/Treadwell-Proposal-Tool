@@ -51,6 +51,11 @@
   /* Pagination: quiet by design — it is navigation for a list, not a control anyone came here
      to use. Real <button>s so Tab reaches them and Enter/Space work with no key handling. */
   .pp-pager { display:flex; align-items:center; gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  /* `hidden` is a UA rule (`[hidden] { display: none }`) and a class rule beats it on specificity,
+     so `display:flex` above silently un-hid the pager: a staging walk found "Page 1 of 1 · 10
+     projects" with both arrows dead, sitting under a list that fits on one page. The JS was right
+     all along — it sets .hidden — which is why no DOM-level test could see this. */
+  .pp-pager[hidden] { display:none; }
   .pp-pg { min-height:32px; padding:0 12px; border:1px solid var(--line); border-radius:999px;
     background:#fff; color:var(--ink-v); font:700 12px system-ui; cursor:pointer; }
   .pp-pg:hover:not(:disabled) { border-color:var(--red); color:var(--red); }
