@@ -1042,6 +1042,18 @@ class PortalPublishIn(BaseModel):
     # (chase everybody, as it has always worked) needs no entry and a caller that omits the field
     # forwards nothing.
     no_followups: list[str] = Field(default_factory=list)
+    # Which STAFF hear about this send, chosen on the Files screen before pressing Send (Hanz,
+    # 2026-08-19: "we need that notifcation sending selection in the Files. so we can select who
+    # receives it first"). Deviations from the global Notification Sending roster, not the whole
+    # list: `notify_add` is somebody who is globally off but should hear about this job,
+    # `notify_mute` somebody globally on who should not. Anybody in neither follows the roster.
+    #
+    # They ride ALONG WITH the publish rather than being written first by the browser, because
+    # portal_notify_overrides has a foreign key onto portal_proposals — on a first send that row
+    # does not exist yet, so a pre-publish write is refused. The portal applies them after it
+    # creates the row and before it resolves who to notify.
+    notify_add: list[str] = Field(default_factory=list)
+    notify_mute: list[str] = Field(default_factory=list)
 
 
 def _clean_estimator(raw: str) -> str:
@@ -1143,6 +1155,13 @@ def api_portal_publish(draft_id: str, request: Request,
     no_fu = _clean_portal_emails(payload.no_followups if payload else [])
     if no_fu:
         body["no_followups"] = no_fu
+    # Who on the team hears about this send. Same cleaning helper again, and forwarded only when
+    # the estimator actually changed something, so a send with the roster left alone carries the
+    # byte-for-byte legacy body.
+    for field in ("notify_add", "notify_mute"):
+        picked = _clean_portal_emails(getattr(payload, field) if payload else [])
+        if picked:
+            body[field] = picked
     # Checked after the recipients (their errors are more specific and predate this)
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
