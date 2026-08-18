@@ -1657,11 +1657,23 @@
   };
   // `template`, not `rule` — the worker records what it SENT. The rule key that
   // deduped it is scheduling bookkeeping and means nothing to an estimator.
+  // Every template the portal can write into the history, so a row says which reminder went out
+  // rather than the generic "Automatic email". The deposit chase and the four staff notes were
+  // missing, which made the busiest part of the cadence the least legible part of the history.
+  //
+  // Staff templates are labelled "Told the team" because that is what happened — nothing in them
+  // reached the customer, and a history that reads "Second nudge" beside "Told the team: not opened"
+  // is the difference between knowing whether the customer has been bothered or we have.
   const FU_TEMPLATE_LABEL = {
     not_viewed: "Nudge: not opened yet",
     next_steps: "Next steps after viewing",
     second_nudge: "Second nudge",
     checkin: "Check-in",
+    deposit_nudge: "Deposit reminder",
+    staff_not_viewed: "Told the team: still not opened",
+    staff_pause_expired: "Told the team: the pause ended",
+    staff_personal_followup: "Told the team: worth a call",
+    staff_deposit_outstanding: "Told the team: deposit outstanding",
   };
   // Bookkeeping the portal writes as a `staff_note` with an `action` key.
   const FU_ACTION = {
