@@ -156,6 +156,23 @@
     return sum;
   }
 
+  /** The county's REAL remodel-tax rate for this project, or 0 when nobody has picked a county.
+   *
+   *  Read off the draft under the same keys the live estimate screen writes (`county_remodel_rate`,
+   *  set by its county picker and by the beta intake's), so a project that chose its county on
+   *  either screen prices the same on both. Kyle's sheet hardcodes 10% here; that is not a real
+   *  rate anywhere, and Hanz's instruction on 2026-08-18 was to use the actual one. When this
+   *  returns 0 the engine falls back to the Kansas state rate rather than to 10%. */
+  function remodelRate() {
+    var r = state.county_remodel_rate;
+    if (r !== null && r !== undefined && r !== "") return B.num(r);
+    // A county IS chosen but carries no remodel rate — that is Missouri, where remodel labour is
+    // generally exempt. Return a definite 0, not null: null would stand the Kansas state rate up
+    // and charge a Missouri job a Kansas tax.
+    if (state.county) return 0;
+    return null;                        // nobody has picked a county yet
+  }
+
   /** The whole bid, recomputed from the model. Cheap enough to call on every keystroke. */
   function bid() {
     return B.markupChain({
@@ -164,6 +181,7 @@
       contingency: M.contingency,
       conditions: M.conditions,
       sf: B.takeoffSf(M.takeoff),
+      remodel_rate: remodelRate(),
     });
   }
 
@@ -470,6 +488,28 @@
       esc(TW.withDraft("/polish-intake.html")) + '">edit in Intake</a></span>';
   }
 
+  /** Where the remodel rate came from, said out loud beside the row.
+   *
+   *  Worth the words: Kyle's sheet charges a flat 10% here, so an estimator who knows the workbook
+   *  will read this line expecting that number. Naming the county, or naming the state fallback,
+   *  is what stops the difference looking like a bug. */
+  function remodelSource() {
+    if (!(M.conditions || {}).remodel_tax) return intakeNote();
+    var rate = remodelRate();
+    // `county` already reads "Johnson County, KS" — the shape the live estimate screen's picker
+    // writes and the beta intake matches, so both screens store one thing. Printing it as-is:
+    // appending " County" to it produced "Johnson County, KS County".
+    if (rate > 0) {
+      return ' <span class="note">' + esc(state.county || "county rate") + '</span>';
+    }
+    if (rate === 0 && state.county) {
+      return ' <span class="note">' + esc(state.county) +
+        ' — remodel labor is exempt there</span>';
+    }
+    return ' <span class="note">Kansas state rate · <a href="' +
+      esc(TW.withDraft("/polish-intake.html")) + '">pick a county</a> for the real one</span>';
+  }
+
   /** Rows 64-82 of the Polish tab, in the same order, so an estimator who knows Kyle's sheet can
    *  read down it and recognise every line. Percentages are the sheet's own and not editable —
    *  the workbook locks these cells in the generated download for the same reason. Contingency is
@@ -504,8 +544,8 @@
     r += row("Sales tax <span class=\"note\">on materials</span>" +
       ((M.conditions || {}).taxable ? "" : intakeNote()),
       keyedPct("sales_tax_pct"), "sales_tax", b.sales_tax_pct ? "" : "off");
-    r += row("Kansas remodel tax" + ((M.conditions || {}).remodel_tax ? "" : intakeNote()),
-      keyedPct("remodel_pct"), "remodel_tax", b.remodel_pct ? "" : "off");
+    r += row("Remodel tax" + remodelSource(), keyedPct("remodel_pct"), "remodel_tax",
+      b.remodel_pct ? "" : "off");
     r += row("Total taxes", "", "taxes", "tot");
     r += row("Fees + Textura", "", "fees", b.fees ? "" : "off");
     r += row("Bond", esc(B.pct(B.RATES.BOND)), "bond", b.bond ? "" : "off");

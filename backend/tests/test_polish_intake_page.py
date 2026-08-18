@@ -28,6 +28,10 @@ The condition KEYS are compared with the real js/polish-bid-core.js, whose marku
 by key to decide the hard-bid discount, the labour escalation and the two taxes. A key that drifted
 here would be a prevailing-wage job quietly priced at standard rates, and nothing on screen would
 say so.
+
+The page also owns the COUNTY, which is the sixth thing that moves the price and the only one that
+is not a toggle — see the section on it further down for why it is a job condition, what four draft
+keys it writes, and why 10% must not appear anywhere on the page.
 """
 import json
 import pathlib
@@ -315,6 +319,317 @@ def test_the_bid_date_defaults_to_today_without_overwriting_one(ran):
     assert len(ran["bidDate"]["defaulted"]) == 10 and ran["bidDate"]["defaulted"][4] == "-", (
         "the bid date default is not an ISO yyyy-mm-dd value: %r" % ran["bidDate"]["defaulted"])
     assert ran["bidDate"]["keptWhatWasThere"] == "2026-12-24"
+
+
+# ── the county, and the real remodel-tax rate ────────────────────────────────
+#
+# WHAT HANZ ASKED FOR, 2026-08-18: "For the Remodel tax please use the real state tax or city tax,
+# DONT USE 10%."
+#
+# Kyle's workbook hardcodes the remodel tax at 10% (Polish!B75). That is not a real rate anywhere.
+# Kansas charges sales tax on commercial remodel LABOUR at the state rate plus the county portion
+# only — 6.5% + 1.475% = 7.975% in Johnson County, less in most others — and the live estimating tool
+# has looked it up per county since 2026-06-02. markupChain() now takes `remodel_rate` as an input,
+# so the beta intake is where that rate comes from.
+#
+# ONE OPEN QUESTION, DELIBERATELY NOT DECIDED HERE. markupChain documents `null` ("nobody has said
+# which county" → stand the Kansas state rate up) and an explicit `0` ("we know, and it is nothing":
+# Missouri exempts remodel labour) as different inputs. js/polish-estimate.js hands it
+# `B.num(state.county_remodel_rate)`, which flattens both to 0. The harness reports BOTH numbers —
+# `enginePct.raw` and `enginePct.asWired` — so the divergence is visible instead of averaged away.
+# The assertions below pin only what is not in question: a Kansas job is charged its county's real
+# rate, and a Missouri job is not charged a Kansas one.
+@needs_node
+def test_the_county_list_comes_from_the_api_and_never_from_the_page(ran):
+    """backend/reference_tax.py is the county table, pulled county-by-county out of the KS DOR
+    Address Tax Rate Locator. A copy of it inside the page would be a second table to keep in step
+    with the DOR — silently wrong the first time a county changes its portion.
+
+    Executed rather than grepped: the page is asked to search BEFORE the fetch resolves, and again
+    with reference data down. A hardcoded list would answer both."""
+    assert ran["county"]["searchedBeforeTheListArrived"] == 0, (
+        "the search box matched rows before /api/reference/counties had answered, so the county "
+        "table is baked into the page")
+    assert ran["countyHydrated"]["searchWithReferenceDataDown"] == 0, (
+        "the search still returns rows with reference data down — there is a fallback table in "
+        "the page")
+    assert ran["county"]["fetched"], "the page never fetched the county list at all"
+    for f in ran["county"]["fetched"]:
+        assert f["url"] == "/api/reference/counties", (
+            "the page fetched something other than the reference endpoint: %r" % f["url"])
+        assert f["headers"] is not None, (
+            "the fetch carries no headers, so it goes out without the bearer token and 401s")
+
+
+@needs_node
+def test_picking_a_kansas_county_writes_the_four_keys_the_live_screen_writes(ran):
+    """THE CONTRACT. `county`, `county_tax_rate`, `county_remodel_rate`, `county_notes` are the live
+    estimate screen's own keys, in its own "<Name> County, ST" shape, so a project that picked its
+    county on either screen is understood by both — js/polish-estimate.js reads
+    `county_remodel_rate` off the draft without caring which screen set it.
+
+    The expected rate is read out of backend/reference_tax.py by the harness, not retyped here: a
+    fixture with an invented rate would keep passing after the table it pins had changed.
+
+    Mutation: write the rate under `remodel_rate`, or store the bare county name. The pick looks
+    perfect on screen and the estimate page prices at the state fallback for ever."""
+    keys = ran["county"]["keys"]
+    table = ran["johnsonKs"]
+    assert keys == {
+        "county": "Johnson County, KS",
+        "county_tax_rate": table["rate"],
+        "county_remodel_rate": table["remodel_rate"],
+        "county_notes": table["notes"],
+    }, "the four draft keys are not the live screen's: %r" % keys
+    assert keys["county_remodel_rate"] == 0.07975, (
+        "Johnson County, KS is not charging the KS DOR's 7.975%")
+    # Priced through the real engine, both the way its contract reads and the way the estimate page
+    # calls it. A real rate survives either, which is why this is the case that must be exact.
+    assert ran["county"]["enginePct"] == {"raw": 0.07975, "asWired": 0.07975}, (
+        "the rate this page wrote does not reach the bid as 7.975%: %r"
+        % ran["county"]["enginePct"])
+
+
+@needs_node
+def test_both_johnson_counties_are_offered_because_they_charge_different_rates(ran):
+    """There is a Johnson County in Kansas and a Johnson County in Missouri, and they are not the
+    same bid. The picker has to show both and say which is which.
+
+    Mutation: match on name only and take the first hit — every Johnson County job in Overland Park
+    gets priced as Warrensburg."""
+    assert ran["county"]["offeredForJohnson"] == [
+        ["Johnson County, MO", "remodel labour exempt"],
+        ["Johnson County, KS", "remodel 7.975%"]], (
+        "the two Johnsons are not both offered, with their rates: %r"
+        % ran["county"]["offeredForJohnson"])
+    assert ran["county"]["clicked"] == "Johnson County, KS", "the harness clicked the wrong row"
+
+
+@needs_node
+def test_choosing_a_county_does_not_delete_the_takeoff(ran):
+    """THE MERGE, from the county's direction. A pick rides the same debounced save as everything
+    else on this page, and that save PUTs the whole blob — including `polish_estimate`, where the
+    calculator's finished takeoff and labour rows live.
+
+    Mutation: write the four keys with a setState that drops polish_estimate, and choosing a county
+    deletes a finished takeoff. Nobody finds out until the bid comes back at zero."""
+    c = ran["county"]
+    assert json.loads(c["takeoffKept"]) == [
+        {"assembly_id": "asm-sp", "assembly_name": "Salt & Pepper polish",
+         "measurement": 12500, "unit": "SF"},
+        {"assembly_id": "asm-edge", "assembly_name": "Edge grind",
+         "measurement": 900, "unit": "LF"}], "the takeoff did not survive picking a county"
+    assert json.loads(c["laborKept"]) == [
+        {"id": "polishing", "label": "Polishing", "guys": 4, "days": 3, "rate": 32.2},
+        {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2}], (
+        "the labour rows did not survive picking a county")
+    assert c["versionKept"] == 2, "the model's version was dropped by a county pick"
+    assert c["conditionsKept"] == {
+        "local": True, "hard_bid": False, "prevailing_wage": False,
+        "taxable": True, "remodel_tax": False}, (
+        "the five job conditions did not survive picking a county")
+    assert c["debounced"] and c["savedOnce"], (
+        "a pick does not go through the page's own 600ms debounce, so it either writes on every "
+        "keystroke or not at all")
+
+
+@needs_node
+def test_a_missouri_county_is_left_without_a_remodel_rate_and_says_why(ran):
+    """Missouri rows carry no `remodel_rate`, and that is CORRECT rather than missing data: MO taxes
+    the contractor on materials and leaves remodel labour exempt. So the key stays null instead of
+    being filled in with a Kansas number, and the note says the rule out loud.
+
+    Also the search that found it: "warrensburg" is a TOWN, matched out of the county's notes,
+    because nobody writes the county on a drawing set.
+
+    Mutation: fall back to the state rate when a row has no remodel_rate, and every Missouri bid
+    quietly grows a Kansas tax."""
+    mo = ran["countyMo"]
+    assert mo["offered"] == [["Johnson County, MO", "remodel labour exempt"]], (
+        "searching the notes for a town did not find its county: %r" % mo["offered"])
+    assert mo["keys"]["county"] == "Johnson County, MO"
+    assert mo["keys"]["county_remodel_rate"] is None, (
+        "a Missouri county was given a remodel rate: %r" % mo["keys"]["county_remodel_rate"])
+    for note in (mo["noteWithRemodelOff"], mo["noteWithRemodelOn"]):
+        assert "generally exempt" in note, (
+            "the note does not say Missouri remodel labour is generally exempt: %r" % note)
+    assert "turn it off for a missouri job" in mo["noteWithRemodelOn"].lower(), (
+        "with Remodel tax left on for a Missouri job the note gives no instruction: %r"
+        % mo["noteWithRemodelOn"])
+    # What the bid is actually charged today, priced through the real engine off the key this page
+    # wrote. The number that must not appear here is the Kansas one.
+    assert mo["enginePct"]["asWired"] == 0, (
+        "a Missouri job is being charged a remodel rate of %r — see the note above this section "
+        "about null vs 0; if polish-estimate.js starts handing markupChain the raw key, a Missouri "
+        "county has to be written as 0 here rather than null" % mo["enginePct"]["asWired"])
+
+
+@needs_node
+def test_remodel_tax_with_no_county_names_the_kansas_state_rate(ran):
+    """The engine stands the Kansas state rate up when the remodel toggle is on and nobody has said
+    which county. The page has to name that rate, because the estimator is about to price a job on
+    it — and the alternative they would otherwise assume is the workbook's 10%.
+
+    Mutation: leave the field silent. The bid is 6.5% and every estimator who knows the sheet reads
+    it as 10%."""
+    fb = ran["countyFallback"]
+    assert "6.5%" in fb["note"], (
+        "the fallback note does not name the Kansas state rate: %r" % fb["note"])
+    assert "no county" in fb["note"].lower(), (
+        "the note does not say that no county has been picked: %r" % fb["note"])
+    assert fb["keys"] == {"county": "", "county_tax_rate": None,
+                          "county_remodel_rate": None, "county_notes": ""}, (
+        "a county nobody picked was invented on the draft: %r" % fb["keys"])
+    assert fb["field"]["clearShown"] is False, "there is a Clear button with nothing to clear"
+    # The rate the note promises is the engine's own fallback, and the engine's constant is the same
+    # 6.5% the server's reference table calls the Kansas state rate.
+    from reference_tax import KS_STATE_RATE
+    assert ran["ksStateRate"] == KS_STATE_RATE == 0.065, (
+        "js/polish-bid-core.js and backend/reference_tax.py disagree about the Kansas state rate, "
+        "so the note names a rate the bid does not use: %r vs %r"
+        % (ran["ksStateRate"], KS_STATE_RATE))
+    assert fb["enginePct"]["raw"] == KS_STATE_RATE, (
+        "the engine does not fall back to the Kansas state rate for the keys this page wrote")
+
+
+@needs_node
+def test_the_note_says_when_the_county_is_not_affecting_the_price_yet(ran):
+    """The county only moves money when Remodel tax is on. Saying so is what stops an estimator
+    picking a county, seeing the total not budge, and assuming the field is broken.
+
+    Mutation: print the rate and nothing else."""
+    off = ran["county"]["field"]["note"]
+    assert "7.975%" in off and "Johnson County, KS" in off, (
+        "the note does not say which rate the picked county would use: %r" % off)
+    assert "not affecting the price yet" in off, (
+        "with Remodel tax off the note does not say the county is not affecting the price: %r" % off)
+    on = ran["county"]["noteWithRemodelOn"]
+    assert "7.975%" in on and "not affecting the price" not in on, (
+        "with Remodel tax on the note still says the county is doing nothing: %r" % on)
+    nothing = ran["countyFallback"]["noteWithRemodelOff"]
+    assert "not affecting the price yet" in nothing, (
+        "with no county and Remodel tax off the field says nothing useful at all: %r" % nothing)
+
+
+@needs_node
+def test_nothing_this_page_renders_offers_the_workbooks_ten_percent(ran):
+    """Hanz, verbatim: "DONT USE 10%". Not as the rate, not as an option, not as a leftover of the
+    sheet's own wording — this page is where an estimator decides what the remodel tax is, and 10%
+    being visible anywhere on it is the instruction being ignored.
+
+    Checked over everything the page painted in every scenario in the harness, not over the source:
+    the string that matters is the one an estimator can read."""
+    painted = ran["rendered"]
+    assert painted, "the harness collected no rendered output, so this test is vacuous"
+    offenders = [s for s in painted if "10%" in s]
+    assert offenders == [], "the page rendered the workbook's 10%%: %r" % offenders
+    # And the check is looking at real output: the rates that SHOULD be there are.
+    joined = " ".join(painted)
+    assert "7.975%" in joined, "no county rate was rendered anywhere — the sweep above is vacuous"
+    assert "6.5%" in joined, "the Kansas state fallback was never rendered"
+
+
+@needs_node
+def test_the_county_is_hydrated_from_the_draft_on_load(ran):
+    """A project that picked its county on the LIVE estimate screen has to show that county here.
+    Otherwise the estimator picks one a second time, and the second pick is the one that counts.
+
+    Read off the DRAFT, not out of the API: with reference data down the field still shows it, which
+    is the difference between "reference data is unavailable" and "your county was lost".
+
+    Mutation: hydrate from the county list by matching names, and the field is empty on every load
+    until the fetch lands."""
+    h = ran["countyHydrated"]
+    assert h["field"]["input"] == "Wyandotte County, KS", (
+        "the county on the draft is not in the field: %r" % h["field"]["input"])
+    assert "7.5%" in h["field"]["note"], (
+        "the hydrated county's rate is not on screen: %r" % h["field"]["note"])
+    assert h["field"]["clearShown"] is True, "a hydrated county cannot be cleared"
+    assert h["field"]["resultsHidden"] is True, "the search list is open before anybody typed"
+    assert h["withReferenceDataDown"] == "Wyandotte County, KS", (
+        "the field is empty when /api/reference/counties is down, so a project looks like it lost "
+        "its county")
+    # THE CLOBBER. Every save on this page PUTs the whole blob, so a county set on the other screen
+    # has to be written back by a save this page makes for an entirely unrelated reason.
+    assert h["keysAfterAnUnrelatedToggle"] == {
+        "county": "Wyandotte County, KS", "county_tax_rate": 0.01,
+        "county_remodel_rate": 0.075, "county_notes": "KCK, Bonner Springs."}, (
+        "flipping an unrelated toggle wiped the county the live estimate screen had set: %r"
+        % h["keysAfterAnUnrelatedToggle"])
+
+
+@needs_node
+def test_the_search_is_keyboard_usable_and_enter_never_leaves_the_page(ran):
+    """The input lives INSIDE the form, and the form's submit handler navigates to the estimate. So
+    Enter on a highlighted row has to be swallowed — otherwise choosing a county with the keyboard
+    leaves the page instead, carrying whatever was there before.
+
+    Mutation: drop the preventDefault. With a mouse it is perfect; with a keyboard it walks the
+    estimator to step 2 mid-search."""
+    k = ran["countyKeyboard"]
+    assert k["openedOnTyping"], "typing does not open the list"
+    assert k["highlightSteps"] == [0, 1, 0, 1, 1], (
+        "the arrow keys do not walk the rendered rows: %r" % k["highlightSteps"])
+    assert k["preventedDefaults"] == 5, (
+        "an arrow or Enter reached the page unprevented — Enter submits the form and the arrows "
+        "move the caret instead of the cursor")
+    assert k["picked"] == "Johnson County, KS", (
+        "Enter did not choose the highlighted row: %r" % k["picked"])
+    assert k["savedOnce"] and k["closedAfterPick"] is True
+    assert k["navigated"] == [], (
+        "choosing a county with the keyboard navigated to %r" % k["navigated"])
+    assert k["escapeClosed"] is True and k["escapeSaved"] == 0, (
+        "Escape either leaves the list open or writes something")
+    assert k["escapeRestoredTheField"] == "Johnson County, KS", (
+        "an abandoned search left its typed text in a field whose draft says a different county — "
+        "the field would be naming the wrong county: %r" % k["escapeRestoredTheField"])
+
+
+@needs_node
+def test_clear_puts_the_four_keys_back_the_way_a_project_with_no_county_has_them(ran):
+    """A wrong county is a wrong price, so it has to be removable — and removing it has to write,
+    not just blank the box.
+
+    Mutation: clear the input and leave countyPick alone. The screen says no county and the bid is
+    still priced on the old one."""
+    c = ran["countyClear"]
+    assert c["keys"] == {"county": "", "county_tax_rate": None,
+                         "county_remodel_rate": None, "county_notes": ""}, (
+        "Clear did not write the county away: %r" % c["keys"])
+    assert c["field"]["input"] == "" and c["field"]["clearShown"] is False
+    assert "not affecting the price yet" in c["field"]["note"], (
+        "after Clear the note still describes a county: %r" % c["field"]["note"])
+
+
+@needs_node
+def test_the_list_closes_on_a_click_away_and_not_on_a_click_into_it(ran, html):
+    """Clicking back into the box the estimator is typing in must not shut the list they are
+    choosing from. Marked with an attribute rather than measured against the element, because a
+    click lands on the row's inner span as often as on the row.
+
+    The stand-in in the harness sets that attribute, so the page's own markup is pinned here — a
+    fixture agreeing with itself would prove nothing."""
+    assert 'id="county-input"' in html and "data-county-keep" in html, (
+        "the county field carries no data-county-keep, so every click on it closes the list")
+    field = html[html.index('id="county-field"'):html.index('id="county-note"')]
+    assert field.count("data-county-keep") == 2, (
+        "data-county-keep is not on both the input and the results box: %r" % field)
+    o = ran["countyOutside"]
+    assert o["openAfterClickingTheBox"], "clicking into the search box closes its own list"
+    assert o["closedAfterClickingAway"] is True, "clicking elsewhere leaves the list open"
+    assert o["inputAfterClickingAway"] == "", (
+        "an abandoned search stayed in the box, where it reads as a chosen county: %r"
+        % o["inputAfterClickingAway"])
+    assert o["savedNothing"] == 0, "closing the list queued a save"
+
+
+@needs_node
+def test_the_offered_list_is_typed_down_rather_than_scrolled(ran):
+    """Every row in the table matches "county". Offering all thirty-odd of them is a scroll, and the
+    estimator knows the name — they type it."""
+    assert ran["county"]["cappedRows"] == ran["county"]["cap"] == 12, (
+        "the picker offered %r rows for a search that matches everything"
+        % ran["county"]["cappedRows"])
 
 
 # ── the static shell ─────────────────────────────────────────────────────────

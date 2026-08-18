@@ -323,7 +323,10 @@ function blob(over) {
  *
  *  Independent of the page on purpose: the page must agree with library-core's priceAssembly and
  *  polish-bid-core's markupChain, not merely be self-consistent. */
-function expectedChain(model, asms, items) {
+/** `remodelRate` is the project's county rate off the draft, which the page reads from
+ *  `state.county_remodel_rate`. Passing it here too keeps this expectation and the page computing
+ *  the same thing; leaving it out would let a page that ignored the county still match. */
+function expectedChain(model, asms, items, remodelRate) {
   let material = 0;
   (model.takeoff || []).forEach((r) => {
     const asm = (asms || []).filter((a) => a.id === r.assembly_id)[0];
@@ -335,6 +338,11 @@ function expectedChain(model, asms, items) {
     contingency: model.contingency,
     conditions: model.conditions,
     sf: B.takeoffSf(model.takeoff),
+    // PASSED THROUGH RAW, never through num(). null/undefined means "no county picked" and the
+    // engine stands the Kansas state rate up; an explicit 0 means "picked, and exempt" (Missouri).
+    // Coercing here collapsed those two into 0 and made this expectation disagree with the page
+    // about every job that has no county.
+    remodel_rate: remodelRate,
   });
 }
 
@@ -1029,6 +1037,83 @@ const rendered = [];      // every string the page put on screen, for the Labour
         .exec(copy.dom.get("panels").innerHTML) || [])[1],
       intakeHref: (/href="([^"]*polish-intake[^"]*)"/
         .exec(copy.dom.get("panels").innerHTML) || [])[1],
+    };
+  }
+
+  // ── J. the remodel tax uses the county's REAL rate, never the sheet's 10% ──
+  //
+  // Kyle's workbook hardcodes 10% at B75. That is not a real rate anywhere: Kansas charges sales
+  // tax on commercial remodel LABOUR at the state rate plus the county portion only. Hanz,
+  // 2026-08-18: "For the Remodel tax please use the real state tax or city tax, DONT USE 10%".
+  // The page reads the rate off the draft under `county_remodel_rate`, the same key the live
+  // estimate screen's county picker writes, so a project priced on either screen agrees.
+  {
+    const REMODEL_ON = Object.assign(clone(MODEL), {
+      conditions: Object.assign({}, MODEL.conditions, { remodel_tax: true }),
+    });
+
+    // Johnson County KS, the figure Kyle and Will both quote.
+    const jo = build({ blob: blob({ polish_estimate: clone(REMODEL_ON),
+                                    county: "Johnson County, KS", county_remodel_rate: 0.07975 }) });
+    await jo.api.init();
+    jo.api.go(2);
+    const joChain = expectedChain(REMODEL_ON, ASMS, ITEMS, 0.07975);
+    out.remodelRate = {
+      county: {
+        pct: txt(jo, '[data-mkpct="remodel_pct"]'),
+        money: txt(jo, '[data-mk="remodel_tax"]'),
+        total: txt(jo, '[data-mk="total"]'),
+        expectedPct: B.pct(joChain.remodel_pct),
+        expectedMoney: joChain.remodel_tax,
+        expectedTotal: joChain.total,
+        rowNamesTheCounty: /Johnson County, KS/.test(jo.dom.get("panels").innerHTML),
+        // The stored value already ends in "County, KS". Appending " County" to it read
+        // "Johnson County, KS County" on screen.
+        doubledCountyWord: /County,? [A-Z]{2} County|County County/
+          .test(jo.dom.get("panels").innerHTML),
+      },
+    };
+
+    // No county picked: the Kansas state rate, and the row says to go and pick one.
+    const none = build({ blob: blob({ polish_estimate: clone(REMODEL_ON) }) });
+    await none.api.init();
+    none.api.go(2);
+    const noneChain = expectedChain(REMODEL_ON, ASMS, ITEMS, null);
+    const noneHtml = none.dom.get("panels").innerHTML;
+    out.remodelRate.fallback = {
+      pct: txt(none, '[data-mkpct="remodel_pct"]'),
+      money: txt(none, '[data-mk="remodel_tax"]'),
+      expectedPct: B.pct(noneChain.remodel_pct),
+      expectedMoney: noneChain.remodel_tax,
+      saysStateRate: /Kansas state rate/i.test(noneHtml),
+      offersToPickACounty: /pick a county/i.test(noneHtml),
+      // What the sheet's 10% WOULD have charged, so the two can be compared.
+      whatTenPercentWouldBe: expectedChain(REMODEL_ON, ASMS, ITEMS, 0.10).remodel_tax,
+    };
+
+    // A MISSOURI county: chosen, and carrying no remodel rate on purpose, because Missouri taxes
+    // remodel labour as exempt. This must charge NOTHING — not the Kansas state fallback, which is
+    // what a null-is-the-same-as-zero reading would have done to every Missouri job.
+    const mo = build({ blob: blob({ polish_estimate: clone(REMODEL_ON),
+                                    county: "Jackson County, MO", county_remodel_rate: null }) });
+    await mo.api.init();
+    mo.api.go(2);
+    out.remodelRate.exemptCounty = {
+      pct: txt(mo, '[data-mkpct="remodel_pct"]'),
+      money: txt(mo, '[data-mk="remodel_tax"]'),
+      saysExempt: /exempt/i.test(mo.dom.get("panels").innerHTML),
+      // The number the Kansas fallback would have invented for this Missouri job.
+      whatTheFallbackWouldBe: expectedChain(REMODEL_ON, ASMS, ITEMS, null).remodel_tax,
+    };
+
+    // A rate sitting on the draft must never switch the tax on by itself.
+    const off = build({ blob: blob({ polish_estimate: clone(MODEL),
+                                     county: "Johnson County, KS", county_remodel_rate: 0.07975 }) });
+    await off.api.init();
+    off.api.go(2);
+    out.remodelRate.toggleOff = {
+      pct: txt(off, '[data-mkpct="remodel_pct"]'),
+      money: txt(off, '[data-mk="remodel_tax"]'),
     };
   }
 

@@ -206,7 +206,13 @@ def test_a_waiting_request_gives_up_instead_of_holding_a_thread(monkeypatch):
         elapsed = time.monotonic() - t0
     finally:
         bb._BUILD_LOCK.release()
-    assert elapsed < 2, f"waited {elapsed:.1f}s on a busy lock"
+    # The property is BOUNDED, not fast: the waiter must give the thread back rather than queue
+    # behind a holder that is sleeping through retries. 10s is deliberately loose because this
+    # figure is now measured on a machine running the suite across every core (`-n auto`), where a
+    # tight bound measures CPU contention rather than the lock. `_BUILD_WAIT_S` is 0 here, so a
+    # regression to the old unbounded `with _BUILD_LOCK` would block until the holder released —
+    # which never happens on this thread — and blow any bound at all.
+    assert elapsed < 10, f"waited {elapsed:.1f}s on a busy lock"
     assert out["busy"] is True
 
 
