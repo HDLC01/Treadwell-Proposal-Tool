@@ -34,12 +34,37 @@
   .alert.ok { color:var(--ok); }
   /* per-project card */
   .pp-search { width:100%; max-width:420px; min-height:38px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; margin:2px 0 12px; }
+  /* Active / Won / Lost / Test. The CRM board's pill shape, copied rather than shared: these
+     rules live in portal.html's own <style> — there is no stylesheet for them to come from, and
+     this page loads none. Deliberately NOT this page's own .chip, which already means "a person,
+     and green means they receive": a tab wearing that class would make green ambiguous on the one
+     screen where green is the whole point. */
+  .tw-tabs { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px; }
+  .tw-tab { background:#fff; color:var(--ink-v); border:1px solid var(--line); border-radius:999px;
+    min-height:34px; padding:0 13px; font:700 13px system-ui; cursor:pointer; display:inline-flex;
+    align-items:center; gap:6px; }
+  .tw-tab:hover { border-color:var(--red); color:var(--red); }
+  .tw-tab[aria-pressed="true"] { background:var(--red-dark); border-color:var(--red-dark); color:#fff; }
+  .tw-tab .n { font-size:11px; font-weight:800; font-variant-numeric:tabular-nums;
+    background:var(--surf-high); color:var(--ink-v); border-radius:999px; padding:1px 6px; }
+  .tw-tab[aria-pressed="true"] .n { background:rgba(255,255,255,.22); color:#fff; }
+  /* Pagination: quiet by design — it is navigation for a list, not a control anyone came here
+     to use. Real <button>s so Tab reaches them and Enter/Space work with no key handling. */
+  .pp-pager { display:flex; align-items:center; gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  .pp-pg { min-height:32px; padding:0 12px; border:1px solid var(--line); border-radius:999px;
+    background:#fff; color:var(--ink-v); font:700 12px system-ui; cursor:pointer; }
+  .pp-pg:hover:not(:disabled) { border-color:var(--red); color:var(--red); }
+  .pp-pg:disabled { opacity:.45; cursor:not-allowed; }
+  .pp-pgn { color:var(--ink-v); font-size:12px; font-variant-numeric:tabular-nums; }
   .pp-row { padding:12px 0; border-top:1px solid var(--line); }
   .pp-row:first-child { border-top:none; }
   .pp-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
   .pp-name { font-weight:700; }
   .pp-cust { color:var(--ink-v); font-size:12px; }
   .pp-badge { background:#fff4d6; color:#8a6d00; border:1px solid #f0e0a8; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:700; }
+  /* Only ever drawn on the Lost tab, the one tab where scratch work and real dead deals sit
+     together. Grey, not amber: it labels what a row IS, it is not an exception to notice. */
+  .pp-badge-test { background:var(--surf-high); color:var(--ink-v); border-color:var(--line); }
   .pp-reset { border:none; background:none; color:var(--red-dark); font:inherit; font-size:12px; font-weight:700; cursor:pointer; padding:0; }
   .nt-chips { display:flex; flex-wrap:wrap; gap:6px; }
   .nt-chip { border:1px solid var(--line); border-radius:999px; padding:5px 11px; font-size:12px; font-weight:700; cursor:pointer;
