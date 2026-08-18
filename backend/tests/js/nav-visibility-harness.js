@@ -215,7 +215,14 @@ function rowsFromPanel(html) {
     while ((m = re.exec(r)) !== null) cells.push([m[1], /✓/.test(m[2])]);
     const roles = {};
     cells.forEach(([role, on]) => { roles[role] = on; });
-    return { href: href, roles: roles, label: (/data-label="([^"]*)"/.exec(r) || ["", ""])[1] };
+    return {
+      href: href,
+      roles: roles,
+      label: (/data-label="([^"]*)"/.exec(r) || ["", ""])[1],
+      section: (/data-section="([^"]*)"/.exec(r) || ["", ""])[1],
+      // What the section COLUMN prints, which is blank on all but the first row of a group.
+      sectionCell: (/<td class="rv-sec">([^<]*)<\/td>/.exec(r) || ["", ""])[1],
+    };
   });
 }
 

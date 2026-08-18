@@ -130,6 +130,20 @@ def test_the_panel_renders_one_row_per_tab_with_the_right_ticks(ran, role):
     """
     rows = ran["panel"][role]
     assert [r["href"] for r in rows] == [r["href"] for r in ran["matrix"]["rows"]]
+    # "Leads &amp; bids" on the way through the markup — the entity is the panel escaping its own
+    # output, which is correct; compare the text.
+    unesc = lambda s: s.replace("&amp;", "&")           # noqa: E731
+    assert [unesc(r["section"]) for r in rows] == [r["section"] for r in ran["matrix"]["rows"]], (
+        "the rows carry the wrong section headings")
+    # The section column prints once per group. Kills the off-by-one that blanks the FIRST row of
+    # each section instead of the repeats, which loses every heading.
+    for i, r in enumerate(rows):
+        first_of_group = i == 0 or rows[i - 1]["section"] != r["section"]
+        assert bool(r["sectionCell"]) == first_of_group, (
+            "%s prints its section %r where first-of-group is %s"
+            % (r["href"], r["sectionCell"], first_of_group))
+        if first_of_group:
+            assert unesc(r["sectionCell"]) == unesc(r["section"])
     for r in rows:
         for who in ran["roles"]:
             seen = {e["href"] for e in ran["renderedEntries"][who]}

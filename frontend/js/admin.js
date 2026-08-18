@@ -76,8 +76,12 @@
         `<th class="rv-h${r===mine?" rv-mine":""}">${esc(roleLabelOf(r))}` +
         `${r===mine?'<span class="you">you</span>':""}</th>`).join("");
 
-      const body = rows.map(r => `<tr data-href="${esc(r.href)}" data-label="${esc(r.label)}">
-          <td class="rv-sec">${esc(r.section)}</td>
+      // The section is printed once per group rather than on all three of its rows: repeated
+      // LEADS & BIDS down a column reads as three sections. The heading still belongs to the row
+      // in the data, which is what the matrix is checked against.
+      const body = rows.map((r, i) => `<tr data-href="${esc(r.href)}" data-label="${esc(r.label)}"
+          data-section="${esc(r.section)}">
+          <td class="rv-sec">${i && rows[i-1].section === r.section ? "" : esc(r.section)}</td>
           <td><span class="rv-ico">${esc(r.glyph)}</span>${esc(r.label)}${
             r.tag?`<span class="badge b-user" style="margin-left:6px">${esc(r.tag)}</span>`:""}
             <span class="rv-href">${esc(r.href)}</span></td>
