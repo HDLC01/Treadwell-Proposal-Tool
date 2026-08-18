@@ -126,11 +126,15 @@ def test_two_fields_moving_in_one_window_are_two_items():
 
 
 def test_two_items_in_one_window_do_not_collide_on_their_id():
-    """The frontend dedupes toasts by id. Keying only on field+pid+timestamp would make a deposit
-    that went requested → received inside one poll window produce two items with the SAME id, and
-    the second would silently vanish.
+    """The frontend dedupes by id (auth.js's `toasted` set), so two items sharing one would make the
+    second vanish.
 
-    Mutation: drop `{now_val}` from the id. This test fails and nothing else does."""
+    ON `{now_val}` IN THE ID, honestly: mutation testing says removing it changes nothing, and that
+    is correct rather than a hole here. Each field is visited once per diff, so field+pid+timestamp
+    is already unique — there is no way for one field to produce two items in one window. The value
+    is in the id because it makes the id self-describing in a log and in that dedupe set, not
+    because uniqueness depends on it. What this test pins is the property that matters: whatever the
+    id is built from, no two items in one window share one."""
     items = n._diff_crm(_prev(proposal="viewed"),
                         [_row(proposal="approved", deposit="received", contacts="received")], TS)
     ids = [i["id"] for i in items]
