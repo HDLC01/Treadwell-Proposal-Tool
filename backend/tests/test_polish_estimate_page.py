@@ -968,3 +968,80 @@ def test_leaving_the_assembly_field_does_not_destroy_the_box_you_tabbed_into(ran
     assert r["unitSyncedInPlace"] == r["expectedUnit"], (
         "the unit select still shows the previous assembly's unit")
     assert "item line" in (r["hintNow"] or ""), "the hint under the picker was not refreshed"
+
+
+# ── the remodel tax uses the county's real rate ───────────────────────────────
+@needs_node
+def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(ran):
+    """Hanz, 2026-08-18: "For the Remodel tax please use the real state tax or city tax, DONT USE
+    10%".
+
+    Kyle's workbook hardcodes 10% at B75, and that figure is not a real rate anywhere. Kansas
+    charges sales tax on commercial remodel LABOUR at the state rate plus the county portion only,
+    which is 7.975% in Johnson County. The live estimating tool has looked the real rate up per
+    county since 2026-06-02, and the beta now reads the same `county_remodel_rate` key off the
+    draft, so a project priced on either screen agrees with the other.
+
+    Mutation: drop `remodel_rate: remodelRate()` from the page's bid() call and the rate silently
+    falls back to the Kansas state floor on every job, including the Johnson County ones."""
+    c = ran["remodelRate"]["county"]
+    assert c["pct"] == "7.975%", "a Johnson County job is not charged the county rate: %r" % c["pct"]
+    assert c["pct"] == c["expectedPct"]
+    assert c["money"] == "$1,529" and c["expectedMoney"] == 1529
+    assert c["total"] == "$33,239" and c["expectedTotal"] == 33239, (
+        "the total does not follow the county rate through the chain")
+    assert c["rowNamesTheCounty"], (
+        "the row does not say which county the rate came from; an estimator who knows the workbook "
+        "reads this line expecting 10% and needs to see why it differs")
+
+
+@needs_node
+def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
+    """A low answer an estimator can correct beats an invented one they might not question.
+
+    10% is the number NOT to fall back to: it is the one figure that looks authoritative because
+    it matches the sheet, while being wrong everywhere."""
+    f = ran["remodelRate"]["fallback"]
+    assert f["pct"] == "6.5%", "the no-county fallback is not the Kansas state rate: %r" % f["pct"]
+    assert f["money"] == "$1,247" and f["expectedMoney"] == 1247
+    assert f["expectedMoney"] != f["whatTenPercentWouldBe"], (
+        "the fallback charges what the sheet's 10% would have charged (%s), so this test proves "
+        "nothing" % f["whatTenPercentWouldBe"])
+    assert f["saysStateRate"], "the review screen does not say the state rate is standing in"
+    assert f["offersToPickACounty"], "it does not tell the estimator how to get the real rate"
+
+
+@needs_node
+def test_a_county_rate_on_the_draft_does_not_switch_the_remodel_tax_on(ran):
+    """The toggle decides WHETHER, the county decides HOW MUCH. A project that recorded its county
+    for the sales-tax lookup must not acquire a remodel tax it was never marked for."""
+    off = ran["remodelRate"]["toggleOff"]
+    assert off["pct"] == "0%" and off["money"] == "$0", (
+        "a remodel tax appeared on a job whose remodel toggle is off: %r" % off)
+
+
+@needs_node
+def test_a_missouri_county_is_charged_nothing_not_the_kansas_fallback(ran):
+    """Missouri taxes remodel LABOUR as exempt, so a Missouri county carries no remodel rate on
+    purpose. That absence means "we know, and it is nothing" — not "we don't know".
+
+    THE BUG THIS PREVENTS: reading the missing rate as unknown stands the Kansas state rate up and
+    charges every Missouri remodel job a Kansas tax it does not owe. The page therefore passes an
+    explicit 0 once a county is chosen, and null only while none has been.
+
+    Mutation: `return null` instead of `return 0` in remodelRate() when state.county is set."""
+    mo = ran["remodelRate"]["exemptCounty"]
+    assert mo["pct"] == "0%", "a Missouri remodel job was charged %s" % mo["pct"]
+    assert mo["money"] == "$0", "a Missouri remodel job was charged %s" % mo["money"]
+    assert mo["whatTheFallbackWouldBe"] > 0, (
+        "the Kansas fallback charges nothing here either, so this test proves nothing")
+    assert mo["saysExempt"], "the review screen does not say why the remodel tax is nil"
+
+
+@needs_node
+def test_the_county_is_printed_as_stored_not_with_County_appended(ran):
+    """`county` is stored as "Johnson County, KS" — the shape the live estimate screen's picker
+    writes, which the beta intake matches so both screens keep one value. Appending " County" to
+    that read "Johnson County, KS County" beside the remodel row."""
+    assert not ran["remodelRate"]["county"]["doubledCountyWord"], (
+        "the county name is printed with 'County' appended to a value that already contains it")

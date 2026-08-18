@@ -17,6 +17,12 @@
  *   * THE TWO TAX BASES. Sales tax on materials only; the remodel tax on the labour side and the
  *     markups and never on materials. Every tax vector carries real materials AND real labour, so
  *     swapping the two bases moves the answer instead of cancelling out.
+ *   * THE REMODEL TAX'S RATE, which is the ONE figure this engine does not take from the sheet.
+ *     B75 hardcodes 10%; Kansas charges the state 6.5% plus the county portion on commercial
+ *     remodel LABOUR, so markupChain takes `remodel_rate` from the project's county. Vectors
+ *     below pin a real county rate, a lower one, the no-county fallback in all three shapes it
+ *     arrives in, a Missouri county's explicit 0 (exempt, and NOT the fallback), a rate handed in
+ *     with the toggle OFF (which must stay untaxed), and that 10% is no longer reachable at all.
  *   * CONTINGENCY, which is not just added at the end — it sits inside the super/PTO, soft-cost
  *     and remodel-tax bases, so a bid with a contingency has more than the contingency added.
  *
@@ -88,12 +94,37 @@ const VECTORS = [
   { label: "not taxable: no sales-tax line at all",
     input: job({ conditions: cond() }) },
 
-  // ── remodel tax on and off ─────────────────────────────────────────────────
-  // Both carry $12,000 of material, so a remodel base that wrongly included D33 would come out
-  // ~$1,224 higher and the recomputation in the pytest would catch it. That is the whole reason
-  // these vectors are not material-free.
-  { label: "remodel: 10% on labour + markups, never on materials",
+  // ── the remodel tax: on/off, and the RATE the county supplies ──────────────
+  // Every one of these carries $12,000 of material, so a remodel base that wrongly included D33
+  // would come out several hundred dollars higher and the recomputation in the pytest would catch
+  // it. That is the whole reason these vectors are not material-free.
+  //
+  // The RATE is deliberately NOT the sheet's B75 10%. 0.07975 is Johnson County KS (6.5% state +
+  // 1.475% county) out of backend/reference_tax.py, the figure Hanz and Kyle both quote. 0.0715 is
+  // a lower county portion: the engine prices whatever rate it is handed, so it has to move.
+  { label: "remodel at Johnson County's 7.975%: on labour + markups, never on materials",
+    input: job({ remodel_rate: 0.07975, conditions: cond({ remodel_tax: true }) }) },
+  { label: "remodel at a lower county rate of 7.15%: the tax follows the county",
+    input: job({ remodel_rate: 0.0715, conditions: cond({ remodel_tax: true }) }) },
+  // NULL IS NOT ZERO, and the next four vectors are the whole reason that distinction exists.
+  //
+  // Absent / null / "" is "nobody has picked a county yet" → stand up the Kansas STATE rate, 6.5%,
+  // until they do. An under-charge an estimator can correct beats the sheet's invented 10%, which
+  // they would have no reason to question. All three shapes must bid the SAME.
+  { label: "remodel with no county picked yet: the 6.5% state floor, not the sheet's 10%",
     input: job({ conditions: cond({ remodel_tax: true }) }) },
+  { label: "remodel with a null county rate: still the 6.5% floor",
+    input: job({ remodel_rate: null, conditions: cond({ remodel_tax: true }) }) },
+  { label: "remodel with an empty-string county rate: still the 6.5% floor",
+    input: job({ remodel_rate: "", conditions: cond({ remodel_tax: true }) }) },
+  // An explicit 0 is "we know the county, and its rate is nothing." Missouri taxes remodel LABOUR
+  // as exempt, so a Missouri county carries no remodel rate ON PURPOSE and the page passes 0.
+  // Fall that 0 back to 6.5% and every Missouri remodel is charged a Kansas tax it does not owe.
+  { label: "remodel in Missouri, county rate an explicit 0: exempt labour, so no tax at all",
+    input: job({ remodel_rate: 0, conditions: cond({ remodel_tax: true }) }) },
+  // A rate on the input is a lookup result, not a decision. Only the toggle charges the tax.
+  { label: "a county rate supplied with the remodel toggle OFF: nothing is taxed",
+    input: job({ remodel_rate: 0.07975, conditions: cond() }) },
   { label: "not a remodel: no remodel-tax line",
     input: job({ conditions: cond() }) },
 
@@ -108,10 +139,10 @@ const VECTORS = [
   // $5,000 of contingency adds MORE than $5,000 to the bid: it is inside the super/PTO, soft-cost
   // and remodel-tax bases. Paired with the same job at zero so the pytest can see the difference.
   { label: "contingency 5,000, remodel + tax on: it feeds three markup bases",
-    input: job({ contingency: 5000,
+    input: job({ contingency: 5000, remodel_rate: 0.07975,
                  conditions: cond({ taxable: true, remodel_tax: true }) }) },
   { label: "contingency 0, otherwise identical",
-    input: job({ contingency: 0,
+    input: job({ contingency: 0, remodel_rate: 0.07975,
                  conditions: cond({ taxable: true, remodel_tax: true }) }) },
 
   // ── the area ───────────────────────────────────────────────────────────────
@@ -122,7 +153,7 @@ const VECTORS = [
 
   // ── a whole realistic job, every condition on, raw sums with cents on them ─
   { label: "everything on, unrounded takeoff and labour sums",
-    input: { material: 18450.75, labor: 15467.2, contingency: 2500,
+    input: { material: 18450.75, labor: 15467.2, contingency: 2500, remodel_rate: 0.07975,
              conditions: { local: true, hard_bid: true, prevailing_wage: true,
                            taxable: true, remodel_tax: true }, sf: 14200 } },
 
@@ -192,7 +223,8 @@ out.formats = {
 // The pytest pulls the sheet's own numbers out of the B67/B68/B74/B75/C46 formula text and checks
 // them against these. A constant that agrees with the workbook and a function that ignores it
 // would both pass a source read, so the bands are answered by the real gpPct/hardBidPct at every
-// threshold the formulas name.
+// threshold the formulas name. RATES.SHEET_REMODEL is the exception that proves the rule: it is
+// pinned to B75's 10% and nothing prices from it, which the remodel vectors above demonstrate.
 out.constants = { rates: P.RATES, gpBands: P.GP_BANDS, hoursPerDay: P.HOURS_PER_DAY };
 out.gpProbe = {};
 [0, 1, 6499, 6500, 6501, 14999, 15000, 15001, 22499, 22500, 22501, 32499, 32500, 32501,

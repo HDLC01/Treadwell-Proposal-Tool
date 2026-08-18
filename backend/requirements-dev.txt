@@ -4,3 +4,4 @@
 -r requirements.txt
 pytest>=8.0
 httpx>=0.28.1          # FastAPI TestClient transport
+pytest-xdist>=3.5      # -n auto --dist loadfile; see backend/pytest.ini

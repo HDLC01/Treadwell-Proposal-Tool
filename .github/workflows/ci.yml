@@ -34,8 +34,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # -n auto spreads the suite over the runner's 4 vCPUs. Locally this took the full run from
+      # 14m59s to 3m32s; on 4 cores expect roughly 4 minutes instead of 12m48s.
+      #
+      # --dist loadfile is NOT optional. The default (--dist load) hands individual tests to
+      # whichever worker is free, which re-runs every module-scoped fixture once per worker per
+      # file — this suite has ~35 node-harness fixtures written to run exactly once — and it
+      # discards the intra-file ordering that tests/test_leads.py documents. loadfile keeps each
+      # file whole on one worker, so both stay true.
+      #
+      # --durations comes from backend/pytest.ini, so every run names its own slowest tests.
       - name: Run tests
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q -n auto --dist loadfile
 
   audit:
     # pip-audit scans the PRODUCTION dependencies for known CVEs.

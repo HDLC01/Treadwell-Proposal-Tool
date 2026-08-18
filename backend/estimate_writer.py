@@ -264,6 +264,44 @@ _WB_CACHE: Dict[tuple[str, bool], tuple[float, Any]] = {}
 _SHEET_GRID_CACHE: Dict[tuple[str, str, float], Dict[str, Any]] = {}
 
 
+# Raw template BYTES, keyed by (path, mtime). Separate from _WB_CACHE on purpose, and it is the
+# difference between a cheap fill and an expensive one.
+#
+# _WB_CACHE hands back a SHARED workbook object, which is right for reads (/api/sheet) and wrong
+# for fill_estimate, which mutates every workbook it touches. So fill_estimate has always loaded
+# its own copy — and paid to re-read 653 KB off disk and re-parse the XML every single time.
+#
+# Caching the bytes splits those two costs apart: the disk read and the zip pull happen once per
+# process, while each caller still parses its own private, fully mutable workbook. Measured at
+# ~1,140ms for the bare load; in the test suite fill_estimate is called ~125 times, which made
+# this one line 35-50% of a 15-minute run.
+#
+# mtime-keyed for the same reason _WB_CACHE is: Kyle swapping in a new template has to take effect
+# without restarting the server.
+_TEMPLATE_BYTES: Dict[str, tuple[float, bytes]] = {}
+
+
+def _template_bytes(path: Path = TEMPLATE_PATH) -> bytes:
+    """The template file's bytes, read once per process per mtime."""
+    key = str(path)
+    mtime = path.stat().st_mtime
+    hit = _TEMPLATE_BYTES.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    raw = path.read_bytes()
+    _TEMPLATE_BYTES[key] = (mtime, raw)
+    return raw
+
+
+def _fresh_template(path: Path = TEMPLATE_PATH, *, data_only: bool = False):
+    """A private, fully mutable workbook, parsed from the cached bytes.
+
+    Every caller gets its own object — nothing is shared but the bytes, so a mutation here can
+    never reach another request the way handing out _WB_CACHE's object would.
+    """
+    return load_workbook(io.BytesIO(_template_bytes(path)), keep_vba=False, data_only=data_only)
+
+
 def _load_template(*, data_only: bool, path: Path = TEMPLATE_PATH):
     """Load + cache a template workbook. Re-loads if the file mtime
     on disk changed (so swapping a new template still works without
@@ -856,7 +894,9 @@ def fill_estimate(
 
     All are applied; `cell_values` wins on conflicts.
     """
-    wb = load_workbook(TEMPLATE_PATH, keep_vba=False)
+    # Fresh, private, mutable — parsed from the cached bytes rather than re-read from disk.
+    # See _fresh_template: the object is never shared, only the file's bytes are.
+    wb = _fresh_template()
 
     # 1. Named-field writes (legacy / typed-form path)
     epoxy = wb["Epoxy"]
