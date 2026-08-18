@@ -185,7 +185,10 @@ function build(opts) {
     grab(/^  const ssSet = .*$/m, "ssSet()"),
     grab(/^  let PP_TAB = .*$/m, "PP_TAB"),
     grab(/^  let PP_PAGE = .*$/m, "PP_PAGE"),
-    fn("isWon"), fn("ppCategory"), fn("ppCounts"), fn("ppPageCount"), fn("ppSlice"),
+    // isWon moved to crm-core on 2026-08-19 ("CRM lost and won should also tie up to the
+    // notification sending"). Lifted from the PAGE as the line that binds it, so the harness
+    // still fails loudly if the page ever re-implements it locally instead of reading core.
+    grab(/^  const isWon = C\.\w+;$/m, "the isWon binding"), fn("ppCategory"), fn("ppCounts"), fn("ppPageCount"), fn("ppSlice"),
     fn("ppMatches"), fn("ppGoto"), fn("syncPpTabs"), fn("syncPpPager"), fn("ppRowHtml"),
     fn("renderProjects"), fn("peopleFor"), fn("toggleProject"),
     // The REAL wiring out of render(), wrapped in a function so it can be called once. Lifted

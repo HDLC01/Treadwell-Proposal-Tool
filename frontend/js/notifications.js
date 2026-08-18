@@ -57,29 +57,11 @@
   let PP_TAB = PP_IDS.indexOf(ss(PP_TAB_KEY, "")) >= 0 ? ss(PP_TAB_KEY, "") : "active";
   let PP_PAGE = Math.max(1, parseInt(ss(PP_PAGE_KEY, "1"), 10) || 1);
 
-  /** WON, and deliberately not `depositSatisfied` on its own.
-   *
-   *  That predicate is true for any job that collects no deposit — including a proposal emailed
-   *  this morning that nobody has opened. It answers "is money outstanding", not "did we win".
-   *
-   *  Approval on its own is too generous the other way. An approved job whose deposit is still
-   *  outstanding is the single most worth-chasing project on the board, and filing it under Won
-   *  would hide it from the person whose job is to chase it — so it stays under Active, which is
-   *  also where the CRM board keeps it (its Approved and Deposit-submitted columns are both live).
-   *
-   *  So Won is BOTH: the customer said yes AND the money question is settled — received, or a job
-   *  that legitimately collects none. followups.js draws the same line from the other side: its
-   *  bucket is internally called `won` and LABELLED "Approved", because approval alone does not
-   *  earn the word. This page has the deposit signal in the same row, so it can afford the
-   *  stricter test and keep the honest label.
-   *
-   *  `approved_at` as well as the status, because the portal moves a row forward past approval —
-   *  crm-core's stage() reads deposit state before proposal_status for exactly that reason — and
-   *  the stamp never unsets. */
-  function isWon(p) {
-    const approved = String(p.proposal_status || "") === "approved" || !!p.approved_at;
-    return approved && C.depositSatisfied(p);
-  }
+  // Won and Lost both come from crm-core, which is the point. Hanz, 2026-08-19: "CRM lost and won
+  // should also tie up to the notification sending okay?" — isWon used to live in this file, the one
+  // page with a Won tab, and a local copy is how two screens end up disagreeing about a word Troy
+  // reads as a number. The reasoning behind the predicate is documented at its definition.
+  const isWon = C.isWon;
 
   /** Exactly one category per project. The ORDER is the whole content of this function.
    *

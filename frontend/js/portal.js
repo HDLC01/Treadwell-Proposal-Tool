@@ -168,6 +168,13 @@
       // have to say so. Only here: on the live tabs the tab itself is the label.
       if (isTest(p)) out.push('<span class="chip chip-test" title="A test or demo project — filed under Test before it was closed">Test</span>');
     } else {
+      // WON. Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending
+      // okay?" The Notification Sending page files these under a Won tab and they leave its working
+      // list; this board deliberately KEEPS them, because a won job still has work on it — its
+      // "Deposit received" and "Contact info" columns are both live, and moving the card off would
+      // hide real work from the people doing it. The chip is how the two screens agree without the
+      // board lying about where the job is: same predicate, from crm-core, one definition.
+      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Approved and the deposit is settled — this is filed under Won on the Notification Sending page">Won</span>');
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
       // Only worth saying when it's OFF: automation being on is the norm, and a chip
