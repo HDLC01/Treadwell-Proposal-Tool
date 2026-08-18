@@ -657,7 +657,10 @@ def fill_info_sheet(prefill: Dict[str, Any],
     Every cell is writable. The old EDITABLE whitelist is gone — a formula cell
     that gets typed over is replaced, exactly as in Excel.
     """
-    wb = openpyxl.load_workbook(TEMPLATE_PATH)   # fresh — never the cached copy
+    # Fresh workbook OBJECT, never the shared cached one — this function mutates what it returns.
+    # Only the file's bytes are cached (estimate_writer._fresh_template), so the disk read and the
+    # zip pull happen once per process while every caller still parses its own private copy.
+    wb = ew._fresh_template(TEMPLATE_PATH)
     visible = set(visible_sheets())
     ops = _norm_ops(tab_structs, visible)
     ws = wb[SHEET]
