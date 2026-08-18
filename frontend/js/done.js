@@ -332,7 +332,16 @@
     // control that implies the send tells no one. The standing roster still applies server-side.
     if (!list.length) { box.hidden = true; return; }
     notifyPick.roster = list.map(x => ({ email: x.email, base: x.enabled !== false }));
+    // Whatever was chosen in the CRM drawer before this project was sent. That control writes the
+    // draft (an unsent project has no portal row to override against), and this is the screen that
+    // carries the decision into the send — so it has to open showing what was already decided
+    // rather than silently discarding it.
     notifyPick.changed = {};
+    try {
+      const saved = (TW.getState() || {}).notify_picks || {};
+      (saved.add || []).forEach(e => { notifyPick.changed[String(e).toLowerCase()] = true; });
+      (saved.mute || []).forEach(e => { notifyPick.changed[String(e).toLowerCase()] = false; });
+    } catch {}
     notifyPick.ready = true;
     box.hidden = false;
     paintNotifyChips();
