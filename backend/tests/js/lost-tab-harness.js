@@ -61,6 +61,20 @@ const ROWS = [
     proposal_status: "closed_lost" },
   { proposal_id: "lost-unknown", project_name: "Fairview Clinic", proposal_status: "closed_lost",
     followup_state: { closed_lost_reason: "aliens" } },
+  // WON, both ways a job can get there (2026-08-19). The chip exists so this board and the
+  // Notification Sending page agree about the word out loud, not only in crm-core.
+  { proposal_id: "won-paid", project_name: "Riverside Logistics", proposal_status: "approved",
+    deposit_status: "received" },
+  { proposal_id: "won-nodeposit", project_name: "Brookfield GC Tenant Fit-out",
+    approved_at: "2026-08-01T12:00:00Z", proposal_status: "sent", deposit_required: false },
+  // Approved with the money still out. NOT won — this is the most worth-chasing row there is, and
+  // a Won chip on it would tell the estimator the job is done.
+  { proposal_id: "approved-unpaid", project_name: "Halstead Medical",
+    proposal_status: "approved", deposit_status: "pending" },
+  // Won and then lost anyway (a cancelled job). Lost has to win the chip, or the card claims both.
+  { proposal_id: "lost-after-won", project_name: "Kellogg Self Storage",
+    proposal_status: "closed_lost", approved_at: "2026-08-01T12:00:00Z",
+    deposit_status: "received", followup_state: { closed_lost_reason: "canceled" } },
 ];
 
 ALL = ROWS;

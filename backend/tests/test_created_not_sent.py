@@ -459,3 +459,74 @@ def test_the_emailed_reply_keeps_its_line_breaks():
     # `.msg .who` came BACK on 2026-08-11 for the multi-recipient case. What must stay gone is
     # the unconditional label in the markup, which the test above covers.
     assert ".msg .who {" in page, "the conditional author name has no styling"
+
+
+# ── the money on a SENT card (2026-08-19) ────────────────────────────────────
+# Kyle: "why not all containers have the dollar amount?" · Hanz: "every project should show the
+# basebid total lump sum."
+#
+# Fixing _bid_total reached only the synthesised rows above. A browser walk on staging found the
+# other half still blank: a proposal the customer HAS carries `approved_total`, which is null until
+# somebody approves it, so every card in Sent and Viewed showed no money — and those are the ones
+# somebody is actively chasing.
+def test_a_sent_but_unapproved_card_still_shows_its_bid(monkeypatch):
+    """The two cards that were blank on staging: Sent and Viewed. cardTotal falls back to
+    bid_total, so the pipeline has to put the draft's figure there."""
+    for status in ("sent", "viewed"):
+        _wire(monkeypatch, [{"proposal_id": "d1", "proposal_status": status,
+                             "approved_total": None}], [_draft("d1", total=41250)])
+        assert _pipeline()["d1"]["bid_total"] == 41250, (
+            "a %s proposal has no money on its card" % status)
+
+
+def test_the_approved_figure_is_never_overwritten(monkeypatch):
+    """approved_total is what the customer was actually GIVEN. The draft's working number can have
+    moved on since — somebody re-prices after sending — and cardTotal prefers approved for exactly
+    that reason. Writing over it would show a figure nobody agreed to."""
+    _wire(monkeypatch, [{"proposal_id": "d1", "proposal_status": "approved",
+                         "approved_total": 39000}], [_draft("d1", total=41250)])
+    row = _pipeline()["d1"]
+    assert row["approved_total"] == 39000, "the approved figure was overwritten"
+    assert row.get("bid_total") == 41250, (
+        "the draft figure is still worth carrying — cardTotal prefers approved and falls back")
+
+
+def test_the_draft_figure_does_not_go_into_the_approved_field(monkeypatch):
+    """The distinction the whole thing rests on. Putting it in approved_total would be the shortest
+    fix and would print the word "approved" over a bid nobody has said yes to — the Approved column
+    reads that field, and the drawer head prints it as "Approved $x"."""
+    _wire(monkeypatch, [{"proposal_id": "d1", "proposal_status": "sent", "approved_total": None}],
+          [_draft("d1", total=41250)])
+    assert _pipeline()["d1"]["approved_total"] is None
+
+
+def test_a_portal_row_with_no_draft_is_left_alone(monkeypatch):
+    """A proposal whose draft was deleted, or one from before this app owned the drafts. Writing
+    None over the key would be indistinguishable, but writing anything ELSE would invent a price."""
+    _wire(monkeypatch, [{"proposal_id": "gone", "proposal_status": "sent", "approved_total": None}],
+          [_draft("d1")])
+    row = _pipeline()["gone"]
+    assert row.get("bid_total") is None
+    assert row["proposal_id"] == "gone", "the row was dropped rather than left alone"
+
+
+def test_a_draft_with_no_figure_yet_writes_nothing(monkeypatch):
+    """An unpriced draft has total None. `if total is not None` rather than a truthiness test, so a
+    key that was never there stays absent instead of becoming an explicit null."""
+    _wire(monkeypatch, [{"proposal_id": "d1", "proposal_status": "sent"}],
+          [_draft("d1", total=None)])
+    assert _pipeline()["d1"].get("bid_total") is None
+
+
+def test_a_figure_the_portal_already_sent_wins_over_the_draft(monkeypatch):
+    """Mutation-found gap: nothing pinned the `is None` half of the guard, because every other case
+    here has the two figures equal.
+
+    The claim is a direction, not a formality. A figure on the portal row is what the customer was
+    SENT; the draft's `total` is a working number that moves every time somebody re-prices. So when
+    both exist the portal's is the honest one, and re-pricing an estimate must not silently restate
+    what a customer is holding. Same reasoning as approved_total winning over both."""
+    _wire(monkeypatch, [{"proposal_id": "d1", "proposal_status": "sent", "approved_total": None,
+                         "bid_total": 38500}], [_draft("d1", total=41250)])
+    assert _pipeline()["d1"]["bid_total"] == 38500, (
+        "the draft's working figure overwrote the number the customer was sent")

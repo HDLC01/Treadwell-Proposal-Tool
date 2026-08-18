@@ -492,10 +492,18 @@ def test_the_categories_come_from_crm_core_and_are_not_re_implemented():
     project. projects.js already carries a duplicate of the test heuristic and needs a test
     comparing the two character for character to keep it honest — don't add a third."""
     js = PAGE_JS.read_text(encoding="utf-8")
-    assert "C.isLost(" in js and "C.isTest(" in js and "C.depositSatisfied(" in js, (
+    assert "C.isLost(" in js and "C.isTest(" in js, (
         "the categories no longer read crm-core's predicates")
+    # Won moved into crm-core on 2026-08-19 — "CRM lost and won should also tie up to the
+    # notification sending okay?". It was defined here, in the only page with a Won tab, which is
+    # precisely how two screens end up disagreeing about a word Troy reads as a number. So the
+    # ingredient (`C.depositSatisfied`) is no longer what this page reaches for: the whole predicate
+    # is, and re-deriving it from the parts here would be the same duplication one layer down.
+    assert "C.isWon" in js, "Won is no longer read from crm-core"
+    assert "C.depositSatisfied(" not in js, (
+        "the page is assembling Won out of crm-core's ingredients again instead of asking it")
     for own in ("function isLost", "function isTest", "function nameLooksLikeTest",
-                "function depositSatisfied", "closed_lost"):
+                "function isWon", "function depositSatisfied", "closed_lost", "approved_at"):
         assert own not in js, (
             "notifications.js has its own %r — it must read crm-core, which is the one place "
             "that decides what a project is" % own)

@@ -168,6 +168,13 @@
       // have to say so. Only here: on the live tabs the tab itself is the label.
       if (isTest(p)) out.push('<span class="chip chip-test" title="A test or demo project — filed under Test before it was closed">Test</span>');
     } else {
+      // WON. Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending
+      // okay?" The Notification Sending page files these under a Won tab and they leave its working
+      // list; this board deliberately KEEPS them, because a won job still has work on it — its
+      // "Deposit received" and "Contact info" columns are both live, and moving the card off would
+      // hide real work from the people doing it. The chip is how the two screens agree without the
+      // board lying about where the job is: same predicate, from crm-core, one definition.
+      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Approved and the deposit is settled — this is filed under Won on the Notification Sending page">Won</span>');
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
       // Only worth saying when it's OFF: automation being on is the norm, and a chip
@@ -840,12 +847,15 @@
             <p class="note">This bid is closed lost${lostReason(row)
               ? ' — <strong>' + esc(lostReason(row)) + '</strong>' : ""}. It sits on the Lost tab and
             counts in the numbers there. Reactivating puts it back under Created but not sent.</p>
-            <button type="button" class="btn btn-s" id="ns-reopen">Reactivate this bid</button>`
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-reopen">Reactivate this bid</button></div>`
           : `
             <p class="note">Close it lost and it moves to the Lost tab under a reason, instead of
             sitting here as work nobody is going to do. The customer is never emailed, and you can
             put it back.</p>
-            <button type="button" class="btn btn-s" id="ns-lost">Mark closed lost</button>`}
+            <!-- .fu-line, the same wrapper the sent drawer's identical buttons sit in. A bare
+                 button inside .sec stretches to the full drawer width, which a staging walk showed
+                 reads as a banner rather than a control. -->
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-lost">Mark closed lost</button></div>`}
           <p class="note" id="ns-lost-note"></p>
         </div>
        </div>
