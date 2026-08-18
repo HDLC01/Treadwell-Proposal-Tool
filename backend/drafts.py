@@ -267,6 +267,44 @@ def set_notify_picks(draft_id: str, add: List[str], mute: List[str],
     return True
 
 
+def set_close_lost(draft_id: str, reason: Optional[str],
+                   actor_email: Optional[str] = None) -> bool:
+    """Close an unsent project as lost, or reopen it. `reason` None reopens.
+
+    Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent category."
+
+    Kyle needs it for the commonest dead bid there is: priced, paperwork generated, and then the GC
+    went with somebody else before we ever sent it. Until now the only way to close a bid lost was
+    the portal's `/status` route, and an unsent project has no `portal_proposals` row to close —
+    the same wall `set_assigned_estimator` and `set_notify_picks` hit. So the answer is the same:
+    the draft records it, and the board reads it back through the synthesised row.
+
+    NOT archiving, which already exists and means something else. Archiving hides a project from
+    the Projects list; this one keeps it, moves it to the Lost tab, and files it under a reason so
+    it counts in the numbers Troy reads. A lost bid is data, not clutter.
+
+    `updated_at` is deliberately NOT bumped, as with the other two: closing a bid is not work on the
+    estimate, and shuffling it to the top of the Projects list on its way out would be backwards.
+
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if reason:
+        data["closed_lost"] = {"reason": str(reason), "by": actor_email or "",
+                               "at": _now_iso()}
+    else:
+        data.pop("closed_lost", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "closed_lost" if reason else "reactivated",
+              {"project_name": data.get("project_name"), "id": draft_id,
+               "reason": str(reason) if reason else None})
+    _cache_clear()
+    return True
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -375,7 +413,10 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # engine object for the drafts that predate it — see _bid_total for why the
                 # order matters and what showing only the second one cost.
                 "proposal_lump_sum:data->>proposal_lump_sum,"
-                "computed_bid:data->computed_bid")
+                "computed_bid:data->computed_bid,"
+                # Closed lost before it was ever sent — see set_close_lost.
+                "closed_lost_reason:data->closed_lost->>reason,"
+                "closed_lost_at:data->closed_lost->>at")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -402,6 +443,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "assigned_estimator": r.get("assigned_estimator"),
             "contact_email": r.get("contact_email"),
             "has_files": bool(r.get("has_files")),
+            "closed_lost_reason": r.get("closed_lost_reason") or None,
+            "closed_lost_at": r.get("closed_lost_at") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -671,6 +714,11 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "contact_email": data.get("contact_email"),
         # Same meaning as the fast path's jsonb scalar: has Generate ever run here.
         "has_files": bool(data.get("generate_result")),
+        # Closed lost before it was ever sent — see set_close_lost. The reason, or None. The
+        # Active Projects board turns this into the same closed_lost state a portal row carries,
+        # so one dead bid reads the same whether or not the customer ever saw it.
+        "closed_lost_reason": ((data.get("closed_lost") or {}).get("reason") or None),
+        "closed_lost_at": ((data.get("closed_lost") or {}).get("at") or None),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

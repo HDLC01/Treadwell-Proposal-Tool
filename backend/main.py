@@ -1382,6 +1382,22 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             "bid_total": s.get("total"),
             "work_type": s.get("work_type"),
         })
+        # Dead before it was ever sent. Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in
+        # the Created not sent category" — the commonest dead bid there is, priced and generated
+        # and then the GC went elsewhere before we sent it.
+        #
+        # Shaped as the portal's OWN closed-lost state rather than a new field, which is the same
+        # discipline as `not_sent` being the only thing new about these rows: isLost() reads
+        # proposal_status and lostReason() reads followup_state.closed_lost_reason, so the board,
+        # the Lost tab's reason columns, the chip and the counts all work with nothing added. And
+        # stage() checks isLost BEFORE not_sent, so the card leaves the Created column on its own.
+        if s.get("closed_lost_reason"):
+            out[-1]["proposal_status"] = "closed_lost"
+            # closed_at as well as the reason: stageTs() looks for it first and falls back to last
+            # activity, so without it the Lost tab would date the bid by whenever somebody last
+            # touched the estimate rather than by the day it was closed.
+            out[-1]["followup_state"] = {"closed_lost_reason": s["closed_lost_reason"],
+                                         "closed_at": s.get("closed_lost_at")}
     return out
 
 
@@ -4026,6 +4042,58 @@ def api_assign_draft(draft_id: str, payload: AssignDraftIn, request: Request) ->
         log.warning("portal assign failed for %s: %s", draft_id, exc)
         portal_ok = False
     return {"ok": True, "assigned_estimator": email, "portal_updated": portal_ok, "sent": True}
+
+
+# The answers the drawer's dialog can produce. Kept in step with LOST_REASON in
+# frontend/js/crm-core.js, which is also what the Lost tab's columns are built from — a reason the
+# board has no column for would file the bid under "Not recorded" and read as though nobody said.
+LOST_REASONS = ("price", "another_contractor", "canceled", "scope_changed", "timing", "other")
+
+
+class DraftStatusIn(BaseModel):
+    """Close an unsent project as lost, or reopen it."""
+    status: str = "closed_lost"
+    reason: str = ""
+
+
+@app.post("/api/draft/{draft_id}/status")
+def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) -> Dict[str, Any]:
+    """Mark a project that was never sent as lost — or put it back.
+
+    Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent category."
+
+    Kyle's case, and the commonest dead bid there is: priced, paperwork generated, and then the GC
+    went with somebody else before we ever sent it. The only existing way to close a bid lost is
+    the portal's `/status` route, and an unsent project has no `portal_proposals` row to close.
+    Third time this wall has come up on this drawer, after the estimator picker and the notify
+    picks, and the answer is the same one: the draft records it and the board reads it back.
+
+    Deliberately NOT forwarded to the portal, which is where this differs from `/assign` and
+    `/notify`. Those two record an intention that a future send has to honour, so a project the
+    customer already has needs the portal's copy updated too. Closing a bid lost is a fact about a
+    project no customer ever saw — and a project that HAS been sent already has the portal route,
+    which does more than this could (it stops the follow-up cadence). Writing both would give one
+    bid two closed-lost records that can disagree.
+
+    Reopening is the same call with `status: "active"`, because a mis-click must not be permanent."""
+    status = (payload.status or "").strip().lower()
+    if status in ("active", "reactivated", "reopen"):
+        reason: Optional[str] = None
+    elif status == "closed_lost":
+        reason = (payload.reason or "").strip().lower()
+        if reason not in LOST_REASONS:
+            raise HTTPException(422, "unknown_reason")
+    else:
+        raise HTTPException(422, "unknown_status")
+
+    try:
+        existed = drafts.set_close_lost(draft_id, reason, _user_email(request))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_close_lost failed for %s: %s", draft_id, exc)
+        raise HTTPException(502, "Could not save the status.") from exc
+    if not existed:
+        raise HTTPException(404, "project_not_found")
+    return {"ok": True, "status": "closed_lost" if reason else "active", "reason": reason}
 
 
 class NotifyPicksIn(BaseModel):
