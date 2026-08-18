@@ -45,6 +45,7 @@ _PIPELINE_TTL_S = 55                   # don't re-diff Basisboard more often tha
 _PIPELINE_KEEP_DAYS = 30               # prune pipeline change events older than this
 _LEADS_TTL_S = 55                      # same cadence for the lead-inbox diff
 _PORTAL_MSG_TTL_S = 55                 # don't re-poll the portal for messages more often than this
+_CRM_TTL_S = 55                        # same cadence for the CRM step diff
 _MAX_ITEMS = 60
 _TZ_NAME = "America/Chicago"
 _EPOCH = "1970-01-01T00:00:00+00:00"
@@ -347,6 +348,184 @@ def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]
     return out
 
 
+# ── the CRM's own steps ────────────────────────────────────────────────
+# Hanz, 2026-08-19: "why are the notif bell not working?" → "Every step of the CRM, message, chat
+# notif".
+#
+# It WAS working, and that was the confusing part. The bell already carried customer messages,
+# deposit submissions, bid deadlines, the Basisboard pipeline and the lead inbox — so it looked
+# alive while saying nothing about our OWN pipeline. Nothing told you a proposal had been viewed,
+# approved, closed lost, or that a deposit had landed. Those are the steps the board is made of.
+#
+# Same snapshot-diff shape as _refresh_pipeline, and for the same reason: the portal has no webhook
+# pointed at us, so "this changed" is "this differs from what we saw last time". The three status
+# fields ARE the steps, so they are diffed directly rather than run through a re-implementation of
+# crm-core's stage() — a second copy of that ordering is exactly the drift this codebase keeps
+# warning about, and it would put a wrong word in a notification nobody can correct.
+_CRM_SNAPSHOT_CAP = 800
+
+# field -> {new value: (icon, sentence, severity)}. A value absent from a field's map is a state
+# change nobody needs a bell for.
+_CRM_STEPS = {
+    "proposal_status": {
+        "viewed":      ("👀", "Opened the proposal", "info"),
+        "approved":    ("✅", "Approved the proposal", "high"),
+        "closed_lost": ("⛔", "Closed lost", "info"),
+    },
+    "deposit_status": {
+        # NOT "submitted". The customer submitting a deposit already posts a portal message row,
+        # which reaches the bell as a 💵 item AND a toast (see _PORTAL_MSG_TYPES). Emitting a step
+        # for it too would show the same event twice, which is how a bell stops being read.
+        "requested":   ("🧾", "Deposit invoice issued", "info"),
+        "received":    ("💰", "Deposit received", "high"),
+    },
+    "contacts_status": {
+        "received":    ("📇", "Sent their project contacts", "info"),
+    },
+}
+
+
+def _crm_snapshot(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        pid = r.get("proposal_id")
+        if not pid:
+            continue
+        out[str(pid)] = {
+            "proposal_status": r.get("proposal_status") or "",
+            "deposit_status": r.get("deposit_status") or "",
+            "contacts_status": r.get("contacts_status") or "",
+            "name": r.get("project_name") or "",
+        }
+        if len(out) >= _CRM_SNAPSHOT_CAP:
+            break
+    return out
+
+
+def _diff_crm(prev: Dict[str, Any], rows: List[Dict[str, Any]],
+              now_iso: str) -> List[Dict[str, Any]]:
+    """One item per interesting status change since the last look.
+
+    A proposal_id we have never seen is a FIRST SEND — the row does not exist in the portal until
+    somebody publishes — so it gets one "Proposal sent" item and none of the per-field ones. Without
+    that special case a first send would fire two or three notifications at once for what a person
+    experienced as pressing one button."""
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        pid = str(r.get("proposal_id") or "")
+        if not pid:
+            continue
+        name = r.get("project_name") or "A project"
+        link = f"/portal.html?open={pid}"
+        old = prev.get(pid)
+        if old is None:
+            out.append({
+                "id": f"crm:sent:{pid}:{now_iso}", "kind": "crm_step", "icon": "📤",
+                "severity": "info", "sort": 3, "ts": now_iso, "link": link,
+                "title": name, "body": "Proposal sent to the customer",
+            })
+            continue
+        for field, steps in _CRM_STEPS.items():
+            now_val = r.get(field) or ""
+            if now_val == (old.get(field) or ""):
+                continue
+            step = steps.get(now_val)
+            if not step:
+                continue
+            icon, sentence, severity = step
+            out.append({
+                # The VALUE is in the id, not just the field: a deposit that goes requested →
+                # received inside one poll window would otherwise collide on `crm:deposit_status:…`
+                # and the second item would be deduped away by the frontend.
+                "id": f"crm:{field}:{now_val}:{pid}:{now_iso}", "kind": "crm_step", "icon": icon,
+                "severity": severity, "sort": 3, "ts": now_iso, "link": link,
+                "title": name, "body": sentence,
+            })
+    return out
+
+
+def _refresh_crm(state: Dict[str, Any]) -> None:
+    """Poll the portal's pipeline, diff the statuses, append the changes. Best-effort and throttled,
+    exactly like the other three refreshers: an unconfigured portal or any error keeps the previous
+    snapshot and never raises.
+
+    FIRST RUN RECORDS A BASELINE AND EMITS NOTHING. Otherwise every proposal in the database would
+    arrive as a fresh 'Proposal sent' the moment this deploys — sixty notifications about things
+    that happened weeks ago, which is worse than the silence it replaces."""
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        return
+    synced_at = state.get("crm_synced_at")
+    if synced_at:
+        try:
+            if (_now() - datetime.fromisoformat(synced_at)).total_seconds() < _CRM_TTL_S:
+                return
+        except Exception:              # noqa: BLE001 - bad stored value → refresh anyway
+            pass
+    import httpx
+    try:
+        with httpx.Client(timeout=8.0, headers={"X-Service-Token": token}) as c:
+            resp = c.get(base + "/api/admin/pipeline")
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:           # noqa: BLE001 - never let the portal break the bell
+        log.warning("crm pipeline fetch failed: %s", exc)
+        return
+    rows = data.get("proposals") or []
+    if not rows:
+        # An empty list is far more likely to be a portal that answered oddly than every proposal
+        # having been deleted. Replacing the snapshot with {} would make the NEXT poll announce the
+        # whole database as newly sent.
+        return
+    now_iso = _now_iso()
+    prev = state.get("crm_snapshot")
+    if prev:
+        changes = _diff_crm(prev, rows, now_iso)
+        if changes:
+            events = list(state.get("crm_events") or [])
+            events.extend(changes)
+            state["crm_events"] = _prune_events(events)
+    state["crm_snapshot"] = _crm_snapshot(rows)
+    state["crm_synced_at"] = now_iso
+
+
+def _draft_event_notifications() -> List[Dict[str, Any]]:
+    """Steps that happen to a project the PORTAL has never heard of.
+
+    A bid closed lost before it was ever sent (2026-08-19) has no portal row, so _diff_crm cannot
+    see it — it is recorded on the draft and logged to our own events table. Same for reactivating
+    one. Read from the log rather than diffed, because unlike a status field these events already
+    carry their own timestamp and actor."""
+    steps = {
+        "closed_lost": ("⛔", "Closed lost before it was sent"),
+        "reactivated": ("↩️", "Reopened — back in Created but not sent"),
+    }
+    out: List[Dict[str, Any]] = []
+    try:
+        events = drafts_mod.list_events(limit=100)
+    except Exception as exc:               # noqa: BLE001
+        log.warning("list_events for CRM notifications failed: %s", exc)
+        return out
+    for e in events:
+        step = steps.get(e.get("action") or "")
+        if not step:
+            continue
+        icon, sentence = step
+        d = e.get("detail") or {}
+        reason = d.get("reason")
+        out.append({
+            "id": f"dev:{e.get('id')}", "kind": "crm_step", "icon": icon,
+            "severity": "info", "sort": 3, "ts": e.get("created_at") or _EPOCH,
+            "title": d.get("project_name") or "A project",
+            "body": sentence + (f" · {reason.replace('_', ' ')}" if reason else ""),
+            "link": "/portal.html",
+        })
+        if len(out) >= 25:
+            break
+    return out
+
+
 # ── deadlines ──────────────────────────────────────────────────────────
 def _parse_date(s: Optional[str]):
     if not s:
@@ -450,6 +629,10 @@ def get_notifications() -> Dict[str, Any]:
             _refresh_portal_messages(state)
         except Exception as exc:       # noqa: BLE001 - never let the portal break the bell
             log.warning("portal messages refresh failed: %s", exc)
+        try:
+            _refresh_crm(state)
+        except Exception as exc:       # noqa: BLE001 - never let the CRM diff break the bell
+            log.warning("crm refresh failed: %s", exc)
         _save_state(state)
         last_seen = state.get("last_seen_at") or _EPOCH
 
@@ -465,8 +648,18 @@ def get_notifications() -> Dict[str, Any]:
     items.extend(state.get("lead_events") or [])
     items.extend(_dropbox_notifications())
     items.extend(_portal_message_notifications(state))
+    # Our own pipeline's steps, from both sides: a proposal the customer has (diffed off the portal)
+    # and a bid closed before it was ever sent (our events log).
+    #
+    # `sort: 3` — the ACTIVITY tier, with the Basisboard pipeline and the lead inbox, deliberately
+    # below every deadline tier (0-2 and 4 are already taken, and 0 is the overdue one). A deadline
+    # is time-critical in a way that "the customer opened it" is not. Within a tier the order is
+    # newest-first, so an approval that just happened still lands at the top of the activity block,
+    # above a Basisboard stage move from this morning.
+    items.extend(state.get("crm_events") or [])
+    items.extend(_draft_event_notifications())
 
-    # Section order (messages→overdue→today→soon→pipeline→no-deadline), newest-first within.
+    # Section order (messages→overdue→today→soon→activity→no-deadline), newest-first within.
     items.sort(key=lambda x: x.get("ts") or "", reverse=True)
     items.sort(key=lambda x: x.get("sort", 3))
     unread = sum(1 for x in items if (x.get("ts") or "") > last_seen)
