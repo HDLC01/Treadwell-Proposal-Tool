@@ -103,12 +103,28 @@ jobs:
             set -euo pipefail
             cd /opt/treadwell-staging
             git pull --ff-only origin staging
+            # Keep staging's self-hosted Postgres schema in step with the code. The
+            # initdb mount only runs on a fresh Docker volume; these statements are
+            # intentionally idempotent so deploys can apply additive DDL safely.
+            docker compose -f docker-compose.staging.yml up -d db
+            db_ok=0
+            for i in $(seq 1 24); do
+              if docker compose -f docker-compose.staging.yml exec -T db \
+                   pg_isready -U postgres -d treadwell >/dev/null; then db_ok=1; break; fi
+              sleep 5
+            done
+            if [ "$db_ok" != "1" ]; then echo "staging database healthcheck failed"; exit 1; fi
+            docker compose -f docker-compose.staging.yml exec -T db \
+              psql -U postgres -d treadwell -v ON_ERROR_STOP=1 \
+              -f /docker-entrypoint-initdb.d/01_schema.sql
             # The token is short-lived and job-scoped; logging out again means no registry
             # credential is ever left sitting on the box.
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
             docker compose -f docker-compose.staging.yml pull app
             docker compose -f docker-compose.staging.yml up -d     # NO --build
+            docker compose -f docker-compose.staging.yml exec -T db \
+              psql -U postgres -d treadwell -c "notify pgrst, 'reload schema';"
             ok=0
             for i in $(seq 1 24); do
               if curl -fsS http://localhost:8889/healthz >/dev/null; then ok=1; break; fi
