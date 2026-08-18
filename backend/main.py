@@ -734,6 +734,7 @@ class LibraryItemIn(BaseModel):
     acceptable, so the rules can't drift between a Pydantic model and the writer."""
     name: Optional[str] = None
     category: Optional[str] = None
+    divisions: Optional[Any] = None
     unit: Optional[str] = None
     # `Any`, because these arrive pasted from a spreadsheet as "$85.38" and "2,875".
     unit_cost: Optional[Any] = None
@@ -840,6 +841,11 @@ class LibraryVendorIn(BaseModel):
     notes: Optional[str] = None
 
 
+class LibraryRefIn(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+
+
 # Vendors: READING is open to every signed-in user, because the Items tab's dropdown needs it and
 # an estimator has to be able to say who a material came from. WRITING is admin-only (Hanz,
 # 2026-08-15) — the list is the thing that keeps one supplier from having three spellings, so who
@@ -880,6 +886,93 @@ def api_library_vendor_delete(vendor_id: str, request: Request) -> Dict[str, Any
     # Items naming it keep saying so — they store the name, and a delete here must not rewrite what
     # a past purchase recorded. The dropdown simply stops offering it.
     return {"ok": True, "deleted": vendor_id}
+
+
+def _ref_payload(kind: str) -> tuple[str, str, str, Any, Any]:
+    if kind == "divisions":
+        return (library.DIVISION_REFS, "division", "divisions",
+                library.list_divisions, library.division_usage)
+    if kind == "units":
+        return (library.UNIT_REFS, "unit", "units",
+                library.list_units, library.unit_usage)
+    raise HTTPException(404, "Unknown library list.")
+
+
+@app.get("/api/library/divisions")
+def api_library_divisions() -> Dict[str, Any]:
+    return {"ok": True, "divisions": library.list_divisions(),
+            "usage": library.division_usage()}
+
+
+@app.post("/api/library/divisions")
+def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_ref(library.DIVISION_REFS, payload.model_dump(exclude_unset=True),
+                                 _user_email(request), label="division")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "division": row}
+
+
+@app.patch("/api/library/divisions/{division_id}")
+def api_library_division_update(division_id: str, payload: LibraryRefIn,
+                                request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_ref(library.DIVISION_REFS, division_id,
+                                 payload.model_dump(exclude_unset=True), label="division")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        raise HTTPException(404, "That division is no longer on the list.")
+    return {"ok": True, "division": row}
+
+
+@app.delete("/api/library/divisions/{division_id}")
+def api_library_division_delete(division_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_ref(library.DIVISION_REFS, division_id):
+        raise HTTPException(404, "That division is no longer on the list.")
+    return {"ok": True, "deleted": division_id}
+
+
+@app.get("/api/library/units")
+def api_library_units() -> Dict[str, Any]:
+    return {"ok": True, "units": library.list_units(), "usage": library.unit_usage()}
+
+
+@app.post("/api/library/units")
+def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_ref(library.UNIT_REFS, payload.model_dump(exclude_unset=True),
+                                 _user_email(request), label="unit")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "unit": row}
+
+
+@app.patch("/api/library/units/{unit_id}")
+def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
+                            request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_ref(library.UNIT_REFS, unit_id,
+                                 payload.model_dump(exclude_unset=True), label="unit")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        raise HTTPException(404, "That unit is no longer on the list.")
+    return {"ok": True, "unit": row}
+
+
+@app.delete("/api/library/units/{unit_id}")
+def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_ref(library.UNIT_REFS, unit_id):
+        raise HTTPException(404, "That unit is no longer on the list.")
+    return {"ok": True, "deleted": unit_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───

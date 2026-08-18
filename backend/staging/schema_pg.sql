@@ -173,16 +173,57 @@ create table if not exists public.library_vendors (
 create index if not exists library_vendors_live_name_idx
   on public.library_vendors (name) where deleted_at is null;
 
+create table if not exists public.library_divisions (
+  id           text primary key,
+  name         text not null,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_divisions_live_name_idx
+  on public.library_divisions (name) where deleted_at is null;
+
+create table if not exists public.library_units (
+  id           text primary key,
+  name         text not null,
+  notes        text,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+create index if not exists library_units_live_name_idx
+  on public.library_units (name) where deleted_at is null;
+
 -- Items and Assemblies, 2026-08-15. Additive, and safe against a volume already holding BETA
 -- rows. buy_qty is the "5" of "5 Gal" (so unit_cost can mean what the pail costs); existing rows
 -- get 1, which prices exactly as they did before the column existed. cost_updated_at marks a
 -- price revision, unlike updated_at which moves on every patch.
 alter table public.library_items add column if not exists buy_qty numeric(10,3) not null default 1;
+alter table public.library_items add column if not exists divisions jsonb not null default '[]'::jsonb;
 alter table public.library_items add column if not exists cost_updated_at timestamptz;
+
+insert into public.library_divisions (id, name)
+values
+  ('default-polished-concrete', 'Polished Concrete'),
+  ('default-epoxy', 'Epoxy'),
+  ('default-gypsum-underlayment', 'Gypsum Underlayment')
+on conflict (id) do nothing;
+
+insert into public.library_units (id, name)
+values
+  ('default-gallon', 'Gallon'),
+  ('default-kit', 'Kit'),
+  ('default-bag', 'Bag')
+on conflict (id) do nothing;
 
 grant select, insert, update, delete on public.library_items to service_role;
 grant select, insert, update, delete on public.library_assemblies to service_role;
 grant select, insert, update, delete on public.library_vendors to service_role;
+grant select, insert, update, delete on public.library_divisions to service_role;
+grant select, insert, update, delete on public.library_units to service_role;
 
 -- ── Grants so PostgREST (service_role) can read/write ───────────────────
 grant usage on schema public to service_role;

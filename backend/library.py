@@ -39,6 +39,7 @@ DELETES ARE SOFT, as in `calendar_events`: `deleted_at` non-NULL hides a row. A 
 reference data somebody has typed by hand, and every other destructive action in this tool is
 recoverable.
 """
+import json
 import logging
 import re
 import uuid
@@ -52,13 +53,16 @@ log = logging.getLogger(__name__)
 ITEMS = "library_items"
 ASSEMBLIES = "library_assemblies"
 VENDORS = "library_vendors"
+DIVISION_REFS = "library_divisions"
+UNIT_REFS = "library_units"
 
 # What a caller may set. Anything else in the payload is ignored rather than stored: an unknown
 # key is a client bug, and persisting it makes the row shape unpredictable for later readers.
-ITEM_WRITABLE = ("name", "category", "unit", "buy_qty", "unit_cost", "coverage",
+ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
                  "sku", "vendor", "notes")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines")
 VENDOR_WRITABLE = ("name", "notes")
+REF_WRITABLE = ("name", "notes")
 
 DEFAULT_ITEM_UNIT = "Gallon"    # what Kyle's sheet buys most things by
 DEFAULT_ASM_UNIT = "SF"         # what a system is priced per
@@ -106,6 +110,46 @@ def _canonical(value: str, offered: tuple) -> str:
     return value
 
 
+def _canonical_from(value: str, offered: List[str] | tuple) -> str:
+    """Canonical spelling from a dynamic offered list; otherwise keep the user's spelling."""
+    for known in offered:
+        if value.casefold() == str(known).casefold():
+            return str(known)
+    return value
+
+
+def _dedup_names(values: List[str], offered: List[str] | tuple) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for raw in values:
+        name = _canonical_from(_clean_text(raw), offered)
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+def _coerce_divisions(raw: Any, fallback: Any = None) -> List[str]:
+    values: List[str] = []
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, tuple):
+        values = list(raw)
+    elif isinstance(raw, str) and raw.strip().startswith("["):
+        try:
+            parsed = json.loads(raw)
+            values = parsed if isinstance(parsed, list) else []
+        except (TypeError, ValueError):
+            values = []
+    elif raw not in (None, ""):
+        values = [raw]
+    elif fallback not in (None, ""):
+        values = [fallback]
+    return _dedup_names([str(v) for v in values], DIVISIONS)
+
+
 def _number(raw: Any, *, field: str, maximum: float) -> Optional[float]:
     """A non-negative number, or None. Tolerates "$1,200" and " 275 ".
 
@@ -133,6 +177,142 @@ def _number(raw: Any, *, field: str, maximum: float) -> Optional[float]:
     return num
 
 
+# ── administration reference lists ───────────────────────────────────────────
+def _ref_defaults(table: str) -> tuple:
+    if table == DIVISION_REFS:
+        return DIVISIONS
+    if table == UNIT_REFS:
+        return ITEM_UNITS
+    return ()
+
+
+def _shape_ref(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "name": row.get("name") or "Untitled",
+        "notes": row.get("notes") or "",
+        "owner_email": row.get("owner_email") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _list_refs(table: str) -> List[Dict[str, Any]]:
+    sb = get_client()
+    res = (sb.table(table).select("*")
+           .is_("deleted_at", "null")
+           .order("name")
+           .limit(500).execute())
+    rows = [_shape_ref(r) for r in (res.data or [])]
+    if rows:
+        return rows
+    any_row = sb.table(table).select("id").limit(1).execute()
+    if any_row.data:
+        return []
+    return [{"id": "", "name": name, "notes": "", "owner_email": "",
+             "created_at": None, "updated_at": None} for name in _ref_defaults(table)]
+
+
+def _live_refs_only(table: str) -> List[Dict[str, Any]]:
+    sb = get_client()
+    res = (sb.table(table).select("*")
+           .is_("deleted_at", "null")
+           .order("name")
+           .limit(500).execute())
+    return [_shape_ref(r) for r in (res.data or [])]
+
+
+def _list_ref_names(table: str) -> List[str]:
+    return [r["name"] for r in _list_refs(table)]
+
+
+def list_divisions() -> List[Dict[str, Any]]:
+    return _list_refs(DIVISION_REFS)
+
+
+def list_units() -> List[Dict[str, Any]]:
+    return _list_refs(UNIT_REFS)
+
+
+def list_division_names() -> List[str]:
+    return _list_ref_names(DIVISION_REFS)
+
+
+def list_unit_names() -> List[str]:
+    return _list_ref_names(UNIT_REFS)
+
+
+def _get_ref(table: str, ref_id: str) -> Optional[Dict[str, Any]]:
+    sb = get_client()
+    res = (sb.table(table).select("*")
+           .eq("id", ref_id).is_("deleted_at", "null").limit(1).execute())
+    rows = res.data or []
+    return _shape_ref(rows[0]) if rows else None
+
+
+def validate_ref(payload: Dict[str, Any], *, label: str, partial: bool = False) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValidationError("Nothing to save.")
+    out: Dict[str, Any] = {}
+    if "name" in payload or not partial:
+        name = _clean_text(payload.get("name"))
+        if not name:
+            raise ValidationError("Give the %s a name." % label)
+        out["name"] = name
+    if "notes" in payload or not partial:
+        out["notes"] = _clean_text(payload.get("notes"), _MAX_NOTES) or None
+    return out
+
+
+def _clashing_ref(table: str, name: str, *, ignore_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    target = name.casefold()
+    for row in _live_refs_only(table):
+        if row.get("id") != ignore_id and str(row.get("name") or "").casefold() == target:
+            return row
+    return None
+
+
+def create_ref(table: str, payload: Dict[str, Any], owner_email: Optional[str], *, label: str) -> Dict[str, Any]:
+    row = validate_ref(payload, label=label)
+    clash = _clashing_ref(table, row["name"])
+    if clash:
+        raise ValidationError("\"%s\" is already on the list." % clash["name"])
+    row["id"] = str(uuid.uuid4())
+    row["owner_email"] = (owner_email or "").lower() or None
+    row["created_at"] = row["updated_at"] = _now_iso()
+    sb = get_client()
+    sb.table(table).insert(row).execute()
+    return _shape_ref(row)
+
+
+def update_ref(table: str, ref_id: str, payload: Dict[str, Any], *, label: str) -> Optional[Dict[str, Any]]:
+    patch = validate_ref(payload, label=label, partial=True)
+    if not patch:
+        return _get_ref(table, ref_id)
+    sb = get_client()
+    cur = (sb.table(table).select("id")
+           .eq("id", ref_id).is_("deleted_at", "null").limit(1).execute())
+    if not (cur.data or []):
+        return None
+    if patch.get("name"):
+        clash = _clashing_ref(table, patch["name"], ignore_id=ref_id)
+        if clash:
+            raise ValidationError("\"%s\" is already on the list." % clash["name"])
+    patch["updated_at"] = _now_iso()
+    sb.table(table).update(patch).eq("id", ref_id).execute()
+    return _get_ref(table, ref_id)
+
+
+def delete_ref(table: str, ref_id: str) -> bool:
+    sb = get_client()
+    cur = (sb.table(table).select("id")
+           .eq("id", ref_id).is_("deleted_at", "null").limit(1).execute())
+    if not (cur.data or []):
+        return False
+    sb.table(table).update({"deleted_at": _now_iso()}).eq("id", ref_id).execute()
+    return True
+
+
 # ── items ─────────────────────────────────────────────────────────────────────
 def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str, Any]:
     """Shape and check an item payload; returns only the columns we intend to write."""
@@ -153,6 +333,11 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         # of. A closed list would block the purchase rather than the typo.
         out["unit"] = _canonical(_clean_text(payload.get("unit"), 24), ITEM_UNITS) \
             or DEFAULT_ITEM_UNIT
+
+    if "divisions" in payload or ("category" in payload and partial) or not partial:
+        divisions = _coerce_divisions(payload.get("divisions"), payload.get("category"))
+        out["divisions"] = divisions
+        out["category"] = divisions[0] if divisions else None
 
     if "buy_qty" in payload or not partial:
         # How many units come in the purchase — the "5" of "5 Gal". `unit_cost` is what that pack
@@ -175,6 +360,8 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
 
     for col, limit in (("category", _MAX_TEXT), ("sku", 80),
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
+        if col == "category" and "divisions" in out:
+            continue
         if col in payload or not partial:
             out[col] = _clean_text(payload.get(col), limit) or None
 
@@ -183,15 +370,20 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
     # exactly as typed, because this is a rename of a free-text column and old rows hold anything.
     if out.get("category"):
         out["category"] = _canonical(out["category"], DIVISIONS)
+        if "divisions" in out:
+            out["divisions"] = _coerce_divisions(out["divisions"], out["category"])
+            out["category"] = out["divisions"][0] if out["divisions"] else None
 
     return out
 
 
 def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
+    divisions = _coerce_divisions(row.get("divisions"), row.get("category"))
     return {
         "id": row.get("id"),
         "name": row.get("name") or "Untitled",
-        "category": row.get("category") or "",
+        "category": divisions[0] if divisions else (row.get("category") or ""),
+        "divisions": divisions,
         "unit": row.get("unit") or DEFAULT_ITEM_UNIT,
         # Floats, not strings: the page does arithmetic with these. PostgREST returns numerics
         # as strings, so the coercion happens here rather than in every caller.
@@ -583,6 +775,27 @@ def vendor_usage() -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for it in list_items():
         key = str(it.get("vendor") or "").casefold()
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def division_usage() -> Dict[str, int]:
+    """How many live items name each division, keyed by casefolded division name."""
+    counts: Dict[str, int] = {}
+    for it in list_items():
+        for div in _coerce_divisions(it.get("divisions"), it.get("category")):
+            key = div.casefold()
+            if key:
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def unit_usage() -> Dict[str, int]:
+    """How many live items use each purchase unit, keyed by casefolded unit name."""
+    counts: Dict[str, int] = {}
+    for it in list_items():
+        key = str(it.get("unit") or "").casefold()
         if key:
             counts[key] = counts.get(key, 0) + 1
     return counts

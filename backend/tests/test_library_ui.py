@@ -71,9 +71,10 @@ def test_the_headers_hanz_asked_to_change_have_changed(ran):
 
 # ── Items ─────────────────────────────────────────────────────────────
 @needs_node
-def test_division_is_a_dropdown_of_the_three_divisions(ran):
+def test_division_is_a_checkbox_group_of_the_three_divisions(ran):
+    assert ran["items"]["hasDivisionCheckboxes"]
     assert ran["items"]["divisionOptions"] == [
-        "—", "Polished Concrete", "Epoxy", "Gypsum Underlayment"]
+        "Polished Concrete", "Epoxy", "Gypsum Underlayment"]
 
 
 @needs_node
@@ -81,7 +82,7 @@ def test_buy_by_became_a_quantity_and_a_unit(ran):
     """"5 Gal" is two facts, and pricing needs them apart: the pack size is what turns a needed
     16.8 gallons into four pails."""
     assert ran["items"]["hasBuyQty"] and ran["items"]["hasUnitDropdown"]
-    assert ran["items"]["unitOptions"][-3:] == ["Gallon", "Kit", "Bag"]
+    assert all(u in ran["items"]["unitOptions"] for u in ["Gallon", "Kit", "Bag"])
 
 
 @needs_node
@@ -317,7 +318,7 @@ def test_the_live_updater_writes_into_the_cells_the_row_actually_has(ran):
     built by a different function. Adding a column ahead of them puts the quantity in the waste box
     with no error anywhere."""
     lines = ran["lines"]
-    assert lines["qtyIdx"] == 4 and lines["costIdx"] == 5, \
+    assert lines["qtyIdx"] == 5 and lines["costIdx"] == 6, \
         "the rendered row moved its computed cells: %s" % lines
     assert lines["indexesAgree"], (
         "refreshNumbers writes %s but the row's qty/cost cells are at %s"
@@ -370,7 +371,7 @@ def test_the_live_updater_recomputes_each_rounding_mode_separately(ran):
 
 @needs_node
 def test_the_empty_state_spans_the_columns_that_now_exist(ran):
-    assert ran["lines"]["placeholderColspan"] == ran["lines"]["tdCount"] == 7
+    assert ran["lines"]["placeholderColspan"] == ran["lines"]["tdCount"] == 8
 
 
 @needs_node
