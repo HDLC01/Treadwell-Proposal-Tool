@@ -25,4 +25,4 @@ cachetools>=7.1.4
 httpx>=0.27.0
 # IANA tz database for zoneinfo (notifications.py buckets deadlines in Central) —
 # insurance in case the base image lacks system tzdata.
-tzdata>=2024.1
+tzdata>=2026.3
