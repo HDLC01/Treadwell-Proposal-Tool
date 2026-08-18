@@ -32,6 +32,7 @@
             <th>Email</th><th>Name</th><th>Role</th><th title="Can be assigned proposals. Independent of role — somebody can be a member, an admin and an estimator at once.">Estimator</th><th>Status</th><th>Joined</th><th>Last change</th><th>Set role</th><th style="text-align:right">Actions</th>
           </tr></thead><tbody id="tbody"></tbody></table></div>
         </div>
+        ${roleMatrixHtml()}
         <div class="panel" style="margin-top:18px;">
           <div class="ph"><strong>Projects</strong><span id="pcount" style="color:var(--ink-v)"></span>
             <span class="grow"></span>
@@ -44,6 +45,98 @@
       document.getElementById("search").addEventListener("input", renderRows);
       document.getElementById("rolefilter").addEventListener("change", refresh);
       document.getElementById("psearch").addEventListener("input", renderProjects);
+    }
+
+    // ── What each role can see ──
+    // Hanz, 2026-08-19: "can we actually show what sidebar tabs is can be present for the admins,
+    // the members and the superadmin?"
+    //
+    // THE ROWS ARE NOT WRITTEN HERE. window.TWAuth.navMatrix() builds the sidebar's nav once per
+    // role out of the menu's own markup and diffs the results, so this table is the menu rather
+    // than a description of it. A hand-kept copy of the tab list would be wrong the first time
+    // somebody adds a page — which is the whole failure this panel would otherwise introduce.
+    // Every sentence under the table is computed from the same rows for the same reason: a
+    // hardcoded "only the Admin tab differs" is a claim that rots silently.
+    const ROLE_LABEL = { user:"Member", admin:"Admin", super_admin:"Super admin" };
+    function roleLabelOf(r){ return ROLE_LABEL[r] || r; }
+
+    function roleMatrixHtml(){
+      const nav = (window.TWAuth && window.TWAuth.navMatrix) ? window.TWAuth.navMatrix() : null;
+      if (!nav || !nav.rows.length) {
+        return `<div class="panel" style="margin-top:18px;"><div class="ph"><strong>What each role can see</strong></div>
+          <p class="rv-note">The sidebar didn't report its tabs, so there is nothing to show here.
+          Reload the page; if it persists, auth.js failed to load.</p></div>`;
+      }
+      const roles = nav.roles, rows = nav.rows, mine = ME.role || "user";
+      const seen = (r) => roles.filter(x => r.roles[x]).length;
+      const differing = rows.filter(r => seen(r) !== roles.length);
+      const count = {}; roles.forEach(x => { count[x] = rows.filter(r => r.roles[x]).length; });
+
+      const head = roles.map(r =>
+        `<th class="rv-h${r===mine?" rv-mine":""}">${esc(roleLabelOf(r))}` +
+        `${r===mine?'<span class="you">you</span>':""}</th>`).join("");
+
+      const body = rows.map(r => `<tr data-href="${esc(r.href)}" data-label="${esc(r.label)}">
+          <td class="rv-sec">${esc(r.section)}</td>
+          <td><span class="rv-ico">${esc(r.glyph)}</span>${esc(r.label)}${
+            r.tag?`<span class="badge b-user" style="margin-left:6px">${esc(r.tag)}</span>`:""}
+            <span class="rv-href">${esc(r.href)}</span></td>
+          ${roles.map(x => `<td class="rv-cell" data-role="${esc(x)}">${
+            r.roles[x]?'<span class="rv-yes">✓</span>':'<span class="rv-no">—</span>'}</td>`).join("")}
+        </tr>`).join("");
+
+      return `<div class="panel" style="margin-top:18px;">
+        <div class="ph"><strong>What each role can see</strong>
+          <span style="color:var(--ink-v)">${rows.length} sidebar tabs · ${differing.length}
+            ${differing.length===1?"differs":"differ"} by role</span>
+          <span class="grow"></span>
+          <span class="rv-you">Your role: <strong>${esc(roleLabelOf(mine))}</strong></span>
+        </div>
+        <div style="overflow-x:auto"><table>
+          <thead><tr><th>Section</th><th>Sidebar tab</th>${head}</tr></thead>
+          <tbody>${body}</tbody>
+        </table></div>
+        <div class="rv-note">
+          <p>${roleDiffSentence(nav, count)}</p>
+          <p><strong>This is the sidebar, not a permission model.</strong> Hiding a tab hides a
+            link and nothing else — every page stays reachable by typing its URL. What actually
+            stops someone is the server: <code>_require_admin</code> guards
+            <code>/api/admin/*</code> (the users, stats and digest calls on this page, and admin
+            project deletes), the Item Library's vendor / division / unit writes, and the
+            notification-recipient writes.</p>
+          <p>Three tabs everybody can open still gate controls <em>inside</em> the page on role:
+            <strong>Items and Assemblies</strong> (only an admin edits vendors, divisions and
+            units; everyone may pick from them), <strong>Notification Sending</strong> (only an
+            admin adds, removes or toggles anyone but themselves) and <strong>Active
+            Projects</strong> (only an admin reassigns someone else's project).</p>
+        </div></div>`;
+    }
+
+    /** The one-line summary, computed — never asserted — so it cannot outlive the truth. */
+    function roleDiffSentence(nav, count){
+      const roles = nav.roles, rows = nav.rows;
+      const only = (has, lacks) => rows.filter(r => r.roles[has] && !r.roles[lacks]);
+      const names = (list) => list.map(r => `<strong>${esc(r.label)}</strong>`).join(", ");
+      const total = rows.length;
+      const adminExtra = only("admin", "user"), memberExtra = only("user", "admin");
+      const superExtra = only("super_admin", "admin");
+      const parts = [];
+      if (!adminExtra.length && !memberExtra.length) {
+        parts.push(`Members and admins see the same ${total} tabs.`);
+      } else {
+        parts.push(`Members see ${count.user} of the ${total} tabs.`);
+        if (adminExtra.length) {
+          parts.push(`${adminExtra.length===1?"The only tab":"The tabs"} an admin sees and a
+            member does not: ${names(adminExtra)}.`);
+        }
+        if (memberExtra.length) parts.push(`Hidden from admins: ${names(memberExtra)}.`);
+      }
+      parts.push(superExtra.length
+        ? `A super admin also sees ${names(superExtra)}.`
+        : `A super admin's sidebar is identical to an admin's — the extra powers are on this page
+           (only a super admin may grant the admin role, or act on another admin), not a tab
+           of their own.`);
+      return parts.join(" ");
     }
 
     async function refresh(){
