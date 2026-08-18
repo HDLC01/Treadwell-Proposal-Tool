@@ -1042,6 +1042,18 @@ class PortalPublishIn(BaseModel):
     # (chase everybody, as it has always worked) needs no entry and a caller that omits the field
     # forwards nothing.
     no_followups: list[str] = Field(default_factory=list)
+    # Which STAFF hear about this send, chosen on the Files screen before pressing Send (Hanz,
+    # 2026-08-19: "we need that notifcation sending selection in the Files. so we can select who
+    # receives it first"). Deviations from the global Notification Sending roster, not the whole
+    # list: `notify_add` is somebody who is globally off but should hear about this job,
+    # `notify_mute` somebody globally on who should not. Anybody in neither follows the roster.
+    #
+    # They ride ALONG WITH the publish rather than being written first by the browser, because
+    # portal_notify_overrides has a foreign key onto portal_proposals — on a first send that row
+    # does not exist yet, so a pre-publish write is refused. The portal applies them after it
+    # creates the row and before it resolves who to notify.
+    notify_add: list[str] = Field(default_factory=list)
+    notify_mute: list[str] = Field(default_factory=list)
 
 
 def _clean_estimator(raw: str) -> str:
@@ -1143,6 +1155,13 @@ def api_portal_publish(draft_id: str, request: Request,
     no_fu = _clean_portal_emails(payload.no_followups if payload else [])
     if no_fu:
         body["no_followups"] = no_fu
+    # Who on the team hears about this send. Same cleaning helper again, and forwarded only when
+    # the estimator actually changed something, so a send with the roster left alone carries the
+    # byte-for-byte legacy body.
+    for field in ("notify_add", "notify_mute"):
+        picked = _clean_portal_emails(getattr(payload, field) if payload else [])
+        if picked:
+            body[field] = picked
     # Checked after the recipients (their errors are more specific and predate this)
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
@@ -4007,6 +4026,70 @@ def api_assign_draft(draft_id: str, payload: AssignDraftIn, request: Request) ->
         log.warning("portal assign failed for %s: %s", draft_id, exc)
         portal_ok = False
     return {"ok": True, "assigned_estimator": email, "portal_updated": portal_ok, "sent": True}
+
+
+class NotifyPicksIn(BaseModel):
+    """Deviations from the global Notification Sending roster for ONE project."""
+    add: list[str] = Field(default_factory=list)
+    mute: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/draft/{draft_id}/notify")
+def api_draft_notify(draft_id: str, payload: NotifyPicksIn, request: Request) -> Dict[str, Any]:
+    """Choose who on the team hears about this project, from the CRM drawer.
+
+    Hanz, 2026-08-19: "add the notif sending in this step of the CRM" — asked of the drawer for a
+    project that has been created but NOT SENT, which is exactly the case the portal cannot store.
+    `portal_notify_overrides.proposal_id` is a foreign key onto a proposal row that does not exist
+    until the first send, so an unsent project has nowhere in the portal to record this. The draft
+    does, and the Files screen carries it into the send.
+
+    Same two-sided shape as `api_assign_draft`: the draft's copy is written always, and a project the
+    customer already has is forwarded to the portal too, because for a SENT project the portal's
+    override table is the copy that decides who actually gets emailed. A portal failure does not fail
+    the request — the draft write already succeeded, and `portal_updated: false` lets the drawer say
+    so rather than pretending or losing the change."""
+    add = _clean_portal_emails(payload.add)
+    mute = _clean_portal_emails(payload.mute)
+    try:
+        existed = drafts.set_notify_picks(draft_id, add, mute, _user_email(request))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_notify_picks failed for %s: %s", draft_id, exc)
+        raise HTTPException(502, "Could not save who to notify.") from exc
+    if not existed:
+        raise HTTPException(404, "project_not_found")
+
+    # Never sent → no portal row to override against, so skip the round-trip entirely. This is the
+    # normal path for the drawer state that prompted the feature.
+    try:
+        sent = bool(drafts.latest_revision_no(draft_id))
+    except Exception as exc:  # noqa: BLE001 — a revisions read must not undo the write
+        log.warning("revision lookup failed for %s: %s", draft_id, exc)
+        sent = False
+    if not sent:
+        return {"ok": True, "add": add, "mute": mute, "portal_updated": False, "sent": False}
+
+    portal_ok = True
+    try:
+        chosen = {e.lower() for e in add} | {e.lower() for e in mute}
+        for email in add:
+            _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
+                    {"email": email, "mode": "add"})
+        for email in mute:
+            _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
+                    {"email": email, "mode": "mute"})
+        # Anyone previously overridden who now follows the roster: clear them, so the drawer's chips
+        # and the mail agree. Read first, because clearing blind would need a list we do not have.
+        current = _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "GET")
+        for row in (current.get("overrides") or []):
+            email = str(row.get("email") or "")
+            if email and email.lower() not in chosen:
+                _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
+                        {"email": email, "mode": "clear"})
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        log.warning("portal notify override failed for %s: %s", draft_id, exc)
+        portal_ok = False
+    return {"ok": True, "add": add, "mute": mute, "portal_updated": portal_ok, "sent": True}
 
 
 @app.get("/api/drafts")

@@ -99,9 +99,26 @@ function liftPair(deps) {
   // down on prod once. Stubbing them would have hidden the coupling instead of proving it.
   const fact = /^  const fact = [\s\S]*?;$/m.exec(SRC);
   if (!fact) throw new Error("could not lift fact");
-  const body = 'let DRAWER_SIG = "";\n' + fact[0] + "\n" + source("drawerHead") + "\n" +
+  const body = 'let DRAWER_SIG = ""; let ACTIVE_SEC = null; const SEC_TABS = { proposal: 1 };'
+    + ' const notifyCalls = []; const panelCalls = [];\n'
+    + fact[0] + "\n" + source("drawerHead") + "\n" +
+    // renderNotSent now builds the same five-tab strip a sent project gets. `secTab` is lifted for
+    // real — it is pure markup and cheap — but `applySecPanel` is recorded as a no-op here.
+    //
+    // That is a division of labour, not a gap: applySecPanel reaches for SEC_TABS, ALL_SEC_CARDS,
+    // SEC_ELIGIBLE, the chat scroll and two lazy fetches, none of which this file has any business
+    // standing up. THIS harness tests the estimator picker. The strip itself is executed for real in
+    // drawer-render-harness.js, which asserts all five tabs, their panels and their placeholder
+    // copy. Recording the call rather than deleting it means a rename still fails loudly here.
+    source("secTab") +
+    "\nfunction applySecPanel() { panelCalls.push(ACTIVE_SEC); }" + "\n" +
     source("renderNotSent") + "\n" + source("wireNotSentAssign") +
-    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG };";
+    // renderNotSent also kicks off the notification picker, which is a network read this file has
+    // no business making — it tests the ESTIMATOR control. Recorded as a call rather than lifted,
+    // so a rename in portal.js still fails loudly here instead of being silently absent.
+    "\nfunction loadNotSentNotify(pid) { notifyCalls.push(pid); }" +
+    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
+    "         notifyCalls, panelCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
 }
 

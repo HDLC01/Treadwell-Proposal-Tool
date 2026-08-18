@@ -612,6 +612,8 @@
   $("drawer").addEventListener("click", (e) => {
     const b = e.target.closest(".dtabs .step");     // closest, so a click on .lbl/.val counts
     if (b && b.dataset.sec) focusSection(b.dataset.sec);
+    const dl = e.target.closest(".rev-dl");
+    if (dl) downloadRevision(CUR_PID, dl.dataset.rev, dl.dataset.kind, dl);
   });
   $("drawer").addEventListener("keydown", (e) => {
     const b = e.target.closest && e.target.closest(".dtabs .step");
@@ -707,18 +709,38 @@
     const who = estimatorOf(row);
     const total = cardTotal(row);
     const d = $("drawer");
-    // Same head, same fact cells and the same layout column as the real drawer: a rep should not
-    // have to re-learn the panel because this project has not been sent yet. What is absent is
-    // absent because it does not exist — no customer link, no thread, no approval, no deposit.
+    // THE SAME FIVE TABS AS A SENT PROJECT. Hanz, 2026-08-19: "For those not sent just please have
+    // the same set of tabs so that its clear."
     //
-    // The head carries no meta line here. The real drawer puts the customer and the money up
-    // there because they have to survive a tab change; this panel has no tabs, so it would only
-    // be restating the two fact cells directly underneath.
+    // This panel deliberately had none, on the reasoning that a deposit and a thread do not exist
+    // yet so a tab pointing at them would be pointing at nothing. That was wrong about what a tab
+    // strip is FOR: it is the shape of a project, and dropping four fifths of it made this drawer
+    // look like a different feature rather than the same project earlier in its life. Somebody who
+    // learns the strip on a sent project should not have to re-learn this one.
+    //
+    // So every tab is present and says what it is waiting for. A tab whose content genuinely does
+    // not exist yet says so in the panel, which is a fact about the project rather than an empty
+    // box that reads as broken.
+    const nsTabs = `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("proposal", "Proposal", { val: "Not sent",
+        hint: "Customer, estimator, who hears about it when it goes out" }) +
+      secTab("deposit", "Deposit", { val: "—", hint: "Nothing until the customer approves" }) +
+      secTab("contacts", "Contacts", { val: "—", hint: "The customer supplies these after approving" }) +
+      secTab("chat", "Chat", { val: "—", hint: "Opens when the customer can see the proposal" }) +
+      secTab("followup", "Follow-up", { val: "Off", hint: "Chasing starts when you send it" }) +
+      `</div>`;
+    // These sections carry `dsec-ns-*` ids, deliberately outside ALL_SEC_CARDS: applySecPanel's
+    // per-card eligibility pass is for the sent drawer, where a card can be present but not
+    // applicable. Here the PANEL-level hiding is the whole job — one panel per tab, always the
+    // right one — so borrowing the card machinery would add a second switch that has to agree
+    // with the first.
+    NS_MODE = true;
     d.innerHTML = `
       ${drawerHead(row.project_name, "")}
+      ${nsTabs}
       <div class="dbody">
-       <div class="dpanel">
-        <div class="sec">
+       <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
+        <div class="sec" id="dsec-ns-proposal">
           <div class="lbl">Not sent yet</div>
           <p class="note">The estimate and the proposal are generated, and nobody has sent them to
           the customer. Nothing reaches them until you do.</p>
@@ -750,9 +772,60 @@
           </div>
           <p class="note ns-assign-note" id="ns-assign-note"></p>
         </div>
+        <!-- Chosen HERE, before the send, because this is where somebody is standing when they
+             decide who should know about a job. Hanz, 2026-08-19: "add the notif sending in this
+             step of the CRM."
+             Stored on the DRAFT, for the same reason the estimator above is: an unsent project has
+             no portal row, and the portal's per-project override table has a foreign key onto one.
+             The Files screen reads this back and carries it into the send that creates the row. -->
+        <div class="sec">
+          <div class="lbl">Notifications for this project</div>
+          <p class="note">Who hears about this once it goes out. Green means they are on. This
+          overrides the global roster for this project only, and toggling somebody never sends them
+          anything now.</p>
+          <div id="ns-nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
+          <p class="note" id="ns-nt-note"></p>
+        </div>
         <div class="sec row3">
           <button type="button" class="btn btn-p" data-go-files>Open the files</button>
           <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
+        </div>
+       </div>
+
+       <!-- The other four. Each says what has to happen before it has anything in it, which is a
+            fact about where the project is rather than an empty panel that reads as a bug. The
+            wording names the trigger, so the strip doubles as an explanation of the sequence. -->
+       <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
+        <div class="sec" id="dsec-ns-deposit">
+          <div class="lbl">Deposit</div>
+          <p class="note">Nothing to collect yet. A deposit can be requested once the customer has
+          approved the proposal, and whether one is required is chosen on the Files screen when you
+          send it.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-contacts" role="tabpanel" aria-labelledby="dtab-contacts" tabindex="-1">
+        <div class="sec" id="dsec-ns-contacts">
+          <div class="lbl">Contacts</div>
+          <p class="note">The customer fills these in themselves — who to reach for scheduling and
+          for invoices — and they are asked for them after they approve.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-chat" role="tabpanel" aria-labelledby="dtab-chat" tabindex="-1">
+        <div class="sec" id="dsec-ns-chat">
+          <div class="lbl">Chat</div>
+          <p class="note">The conversation opens when the customer can see the proposal. Send it and
+          anything they ask lands here, with your replies going back to them by email.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-followup" role="tabpanel" aria-labelledby="dtab-followup" tabindex="-1">
+        <div class="sec" id="dsec-ns-followup">
+          <div class="lbl">Follow-up</div>
+          <p class="note">Chasing starts when you send this. From then on the assigned estimator
+          gets the reminders and this project appears in the morning digest until the deposit is
+          in. Nobody is chased before a proposal exists.</p>
         </div>
        </div>
       </div>`;
@@ -762,7 +835,96 @@
       () => go("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
     d.querySelector("[data-go-edit]").addEventListener("click",
       () => go("/?d=" + encodeURIComponent(pid) + "&edit=1"));
+    // Land on Proposal, and paint the strip so one tab reads as selected. Without this the five
+    // tabs render with nothing active and every panel visible at once — the strip has to be applied,
+    // not merely present.
+    if (!SEC_TABS[ACTIVE_SEC]) ACTIVE_SEC = "proposal";
+    applySecPanel();
     wireNotSentAssign(pid, row);
+    loadNotSentNotify(pid);
+  }
+
+  /** The notification picker on a project that has not been sent.
+   *
+   *  Two reads, because the two halves live in different places and neither is the other's business:
+   *  the global roster comes from the portal (it is the same list the Notification Sending page
+   *  edits), and this project's deviations come off the DRAFT, where they wait until a send exists
+   *  to apply them to.
+   *
+   *  Writes go to the draft endpoint, not the portal's override route — that route 404s for a project
+   *  with no proposal row, which is every project in this drawer state. */
+  async function loadNotSentNotify(pid) {
+    const wrap = $("ns-nt-chips");
+    if (!wrap) return;
+    let roster = [];
+    let picks = { add: [], mute: [] };
+    try {
+      const [rr, dr] = await Promise.all([
+        api("/api/portal/notify-recipients"),
+        api("/api/draft/" + encodeURIComponent(pid)),
+      ]);
+      const rj = await rr.json();
+      roster = (rj.recipients || []).filter((x) => x.kind === "general")
+        .map((x) => ({ email: x.email, base: x.enabled !== false }));
+      const dj = await dr.json();
+      const saved = ((dj.data || {}).notify_picks) || {};
+      picks = { add: saved.add || [], mute: saved.mute || [] };
+    } catch (err) {
+      wrap.innerHTML = '<span class="note">Could not load the roster: ' + esc(err.message) + "</span>";
+      return;
+    }
+    if (!roster.length) {
+      wrap.innerHTML = '<span class="note">Nobody is on the notification roster yet.</span>';
+      return;
+    }
+    paintNotSentNotify(pid, roster, picks);
+  }
+
+  function paintNotSentNotify(pid, roster, picks) {
+    const wrap = $("ns-nt-chips");
+    const note = $("ns-nt-note");
+    if (!wrap) return;
+    const add = new Set(picks.add.map((e) => e.toLowerCase()));
+    const mute = new Set(picks.mute.map((e) => e.toLowerCase()));
+    const effective = (p) => {
+      const k = p.email.toLowerCase();
+      return mute.has(k) ? false : (add.has(k) ? true : p.base);
+    };
+    wrap.innerHTML = roster.map((p) => {
+      const on = effective(p);
+      // plainAvatar, not avatar: on this control the colour IS the state (green = will hear about
+      // it), so an identity colour would compete with the one signal the chip exists to show.
+      return '<button type="button" class="nt-chip' + (on ? " on" : "") + '"'
+        + ' data-ns-notify="' + esc(p.email) + '" title="' + esc(p.email) + '">'
+        + plainAvatar(p.email) + esc(nameOf(p.email)) + "</button>";
+    }).join("");
+    if (note) {
+      const n = roster.filter(effective).length;
+      note.textContent = n + " of " + roster.length
+        + " will hear about this when it is sent.";
+    }
+    wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
+      const email = b.getAttribute("data-ns-notify");
+      const k = email.toLowerCase();
+      const person = roster.find((p) => p.email.toLowerCase() === k);
+      const next = !effective(person);
+      // Back to what the roster already says → forget the deviation, so a project that agrees with
+      // the roster stores nothing and keeps following it as the roster changes.
+      add.delete(k); mute.delete(k);
+      if (next !== person.base) (next ? add : mute).add(k);
+      const body = { add: [...add], mute: [...mute] };
+      wrap.querySelectorAll(".nt-chip").forEach((x) => { x.disabled = true; });
+      try {
+        const r = await api("/api/draft/" + encodeURIComponent(pid) + "/notify",
+                            { method: "POST", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify(body) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        paintNotSentNotify(pid, roster, { add: body.add, mute: body.mute });
+      } catch (err) {
+        if (note) note.textContent = "Could not save that: " + err.message;
+        wrap.querySelectorAll(".nt-chip").forEach((x) => { x.disabled = false; });
+      }
+    }));
   }
 
   /** The estimator picker on a "Created but not sent" project.
@@ -840,7 +1002,8 @@
   // state, ACTIVE_SEC says which tab is ON SCREEN. Only applySecPanel() reads
   // both and touches visibility — nothing else may.
   const SEC_TABS = {
-    proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify"],
+    proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
+               "dsec-revisions"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -860,8 +1023,13 @@
   let CUR_PID = null;            // the drawer is reused across projects
   const REPLY_DRAFT = {};        // unsent text survives the post-action re-render
   const NT_CACHE = {};           // chips per PROJECT, so a poll doesn't refetch them
+  const REV_CACHE = {};          // sent versions per PROJECT, for the same reason
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
+  // True while the drawer is showing a project nobody has sent. The tab strip is the same one, but
+  // the Proposal tab's two lazy fetches are not: both address a portal row this project does not
+  // have yet, so firing them would answer a tab click with "could not load".
+  let NS_MODE = false;
 
   // What the drawer currently shows, same idea as BOARD_SIG. renderDetail replaces the drawer's
   // whole innerHTML including the chat thread, so an unchanged repaint tears down and rebuilds
@@ -904,7 +1072,12 @@
     });
     const body = drawer.querySelector(".dbody");
     if (body) body.dataset.sec = sec;                      // arms the chat-scroll CSS
-    if (sec === "proposal") loadNotifyChips(CUR_PID, RENDER_GEN);
+    // Both of these read the portal's copy of a project, which an unsent one does not have. The
+    // not-sent panel carries its own notification picker (draft-backed) and has no versions to list.
+    if (sec === "proposal" && !NS_MODE) {
+      loadNotifyChips(CUR_PID, RENDER_GEN);
+      loadRevisions(CUR_PID, RENDER_GEN);
+    }
     if (sec === "chat") requestAnimationFrame(() => {
       const t = $("thread");
       if (!t) return;
@@ -987,6 +1160,101 @@
       const wrap = $("nt-chips");
       if (wrap && gen === RENDER_GEN) wrap.innerHTML = '<span class="note">Could not load notifications: ' + esc(err.message) + "</span>";
     }
+  }
+
+  /** The versions of this estimate that have actually been sent.
+   *
+   *  Hanz, 2026-08-19: "Make sure to also put the revisions here." The Files screen has shown this
+   *  since revisions shipped; the drawer is where somebody is standing when they wonder what the
+   *  customer was quoted in July, and it made them leave the project to find out.
+   *
+   *  Read from the DRAFT, not the portal: a revision is the proposal tool's own snapshot of its
+   *  estimate (drafts.create_revision on every publish), and the portal only knows the number of
+   *  the version it was handed. Cached per project for the same reason the chips are — openDetail
+   *  runs again on every 12s poll, and an unguarded fetch would flash its own "Loading…" four times
+   *  a minute. */
+  async function loadRevisions(pid, gen) {
+    if (!pid) return;
+    if (REV_CACHE[pid]) { paintRevisions(REV_CACHE[pid], gen); return; }
+    try {
+      const r = await api("/api/draft/" + encodeURIComponent(pid) + "/revisions");
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      REV_CACHE[pid] = j.revisions || [];
+      paintRevisions(REV_CACHE[pid], gen);
+    } catch (err) {
+      const box = $("rev-list");
+      if (box && gen === RENDER_GEN) {
+        box.innerHTML = '<span class="note">Could not load the sent versions: ' + esc(err.message) + "</span>";
+      }
+    }
+  }
+
+  function paintRevisions(revs, gen) {
+    const box = $("rev-list");
+    if (!box || gen !== RENDER_GEN) return;
+    if (!revs.length) {
+      // A sent project with no snapshot is one sent before revisions existed, which is a fact
+      // about the record rather than an error.
+      box.innerHTML = '<span class="note">No snapshots yet — this went out before versions were '
+        + "recorded.</span>";
+      return;
+    }
+    box.innerHTML = revs.map((rv, i) => `
+      <div class="rev-row">
+        <strong>Rev ${esc(rv.revision_no)}</strong>
+        ${i === 0 ? '<span class="rev-cur">current</span>' : ""}
+        <span class="note">${esc(rv.created_at ? TW.fmtBizDate(rv.created_at) : "—")}</span>
+        <span class="note">${rv.created_by
+          ? avatar(rv.created_by) + esc(nameOf(rv.created_by)) : "—"}</span>
+        <strong class="rev-amt">${rv.total == null ? "—" : money(rv.total)}</strong>
+        ${rv.has_documents
+          ? ["xlsx", "docx", "pdf"].map((k) =>
+              `<button type="button" class="btn btn-s rev-dl" data-rev="${esc(rv.revision_no)}"`
+              + ` data-kind="${k}">${k === "pdf" ? "PDF" : "." + k}</button>`).join("")
+          : '<span class="note">no documents</span>'}
+      </div>`).join("");
+  }
+
+  /** Rebuild one sent version's documents and save the requested one.
+   *
+   *  The rebuild is the point: an old revision must be rendered from ITS snapshot, never from the
+   *  live draft, or the download would quietly show today's price under a July heading. Same
+   *  endpoint and the same octet-stream trick as the Files screen — without the forced type the
+   *  browser's inline PDF viewer hijacks the click and the file is never saved. */
+  async function downloadRevision(pid, revNo, kind, button) {
+    if (!pid || !revNo) return;
+    const orig = button.textContent;
+    button.disabled = true;
+    button.textContent = "…";
+    try {
+      const r = await api("/api/draft/" + encodeURIComponent(pid) + "/revisions/"
+                          + encodeURIComponent(revNo) + "/files", { method: "POST" });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error || out.detail || ("HTTP " + r.status));
+      const url = out[kind === "xlsx" ? "xlsx_download_url"
+                     : kind === "docx" ? "docx_download_url" : "pdf_download_url"];
+      if (!url) throw new Error("not available for this version");
+      const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const safe = String(out.project_name || "proposal")
+        .replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+      const blobUrl = URL.createObjectURL(new Blob([await resp.arrayBuffer()],
+                                                   { type: "application/octet-stream" }));
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = safe + "_rev" + revNo + "_"
+        + (kind === "xlsx" ? "estimate" : "proposal") + "." + kind;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+      button.textContent = "✓";
+    } catch (err) {
+      console.error("revision download failed", err);
+      button.textContent = "failed";
+    }
+    setTimeout(() => { button.textContent = orig; button.disabled = false; }, 1800);
   }
 
   /** Draw the chip strip from an already-fetched payload. Synchronous on purpose: called
@@ -1657,11 +1925,23 @@
   };
   // `template`, not `rule` — the worker records what it SENT. The rule key that
   // deduped it is scheduling bookkeeping and means nothing to an estimator.
+  // Every template the portal can write into the history, so a row says which reminder went out
+  // rather than the generic "Automatic email". The deposit chase and the four staff notes were
+  // missing, which made the busiest part of the cadence the least legible part of the history.
+  //
+  // Staff templates are labelled "Told the team" because that is what happened — nothing in them
+  // reached the customer, and a history that reads "Second nudge" beside "Told the team: not opened"
+  // is the difference between knowing whether the customer has been bothered or we have.
   const FU_TEMPLATE_LABEL = {
     not_viewed: "Nudge: not opened yet",
     next_steps: "Next steps after viewing",
     second_nudge: "Second nudge",
     checkin: "Check-in",
+    deposit_nudge: "Deposit reminder",
+    staff_not_viewed: "Told the team: still not opened",
+    staff_pause_expired: "Told the team: the pause ended",
+    staff_personal_followup: "Told the team: worth a call",
+    staff_deposit_outstanding: "Told the team: deposit outstanding",
   };
   // Bookkeeping the portal writes as a `staff_note` with an `action` key.
   const FU_ACTION = {
@@ -2030,6 +2310,7 @@
     const sig = JSON.stringify([pid, data, unread]);
     if (sig === DRAWER_SIG) return;
     DRAWER_SIG = sig;
+    NS_MODE = false;                 // a sent project: the portal-backed loads apply again
 
     // Set BEFORE the markup below is built: msgHtml reads it to decide whether to name the
     // author, and a message rendered before it is populated would go unnamed. `data` is already
@@ -2079,6 +2360,17 @@
           <p class="note" id="nt-count"></p>
           <div id="nt-alert" class="note"></div>
           <div id="nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
+        </div>
+
+        <!-- Every send snapshots the estimate, so the versions are a real record of what each
+             customer was quoted and when. Hanz, 2026-08-19: "Make sure to also put the revisions
+             here." They were only on the Files screen, which meant answering "what did we send them
+             in July?" required leaving the project you were looking at. -->
+        <div class="sec" id="dsec-revisions">
+          <div class="lbl">Sent versions</div>
+          <p class="note">Each send pins the estimate as it was, so an old version stays readable
+          even after the draft moves on.</p>
+          <div id="rev-list"><span class="note">Loading…</span></div>
         </div>
        </div>
 

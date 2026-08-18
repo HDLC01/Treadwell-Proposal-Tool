@@ -135,6 +135,15 @@
   #drawer.open { display:flex; }
   /* per-project notification chips (in the detail drawer) */
   .nt-chips { display:flex; flex-wrap:wrap; gap:6px; margin:0; }
+  /* Sent versions. One row per snapshot, the money right-aligned so a revised price is scannable
+     down the column, and the download buttons trailing it. */
+  .rev-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:7px 0;
+    border-top:1px solid var(--line); font-size:12.5px; }
+  .rev-row:first-child { border-top:0; }
+  .rev-row .rev-amt { margin-left:auto; font-variant-numeric:tabular-nums; }
+  .rev-cur { font:700 9.5px system-ui; letter-spacing:.06em; text-transform:uppercase;
+    color:#0f7b34; background:#dcf5e3; border-radius:999px; padding:2px 7px; }
+  .rev-row .rev-dl { padding:3px 9px; font-size:11.5px; }
   .nt-chip { border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700;
     cursor:pointer; background:var(--surf-high); color:var(--ink-v); }
   .nt-chip.on { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }

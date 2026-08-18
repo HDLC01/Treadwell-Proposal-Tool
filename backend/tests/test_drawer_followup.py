@@ -93,17 +93,25 @@ def test_the_tab_strip_cannot_disagree_with_the_number_of_tabs():
     assert step and re.search(r"flex:\s*1 1 \d+px", step.group(1)), (
         "the cards do not share the strip's width, so they cannot adapt to a tab being added")
 
-    tabs = re.findall(r'secTab\("([a-z]+)"', PORTAL_JS)
     # The SEC_TABS literal ONLY, not everything after it. An unbounded slice would sweep up any
     # later four-space-indented `key: [` in the file and fail on code that has nothing to do with
     # the tab strip — a test that cries wolf gets deleted by the next person, which is worse than
     # not having it.
     start = PORTAL_JS.index("const SEC_TABS = {")
     keys = re.findall(r"^\s{4}([a-z]+):\s*\[", PORTAL_JS[start:PORTAL_JS.index("\n  };", start)], re.M)
-    assert tabs, "renderSecTabs renders no tabs"
-    assert tabs == keys, (
-        "the tab strip and SEC_TABS disagree: rendered %s, mapped %s. One of them shows a tab "
-        "whose cards are unreachable, or hides cards nothing can reach." % (tabs, keys))
+    assert keys, "SEC_TABS maps nothing"
+
+    # TWO functions build a strip since 2026-08-19: renderSecTabs for a sent project and
+    # renderNotSent for one that exists only as a draft ("For those not sent just please have the
+    # same set of tabs so that its clear"). Checked per function rather than over the whole file,
+    # because a flat findall over both now passes with ten names and would go on passing if one
+    # strip lost a tab the other still had — which is the drift the ask was about.
+    for fn in ("renderSecTabs", "renderNotSent"):
+        tabs = re.findall(r'secTab\("([a-z]+)"', _block(fn))
+        assert tabs, "%s renders no tabs" % fn
+        assert tabs == keys, (
+            "%s and SEC_TABS disagree: rendered %s, mapped %s. One of them shows a tab whose "
+            "cards are unreachable, or hides cards nothing can reach." % (fn, tabs, keys))
 
 
 def test_the_panel_is_wired_from_render_detail():

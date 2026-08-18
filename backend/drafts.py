@@ -227,6 +227,46 @@ def set_assigned_estimator(draft_id: str, email: str,
     return True
 
 
+def set_notify_picks(draft_id: str, add: List[str], mute: List[str],
+                     actor_email: Optional[str] = None) -> bool:
+    """Who on the team should hear about this project's next send.
+
+    Hanz, 2026-08-19: "add the notif sending in this step of the CRM" — asked of the drawer for a
+    project that has been CREATED BUT NOT SENT.
+
+    It has to live on the draft rather than in the portal's per-project override table, for the same
+    reason `set_assigned_estimator` does: `portal_notify_overrides.proposal_id` is a foreign key onto
+    a proposal row that an unsent project does not have. So this is the intention, recorded before
+    there is anywhere to apply it, and the Files screen carries it into the send that creates the
+    row. A project the customer already has keeps the authoritative copy on the portal side, and
+    `api_draft_notify` forwards there too.
+
+    Stored as DEVIATIONS from the global roster, not as a recipient list. The roster changes — people
+    join, leave, get toggled — and a stored list would freeze a decision about nine specific people
+    made weeks before the send. "Include Will, exclude Troy" still means what it said.
+
+    Same posture as the assignment: inside the `data` blob, no migration, and no `updated_at` bump.
+    Choosing who to notify is not work on the estimate and must not shuffle the project to the top of
+    the Projects list. Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if add or mute:
+        data["notify_picks"] = {"add": list(add), "mute": list(mute)}
+    else:
+        # Nothing deviates from the roster any more, so drop the key rather than storing two empty
+        # lists that read as "somebody decided nothing".
+        data.pop("notify_picks", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "notify_picked",
+              {"project_name": data.get("project_name"), "id": draft_id,
+               "add": list(add), "mute": list(mute)})
+    _cache_clear()
+    return True
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)

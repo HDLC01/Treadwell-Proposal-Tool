@@ -400,8 +400,22 @@ def test_the_not_sent_drawer_offers_the_action_that_moves_the_project_on():
     body = _block("portal.js", "renderNotSent")
     assert "/done.html?d=" in body and "files=1" in body, "no route to the Files page"
     assert "dclose" in body, "the panel cannot be closed"
-    assert "dtabs" not in body, (
-        "the tab strip is rendered for a project whose six other tabs are all empty")
+
+
+def test_the_not_sent_drawer_wears_the_same_tab_strip():
+    """Reversed on Hanz's word, 2026-08-19: "For those not sent just please have the same set of
+    tabs so that its clear". The earlier reading — hide the strip because six tabs are empty —
+    is what made the two drawers look like two different features. An empty tab that says what
+    has to happen first teaches the state; a missing tab just looks broken.
+
+    The strip is executed for real (all five tabs, their panels and their copy) in
+    drawer-render-harness.js; this only pins that renderNotSent is the function building it.
+    """
+    body = _block("portal.js", "renderNotSent")
+    assert "dtabs" in body, "the not-sent drawer no longer shows the tab strip"
+    assert "NS_MODE = true" in body, (
+        "the not-sent flag is not set, so applySecPanel will fire the portal-backed fetches "
+        "for a project that has no portal row yet — the 404 this file exists to prevent")
 
 
 def test_the_not_sent_drawer_uses_buttons_the_page_actually_styles():

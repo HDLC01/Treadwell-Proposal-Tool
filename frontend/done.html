@@ -129,6 +129,21 @@
   }
   .portal-recip .tw-em-list { margin: 6px 0 0; }
   .portal-recip .tw-em-empty { font-size: 12.5px; color: var(--ink-variant); padding: 4px 2px; }
+  /* "Tell the team" — the same toggle chip the Notification Sending page and the CRM drawer use,
+     so one control means one thing wherever it appears. Copied rather than shared because these
+     rules live in each page's own <style> block, not in styles.css. Colour IS the state here
+     (green = hears about this send), which is why the avatar is deliberately colourless: an
+     identity colour would compete with the only signal that matters. */
+  .nt-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .nt-chip { border:1px solid var(--surface-dim,#ccc); border-radius:999px; padding:5px 11px;
+    font-size:12px; font-weight:700; cursor:pointer; background:#f4f4f5; color:var(--ink-variant); }
+  .nt-chip.on { background:#dcf5e3; color:#0f7b34; border-color:#bfe3c8; }
+  .nt-chip:disabled { cursor:not-allowed; opacity:.6; }
+  .nt-chip .nt-av { display:inline-flex; align-items:center; justify-content:center;
+    width:20px; height:20px; border-radius:50%; margin-right:5px; flex:0 0 auto;
+    font:800 9.5px/1 system-ui; letter-spacing:.02em; vertical-align:middle; text-transform:uppercase;
+    background:rgba(27,28,28,.09); color:var(--ink-variant); }
+  .nt-chip.on .nt-av { background:rgba(15,123,52,.15); color:#0f7b34; }
   /* Dropbox filing (folded in from the old step 5) */
   .dbx-field { margin: 22px 0 8px; }
   .dbx-field label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
@@ -270,6 +285,17 @@
         <input type="checkbox" id="portal-require-deposit" style="width:16px;height:16px;cursor:pointer;">
         <span>Require deposit <span id="portal-require-deposit-hint" style="font-weight:400;"></span></span>
       </label>
+
+      <!-- Who on the team hears about this send. Hanz, 2026-08-19: "we need that notifcation
+           sending selection in the Files. so we can select who receives it first."
+           Filled by done.js (mountNotifyRoster) from the Notification Sending roster; the picks
+           travel in the publish body, because the per-project override table has a foreign key onto
+           a proposal row that does not exist until this send creates it. -->
+      <div id="notify-pick" style="margin:14px 0 0;" hidden>
+        <div class="hint" style="font-weight:600;margin-bottom:2px;">Tell the team</div>
+        <p class="hint" id="notify-pick-why" style="margin:0 0 6px;"></p>
+        <div id="notify-pick-chips" class="nt-chips"></div>
+      </div>
       <button id="portal-btn" class="btn-primary" type="button" style="padding:12px 20px;margin-top:10px;">↗ Send to customer portal</button>
       <p id="portal-result" class="hint" style="display:none;margin-top:12px;"></p>
       <p class="hint" style="margin-top:8px;">Each recipient gets a secure link to view, ask questions, and approve online.</p>
