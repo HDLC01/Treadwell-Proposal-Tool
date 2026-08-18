@@ -20,6 +20,11 @@
 // markupChain() reads them by key to decide the hard-bid discount, the labour escalation and the
 // two taxes. The takeoff and labor rows live under the SAME key, so every save merges — see save().
 //
+// The county is the sixth thing that moves the price and the only one that is not a toggle. It
+// writes FOUR TOP-LEVEL keys — `county`, `county_tax_rate`, `county_remodel_rate`, `county_notes` —
+// which are the live estimate screen's own, deliberately, so a project that picked its county on
+// either screen is understood by both. See the county block for why the field is here at all.
+//
 // The model it writes is always a WELL-FORMED v2 (migrateModel stamps the version), and that
 // matters twice over: an unversioned blob used to have its conditions discarded by the calculator
 // on the very next page, and backend/drafts.py reads `polish_estimate.version` to decide that a
@@ -126,7 +131,271 @@
     if (!isCondition(key)) return;          // only the five; a stray data-cond invents nothing
     M.conditions[key] = !M.conditions[key];
     paintCondition(key);
+    // The county note quotes the Remodel tax toggle by name, so it is stale the moment one of these
+    // flips. Repainted for any of the five rather than just that one: it costs a string, and a
+    // note that describes the price has to describe the price as it is now.
+    renderCountyNote();
     saveSoon();
+  }
+
+  // ── the county, and the real remodel-tax rate ────────────────────────────────
+  //
+  // WHY THIS FIELD EXISTS. Kyle's workbook hardcodes the remodel tax at 10% (Polish!B75). That is
+  // not a real rate anywhere. Kansas charges sales tax on commercial remodel LABOUR at the state
+  // rate plus the COUNTY portion only — 6.5% + 1.475% = 7.975% in Johnson County, less in most
+  // others. Hanz, 2026-08-18: "For the Remodel tax please use the real state tax or city tax, DONT
+  // USE 10%". The live estimating tool has looked this up per county since 2026-06-02, and
+  // markupChain() now takes `remodel_rate` as an input, so the beta needs somewhere to capture it.
+  //
+  // THE FOUR KEYS ARE THE CONTRACT, and they are the live estimate screen's own (see the county
+  // picker in js/estimate-review.js): `county`, `county_tax_rate`, `county_remodel_rate`,
+  // `county_notes`. Written under the same names and in the same "<Name> County, ST" shape so a
+  // project that picked its county on either screen is understood by both — js/polish-estimate.js
+  // reads `county_remodel_rate` off the draft without caring which screen set it, and the live
+  // screen parses `county` back apart to restore its own pill.
+  //
+  // The list is NEVER hardcoded here. It comes from /api/reference/counties, which serves
+  // backend/reference_tax.py — rates pulled one by one from the KS DOR Address Tax Rate Locator.
+  // A copy in this file would be a second table to keep in step with the DOR, silently wrong.
+  var COUNTY_LIMIT = 12;               // rows offered at once; the estimator types, not scrolls
+  var counties = [];                   // from the API, at runtime
+  var countyMatches = [];              // what the current search text matched, in rendered order
+  var countyHighlight = -1;            // keyboard cursor into countyMatches, -1 for none
+  // The pick, held as the four DRAFT keys rather than as an API row: hydration reads exactly these
+  // four off the draft, so what a reopened project shows is what a fresh pick would have written.
+  var countyPick = null;
+
+  async function loadCounties() {
+    try {
+      if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
+      var res = await fetch(TW.resolveApiBase() + "/api/reference/counties",
+                            { headers: TW.authHeaders() });
+      var body = await res.json();
+      counties = (body && body.counties) || [];
+    } catch (e) {
+      // Reference data, not the draft. A failed load costs the search box its rows; it must not
+      // stop an estimator filling in the rest of the form.
+      counties = [];
+    }
+    // A list that arrived while somebody was already typing has to reach the rows they are looking
+    // at, or the box keeps saying "no county matches" until the next keystroke.
+    var input = $("county-input");
+    if (!countyPick && input && input.value) renderCountyResults(input.value);
+    return counties;
+  }
+
+  /** The two-letter state out of "Johnson County, KS".
+   *
+   *  Read off the name rather than inferred from the rate: BOTH states have a Johnson County, and
+   *  "this row carries no remodel_rate" is not the same claim as "this job is in Missouri". */
+  function countyStateOf(pick) {
+    var m = /,\s*([A-Za-z]{2})\s*$/.exec(String((pick && pick.county) || ""));
+    return m ? m[1].toUpperCase() : "";
+  }
+
+  /** What one row charges, in the picker. B.pct is the estimate page's own formatter, so the rate
+   *  promised here and the rate shown on the markup row read identically. */
+  function countyRowRate(c) {
+    return c && c.remodel_rate != null
+      ? "remodel " + B.pct(c.remodel_rate)
+      : "remodel labour exempt";
+  }
+
+  function filterCounties(query) {
+    var q = String(query == null ? "" : query).trim().toLowerCase();
+    if (!q) return [];
+    var hits = [];
+    for (var i = 0; i < counties.length && hits.length < COUNTY_LIMIT; i++) {
+      var c = counties[i];
+      // Name, state, "Johnson County, KS" and the notes, which is where the cities are: an
+      // estimator types the town on the drawing set, not the county nobody puts on a plan.
+      var hay = (c.name + " county, " + c.state + " " + (c.notes || "")).toLowerCase();
+      if (hay.indexOf(q) >= 0) hits.push(c);
+    }
+    return hits;
+  }
+
+  /** Close the list AND put the box back to what is actually saved.
+   *
+   *  The restore is the load-bearing half. The chosen county is shown IN the input, so a search the
+   *  estimator abandoned half-typed — Escape, or a click somewhere else on the page — would leave
+   *  "wyando" sitting in a field whose draft says Johnson County. The field would be telling them
+   *  the wrong county, which is the one thing this whole control exists to get right.
+   *
+   *  Deliberately NOT called from renderCountyResults: emptying the box to type a different county
+   *  must not have the old one typed back in on top of them. */
+  function closeCountyResults() {
+    var box = $("county-results");
+    if (box) box.hidden = true;
+    countyHighlight = -1;
+    var input = $("county-input");
+    if (input) input.value = countyPick ? countyPick.county : "";
+  }
+
+  function renderCountyResults(query) {
+    var box = $("county-results");
+    if (!box) return;
+    var typed = String(query == null ? "" : query).trim();
+    countyMatches = filterCounties(typed);
+    countyHighlight = -1;
+    if (!countyMatches.length) {
+      box.innerHTML = typed
+        ? '<div class="c-empty">No county matches &ldquo;' + esc(typed) + '&rdquo;</div>' : "";
+      box.hidden = !typed;
+      return;
+    }
+    box.innerHTML = countyMatches.map(function (c, i) {
+      return '<div class="c-row" id="county-row-' + i + '" data-county="' + i + '">' +
+        '<span class="c-name">' + esc(c.name) + ' County, ' + esc(c.state) + '</span>' +
+        '<span class="c-rate">' + esc(countyRowRate(c)) + '</span></div>';
+    }).join("");
+    box.hidden = false;
+  }
+
+  /** Move the keyboard cursor. Class-only, like paintCondition: re-rendering the list would throw
+   *  away the caret in the box the estimator is still typing in. */
+  function paintCountyHighlight() {
+    for (var i = 0; i < countyMatches.length; i++) {
+      var el = $("county-row-" + i);
+      if (el) el.className = "c-row" + (i === countyHighlight ? " on" : "");
+    }
+  }
+
+  /** The four keys a save writes. Nulls when nobody has picked, which is also what Clear means. */
+  function countyKeys() {
+    if (!countyPick) {
+      return { county: "", county_tax_rate: null, county_remodel_rate: null, county_notes: "" };
+    }
+    return { county: countyPick.county,
+             county_tax_rate: countyPick.county_tax_rate,
+             county_remodel_rate: countyPick.county_remodel_rate,
+             county_notes: countyPick.county_notes };
+  }
+
+  function pickCounty(c) {
+    if (!c || !c.name) return;
+    countyPick = {
+      // The live screen's shape, because its own restore path parses this string back apart.
+      county: c.name + " County, " + c.state,
+      county_tax_rate: c.rate == null ? null : c.rate,
+      // MISSOURI ROWS HAVE NO remodel_rate, and that is correct rather than missing data: Missouri
+      // remodel labour is generally exempt. Left null instead of filled in with something.
+      county_remodel_rate: c.remodel_rate == null ? null : c.remodel_rate,
+      county_notes: c.notes || "",
+    };
+    // closeCountyResults is what puts the chosen county in the box — one place owns what the field
+    // shows, so a pick and an abandoned search cannot disagree about it.
+    closeCountyResults();
+    renderCountyNote();
+    saveSoon();                            // the page's own debounced save, which MERGES
+  }
+
+  function clearCounty() {
+    countyPick = null;
+    countyMatches = [];
+    closeCountyResults();                  // which now empties the box, countyPick being null
+    renderCountyNote();
+    saveSoon();
+  }
+
+  /** What the county does to THIS bid, in plain words.
+   *
+   *  Said out loud because the number is not the one the workbook shows. An estimator who knows
+   *  Kyle's sheet expects a flat 10% on this line; naming the real rate, the county it came from,
+   *  and the fallback when there is no county is what stops the difference reading as a bug. */
+  function countyNoteText() {
+    var on = !!(M && M.conditions && M.conditions.remodel_tax);
+    var ksRate = "the Kansas state rate of " + B.pct(B.RATES.KS_STATE);
+    if (!countyPick) {
+      if (!on) {
+        return "Remodel tax is off, so the county is not affecting the price yet — it only " +
+          "changes the bid on an occupied remodel.";
+      }
+      return "Remodel tax is on with no county picked, so this bid falls back to " + ksRate +
+        " until you choose one.";
+    }
+    // MISSOURI. The row carries no remodel rate on purpose — MO taxes the contractor on materials
+    // and leaves the labour exempt — so this says the rule and then says what to DO, rather than
+    // promising a number. Which number a Missouri job would land on if Remodel tax were left on is
+    // decided in markupChain and in how js/polish-estimate.js hands it the rate, not here; the one
+    // instruction this page can honestly give is to turn the toggle off.
+    if (countyStateOf(countyPick) === "MO") {
+      return countyPick.county + " — Missouri remodel labour is generally exempt, so no remodel " +
+        "tax applies." + (on
+          ? " Remodel tax is on anyway: turn it off for a Missouri job unless you know this " +
+            "labour is taxable."
+          : " Remodel tax is off, so it is not affecting the price either way.");
+    }
+    var rate = countyPick.county_remodel_rate;
+    if (rate == null || !(Number(rate) > 0)) {
+      return countyPick.county + " has no remodel rate on file, so " + (on
+        ? "this bid uses " + ksRate + "."
+        : "Remodel tax would use " + ksRate + " — and the toggle is off, so nothing is added yet.");
+    }
+    return "Remodel tax " + B.pct(rate) + " · " + countyPick.county + (on
+      ? ", on the labour and the markups. Never on materials."
+      : " — but the Remodel tax toggle is off, so it is not affecting the price yet.");
+  }
+
+  /** Text, not markup: every word of this is composed here, and the only variable in it is a
+   *  county name from the server's own table. Nothing to escape and nothing to get wrong. */
+  function renderCountyNote() {
+    var note = $("county-note");
+    if (note) note.textContent = countyNoteText();
+    var clear = $("county-clear");
+    if (clear) clear.hidden = !countyPick;
+  }
+
+  function hydrateCounty() {
+    // Straight off the draft, under the live screen's keys: a project that picked its county on
+    // the estimate screen has to show that county HERE, or the estimator picks it twice and the
+    // second pick is the one that counts.
+    countyPick = state.county
+      ? { county: String(state.county),
+          county_tax_rate: state.county_tax_rate == null ? null : state.county_tax_rate,
+          county_remodel_rate:
+            state.county_remodel_rate == null ? null : state.county_remodel_rate,
+          county_notes: state.county_notes || "" }
+      : null;
+    countyMatches = [];
+    closeCountyResults();                  // which puts the hydrated county into the box
+    renderCountyNote();
+  }
+
+  function onCountyInput() {
+    var input = $("county-input");
+    renderCountyResults(input ? input.value : "");
+  }
+
+  function onCountyKeydown(e) {
+    var key = e && e.key;
+    if (!key) return;
+    var box = $("county-results");
+    var open = !!box && box.hidden === false;
+    if (key === "Escape") { if (open) closeCountyResults(); return; }
+    if (!open) return;
+    if (key === "Enter") {
+      // Swallowed whenever the list is open, ALWAYS. This input lives inside the form, and the
+      // form's submit handler navigates to the estimate — so an un-prevented Enter would leave the
+      // page while the estimator was choosing the row in front of them.
+      if (e.preventDefault) e.preventDefault();
+      // Nothing highlighted takes the top match: on a list narrowed to one row, Enter means that
+      // row rather than "arrow down first".
+      if (countyMatches.length) {
+        pickCounty(countyMatches[countyHighlight >= 0 ? countyHighlight : 0]);
+      }
+      return;
+    }
+    if (key === "ArrowDown") {
+      if (e.preventDefault) e.preventDefault();
+      countyHighlight = Math.min(countyHighlight + 1, countyMatches.length - 1);
+    } else if (key === "ArrowUp") {
+      if (e.preventDefault) e.preventDefault();
+      countyHighlight = Math.max(countyHighlight - 1, 0);
+    } else {
+      return;
+    }
+    paintCountyHighlight();
   }
 
   // ── saving ──────────────────────────────────────────────────────────────────
@@ -160,6 +429,10 @@
     var model = B.migrateModel(existing);
     model.conditions = Object.assign({}, model.conditions, M.conditions);
 
+    // The county's four keys ride along as TOP-LEVEL draft keys, not inside polish_estimate: they
+    // are the live estimate screen's own, and js/polish-estimate.js reads county_remodel_rate off
+    // the draft root. countyKeys() is hydrated from the draft on load, so a project that picked its
+    // county on the other screen writes the same values back rather than losing them here.
     TW.setState(Object.assign({}, values, {
       city_state: cs,
       // The beta calculator is polish-only, so intake here says so rather than asking.
@@ -168,7 +441,7 @@
       // reminders and the Dropbox folder date all read `deadline`.
       deadline: values.bid_date || cur.deadline || "",
       polish_estimate: model,
-    }));
+    }, countyKeys()));
   }
 
   // ── the form ────────────────────────────────────────────────────────────────
@@ -184,15 +457,32 @@
         (d.length < 2 ? "0" + d : d);
     }
     renderConditions();
+    hydrateCounty();                        // after the toggles: the note quotes Remodel tax
     $("proj-line").textContent = [state.project_name, state.city && state.state
       ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";
   }
 
   function onClick(e) {
-    var t = e.target;
-    var sw = t && t.closest ? t.closest("[data-cond]") : null;
-    if (!sw) return;
-    toggleCondition(sw.getAttribute("data-cond"));
+    var t = e && e.target;
+    var near = function (sel) { return t && t.closest ? t.closest(sel) : null; };
+
+    var sw = near("[data-cond]");
+    if (sw) { toggleCondition(sw.getAttribute("data-cond")); return; }
+
+    var row = near("[data-county]");
+    if (row) {
+      // By INDEX into what was rendered, not by name: two counties are called Johnson and they
+      // charge different rates.
+      pickCounty(countyMatches[parseInt(row.getAttribute("data-county"), 10)]);
+      return;
+    }
+
+    if (near("#county-clear")) { clearCounty(); return; }
+
+    // Anything else closes the search list — except a click inside the field itself, which is the
+    // estimator putting the caret back in the box they are typing into. Marked with an attribute
+    // rather than measured against the input: `closest` walks up out of the rendered rows too.
+    if (!near("[data-county-keep]")) closeCountyResults();
   }
 
   function onSubmit(e) {
@@ -209,6 +499,11 @@
   function wire() {
     document.addEventListener("click", onClick);
     if (form) form.addEventListener("submit", onSubmit);
+    var input = $("county-input");
+    if (input) {
+      input.addEventListener("input", onCountyInput);
+      input.addEventListener("keydown", onCountyKeydown);
+    }
   }
 
   // ── boot ────────────────────────────────────────────────────────────────────
@@ -233,6 +528,12 @@
 
     $("loading").hidden = true;
     $("main").hidden = false;
+
+    // NOT awaited, and after the reveal: it is reference data for one search box, and the other
+    // eight fields must not wait on it. hydrateCounty has already shown whatever county the draft
+    // carries — that comes off the draft, not out of this list — and loadCounties repaints the
+    // rows if the estimator started typing while it was in flight.
+    loadCounties();
   }
 
   boot();

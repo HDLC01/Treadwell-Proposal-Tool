@@ -92,6 +92,27 @@
     .sw.on .track::after{left:18px;background:#fff}
     .sw .t{font-weight:600;font-size:13px}
     .sw .c{color:var(--ink-3);font-size:11.5px;margin-top:2px;display:block}
+
+    /* The county, which is here because it only changes the price when Remodel tax is on.
+       Kyle's workbook hardcodes 10% for the remodel tax and that is not a real rate anywhere —
+       Kansas charges the state 6.5% plus the county portion — so the bid has to know WHICH county.
+       Searchable rather than a <select>: the list comes from /api/reference/counties at runtime and
+       is 30-odd rows long, and it is the same picker shape the live estimate screen already uses. */
+    .county{margin:15px 0 0;padding:15px 0 0;border-top:1px solid var(--line-2)}
+    .c-box{position:relative;display:flex;gap:8px;align-items:flex-start}
+    .c-clear{flex:none;background:var(--card);color:var(--ink-v);border:1px solid var(--line);
+        border-radius:var(--r-s);padding:8px 12px;font:600 12.5px var(--sans);cursor:pointer}
+    .c-clear:hover{border-color:var(--red);color:var(--red)}
+    .c-results{position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:20;max-height:262px;
+        overflow-y:auto;background:var(--card);border:1px solid var(--line);
+        border-radius:var(--r-s);box-shadow:0 6px 16px rgba(0,0,0,.09)}
+    .c-row{display:flex;gap:12px;align-items:baseline;justify-content:space-between;
+        padding:8px 11px;border-bottom:1px solid var(--line-2);cursor:pointer;font-size:12.5px}
+    .c-row:last-child{border-bottom:0}
+    .c-row:hover,.c-row.on{background:var(--red-tint)}
+    .c-name{font-weight:600}
+    .c-rate{font:600 11px var(--mono);color:var(--ink-3);white-space:nowrap}
+    .c-empty{padding:8px 11px;color:var(--ink-3);font-size:12.5px}
   </style>
 </head>
 <body>
@@ -180,13 +201,35 @@
         <section class="sec">
           <div class="sec-h">
             <h2>Job conditions</h2>
-            <p>The five things that move the price. Each says what it does.</p>
+            <p>The five things that move the price, plus the county the remodel tax is charged at.
+              Each says what it does.</p>
           </div>
           <div class="sec-b">
             <div id="conditions"></div>
-            <p class="cap">These used to be step 2 of the beta calculator. They live on intake now,
-              because they describe the job rather than the takeoff — and the estimate carries them
-              through to the bid either way.</p>
+
+            <!-- WHY THE COUNTY IS A JOB CONDITION AND NOT A PROJECT FIELD.
+                 It exists for one reason: the Remodel tax toggle directly above it. Kansas charges
+                 sales tax on commercial remodel LABOUR at the state rate plus the county portion
+                 (7.975% in Johnson County), and Kyle's workbook hardcodes a flat 10% that is not a
+                 real rate anywhere. Hanz, 2026-08-18: "For the Remodel tax please use the real
+                 state tax or city tax, DONT USE 10%".
+                 The rows come from /api/reference/counties — the same server table the live
+                 estimate screen's picker reads — and a pick writes the same four draft keys, so a
+                 project that chose its county on either screen prices the same on both. -->
+            <div class="f county" id="county-field">
+              <label for="county-input">County <span class="unit">remodel tax</span></label>
+              <div class="c-box">
+                <input type="text" id="county-input" autocomplete="off" data-county-keep
+                       placeholder="Search counties — Johnson, Wyandotte, Jackson…" />
+                <button type="button" class="c-clear" id="county-clear" hidden>Clear</button>
+                <div class="c-results" id="county-results" data-county-keep hidden></div>
+              </div>
+              <p class="hint" id="county-note" role="status" aria-live="polite"></p>
+            </div>
+
+            <p class="cap">The five toggles used to be step 2 of the beta calculator. They live on
+              intake now, because they describe the job rather than the takeoff — and the estimate
+              carries them through to the bid either way.</p>
           </div>
           <div class="nav">
             <span class="step-of">Step 1 of 4</span>
