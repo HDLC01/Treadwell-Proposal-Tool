@@ -138,8 +138,14 @@ ELEVEN_HOURS_AGO = "2026-08-19T02:30:00+00:00"
 
 
 def _feed(monkeypatch, state=None, projects=(), events=(), today=TODAY):
+    """The notifications the browser would render."""
+    return _feed_all(monkeypatch, state, projects, events, today)["notifications"]
+
+
+def _feed_all(monkeypatch, state=None, projects=(), events=(), today=TODAY):
     """The real get_notifications() with every external read stubbed: no Basisboard, no portal, no
-    drafts DB, no state file. Same stubbing shape as the refresher tests above."""
+    drafts DB, no state file. Same stubbing shape as the refresher tests above. Returns the WHOLE
+    payload, because `unread` is a claim about the same trim the cap tests below exercise."""
     monkeypatch.setattr(n, "_load_state", lambda: dict(state or {}))
     monkeypatch.setattr(n, "_save_state", lambda s: None)
     monkeypatch.setattr(n.basisboard_client, "is_configured", lambda: False)
@@ -148,7 +154,7 @@ def _feed(monkeypatch, state=None, projects=(), events=(), today=TODAY):
     monkeypatch.setattr(n.drafts_mod, "list_drafts", lambda *a, **k: list(projects))
     monkeypatch.setattr(n.drafts_mod, "list_events", lambda limit=100: list(events))
     monkeypatch.setattr(n, "_biz_today", lambda: today)
-    return n.get_notifications()["notifications"]
+    return n.get_notifications()
 
 
 def _crm_step(ts, pid="p1", name="Nearman Creek"):
@@ -335,3 +341,176 @@ def test_a_stored_event_is_retiered_on_read_not_trusted_from_the_file(monkeypatc
     assert [x["kind"] for x in items] == ["crm_step", "pipeline_stage"], (
         "the tier written in the file won: %r" % [(x["kind"], x["sort"]) for x in items])
     assert stale["sort"] == 3, "_retier wrote the recomputed tier back into the state file"
+
+
+# ── the cap: putting events on top must not delete the deadlines ──────────────
+# Checked against production minutes after the retiering above shipped: the bell returned 60 rows and
+# NOT ONE had a kind starting with `deadline_`, while the box held 14 overdue + 3 due today + 6 due
+# soon bids. `items[:_MAX_ITEMS]` trims AFTER the sort, so whichever group sorts first takes every
+# slot. Hanz asked for new things at the top; nobody asked for overdue bids to disappear, and an
+# overdue bid is money.
+#
+# Asserted through the real get_notifications() for the same reason as the order tests: what the
+# browser receives is the claim, and a test that reads _GROUP_RESERVE passes happily with
+# _cap_by_group never called at all.
+def _ts(i: int) -> str:
+    """Distinct ordered timestamps on the day under test — a higher `i` is newer — so "newest first
+    inside a tier" has something to be right or wrong about."""
+    return "2026-08-19T%02d:%02d:00+00:00" % (10 + i // 60, i % 60)
+
+
+def _event_state(messages=0, steps=0, pipeline=0):
+    """A wall of event items across all three event tiers, built by the production emitters so each
+    row carries the tier it really ships with rather than one a test asserted into existence."""
+    i = 0
+    msgs, crm, pl = [], [], []
+    for k in range(messages):
+        msgs.append({"id": 1000 + k, "proposal_id": "pm%d" % k, "project_name": "Msg %d" % k,
+                     "customer_name": "Dana", "body": "Question %d" % k, "created_at": _ts(i)})
+        i += 1
+    for k in range(steps):
+        crm += _crm_step(_ts(i), pid="cs%d" % k, name="Step %d" % k)
+        i += 1
+    for k in range(pipeline):
+        pl += _pipeline_move(_ts(i), pid="bb%d" % k)
+        i += 1
+    return {"portal_messages": msgs, "crm_events": crm, "pipeline_events": pl}
+
+
+def _deadline_projects(overdue=0, today=0, soon=0, none=0):
+    """Active drafts in each deadline bucket. The no-deadline rows carry a week-old `updated_at` —
+    that field is their `ts`, and a project nobody has touched in a week is the realistic case."""
+    out = []
+    for k in range(overdue):
+        out.append({"id": "od%d" % k, "project_name": "Overdue %d" % k,
+                    "deadline": "2026-08-%02d" % (1 + k % 14), "archived": False})
+    for k in range(today):
+        out.append({"id": "td%d" % k, "project_name": "Today %d" % k,
+                    "deadline": "2026-08-19", "archived": False})
+    for k in range(soon):
+        out.append({"id": "sn%d" % k, "project_name": "Soon %d" % k,
+                    "deadline": "2026-08-%02d" % (20 + k % 6), "archived": False})
+    for k in range(none):
+        out.append({"id": "nd%d" % k, "project_name": "NoDate %d" % k, "deadline": None,
+                    "archived": False, "updated_at": "2026-08-12T08:00:00+00:00"})
+    return out
+
+
+# The deadline load measured on production on 2026-08-19 — the 23 urgent rows the global slice threw
+# away, plus two projects nobody has given a date yet.
+PROD_DEADLINES = dict(overdue=14, today=3, soon=6, none=2)
+
+
+def test_a_wall_of_events_no_longer_wipes_every_deadline_off_the_bell(monkeypatch):
+    """The reported bug: 100 events against production's own deadline load.
+
+    Mutation: drop the per-group cap back to one global `items[:_MAX_ITEMS]`, or give the deadline
+    group 0 slots. Both fail here."""
+    items = _feed(monkeypatch, state=_event_state(messages=5, steps=15, pipeline=80),
+                  projects=_deadline_projects(**PROD_DEADLINES))
+    kinds = [x["kind"] for x in items]
+    deadlines = [k for k in kinds if k.startswith("deadline_")]
+    events = [k for k in kinds if not k.startswith("deadline_")]
+    assert deadlines, "100 events emptied the deadline half of the bell again: %r" % kinds
+    assert events, "the deadlines took the whole panel: %r" % kinds
+    assert len(items) == n._MAX_ITEMS, "the panel renders every row it is sent: %d" % len(items)
+    assert len(events) == n._EVENT_SLOTS, kinds
+    assert len(deadlines) == n._DEADLINE_SLOTS, kinds
+    # Every dated row somebody can still act on survives — that is what the 24 slots are sized for.
+    assert kinds.count("deadline_overdue") == 14, kinds
+    assert kinds.count("deadline_today") == 3, kinds
+    assert kinds.count("deadline_soon") == 6, kinds
+
+
+def test_a_wall_of_deadlines_does_not_squeeze_the_events_out_either(monkeypatch):
+    """The reverse bug, which the fix must not introduce: production already has 23 deadline rows and
+    a slow week would add more.
+
+    Mutation: give the event group 0 slots. This fails."""
+    items = _feed(monkeypatch, state=_event_state(messages=1, steps=1, pipeline=1),
+                  projects=_deadline_projects(overdue=40, today=10, soon=20, none=30))
+    kinds = [x["kind"] for x in items]
+    assert kinds[:3] == ["portal_message", "crm_step", "pipeline_stage"], (
+        "100 deadlines buried the three things that happened: %r" % kinds[:6])
+    assert len(items) == n._MAX_ITEMS
+    # And the deadlines took the 33 slots the three events left unclaimed, rather than sitting at
+    # their 24-row reserve while the panel showed 27 rows.
+    assert len([k for k in kinds if k.startswith("deadline_")]) == n._MAX_ITEMS - 3, kinds
+
+
+def test_a_quiet_side_lends_its_unused_slots_to_the_busy_one(monkeypatch):
+    """Two deadlines and a loud day: the panel fills with 58 events instead of stopping at 38 because
+    22 deadline slots went unclaimed.
+
+    Mutation: hand out only the reserves and never the spare. This fails."""
+    items = _feed(monkeypatch, state=_event_state(pipeline=100),
+                  projects=_deadline_projects(overdue=2))
+    kinds = [x["kind"] for x in items]
+    assert len(items) == n._MAX_ITEMS
+    assert kinds.count("deadline_overdue") == 2, kinds
+    assert kinds.count("pipeline_stage") == n._MAX_ITEMS - 2, (
+        "the quiet half's slots were left empty: %d events" % kinds.count("pipeline_stage"))
+
+
+def test_the_cap_chooses_rows_and_never_reorders_them(monkeypatch):
+    """Ordering is unchanged by the trim: tier first, newest-first inside a tier.
+
+    Mutation: sort the kept rows instead of re-emitting them in feed order. This fails — a deadline's
+    `ts` is its DUE DATE, so any re-sort by `ts` interleaves the buckets and puts due-today above
+    overdue."""
+    items = _feed(monkeypatch, state=_event_state(messages=5, steps=15, pipeline=80),
+                  projects=_deadline_projects(**PROD_DEADLINES))
+    kinds = [x["kind"] for x in items]
+    tiers = [x["sort"] for x in items]
+    assert tiers == sorted(tiers), "the trim reordered the sections: %r" % kinds
+    assert items[0]["id"] == "pmsg:1004", (
+        "the newest row of the top tier no longer leads: %r" % items[0].get("id"))
+    for a, b in zip(items, items[1:]):
+        if a["sort"] == b["sort"]:
+            assert (a["ts"] or "") >= (b["ts"] or ""), (
+                "newest-first broke inside the %s tier" % a["kind"])
+    deadlines = [i for i, k in enumerate(kinds) if k.startswith("deadline_")]
+    events = [i for i, k in enumerate(kinds) if not k.startswith("deadline_")]
+    assert max(events) < min(deadlines), "a deadline outranks an event after the trim: %r" % kinds
+
+
+def test_the_badge_counts_only_rows_the_panel_will_actually_show(monkeypatch):
+    """`unread` is counted AFTER the trim — the badge is a promise about what you will find when you
+    open the panel, and the panel has no pager (auth.js renderList renders exactly these rows, and
+    opening the bell marks everything seen). A 100 that resolves to 36 findable rows sends people
+    hunting for news that was already cleared on their behalf.
+
+    Mutation: count `unread` before the trim. This fails."""
+    last_seen = "2026-08-19T09:00:00+00:00"
+    state = _event_state(messages=5, steps=15, pipeline=80)
+    state["last_seen_at"] = last_seen
+    res = _feed_all(monkeypatch, state, _deadline_projects(**PROD_DEADLINES))
+    shown = res["notifications"]
+    assert res["unread"] == sum(1 for x in shown if (x.get("ts") or "") > last_seen), (
+        "the badge disagrees with the rows it was counted from")
+    assert res["unread"] <= len(shown)
+    # 100 events arrived after the marker and 36 of them are on screen; no deadline row is newer than
+    # it (a due date is not a thing that happened).
+    assert res["unread"] == n._EVENT_SLOTS, res["unread"]
+
+
+def test_an_item_that_forgot_its_tier_reserves_no_slot_of_its_own(monkeypatch):
+    """A source shipping without a `sort` is a bug, and a bug must not evict an overdue bid to make
+    room for itself — so the untiered group reserves nothing and only ever gets spare slots. On a
+    quiet feed it still shows, last: see test_a_source_that_forgets_its_tier_lands_last_not_first.
+
+    Mutation: give the untiered group a reserve of its own (`_GROUP_RESERVE.get(g, 1)`). This fails
+    twice — the mystery row appears AND the total goes to 61.
+
+    Honestly, on what this does NOT catch: filing untiered items into one of the real groups survives
+    here, because the untiered row sorts last and a full group's slice takes its head either way. The
+    property worth pinning is the one above — a bug cannot cost a real notification its slot."""
+    monkeypatch.setattr(n, "_dropbox_notifications", lambda: [
+        {"id": "oops", "kind": "mystery", "icon": "•", "severity": "info", "title": "No tier",
+         "body": "", "link": "/", "ts": "2099-01-01T00:00:00+00:00"}])
+    items = _feed(monkeypatch, state=_event_state(messages=5, steps=15, pipeline=80),
+                  projects=_deadline_projects(**PROD_DEADLINES))
+    kinds = [x["kind"] for x in items]
+    assert "mystery" not in kinds, "an untiered item took a slot a real notification needed"
+    assert len(items) == n._MAX_ITEMS
+    assert kinds.count("deadline_overdue") == 14, kinds
