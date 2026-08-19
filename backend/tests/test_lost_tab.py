@@ -84,7 +84,8 @@ def test_the_lost_tab_holds_the_lost_projects(ran):
     # lost-after-won is a job that was approved and paid and then cancelled. It belongs here:
     # closed-lost is checked before anything else, on this board and on the notification page.
     assert set(ran["pools"]["lost"]) == {"lost-price", "lost-test", "lost-noreason",
-                                         "lost-unknown", "lost-after-won"}
+                                         "lost-unknown", "lost-after-won",
+                                         "lost-after-marked-won"}
 
 
 @needs_node
@@ -226,6 +227,27 @@ def test_a_job_won_and_then_cancelled_reads_as_lost_only(ran):
     chips = ran["chips"]["lost-after-won"]
     assert "chip-lost" in chips
     assert "chip-won" not in chips, "the card says it was both won and lost"
+
+
+@needs_node
+def test_a_job_marked_won_by_hand_says_so_on_the_board_too(ran):
+    """Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit
+    has been received". Neither half of the derived rule is true of this row — sent, unapproved, no
+    deposit — so without the chip the card reads as untouched work and the colleague who took the call
+    has no way to tell anyone."""
+    chips = ran["chips"]["won-marked"]
+    assert "chip-won" in chips, "a project somebody marked won looks identical to one nobody has"
+    assert ">Won<" in chips
+
+
+@needs_node
+def test_a_job_marked_won_and_then_cancelled_reads_as_lost_only(ran):
+    """The manual mark does not buy its way past Lost. Nothing in isWon checks isLost, so this is the
+    reader's ordering doing the work — and it has to, because a sent project's closed_lost lives in
+    the portal where the mark cannot reach it."""
+    chips = ran["chips"]["lost-after-marked-won"]
+    assert "chip-lost" in chips
+    assert "chip-won" not in chips, "the card says it was both marked won and lost"
 
 
 @needs_node

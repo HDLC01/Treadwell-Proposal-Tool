@@ -285,6 +285,12 @@ CONDITIONAL_IDS = {
     # the two renders, and wireNotSentLost looks up both and guards on the result.
     "ns-reopen": "only rendered on a bid already closed lost",
     "ns-lost": "not rendered on a bid already closed lost",
+    # The by-hand Won control (2026-08-19), in BOTH drawers — one wireWon serves them, and
+    # wonControlHtml renders at most one of these three: the mark, the undo, or on a closed-lost
+    # project (and on one won by the deposit landing) nothing at all.
+    "won-mark": "not rendered once the project is won, or when it is closed lost",
+    "won-undo": "only rendered on a project somebody marked won by hand",
+    "won-note": "rendered with either button, so absent when neither is offered",
 }
 
 
@@ -587,6 +593,122 @@ def test_the_not_sent_panel_does_not_wire_the_sent_drawers_cards(out):
     # for fu-lost / fu-reopen since it shipped, and it is checked by the same list.
     unexpected = missing - shared_cards - set(CONDITIONAL_IDS)
     assert not unexpected, "it wires ids it never rendered: %s" % sorted(unexpected)
+
+
+# ── marking a project won, by hand ──────────────────────────────────────────
+# Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit has
+# been received". Won was derived only (approved AND the deposit settled), so a bid won by phone on
+# Monday read as Active until the money landed on Friday.
+#
+# Everything below is EXECUTED because every claim is behavioural and invisible to a source read:
+# which route the button posts to, that the panel it repaints into offers the undo, that the mark
+# lands on the board row the next poll renders from, and that a refused write claims nothing.
+@needs_node
+@pytest.mark.parametrize("where", ["notSentOffered", "sentOffered"])
+def test_both_drawers_offer_the_mark(out, where):
+    """BOTH, and the sent one is the one that matters: a verbal yes almost always arrives on a
+    proposal the customer already has. Shipping this to the not-sent column alone would have put it
+    where it is least needed."""
+    html = out["won"][where]["html"]
+    assert 'id="won-mark"' in html, "%s has no way to mark a project won" % where
+    assert 'id="won-undo"' not in html, "it offers an undo on a project nobody has marked"
+
+
+@needs_node
+@pytest.mark.parametrize("case,pid", [("notSentMarked", "marknotsent"), ("sentMarked", "marksent")])
+def test_it_marks_the_project_through_the_DRAFT_endpoint(out, case, pid):
+    """The whole reason this is stored on the draft: `proposal_status` is CHECK-constrained, so there
+    is no portal status to set without DDL, and the mark has to work on an unsent project too. A
+    sent project's drawer posts everything else to /api/portal/proposal/<id>/… , so this is the one
+    control there that deliberately does not."""
+    r = out["won"][case]
+    assert r["pressed"], "the button never rendered, so this proves nothing"
+    first = r["requests"][0]
+    assert first["path"] == "/api/draft/%s/status" % pid, (
+        "it posts to %s; the portal has no column for the Won mark" % first["path"])
+    assert first["method"] == "POST"
+    assert first["body"] == {"status": "won"}, r["requests"]
+    assert not [q for q in r["requests"] if "/api/portal/proposal/" in q["path"]], (
+        "it also poked the portal's status route, which would close or reopen the proposal")
+
+
+@needs_node
+@pytest.mark.parametrize("case", ["notSentMarked", "sentMarked"])
+def test_the_panel_repaints_into_the_won_state_with_an_undo(out, case):
+    """Without the repaint the rep is left looking at a panel still offering to mark a project it has
+    already marked, and presses it again. The undo half matters just as much: a mis-click on a
+    cheerful, one-press control has to be reversible."""
+    r = out["won"][case]
+    assert 'id="won-undo"' in r["html"], "the panel did not repaint into the won state"
+    assert 'id="won-mark"' not in r["html"], "it still offers to mark a project it just marked"
+    assert "Somebody marked this won" in r["html"], "the panel does not say what state it is in"
+
+
+@needs_node
+@pytest.mark.parametrize("case,pid", [("notSentMarked", "marknotsent"), ("sentMarked", "marksent")])
+def test_the_mark_lands_on_the_board_row_the_next_poll_renders_from(out, case, pid):
+    """The client's ONE copy of the mark is the board row (see the merge at the top of renderDetail),
+    so patching anything else means the 12s poll paints the old answer back before load() returns.
+    That is the whole reason this control does not go through `act`, which refreshes by re-fetching
+    the portal payload the mark is not in."""
+    assert out["won"][case]["rowWonAt"], "the board row was not patched, so the repaint is temporary"
+
+
+@needs_node
+def test_undoing_it_clears_the_mark_and_offers_it_again(out):
+    """A separate status from reopening a lost bid, on purpose: each undo aims at the thing it undid.
+    See api_draft_status for why one call clearing both would log a "reactivated" event for a project
+    nobody had ever closed."""
+    r = out["won"]["notSentUndone"]
+    assert r["pressed"]
+    assert r["requests"][0]["body"] == {"status": "not_won"}, r["requests"]
+    assert not r["rowWonAt"], "the board row still carries the mark it just cleared"
+    assert 'id="won-mark"' in r["html"], "there is no way to mark it again"
+
+
+@needs_node
+def test_a_project_somebody_else_marked_shows_as_won_in_the_sent_drawer(out):
+    """The merge, executed. `won_at` lives on OUR draft blob, so the portal's detail payload has never
+    heard of it — without copying it off the board row this drawer would offer "Mark won" on a project
+    the board behind it already shows a Won chip on."""
+    r = out["won"]["sentAlreadyWon"]
+    assert r["merged"] == "2026-08-19T15:00:00+00:00", (
+        "the drawer payload never received the mark, so the panel contradicts the card")
+    assert 'id="won-undo"' in r["html"]
+
+
+@needs_node
+def test_a_failed_save_does_not_claim_the_project_is_won(out):
+    """The optimistic patch is the hazard in this design: the panel redraws from a row it patched
+    itself, so a refused write must leave the mark off the row as well as off the screen."""
+    f = out["won"]["failed"]
+    assert 'id="won-undo"' not in f["html"], "it repainted as won even though the write failed"
+    assert 'id="won-mark"' in f["html"], "the control is gone, so there is no way to retry"
+    assert not f["rowWonAt"], (
+        "the board row was patched anyway, so the card will claim a win nothing saved")
+    assert "postgrest down" in f["note"], (
+        "the failure says %r, which does not tell the rep anything" % f["note"])
+    assert f["disabled"] is False and f["label"] == "Mark won", (
+        "the button is left %r/disabled=%s, so the rep cannot try again" % (f["label"], f["disabled"]))
+
+
+@needs_node
+def test_a_closed_lost_project_is_offered_nothing(out):
+    """Lost beats Won in every reader (stage, ppCategory, chipsHtml), so a press here would save and
+    change nothing visible, which reads as a broken control. Reactivate beside it is the way back."""
+    html = out["won"]["lost"]["html"]
+    assert 'id="won-mark"' not in html and 'id="won-undo"' not in html
+    assert 'id="fu-reopen"' in html, "the way back is missing too, so the bid is stuck"
+
+
+@needs_node
+def test_a_project_won_by_the_deposit_landing_says_so_and_offers_no_button(out):
+    """There is nothing to undo about a deposit that arrived, and a Mark won button on a paid job
+    would file a redundant human mark over a fact. The state is still stated, because a panel that
+    says nothing about a won job reads as one nobody has looked at."""
+    html = out["won"]["derived"]["html"]
+    assert "already counts as won" in html
+    assert 'id="won-mark"' not in html and 'id="won-undo"' not in html
 
 
 # ── the bank numbers ─────────────────────────────────────────────────────────
