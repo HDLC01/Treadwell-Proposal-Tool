@@ -154,9 +154,11 @@ def test_every_step_carries_what_the_bell_renders():
 
 
 # ── where they sit in the feed ───────────────────────────────────────────────
-def test_a_step_sits_below_a_customer_message_and_below_every_deadline():
-    """Order is a product decision, not an accident. A customer replying outranks us moving a card,
-    and an OVERDUE BID outranks both — that one has a date attached."""
+def test_a_step_sits_below_a_customer_message_and_above_every_deadline():
+    """Order is a product decision, not an accident. A customer replying outranks us moving a card —
+    but a step outranks every DEADLINE, which is the 2026-08-19 retiering (see the _TIER_* block).
+    This test asserted the opposite until then: deadlines first put 23 dated rows above anything that
+    had just happened."""
     step = n._diff_crm(_prev(), [_row(proposal="viewed")], TS)[0]
     msg = n._portal_message_notifications({"portal_messages": [
         {"id": 1, "proposal_id": "p1", "body": "hi", "created_at": TS}]})[0]
@@ -164,21 +166,26 @@ def test_a_step_sits_below_a_customer_message_and_below_every_deadline():
     import datetime as _dt
     deadlines = n._deadline_notifications(
         [{"id": "a", "project_name": "Overdue", "deadline": "2026-08-01", "archived": False},
-         {"id": "b", "project_name": "Soon", "deadline": "2026-08-22", "archived": False}],
+         {"id": "b", "project_name": "Soon", "deadline": "2026-08-22", "archived": False},
+         {"id": "c", "project_name": "None", "deadline": None, "archived": False}],
         _dt.date(2026, 8, 19))
+    assert len(deadlines) == 3
     for d in deadlines:
-        assert d["sort"] < step["sort"], (
-            "a CRM step outranks the %s deadline, which has a date on it" % d["kind"])
+        assert step["sort"] < d["sort"], (
+            "the %s deadline outranks a CRM step, so today's events sit below a date that will read "
+            "the same tomorrow" % d["kind"])
 
 
-def test_the_step_tier_is_the_activity_tier():
-    """Same tier as the Basisboard pipeline and the lead inbox: recent activity, newest first. Not
-    its own tier, because tiers 0-2 and 4 are the deadline buckets."""
+def test_the_step_tier_is_its_own_tier_above_the_activity_block():
+    """Not shared with the Basisboard pipeline and the lead inbox (changed 2026-08-19): our own
+    pipeline moving matters more than a third party's, and one Basisboard sweep can emit dozens of
+    rows — which is exactly what buried an approval on the day this was reported."""
     step = n._diff_crm(_prev(), [_row(proposal="viewed")], TS)[0]
     pipeline = n._diff_pipeline(
         {"x": {"stage_id": "s1", "stage_name": "Bidding", "awarded": False, "name": "X"}},
         [{"id": "x", "stage_id": "s2", "stage_name": "Won", "awarded": False, "name": "X"}], TS)[0]
-    assert step["sort"] == pipeline["sort"]
+    assert step["sort"] < pipeline["sort"], (
+        "a CRM step shares the Basisboard tier again, so a stage-move flood can outrank an approval")
 
 
 # ── a bid that was never sent has no portal row at all ───────────────────────
