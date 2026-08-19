@@ -84,6 +84,48 @@ _TIER_UNKNOWN = 9        # an item that forgot its tier is a bug; a bug does not
 # category across two sections — which is exactly what made the old order impossible to read.
 
 
+# ── how the 60 slots are divided ──────────────────────────────────────
+# The retiering above fixed the ORDER and broke the CONTENTS. `items[:_MAX_ITEMS]` cut the feed
+# AFTER the sort, so with events now on top, events took all 60 slots: production returned ZERO
+# rows whose kind starts with `deadline_` while it held 14 overdue + 3 due today + 6 due soon bids.
+# Hanz asked for new things at the top; he did not ask for overdue bids to vanish, and an overdue
+# bid is money.
+#
+# So the cap is applied PER GROUP before the global trim. This is the slot half of the "two labelled
+# groups" idea in the tier block — the panel is still one list, but the two halves no longer compete
+# for the same 60 rows.
+#
+# THE NUMBERS, and why these: 24 deadline slots covers the whole URGENT deadline load measured on
+# production on 2026-08-19 (14 overdue + 3 due today + 6 due soon = 23) with one row of headroom, so
+# the loudest possible event day still cannot push a dated bid nobody has answered off the panel.
+# Events keep the remaining 36 and lead it regardless of how many they are. The rejected split was
+# 40/20: rounder, but 20 is under the 23 rows prod already carries, so it would drop due-soon bids on
+# exactly the busy days when nobody has time to go read the board instead.
+#
+# Either side's unclaimed slots spill to the other (see _cap_by_group), so a quiet morning fills the
+# panel with whatever there IS rather than leaving the other group's reserve as empty space.
+_GROUP_EVENTS = "events"          # something HAPPENED: message / crm step / activity
+_GROUP_DEADLINES = "deadlines"    # merely DUE: overdue / today / soon / no deadline
+_GROUP_UNTIERED = "untiered"      # a source that shipped without a `sort` — reserves nothing
+
+_DEADLINE_SLOTS = 24
+_EVENT_SLOTS = _MAX_ITEMS - _DEADLINE_SLOTS
+# Derived from _MAX_ITEMS rather than written as two literals so the reserves can never sum to more
+# than the panel renders — a split that oversubscribes the total would put the bound back at the
+# mercy of a defensive slice.
+_GROUP_RESERVE = {_GROUP_EVENTS: _EVENT_SLOTS, _GROUP_DEADLINES: _DEADLINE_SLOTS}
+
+_TIER_GROUP = {
+    _TIER_MESSAGE: _GROUP_EVENTS,
+    _TIER_CRM_STEP: _GROUP_EVENTS,
+    _TIER_ACTIVITY: _GROUP_EVENTS,
+    _TIER_OVERDUE: _GROUP_DEADLINES,
+    _TIER_DUE_TODAY: _GROUP_DEADLINES,
+    _TIER_DUE_SOON: _GROUP_DEADLINES,
+    _TIER_NO_DEADLINE: _GROUP_DEADLINES,
+}
+
+
 # ── time helpers ──────────────────────────────────────────────────────
 def _biz_tz():
     try:
@@ -662,6 +704,45 @@ def _retier(stored: Optional[List[Dict[str, Any]]], tier: int) -> List[Dict[str,
     return [{**e, "sort": tier} for e in (stored or [])]
 
 
+def _group_of(item: Dict[str, Any]) -> str:
+    """Which pool of slots an item draws from. Reads the tier through the SAME missing-key default
+    as the feed sort, so an item that shipped without a `sort` is treated consistently by both."""
+    return _TIER_GROUP.get(item.get("sort", _TIER_UNKNOWN), _GROUP_UNTIERED)
+
+
+def _cap_by_group(items: List[Dict[str, Any]], total: int = _MAX_ITEMS) -> List[Dict[str, Any]]:
+    """Trim an already-ordered feed to `total` rows so neither group can starve the other.
+
+    `items` must arrive in final display order (tier, then newest-first). This picks WHICH rows
+    survive and re-emits them in that same order, so it can never reorder the feed. The rejected
+    alternative was bucketing and concatenating the kept buckets: it gives the identical answer today
+    only because the tier groups happen to be contiguous, and would start quietly reordering the
+    panel the day a group spans a gap or a tier moves between groups.
+
+    Two passes:
+      1. Nobody exceeds its reserve, which is what guarantees each group a floor no matter how loud
+         the other one is. Untiered items reserve nothing — a source that forgot its tier is a bug,
+         and a bug must not evict a bid deadline to make room for itself.
+      2. Slots a quiet group didn't claim go to the groups that still have rows waiting, so 2
+         deadlines and 100 events fills the panel with 58 events rather than showing 38 rows.
+    """
+    buckets: Dict[str, List[int]] = {}
+    for i, item in enumerate(items):
+        buckets.setdefault(_group_of(item), []).append(i)
+    keep = {g: min(len(idx), _GROUP_RESERVE.get(g, 0)) for g, idx in buckets.items()}
+    spare = total - sum(keep.values())
+    # Insertion order is the order the groups first appear in the sorted feed, i.e. their own tier
+    # order — so when both sides want the spare slots the higher-ranked group gets first call.
+    for group, idx in buckets.items():
+        if spare <= 0:
+            break
+        take = min(len(idx) - keep[group], spare)
+        keep[group] += take
+        spare -= take
+    chosen = sorted(i for group, idx in buckets.items() for i in idx[:keep[group]])
+    return [items[i] for i in chosen]
+
+
 def get_notifications() -> Dict[str, Any]:
     """Assemble the feed: deadline items (live) + recent pipeline changes, sorted
     by section then newest-first. `unread` counts items newer than the global
@@ -715,8 +796,18 @@ def get_notifications() -> Dict[str, Any]:
     # `_TIER_UNKNOWN`, not a real tier: an item that shipped without a `sort` is a bug, and the one
     # place it must not land is the top of the feed the whole team reads first.
     items.sort(key=lambda x: x.get("sort", _TIER_UNKNOWN))
+    # Per-group BEFORE the total, or the winning group takes all 60 — see the _GROUP_* block.
+    items = _cap_by_group(items, _MAX_ITEMS)
+    # `unread` is counted AFTER the trim, deliberately, and that is the correct side: the badge is a
+    # promise about what you will find when you open the panel, and the panel has no pager — it
+    # renders exactly these rows and nothing else. Counting the whole pre-trim feed sent people
+    # hunting for a "17" they could only ever find 9 of, and `mark_seen` clears the badge globally,
+    # so an item counted but never shown is cleared without anyone having read it. The reverse error
+    # is just as real (a badge that undercounts hides news), which is what the per-group cap above
+    # is for: no whole CATEGORY can now be trimmed away, so what the badge omits is only the tail of
+    # a group whose head is on screen.
     unread = sum(1 for x in items if (x.get("ts") or "") > last_seen)
-    return {"notifications": items[:_MAX_ITEMS], "unread": unread, "last_seen_at": last_seen}
+    return {"notifications": items, "unread": unread, "last_seen_at": last_seen}
 
 
 def mark_seen(actor_email: Optional[str] = None) -> None:
