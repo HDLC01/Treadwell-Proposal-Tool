@@ -25,6 +25,11 @@
     /* Bulk actions — select several, or empty the whole trash in one go. */
     .bulkbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px;
       padding:10px 14px; background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:10px; }
+    /* `display:flex` above beats the UA `[hidden]` rule, so trash.js's `bar.hidden =
+       all.length === 0` did nothing and an EMPTY trash still showed a Select all checkbox and a
+       dead "Delete selected" button. Found by test_hidden_is_actually_hidden, which went
+       looking after a staging walk caught the same bug on the notification page's pager. */
+    .bulkbar[hidden] { display:none; }
     .bulk-all { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:600; cursor:pointer; }
     .bulk-count { font-size:12px; color:#5c403f; }
     .bulk-spacer { flex:1; }

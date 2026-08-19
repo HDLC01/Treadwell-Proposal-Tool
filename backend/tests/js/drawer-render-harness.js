@@ -95,12 +95,12 @@ const CONST_NAMES = [
   "ACCT_TYPE_LABEL", "METHOD_LABEL", "METHOD_PHRASE", "CUSTOMER_EVENTS", "sideOf",
   "FU_KIND_LABEL", "FU_TEMPLATE_LABEL", "FU_ACTION", "STATUS_LABEL",
   "SEC_TABS", "ALL_SEC_CARDS", "SEC_ELIGIBLE", "setSecEligible",
-  "REPLY_DRAFT", "NT_CACHE", "DETAIL_CACHE", "fact", "metaLine", "headMoney",
+  "REPLY_DRAFT", "NT_CACHE", "REV_CACHE", "DETAIL_CACHE", "fact", "metaLine", "headMoney",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
 const LET_NAMES = ["ALL", "ACTIVE_SEC", "CUR_PID", "RENDER_GEN", "DEEPLINK_USED", "DRAWER_SIG",
-                   "DETAIL_RECIPIENTS", "DETAIL_GEN", "THREAD_SCROLL"];
+                   "DETAIL_RECIPIENTS", "DETAIL_GEN", "THREAD_SCROLL", "NS_MODE"];
 const FN_NAMES = [
   "drawerHead", "customerHtml", "copyPortalLink", "wirePortalLink", "approvalHtml",
   "contactsHtml", "recipientsHtml", "msgHtml", "splitSystem", "depositHtml", "mask4",
@@ -112,6 +112,18 @@ const FN_NAMES = [
   // nobody has sent). Omitting it made the whole panel a ReferenceError rather than a partial
   // render — which is the failure this harness exists to catch, so it caught its own gap.
   "wireNotSentAssign",
+  // Sent versions, and the notification picker on an unsent project. Same gap as
+  // wireNotSentAssign above: applySecPanel calls loadRevisions on the Proposal tab and
+  // renderNotSent calls loadNotSentNotify at the end, so omitting either turns the whole panel
+  // into a ReferenceError instead of a partial render — which is what this harness is for, and
+  // it caught this the first time it ran.
+  "loadRevisions", "paintRevisions", "downloadRevision",
+  "loadNotSentNotify", "paintNotSentNotify",
+  // Closing an unsent bid lost (2026-08-19). Third time this list has had to grow for the same
+  // reason: renderNotSent calls it unconditionally, so leaving it out is a ReferenceError for the
+  // whole panel rather than a missing button. lostReasonDialog comes with it because the handler
+  // awaits it.
+  "wireNotSentLost", "lostReasonDialog",
 ];
 
 // ── the DOM stub ─────────────────────────────────────────────────────────────
@@ -435,6 +447,7 @@ const body = `"use strict";
     eligible: () => Array.from(SEC_ELIGIBLE),
     activeSec: () => ACTIVE_SEC,
     secTabs: () => SEC_TABS,
+    allSecCards: () => ALL_SEC_CARDS,
     // Drive eligibility DIRECTLY, so a card can be present in the markup and still not eligible.
     // Every payload produces markup and eligibility together (an ineligible card renders as "" and
     // the DOM stub never creates an element for it), so no payload can put the two halves of
@@ -452,6 +465,10 @@ page.setBoard(BOARD_ROWS);
 // assert that a tab shows those and only those. Read out of the running module, so it is the map
 // applySecPanel actually consulted rather than a copy that can drift.
 const out = { imported: destructured.map(([n]) => n), tabs: Object.keys(page.secTabs()),
+  // The sent drawer's card ids. applySecPanel looks up every one of them to decide what to
+  // hide and tolerates absence by design, so a panel that does not render them is not
+  // "wiring an id it never rendered" — the not-sent test subtracts these.
+  allSecCards: page.allSecCards(),
               secMap: page.secTabs(),
               scenarios: {}, clipboard: {}, notSent: {}, errors: {} };
 

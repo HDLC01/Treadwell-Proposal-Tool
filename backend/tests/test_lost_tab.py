@@ -81,8 +81,10 @@ def ran():
 @needs_node
 def test_the_lost_tab_holds_the_lost_projects(ran):
     """The whole ask, in one assertion."""
+    # lost-after-won is a job that was approved and paid and then cancelled. It belongs here:
+    # closed-lost is checked before anything else, on this board and on the notification page.
     assert set(ran["pools"]["lost"]) == {"lost-price", "lost-test", "lost-noreason",
-                                         "lost-unknown"}
+                                         "lost-unknown", "lost-after-won"}
 
 
 @needs_node
@@ -187,6 +189,68 @@ def test_the_test_chip_appears_ONLY_on_a_lost_card(ran):
 
 def test_the_test_chip_is_styled():
     assert ".chip-test" in PORTAL_HTML, "the Test chip has no styling, so it renders as a bare pill"
+
+
+# ── the Won chip: the board saying out loud what the notification page files ──
+# Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending okay?"
+#
+# The two screens now share one isWon, in crm-core. They still TREAT a won job differently, and
+# deliberately: the Notification Sending page moves it out of its working list because there is no
+# more proposal to chase, while this board keeps the card, because a won job still has work on it —
+# "Deposit received" and "Contact info" are both live columns. The chip is how the board agrees
+# about the word without lying about where the job is.
+@needs_node
+@pytest.mark.parametrize("pid", ["won-paid", "won-nodeposit"])
+def test_a_won_job_says_so_on_the_board(ran, pid):
+    """Both routes to won: approved with the deposit received, and approved on a job that
+    legitimately collects none. RENDERED, because `if (false) out.push(...chip-won...)` leaves the
+    class in the function and keeps a source check green while labelling nothing."""
+    assert "chip-won" in ran["chips"][pid], "%s does not say it was won" % pid
+    assert ">Won<" in ran["chips"][pid], (
+        "the chip has no word in it, and this page gets a synthesised dark theme in some browsers "
+        "that rewrites the tint")
+
+
+@needs_node
+def test_an_approved_job_with_the_money_still_out_is_not_won(ran):
+    """THE distinction the predicate exists for. This is the most worth-chasing row on the board,
+    and a Won chip on it tells the estimator the job is finished."""
+    assert "chip-won" not in ran["chips"]["approved-unpaid"], (
+        "an approved job with an outstanding deposit is being called won")
+
+
+@needs_node
+def test_a_job_won_and_then_cancelled_reads_as_lost_only(ran):
+    """A card claiming both would be worse than either. Lost is checked first, which is the same
+    order crm-core's stage() and the notification page's ppCategory use."""
+    chips = ran["chips"]["lost-after-won"]
+    assert "chip-lost" in chips
+    assert "chip-won" not in chips, "the card says it was both won and lost"
+
+
+@needs_node
+def test_a_won_job_stays_on_the_board(ran):
+    """The chip is an annotation, not a filter. Dropping these off the live board would hide the
+    deposit and contact-gathering work from the people doing it — which is exactly the difference
+    between this board and the Notification Sending page."""
+    assert "won-paid" in ran["pools"]["active"]
+    assert "won-nodeposit" in ran["pools"]["active"]
+
+
+def test_the_won_chip_is_styled():
+    assert ".chip-won" in PORTAL_HTML, "the Won chip has no styling, so it renders as a bare pill"
+
+
+def test_won_is_defined_once_for_both_screens():
+    """The substance of "tie up". Two copies of this predicate is how the board and the
+    Notification Sending page start disagreeing about a word Troy reads as a number."""
+    core = (FRONTEND / "js" / "crm-core.js").read_text(encoding="utf-8")
+    assert "function isWon" in core and "isWon: isWon" in core, (
+        "isWon is not defined and exported by crm-core")
+    for page in ("portal.js", "notifications.js"):
+        js = (FRONTEND / "js" / page).read_text(encoding="utf-8")
+        assert "function isWon" not in js, "%s has its own copy of isWon" % page
+        assert "isWon" in js, "%s does not use the shared isWon at all" % page
 
 
 def test_an_empty_lost_tab_says_which_kind_of_empty_it_is():

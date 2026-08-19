@@ -227,6 +227,104 @@ def set_assigned_estimator(draft_id: str, email: str,
     return True
 
 
+def set_notify_picks(draft_id: str, add: List[str], mute: List[str],
+                     actor_email: Optional[str] = None) -> bool:
+    """Who on the team should hear about this project's next send.
+
+    Hanz, 2026-08-19: "add the notif sending in this step of the CRM" — asked of the drawer for a
+    project that has been CREATED BUT NOT SENT.
+
+    It has to live on the draft rather than in the portal's per-project override table, for the same
+    reason `set_assigned_estimator` does: `portal_notify_overrides.proposal_id` is a foreign key onto
+    a proposal row that an unsent project does not have. So this is the intention, recorded before
+    there is anywhere to apply it, and the Files screen carries it into the send that creates the
+    row. A project the customer already has keeps the authoritative copy on the portal side, and
+    `api_draft_notify` forwards there too.
+
+    Stored as DEVIATIONS from the global roster, not as a recipient list. The roster changes — people
+    join, leave, get toggled — and a stored list would freeze a decision about nine specific people
+    made weeks before the send. "Include Will, exclude Troy" still means what it said.
+
+    Same posture as the assignment: inside the `data` blob, no migration, and no `updated_at` bump.
+    Choosing who to notify is not work on the estimate and must not shuffle the project to the top of
+    the Projects list. Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if add or mute:
+        data["notify_picks"] = {"add": list(add), "mute": list(mute)}
+    else:
+        # Nothing deviates from the roster any more, so drop the key rather than storing two empty
+        # lists that read as "somebody decided nothing".
+        data.pop("notify_picks", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "notify_picked",
+              {"project_name": data.get("project_name"), "id": draft_id,
+               "add": list(add), "mute": list(mute)})
+    _cache_clear()
+    return True
+
+
+def get_notify_picks(draft_id: str) -> Dict[str, List[str]]:
+    """The stored deviations, as {"add": [...], "mute": [...]}. Empty lists when there are none.
+
+    Read-only companion to set_notify_picks, and it exists for AUTHORISATION rather than for
+    display: `api_draft_notify` compares what a caller submitted against what is already stored so a
+    non-admin can be held to changing only their own address. A missing project reads as empty, which
+    is the safe direction — every submitted address then counts as a change and has to clear the
+    same check."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return {"add": [], "mute": []}
+    picks = (cur.data[0].get("data") or {}).get("notify_picks") or {}
+    out: Dict[str, List[str]] = {}
+    for key in ("add", "mute"):
+        raw = picks.get(key)
+        out[key] = [str(e) for e in raw] if isinstance(raw, list) else []
+    return out
+
+
+def set_close_lost(draft_id: str, reason: Optional[str],
+                   actor_email: Optional[str] = None) -> bool:
+    """Close an unsent project as lost, or reopen it. `reason` None reopens.
+
+    Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent category."
+
+    Kyle needs it for the commonest dead bid there is: priced, paperwork generated, and then the GC
+    went with somebody else before we ever sent it. Until now the only way to close a bid lost was
+    the portal's `/status` route, and an unsent project has no `portal_proposals` row to close —
+    the same wall `set_assigned_estimator` and `set_notify_picks` hit. So the answer is the same:
+    the draft records it, and the board reads it back through the synthesised row.
+
+    NOT archiving, which already exists and means something else. Archiving hides a project from
+    the Projects list; this one keeps it, moves it to the Lost tab, and files it under a reason so
+    it counts in the numbers Troy reads. A lost bid is data, not clutter.
+
+    `updated_at` is deliberately NOT bumped, as with the other two: closing a bid is not work on the
+    estimate, and shuffling it to the top of the Projects list on its way out would be backwards.
+
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if reason:
+        data["closed_lost"] = {"reason": str(reason), "by": actor_email or "",
+                               "at": _now_iso()}
+    else:
+        data.pop("closed_lost", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "closed_lost" if reason else "reactivated",
+              {"project_name": data.get("project_name"), "id": draft_id,
+               "reason": str(reason) if reason else None})
+    _cache_clear()
+    return True
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -331,7 +429,14 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # every Projects page load. work_type is always present when the object is (see
                 # GenerateOut), so its presence is the cheapest honest existence test.
                 "has_files:data->generate_result->>work_type,"
-                "computed_bid:data->computed_bid")
+                # The card's money. The base tab's TOTAL LUMP SUM as a scalar, plus the legacy
+                # engine object for the drafts that predate it — see _bid_total for why the
+                # order matters and what showing only the second one cost.
+                "proposal_lump_sum:data->>proposal_lump_sum,"
+                "computed_bid:data->computed_bid,"
+                # Closed lost before it was ever sent — see set_close_lost.
+                "closed_lost_reason:data->closed_lost->>reason,"
+                "closed_lost_at:data->closed_lost->>at")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -344,7 +449,11 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
         return [{
             "id": r["id"],
             "project_name": r.get("project_name") or "(untitled)",
-            "total": _bid_total({"computed_bid": r.get("computed_bid")}),
+            "total": _bid_total({"proposal_lump_sum": r.get("proposal_lump_sum"),
+                                 "computed_bid": r.get("computed_bid"),
+                                 # Already selected for the card's own beta badge; passed in so
+                                 # the fast path resolves money in the same order as the slow one.
+                                 "polish_beta": _polish_beta(r.get("polish_beta"))}),
             "work_type": r.get("work_type"),
             "deadline": r.get("deadline"),
             "archived": _truthy(r.get("archived")),
@@ -354,6 +463,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "assigned_estimator": r.get("assigned_estimator"),
             "contact_email": r.get("contact_email"),
             "has_files": bool(r.get("has_files")),
+            "closed_lost_reason": r.get("closed_lost_reason") or None,
+            "closed_lost_at": r.get("closed_lost_at") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -534,11 +645,63 @@ def _polish_beta(version: Any) -> bool:
         return False
 
 
+def _pos_num(v: Any) -> Optional[float]:
+    """A positive number, or None. Accepts the string a `->>` projection returns."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def _bid_total(data: Dict[str, Any]) -> Optional[float]:
-    cb = (data or {}).get("computed_bid") or {}
-    fb = cb.get("full_bid") or {}
-    if isinstance(fb.get("total_base_bid"), (int, float)):
-        return float(fb["total_base_bid"])
+    """The money on a card, resolved the way the proposal itself resolves it.
+
+    `proposal_lump_sum` FIRST, because that is the estimate sheet's own TOTAL LUMP SUM for the
+    base tab (D88/D82) — the figure the estimator is looking at and the one the proposal prints.
+    `computed_bid` is the removed Reference Bid engine and is the FALLBACK ONLY, which is the
+    precedence proposal-review.js has documented all along (see its comment at the `#tb-total`
+    stash). This function had only the fallback, and the consequences were both halves bad:
+
+      - 21 of 31 live drafts (2026-08-19) were priced but showed no money at all, because
+        estimate-review.js nulls `computed_bid` on the way out of step 2 — Kyle's "why not all
+        containers have the dollar amount?".
+      - the 6 that did show one showed the WRONG one. Every row where both figures exist
+        disagrees, in both directions: draft 17117b50 showed $30,960 against a real bid of
+        $45,629, and 89b3498b showed $11,573 against $7,861. The engine is known to be ~30% out
+        on polish, which is why it was removed.
+
+    Sharing one order with the proposal is the point: a card can no longer name a price the
+    document would not.
+
+    THE ORDER INVERTS FOR A POLISH BETA PROJECT, and it has to. That calculator prices itself and
+    writes `computed_bid` on every save (polish-estimate.js:202) but never touches
+    `proposal_lump_sum` — so on a project that was first priced on the spreadsheet and then
+    re-priced in the beta, the lump sum is the STALE figure and the engine object is the live one.
+    Preferring the lump sum there would show the old spreadsheet number on a bid nobody quotes
+    any more, which is the same class of leak the beta's own file header warns about."""
+    data = data or {}
+    beta = data.get("polish_beta")
+    if beta is None:
+        beta = _polish_beta((data.get("polish_estimate") or {}).get("version"))
+
+    def engine() -> Optional[float]:
+        cb = data.get("computed_bid") or {}
+        fb = cb.get("full_bid") or {}
+        if isinstance(fb.get("total_base_bid"), (int, float)):
+            return float(fb["total_base_bid"])
+        if isinstance(cb.get("grand_total"), (int, float)):
+            return float(cb["grand_total"])      # material-only mode, as on Proposal Review
+        return None
+
+    order = (engine, lambda: _pos_num(data.get("proposal_lump_sum"))) if beta else \
+            (lambda: _pos_num(data.get("proposal_lump_sum")), engine)
+    for src in order:
+        got = src()
+        if got is not None:
+            return got
     return None
 
 
@@ -571,6 +734,11 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "contact_email": data.get("contact_email"),
         # Same meaning as the fast path's jsonb scalar: has Generate ever run here.
         "has_files": bool(data.get("generate_result")),
+        # Closed lost before it was ever sent — see set_close_lost. The reason, or None. The
+        # Active Projects board turns this into the same closed_lost state a portal row carries,
+        # so one dead bid reads the same whether or not the customer ever saw it.
+        "closed_lost_reason": ((data.get("closed_lost") or {}).get("reason") or None),
+        "closed_lost_at": ((data.get("closed_lost") or {}).get("at") or None),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

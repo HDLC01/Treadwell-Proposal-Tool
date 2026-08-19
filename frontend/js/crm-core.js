@@ -138,6 +138,31 @@
       (p.deposit_required === false && !p.deposit_requested_at);
   }
 
+  /** WON: the customer said yes AND the money question is settled.
+   *
+   *  Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending okay?"
+   *  It lived in notifications.js, which is the one page that had a Won tab, and that is exactly
+   *  how two screens end up disagreeing about a word Troy reads as a number. It sits here beside
+   *  isLost now, so the board and the Notification Sending page cannot drift.
+   *
+   *  Deliberately NOT depositSatisfied on its own. That predicate is true of any job which collects
+   *  no deposit — including a proposal emailed this morning nobody has opened. It answers "is money
+   *  outstanding", not "did we win".
+   *
+   *  And not approval on its own, which is too generous the other way: an approved job with the
+   *  deposit still outstanding is the single most worth-chasing project there is, and filing it
+   *  under Won would hide it from the person whose job is the chasing. followups.js draws the same
+   *  line from the other side — its bucket is internally called `won` and LABELLED "Approved",
+   *  because approval alone does not earn the word.
+   *
+   *  `approved_at` as well as the status, because the portal moves a row forward past approval —
+   *  stage() below reads deposit state before proposal_status for that very reason — and the stamp
+   *  never unsets. Without it a job falls back out of Won the moment contacts arrive. */
+  function isWon(p) {
+    var approved = String((p && p.proposal_status) || "") === "approved" || !!(p && p.approved_at);
+    return approved && depositSatisfied(p);
+  }
+
   function stage(p) {
     if (isLost(p)) return STAGE_LOST;
     // Checked before every portal state, because a synthesised row has none of them: it is a
@@ -392,7 +417,7 @@
     STAGE_CREATED: STAGE_CREATED,
     LOST_REASON: LOST_REASON, MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
-    followup: followup, isLost: isLost, depositSatisfied: depositSatisfied,
+    followup: followup, isLost: isLost, isWon: isWon, depositSatisfied: depositSatisfied,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
     stage: stage, lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, cardTotal: cardTotal,

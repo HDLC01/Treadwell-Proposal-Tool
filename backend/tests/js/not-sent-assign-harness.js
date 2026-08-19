@@ -99,9 +99,30 @@ function liftPair(deps) {
   // down on prod once. Stubbing them would have hidden the coupling instead of proving it.
   const fact = /^  const fact = [\s\S]*?;$/m.exec(SRC);
   if (!fact) throw new Error("could not lift fact");
-  const body = 'let DRAWER_SIG = "";\n' + fact[0] + "\n" + source("drawerHead") + "\n" +
+  const body = 'let DRAWER_SIG = ""; let ACTIVE_SEC = null; const SEC_TABS = { proposal: 1 };'
+    + ' const notifyCalls = []; const panelCalls = []; const lostCalls = [];\n'
+    + fact[0] + "\n" + source("drawerHead") + "\n" +
+    // renderNotSent now builds the same five-tab strip a sent project gets. `secTab` is lifted for
+    // real — it is pure markup and cheap — but `applySecPanel` is recorded as a no-op here.
+    //
+    // That is a division of labour, not a gap: applySecPanel reaches for SEC_TABS, ALL_SEC_CARDS,
+    // SEC_ELIGIBLE, the chat scroll and two lazy fetches, none of which this file has any business
+    // standing up. THIS harness tests the estimator picker. The strip itself is executed for real in
+    // drawer-render-harness.js, which asserts all five tabs, their panels and their placeholder
+    // copy. Recording the call rather than deleting it means a rename still fails loudly here.
+    source("secTab") +
+    "\nfunction applySecPanel() { panelCalls.push(ACTIVE_SEC); }" + "\n" +
     source("renderNotSent") + "\n" + source("wireNotSentAssign") +
-    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG };";
+    // renderNotSent also kicks off the notification picker, which is a network read this file has
+    // no business making — it tests the ESTIMATOR control. Recorded as a call rather than lifted,
+    // so a rename in portal.js still fails loudly here instead of being silently absent.
+    "\nfunction loadNotSentNotify(pid) { notifyCalls.push(pid); }" +
+    // Same division of labour for the close-lost control (2026-08-19). It has its own executed
+    // tests in not-sent-lost-harness.js, where the dialog and the request are the subject; here it
+    // is recorded so a rename still fails loudly rather than going quiet.
+    "\nfunction wireNotSentLost(pid, row) { lostCalls.push(pid); }" +
+    "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
+    "         notifyCalls, panelCalls, lostCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
 }
 
@@ -118,6 +139,14 @@ function harness(row, opts) {
     avatar: (e) => '<span class="av">' + String(e)[0] + "</span>",
     nameOf: (e) => (ROSTER.find((x) => x.email === e) || {}).name || e,
     isAssigned: (p) => !!p.assigned_estimator,
+    // crm-core's own definitions, not stubs returning false: the panel branches on them for the
+    // close-lost control, and a stub that always says "live" would leave the reactivate half of
+    // this drawer unrendered and unexercised in every case below.
+    isLost: (p) => String((p && p.proposal_status) || "") === "closed_lost",
+    lostReason: (p) => ({ price: "Price", another_contractor: "Another contractor",
+                          canceled: "Project canceled", scope_changed: "Scope changed",
+                          timing: "Timing", other: "Other" })[
+      ((p && p.followup_state) || {}).closed_lost_reason] || "",
     estimatorOf: (p) => String(p.assigned_estimator || p.estimator_email || ""),
     cardTotal: () => null,
     money: (n) => "$" + n,

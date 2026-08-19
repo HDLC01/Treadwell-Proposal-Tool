@@ -734,6 +734,7 @@ class LibraryItemIn(BaseModel):
     acceptable, so the rules can't drift between a Pydantic model and the writer."""
     name: Optional[str] = None
     category: Optional[str] = None
+    divisions: Optional[Any] = None
     unit: Optional[str] = None
     # `Any`, because these arrive pasted from a spreadsheet as "$85.38" and "2,875".
     unit_cost: Optional[Any] = None
@@ -840,6 +841,11 @@ class LibraryVendorIn(BaseModel):
     notes: Optional[str] = None
 
 
+class LibraryRefIn(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+
+
 # Vendors: READING is open to every signed-in user, because the Items tab's dropdown needs it and
 # an estimator has to be able to say who a material came from. WRITING is admin-only (Hanz,
 # 2026-08-15) — the list is the thing that keeps one supplier from having three spellings, so who
@@ -880,6 +886,93 @@ def api_library_vendor_delete(vendor_id: str, request: Request) -> Dict[str, Any
     # Items naming it keep saying so — they store the name, and a delete here must not rewrite what
     # a past purchase recorded. The dropdown simply stops offering it.
     return {"ok": True, "deleted": vendor_id}
+
+
+def _ref_payload(kind: str) -> tuple[str, str, str, Any, Any]:
+    if kind == "divisions":
+        return (library.DIVISION_REFS, "division", "divisions",
+                library.list_divisions, library.division_usage)
+    if kind == "units":
+        return (library.UNIT_REFS, "unit", "units",
+                library.list_units, library.unit_usage)
+    raise HTTPException(404, "Unknown library list.")
+
+
+@app.get("/api/library/divisions")
+def api_library_divisions() -> Dict[str, Any]:
+    return {"ok": True, "divisions": library.list_divisions(),
+            "usage": library.division_usage()}
+
+
+@app.post("/api/library/divisions")
+def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_ref(library.DIVISION_REFS, payload.model_dump(exclude_unset=True),
+                                 _user_email(request), label="division")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "division": row}
+
+
+@app.patch("/api/library/divisions/{division_id}")
+def api_library_division_update(division_id: str, payload: LibraryRefIn,
+                                request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_ref(library.DIVISION_REFS, division_id,
+                                 payload.model_dump(exclude_unset=True), label="division")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        raise HTTPException(404, "That division is no longer on the list.")
+    return {"ok": True, "division": row}
+
+
+@app.delete("/api/library/divisions/{division_id}")
+def api_library_division_delete(division_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_ref(library.DIVISION_REFS, division_id):
+        raise HTTPException(404, "That division is no longer on the list.")
+    return {"ok": True, "deleted": division_id}
+
+
+@app.get("/api/library/units")
+def api_library_units() -> Dict[str, Any]:
+    return {"ok": True, "units": library.list_units(), "usage": library.unit_usage()}
+
+
+@app.post("/api/library/units")
+def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.create_ref(library.UNIT_REFS, payload.model_dump(exclude_unset=True),
+                                 _user_email(request), label="unit")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "unit": row}
+
+
+@app.patch("/api/library/units/{unit_id}")
+def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
+                            request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = library.update_ref(library.UNIT_REFS, unit_id,
+                                 payload.model_dump(exclude_unset=True), label="unit")
+    except library.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    if row is None:
+        raise HTTPException(404, "That unit is no longer on the list.")
+    return {"ok": True, "unit": row}
+
+
+@app.delete("/api/library/units/{unit_id}")
+def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not library.delete_ref(library.UNIT_REFS, unit_id):
+        raise HTTPException(404, "That unit is no longer on the list.")
+    return {"ok": True, "deleted": unit_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
@@ -949,6 +1042,18 @@ class PortalPublishIn(BaseModel):
     # (chase everybody, as it has always worked) needs no entry and a caller that omits the field
     # forwards nothing.
     no_followups: list[str] = Field(default_factory=list)
+    # Which STAFF hear about this send, chosen on the Files screen before pressing Send (Hanz,
+    # 2026-08-19: "we need that notifcation sending selection in the Files. so we can select who
+    # receives it first"). Deviations from the global Notification Sending roster, not the whole
+    # list: `notify_add` is somebody who is globally off but should hear about this job,
+    # `notify_mute` somebody globally on who should not. Anybody in neither follows the roster.
+    #
+    # They ride ALONG WITH the publish rather than being written first by the browser, because
+    # portal_notify_overrides has a foreign key onto portal_proposals — on a first send that row
+    # does not exist yet, so a pre-publish write is refused. The portal applies them after it
+    # creates the row and before it resolves who to notify.
+    notify_add: list[str] = Field(default_factory=list)
+    notify_mute: list[str] = Field(default_factory=list)
 
 
 def _clean_estimator(raw: str) -> str:
@@ -1050,6 +1155,13 @@ def api_portal_publish(draft_id: str, request: Request,
     no_fu = _clean_portal_emails(payload.no_followups if payload else [])
     if no_fu:
         body["no_followups"] = no_fu
+    # Who on the team hears about this send. Same cleaning helper again, and forwarded only when
+    # the estimator actually changed something, so a send with the roster left alone carries the
+    # byte-for-byte legacy body.
+    for field in ("notify_add", "notify_mute"):
+        picked = _clean_portal_emails(getattr(payload, field) if payload else [])
+        if picked:
+            body[field] = picked
     # Checked after the recipients (their errors are more specific and predate this)
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
@@ -1222,10 +1334,25 @@ def api_portal_pipeline() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 (the board matters more than the split)
         log.warning("pipeline test flags unavailable: %s", exc)
     flags = {s["id"]: s.get("is_test") for s in summaries}   # tri-state: True / False / None
+    # The bid, for a proposal the customer HAS. The portal row carries `approved_total`, which is
+    # null until somebody approves, so a sent-but-not-yet-approved card had no money on it at all —
+    # the other half of Kyle's "why not all containers have the dollar amount?" and of Hanz's "every
+    # project should show the basebid total lump sum". Fixing _bid_total (2026-08-19) only reached
+    # the synthesised not-sent rows; a browser walk on staging found these two still blank.
+    #
+    # Sent as `bid_total`, NOT as approved_total, and that distinction is the whole point:
+    # cardTotal() prefers the approved figure because it is what the customer was actually given,
+    # and falls back to this one. Writing the draft's working number into `approved_total` would put
+    # the word "approved" on a bid nobody has agreed to — and would overwrite the real approved
+    # figure on the rows that have one.
+    totals = {s["id"]: s.get("total") for s in summaries}
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
             row["is_test"] = flags[pid]
+        # Never clobber a figure the portal already has, and never write a null over nothing.
+        if row.get("bid_total") is None and totals.get(pid) is not None:
+            row["bid_total"] = totals[pid]
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
     return data
 
@@ -1270,6 +1397,22 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             "bid_total": s.get("total"),
             "work_type": s.get("work_type"),
         })
+        # Dead before it was ever sent. Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in
+        # the Created not sent category" — the commonest dead bid there is, priced and generated
+        # and then the GC went elsewhere before we sent it.
+        #
+        # Shaped as the portal's OWN closed-lost state rather than a new field, which is the same
+        # discipline as `not_sent` being the only thing new about these rows: isLost() reads
+        # proposal_status and lostReason() reads followup_state.closed_lost_reason, so the board,
+        # the Lost tab's reason columns, the chip and the counts all work with nothing added. And
+        # stage() checks isLost BEFORE not_sent, so the card leaves the Created column on its own.
+        if s.get("closed_lost_reason"):
+            out[-1]["proposal_status"] = "closed_lost"
+            # closed_at as well as the reason: stageTs() looks for it first and falls back to last
+            # activity, so without it the Lost tab would date the bid by whenever somebody last
+            # touched the estimate rather than by the day it was closed.
+            out[-1]["followup_state"] = {"closed_lost_reason": s["closed_lost_reason"],
+                                         "closed_at": s.get("closed_lost_at")}
     return out
 
 
@@ -3914,6 +4057,152 @@ def api_assign_draft(draft_id: str, payload: AssignDraftIn, request: Request) ->
         log.warning("portal assign failed for %s: %s", draft_id, exc)
         portal_ok = False
     return {"ok": True, "assigned_estimator": email, "portal_updated": portal_ok, "sent": True}
+
+
+# The answers the drawer's dialog can produce. Kept in step with LOST_REASON in
+# frontend/js/crm-core.js, which is also what the Lost tab's columns are built from — a reason the
+# board has no column for would file the bid under "Not recorded" and read as though nobody said.
+LOST_REASONS = ("price", "another_contractor", "canceled", "scope_changed", "timing", "other")
+
+
+class DraftStatusIn(BaseModel):
+    """Close an unsent project as lost, or reopen it."""
+    status: str = "closed_lost"
+    reason: str = ""
+
+
+@app.post("/api/draft/{draft_id}/status")
+def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) -> Dict[str, Any]:
+    """Mark a project that was never sent as lost — or put it back.
+
+    Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent category."
+
+    Kyle's case, and the commonest dead bid there is: priced, paperwork generated, and then the GC
+    went with somebody else before we ever sent it. The only existing way to close a bid lost is
+    the portal's `/status` route, and an unsent project has no `portal_proposals` row to close.
+    Third time this wall has come up on this drawer, after the estimator picker and the notify
+    picks, and the answer is the same one: the draft records it and the board reads it back.
+
+    Deliberately NOT forwarded to the portal, which is where this differs from `/assign` and
+    `/notify`. Those two record an intention that a future send has to honour, so a project the
+    customer already has needs the portal's copy updated too. Closing a bid lost is a fact about a
+    project no customer ever saw — and a project that HAS been sent already has the portal route,
+    which does more than this could (it stops the follow-up cadence). Writing both would give one
+    bid two closed-lost records that can disagree.
+
+    Reopening is the same call with `status: "active"`, because a mis-click must not be permanent."""
+    status = (payload.status or "").strip().lower()
+    if status in ("active", "reactivated", "reopen"):
+        reason: Optional[str] = None
+    elif status == "closed_lost":
+        reason = (payload.reason or "").strip().lower()
+        if reason not in LOST_REASONS:
+            raise HTTPException(422, "unknown_reason")
+    else:
+        raise HTTPException(422, "unknown_status")
+
+    try:
+        existed = drafts.set_close_lost(draft_id, reason, _user_email(request))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_close_lost failed for %s: %s", draft_id, exc)
+        raise HTTPException(502, "Could not save the status.") from exc
+    if not existed:
+        raise HTTPException(404, "project_not_found")
+    return {"ok": True, "status": "closed_lost" if reason else "active", "reason": reason}
+
+
+class NotifyPicksIn(BaseModel):
+    """Deviations from the global Notification Sending roster for ONE project."""
+    add: list[str] = Field(default_factory=list)
+    mute: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/draft/{draft_id}/notify")
+def api_draft_notify(draft_id: str, payload: NotifyPicksIn, request: Request) -> Dict[str, Any]:
+    """Choose who on the team hears about this project, from the CRM drawer.
+
+    Hanz, 2026-08-19: "add the notif sending in this step of the CRM" — asked of the drawer for a
+    project that has been created but NOT SENT, which is exactly the case the portal cannot store.
+    `portal_notify_overrides.proposal_id` is a foreign key onto a proposal row that does not exist
+    until the first send, so an unsent project has nowhere in the portal to record this. The draft
+    does, and the Files screen carries it into the send.
+
+    Same two-sided shape as `api_assign_draft`: the draft's copy is written always, and a project the
+    customer already has is forwarded to the portal too, because for a SENT project the portal's
+    override table is the copy that decides who actually gets emailed. A portal failure does not fail
+    the request — the draft write already succeeded, and `portal_updated: false` lets the drawer say
+    so rather than pretending or losing the change."""
+    add = _clean_portal_emails(payload.add)
+    mute = _clean_portal_emails(payload.mute)
+
+    # Admin may set anyone's; anybody else may only change THEIR OWN address. Same rule the
+    # per-project override route enforces (api_portal_notify_overrides_set), and it belongs here too:
+    # an `add` is not cosmetic, it makes the portal email that address the proposal-sent and approval
+    # notifications, project and customer detail included. Without this check any signed-in staff
+    # member could route those to an arbitrary outside address on any project.
+    #
+    # Compared as a DELTA against what is stored, not as "every address must be mine". These two
+    # controls submit the WHOLE set of deviations, so a flat rule would 403 a non-admin on any
+    # project where an admin had already muted somebody — the legitimate case, and the one that would
+    # have made the control useless rather than safe.
+    if not _caller_is_admin(request):
+        me = (_user_email(request) or "").strip().lower()
+        try:
+            prior = drafts.get_notify_picks(draft_id)
+        except Exception as exc:  # noqa: BLE001 — cannot authorise without it, so fail closed
+            log.warning("get_notify_picks failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not check your permissions.") from exc
+        lower = lambda xs: {str(e).strip().lower() for e in xs}          # noqa: E731
+        changed = (lower(add) ^ lower(prior.get("add") or [])) \
+            | (lower(mute) ^ lower(prior.get("mute") or []))
+        # `e and` is defence in depth, not load-bearing: _clean_portal_emails already drops
+        # empty entries, so `changed` cannot contain "". Mutation testing says removing it
+        # changes nothing, and the comment says so rather than taking credit for it. It stays
+        # because an empty `me` must never match an empty entry if that ever becomes reachable.
+        foreign = sorted(e for e in changed if e and e != me)
+        if foreign:
+            raise HTTPException(
+                403, "You can only change your own notifications for a project.")
+
+    try:
+        existed = drafts.set_notify_picks(draft_id, add, mute, _user_email(request))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_notify_picks failed for %s: %s", draft_id, exc)
+        raise HTTPException(502, "Could not save who to notify.") from exc
+    if not existed:
+        raise HTTPException(404, "project_not_found")
+
+    # Never sent → no portal row to override against, so skip the round-trip entirely. This is the
+    # normal path for the drawer state that prompted the feature.
+    try:
+        sent = bool(drafts.latest_revision_no(draft_id))
+    except Exception as exc:  # noqa: BLE001 — a revisions read must not undo the write
+        log.warning("revision lookup failed for %s: %s", draft_id, exc)
+        sent = False
+    if not sent:
+        return {"ok": True, "add": add, "mute": mute, "portal_updated": False, "sent": False}
+
+    portal_ok = True
+    try:
+        chosen = {e.lower() for e in add} | {e.lower() for e in mute}
+        for email in add:
+            _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
+                    {"email": email, "mode": "add"})
+        for email in mute:
+            _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
+                    {"email": email, "mode": "mute"})
+        # Anyone previously overridden who now follows the roster: clear them, so the drawer's chips
+        # and the mail agree. Read first, because clearing blind would need a list we do not have.
+        current = _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "GET")
+        for row in (current.get("overrides") or []):
+            email = str(row.get("email") or "")
+            if email and email.lower() not in chosen:
+                _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
+                        {"email": email, "mode": "clear"})
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        log.warning("portal notify override failed for %s: %s", draft_id, exc)
+        portal_ok = False
+    return {"ok": True, "add": add, "mute": mute, "portal_updated": portal_ok, "sent": True}
 
 
 @app.get("/api/drafts")
