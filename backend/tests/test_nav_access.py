@@ -134,17 +134,20 @@ def test_the_write_is_atomic(monkeypatch):
 
 # ── what can never be denied ──────────────────────────────────────────────────
 def test_the_locked_pages_are_stripped_ON_WRITE_so_they_never_reach_the_file():
-    """/admin.html is where this policy is edited and /portal.html is where signing in lands. The
-    strip is asserted against the BYTES on disk, so removing it from save() fails here even though
-    the read path strips too."""
+    """/admin.html is where this policy is edited and /portal.html is where signing in lands.
+
+    ONE normaliser (sanitize) serves both directions, so this and the read-side test below are the
+    same code checked from both ends — asserted against the BYTES ON DISK here, so a policy cannot
+    "have been saved" carrying something that only the read path would have dropped."""
     nav_access.save({"user": ["/admin.html", "/portal.html", "/leads.html"]}, "k@x.com")
     raw = json.loads(nav_access._FILE.read_text(encoding="utf-8"))
     assert raw["deny"] == {"user": ["/leads.html"]}, raw
 
 
 def test_the_locked_pages_are_stripped_ON_READ_so_a_hand_edited_file_cannot_lock_anybody_out():
-    """The second half of the same guarantee, and the half that matters on a live box: the file is
-    editable with a text editor and the middleware reads it, not the browser."""
+    """The other end of the same guarantee, and the end that matters on a live box: the file sits on
+    a Docker volume, is editable with a text editor, and the middleware reads it — not the browser.
+    The API refusing a locked page (test_nav_gate.py) is a courtesy on top of this, not the guard."""
     nav_access._FILE.write_text(
         json.dumps({"deny": {"user": ["/admin.html", "/portal.html", "/trash.html"]}}),
         encoding="utf-8")
