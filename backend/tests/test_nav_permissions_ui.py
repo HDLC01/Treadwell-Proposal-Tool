@@ -212,6 +212,198 @@ def test_a_response_that_says_nothing_about_permissions_denies_nothing(ran):
         % (len(r["entries"]), len(ran["menusOpen"]["user"])))
 
 
+# ── the switches ──────────────────────────────────────────────────────────────
+@needs_node
+def test_the_capability_table_the_harness_uses_is_the_one_the_server_serves(ran):
+    """Everything below is checked against a policy this harness declares. Declared copies rot, so it
+    is diffed against backend/nav_access.py rather than trusted."""
+    import nav_access
+    # href / label / api / locked are the four fields the panel reads. `pages` is deliberately not
+    # compared here: nothing on this page uses it — it drives the refusal card, which
+    # test_the_refusal_names_the_tab_that_owns_the_page_not_the_page covers instead.
+    keys = ("href", "label", "api", "locked")
+    want = [{k: t[k] for k in keys} for t in nav_access.capability_table()]
+    assert ran["caps"] == want, (
+        "the harness's copy of the capability table has drifted from nav_access.py")
+
+
+@needs_node
+@pytest.mark.parametrize("viewer", ["user", "admin", "super_admin"])
+def test_every_cell_is_a_switch_carrying_its_own_state(ran, viewer):
+    """The tick lives INSIDE the button, so a cell cannot show a switch that is on beside a dash that
+    says it is off — there is only one thing to read. aria-pressed carries it for a screen reader."""
+    for row in ran["panel"][viewer]:
+        for role in ran["roles"]:
+            sw = row["switches"][role]
+            assert sw, "%s / %s has no switch" % (row["href"], role)
+            assert sw["href"] == row["href"] and sw["role"] == role, (
+                "%s / %s carries the wrong identity: %s" % (row["href"], role, sw))
+            assert sw["on"] == row["roles"][role], (
+                "%s / %s: the switch says %s and the tick says %s"
+                % (row["href"], role, sw["on"], row["roles"][role]))
+            assert sw["pressed"] == ("true" if sw["on"] else "false")
+            assert sw["dataOn"] == ("1" if sw["on"] else "0")
+
+
+@needs_node
+def test_the_switches_reflect_the_stored_policy(ran):
+    """Not "every switch is on": the ticks and the switches are one render of the sidebar under the
+    policy, which is what stops them disagreeing."""
+    rows = {r["href"]: r for r in ran["panel"]["admin"]}
+    assert rows["/leads.html"]["switches"]["user"]["on"] is False
+    assert rows["/leads.html"]["switches"]["admin"]["on"] is True
+    assert rows["/history.html"]["switches"]["admin"]["on"] is False
+    assert rows["/history.html"]["switches"]["user"]["on"] is True
+    assert rows["/trash.html"]["switches"]["user"]["on"] is True
+
+
+@needs_node
+@pytest.mark.parametrize("href", ["/admin.html", "/portal.html"])
+def test_a_locked_page_cannot_be_switched_off_for_anybody(ran, href):
+    """/admin.html is where this setting is edited and /portal.html is where signing in lands. The
+    server strips both on write AND on read; the UI must not offer what the server will refuse."""
+    rows = {r["href"]: r for r in ran["panel"]["admin"]}
+    row = rows[href]
+    assert row["chip"] == "lock", "%s does not say it cannot be denied" % href
+    for role in ran["roles"]:
+        assert row["switches"][role]["disabled"] is True, "%s / %s is clickable" % (href, role)
+
+
+@needs_node
+@pytest.mark.parametrize("viewer", ["user", "admin", "super_admin"])
+def test_the_super_admin_column_is_never_clickable(ran, viewer):
+    """That role is bootstrapped from the server's environment and is the account that always has a
+    way in. nav_access.py strips it on write and on read, so a switch there would save nothing."""
+    for row in ran["panel"][viewer]:
+        assert row["switches"]["super_admin"]["disabled"] is True, row["href"]
+        assert row["switches"]["super_admin"]["on"] is True, (
+            "%s is off for the super admin, who cannot be denied anything" % row["href"])
+
+
+@needs_node
+def test_a_viewer_cannot_switch_their_own_role_off_but_can_switch_it_back_on(ran):
+    """The server refuses the first and allows the second, and the UI says the same thing — a switch
+    that looks clickable and then fails is worse than one that explains itself on hover."""
+    rows = {r["href"]: r for r in ran["panel"]["admin"]}
+    own_on = rows["/trash.html"]["switches"]["admin"]
+    assert own_on["on"] is True and own_on["disabled"] is True
+    assert "own role" in own_on["title"], own_on["title"]
+    # /history.html is already denied to admins, so turning it back on is widening — always allowed.
+    own_off = rows["/history.html"]["switches"]["admin"]
+    assert own_off["on"] is False and own_off["disabled"] is False
+    # And a member's switches stay editable for that same admin viewer.
+    assert rows["/trash.html"]["switches"]["user"]["disabled"] is False
+
+
+@needs_node
+def test_the_five_tabs_with_no_private_endpoint_say_so_on_screen(ran):
+    """Derived from the capability table, so the claim cannot outlive the code. Switching one of these
+    off hides the tab and blocks the page and leaves the data reachable — and the page must SAY that
+    rather than imply a lock it does not have."""
+    caps = {c["href"]: c for c in ran["caps"]}
+    rows = {r["href"]: r for r in ran["panel"]["admin"]}
+    thin = [h for h, c in caps.items() if not c["api"] and not c["locked"]]
+    hard = [h for h, c in caps.items() if c["api"]]
+    assert thin, "no tab owns zero private endpoints any more; the wording below should go"
+    for href in thin:
+        assert rows[href]["chip"] == "thin", "%s does not say a switch there only hides it" % href
+        title = rows[href]["switches"]["user"]["title"]
+        assert "hides the tab and blocks the page" in title, title
+        assert "reachable to somebody who types the URL" in title, title
+    for href in hard:
+        assert rows[href]["chip"] == "hard", "%s does not say a switch there blocks its data" % href
+        assert caps[href]["api"][0] in rows[href]["switches"]["user"]["title"], (
+            "%s does not name the routes it refuses" % href)
+    # And the note names them, computed from the same table.
+    flat = re.sub(r"\s+", " ", ran["panelHtml"]["admin"])
+    assert "can only be hidden, not sealed" in flat
+    for href in thin:
+        assert "<strong>%s</strong>" % caps[href]["label"] in flat, (
+            "%s is not named in the note" % href)
+
+
+@needs_node
+def test_the_note_still_says_the_page_itself_stays_served(ran):
+    """The honest half of "real blocking". There is no cookie in this app, so a browser navigating to
+    a page carries no identity — the .html serves and paints a refusal. Somebody reading this table as
+    "the URL is sealed" would be wrong, and the page has to say which it is."""
+    flat = re.sub(r"\s+", " ", ran["panelHtml"]["admin"])
+    assert "reachable by typing its URL" in flat
+    assert "refusal card" in flat
+    assert "not a permission model" in flat
+    assert "_require_admin" in flat
+
+
+@needs_node
+def test_a_failed_policy_fetch_renders_read_only_and_says_so(ran):
+    """A panel full of switches that save nothing is worse than a table. The deny map alone is not
+    enough — without the capability table the page cannot tell which switches only hide."""
+    assert not any(v for r in ran["readOnlyRows"] for v in r["switches"].values()), (
+        "switches were drawn with no capability table to describe them")
+    assert "Read-only right now" in re.sub(r"\s+", " ", ran["readOnlyHtml"])
+    # It still shows the truth about the policy that IS loaded.
+    rows = {r["href"]: r for r in ran["readOnlyRows"]}
+    assert rows["/leads.html"]["roles"]["user"] is False
+
+
+@needs_node
+def test_with_no_policy_at_all_the_panel_is_exactly_the_old_read_only_table(ran):
+    """The state test_role_visibility_matrix.py owns, and the state a container with no policy file is
+    in. No switches, no chips, and only the Admin tab differing by role."""
+    assert not any(v for r in ran["noPolicyRows"] for v in r["switches"].values())
+    assert not any(r["chip"] for r in ran["noPolicyRows"])
+    differing = [r["href"] for r in ran["noPolicyRows"]
+                 if len({r["roles"][x] for x in ran["roles"]}) > 1]
+    assert differing == ["/admin.html"], differing
+
+
+# ── the wiring ────────────────────────────────────────────────────────────────
+def test_the_toggle_is_wired_and_the_panel_re_renders_in_place():
+    """The CSP forbids inline handlers, so a switch with no addEventListener silently does nothing —
+    and a save that does not re-render leaves the table showing the state before the click."""
+    js = (FRONTEND / "js" / "admin.js").read_text(encoding="utf-8")
+    assert 'document.querySelectorAll(\'#rv-panel [data-act="nav"]\')' in js, (
+        "the switches are never wired up")
+    assert "el.outerHTML = roleMatrixHtml()" in js, "a save does not re-render the panel"
+    assert "wireRoleMatrix()" in js and js.count("wireRoleMatrix()") >= 3, (
+        "the re-rendered panel is never re-wired, so the second click does nothing")
+    assert "onclick=" not in js.lower()
+
+
+def test_the_policy_is_fetched_before_the_first_paint():
+    """Rendering first and correcting afterwards means every switch flashes on. The matrix is built by
+    re-rendering the sidebar per role, so TWAuth has to be holding the policy before shell() runs."""
+    js = (FRONTEND / "js" / "admin.js").read_text(encoding="utf-8")
+    assert js.index("await loadNavPolicy()") < js.index("shell();"), (
+        "shell() renders the matrix before the policy is loaded")
+    assert "TWAuth.setNavDeny" in js, (
+        "the page never hands the full per-role map to auth.js, so the matrix can only show its own")
+
+
+def test_the_refusals_reason_reaches_the_user():
+    """"You can't take that away from your own role" is actionable. "Action failed" sends somebody to
+    the logs — and api() throws the status away, which is why this route uses its own caller."""
+    js = (FRONTEND / "js" / "admin.js").read_text(encoding="utf-8")
+    assert "async function apiFull(" in js
+    assert "res.body.detail" in js or "body.detail" in js, (
+        "a 400 from FastAPI carries its reason in `detail`, and nothing reads it")
+    assert "alert(errText(res))" in js
+
+
+def test_the_switch_and_its_chips_are_styled_and_hideable():
+    """Unstyled, every switch is a bare button in a nowrap cell. And `hidden` works through one UA
+    rule with the lowest specificity there is, so any class rule setting `display` beats it — the
+    guard ships with the rule (backend/tests/test_hidden_is_actually_hidden.py)."""
+    html = (FRONTEND / "admin.html").read_text(encoding="utf-8")
+    for cls in (".rv-sw {", ".rv-sw.rv-on {", ".rv-sw:disabled {", ".rv-lock,", ".rv-thin {",
+                ".rv-hard {"):
+        assert cls in html, "%s has no styling" % cls
+    assert re.search(r"\.rv-sw\[hidden\][^{]*\{[^}]*display\s*:\s*none", html), (
+        "the switch sets display and has no [hidden] guard")
+    # CSP: an inline <script> would silently not run, so the panel must stay in admin.js.
+    assert "<script>" not in html.replace("<script src", "<script-src")
+
+
 # ── the card is actually styled ───────────────────────────────────────────────
 def test_the_refusal_card_has_styles_and_they_live_with_the_sidebar():
     """auth.js's injected stylesheet is the only CSS every page has, and the card is painted onto

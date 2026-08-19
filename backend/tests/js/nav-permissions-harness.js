@@ -27,6 +27,7 @@ const ROOT = path.resolve(process.argv[2]);
 // Line endings normalised on read: git hands these out with CRLF on a Windows checkout.
 const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const AUTH_SRC = read(path.join(ROOT, "auth.js"));
+const ADMIN_SRC = read(path.join(ROOT, "js", "admin.js"));
 
 // ── as much of a browser as auth.js touches ──────────────────────────────────
 function browser(pathname) {
@@ -150,9 +151,106 @@ function entriesFromMarkup(markup) {
   return out;
 }
 
+// ── the Admin page's own matrix, lifted and run ───────────────────────────────
+/** Lift a named function out of admin.js (four-space indent, no IIFE), braces balanced. */
+function adminFn(name) {
+  const m = new RegExp("\\n    function " + name + "\\s*\\(").exec(ADMIN_SRC);
+  if (!m) throw new Error(name + "() is gone from admin.js — rewrite this harness, don't stub it");
+  const i = ADMIN_SRC.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  for (let j = i; j < ADMIN_SRC.length; j++) {
+    if (ADMIN_SRC[j] === "{") depth++;
+    else if (ADMIN_SRC[j] === "}" && --depth === 0) return ADMIN_SRC.slice(m.index, j + 1);
+  }
+  throw new Error("unbalanced braces reading " + name + "() in admin.js");
+}
+
+function adminGrab(re, what) {
+  const m = re.exec(ADMIN_SRC);
+  if (!m) throw new Error(what + " is gone from admin.js — rewrite this harness");
+  return m[0];
+}
+
+/* The page's roleMatrixHtml(), run against the given live TWAuth as role `me`, for `policy`.
+ *
+ * The POLICY IS PASSED IN rather than assigned to a module variable, because that is the seam the
+ * page itself uses: shell() calls roleMatrixHtml() with no argument and it falls back to what boot()
+ * fetched. Handing it in here is the same code path with the fetch removed. */
+function renderAdminMatrix(win, me, policy) {
+  const make = new Function("window", "ME", "policy", `
+    "use strict";
+    var TWAuth = window.TWAuth;
+    ${adminGrab(/^    const ROLE_LABEL = \{[^}]*\};$/m, "ROLE_LABEL")}
+    ${adminFn("esc")}
+    ${adminFn("roleLabelOf")}
+    ${adminFn("roleDiffSentence")}
+    ${adminFn("roleMatrixHtml")}
+    return roleMatrixHtml(policy);
+  `);
+  return make(win, { role: me, email: "someone@wetreadwell.com" }, policy || null);
+}
+
+/** Rows the rendered panel shows: which cells are ticked, and what switch each one drew. */
+function rowsFromPanel(html) {
+  const body = html.slice(html.indexOf("<tbody"), html.indexOf("</tbody>"));
+  return body.split("</tr>").filter((r) => /data-href=/.test(r)).map((r) => {
+    const roles = {}, switches = {};
+    const cell = /<td class="rv-cell" data-role="([^"]*)"[^>]*>([\s\S]*?)<\/td>/g;
+    let m;
+    while ((m = cell.exec(r)) !== null) {
+      roles[m[1]] = /✓/.test(m[2]);
+      const btn = /<button([^>]*)>/.exec(m[2]);
+      switches[m[1]] = btn ? {
+        on: /class="rv-sw rv-on"/.test(btn[0]),
+        disabled: / disabled/.test(btn[1]),
+        pressed: (/aria-pressed="([^"]*)"/.exec(btn[1]) || [])[1],
+        dataOn: (/data-on="([^"]*)"/.exec(btn[1]) || [])[1],
+        href: (/data-href="([^"]*)"/.exec(btn[1]) || [])[1],
+        role: (/data-role="([^"]*)"/.exec(btn[1]) || [])[1],
+        title: (/title="([^"]*)"/.exec(btn[1]) || [])[1],
+      } : null;
+    }
+    return {
+      href: (/data-href="([^"]*)"/.exec(r) || ["", ""])[1],
+      label: (/data-label="([^"]*)"/.exec(r) || ["", ""])[1],
+      section: (/data-section="([^"]*)"/.exec(r) || ["", ""])[1],
+      chip: (/<span class="rv-(lock|thin|hard)"/.exec(r) || ["", ""])[1],
+      roles: roles,
+      switches: switches,
+    };
+  });
+}
+
 // ── the runs ─────────────────────────────────────────────────────────────────
 // Two roles denied different tabs, so "it filtered the menu" cannot pass by filtering every menu.
 const POLICY = { user: ["/leads.html", "/polish-intake.html"], admin: ["/history.html"] };
+
+// The capability table as /api/admin/nav-access serves it. Kept in step with backend/nav_access.py by
+// test_nav_permissions_ui.py, which builds this from the module rather than trusting the copy.
+const CAPS = [
+  { href: "/portal.html", label: "Active Projects", api: [], locked: true },
+  { href: "/leads.html", label: "Lead Inbox", api: ["/api/leads", "/api/leads/"], locked: false },
+  { href: "/crm.html", label: "Bid Pipeline", api: ["/api/basisboard/"], locked: false },
+  { href: "/calendar.html", label: "Bid Calendar",
+    api: ["/api/calendar/events", "/api/calendar/events/"], locked: false },
+  { href: "/info-sheet.html", label: "Info Sheet", api: ["/api/info-sheet/"], locked: false },
+  { href: "/polish-intake.html", label: "Polish Estimate", api: [], locked: false },
+  { href: "/analytics.html", label: "Analytics", api: ["/api/analytics/"], locked: false },
+  { href: "/projects.html", label: "Proposals Database", api: [], locked: false },
+  { href: "/library.html", label: "Items and Assemblies", api: [], locked: false },
+  { href: "/history.html", label: "History", api: ["/api/history"], locked: false },
+  { href: "/trash.html", label: "Trash", api: ["/api/trash"], locked: false },
+  { href: "/notifications.html", label: "Notification Sending", api: [], locked: false },
+  { href: "/followup-settings.html", label: "Auto Followups",
+    api: ["/api/followup-settings", "/api/followup-settings/"], locked: false },
+  { href: "/admin.html", label: "Admin", api: [], locked: true },
+];
+
+const FULL_POLICY = {
+  deny: POLICY, tabs: CAPS,
+  locked_pages: ["/admin.html", "/portal.html"], locked_roles: ["super_admin"],
+  updated_at: "2026-08-19T12:00:00Z", updated_by: "kyle@wetreadwell.com",
+};
 
 async function main() {
   // 1. The menu per role, under the policy and with nothing denied — asked for explicitly, so this
@@ -191,6 +289,18 @@ async function main() {
     { nav_denied: POLICY.admin, nav_denied_pages: { "/history.html": "/history.html" } },
     "/leads.html");
 
+  // 4. The Admin page's own panel: with the full policy (as each role, so "which switches may I
+  //    touch" can be checked per viewer), with the deny map but NO capability table (a failed policy
+  //    fetch — read-only), and with nothing at all (the state test_role_visibility_matrix.py owns).
+  win.TWAuth.setNavDeny({});
+  const panel = {}, panelHtml = {};
+  roles.forEach((r) => {
+    panelHtml[r] = renderAdminMatrix(win, r, FULL_POLICY);
+    panel[r] = rowsFromPanel(panelHtml[r]);
+  });
+  const readOnlyHtml = renderAdminMatrix(win, "admin", { deny: POLICY });
+  const noPolicyHtml = renderAdminMatrix(win, "admin", null);
+
   process.stdout.write(JSON.stringify({
     roles: roles,
     policy: POLICY,
@@ -203,6 +313,13 @@ async function main() {
     menuStored: menuStored,
     signedIn: { denied: denied, deniedStepTwo: deniedStepTwo, allowed: allowed,
                 legacy: legacy, otherRole: otherRole },
+    caps: CAPS,
+    panel: panel,
+    panelHtml: panelHtml,
+    readOnlyHtml: readOnlyHtml,
+    readOnlyRows: rowsFromPanel(readOnlyHtml),
+    noPolicyHtml: noPolicyHtml,
+    noPolicyRows: rowsFromPanel(noPolicyHtml),
   }) + "\n");
 }
 
