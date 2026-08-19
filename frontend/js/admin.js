@@ -1,8 +1,24 @@
 // Externalized from admin.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
     let ME = null, USERS = [], PROJECTS = [];
+    // The stored tab policy: { deny, locked_pages, locked_roles, tabs, updated_at, updated_by }.
+    // null until boot() fetches it, and null again if that fetch fails — in which case the matrix
+    // renders READ-ONLY and says so, rather than drawing switches that would save nothing.
+    let NAV_POLICY = null;
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
     async function api(path, opts){ const r = await fetch(path, Object.assign({ headers: TW.authHeaders() }, opts||{})); return r.json().catch(()=>({ok:false,error:"bad response", status:r.status})); }
+    // api() throws away the status, which is fine for the routes that answer {ok:false,error}. The
+    // tab-policy route refuses with FastAPI's {detail:…} and a 400/403/500, and the reason it gives
+    // ("you can't take that away from your own role") is the whole value of the refusal — so it needs
+    // a call that keeps both.
+    async function apiFull(path, opts){
+      const r = await fetch(path, Object.assign({ headers: TW.authHeaders() }, opts||{}));
+      const body = await r.json().catch(()=>({}));
+      return { status: r.status, ok: r.ok, body: body||{} };
+    }
+    function errText(res){
+      return (res.body && (res.body.detail || res.body.error)) || ("HTTP " + res.status);
+    }
 
     async function boot(){
       await window.TWAuth.ready;
@@ -12,8 +28,21 @@
         root.innerHTML = '<div class="denied">Admin access only. Redirecting…</div>';
         setTimeout(()=>window.location.assign("/projects.html"), 1500); return;
       }
+      // BEFORE shell(): the matrix is rendered by re-rendering the sidebar once per role, so the
+      // policy has to be in TWAuth's hands before that happens or the first paint shows every
+      // switch on and then corrects itself.
+      await loadNavPolicy();
       shell();
+      wireRoleMatrix();
       await refresh();
+    }
+
+    async function loadNavPolicy(){
+      const res = await apiFull("/api/admin/nav-access");
+      NAV_POLICY = res.ok && res.body && res.body.deny ? res.body : null;
+      // Hand the whole map to auth.js so navMatrix() renders the sidebar for EVERY role under it.
+      // /api/me only carried this viewer's own row, which is all an ordinary page needs.
+      try { window.TWAuth.setNavDeny((NAV_POLICY && NAV_POLICY.deny) || {}); } catch (e) {}
     }
 
     function shell(){
@@ -49,21 +78,30 @@
 
     // ── What each role can see ──
     // Hanz, 2026-08-19: "can we actually show what sidebar tabs is can be present for the admins,
-    // the members and the superadmin?"
+    // the members and the superadmin?" — then, looking at the read-only table: "I cant toggle these
+    // on and off?" Asked whether hiding the tab was enough or the page had to actually refuse, he
+    // chose REAL BLOCKING. So the cells are switches now, and the server enforces what they say.
     //
-    // THE ROWS ARE NOT WRITTEN HERE. window.TWAuth.navMatrix() builds the sidebar's nav once per
-    // role out of the menu's own markup and diffs the results, so this table is the menu rather
-    // than a description of it. A hand-kept copy of the tab list would be wrong the first time
-    // somebody adds a page — which is the whole failure this panel would otherwise introduce.
-    // Every sentence under the table is computed from the same rows for the same reason: a
-    // hardcoded "only the Admin tab differs" is a claim that rots silently.
+    // THE ROWS ARE STILL NOT WRITTEN HERE. window.TWAuth.navMatrix(deny) builds the sidebar's nav
+    // once per role out of the menu's own markup, UNDER THE STORED POLICY, and diffs the results —
+    // so the ticks and the switches are one render rather than two opinions, and a hand-kept copy of
+    // the tab list cannot drift from the menu. Every sentence under the table is computed from the
+    // same rows for the same reason: a hardcoded "only the Admin tab differs" is a claim that rots.
     const ROLE_LABEL = { user:"Member", admin:"Admin", super_admin:"Super admin" };
     function roleLabelOf(r){ return ROLE_LABEL[r] || r; }
 
-    function roleMatrixHtml(){
-      const nav = (window.TWAuth && window.TWAuth.navMatrix) ? window.TWAuth.navMatrix() : null;
+    // `policy` is optional, and that is deliberate: backend/tests/js/nav-visibility-harness.js lifts
+    // this function out on its own to prove the table IS the menu, and with no policy it renders
+    // exactly today's read-only panel. shell() calls it with no argument and it falls back to the
+    // module's NAV_POLICY — the typeof guard is what lets the lifted copy run, where that variable
+    // does not exist at all.
+    function roleMatrixHtml(policy){
+      const pol = policy || (typeof NAV_POLICY === "undefined" ? null : NAV_POLICY) || {};
+      const deny = pol.deny || null;
+      const nav = (window.TWAuth && window.TWAuth.navMatrix)
+        ? window.TWAuth.navMatrix(deny || undefined) : null;
       if (!nav || !nav.rows.length) {
-        return `<div class="panel" style="margin-top:18px;"><div class="ph"><strong>What each role can see</strong></div>
+        return `<div class="panel" id="rv-panel" style="margin-top:18px;"><div class="ph"><strong>What each role can see</strong></div>
           <p class="rv-note">The sidebar didn't report its tabs, so there is nothing to show here.
           Reload the page; if it persists, auth.js failed to load.</p></div>`;
       }
@@ -72,9 +110,60 @@
       const differing = rows.filter(r => seen(r) !== roles.length);
       const count = {}; roles.forEach(x => { count[x] = rows.filter(r => r.roles[x]).length; });
 
+      // What each tab actually owns, from the server's capability table. Absent (the lifted copy, or
+      // a failed policy fetch) means read-only: no switches, and the note says why.
+      const caps = {}; (pol.tabs || []).forEach(t => { caps[t.href] = t; });
+      const editable = !!(pol.tabs && pol.tabs.length);
+      const lockedRoles = pol.locked_roles || [];
+      const hideOnly = (pol.tabs || []).filter(t => !t.locked && !(t.api||[]).length);
+
+      // Both helpers are LOCAL because nav-visibility-harness.js lifts this function out on its own
+      // to prove the table is the menu; anything it reaches for from the file's top level would be a
+      // ReferenceError in that run, and stubbing it there would be stubbing the thing under test.
+      const shortDate = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString(); };
+      /** The chip beside a tab's name saying how much a switch there really does. */
+      const scopeChip = (cap) => {
+        if (!editable || !cap) return "";
+        // "not deniable" rather than "always on": the Admin row's member cell is a dash, because a
+        // member genuinely does not get that tab — the ROLE gate in the sidebar decides that, and
+        // this policy is a separate thing that simply cannot reach either page.
+        if (cap.locked) return `<span class="rv-lock" title="This policy cannot take this page away. It is where the setting is edited from, or where signing in lands — denying it would remove the way back.">not deniable</span>`;
+        if (!(cap.api||[]).length) return `<span class="rv-thin" title="Every API route this page reads is read by another page too, so refusing them would break a page nobody restricted. Switching this tab off hides it and blocks the page; the data stays reachable to somebody who knows the URL.">hides the tab only</span>`;
+        return `<span class="rv-hard" title="${esc((cap.api||[]).join(", "))}">blocks its data</span>`;
+      };
+
       const head = roles.map(r =>
         `<th class="rv-h${r===mine?" rv-mine":""}">${esc(roleLabelOf(r))}` +
         `${r===mine?'<span class="you">you</span>':""}</th>`).join("");
+
+      // ONE cell renderer for both modes, so the tick can never disagree with the switch beside it:
+      // there is no switch beside it — the glyph is INSIDE the button.
+      function cellHtml(r, role){
+        const on = !!r.roles[role];
+        const glyph = on ? '<span class="rv-yes">✓</span>' : '<span class="rv-no">—</span>';
+        const cap = caps[r.href];
+        if (!editable) return `<td class="rv-cell" data-role="${esc(role)}">${glyph}</td>`;
+        // Three reasons a switch cannot be touched, each with its own explanation on hover:
+        //  * the page is locked outright — /admin.html is where this policy is edited and
+        //    /portal.html is where signing in lands, so denying either removes the way back;
+        //  * the role is locked — the super admin is bootstrapped from an env var and is the account
+        //    that always has a way in;
+        //  * it is YOUR role and it is currently on — the server refuses that too, because every
+        //    self-lockout starts with somebody testing the toggle on themselves. Turning your own
+        //    role's tab back ON stays allowed: widening can only give access back.
+        let why = "";
+        if (!cap || cap.locked) why = "Always on. This is the page this setting is edited from, or the page signing in lands on — denying it would remove the way back.";
+        else if (lockedRoles.indexOf(role) !== -1) why = "A super admin cannot be restricted. That role is set from the server's environment, so it is the account that always has a way in.";
+        else if (role === mine && on) why = "You can't take a tab away from your own role. Ask another admin, or change it for a different role.";
+        const scope = cap && !(cap.api||[]).length
+          ? "Switching this off hides the tab and blocks the page. Its data stays reachable to somebody who types the URL — every route its page reads is read by another page too."
+          : (cap ? ("Switching this off also refuses " + (cap.api||[]).join(", ") + ", which only this tab uses.") : "");
+        const title = why || ((on ? "Switch off for " : "Switch on for ") + roleLabelOf(role) + ". " + scope);
+        return `<td class="rv-cell" data-role="${esc(role)}">` +
+          `<button class="rv-sw${on?" rv-on":""}"${why?" disabled":""} data-act="nav"` +
+          ` data-href="${esc(r.href)}" data-role="${esc(role)}" data-on="${on?"1":"0"}"` +
+          ` aria-pressed="${on?"true":"false"}" title="${esc(title)}">${glyph}</button></td>`;
+      }
 
       // The section is printed once per group rather than on all three of its rows: repeated
       // LEADS & BIDS down a column reads as three sections. The heading still belongs to the row
@@ -84,30 +173,43 @@
           <td class="rv-sec">${i && rows[i-1].section === r.section ? "" : esc(r.section)}</td>
           <td><span class="rv-ico">${esc(r.glyph)}</span>${esc(r.label)}${
             r.tag?`<span class="badge b-user" style="margin-left:6px">${esc(r.tag)}</span>`:""}
-            <span class="rv-href">${esc(r.href)}</span></td>
-          ${roles.map(x => `<td class="rv-cell" data-role="${esc(x)}">${
-            r.roles[x]?'<span class="rv-yes">✓</span>':'<span class="rv-no">—</span>'}</td>`).join("")}
+            <span class="rv-href">${esc(r.href)}</span>${scopeChip(caps[r.href])}</td>
+          ${roles.map(x => cellHtml(r, x)).join("")}
         </tr>`).join("");
 
-      return `<div class="panel" style="margin-top:18px;">
+      return `<div class="panel" id="rv-panel" style="margin-top:18px;">
         <div class="ph"><strong>What each role can see</strong>
           <span style="color:var(--ink-v)">${rows.length} sidebar tabs · ${differing.length}
             ${differing.length===1?"differs":"differ"} by role</span>
           <span class="grow"></span>
+          ${pol.updated_at?`<span class="rv-you">Last changed ${esc(shortDate(pol.updated_at))}${
+            pol.updated_by?" by "+esc(pol.updated_by):""}</span>`:""}
           <span class="rv-you">Your role: <strong>${esc(roleLabelOf(mine))}</strong></span>
         </div>
         <div style="overflow-x:auto"><table>
           <thead><tr><th>Section</th><th>Sidebar tab</th>${head}</tr></thead>
           <tbody>${body}</tbody>
         </table></div>
-        <div class="rv-note">
+        <div class="rv-note" id="rv-note">
           <p>${roleDiffSentence(nav, count)}</p>
-          <p><strong>This is the sidebar, not a permission model.</strong> Hiding a tab hides a
-            link and nothing else — every page stays reachable by typing its URL. What actually
-            stops someone is the server: <code>_require_admin</code> guards every
-            <code>/api/admin/*</code> route (this page's users and stats, admin project deletes,
-            the digest run and preview), the Item Library's vendor / division / unit writes, and
-            the notification-recipient writes.</p>
+          ${editable ? "" : `<p><strong>Read-only right now.</strong> The tab permissions didn't
+            load, so this is showing the menu as it stands with no switches. Reload the page.</p>`}
+          <p><strong>A tab switched off is a real block, but the page is still served.</strong>
+            There is no session cookie in this app — the only credential is a header the browser
+            attaches to API calls — so a page is still reachable by typing its URL, and what it
+            paints for a blocked role is a refusal card instead of its own content. What refuses the
+            DATA is the server, on the tabs marked <em>blocks its data</em> below. The sidebar on its
+            own is not a permission model, and never was: <code>_require_admin</code> guards every
+            <code>/api/admin/*</code> route (this page's users and stats, admin project deletes, the
+            digest run and preview), the Item Library's vendor / division / unit writes, and the
+            notification-recipient writes, switches or no switches.</p>
+          ${hideOnly.length?`<p><strong>${hideOnly.length} ${hideOnly.length===1?"tab":"tabs"} can
+            only be hidden, not sealed:</strong> ${hideOnly.map(t=>`<strong>${esc(t.label)}</strong>`)
+              .join(", ")}. Every API route their pages read is read by another page too — the
+            Analytics payload is also the Bid Calendar's, the Item Library's assemblies also price
+            the Polish beta, the pipeline feeds both Active Projects and Notification Sending — so
+            refusing those routes would break a page nobody restricted. Switching one off removes
+            the tab and blocks the page; somebody who knows the route can still read the data.</p>`:""}
           <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
             admin-gated: any signed-in member may rewrite the four recurring customer emails, and
             the save replaces the settings row with no history. The sidebar and the server agree
@@ -118,6 +220,42 @@
             admin adds, removes or toggles anyone but themselves) and <strong>Active
             Projects</strong> (only an admin reassigns someone else's project).</p>
         </div></div>`;
+    }
+
+    function wireRoleMatrix(){
+      document.querySelectorAll('#rv-panel [data-act="nav"]').forEach(el =>
+        el.addEventListener("click", () =>
+          toggleNav(el.dataset.href, el.dataset.role, el.dataset.on !== "1")));
+    }
+
+    function renderRoleMatrix(){
+      const el = document.getElementById("rv-panel");
+      if (!el) return;
+      el.outerHTML = roleMatrixHtml();
+      wireRoleMatrix();
+    }
+
+    /** Flip one tab for one role and save the WHOLE map, which is what the route takes. */
+    async function toggleNav(href, role, on){
+      const deny = {};
+      Object.keys((NAV_POLICY && NAV_POLICY.deny) || {}).forEach(r => {
+        deny[r] = ((NAV_POLICY.deny[r]) || []).slice();
+      });
+      const list = deny[role] || (deny[role] = []);
+      const at = list.indexOf(href);
+      if (on) { if (at !== -1) list.splice(at, 1); }        // ON = the denial comes off
+      else if (at === -1) list.push(href);
+      const res = await apiFull("/api/admin/nav-access",
+        { method:"PUT", body: JSON.stringify({ deny: deny }) });
+      if (!res.ok || !res.body.deny) {
+        // The refusal's REASON is the point — "you can't take that away from your own role" is
+        // actionable; "Action failed" sends somebody to the logs.
+        alert(errText(res));
+        return;
+      }
+      NAV_POLICY = res.body;
+      try { window.TWAuth.setNavDeny(NAV_POLICY.deny || {}); } catch (e) {}
+      renderRoleMatrix();
     }
 
     /** The one-line summary, computed — never asserted — so it cannot outlive the truth. */

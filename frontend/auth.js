@@ -28,6 +28,29 @@
   let sb = null;
   let currentUser = null;          // { email, name, role, status }
 
+  // ── Which tabs a role may NOT reach ──
+  // Hanz, 2026-08-19, on the Admin page's role matrix: "I cant toggle these on and off?" He chose
+  // real blocking, so the server refuses a denied tab's own API routes as well; this is the same
+  // policy on the menu side, and it arrives on /api/me (which init() already awaits before drawing
+  // the sidebar, so it costs no round trip and cannot disagree with the gate).
+  //
+  // NAV_DENY holds the FULL per-role map when the page knows it — the Admin page fetches it so the
+  // matrix can show every role's switches — and only the signed-in user's row otherwise. One object,
+  // so renderSidebar and navMatrix read the same thing rather than two.
+  //
+  // Empty means nothing is denied, which is exactly today's behaviour: absent policy file, a role
+  // the file never mentions, or a failed /api/me all land here.
+  let NAV_DENY = {};
+  // { page path: the denied tab href that owns it }, for the page this browser is ON. The server
+  // expands it because ONE tab owns TWO pages (the Polish beta's step 2 is opened from two places
+  // that are not its sidebar row), and a second copy of that mapping here is the copy that rots.
+  let DENIED_PAGES = {};
+
+  function denyFor(role) {
+    const list = NAV_DENY && NAV_DENY[role];
+    return Array.isArray(list) ? list : [];
+  }
+
   window.TWAuth = {
     ready: null,
     client: () => sb,
@@ -40,10 +63,17 @@
     // than a second list of it: sidebarMarkup(role) is the markup renderSidebar would put on
     // the page for that role, navSpec parses it into rows, navMatrix diffs the roles.
     // Accessors, not values, because the const they read is declared further down the file.
+    //
+    // Each takes an optional deny argument so the Admin page can render the matrix for a policy it
+    // has fetched — or for one the user is part-way through editing — without saving anything.
     roles: () => ROLES.slice(),
-    sidebarMarkup: (role) => renderSidebar(role || ROLES[0]),
-    navSpec: (role) => parseNav(renderSidebar(role || ROLES[0])),
+    sidebarMarkup: (role, deny) => renderSidebar(role || ROLES[0], deny),
+    navSpec: (role, deny) => parseNav(renderSidebar(role || ROLES[0], deny)),
     navMatrix,
+    // The signed-in user's own denied tabs, and the whole map when this page has it.
+    deniedPaths: () => denyFor((currentUser || {}).role || "user").slice(),
+    navDeny: () => NAV_DENY,
+    setNavDeny: (map) => { NAV_DENY = map && typeof map === "object" ? map : {}; },
   };
 
   function apiBase() { return window.TW_API_BASE || ""; }
@@ -82,9 +112,18 @@
         { headers: { Authorization: "Bearer " + window.__TW_TOKEN } })).json();
       currentUser = (me && me.ok) ? me
         : { email, role: "user", name: (session.user.user_metadata || {}).full_name };
+      // Fail OPEN if the response says nothing about permissions: a /api/me from a container that
+      // predates this feature, or one whose policy read failed, must leave every tab where it was.
+      NAV_DENY = {};
+      NAV_DENY[currentUser.role || "user"] = (me && me.nav_denied) || [];
+      DENIED_PAGES = (me && me.nav_denied_pages) || {};
     } catch {
       currentUser = { email, role: "user", name: (session.user.user_metadata || {}).full_name };
     }
+    // Refuse the page BEFORE the sidebar goes up, so a denied member never sees the tab they are
+    // standing on highlighted in a menu that is about to lose it.
+    const owner = DENIED_PAGES[path] || DENIED_PAGES[location.pathname];
+    if (owner) return showRefusal(owner);
     renderSidebar();
   }
 
@@ -141,7 +180,21 @@
 
   // Left sidebar matching the main Treadwell app (light, 240px, red accent),
   // collapsing to an off-canvas drawer under 768px.
+  // The hrefs the render CURRENTLY IN PROGRESS must leave out. A module-level variable rather than a
+  // fourth navItem() parameter because three test files and the nav-visibility harness read the
+  // sidebar's navItem(...) calls as SOURCE TEXT — the harness's probe run splices new ones in by
+  // string match — so the shape of those calls has to stay exactly as it is.
+  //
+  // Set by renderSidebar and cleared the moment the markup is built. The whole innerHTML assignment
+  // is synchronous and navMatrix walks the roles one at a time, so there is no window in which two
+  // renders overlap.
+  let RENDER_DENY = [];
+
   function navItem(href, glyph, label, tag) {
+    // A denied tab leaves the menu entirely. Returning "" rather than hiding it with CSS is the
+    // point of Hanz choosing real blocking: the server refuses this tab's own routes too, so a
+    // present-but-hidden link would be a link to a page that says no.
+    if (RENDER_DENY.indexOf(href) !== -1) return "";
     const active = location.pathname.toLowerCase().endsWith(href.toLowerCase());
     // `tag` marks a page as not-yet-finished. Optional so the other twelve callers are
     // untouched, and rendered as a chip rather than folded into the label so it reads as a
@@ -196,10 +249,19 @@
   //
   // Rows are created walking the MOST privileged role first, because a gate can only ever add
   // items, so that render is the one that holds every row in true sidebar order.
-  function navMatrix() {
+  // `deny` is an optional { role: [href] } map — the Admin page passes the stored policy, or the one
+  // the user is part-way through editing, so the switches and the ticks are the same render. Omitted,
+  // it uses whatever this page knows (NAV_DENY), which on an ordinary page is the signed-in user's
+  // row and nothing else.
+  //
+  // The most-privileged-first walk is also what guarantees every row EXISTS: the super admin can
+  // never be denied a tab (nav_access.py strips his role on write and on read), so his render always
+  // holds the full list. A tab denied to both members and admins still gets a row, with its ticks off
+  // — which is what the Admin page needs in order to draw a switch for it.
+  function navMatrix(deny) {
     const rows = [], byHref = {};
     ROLES.slice().reverse().forEach(function (role) {
-      parseNav(renderSidebar(role)).forEach(function (e) {
+      parseNav(renderSidebar(role, deny ? (deny[role] || []) : denyFor(role))).forEach(function (e) {
         let row = byHref[e.href];
         if (!row) {
           row = byHref[e.href] = { section: e.section, href: e.href, glyph: e.glyph,
@@ -226,13 +288,17 @@
   // isAdmin-ternary below rather than a second opinion about it. (No backticks in this file's
   // comments — the injected stylesheet is one long template literal and one stray backtick took
   // auth.js off the air on staging once. See test_frontend_js_parses.py.)
-  function renderSidebar(roleForSpec) {
+  function renderSidebar(roleForSpec, denyForSpec) {
     const spec = !!roleForSpec;
     if (!spec) {
       if (document.getElementById("tw-sidebar")) return;
       injectSidebarStyles();
     }
     const u = spec ? { role: roleForSpec } : (currentUser || {});
+    // Which tabs this render leaves out. Spec mode may be told explicitly (the Admin page rendering
+    // an unsaved policy); otherwise both modes read the same NAV_DENY, so the menu on the page and
+    // the matrix on the Admin page cannot report different things about the same role.
+    RENDER_DENY = (spec && denyForSpec) ? denyForSpec : denyFor(u.role || "user");
     const isAdmin = u.role === "admin" || u.role === "super_admin";
     const roleLabel = u.role === "super_admin" ? "SUPER ADMIN" : (u.role === "admin" ? "ADMIN" : "USER");
     const roleClass = u.role === "super_admin" ? "super" : (u.role === "admin" ? "admin" : "user");
@@ -344,6 +410,7 @@
       '<span class="tw-badge ' + roleClass + '">' + roleLabel + '</span></div>' +
       '<div class="tw-useremail">' + esc(u.email || "") + '</div></div>' +
       '<button class="tw-signout" id="tw-signout" title="Sign out">⏻</button></div>';
+    RENDER_DENY = [];        // the markup is built; nothing else may read this
     // Spec mode stops here: the caller wanted the markup, not a sidebar on the page.
     if (spec) return aside.innerHTML;
     document.body.appendChild(aside);
@@ -410,6 +477,55 @@
     }
 
     mountNotifications();
+  }
+
+  // ── A page this account may not open ──
+  // The tab's own label, read back out of the menu, so the card names the page the way the sidebar
+  // does and a rename cannot leave it saying something else. Rendered with NO denials, because the
+  // row being looked up is by definition one this role does not get.
+  function labelOf(href) {
+    const rows = navMatrix({}).rows;
+    for (let i = 0; i < rows.length; i++) if (rows[i].href === href) return rows[i].label;
+    return "This page";
+  }
+
+  /* Paint a refusal and stop. Called from init() the moment /api/me says this path is denied.
+   *
+   * NOT a bare redirect and NOT "Access denied". Somebody bounced silently to another page thinks
+   * their click did not register; somebody who lands on "Access denied" with no explanation files a
+   * bug. This says which tab, who can turn it on, and that nothing was lost.
+   *
+   * The sidebar still goes up, so this is not a dead end — every tab they DO have is one click away.
+   *
+   * TWAuth.ready NEVER SETTLES from here, and that is the mechanism rather than an oversight. Every
+   * page module boots with `await window.TWAuth.ready` and shared.js's API helper awaits it too, so
+   * nothing runs against the document this just emptied. The alternative — resolving — means each
+   * page's own boot continues, finds its elements gone, and either throws or paints an empty shell
+   * back over this card.
+   */
+  async function showRefusal(href) {
+    const label = labelOf(href);
+    injectSidebarStyles();
+    document.title = label + " isn't available — Treadwell";
+    // Replace the page's content wholesale. By now the page's own <script> tags have run their
+    // synchronous boot — auth.js resolves /api/me several ticks later — so what this covers is an
+    // empty shell, not data: every data call on those pages goes through shared.js, which waits.
+    try { document.body.replaceChildren(); } catch { document.body.innerHTML = ""; }
+    document.body.style.paddingTop = "";
+    try { delete document.body.dataset.twTopbarPad; } catch { /* stubbed dataset */ }
+    const card = document.createElement("div");
+    card.className = "tw-refuse";
+    card.innerHTML =
+      '<div class="tw-refuse-card">' +
+      '<div class="tw-refuse-ico" aria-hidden="true">🔒</div>' +
+      '<h1 class="tw-refuse-h">' + esc(label) + " isn't available on your account.</h1>" +
+      '<p class="tw-refuse-p">An admin can turn it on for members from the Admin page. ' +
+      'Nothing you were doing was lost.</p>' +
+      '<a class="tw-refuse-go" href="' + HOME_PAGE + '">Go to Active Projects</a>' +
+      '</div>';
+    document.body.appendChild(card);
+    renderSidebar();
+    await new Promise(function () {});
   }
 
   // ── Notification bell ──
@@ -643,6 +759,19 @@ html.tw-nav-open #tw-burger{display:none;}
 @media (max-width:767px){
   html.tw-nav-open #tw-backdrop{display:block;}
 }
+/* a page this account may not open. Centred in the content column, not the viewport, so the
+   sidebar beside it still reads as the way out. */
+.tw-refuse{display:flex;align-items:center;justify-content:center;min-height:82vh;padding:28px 20px;
+box-sizing:border-box;font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+color:var(--tw-ink);}
+.tw-refuse-card{max-width:46ch;text-align:center;background:#fff;border:1px solid rgba(27,28,28,.12);
+border-radius:14px;padding:30px 28px 26px;box-shadow:0 10px 30px rgba(0,0,0,.07);}
+.tw-refuse-ico{font-size:30px;line-height:1;margin-bottom:12px;}
+.tw-refuse-h{font-size:17px;font-weight:600;line-height:1.35;margin:0 0 8px;}
+.tw-refuse-p{margin:0 0 18px;color:var(--tw-ink-v);}
+.tw-refuse-go{display:inline-block;text-decoration:none;background:var(--tw-red);color:#fff;
+font-weight:600;padding:9px 16px;border-radius:9px;}
+.tw-refuse-go:hover{background:var(--tw-red-dark);}
 /* fixed top bar (hosts the notification bell, right-aligned) */
 #tw-topbar{position:fixed;top:0;left:0;right:0;height:52px;z-index:9995;background:#fff;
 border-bottom:1px solid rgba(27,28,28,.1);display:flex;align-items:center;justify-content:flex-end;
