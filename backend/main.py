@@ -4155,6 +4155,10 @@ def api_draft_notify(draft_id: str, payload: NotifyPicksIn, request: Request) ->
         lower = lambda xs: {str(e).strip().lower() for e in xs}          # noqa: E731
         changed = (lower(add) ^ lower(prior.get("add") or [])) \
             | (lower(mute) ^ lower(prior.get("mute") or []))
+        # `e and` is defence in depth, not load-bearing: _clean_portal_emails already drops
+        # empty entries, so `changed` cannot contain "". Mutation testing says removing it
+        # changes nothing, and the comment says so rather than taking credit for it. It stays
+        # because an empty `me` must never match an empty entry if that ever becomes reachable.
         foreign = sorted(e for e in changed if e and e != me)
         if foreign:
             raise HTTPException(

@@ -102,6 +102,22 @@ def test_case_and_padding_do_not_get_round_the_check(route):
     assert state["written"] == []
 
 
+@pytest.mark.parametrize("mine", ["KYLENE@WETREADWELL.COM", "Kylene@WeTreadwell.com",
+                                  "  kylene@wetreadwell.com  "])
+def test_your_own_address_is_recognised_whatever_its_casing(route, mine):
+    """The direction the test above does NOT cover, and the one the normalisation is actually for.
+    `_clean_portal_emails` trims but deliberately KEEPS the caller's casing, and the roster may hold
+    a different one — so without folding case here a non-admin would be refused permission to toggle
+    their OWN chip. That is a false refusal, not a bypass, which is why the refusal-side test passes
+    with or without the fold and this one does not.
+
+    Mutation: drop `.lower()` from the comparison. Only this test fails."""
+    post, state = route
+    r = post(add=[mine], mute=[])
+    assert r.status_code == 200, r.text
+    assert state["written"], "the caller was refused permission to change their own notification"
+
+
 # ── the delta, which is what keeps the control usable ────────────────────────
 def test_an_untouched_colleague_entry_is_carried_through_not_refused(route):
     """An admin muted Troy on this project. A non-admin now adds themselves, and the payload still
