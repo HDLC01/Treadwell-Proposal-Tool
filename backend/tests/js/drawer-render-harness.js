@@ -124,6 +124,11 @@ const FN_NAMES = [
   // whole panel rather than a missing button. lostReasonDialog comes with it because the handler
   // awaits it.
   "wireNotSentLost", "lostReasonDialog",
+  // Marking a project won by hand (2026-08-19). FOURTH time, and this pair is called from BOTH
+  // renderers — wonControlHtml from renderNotSent and from followupPanelHtml, wireWon from
+  // renderNotSent and from wireFollowup — so omitting either is a ReferenceError that takes out the
+  // whole drawer on a sent project as well as an unsent one.
+  "wonControlHtml", "wireWon",
 ];
 
 // ── the DOM stub ─────────────────────────────────────────────────────────────
@@ -285,6 +290,14 @@ const BOARD_ROWS = [
   { proposal_id: "notsent", project_name: "Cedar Ridge Distribution Center", not_sent: true,
     bid_total: 88000.0, drafted_at: "2026-08-09T12:00:00Z", estimator_email: "kyle@wetreadwell.com",
     customer_email: "dave@cedarridge.com" },
+  // The Won-by-hand rows (2026-08-19). Separate from the four above so the click scenarios can
+  // mutate them — the drawer patches the board row in place, which is the point — without changing
+  // what every other scenario renders.
+  { proposal_id: "wonsent", project_name: "Fairview Clinic", proposal_status: "sent" },
+  { proposal_id: "marksent", project_name: "Northgate Fulfilment", proposal_status: "sent" },
+  { proposal_id: "marknotsent", project_name: "Riverbend Logistics Hub", not_sent: true,
+    bid_total: 41250.0, drafted_at: "2026-08-09T12:00:00Z", estimator_email: "kyle@wetreadwell.com" },
+  { proposal_id: "paid", project_name: "Westport Retail Center", proposal_status: "approved" },
 ];
 
 /** The drawer payload as /api/portal/proposal/<id> returns it. */
@@ -402,12 +415,25 @@ const NOTIFY = {
               { email: "hanz@wetreadwell.com", mode: "add" },
               { email: "kyle@wetreadwell.com", mode: "mute" }],
 };
-const api = (p) => Promise.resolve({
-  ok: true,
-  json: () => Promise.resolve(p.includes("notify-overrides") ? NOTIFY
-    : p.includes("estimators") ? { estimators: [{ email: "kyle@wetreadwell.com", name: "Kyle" }] }
-    : { ok: true }),
-});
+// Every request the drawer makes, recorded. WHICH endpoint a button posts to is a behavioural claim
+// no source read settles — the won control has to reach the DRAFT route even on a sent project,
+// because the portal has no column for the mark — and `fails` lets one scenario prove that a refused
+// write does not leave the rep looking at a panel claiming it saved.
+const net = { requests: [], fails: false };
+const api = (p, init) => {
+  net.requests.push({ path: p, method: (init && init.method) || "GET",
+                      body: init && init.body ? JSON.parse(init.body) : null });
+  if (net.fails) {
+    return Promise.resolve({ ok: false, status: 500,
+                             json: () => Promise.resolve({ error: "postgrest down" }) });
+  }
+  return Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve(p.includes("notify-overrides") ? NOTIFY
+      : p.includes("estimators") ? { estimators: [{ email: "kyle@wetreadwell.com", name: "Kyle" }] }
+      : { ok: true }),
+  });
+};
 const TW = {
   fmtBizDate: (v) => (v ? String(v).slice(0, 10) : ""),
   fmtBizDay: (v) => String(v || ""),
@@ -455,6 +481,14 @@ const body = `"use strict";
     // adversarial review deleted that half of the toggle and the whole suite stayed green.
     // NB no backticks in this string — it is inside a template literal.
     setEligible: (id, on) => setSecEligible(id, on),
+    // openDetail is stubbed in this harness, and it is what fills DETAIL_CACHE in the browser
+    // (before it ever renders). The won control's repaint on a SENT project reads the cache back,
+    // so a scenario has to stand in for that one line or it would be testing the stub.
+    cache: (pid, data) => { DETAIL_CACHE[pid] = data; },
+    // The board row a renderer merged from, read back out of the module: the won mark lives on it
+    // and nowhere else on the client (see the merge at the top of renderDetail).
+    row: (pid) => ALL.filter((x) => x.proposal_id === pid)[0] || null,
+    sig: () => DRAWER_SIG,
   };`;
 
 const page = new Function(...injected.map(([n]) => n), body)(...injected.map(([, v]) => v));
@@ -470,7 +504,7 @@ const out = { imported: destructured.map(([n]) => n), tabs: Object.keys(page.sec
   // "wiring an id it never rendered" — the not-sent test subtracts these.
   allSecCards: page.allSecCards(),
               secMap: page.secTabs(),
-              scenarios: {}, clipboard: {}, notSent: {}, errors: {} };
+              scenarios: {}, clipboard: {}, notSent: {}, won: {}, errors: {} };
 
 /** What one tab looks like once focusSection has switched to it: which cards are on screen,
  *  which panel is, and which step reads as selected. Read off the classList the real
@@ -653,6 +687,103 @@ async function runScenario(name, s) {
     out.clipboard.throwsSync = await copyCase({ writeText: () => { throw new Error("boom"); } });
   } catch (e) {
     out.errors.clipboard = e.constructor.name + ": " + e.message;
+  }
+
+  // ── marking a project won, by hand, in BOTH drawers ────────────────────────
+  // Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit has
+  // been received". Everything asserted here is behavioural: which route the button posts to, that
+  // the panel it repaints into offers the undo, that the mark survives on the board row the next
+  // poll will render from, and that a refused write claims nothing.
+  try {
+    /** Press one of the two won buttons and report what the drawer did about it. */
+    async function pressWon(id) {
+      net.requests.length = 0;
+      const b = dom.getElementById(id);
+      if (!b) return { pressed: false };
+      b.textContent = id === "won-mark" ? "Mark won" : "Undo — not won yet";
+      await b.fire("click");
+      for (let i = 0; i < 6; i++) await tick();          // api() + .json() + the repaint
+      return { pressed: true, requests: net.requests.slice(), html: dom.html,
+               note: (dom.els.get("#won-note") || {}).textContent || "",
+               label: b.textContent, disabled: b.disabled };
+    }
+
+    // ── the not-sent drawer ──
+    page.open("marknotsent");
+    const nsRow = page.row("marknotsent");
+    page.renderNotSent("marknotsent", nsRow);
+    out.won.notSentOffered = { html: dom.html };
+    const nsMark = await pressWon("won-mark");
+    out.won.notSentMarked = Object.assign({}, nsMark, { rowWonAt: (page.row("marknotsent") || {}).won_at,
+                                                        sig: page.sig() });
+    const nsUndo = await pressWon("won-undo");
+    out.won.notSentUndone = Object.assign({}, nsUndo, { rowWonAt: (page.row("marknotsent") || {}).won_at });
+
+    // ── the sent drawer: a project somebody already marked ──
+    // won_at reaches this drawer ONLY through the board row (the portal payload has no such field),
+    // so this is the merge at the top of renderDetail, executed.
+    const wonRow = page.row("wonsent");
+    wonRow.won_at = "2026-08-19T15:00:00+00:00";
+    const wonData = payload({ proposal: { project_name: "Fairview Clinic", customer_email: "d@x.com",
+                                          url: PORTAL_URL, proposal_status: "sent",
+                                          deposit_status: "pending", contacts_status: "pending",
+                                          followup_state: { enrolled: true, enabled: true } },
+                              approval: null, contacts: [], deposits: [], recipient_activity: [],
+                              followups: [] });
+    page.open("wonsent");
+    page.cache("wonsent", wonData);
+    page.renderDetail("wonsent", wonData);
+    out.won.sentAlreadyWon = { html: dom.html, merged: wonData.proposal.won_at };
+
+    // ── the sent drawer: marking one from scratch ──
+    const markData = payload({ proposal: { project_name: "Northgate Fulfilment",
+                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           proposal_status: "sent", deposit_status: "pending",
+                                           contacts_status: "pending",
+                                           followup_state: { enrolled: true, enabled: true } },
+                               approval: null, contacts: [], deposits: [], recipient_activity: [],
+                               followups: [] });
+    page.open("marksent");
+    page.cache("marksent", markData);
+    page.renderDetail("marksent", markData);
+    out.won.sentOffered = { html: dom.html };
+    const sentMark = await pressWon("won-mark");
+    out.won.sentMarked = Object.assign({}, sentMark, { rowWonAt: (page.row("marksent") || {}).won_at });
+
+    // ── a refused write ──
+    // The optimistic patch is the hazard in this design: the panel redraws from a row it patched
+    // itself, so a failed save must leave the mark OFF the row as well as off the screen.
+    const failRow = page.row("marknotsent");
+    failRow.won_at = "";
+    page.open("marknotsent");
+    page.renderNotSent("marknotsent", failRow);
+    net.fails = true;
+    const failed = await pressWon("won-mark");
+    net.fails = false;
+    out.won.failed = Object.assign({}, failed, { rowWonAt: (page.row("marknotsent") || {}).won_at });
+
+    // ── a closed-lost project offers nothing ──
+    // Lost beats Won in every reader, so a Mark won press here would save and change nothing
+    // visible, which reads as a broken control. Reactivate is the way back.
+    page.open("bare");
+    page.cache("bare", SCENARIOS.bare.data);
+    page.renderDetail("bare", SCENARIOS.bare.data);
+    out.won.lost = { html: dom.html };
+
+    // ── a project won the DERIVED way says so, and offers no button ──
+    const paidData = payload({ proposal: { project_name: "Westport Retail Center",
+                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           proposal_status: "approved",
+                                           approved_at: "2026-07-20T10:00:00Z",
+                                           deposit_status: "received", contacts_status: "pending",
+                                           followup_state: { enrolled: true, enabled: true } },
+                               contacts: [], deposits: [], recipient_activity: [], followups: [] });
+    page.open("paid");
+    page.cache("paid", paidData);
+    page.renderDetail("paid", paidData);
+    out.won.derived = { html: dom.html };
+  } catch (e) {
+    out.errors.won = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
   console.log(JSON.stringify(out));

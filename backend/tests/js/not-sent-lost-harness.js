@@ -17,6 +17,9 @@ const path = require("path");
 
 const ROOT = process.argv[2];
 const SRC = fs.readFileSync(path.join(ROOT, "js", "portal.js"), "utf8");
+// The real predicates, for the Won control renderNotSent now also paints (2026-08-19). Stubbing
+// `wonByHand` would decide which branch of that control renders, which is the thing it decides.
+const CORE = require(path.join(path.resolve(ROOT), "js", "crm-core.js"));
 
 const REASONS = {
   price: "Price", another_contractor: "Another contractor", canceled: "Project canceled",
@@ -114,6 +117,10 @@ function lift(deps) {
     // either.
     + source("lostReasonDialog") + "\n"
     + source("renderNotSent") + "\n" + source("wireNotSentLost") + "\n"
+    // Marking a bid won by hand (2026-08-19). Lifted rather than stubbed because renderNotSent calls
+    // BOTH unconditionally: leaving either out is a ReferenceError for the whole panel, which is how
+    // this harness found the feature's first bug.
+    + source("wonControlHtml") + "\n" + source("wireWon") + "\n"
     // Recorded rather than lifted: applySecPanel reaches for ALL_SEC_CARDS/SEC_ELIGIBLE and two
     // lazy fetches, the estimator picker is another file's subject, and the notify roster is a
     // network read. Recording each means a RENAME in portal.js still fails loudly here.
@@ -144,7 +151,7 @@ function harness(row, opts) {
     // unrendered in every case, including the ones about reopening.
     isLost: (p) => String((p && p.proposal_status) || "") === "closed_lost",
     lostReason: (p) => REASONS[((p && p.followup_state) || {}).closed_lost_reason] || "",
-    C: { LOST_REASON: REASONS },
+    C: { LOST_REASON: REASONS, isWon: CORE.isWon, wonByHand: CORE.wonByHand },
     cardTotal: () => null,
     money: (n) => "$" + n,
     TW: { fmtBizDate: (d) => String(d) },
