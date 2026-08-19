@@ -267,20 +267,29 @@ def set_notify_picks(draft_id: str, add: List[str], mute: List[str],
     return True
 
 
-def get_notify_picks(draft_id: str) -> Dict[str, List[str]]:
-    """The stored deviations, as {"add": [...], "mute": [...]}. Empty lists when there are none.
+def get_notify_picks(draft_id: str) -> Dict[str, Any]:
+    """The stored deviations plus the project's owner: {"add": [...], "mute": [...], "owner_email"}.
 
-    Read-only companion to set_notify_picks, and it exists for AUTHORISATION rather than for
-    display: `api_draft_notify` compares what a caller submitted against what is already stored so a
-    non-admin can be held to changing only their own address. A missing project reads as empty, which
-    is the safe direction — every submitted address then counts as a change and has to clear the
-    same check."""
+    Read-only companion to set_notify_picks, serving two callers that both need one query:
+
+      * AUTHORISATION — `_guard_notify_picks` compares what a caller submitted against what is
+        already stored, so a non-admin can be held to changing only their own address.
+      * THE RECONCILE LOOP in `api_draft_notify`, which clears overrides that no longer deviate and
+        must SPARE the owner. The portal deliberately keeps the creator's override (Will, via Hanz,
+        2026-08-13: the estimator who built the estimate should hear back about it), so a loop that
+        cleared everything outside the submitted set would strip an override the portal set on
+        purpose.
+
+    A missing project reads as empty with no owner, which is the safe direction on both counts: every
+    submitted address then counts as a change and has to clear the same check, and nothing is
+    spared from clearing on a project that does not exist."""
     sb = get_client()
-    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    cur = sb.table("drafts").select("data,owner_email").eq("id", draft_id).limit(1).execute()
     if not cur.data:
-        return {"add": [], "mute": []}
-    picks = (cur.data[0].get("data") or {}).get("notify_picks") or {}
-    out: Dict[str, List[str]] = {}
+        return {"add": [], "mute": [], "owner_email": ""}
+    row = cur.data[0]
+    picks = (row.get("data") or {}).get("notify_picks") or {}
+    out: Dict[str, Any] = {"owner_email": (row.get("owner_email") or "").strip()}
     for key in ("add", "mute"):
         raw = picks.get(key)
         out[key] = [str(e) for e in raw] if isinstance(raw, list) else []
