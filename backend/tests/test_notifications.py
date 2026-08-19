@@ -263,6 +263,64 @@ def test_a_source_that_forgets_its_tier_lands_last_not_first(monkeypatch):
         "an untiered item sorted into %r" % [x["kind"] for x in items])
 
 
+def test_every_emitter_agrees_on_its_category_tier(monkeypatch):
+    """The bug the named tiers exist to prevent: a category emits its tier from SEVERAL places —
+    three in the Basisboard diff, three for crm_step — and one missed site drops half a category into
+    another section. The feed tests above only ever see one item per kind, so this walks all fourteen
+    emit sites instead and checks that each kind speaks with one voice.
+
+    Mutation: retier any single emit site. This fails."""
+    captured = {}
+    monkeypatch.setattr(n, "_load_state", lambda: {})
+    monkeypatch.setattr(n, "_save_state", lambda s: captured.update(s))
+    n.add_lead_estimate("d1", "A lead")
+    monkeypatch.setattr(n.drafts_mod, "list_events", lambda limit=100: [
+        {"id": 1, "action": "to_dropbox", "created_at": A_MINUTE_AGO,
+         "detail": {"project_name": "Filed", "folder_url": "https://dropbox.test/x"}},
+        {"id": 2, "action": "closed_lost", "created_at": A_MINUTE_AGO,
+         "detail": {"project_name": "Unsent", "reason": "another_contractor"}}])
+    emitted = (
+        n._diff_pipeline(                                     # pipeline_awarded / _stage / _new
+            {"p1": {"stage_id": "s1", "stage_name": "Bid", "awarded": False, "name": "P1"},
+             "p2": {"stage_id": "s1", "stage_name": "Bid", "awarded": False, "name": "P2"}},
+            [{"id": "p1", "stage_id": "s1", "stage_name": "Bid", "awarded": True, "name": "P1"},
+             {"id": "p2", "stage_id": "s2", "stage_name": "Won", "awarded": False, "name": "P2"},
+             {"id": "p3", "stage_id": "s1", "stage_name": "Bid", "awarded": False, "name": "P3"}],
+            A_MINUTE_AGO)
+        + n._lead_events([{"id": 1, "project": {"name": "L"}}], A_MINUTE_AGO)   # lead_new
+        + captured["lead_events"]                                              # lead_estimate
+        + n._diff_crm({}, [{"proposal_id": "p9", "project_name": "First send",
+                            "proposal_status": "sent"}], A_MINUTE_AGO)         # crm_step (sent)
+        + _crm_step(A_MINUTE_AGO)                                              # crm_step (per-field)
+        + n._dropbox_notifications()                                           # to_dropbox
+        + n._draft_event_notifications()                                       # crm_step (unsent)
+        + n._portal_message_notifications({"portal_messages": [
+            {"id": 1, "body": "hi", "created_at": A_MINUTE_AGO}]})             # portal_message
+        + n._deadline_notifications([                                          # all four buckets
+            {"id": "o", "project_name": "Overdue", "deadline": "2026-08-01", "archived": False},
+            {"id": "t", "project_name": "Today", "deadline": "2026-08-19", "archived": False},
+            {"id": "s", "project_name": "Soon", "deadline": "2026-08-22", "archived": False},
+            {"id": "n", "project_name": "NoDate", "deadline": None, "archived": False},
+        ], TODAY)
+    )
+    assert len(emitted) == 14, "an emit site is no longer covered here: %d items" % len(emitted)
+    tiers = {}
+    for item in emitted:
+        tiers.setdefault(item["kind"], set()).add(item["sort"])
+    split = {k: v for k, v in tiers.items() if len(v) > 1}
+    assert not split, "these kinds emit more than one tier: %r" % split
+    tier = {k: v.pop() for k, v in tiers.items()}
+    assert tier["portal_message"] < tier["crm_step"] < tier["pipeline_new"], tier
+    assert (tier["pipeline_new"] == tier["pipeline_awarded"] == tier["pipeline_stage"]
+            == tier["lead_new"] == tier["lead_estimate"] == tier["to_dropbox"]), tier
+    deadline = {k: v for k, v in tier.items() if k.startswith("deadline_")}
+    event = {k: v for k, v in tier.items() if not k.startswith("deadline_")}
+    assert max(event.values()) < min(deadline.values()), (
+        "an event shares or loses to a deadline tier: %r" % tier)
+    assert (deadline["deadline_overdue"] < deadline["deadline_today"]
+            < deadline["deadline_soon"] < deadline["deadline_none"]), deadline
+
+
 def test_a_stored_event_is_retiered_on_read_not_trusted_from_the_file(monkeypatch):
     """notif_state.json is a 30-day archive written by whatever code was deployed when each event
     happened, so its items carry the tier that was current THEN. Trusting the stored number would
