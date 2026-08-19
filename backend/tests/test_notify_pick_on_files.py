@@ -43,6 +43,11 @@ def wire(monkeypatch):
     monkeypatch.setattr(main.drafts, "delete_revision", lambda *a, **k: None)
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
     monkeypatch.setattr(main.profiles, "get_by_email", lambda e: None)
+    # An ADMIN, because these tests are about the picks being forwarded and cleaned, and since
+    # 2026-08-19 this route also checks that the caller is allowed to make the change it forwards.
+    # Kyle and Hanz are admins, so this is the ordinary case; the permission rule itself is covered
+    # in test_notify_picks_permission.py, including on this route.
+    monkeypatch.setattr(main, "_caller_is_admin", lambda request: True)
     return sent
 
 
