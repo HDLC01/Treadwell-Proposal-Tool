@@ -169,16 +169,23 @@ def test_an_admin_may_change_anyone(route):
     assert state["written"] == [{"add": [OTHER, OUTSIDE], "mute": [ME]}]
 
 
-def test_an_admin_is_not_charged_for_a_permission_read(route, monkeypatch):
-    """The stored picks are read ONLY to authorise. An admin needs no delta, so the read must not
-    happen at all — and if it did and threw, an admin's save would 502 for no reason."""
+def test_the_stored_picks_are_read_for_an_admin_too(route, monkeypatch):
+    """An earlier version of this test asserted the opposite — that an admin skips the read, because
+    the read existed only to authorise. That stopped being true when the reconcile loop started
+    needing the project's OWNER from the same row in order to spare them from its clearing pass, and
+    the loop runs for admins as much as anyone. So the read is unconditional now, deliberately, and
+    this pins that rather than the old claim.
+
+    Mutation: put the read back behind `if not _caller_is_admin(request)`. The owner exclusion then
+    applies to nobody who actually uses the control, and test_the_owner_is_never_cleared fails."""
     post, state = route
     state["admin"] = True
-
-    def boom(pid):
-        raise RuntimeError("should not be called for an admin")
-    monkeypatch.setattr(main.drafts, "get_notify_picks", boom)
+    seen = []
+    real = main.drafts.get_notify_picks
+    monkeypatch.setattr(main.drafts, "get_notify_picks",
+                        lambda pid: (seen.append(pid), real(pid))[1])
     assert post(add=[OTHER], mute=[]).status_code == 200
+    assert seen == ["d-1"], "the owner is no longer read, so the reconcile loop cannot spare them"
 
 
 # ── failing closed ───────────────────────────────────────────────────────────
@@ -245,3 +252,138 @@ def test_the_drawers_click_wiring_skips_the_read_only_chips():
     assert 'querySelectorAll(".nt-chip")' not in body, (
         "the not-sent picker still wires clicks by class, which now matches its read-only spans")
     assert 'querySelectorAll("[data-ns-notify]")' in body
+
+
+# ── the LIVE path: the picks travel in the publish body ──────────────────────
+# The gate went on /api/draft/{id}/notify first, and that was the secondary door. The Files screen
+# sends its choices with the PUBLISH, because portal_notify_overrides.proposal_id has a foreign key
+# onto a row that does not exist until that request creates it. So the route people actually use to
+# tell the portal who hears about a send was still ungated after the "fix". Both call one helper now.
+PUBLISH = "/api/portal/publish?draft_id=d1"
+
+
+@pytest.fixture
+def publish(monkeypatch):
+    state = {"admin": False, "prior": {}, "body": {}}
+
+    def fake_portal(path, method="GET", body=None):
+        state["body"] = body or {}
+        return {"ok": True, "token": "t", "url": "u"}
+
+    monkeypatch.setattr(main, "_portal", fake_portal)
+    monkeypatch.setattr(main, "_user_email", lambda request: ME)
+    monkeypatch.setattr(main, "_caller_is_admin", lambda request: state["admin"])
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda pid: {"data": {"notify_picks": dict(state["prior"])},
+                                     "owner_email": "rj@wetreadwell.com"})
+    monkeypatch.setattr(main.drafts, "create_revision", lambda *a, **k: 1)
+    monkeypatch.setattr(main.drafts, "delete_revision", lambda *a, **k: None)
+    monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
+    monkeypatch.setattr(main.profiles, "get_by_email", lambda e: None)
+
+    def go(**body):
+        # The route requires an estimator before it looks at anything else, so every call carries one
+        # — otherwise these tests would pass on a 400 that has nothing to do with permissions.
+        body.setdefault("assigned_estimator", OTHER)
+        return client.post(PUBLISH, json=body)
+
+    return go, state
+
+
+def test_a_non_admin_cannot_smuggle_an_outside_address_into_a_real_send(publish):
+    """THE hole the first fix missed. This is a send: the portal applies these picks to the override
+    table and then emails everyone it resolves. An outside address added here receives the
+    proposal-sent notification for a real customer's job."""
+    go, state = publish
+    r = go(notify_add=[OUTSIDE])
+    assert r.status_code == 403, r.text
+    assert "notify_add" not in state["body"], "the pick was forwarded to the portal anyway"
+
+
+def test_a_non_admin_cannot_mute_the_team_on_a_real_send(publish):
+    go, state = publish
+    r = go(notify_mute=[OTHER])
+    assert r.status_code == 403
+    assert "notify_mute" not in state["body"]
+
+
+def test_a_non_admin_may_still_change_their_own_on_a_send(publish):
+    go, state = publish
+    r = go(notify_add=[ME])
+    assert r.status_code == 200, r.text
+    assert state["body"]["notify_add"] == [ME]
+
+
+def test_an_admin_may_pick_anyone_on_a_send(publish):
+    go, state = publish
+    state["admin"] = True
+    r = go(notify_add=[OTHER, OUTSIDE], notify_mute=[ME])
+    assert r.status_code == 200, r.text
+    assert state["body"]["notify_add"] == [OTHER, OUTSIDE]
+
+
+def test_an_untouched_send_needs_no_permission_at_all(publish):
+    """A send that carries no picks must not be gated — every estimator sends proposals, and most
+    never touch the control. Checked because the guard is only called when something was picked."""
+    go, state = publish
+    r = go(assigned_estimator=OTHER)
+    assert r.status_code == 200, r.text
+    assert "notify_add" not in state["body"] and "notify_mute" not in state["body"]
+
+
+def test_a_send_that_carries_the_stored_picks_unchanged_is_allowed(publish):
+    """The Files chips are seeded from the draft's stored picks, so a non-admin who opens the screen
+    and presses Send forwards exactly what is already there. That is a no-op change and must pass, or
+    a non-admin could not send a proposal on any project with an override on it."""
+    go, state = publish
+    state["prior"] = {"add": [OTHER], "mute": []}
+    r = go(notify_add=[OTHER])
+    assert r.status_code == 200, r.text
+    assert state["body"]["notify_add"] == [OTHER]
+
+
+def test_both_doors_share_one_check():
+    """A rule enforced in two places drifts. The publish path and the draft route must both reach
+    _guard_notify_picks — if either grows its own copy, this is the test that says so."""
+    import inspect
+    import re
+    src = inspect.getsource(main)
+    assert src.count("def _guard_notify_picks(") == 1, "the guard has been duplicated"
+    # CALLS only — `def _guard_notify_picks(request, ...` matches a naive substring count too, which
+    # is why the first version of this test read 3 and looked like a duplicate.
+    calls = re.findall(r"^\s+_guard_notify_picks\(request", src, re.M)
+    assert len(calls) == 2, (
+        "expected exactly two call sites (the publish path and the draft route); found %d. A third "
+        "door into the override table needs the same guard, not its own copy." % len(calls))
+
+
+# ── the reconcile loop must not strip the estimate's author ──────────────────
+def test_the_owner_is_never_cleared(route, monkeypatch):
+    """The publish path forwards `created_by`, and the portal records the estimate's author as a
+    recipient on purpose — Will, via Hanz, 2026-08-13: the estimator who built it should hear back.
+    The portal's own clearing loop spares them. Without the same exclusion here, one save from this
+    drawer strips an override the portal deliberately set, and the person who built the estimate
+    quietly stops hearing about their own job.
+
+    Mutation: clear against `chosen` instead of `spared`. Only this test fails."""
+    post, state = route
+    state["admin"] = True
+    owner = "rj@wetreadwell.com"
+    monkeypatch.setattr(main.drafts, "get_notify_picks",
+                        lambda pid: {"add": [], "mute": [], "owner_email": owner})
+    monkeypatch.setattr(main.drafts, "latest_revision_no", lambda pid: 3)   # sent, so it reconciles
+    cleared = []
+
+    def fake_portal(path, method="GET", body=None):
+        if method == "GET":
+            return {"overrides": [{"email": owner}, {"email": "troy@wetreadwell.com"}]}
+        if (body or {}).get("mode") == "clear":
+            cleared.append(body["email"])
+        return {"ok": True}
+    monkeypatch.setattr(main, "_portal", fake_portal)
+
+    r = post(add=[ME], mute=[])
+    assert r.status_code == 200, r.text
+    assert owner not in cleared, "the estimate's author was stripped from their own job"
+    assert "troy@wetreadwell.com" in cleared, (
+        "nothing was cleared at all, so this proves nothing about the exclusion")

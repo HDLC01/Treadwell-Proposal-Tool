@@ -1108,6 +1108,46 @@ def _clean_portal_emails(raw: list) -> list:
     return out
 
 
+def _guard_notify_picks(request: Request, prior: Any,
+                        add: list, mute: list) -> None:
+    """403 unless the caller is an admin, or every address they CHANGED is their own.
+
+    Admin may set anyone's; anybody else may only change their own, which is the rule
+    `api_portal_notify_overrides_set` has always enforced. It belongs on every door into that
+    override table, because an `add` is not cosmetic: the portal then emails that address the
+    proposal-sent and approval notifications, project name and customer detail included. Without
+    this, any signed-in staff member can route a customer's proposal activity to an arbitrary
+    outside address.
+
+    ONE HELPER, TWO CALLERS, and that is the point. The first version of this check lived inline in
+    `api_draft_notify` only — and the picks' PRIMARY path is the publish body, because
+    `portal_notify_overrides.proposal_id` has a foreign key onto a row that does not exist until the
+    first send. So the gate went on the secondary door and the live one stayed open. Anything that
+    forwards `notify_add`/`notify_mute` calls this.
+
+    Compared as a DELTA, not as "every address must be mine". Both controls submit the WHOLE set of
+    deviations, so a flat rule would refuse a non-admin on any project where an admin had already
+    muted somebody — the legitimate case, and the one that would make the control useless rather
+    than safe. Carrying an existing entry through is fine; dropping somebody else's is a change, or
+    un-muting by omission would be a free bypass.
+    """
+    if _caller_is_admin(request):
+        return
+    me = (_user_email(request) or "").strip().lower()
+    picks = prior if isinstance(prior, dict) else {}
+
+    def _low(xs) -> set:
+        return {str(e).strip().lower() for e in (xs or []) if str(e).strip()}
+
+    changed = (_low(add) ^ _low(picks.get("add"))) | (_low(mute) ^ _low(picks.get("mute")))
+    # `e and` is defence in depth rather than load-bearing: _clean_portal_emails and _low both drop
+    # empty entries, so `changed` cannot hold "". Mutation testing says removing it changes nothing,
+    # and this says so rather than taking credit — it stays so an empty `me` can never match an empty
+    # entry if that ever becomes reachable.
+    if any(e and e != me for e in changed):
+        raise HTTPException(403, "You can only change your own notifications for a project.")
+
+
 @app.post("/api/portal/publish")
 def api_portal_publish(draft_id: str, request: Request,
                        payload: Optional[PortalPublishIn] = None) -> Dict[str, Any]:
@@ -1158,10 +1198,22 @@ def api_portal_publish(draft_id: str, request: Request,
     # Who on the team hears about this send. Same cleaning helper again, and forwarded only when
     # the estimator actually changed something, so a send with the roster left alone carries the
     # byte-for-byte legacy body.
+    #
+    # THIS IS THE LIVE PATH FOR THE PICKS, and it needs the same permission check as the drawer's
+    # route. The Files screen sends its choices HERE rather than to /api/draft/{id}/notify, because
+    # portal_notify_overrides.proposal_id has a foreign key onto a row that does not exist until this
+    # very request creates it — so a gate on that route alone would have left the door people
+    # actually use wide open. Compared against the draft's stored picks, which is what the Files
+    # chips were seeded from, so an untouched send is a no-op change and needs no permission.
+    _picked = {}
     for field in ("notify_add", "notify_mute"):
         picked = _clean_portal_emails(getattr(payload, field) if payload else [])
         if picked:
             body[field] = picked
+        _picked[field] = picked
+    if _picked["notify_add"] or _picked["notify_mute"]:
+        _guard_notify_picks(request, (row.get("data") or {}).get("notify_picks"),
+                            _picked["notify_add"], _picked["notify_mute"])
     # Checked after the recipients (their errors are more specific and predate this)
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
@@ -4135,34 +4187,16 @@ def api_draft_notify(draft_id: str, payload: NotifyPicksIn, request: Request) ->
     add = _clean_portal_emails(payload.add)
     mute = _clean_portal_emails(payload.mute)
 
-    # Admin may set anyone's; anybody else may only change THEIR OWN address. Same rule the
-    # per-project override route enforces (api_portal_notify_overrides_set), and it belongs here too:
-    # an `add` is not cosmetic, it makes the portal email that address the proposal-sent and approval
-    # notifications, project and customer detail included. Without this check any signed-in staff
-    # member could route those to an arbitrary outside address on any project.
-    #
-    # Compared as a DELTA against what is stored, not as "every address must be mine". These two
-    # controls submit the WHOLE set of deviations, so a flat rule would 403 a non-admin on any
-    # project where an admin had already muted somebody — the legitimate case, and the one that would
-    # have made the control useless rather than safe.
-    if not _caller_is_admin(request):
-        me = (_user_email(request) or "").strip().lower()
-        try:
-            prior = drafts.get_notify_picks(draft_id)
-        except Exception as exc:  # noqa: BLE001 — cannot authorise without it, so fail closed
-            log.warning("get_notify_picks failed for %s: %s", draft_id, exc)
-            raise HTTPException(502, "Could not check your permissions.") from exc
-        lower = lambda xs: {str(e).strip().lower() for e in xs}          # noqa: E731
-        changed = (lower(add) ^ lower(prior.get("add") or [])) \
-            | (lower(mute) ^ lower(prior.get("mute") or []))
-        # `e and` is defence in depth, not load-bearing: _clean_portal_emails already drops
-        # empty entries, so `changed` cannot contain "". Mutation testing says removing it
-        # changes nothing, and the comment says so rather than taking credit for it. It stays
-        # because an empty `me` must never match an empty entry if that ever becomes reachable.
-        foreign = sorted(e for e in changed if e and e != me)
-        if foreign:
-            raise HTTPException(
-                403, "You can only change your own notifications for a project.")
+    # Read ONCE, and used twice: to authorise the change (see _guard_notify_picks) and, further down,
+    # to spare the project's owner from the reconcile loop's clearing pass. Unconditional because the
+    # reconcile loop runs for admins too — gating this read on `not _caller_is_admin` is how the
+    # owner exclusion would silently apply to nobody who actually uses the control.
+    try:
+        prior = drafts.get_notify_picks(draft_id)
+    except Exception as exc:  # noqa: BLE001 — cannot authorise without it, so fail closed
+        log.warning("get_notify_picks failed for %s: %s", draft_id, exc)
+        raise HTTPException(502, "Could not check your permissions.") from exc
+    _guard_notify_picks(request, prior, add, mute)
 
     try:
         existed = drafts.set_notify_picks(draft_id, add, mute, _user_email(request))
@@ -4191,12 +4225,19 @@ def api_draft_notify(draft_id: str, payload: NotifyPicksIn, request: Request) ->
         for email in mute:
             _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
                     {"email": email, "mode": "mute"})
+        # The project's OWNER is never cleared, whatever the chips say. The publish path forwards
+        # `created_by` and the portal records the estimate's author as a recipient on purpose (Will,
+        # via Hanz, 2026-08-13: "this estimator created an estimate, by default this estimator should
+        # be included") — and the portal's own clearing loop spares them for that reason. Without the
+        # same exclusion here, one save from this drawer strips an override the portal deliberately
+        # set, and the person who built the estimate quietly stops hearing about their own job.
+        spared = chosen | {(prior.get("owner_email") or "").strip().lower()}
         # Anyone previously overridden who now follows the roster: clear them, so the drawer's chips
         # and the mail agree. Read first, because clearing blind would need a list we do not have.
         current = _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "GET")
         for row in (current.get("overrides") or []):
             email = str(row.get("email") or "")
-            if email and email.lower() not in chosen:
+            if email and email.lower() not in spared:
                 _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/notify-overrides", "PUT",
                         {"email": email, "mode": "clear"})
     except Exception as exc:  # noqa: BLE001 — see the docstring
