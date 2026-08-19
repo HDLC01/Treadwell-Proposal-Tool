@@ -174,7 +174,11 @@
       // "Deposit received" and "Contact info" columns are both live, and moving the card off would
       // hide real work from the people doing it. The chip is how the two screens agree without the
       // board lying about where the job is: same predicate, from crm-core, one definition.
-      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Approved and the deposit is settled — this is filed under Won on the Notification Sending page">Won</span>');
+      //
+      // The title names BOTH routes to the chip since 2026-08-19, because a rep who reads only the
+      // derived one on a project nobody has approved would take the chip for a bug rather than for
+      // the colleague who marked it won on the phone.
+      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Won — either marked won by hand, or approved with the deposit settled. Filed under Won on the Notification Sending page">Won</span>');
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
       // Only worth saying when it's OFF: automation being on is the norm, and a chip
@@ -715,6 +719,7 @@
     DRAWER_SIG = sig;
     const who = estimatorOf(row);
     const total = cardTotal(row);
+    const wonHtml = wonControlHtml(row);
     const d = $("drawer");
     // THE SAME FIVE TABS AS A SENT PROJECT. Hanz, 2026-08-19: "For those not sent just please have
     // the same set of tabs so that its clear."
@@ -841,6 +846,12 @@
 
              In the FOLLOW-UP tab because that is where somebody who learned this control on a sent
              project will look for it. Posts to the DRAFT endpoint: there is no portal row to close. -->
+        <!-- Won, by hand. Hanz, 2026-08-19: "Is there any way to also mark as won for now other than
+             after the deposit has been received". ABOVE the closed-lost control, because that is the
+             order the two outcomes deserve to be read in. The whole section goes when there is
+             nothing to offer — on a lost bid — rather than leaving an empty .sec taking its parent's
+             gap above the Reactivate button. -->
+        ${wonHtml ? `<div class="sec" id="dsec-ns-won">${wonHtml}</div>` : ""}
         <div class="sec" id="dsec-ns-lost">
           <div class="lbl">${isLost(row) ? "Closed lost" : "Not going ahead?"}</div>
           ${isLost(row) ? `
@@ -873,6 +884,14 @@
     applySecPanel();
     wireNotSentAssign(pid, row);
     wireNotSentLost(pid, row);
+    // The row IS the board's own object (renderNotSent is only ever called with ALL.find(...)), so
+    // patching it in place is what makes the mark survive the 12s poll that re-opens this drawer
+    // before load() has returned — a copy would be repainted away by the next tick.
+    wireWon(pid, (patch) => {
+      Object.assign(row, patch);
+      DRAWER_SIG = "";
+      renderNotSent(pid, row);
+    });
     loadNotSentNotify(pid);
   }
 
@@ -926,6 +945,101 @@
     const reopen = $("ns-reopen");
     if (reopen) reopen.addEventListener("click", () =>
       post(reopen, { status: "active" }, { proposal_status: "", followup_state: {} }));
+  }
+
+  /** "We won it" — the by-hand mark, and what the panel says once somebody has used it.
+   *
+   *  Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit
+   *  has been received". Won was derived only (approved AND the deposit settled), so a job we won by
+   *  phone on Monday read as Active until the money arrived on Friday. Lost was already markable by
+   *  hand; that asymmetry was the bug.
+   *
+   *  ONE definition for BOTH drawers — the not-sent panel and a sent project's Follow-up tab — and
+   *  the ids are shared because only one of them is ever rendered into #drawer at a time. A second
+   *  copy is exactly how the word "lost" ended up meaning two things on two screens before crm-core
+   *  existed. `lblClass` is the only difference: the sent drawer drops this into the middle of an
+   *  existing section, where a heading needs its top margin.
+   *
+   *  FOUR STATES, because three of them are things a button must NOT be offered for:
+   *    · lost      → nothing at all. Lost beats Won everywhere (see isWon), so a Mark won press here
+   *                  would save and change nothing visible, which reads as a broken control. The
+   *                  Reactivate button beside it is the way back.
+   *    · by hand   → the state and an undo, exactly as the closed-lost control does.
+   *    · won anyway→ the state, and NO control. There is nothing to undo about a deposit that
+   *                  arrived, and a Mark won button would file a redundant human mark over a fact.
+   *    · otherwise → the offer. */
+  function wonControlHtml(p, lblClass) {
+    const lbl = '<div class="' + (lblClass || "lbl") + '">';
+    if (isLost(p)) return "";
+    // No em dash anywhere in this copy: it renders in the sent drawer, where that is a house rule
+    // (test_no_em_dash_in_the_panels_copy) because the portal's own system lines use one as a field
+    // separator and splitSystem cuts on it.
+    if (C.wonByHand(p)) {
+      return `${lbl}Won</div>
+        <p class="note">Somebody marked this won. It carries a Won chip on the board and counts under
+        Won on the Notification Sending page. Follow-ups do NOT stop: the chasing runs until the
+        deposit is in, and the customer is not emailed about this either way.</p>
+        <div class="fu-line"><button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>
+        <p class="note" id="won-note"></p>`;
+    }
+    if (C.isWon(p)) {
+      return `${lbl}Won</div>
+        <p class="note">Approved, and the deposit question is settled, so this already counts as won
+        without anyone marking it.</p>`;
+    }
+    return `${lbl}Won it already?</div>
+      <p class="note">Mark it won as soon as they say yes on the phone. It does not wait for the
+      customer to click Approve or for the deposit to land, the customer is not emailed, and the
+      follow-ups carry on until the money is in. You can undo it.</p>
+      <div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark won</button></div>
+      <p class="note" id="won-note"></p>`;
+  }
+
+  /** Wire the pair of buttons wonControlHtml can render. Shared by both drawers, which is why the
+   *  repaint is a callback: the not-sent panel redraws from its board row, and a sent project's
+   *  drawer redraws from its cached portal payload with the row merged back in.
+   *
+   *  Posts to the DRAFT endpoint from BOTH drawers, unlike Mark closed lost, which uses the portal's
+   *  route once a proposal exists. There is no portal equivalent to defer to: `proposal_status` is
+   *  CHECK-constrained, so a "won" value there would mean DDL on a column the portal owns, and the
+   *  mark has to work on an unsent project too. One place records it, one place reads it back.
+   *
+   *  `patch` carries `won_at`, not a boolean, because that is the field the pipeline sends and isWon
+   *  reads. The optimistic value is the browser's clock: nothing renders this stamp, the server
+   *  writes its own on the row that matters, and the next board load replaces it. */
+  function wireWon(pid, repaint) {
+    const note = $("won-note");
+    const post = async (btn, body, patch) => {
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = "Saving…";
+      if (note) note.textContent = "";
+      try {
+        const r = await api("/api/draft/" + encodeURIComponent(pid) + "/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        repaint(patch);
+        load();                     // the chip and the Won count live on the board behind this
+      } catch (err) {
+        btn.textContent = orig;
+        btn.disabled = false;
+        if (note) note.textContent = "Couldn't save that — " + (err.message || "try again.");
+      }
+    };
+
+    const mark = $("won-mark");
+    if (mark) mark.addEventListener("click", () =>
+      post(mark, { status: "won" }, { won_at: new Date().toISOString() }));
+    // No confirm dialog on either half, unlike closing a bid lost. Nothing is sent, nothing leaves
+    // the pipeline, and both directions are one click away from each other — a modal to say "we won
+    // it" would be ceremony over a reversible, cheerful fact.
+    const undo = $("won-undo");
+    if (undo) undo.addEventListener("click", () =>
+      post(undo, { status: "not_won" }, { won_at: "" }));
   }
 
   /** The notification picker on a project that has not been sent.
@@ -2175,6 +2289,15 @@
                <button class="btn btn-s" id="fu-lost">Mark closed lost</button>`}
         </div>
 
+        <!-- Won, by hand: the SENT drawer's copy of the same control the not-sent panel carries.
+             Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the
+             deposit has been received". This is the drawer that needed it most, because a verbal yes
+             almost always arrives on a proposal the customer already has, days before they click
+             Approve. It sits in this section because the line above already exists for exactly this
+             case: "when a customer tells you by phone instead of clicking the link in their email".
+             (No em dash in this comment: it ships inside the panel, where that is a house rule.) -->
+        ${wonControlHtml(p, "lbl fu-lbl")}
+
         ${followupContactsHtml(data.recipient_activity)}
 
         <div class="lbl fu-lbl">History</div>
@@ -2301,6 +2424,21 @@
     if (reopen) reopen.addEventListener("click", (e) =>
       act(path("/status"), e.target, { body: JSON.stringify({ status: "active" }) }));
 
+    // Deliberately NOT through `act`, which every other control here uses. `act` refreshes by
+    // re-fetching the PORTAL payload, and the Won mark is not in it — the drawer would repaint from
+    // the stale board row and show "Mark won" on the project it had just marked, for the twelve
+    // seconds until the next poll caught up. So this patches the board row (the client's one copy of
+    // the mark, per the merge in renderDetail) and repaints from the cached payload.
+    wireWon(pid, (patch) => {
+      const r = ALL.find((x) => x.proposal_id === pid);
+      if (r) Object.assign(r, patch);
+      DRAWER_SIG = "";
+      // openDetail caches the payload before it ever renders, so this is populated whenever these
+      // buttons exist. Guarded rather than defaulted: inventing a payload here would render a drawer
+      // with no thread, no deposit and no contacts, which is worse than not repainting.
+      if (DETAIL_CACHE[pid]) renderDetail(pid, DETAIL_CACHE[pid]);
+    });
+
     // The estimator list is a separate fetch, so the control starts disabled and
     // opens only once there is something real to pick.
     const sel = $("fu-assign"), btn = $("fu-reassign");
@@ -2407,6 +2545,18 @@
 
     const unread = unreadCount(pid, msgs);
 
+    // The board row: the only place several draft-side facts exist for a SENT project, and the
+    // same lookup unreadCount and the not-sent branch already rely on. Read here rather than
+    // below, so the merge on the next line lands before the signature is taken.
+    const row = ALL.find((x) => x.proposal_id === pid);
+    // The by-hand Won mark lives on OUR draft blob (drafts.set_won), so the portal's detail payload
+    // has never heard of it and isWon would answer "no" in this drawer about a project the board
+    // already shows a Won chip on. ASSIGNED, not defaulted: undoing the mark has to clear it here
+    // too, and `p` is the cached payload's own object, so a stale `||` would pin the old answer for
+    // as long as the drawer stays open. Mutating `p` before the signature is what makes the mark
+    // part of it — so a colleague's mark repaints this panel on the next poll.
+    if (row) p.won_at = row.won_at || "";
+
     // Nothing changed? Leave the DOM alone. This is the guard that makes the 12s drawer poll
     // invisible: without it every tick destroyed the thread, the tab strip and every card, and
     // threw away wherever the rep had scrolled.
@@ -2435,11 +2585,9 @@
 
     ACTIVE_SEC = defaultSection(p, unread);
 
-    // What the head says on every tab: who it is for, and what it is worth. The board row is
-    // the only place a total exists before approval (the drawer payload has no such field),
-    // and the drawer is always opened from a loaded board — the same lookup unreadCount and
-    // the not-sent branch already rely on.
-    const row = ALL.find((x) => x.proposal_id === pid);
+    // What the head says on every tab: who it is for, and what it is worth. `row` (above) is the
+    // only place a total exists before approval — the drawer payload has no such field — and the
+    // drawer is always opened from a loaded board.
     const head = drawerHead(p.project_name, metaLine([
       (p.customer_name || p.customer_email)
         ? `<span class="dh-who">${esc(p.customer_name || p.customer_email)}</span>` : "",

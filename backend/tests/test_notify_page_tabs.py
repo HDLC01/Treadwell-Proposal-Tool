@@ -86,9 +86,10 @@ def test_each_category_receives_the_right_projects(ran):
     assert got["active"] == {"a-sent", "a-viewed", "a-notsent", "a-approved-owes",
                              "a-approved-submitted", "a-nodeposit-unapproved",
                              "a-testname-real"}
-    assert got["won"] == {"w-deposit-in", "w-no-deposit-needed", "w-contacts-in"}
-    assert got["lost"] == {"l-price", "l-test", "l-was-won"}
-    assert got["test"] == {"t-flag", "t-name", "t-won"}
+    assert got["won"] == {"w-deposit-in", "w-no-deposit-needed", "w-contacts-in",
+                          "w-marked", "w-marked-notsent"}
+    assert got["lost"] == {"l-price", "l-test", "l-was-won", "l-was-marked-won"}
+    assert got["test"] == {"t-flag", "t-name", "t-won", "t-marked-won"}
 
 
 @needs_node
@@ -175,6 +176,38 @@ def test_a_project_the_portal_moved_past_approval_is_still_won(ran):
     back into the working list the moment the customer submits contacts."""
     assert ran["categoryOf"]["w-contacts-in"] == "won"
     assert ran["boardStage"]["w-contacts-in"] == "Contact info", "fixture drift"
+
+
+@needs_node
+def test_a_project_marked_won_by_hand_leaves_the_working_list(ran):
+    """Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit
+    has been received". Neither half of the derived rule is true of these two rows — one was never
+    even sent — so if the manual mark were ignored they would both sit under Active, which is exactly
+    the "nobody has said" the estimator pressed the button to correct.
+
+    Mutation this kills: dropping the `p.won_at` branch from isWon."""
+    assert ran["categoryOf"]["w-marked"] == "won"
+    assert ran["categoryOf"]["w-marked-notsent"] == "won", (
+        "a bid nobody has sent cannot be marked won, which is Kyle's case for the same control")
+    assert ran["depositSatisfied"]["w-marked"] is False, (
+        "fixture drift: this row is supposed to be one only the manual mark can win")
+
+
+@needs_node
+def test_a_project_marked_won_and_then_lost_is_still_lost(ran):
+    """Lost above Won, with the manual mark in play. This is the pair that MUST be ordered here: the
+    two facts are stored independently (see drafts.set_won) because a sent project's closed_lost
+    belongs to the portal, which no draft-side write can clear — so nothing but this precedence keeps
+    a cancelled job off the Won tab."""
+    assert ran["categoryOf"]["l-was-marked-won"] == "lost"
+
+
+@needs_node
+def test_a_test_project_marked_won_by_hand_is_still_a_test_project(ran):
+    """Test above Won, with the manual mark in play. A human pressing the button says nothing about
+    whether the project is real work, so the override must not become a way round the rule that keeps
+    somebody's scratch bid out of a number Troy reads as revenue."""
+    assert ran["categoryOf"]["t-marked-won"] == "test"
 
 
 @needs_node

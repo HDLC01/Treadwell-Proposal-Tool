@@ -16,6 +16,9 @@ const path = require("path");
 // argv[1] is this script when run as a file; the frontend dir is the first real argument.
 const ROOT = process.argv[2];
 const SRC = fs.readFileSync(path.join(ROOT, "js", "portal.js"), "utf8");
+// The real predicates, for the Won control renderNotSent also paints (2026-08-19) — see the C dep
+// below. Stubbing them would choose which branch of that control this panel renders.
+const CORE = require(path.join(path.resolve(ROOT), "js", "crm-core.js"));
 
 const ROSTER = [
   { email: "kyle@wetreadwell.com", name: "Kyle Loseke" },
@@ -100,7 +103,8 @@ function liftPair(deps) {
   const fact = /^  const fact = [\s\S]*?;$/m.exec(SRC);
   if (!fact) throw new Error("could not lift fact");
   const body = 'let DRAWER_SIG = ""; let ACTIVE_SEC = null; const SEC_TABS = { proposal: 1 };'
-    + ' const notifyCalls = []; const panelCalls = []; const lostCalls = [];\n'
+    + ' const notifyCalls = []; const panelCalls = []; const lostCalls = [];'
+    + ' const wonCalls = [];\n'
     + fact[0] + "\n" + source("drawerHead") + "\n" +
     // renderNotSent now builds the same five-tab strip a sent project gets. `secTab` is lifted for
     // real — it is pure markup and cheap — but `applySecPanel` is recorded as a no-op here.
@@ -121,8 +125,14 @@ function liftPair(deps) {
     // tests in not-sent-lost-harness.js, where the dialog and the request are the subject; here it
     // is recorded so a rename still fails loudly rather than going quiet.
     "\nfunction wireNotSentLost(pid, row) { lostCalls.push(pid); }" +
+    // The by-hand Won control (2026-08-19). Its MARKUP is lifted for real — renderNotSent embeds it,
+    // it is pure string-building, and a stub would decide what this panel contains — while its
+    // WIRING is recorded, on the same division of labour as wireNotSentLost above: the request and
+    // the repaint are drawer-render-harness.js's subject.
+    "\n" + source("wonControlHtml") +
+    "\nfunction wireWon(pid, repaint) { wonCalls.push(pid); }" +
     "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
-    "         notifyCalls, panelCalls, lostCalls };";
+    "         notifyCalls, panelCalls, lostCalls, wonCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
 }
 
@@ -149,6 +159,9 @@ function harness(row, opts) {
       ((p && p.followup_state) || {}).closed_lost_reason] || "",
     estimatorOf: (p) => String(p.assigned_estimator || p.estimator_email || ""),
     cardTotal: () => null,
+    // Only the two Won predicates, taken from crm-core itself: wonControlHtml branches on them and a
+    // hand-copy here could disagree with the page while both looked fine.
+    C: { isWon: CORE.isWon, wonByHand: CORE.wonByHand },
     money: (n) => "$" + n,
     TW: { fmtBizDate: (d) => String(d) },
     loadEstimators: () => Promise.resolve(o.rosterFails ? [] : ROSTER),
