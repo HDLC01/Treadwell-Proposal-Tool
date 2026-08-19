@@ -1398,6 +1398,15 @@ def api_portal_pipeline() -> Dict[str, Any]:
     # the word "approved" on a bid nobody has agreed to — and would overwrite the real approved
     # figure on the rows that have one.
     totals = {s["id"]: s.get("total") for s in summaries}
+    # The by-hand Won mark, for a proposal the customer HAS. Same shape of problem as the bid above:
+    # it lives on OUR draft blob (see drafts.set_won — there is no portal column for it and adding
+    # one would mean DDL on a CHECK-constrained status), so a SENT project's row arrives without it
+    # and isWon would answer "no" about a job somebody marked won on the phone this morning.
+    #
+    # And this is the half that matters most: Hanz's case is a verbal yes, which almost always
+    # lands on a project that HAS been sent. Carrying it only onto the synthesised not-sent rows
+    # would ship the feature to the column it is least needed in.
+    wons = {s["id"]: s.get("won_at") for s in summaries}
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
@@ -1405,6 +1414,10 @@ def api_portal_pipeline() -> Dict[str, Any]:
         # Never clobber a figure the portal already has, and never write a null over nothing.
         if row.get("bid_total") is None and totals.get(pid) is not None:
             row["bid_total"] = totals[pid]
+        # Only when there IS a mark: a null `won_at` on every sent row would be a value where the
+        # honest answer is "no such field", and isWon reads the stamp's truthiness either way.
+        if wons.get(pid):
+            row["won_at"] = wons[pid]
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
     return data
 
@@ -1448,6 +1461,11 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # NOT approved_total: nobody has approved this. cardTotal() reads both.
             "bid_total": s.get("total"),
             "work_type": s.get("work_type"),
+            # Marked won by hand — see drafts.set_won. Carried the same way `bid_total` is, and
+            # unconditionally for the same reason: this row is SYNTHESISED, so a null here is the
+            # complete truth about the project rather than a key invented over a portal field.
+            # isWon reads the stamp's truthiness, so None simply means nobody has said so.
+            "won_at": s.get("won_at"),
         })
         # Dead before it was ever sent. Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in
         # the Created not sent category" — the commonest dead bid there is, priced and generated
@@ -4118,14 +4136,14 @@ LOST_REASONS = ("price", "another_contractor", "canceled", "scope_changed", "tim
 
 
 class DraftStatusIn(BaseModel):
-    """Close an unsent project as lost, or reopen it."""
+    """Close an unsent project as lost, mark one won by hand, or clear either."""
     status: str = "closed_lost"
     reason: str = ""
 
 
 @app.post("/api/draft/{draft_id}/status")
 def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) -> Dict[str, Any]:
-    """Mark a project that was never sent as lost — or put it back.
+    """Record a project's outcome on the DRAFT: lost, won, or neither.
 
     Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent category."
 
@@ -4142,8 +4160,34 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
     which does more than this could (it stops the follow-up cadence). Writing both would give one
     bid two closed-lost records that can disagree.
 
-    Reopening is the same call with `status: "active"`, because a mis-click must not be permanent."""
+    Reopening is the same call with `status: "active"`, because a mis-click must not be permanent.
+
+    ALSO MARKS A PROJECT WON, with `status: "won"`. Hanz, 2026-08-19: "Is there any way to also mark
+    as won for now other than after the deposit has been received". Won was derived only — approved
+    AND the deposit settled — so between the verbal yes and the money landing the board called a won
+    job Active. Same route because it is the same kind of fact recorded in the same place, and
+    because a project that HAS been sent needs this too: unlike closing lost, marking won has no
+    portal equivalent to defer to, so this endpoint serves both drawers.
+
+    "won" needs no reason and takes none. There is no vocabulary of ways to win.
+
+    CLEARING WON IS ITS OWN STATUS, `not_won`, rather than more work for "active". Each undo aims at
+    the thing it undid: "active" is the Reactivate button's word for "this bid is live again", and
+    overloading it would mean one call making two blob writes and logging two events, so a project
+    nobody had ever closed would show a "reactivated" line in its history. There is also nothing for
+    a combined clear to protect: the two facts are stored independently on purpose (see set_won) and
+    every reader asks isLost first, so a project can never READ as both."""
     status = (payload.status or "").strip().lower()
+    if status in ("won", "not_won"):
+        try:
+            existed = drafts.set_won(draft_id, status == "won", _user_email(request))
+        except Exception as exc:  # noqa: BLE001 — the drawer repaints itself on ok; see below
+            log.warning("set_won failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not save the status.") from exc
+        if not existed:
+            raise HTTPException(404, "project_not_found")
+        return {"ok": True, "status": status}
+
     if status in ("active", "reactivated", "reopen"):
         reason: Optional[str] = None
     elif status == "closed_lost":

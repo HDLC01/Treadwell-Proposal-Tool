@@ -334,6 +334,52 @@ def set_close_lost(draft_id: str, reason: Optional[str],
     return True
 
 
+def set_won(draft_id: str, won: bool, actor_email: Optional[str] = None) -> bool:
+    """Mark a project won by hand, or clear that mark. `won` False clears it.
+
+    Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit
+    has been received".
+
+    Won was DERIVED ONLY — approved AND the money question settled (`isWon` in crm-core.js). That is
+    the honest definition of a FINISHED job and useless for the commonest way we learn we won one: a
+    verbal yes on the phone, days before the customer clicks Approve and weeks before the deposit
+    lands. Lost became markable by hand this morning (`set_close_lost` above); the asymmetry was the
+    bug, because between the phone call and the deposit the board called a won job "Active".
+
+    Stored on the draft blob beside `closed_lost`, for the same two reasons: an unsent project has
+    no `portal_proposals` row to write to, and `proposal_status` is CHECK-constrained, so a "won"
+    status value there would mean DDL on a column the portal owns.
+
+    NOT made mutually exclusive with `closed_lost` here, deliberately. Lost-beats-Won has to live in
+    the predicates regardless — a SENT project's closed_lost is the PORTAL's, which this function
+    cannot see or clear — so popping the other key would be a second rule that can only ever agree
+    with the first by accident, and it would destroy a reason somebody recorded. Neither writer
+    touches the other's key; the board, the chip and the Won tab still show exactly one outcome,
+    because every reader asks isLost first.
+
+    `updated_at` is deliberately NOT bumped, as with the other three blob writers here: recording an
+    outcome is not work on the estimate, and shuffling the project to the top of a list sorted by
+    date-updated on its way OUT would be backwards.
+
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if won:
+        data["won"] = {"at": _now_iso(), "by": actor_email or ""}
+    else:
+        # Drop the key rather than storing `{"at": null}`: every reader tests the stamp's presence,
+        # and an object with nothing in it reads as "somebody decided" when nobody did.
+        data.pop("won", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "won" if won else "not_won",
+              {"project_name": data.get("project_name"), "id": draft_id})
+    _cache_clear()
+    return True
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -445,7 +491,13 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 "computed_bid:data->computed_bid,"
                 # Closed lost before it was ever sent — see set_close_lost.
                 "closed_lost_reason:data->closed_lost->>reason,"
-                "closed_lost_at:data->closed_lost->>at")
+                "closed_lost_at:data->closed_lost->>at,"
+                # Marked won by hand — see set_won. Selected by NAME like every other field on this
+                # projection, which is exactly why it has to be listed here: this path selects named
+                # JSON paths rather than the blob, so a key that is not named reaches no card. The
+                # fast path is the one that serves every real page load; the full-blob `_summary`
+                # below only runs when PostgREST refuses this select.
+                "won_at:data->won->>at")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -474,6 +526,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "has_files": bool(r.get("has_files")),
             "closed_lost_reason": r.get("closed_lost_reason") or None,
             "closed_lost_at": r.get("closed_lost_at") or None,
+            "won_at": r.get("won_at") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -748,6 +801,10 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         # so one dead bid reads the same whether or not the customer ever saw it.
         "closed_lost_reason": ((data.get("closed_lost") or {}).get("reason") or None),
         "closed_lost_at": ((data.get("closed_lost") or {}).get("at") or None),
+        # Marked won by hand — see set_won. Same key, same meaning as the fast projection's jsonb
+        # scalar: both paths have to expose it or the Won mark reaches the card on some page loads
+        # and not others, which is indistinguishable from the mark not having saved.
+        "won_at": ((data.get("won") or {}).get("at") or None),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),
