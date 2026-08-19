@@ -23,6 +23,13 @@
   .chip.can { cursor:pointer; }
   .chip.on { background:#dcf5e3; color:#0f7b34; border-color:#bfe3c8; }
   .chip .em { font-weight:400; font-size:11px; opacity:.8; }
+  /* "also on deposits" / "also on the team" — the same address may sit on BOTH rosters (a row's
+     unique key is kind + email), and that is a deliberate "everything, deposits included", not a
+     duplicate to be tidied away. Outlined in the chip's OWN colour rather than given a tint of its
+     own: on this card colour already means receives / off, and a third hue would read as a third
+     state. Rejected alternative: a warning-amber badge — it says "conflict", which this isn't. */
+  .chip .also { font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.04em;
+    border:1px solid currentColor; border-radius:999px; padding:1px 6px; opacity:.75; }
   .chip .x { border:none; background:none; color:inherit; cursor:pointer; font-size:15px; line-height:1; padding:0; }
   .addrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
   .addrow input { flex:1; min-width:220px; min-height:40px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; }

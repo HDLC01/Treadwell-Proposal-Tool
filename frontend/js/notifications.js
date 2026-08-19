@@ -29,9 +29,70 @@
   const C = window.TWCrm;
 
   let ADMIN = false, MY_EMAIL = "";
-  let ROSTER = [];                 // [{email, enabled}] — the global base
+  let ROSTER = [];                 // [{email, enabled}] — the GENERAL rows: the global base
+  let DEPOSIT_EXTRAS = [];         // [{email, enabled}] — deposit-kind rows, ADDITIVE to ROSTER
   let PROJECTS = [];               // [{proposal_id, project_name, customer_email, ...}]
   let OVERRIDES = {};              // { proposal_id: { emailLower: 'add'|'mute' } }
+
+  // ── The two roster groups ───────────────────────────────────────────────────
+  // A roster row carries a `kind`. A GENERAL alert resolves to the enabled general rows; a
+  // DEPOSIT alert resolves to those PLUS the enabled deposit rows, deduped. Additive, not a
+  // swap — a swapping rule would cut the whole team off deposits the moment the first
+  // deposit-only person was added, and nothing on screen would have said so.
+  //
+  // WHY THIS SECOND CARD EXISTS. This page filtered the roster to general rows, so kylene@ —
+  // live as an enabled deposit row — was configuration nobody could see or change from the UI,
+  // and the next person like her needed SQL. Config you cannot see is config that rots.
+  //
+  // ONE CARD, BUILT TWICE, parameterised by kind: the toggle, the remove and the add all hit the
+  // same kind-agnostic endpoints, so a second hand-written card would only be a second place to
+  // fix the same bug. Rejected alternative: one list with a "deposits only" checkbox per chip.
+  // `kind` is half the row's unique key, so flipping it in place is a delete plus an insert —
+  // a half-failed pair leaves somebody silently unnotified, and a checkbox hides that.
+  const GROUPS = [{
+    kind: "general", other: "deposit",
+    lbl: "Team — global default (all projects)",
+    intro: "Everyone here gets every notification, deposits included.",
+    what: "the team", also: "also on deposits",
+    addLbl: "Add someone",
+    empty: "No one on the list yet.",
+    removeTitle: "Remove from notifications?",
+    removeBefore: "Stop sending Customer Portal notifications to ",
+    // Said out loud because these are two separate rows: removing this one leaves the other
+    // standing, and somebody who believes they just removed both stops looking.
+    removeAlso: "? Their deposit row stays, so they keep getting the three deposit emails.",
+    chips: "nn-chips", input: "nn-email", btn: "nn-add", alert: "nn-alert",
+  }, {
+    kind: "deposit", other: "general",
+    lbl: "Deposit alerts — in addition to the team above",
+    intro: "These people also hear about deposits: the invoice going out, the customer sending " +
+      "payment details, and a deposit marked received. They get nothing else — no approvals, " +
+      "replies, questions or contacts. This list adds to the team above rather than replacing it, " +
+      "so everyone up there keeps getting deposit emails too.",
+    what: "deposit alerts", also: "also on the team",
+    addLbl: "Add someone to deposit alerts",
+    // A deliberate state, not a broken panel: an empty list here means "nobody EXTRA", and the
+    // team above is still told. "No one on the list yet" would read as nobody being told at all.
+    empty: "Nobody extra is told about deposits — the team above still gets them.",
+    removeTitle: "Remove from deposit alerts?",
+    removeBefore: "Stop sending deposit alerts to ",
+    removeAlso: "? They stay on the team list above, which gets deposit emails too.",
+    chips: "nn-depchips", input: "nn-depemail", btn: "nn-depadd", alert: "nn-depalert",
+  }];
+
+  /** Which group a row belongs to. Anything that is not "deposit" is general — the same call the
+   *  portal's own resolver makes when it buckets the rows, so a row with a missing or
+   *  unrecognised kind lands on a card somebody can see and remove. Filtering such a row out
+   *  is precisely the failure this card exists to end. */
+  const kindOf = (row) => (row && row.kind === "deposit" ? "deposit" : "general");
+
+  const listFor = (kind) => (kind === "deposit" ? DEPOSIT_EXTRAS : ROSTER);
+
+  /** Is this address on the OTHER list too? A row's unique key is kind + email, so both at once
+   *  is legal and means "everything, deposits included" — not a duplicate and not a conflict.
+   *  It only ever adds a label to the chip and a sentence to the remove dialog. */
+  const onList = (kind, email) => listFor(kind)
+    .some((m) => m.email.toLowerCase() === String(email || "").trim().toLowerCase());
 
   // ── per-project categories + paging ─────────────────────────────────────────
   // Hanz, 2026-08-19: "the per project Notification sending should be separate for active and
@@ -122,26 +183,42 @@
     await loadProjects();  // per-project card
   }
 
+  /** One roster card. Both groups render through here rather than through two blocks of
+   *  hand-written markup, so the deposit list is the same control as the team list — same chip,
+   *  same green = receives / grey = off, same Add field, same × — and cannot drift into being
+   *  a second, subtly different thing. */
+  function rosterCardHtml(g) {
+    return '<div class="card">' +
+      '<div class="lbl">' + g.lbl + '</div>' +
+      '<p class="note" style="margin:0 0 10px">' + g.intro + '</p>' +
+      '<div id="' + g.alert + '" class="alert"></div>' +
+      '<div id="' + g.chips + '" class="chips"><span class="note">Loading…</span></div>' +
+      (ADMIN
+        // aria-label on both, because two identical "Add" buttons on one page are
+        // indistinguishable to anyone reading it through a screen reader's control list.
+        ? '<div style="margin-top:16px"><div class="lbl">' + g.addLbl + '</div>' +
+          '<div class="addrow"><input id="' + g.input + '" type="email" placeholder="name@wetreadwell.com"' +
+          ' autocomplete="off" aria-label="' + g.addLbl + '" />' +
+          '<button class="btn btn-p" id="' + g.btn + '" type="button" aria-label="' + g.addLbl + '">Add</button></div></div>'
+        : '<p class="note" style="margin-top:12px">Only admins can change this list — ask an admin to add or toggle someone.</p>') +
+    '</div>';
+  }
+
   function render() {
     $("root").innerHTML =
       '<h1>Notification Sending</h1>' +
       '<p class="sub">Who gets emailed when a customer approves, replies, asks a question, or submits a deposit or contacts. ' +
       'Green = receives; gray = off. <strong>Toggling a name never sends an email.</strong> It only sets who gets ' +
       'notified the next time a customer replies, approves, or pays.</p>' +
-      '<div class="card">' +
-        '<div class="lbl">Team — global default (all projects)</div>' +
-        '<div id="nn-alert" class="alert"></div>' +
-        '<div id="nn-chips" class="chips"><span class="note">Loading…</span></div>' +
-        (ADMIN
-          ? '<div style="margin-top:16px"><div class="lbl">Add someone</div>' +
-            '<div class="addrow"><input id="nn-email" type="email" placeholder="name@wetreadwell.com" autocomplete="off" />' +
-            '<button class="btn btn-p" id="nn-add" type="button">Add</button></div></div>'
-          : '<p class="note" style="margin-top:12px">Only admins can change the list — ask an admin to add or toggle someone.</p>') +
-      '</div>' +
+      GROUPS.map(rosterCardHtml).join("") +
       '<div class="card">' +
         '<div class="lbl">Per-project — assign specific people</div>' +
-        '<p class="note" style="margin:0 0 8px">Green = receives THIS project’s emails. Overrides the global default above for that project only. ' +
+        '<p class="note" style="margin:0 0 8px">Green = receives THIS project’s emails. Overrides the team list above for that project only. ' +
         (ADMIN ? "Toggle anyone." : "You can toggle only yourself.") + '</p>' +
+        // The decision, on screen, so nobody has to read peopleFor() to find out.
+        '<p class="note" style="margin:0 0 8px">Only the team list is shown here — deposit-only people are not. ' +
+        'A per-project toggle covers every email that project sends, and an override is stored by address with no kind, ' +
+        'so switching a deposit-only person on here would sign them up for approvals and replies as well.</p>' +
         '<input id="pp-search" type="search" class="pp-search" placeholder="Filter by project or customer…" />' +
         // Static markup, updated in place by syncPpTabs/syncPpPager rather than re-rendered:
         // pressing a pill or Next repaints the list under it, and replacing the node you just
@@ -161,8 +238,10 @@
         '</nav>' +
       '</div>';
     if (ADMIN) {
-      $("nn-add").addEventListener("click", addEmail);
-      $("nn-email").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } });
+      GROUPS.forEach((g) => {
+        $(g.btn).addEventListener("click", () => addEmail(g));
+        $(g.input).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addEmail(g); } });
+      });
     }
     // Typing narrows the pool, so page 3 of the old pool is meaningless — back to the first.
     $("pp-search").addEventListener("input", () => ppGoto(1));
@@ -179,41 +258,64 @@
     $("pp-next").addEventListener("click", () => ppGoto(PP_PAGE + 1));
   }
 
-  function alert(kind, msg) { const a = $("nn-alert"); if (a) { a.className = "alert " + kind; a.textContent = msg || ""; } }
+  function alertOf(g, kind, msg) { const a = $(g.alert); if (a) { a.className = "alert " + kind; a.textContent = msg || ""; } }
   function ppAlert(kind, msg) { const a = $("pp-alert"); if (a) { a.className = "alert " + kind; a.textContent = msg || ""; } }
 
-  // ── Global roster card ────────────────────────────────────────────────────
+  // ── Global roster cards: the team, and the deposit-only extras ──────────────
+  /** One group's chips, from the rows the API returned for its kind. Identical markup and
+   *  handlers for both groups — a deposit chip toggles and removes through the same
+   *  kind-agnostic row-id endpoints as a team chip, because that is what the API offers. */
+  function paintGroup(g, rows) {
+    const wrap = $(g.chips);
+    if (!wrap) return;
+    wrap.innerHTML = rows.map((x) => {
+      const on = x.enabled !== false;
+      // The same address may legitimately sit on both lists. Labelled rather than flagged: it
+      // is a choice ("everything, deposits included"), and an unexplained twin reads as a bug
+      // somebody will "fix" by deleting one of them.
+      const both = onList(g.other, x.email);
+      return '<span class="chip ' + (on ? "on " : "") + (ADMIN ? "can" : "") + '" data-id="' + esc(x.id) + '" data-on="' + (on ? 1 : 0) + '"'
+           + ' data-kind="' + esc(g.kind) + '"' + (ADMIN ? ' role="button" tabindex="0"' : "") + '>'
+           + avatar(x.email) + esc(nameOf(x.email)) + ' <span class="em">' + esc(x.email) + '</span>'
+           + (both ? ' <span class="also">' + esc(g.also) + '</span>' : "")
+           + (ADMIN ? ' <button class="x" title="Remove" aria-label="Remove">&times;</button>' : "")
+           + '</span>';
+    }).join("") || '<span class="note">' + g.empty + (ADMIN ? " Add someone below." : "") + '</span>';
+    if (ADMIN) {
+      wrap.querySelectorAll(".chip").forEach((c) => {
+        const id = c.dataset.id, on = c.dataset.on === "1";
+        c.addEventListener("click", (e) => { if (e.target.classList.contains("x")) return; toggle(id, !on, c, g); });
+        const x = c.querySelector(".x");
+        if (x) x.addEventListener("click", (e) => { e.stopPropagation(); removeOne(id, c, g); });
+      });
+    }
+  }
+
   async function load() {
-    const wrap = $("nn-chips");
     try {
       const r = await api("/api/portal/notify-recipients");
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      const list = (j.recipients || []).filter((x) => x.kind === "general");
-      ROSTER = list.map((x) => ({ email: x.email, enabled: x.enabled !== false }));
-      wrap.innerHTML = list.map((x) => {
-        const on = x.enabled !== false;
-        return '<span class="chip ' + (on ? "on " : "") + (ADMIN ? "can" : "") + '" data-id="' + esc(x.id) + '" data-on="' + (on ? 1 : 0) + '"'
-             + (ADMIN ? ' role="button" tabindex="0"' : "") + '>'
-             + avatar(x.email) + esc(nameOf(x.email)) + ' <span class="em">' + esc(x.email) + '</span>'
-             + (ADMIN ? ' <button class="x" title="Remove" aria-label="Remove">&times;</button>' : "")
-             + '</span>';
-      }).join("") || '<span class="note">No one on the list yet' + (ADMIN ? " — add someone below." : ".") + '</span>';
-      if (ADMIN) {
-        wrap.querySelectorAll(".chip").forEach((c) => {
-          const id = c.dataset.id, on = c.dataset.on === "1";
-          c.addEventListener("click", (e) => { if (e.target.classList.contains("x")) return; toggle(id, !on, c); });
-          const x = c.querySelector(".x");
-          if (x) x.addEventListener("click", (e) => { e.stopPropagation(); removeOne(id, c); });
-        });
-      }
-      alert("", "");
+      const rows = j.recipients || [];
+      const byKind = {};
+      GROUPS.forEach((g) => { byKind[g.kind] = rows.filter((x) => kindOf(x) === g.kind); });
+      const asList = (k) => byKind[k].map((x) => ({ email: x.email, enabled: x.enabled !== false }));
+      // Both module lists first, THEN paint: a chip's "also on…" label asks about the other
+      // group, so painting group one before group two's list existed would silently drop it.
+      ROSTER = asList("general");
+      DEPOSIT_EXTRAS = asList("deposit");
+      GROUPS.forEach((g) => { paintGroup(g, byKind[g.kind]); alertOf(g, "", ""); });
     } catch (err) {
-      wrap.innerHTML = '<span class="note">Could not load: ' + esc(err.message) + '</span>';
+      // Both cards say so. One card reading "Could not load" beside another still showing
+      // "Loading…" would look like a half-working page rather than one failed fetch.
+      GROUPS.forEach((g) => {
+        const wrap = $(g.chips);
+        if (wrap) wrap.innerHTML = '<span class="note">Could not load: ' + esc(err.message) + '</span>';
+      });
     }
   }
 
-  async function toggle(id, enabled, chip) {
+  async function toggle(id, enabled, chip, g) {
     if (chip) chip.style.opacity = ".5";
     try {
       const r = await api("/api/portal/notify-recipients/" + encodeURIComponent(id),
@@ -221,31 +323,35 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       await load(); renderProjects();   // roster base changed → per-project effective states shift
-    } catch (err) { alert("err", "Could not update: " + (err.message || "retry")); if (chip) chip.style.opacity = ""; }
+    } catch (err) { alertOf(g, "err", "Could not update: " + (err.message || "retry")); if (chip) chip.style.opacity = ""; }
   }
 
-  async function addEmail() {
-    const email = ($("nn-email").value || "").trim().toLowerCase();
-    if (!email) { alert("err", "Enter an email address."); return; }
-    const btn = $("nn-add"); btn.disabled = true; btn.textContent = "Adding…";
+  async function addEmail(g) {
+    const email = ($(g.input).value || "").trim().toLowerCase();
+    if (!email) { alertOf(g, "err", "Enter an email address."); return; }
+    const btn = $(g.btn); btn.disabled = true; btn.textContent = "Adding…";
     try {
       const r = await api("/api/portal/notify-recipients",
-        { method: "POST", body: JSON.stringify({ email, kind: "general" }) });
+        // The kind of the field it was typed into. The proxy defaults a missing kind to
+        // "general", so a dropped field here would quietly create the wrong sort of row.
+        { method: "POST", body: JSON.stringify({ email, kind: g.kind }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      $("nn-email").value = "";
+      $(g.input).value = "";
       await load(); renderProjects();
-      alert("ok", "Added " + email + " — it's off (gray). Click it to turn green and start sending.");
-    } catch (err) { alert("err", "Could not add: " + (err.message || "retry")); }
+      alertOf(g, "ok", "Added " + email + " to " + g.what + " — it's off (gray). Click it to turn green and start sending.");
+    } catch (err) { alertOf(g, "err", "Could not add: " + (err.message || "retry")); }
     finally { btn.disabled = false; btn.textContent = "Add"; }
   }
 
-  async function removeOne(id, chip) {
+  async function removeOne(id, chip, g) {
     const em = chip.querySelector(".em");
     const who = em ? em.textContent : "this person";
     const ok = await TW.confirmDanger({
-      title: "Remove from notifications?", before: "Stop sending Customer Portal notifications to ",
-      name: who, after: "?", confirmText: "Remove", tone: "danger",
+      title: g.removeTitle, before: g.removeBefore, name: who,
+      // Two rows, two ids: removing one leaves the other, and the dialog has to say which.
+      after: onList(g.other, who) ? g.removeAlso : "?",
+      confirmText: "Remove", tone: "danger",
     });
     if (!ok) return;
     try {
@@ -253,7 +359,7 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       await load(); renderProjects();
-    } catch (err) { alert("err", "Could not remove: " + (err.message || "retry")); }
+    } catch (err) { alertOf(g, "err", "Could not remove: " + (err.message || "retry")); }
   }
 
   // ── Per-project card ────────────────────────────────────────────────────────
@@ -278,6 +384,15 @@
   }
 
   // Roster members + any override-only emails (someone 'add'ed who isn't on the roster).
+  //
+  // GENERAL ROWS ONLY — deposit-only people are deliberately absent, and the card says so on
+  // screen. A per-project chip is one on/off that governs everything that project emails, and an
+  // override is stored as (proposal_id, email, mode) with no kind at all: switching a
+  // deposit-only person green here would union their address into that project's general
+  // recipients too, quietly promoting somebody who was added for three deposit emails into
+  // approvals, replies and questions. Rejected alternative: show them with their chip disabled —
+  // a row of permanently dead chips invites exactly the "why can't I click this" that a sentence
+  // answers better.
   function peopleFor(pid) {
     const ov = OVERRIDES[pid] || {};
     const seen = {}, people = [];
