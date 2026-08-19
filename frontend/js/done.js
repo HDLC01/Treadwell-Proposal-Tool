@@ -295,7 +295,11 @@
    *
    *  Deliberately NOT part of the draft blob: `refreshServerOwned` would overwrite in-progress
    *  picks, and this is a decision about one send rather than a property of the project. */
-  const notifyPick = { roster: [], changed: {}, ready: false };
+  // `isAdmin` / `me` decide which chips are toggleable — see paintNotifyChips. Both are filled in
+  // from TWAuth when the roster loads; until then nothing is painted, so the defaults here only ever
+  // apply to an unmounted control. Defaulting isAdmin to FALSE is the safe direction: the worst case
+  // is a chip that looks read-only for a moment, not one that offers a change the server will refuse.
+  const notifyPick = { roster: [], changed: {}, ready: false, isAdmin: false, me: "" };
 
   notifyPick.effective = (email) => {
     const person = notifyPick.roster.find(p => p.email.toLowerCase() === email.toLowerCase());
@@ -342,6 +346,13 @@
       (saved.add || []).forEach(e => { notifyPick.changed[String(e).toLowerCase()] = true; });
       (saved.mute || []).forEach(e => { notifyPick.changed[String(e).toLowerCase()] = false; });
     } catch {}
+    // Who is looking, so paintNotifyChips knows which chips they may touch. Read the same way the
+    // Notification Sending page reads it, off TWAuth rather than from a role guessed here.
+    try {
+      const who = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
+      notifyPick.me = String(who.email || "").toLowerCase();
+      notifyPick.isAdmin = who.role === "admin" || who.role === "super_admin";
+    } catch { notifyPick.isAdmin = false; notifyPick.me = ""; }
     notifyPick.ready = true;
     box.hidden = false;
     paintNotifyChips();
@@ -358,18 +369,27 @@
       // portal folds them in), so the chip says so instead of offering to add somebody who is
       // already coming. A mute still wins, so it stays clickable.
       const owns = person.email.toLowerCase() === estimator;
-      return '<button type="button" class="nt-chip' + ((on || owns) ? " on" : "") + '"'
+      // Only an admin may toggle somebody else, exactly as the Notification Sending page has always
+      // had it — and now enforced server-side too, so an ungated chip would just 403. Rendered as a
+      // plain span rather than a disabled button: a disabled control invites clicking and explains
+      // nothing, and the sentence below says who may change what.
+      const mayToggle = notifyPick.isAdmin || person.email.toLowerCase() === notifyPick.me;
+      const cls = 'nt-chip' + ((on || owns) ? ' on' : '') + (mayToggle ? '' : ' nt-chip-ro');
+      const label = '<span class="nt-av">' + esc(window.TWCrm.initialsOf(person.email)) + "</span>"
+        + esc(window.TWCrm.nameOf(person.email));
+      const title = esc(person.email + (owns ? " — owns this job, so always told" : "")
+        + (mayToggle ? "" : " — only an admin can change this"));
+      if (!mayToggle) return '<span class="' + cls + '" title="' + title + '">' + label + "</span>";
+      return '<button type="button" class="' + cls + '"'
         + ' data-notify="' + esc(person.email) + '"'
-        + ' title="' + esc(person.email + (owns ? " — owns this job, so always told" : "")) + '">'
-        + '<span class="nt-av">' + esc(window.TWCrm.initialsOf(person.email)) + "</span>"
-        + esc(window.TWCrm.nameOf(person.email))
-        + "</button>";
+        + ' title="' + title + '">' + label + "</button>";
     }).join("");
     if (why) {
       const n = notifyPick.roster.filter(p => notifyPick.effective(p.email)).length;
+      const how = notifyPick.isAdmin ? "Click to change." : "You can change only your own.";
       why.textContent = n
-        ? n + " of " + notifyPick.roster.length + " will be told this went out. Click to change."
-        : "Nobody will be told this went out. Click a name to include them.";
+        ? n + " of " + notifyPick.roster.length + " will be told this went out. " + how
+        : "Nobody will be told this went out. " + how;
     }
   }
 

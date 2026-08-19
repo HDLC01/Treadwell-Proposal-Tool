@@ -150,6 +150,9 @@
   .nt-chip { border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700;
     cursor:pointer; background:var(--surf-high); color:var(--ink-v); }
   .nt-chip.on { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
+  /* Read-only chips (a non-admin looking at somebody else) render as spans, not disabled buttons.
+     The state colour must keep reading the same — only the cursor changes. */
+  span.nt-chip { cursor:default; }
   .nt-chip:disabled { cursor:not-allowed; opacity:.7; }
   /* The avatar inside a toggle chip, deliberately colourless — NOT the shared .tw-av.
      On this control colour IS the state (green = receives this project's email), so an
