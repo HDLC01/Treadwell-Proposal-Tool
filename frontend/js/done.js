@@ -280,6 +280,112 @@
   const readAssignedEstimator = () =>
     (document.getElementById("portal-estimator") || {}).value || "";
 
+  /** Who on the team hears about THIS send, chosen before pressing Send.
+   *
+   *  Hanz, 2026-08-19: "we need that notifcation sending selection in the Files. so we can select
+   *  who receives it first." The Notification Sending page sets the standing default; this picks
+   *  the exceptions for one job, next to the recipients it is being sent to.
+   *
+   *  HELD IN MEMORY, SENT WITH THE PUBLISH. Nothing is written when a chip is clicked, for a
+   *  reason that is not stylistic: the per-project override table has a foreign key onto the
+   *  proposal row, and on a FIRST send that row does not exist until the publish creates it — a
+   *  write beforehand is refused by the portal. So the picks travel in the publish body and the
+   *  portal applies them after it creates the row and before it decides who to notify. It also
+   *  keeps the send a single request, which is what the flush-then-publish ordering depends on.
+   *
+   *  Deliberately NOT part of the draft blob: `refreshServerOwned` would overwrite in-progress
+   *  picks, and this is a decision about one send rather than a property of the project. */
+  const notifyPick = { roster: [], changed: {}, ready: false };
+
+  notifyPick.effective = (email) => {
+    const person = notifyPick.roster.find(p => p.email.toLowerCase() === email.toLowerCase());
+    if (!person) return false;
+    const override = notifyPick.changed[email.toLowerCase()];
+    return override === undefined ? person.base : override;
+  };
+
+  // Only what the estimator actually changed. Anybody left alone follows the roster, so an
+  // untouched send forwards nothing and the request stays byte-for-byte the legacy one.
+  notifyPick.adds = () => Object.keys(notifyPick.changed)
+    .filter(e => notifyPick.changed[e] === true && !baseOf(e));
+  notifyPick.mutes = () => Object.keys(notifyPick.changed)
+    .filter(e => notifyPick.changed[e] === false && baseOf(e));
+
+  function baseOf(email) {
+    const person = notifyPick.roster.find(p => p.email.toLowerCase() === email.toLowerCase());
+    return !!(person && person.base);
+  }
+
+  async function mountNotifyRoster() {
+    const box = document.getElementById("notify-pick");
+    const chips = document.getElementById("notify-pick-chips");
+    if (!box || !chips) return;
+    let list = [];
+    try {
+      const r = await fetch(TW.absoluteUrl("/api/portal/notify-recipients"),
+                            { headers: TW.authHeaders() });
+      const j = r.ok ? await r.json() : {};
+      // 'general' only: a deposit-kind row is for deposit alerts, not for "we sent a proposal".
+      list = (j.recipients || []).filter(x => x.kind === "general");
+    } catch { list = []; }
+    // Nobody configured, or the roster is unreachable: say nothing rather than showing an empty
+    // control that implies the send tells no one. The standing roster still applies server-side.
+    if (!list.length) { box.hidden = true; return; }
+    notifyPick.roster = list.map(x => ({ email: x.email, base: x.enabled !== false }));
+    // Whatever was chosen in the CRM drawer before this project was sent. That control writes the
+    // draft (an unsent project has no portal row to override against), and this is the screen that
+    // carries the decision into the send — so it has to open showing what was already decided
+    // rather than silently discarding it.
+    notifyPick.changed = {};
+    try {
+      const saved = (TW.getState() || {}).notify_picks || {};
+      (saved.add || []).forEach(e => { notifyPick.changed[String(e).toLowerCase()] = true; });
+      (saved.mute || []).forEach(e => { notifyPick.changed[String(e).toLowerCase()] = false; });
+    } catch {}
+    notifyPick.ready = true;
+    box.hidden = false;
+    paintNotifyChips();
+  }
+
+  function paintNotifyChips() {
+    const chips = document.getElementById("notify-pick-chips");
+    const why = document.getElementById("notify-pick-why");
+    if (!chips) return;
+    const estimator = String(readAssignedEstimator() || "").toLowerCase();
+    chips.innerHTML = notifyPick.roster.map(person => {
+      const on = notifyPick.effective(person.email);
+      // The assigned estimator hears about the job whether or not they sit on the roster (the
+      // portal folds them in), so the chip says so instead of offering to add somebody who is
+      // already coming. A mute still wins, so it stays clickable.
+      const owns = person.email.toLowerCase() === estimator;
+      return '<button type="button" class="nt-chip' + ((on || owns) ? " on" : "") + '"'
+        + ' data-notify="' + esc(person.email) + '"'
+        + ' title="' + esc(person.email + (owns ? " — owns this job, so always told" : "")) + '">'
+        + '<span class="nt-av">' + esc(window.TWCrm.initialsOf(person.email)) + "</span>"
+        + esc(window.TWCrm.nameOf(person.email))
+        + "</button>";
+    }).join("");
+    if (why) {
+      const n = notifyPick.roster.filter(p => notifyPick.effective(p.email)).length;
+      why.textContent = n
+        ? n + " of " + notifyPick.roster.length + " will be told this went out. Click to change."
+        : "Nobody will be told this went out. Click a name to include them.";
+    }
+  }
+
+  // Delegated, because the chips are rebuilt whenever the estimator changes.
+  document.addEventListener("click", (e) => {
+    const chip = e.target.closest && e.target.closest("[data-notify]");
+    if (!chip) return;
+    const email = chip.getAttribute("data-notify").toLowerCase();
+    const now = notifyPick.effective(email);
+    // Back to the roster's own answer → forget the deviation entirely, so an untouched-in-effect
+    // send sends nothing rather than an override that happens to agree.
+    if (!now === baseOf(email)) delete notifyPick.changed[email];
+    else notifyPick.changed[email] = !now;
+    paintNotifyChips();
+  });
+
   function readRequireDeposit() {
     const el = document.getElementById("portal-require-deposit");
     // Missing element (older cached page) → fall back to the audience default so a
@@ -668,7 +774,13 @@
     const _msgEl = document.getElementById("portal-message");
     if (_msgEl) { try { _msgEl.value = TW.getState().portal_message || ""; } catch {} }
     mountRequireDeposit();
-    mountEstimatorPicker();
+    // Awaited so the chips can mark whoever ends up assigned as already-included; the estimator
+    // picker is what decides that, and it resolves the roster from the server.
+    mountEstimatorPicker().then(paintNotifyChips).catch(() => {});
+    mountNotifyRoster();
+    // Changing the estimator changes who is implicitly told, so the chips follow the select.
+    const _estSel = document.getElementById("portal-estimator");
+    if (_estSel) _estSel.addEventListener("change", paintNotifyChips);
     mountRevisions();
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
@@ -717,7 +829,12 @@
                                         // Which of those contacts should not be chased. Filtered
                                         // to the addresses actually being sent to, so a removed
                                         // or retargeted one cannot travel as a stale opt-out.
-                                        no_followups: portalRecip.noFollowupsToSend() });
+                                        no_followups: portalRecip.noFollowupsToSend(),
+                                        // Which STAFF hear about this send — only the deviations
+                                        // from the standing roster, so an untouched send carries
+                                        // nothing and behaves exactly as it always has.
+                                        notify_add: notifyPick.adds(),
+                                        notify_mute: notifyPick.mutes() });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
           // Remember both for a re-send. require_deposit persists so a deliberate
           // GC-with-deposit (or Direct-without) choice survives a reload instead of

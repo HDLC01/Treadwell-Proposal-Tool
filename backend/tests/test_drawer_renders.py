@@ -281,6 +281,10 @@ CONDITIONAL_IDS = {
     "fu-lost": "not rendered on a closed-lost proposal",
     "fu-add-contact": "only rendered when the portal knows a recipient",
     "fu-add-contact-btn": "only rendered when the portal knows a recipient",
+    # The not-sent panel's own pair, same shape as fu-lost/fu-reopen above: exactly one of
+    # the two renders, and wireNotSentLost looks up both and guards on the result.
+    "ns-reopen": "only rendered on a bid already closed lost",
+    "ns-lost": "not rendered on a bid already closed lost",
 }
 
 
@@ -534,16 +538,55 @@ def test_a_changed_payload_still_repaints(out, name):
 @needs_node
 def test_the_not_sent_panel_keeps_its_actions_and_its_guard(out):
     """The Created-but-not-sent drawer shares the head, the fact cells and the layout column with
-    the real one, so a rep does not re-learn the panel. What it must not grow is a tab strip: six
-    of the seven tabs would be empty."""
+    the real one, so a rep does not re-learn the panel.
+
+    IT NOW CARRIES THE SAME TAB STRIP, which reverses what this test used to assert. The old
+    reasoning was that a tab pointing at a deposit which does not exist points at nothing. Hanz,
+    2026-08-19: "For those not sent just please have the same set of tabs so that its clear." He is
+    right about what the strip is for — it is the shape of a project, and showing one fifth of it
+    made this drawer look like a different feature rather than the same project earlier in its
+    life. Each tab that has nothing yet says what has to happen first, which is a fact about the
+    project rather than an empty box."""
     ns = out["notSent"]
     assert ns["chars"] > 400, "the not-sent panel rendered almost nothing"
-    assert not ns["missing"], "it wires ids it never rendered: %s" % ns["missing"]
     assert ns["repaintedOnIdenticalPayload"] is False, "the not-sent panel repaints on every poll"
-    assert "dtabs" not in ns["html"], "the tab strip is rendered for a project with no portal row"
+    assert "dtabs" in ns["html"], "the tab strip is missing, so this drawer reads as another feature"
+    for key in ("proposal", "deposit", "contacts", "chat", "followup"):
+        assert 'data-sec="%s"' % key in ns["html"], "the %s tab is missing" % key
+        assert 'id="dpanel-%s"' % key in ns["html"], "the %s tab has no panel to open" % key
     assert "data-go-files" in ns["html"] and "data-go-edit" in ns["html"]
     assert 'class="dclose"' in ns["html"]
     assert 'class="amt">$88,000.00' in ns["html"], "the bid is not rendered as money"
+
+
+@needs_node
+def test_the_empty_tabs_say_what_has_to_happen_first(out):
+    """An empty panel reads as a bug. Each of the four tabs that cannot have content yet names the
+    thing that fills it, so the strip doubles as an explanation of the sequence.
+
+    Mutation: render the four panels empty. The strip still looks right and every tab still opens,
+    which is exactly why this needs asserting rather than eyeballing."""
+    html = out["notSent"]["html"]
+    for phrase in ("approved", "after they approve", "Send it", "Chasing starts when you send"):
+        assert phrase in html, "the placeholders do not explain themselves: %r missing" % phrase
+
+
+@needs_node
+def test_the_not_sent_panel_does_not_wire_the_sent_drawers_cards(out):
+    """`applySecPanel` is shared, and it looks up every card id in ALL_SEC_CARDS to decide what to
+    hide — tolerating absence by design (`if (!el) continue`). Those lookups are not wiring, so the
+    ids this panel legitimately never renders are excluded here.
+
+    What would be a real bug is a HANDLER bound to a missing id, and that is still asserted: the
+    not-sent panel's own controls are checked above, and every other scenario keeps the strict
+    check."""
+    missing = set(out["notSent"]["missing"])
+    shared_cards = set(out["allSecCards"])
+    # CONDITIONAL_IDS too: this panel now has a mutually-exclusive pair of its own
+    # (ns-lost / ns-reopen), which is the same guarded-lookup shape the sent drawer has had
+    # for fu-lost / fu-reopen since it shipped, and it is checked by the same list.
+    unexpected = missing - shared_cards - set(CONDITIONAL_IDS)
+    assert not unexpected, "it wires ids it never rendered: %s" % sorted(unexpected)
 
 
 # ── the bank numbers ─────────────────────────────────────────────────────────

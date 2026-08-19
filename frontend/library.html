@@ -62,12 +62,17 @@
 
     /* tables */
     .tw { overflow-x:auto; }
+    /* Same table, no scroller — see the comment on the assemblies lines table. An overflow value
+       other than `visible` would clip the item picker's floating results. */
+    .tw-nolimit { overflow:visible; }
     table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
     th, td { text-align:left; padding:9px 11px; border-bottom:1px solid rgba(27,28,28,.08); }
     thead th { background:var(--surf-low); font:700 10px system-ui; letter-spacing:.06em;
       text-transform:uppercase; color:var(--ink-v); white-space:nowrap; }
     tbody tr:last-child td { border-bottom:0; }
     td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+    .items-table thead th { text-align:center; }
+    .items-table thead th:first-child { text-align:left; }
 
     /* assemblies workspace */
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
@@ -92,10 +97,14 @@
     .areaband input { width:116px; font-weight:600; }
     .areaband .why { color:var(--ink-v); font-size:12px; }
 
-    .lines td { vertical-align:middle; }
+    .lines td { vertical-align:top; }
     .lines .role input { width:100%; min-width:96px; }
     .lines select { width:100%; min-width:150px; }
     .lines .cov input { width:82px; }
+    .lines .line-primary { min-height:32px; display:flex; align-items:center; justify-content:flex-end; }
+    .lines .line-primary .gone { margin-top:0; }
+    .lines .line-action { justify-content:center; }
+    .lines td > .icon { min-height:32px; display:inline-flex; align-items:center; justify-content:center; }
     /* The arithmetic, shown rather than implied: a wrong coverage should be visible in the
        working, not inferred from a total that looks slightly off. */
     .calc { font-size:11px; color:var(--ink-v); margin-top:3px; }
@@ -144,6 +153,30 @@
     .lines .waste { width:74px; }
     .lines .ru { text-align:center; }
     .lines input[type="checkbox"] { width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
+    .division-picks { display:flex; flex-wrap:wrap; gap:6px; min-width:170px; }
+    .division-picks label { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line);
+      border-radius:7px; padding:4px 7px; background:var(--card); font-size:12px; white-space:nowrap; }
+    .division-picks input { width:14px; height:14px; accent-color:var(--red); }
+    /* ONE ROW PER LINE ITEM. The picker is a single input; its results float over the table rather
+       than expanding the cell, so opening the list cannot change a row's height. Hanz, 2026-08-19:
+       "Make one line item, one row." The division and vendor filters that used to sit in here are
+       gone — one search box matches name, division and vendor (itemMatches in library.js), and
+       every result prints its division and vendor underneath. */
+    .item-picker { position:relative; min-width:220px; }
+    .item-picker > input { width:100%; }
+    .item-results { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:30;
+      display:grid; gap:4px; max-height:230px; overflow:auto; background:var(--card);
+      border:1px solid var(--line); border-radius:9px; padding:6px;
+      box-shadow:0 8px 22px rgba(27,28,28,.16); }
+    .item-result { text-align:left; background:var(--card); border:1px solid var(--line); border-radius:7px;
+      padding:6px 8px; cursor:pointer; color:var(--ink); }
+    .item-result[aria-pressed="true"] { border-color:var(--red); background:var(--red-tint); }
+    .item-result:hover { border-color:var(--red); }
+    .item-result b { display:block; font-size:12.5px; }
+    .item-result span { display:block; color:var(--ink-v); font-size:11px; line-height:1.35; }
+    .th-help { cursor:help; border-bottom:1px dotted rgba(92,64,63,.55); }
+    .admin-grid { display:grid; gap:18px; }
+    .admin-section h2 { margin:0 0 8px; font:700 14px system-ui; }
 
     /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
        a disabled table — it says who to ask. */
@@ -176,7 +209,7 @@
       <button type="button" role="tab" id="tab-asm" aria-selected="true"
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
-              aria-controls="pane-vendors">Vendors<span class="n" id="n-vendors"></span></button>
+              aria-controls="pane-vendors">Administration</button>
     </div>
 
     <!-- ── Items ──────────────────────────────────────────────────────── -->
@@ -185,11 +218,11 @@
         invoice — the pack you order, and what that pack costs. A five-gallon pail is
         <b>5</b> · <b>Gallon</b>, priced as the pail.</p>
       <div class="card tw">
-        <table>
+        <table class="items-table">
           <thead>
             <tr>
-              <th>Material <span style="font-weight:400;text-transform:none;letter-spacing:0;">(how the manufacturer names it)</span></th>
-              <th>Division</th><th class="n">Qty</th><th>Unit</th>
+              <th>Materials <span style="font-weight:400;text-transform:none;letter-spacing:0;">(how the manufacturer names it)</span></th>
+              <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
               <th class="n">Cost</th><th>Vendor</th><th>Dates</th><th></th>
             </tr>
           </thead>
@@ -215,35 +248,71 @@
 
     <!-- ── Vendors ────────────────────────────────────────────────────── -->
     <section id="pane-vendors" role="tabpanel" aria-labelledby="tab-vendors" hidden>
-      <p class="paneintro"><b>Who we buy from.</b> This list is what the Vendor dropdown offers on
-        the Items tab, so one supplier keeps one spelling. Only an admin can change it.</p>
-      <p class="ronote" id="vendors-ro" hidden>You can see the list and pick vendors on your
-        materials. Adding, renaming and removing them is admin-only — ask Hanz or Kyle.</p>
-      <div class="card tw">
-        <table>
-          <thead>
-            <tr><th>Vendor</th><th>Notes</th><th class="n">Materials</th><th></th></tr>
-          </thead>
-          <tbody id="vendors-body"></tbody>
-        </table>
-        <div id="vendors-empty" class="empty" hidden>
-          <h3 id="vendors-empty-h">No vendors yet</h3>
-          <p id="vendors-empty-why">Add the suppliers you buy from and they become a dropdown on
-            every material.</p>
-          <button class="btn" type="button" id="vendor-add-first">+ Add your first vendor</button>
+      <p class="paneintro"><b>Administration lists.</b> These are the Division, Unit and Vendor
+        choices offered on the Items tab. Only an admin can change them.</p>
+      <p class="ronote" id="vendors-ro" hidden>You can see these lists and use them on items.
+        Adding, renaming and removing values is admin-only - ask Hanz or Kyle.</p>
+      <div class="admin-grid">
+        <div class="admin-section" id="admin-divisions">
+          <h2>Divisions</h2>
+          <div class="card tw">
+            <table>
+              <thead><tr><th>Division</th><th>Notes</th><th class="n">Items</th><th></th></tr></thead>
+              <tbody id="divisions-body"></tbody>
+            </table>
+            <div id="divisions-empty" class="empty" hidden>
+              <h3>No divisions yet</h3>
+              <p>Add divisions and they become checkboxes on every item.</p>
+              <button class="btn" type="button" data-add-ref="divisions">+ Add your first division</button>
+            </div>
+          </div>
+          <div style="margin-top:12px;" data-addrow-ref="divisions">
+            <button class="btn ghost" type="button" data-add-ref="divisions">+ Add division</button>
+          </div>
+        </div>
+        <div class="admin-section" id="admin-units">
+          <h2>Units</h2>
+          <div class="card tw">
+            <table>
+              <thead><tr><th>Unit</th><th>Notes</th><th class="n">Items</th><th></th></tr></thead>
+              <tbody id="units-body"></tbody>
+            </table>
+            <div id="units-empty" class="empty" hidden>
+              <h3>No units yet</h3>
+              <p>Add purchase units and they become options on every item.</p>
+              <button class="btn" type="button" data-add-ref="units">+ Add your first unit</button>
+            </div>
+          </div>
+          <div style="margin-top:12px;" data-addrow-ref="units">
+            <button class="btn ghost" type="button" data-add-ref="units">+ Add unit</button>
+          </div>
+        </div>
+        <div class="admin-section" id="admin-vendors">
+          <h2>Vendors</h2>
+          <div class="card tw">
+            <table>
+              <thead><tr><th>Vendor</th><th>Notes</th><th class="n">Items</th><th></th></tr></thead>
+              <tbody id="vendors-body"></tbody>
+            </table>
+            <div id="vendors-empty" class="empty" hidden>
+              <h3>No vendors yet</h3>
+              <p>Add the suppliers you buy from and they become options on every item.</p>
+              <button class="btn" type="button" data-add-ref="vendors">+ Add your first vendor</button>
+            </div>
+          </div>
+          <div style="margin-top:12px;" data-addrow-ref="vendors">
+            <button class="btn ghost" type="button" data-add-ref="vendors">+ Add vendor</button>
+          </div>
         </div>
       </div>
-      <div style="margin-top:12px;" id="vendor-addrow">
-        <button class="btn ghost" type="button" id="vendor-add">+ Add vendor</button>
-      </div>
-      <p class="foot">Removing a vendor stops it being offered; materials already bought from it
-        keep saying so, because an item records where it actually came from.</p>
+      <p class="foot">Removing a value stops it being offered; items already using it keep saying
+        so until someone manually changes that item.</p>
     </section>
 
     <!-- ── Assemblies ─────────────────────────────────────────────────── -->
     <section id="pane-asm" role="tabpanel" aria-labelledby="tab-asm">
       <p class="paneintro"><b>Assemblies are how we estimate them.</b> Build a system out of the
-        materials — a primer, a body coat, a top coat — and see what it costs per square foot at a
+        items - a primer, a body coat, a top coat - and see what it costs per square foot at a
         test area.</p>
       <div class="work">
         <div class="card alist" id="asm-list" hidden></div>
@@ -264,14 +333,18 @@
               it is not saved with the assembly.</span>
           </div>
 
-          <div class="tw">
+          <!-- Not `.tw`: that wrapper sets overflow-x:auto, which becomes a clipping context and
+               cuts off the item picker's floating results at the cell edge. This table's columns
+               are fixed-width and fit the panel, so it does not need the scroller. -->
+          <div class="tw-nolimit">
             <table class="lines">
               <thead>
                 <tr>
-                  <th>Material</th>
+                  <th>Items</th>
+                  <th class="n" style="width:112px;">Order Amount</th>
                   <th class="n" style="width:116px;">Coverage per Unit</th>
-                  <th class="n" style="width:104px;">Waste Factor</th>
-                  <th style="width:78px;text-align:center;">Roundup?</th>
+                  <th class="n" style="width:104px;"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor</span></th>
+                  <th style="width:78px;text-align:center;"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
                   <th class="n" style="width:132px;">Quantity</th>
                   <th class="n" style="width:132px;">Cost</th>
                   <th style="width:34px;"></th>
@@ -281,11 +354,11 @@
             </table>
           </div>
 
-          <div><button class="btn ghost sm" type="button" id="add-line">+ Add material line</button></div>
+          <div><button class="btn ghost sm" type="button" id="add-line">+ Add item line</button></div>
 
           <div class="totals">
             <div class="tot">
-              <div class="k">Material total</div>
+              <div class="k">Items total</div>
               <div class="v" id="t-total">—</div>
             </div>
             <div class="tot head">
