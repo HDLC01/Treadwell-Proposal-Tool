@@ -51,6 +51,39 @@ _TZ_NAME = "America/Chicago"
 _EPOCH = "1970-01-01T00:00:00+00:00"
 
 
+# ── feed tiers: the bell's section order ───────────────────────────────
+# ONE RULE — things that HAPPENED outrank things merely DUE.
+#
+# Hanz, 2026-08-19: "why is this on the bottom, new notifs should be at the top". He was scrolling
+# past a wall of 11-hour-old Basisboard rows to find a proposal that had been sent at 13:17 and
+# opened at 13:29. The cause was the SECTION order, not the newest-first sort inside a section: the
+# deadline buckets came first, and on production they hold 14 overdue + 3 due today + 6 due soon, so
+# 23 rows sat above anything that had just happened. Compounding it, a deadline's `ts` is its DUE
+# DATE rather than when something occurred, so "newest first" never meant anything recognisable
+# within those blocks either.
+#
+# THE TENSION, stated rather than hidden: an overdue bid deadline is genuinely time-critical, and
+# this pushes it BELOW the event feed. It is still the right trade, because a deadline does not
+# change — it will read the same tomorrow, and it is also on the board, the bid calendar and the 6am
+# digest. A customer opening a proposal is news exactly once, and only the bell says so.
+#
+# If this bites, the fix is TWO LABELLED GROUPS in the panel ("Recent" / "Deadlines") so neither
+# hides the other — NOT restoring an order that buries today's events behind last week's dates. The
+# rejected alternative was leaving the tiers alone and sorting the whole feed by `ts`: that reads
+# worse, because a deadline's `ts` is a due date and would interleave future dates with past events.
+_TIER_MESSAGE = 0        # a customer said something — outranks us moving a card
+_TIER_CRM_STEP = 1       # our OWN pipeline: sent / viewed / approved / deposit / closed lost
+_TIER_ACTIVITY = 2       # third-party + filing: Basisboard pipeline, lead inbox, Dropbox
+_TIER_OVERDUE = 3
+_TIER_DUE_TODAY = 4
+_TIER_DUE_SOON = 5
+_TIER_NO_DEADLINE = 6
+_TIER_UNKNOWN = 9        # an item that forgot its tier is a bug; a bug does not get the top slot
+# Named instead of repeated as bare literals because every category emits its tier from SEVERAL
+# places (three for the Basisboard diff, three for crm_step), and one missed literal splits a
+# category across two sections — which is exactly what made the old order impossible to read.
+
+
 # ── time helpers ──────────────────────────────────────────────────────
 def _biz_tz():
     try:
@@ -126,7 +159,7 @@ def _diff_pipeline(prev: Dict[str, Any], projects: List[Dict[str, Any]],
         if old is None:                                     # appeared since last snapshot
             changes.append({
                 "id": f"pl:new:{pid}:{now_iso}", "kind": "pipeline_new", "icon": "✨",
-                "severity": "info", "sort": 3, "ts": now_iso, "link": "/crm.html",
+                "severity": "info", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/crm.html",
                 "title": name,
                 "body": f"New bid in the pipeline · {p.get('stage_name') or 'Unstaged'}",
             })
@@ -134,14 +167,14 @@ def _diff_pipeline(prev: Dict[str, Any], projects: List[Dict[str, Any]],
         if bool(p.get("awarded")) and not old.get("awarded"):
             changes.append({
                 "id": f"pl:award:{pid}:{now_iso}", "kind": "pipeline_awarded", "icon": "🏆",
-                "severity": "high", "sort": 3, "ts": now_iso, "link": "/crm.html",
+                "severity": "high", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/crm.html",
                 "title": name, "body": "Bid awarded 🎉",
             })
         elif p.get("stage_id") != old.get("stage_id"):
             frm = old.get("stage_name")
             changes.append({
                 "id": f"pl:stage:{pid}:{now_iso}", "kind": "pipeline_stage", "icon": "➡️",
-                "severity": "info", "sort": 3, "ts": now_iso, "link": "/crm.html",
+                "severity": "info", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/crm.html",
                 "title": name,
                 "body": (f"Moved to {p.get('stage_name') or 'a new stage'}"
                          + (f" (from {frm})" if frm else "")),
@@ -210,7 +243,7 @@ def _lead_events(messages: List[Dict[str, Any]], now_iso: str) -> List[Dict[str,
         company = ((m.get("company") or {}).get("name") or "").strip()
         out.append({
             "id": f"lead:new:{m.get('id')}", "kind": "lead_new", "icon": "📥",
-            "severity": "info", "sort": 3, "ts": now_iso, "link": "/leads.html",
+            "severity": "info", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/leads.html",
             "title": str(proj.get("name") or m.get("subject") or "New lead"),
             "body": "New lead" + (f" · {company}" if company else ""),
         })
@@ -262,8 +295,11 @@ def add_lead_estimate(draft_id: str, title: str, body: str = "") -> None:
     if not did:
         return
     event = {
+        # ACTIVITY, not CRM_STEP: this is the lead inbox's own follow-through, and it rides in
+        # `lead_events` with the rest of the inbox. A crm_step is something a CUSTOMER did to a
+        # proposal that exists; drafting an estimate is us reacting to a Basisboard invite.
         "id": f"lead:est:{did}", "kind": "lead_estimate", "icon": "📐",
-        "severity": "high", "sort": 3, "ts": _now_iso(),
+        "severity": "high", "sort": _TIER_ACTIVITY, "ts": _now_iso(),
         "link": f"/?d={did}&edit=1",
         "title": title or "A lead", "body": body or "Estimate drafted from a lead",
     }
@@ -327,8 +363,8 @@ _PORTAL_MSG_DEFAULT = ("💬", "New message")
 
 
 def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Map the cached portal messages onto bell items. `sort:-1` floats them above
-    every other section; the id (`pmsg:<row id>`) lets the frontend dedupe toasts."""
+    """Map the cached portal messages onto bell items. `_TIER_MESSAGE` floats them above every
+    other section; the id (`pmsg:<row id>`) lets the frontend dedupe toasts."""
     out: List[Dict[str, Any]] = []
     for r in (state.get("portal_messages") or []):
         rid = r.get("id")
@@ -340,7 +376,7 @@ def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]
         icon, empty_body = _PORTAL_MSG_TYPES.get(r.get("msg_type") or "", _PORTAL_MSG_DEFAULT)
         out.append({
             "id": f"pmsg:{rid}", "kind": "portal_message", "icon": icon,
-            "severity": "high", "sort": -1, "ts": r.get("created_at") or _EPOCH,
+            "severity": "high", "sort": _TIER_MESSAGE, "ts": r.get("created_at") or _EPOCH,
             "title": f"{who} · {proj}",
             "body": r.get("body") or empty_body,
             "link": f"/portal.html?open={pid}" if pid else "/portal.html",
@@ -421,7 +457,7 @@ def _diff_crm(prev: Dict[str, Any], rows: List[Dict[str, Any]],
         if old is None:
             out.append({
                 "id": f"crm:sent:{pid}:{now_iso}", "kind": "crm_step", "icon": "📤",
-                "severity": "info", "sort": 3, "ts": now_iso, "link": link,
+                "severity": "info", "sort": _TIER_CRM_STEP, "ts": now_iso, "link": link,
                 "title": name, "body": "Proposal sent to the customer",
             })
             continue
@@ -438,7 +474,7 @@ def _diff_crm(prev: Dict[str, Any], rows: List[Dict[str, Any]],
                 # received inside one poll window would otherwise collide on `crm:deposit_status:…`
                 # and the second item would be deduped away by the frontend.
                 "id": f"crm:{field}:{now_val}:{pid}:{now_iso}", "kind": "crm_step", "icon": icon,
-                "severity": severity, "sort": 3, "ts": now_iso, "link": link,
+                "severity": severity, "sort": _TIER_CRM_STEP, "ts": now_iso, "link": link,
                 "title": name, "body": sentence,
             })
     return out
@@ -516,7 +552,7 @@ def _draft_event_notifications() -> List[Dict[str, Any]]:
         reason = d.get("reason")
         out.append({
             "id": f"dev:{e.get('id')}", "kind": "crm_step", "icon": icon,
-            "severity": "info", "sort": 3, "ts": e.get("created_at") or _EPOCH,
+            "severity": "info", "sort": _TIER_CRM_STEP, "ts": e.get("created_at") or _EPOCH,
             "title": d.get("project_name") or "A project",
             "body": sentence + (f" · {reason.replace('_', ' ')}" if reason else ""),
             "link": "/portal.html",
@@ -550,7 +586,7 @@ def _deadline_notifications(projects: List[Dict[str, Any]], today) -> List[Dict[
         if dl is None:
             out.append({
                 "id": f"dl:none:{pid}", "kind": "deadline_none", "icon": "⚪",
-                "severity": "low", "sort": 4,
+                "severity": "low", "sort": _TIER_NO_DEADLINE,
                 "ts": p.get("updated_at") or p.get("created_at") or _EPOCH,
                 "title": name, "body": "No deadline set", "link": link,
             })
@@ -561,19 +597,19 @@ def _deadline_notifications(projects: List[Dict[str, Any]], today) -> List[Dict[
             n = abs(days)
             out.append({
                 "id": f"dl:overdue:{pid}", "kind": "deadline_overdue", "icon": "🔴",
-                "severity": "high", "sort": 0, "ts": _date_iso(dl), "title": name,
+                "severity": "high", "sort": _TIER_OVERDUE, "ts": _date_iso(dl), "title": name,
                 "body": f"Overdue by {n} day{'s' if n != 1 else ''} ({dl_str})", "link": link,
             })
         elif days == 0:
             out.append({
                 "id": f"dl:today:{pid}", "kind": "deadline_today", "icon": "🟠",
-                "severity": "high", "sort": 1, "ts": _date_iso(dl), "title": name,
+                "severity": "high", "sort": _TIER_DUE_TODAY, "ts": _date_iso(dl), "title": name,
                 "body": f"Due today ({dl_str})", "link": link,
             })
         elif days <= 7:
             out.append({
                 "id": f"dl:soon:{pid}", "kind": "deadline_soon", "icon": "🟡",
-                "severity": "medium", "sort": 2, "ts": _date_iso(dl - timedelta(days=7)),
+                "severity": "medium", "sort": _TIER_DUE_SOON, "ts": _date_iso(dl - timedelta(days=7)),
                 "title": name,
                 "body": f"Due in {days} day{'s' if days != 1 else ''} ({dl_str})", "link": link,
             })
@@ -598,7 +634,7 @@ def _dropbox_notifications() -> List[Dict[str, Any]]:
         label = d.get("label")
         out.append({
             "id": f"dbx:{e.get('id')}",
-            "kind": "to_dropbox", "icon": "📁", "severity": "info", "sort": 3,
+            "kind": "to_dropbox", "icon": "📁", "severity": "info", "sort": _TIER_ACTIVITY,
             "ts": e.get("created_at") or _EPOCH,
             "title": proj,
             "body": "Filed to Dropbox" + (f" · {label}" if label else ""),
@@ -611,6 +647,21 @@ def _dropbox_notifications() -> List[Dict[str, Any]]:
 
 
 # ── public API ─────────────────────────────────────────────────────────
+def _retier(stored: Optional[List[Dict[str, Any]]], tier: int) -> List[Dict[str, Any]]:
+    """Re-stamp the section tier on events read back OUT of the state file.
+
+    The state file is a 30-day archive written by whatever code was deployed when each event
+    happened, so its items carry whatever `sort` was current then. Without this, the 2026-08-19
+    retiering would leave up to a month of stored Basisboard/lead/CRM events sitting at the old
+    activity number — which is now the OVERDUE DEADLINE tier — so the very rows this change moves off
+    the bottom would come back in the middle of the deadline block for a month.
+
+    The rejected alternative was bumping a version key and discarding the stored events on first
+    read: that throws away real bell history to correct a number we can simply recompute. Returns
+    copies, so the recomputed tier is never written back into the file."""
+    return [{**e, "sort": tier} for e in (stored or [])]
+
+
 def get_notifications() -> Dict[str, Any]:
     """Assemble the feed: deadline items (live) + recent pipeline changes, sorted
     by section then newest-first. `unread` counts items newer than the global
@@ -643,25 +694,27 @@ def get_notifications() -> Dict[str, Any]:
         projects = []
 
     items = _deadline_notifications(projects, _biz_today())
-    for e in (state.get("pipeline_events") or []):
-        items.append(e)
-    items.extend(state.get("lead_events") or [])
+    items.extend(_retier(state.get("pipeline_events"), _TIER_ACTIVITY))
+    items.extend(_retier(state.get("lead_events"), _TIER_ACTIVITY))
     items.extend(_dropbox_notifications())
     items.extend(_portal_message_notifications(state))
     # Our own pipeline's steps, from both sides: a proposal the customer has (diffed off the portal)
     # and a bid closed before it was ever sent (our events log).
     #
-    # `sort: 3` — the ACTIVITY tier, with the Basisboard pipeline and the lead inbox, deliberately
-    # below every deadline tier (0-2 and 4 are already taken, and 0 is the overdue one). A deadline
-    # is time-critical in a way that "the customer opened it" is not. Within a tier the order is
-    # newest-first, so an approval that just happened still lands at the top of the activity block,
-    # above a Basisboard stage move from this morning.
-    items.extend(state.get("crm_events") or [])
+    # `_TIER_CRM_STEP` — its OWN tier, above the Basisboard pipeline and the lead inbox rather than
+    # sharing the activity block with them (2026-08-19). Our pipeline moving matters more than a
+    # third party's, and Basisboard alone can produce dozens of rows in a sweep, which is what buried
+    # an approval last time. Within a tier the order is newest-first.
+    items.extend(_retier(state.get("crm_events"), _TIER_CRM_STEP))
     items.extend(_draft_event_notifications())
 
-    # Section order (messages→overdue→today→soon→activity→no-deadline), newest-first within.
+    # Section order — see the _TIER_* block: messages → CRM steps → activity → overdue → today →
+    # soon → no-deadline, newest-first inside each. EVENTS ABOVE DEADLINES: a deadline will read the
+    # same tomorrow, an event is news exactly once.
     items.sort(key=lambda x: x.get("ts") or "", reverse=True)
-    items.sort(key=lambda x: x.get("sort", 3))
+    # `_TIER_UNKNOWN`, not a real tier: an item that shipped without a `sort` is a bug, and the one
+    # place it must not land is the top of the feed the whole team reads first.
+    items.sort(key=lambda x: x.get("sort", _TIER_UNKNOWN))
     unread = sum(1 for x in items if (x.get("ts") or "") > last_seen)
     return {"notifications": items[:_MAX_ITEMS], "unread": unread, "last_seen_at": last_seen}
 
