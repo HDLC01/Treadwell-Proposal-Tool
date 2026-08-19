@@ -71,6 +71,7 @@ import invoice_writer
 import leads
 import leads_worker
 import library
+import nav_access
 import notifications
 import pdf_writer
 import pricing
@@ -213,6 +214,58 @@ async def _audit_log(request: Request, call_next):
     except Exception:  # noqa: BLE001 — audit must never break the request
         pass
     return response
+
+
+# ─── Nav gate (which sidebar tabs a role may reach) ────────────────────
+# Hanz, 2026-08-19, on the Admin page's role matrix: "I cant toggle these on and off?" Asked whether
+# hiding the tab was enough, he chose REAL BLOCKING — so a denied role's own API prefixes refuse
+# rather than merely vanish from the menu. backend/nav_access.py holds the policy, the capability
+# table, and the reasons it ships denying nothing at all.
+#
+# ONE MIDDLEWARE, NOT PER-ROUTE DECORATORS. api_history, api_list_trash and api_followup_settings
+# take no `request` parameter at all, so decorators would mean editing every signature — and a route
+# added later under a prefix a tab already owns would be ungated until somebody remembered. This
+# edits no handler and covers the new route on its own.
+#
+# THE .html IS NOT GATED HERE, and that is accepted rather than a gap left open. There is no cookie
+# anywhere in this app — the Supabase session lives in localStorage and the only credential is the
+# Authorization header — so a browser NAVIGATING to /leads.html carries no identity to judge. What
+# makes it harmless: nothing is server-side templated, every page is an inert shell served by
+# NoCacheStaticFiles, and 100% of its content arrives over /api/*. A denied member gets a page that
+# paints a refusal card and whose data calls 403. Session cookies were the alternative and were
+# rejected: they need an interstitial plus a token refresh on every navigation, which turns a
+# 30-second Supabase blip into everybody bounced to sign-in.
+async def _nav_gate(request: Request, call_next):
+    # Public paths carry no identity — _auth_gate waved them through without setting one — so there
+    # is no role to read and nothing to decide. Reusing its own predicate keeps ONE answer to
+    # "is this request identified" rather than a second list that drifts from the first.
+    if _auth_is_public(request.url.path, request.method):
+        return await call_next(request)
+    try:
+        role = (_caller_profile(request) or {}).get("role") or "user"
+        denied = nav_access.is_api_denied(role, request.url.path)
+    except Exception as exc:  # noqa: BLE001
+        # FAIL OPEN. This is an internal tool with three accounts where a lockout is an outage the
+        # affected person cannot fix, and the data behind these routes is still behind the existing
+        # _require_admin gates. Failing closed would turn a database blip into a company-wide outage
+        # to save nothing.
+        log.warning("nav gate open (policy could not be evaluated for %s): %s",
+                    request.url.path, exc)
+        return await call_next(request)
+    if denied:
+        return JSONResponse(status_code=403, content={
+            "ok": False, "nav_denied": True,
+            "error": "That isn't available on your account. An admin can turn it on from the "
+                     "Admin page."})
+    return await call_next(request)
+
+
+# Registered BEFORE _auth_gate so it ends up INSIDE it. Starlette wraps the most recently added
+# middleware OUTERMOST (add_middleware inserts at index 0, and the stack is built by walking that
+# list in reverse) — the same mechanic that makes _audit_log, registered last, the outer layer that
+# sees even 401s. Inside is the only correct place for this one: it reads the caller's ROLE, which
+# needs the identity _auth_gate puts on request.state.
+app.middleware("http")(_nav_gate)
 
 
 @app.middleware("http")
@@ -1825,6 +1878,9 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
 # per-project overrides allow ANY signed-in staff to toggle THEMSELVES for a project,
 # and admins to toggle anyone. All routes are already bearer-gated by _auth_gate.
 def _caller_is_admin(request: Request) -> bool:
+    # Through _require_admin, so it reads the same cached profile as every other role decision in
+    # the app. A local profiles.get_by_email() here would be a third role reader and would miss both
+    # the SUPER_ADMIN_EMAIL fallback and the cache the nav gate depends on.
     try:
         _require_admin(request)
         return True
@@ -4487,20 +4543,72 @@ def api_me(request: Request) -> Dict[str, Any]:
             prof = profiles.get_by_email(email)
         except Exception:  # noqa: BLE001
             prof = None
+    # `nav_denied` rides along here rather than on a route of its own: auth.js already awaits this
+    # response before drawing the sidebar, so the menu it draws and the gate that refuses come out
+    # of the same answer — and there is no second request for a browser to skip.
     if prof:
+        role = prof.get("role", "user")
         return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
-                "role": prof.get("role", "user"), "status": prof.get("status", "active")}
+                "role": role, "status": prof.get("status", "active"),
+                "nav_denied": _nav_denied_for(role)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
-    return {"ok": True, "email": email, "name": None, "role": role, "status": "active"}
+    return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
+            "nav_denied": _nav_denied_for(role)}
+
+
+# ─── The caller's role, resolved in ONE place ─────────────────────────
+# _require_admin used to be the only role reader; _nav_gate needs the same answer on every /api/*
+# request, so it was factored out rather than written twice. The SUPER_ADMIN_EMAIL fallback below is
+# carried over VERBATIM: it is what gets the owner into a box where his profile row does not exist
+# yet, and a second role reader that quietly forgot it would lock him out of his own tool.
+#
+# CACHED because the gate now asks per REQUEST rather than per admin route, which would otherwise be
+# a PostgREST round trip on every call the app makes. Short TTL, and the role/status/ban/delete
+# handlers clear it, so a demotion takes effect on the next request instead of up to 30s later —
+# that is the direction that matters.
+#
+# HITS ONLY. A miss is deliberately not cached: /api/me creates the profile row moments after a
+# first-ever sign-in, and a cached miss would 403 a brand-new admin for the length of the TTL.
+_PROFILE_CACHE: cachetools.TTLCache = cachetools.TTLCache(maxsize=64, ttl=30)
+
+
+def _profile_cache_clear() -> None:
+    """Drop the cached profiles — called after every role / status / membership write."""
+    _PROFILE_CACHE.clear()
+
+
+def _caller_profile(request: Request) -> Optional[Dict[str, Any]]:
+    """The signed-in caller's profile row, or None. Raises whatever the store raises."""
+    email = _user_email(request) or ""
+    cached = _PROFILE_CACHE.get(email)
+    if cached is not None:
+        return cached
+    prof = profiles.get_by_email(email)
+    if not prof and email == _SUPER_ADMIN_EMAIL:
+        prof = {"id": None, "email": email, "role": "super_admin"}
+    if prof:
+        _PROFILE_CACHE[email] = prof
+    return prof
+
+
+def _nav_denied_for(role: str) -> List[str]:
+    """The tab hrefs `role` may not reach, for /api/me.
+
+    auth.js already awaits /api/me at boot before it draws the sidebar, so riding along on that
+    response costs no round trip and means the menu and the gate read ONE source. Fails open: a
+    policy blip costs a menu item, never the page.
+    """
+    try:
+        return nav_access.denied_paths(role)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("nav policy unreadable for /api/me: %s", exc)
+        return []
 
 
 def _require_admin(request: Request) -> Dict[str, Any]:
     """Resolve the caller's profile and require admin/super_admin; else 403."""
-    email = _user_email(request) or ""
-    prof = profiles.get_by_email(email)
-    if not prof and email == _SUPER_ADMIN_EMAIL:
-        prof = {"id": None, "email": email, "role": "super_admin"}
+    prof = _caller_profile(request)
     if not prof or prof.get("role") not in ("admin", "super_admin"):
         raise HTTPException(403, "Admin access required.")
     return prof
@@ -4538,6 +4646,9 @@ def api_admin_stats(request: Request) -> Dict[str, Any]:
 def api_admin_set_role(user_id: str, payload: RoleIn, request: Request) -> Dict[str, Any]:
     actor = _require_admin(request)
     out = profiles.set_role(actor, user_id, payload.role)
+    # Unconditional, not `if out.get("ok")`: a write that partly landed and reported a failure would
+    # otherwise leave the old role cached for the whole TTL. Clearing costs one profile read.
+    _profile_cache_clear()
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "role_changed",
                          {"target": user_id, "role": payload.role})
@@ -4548,6 +4659,7 @@ def api_admin_set_role(user_id: str, payload: RoleIn, request: Request) -> Dict[
 def api_admin_set_status(user_id: str, payload: StatusIn, request: Request) -> Dict[str, Any]:
     actor = _require_admin(request)
     out = profiles.set_status(actor, user_id, payload.status)
+    _profile_cache_clear()
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "status_changed",
                          {"target": user_id, "status": payload.status})
@@ -4574,6 +4686,7 @@ def api_admin_set_estimator(user_id: str, payload: EstimatorIn, request: Request
 def api_admin_ban(user_id: str, payload: BanIn, request: Request) -> Dict[str, Any]:
     actor = _require_admin(request)
     out = profiles.ban_user(actor, user_id, reason=payload.reason)
+    _profile_cache_clear()
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "banned", {"target": user_id})
     return out
@@ -4583,6 +4696,7 @@ def api_admin_ban(user_id: str, payload: BanIn, request: Request) -> Dict[str, A
 def api_admin_unban(user_id: str, request: Request) -> Dict[str, Any]:
     actor = _require_admin(request)
     out = profiles.unban_user(actor, user_id)
+    _profile_cache_clear()
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "unbanned", {"target": user_id})
     return out
@@ -4592,6 +4706,7 @@ def api_admin_unban(user_id: str, request: Request) -> Dict[str, Any]:
 def api_admin_delete(user_id: str, request: Request) -> Dict[str, Any]:
     actor = _require_admin(request)
     out = profiles.delete_user(actor, user_id)
+    _profile_cache_clear()
     if out.get("ok"):
         drafts.log_event(None, actor.get("email"), "deleted_user",
                          {"target": user_id, "email": out.get("email")})
@@ -4606,6 +4721,63 @@ def api_admin_delete_project(project_id: str, request: Request) -> Dict[str, Any
     actor = _require_admin(request)
     existed = drafts.trash_draft(project_id, actor.get("email"))
     return {"ok": True, "existed": existed, "trashed": True}
+
+
+# ─── Which sidebar tabs each role may reach ───────────────────────────
+# The read/write half of the Admin page's role matrix. The matrix ROWS are not served from here —
+# auth.js builds them by rendering the real sidebar once per role, which is what stops the ticks and
+# the switches disagreeing. This endpoint serves only the stored denials plus the capability table,
+# so the page can say on screen which tabs a switch really blocks and which it only hides.
+class NavAccessIn(BaseModel):
+    """`extra="forbid"` so a typo'd key is a 422 rather than a save that reports success while
+    silently lifting every restriction in force — and so `by` can never come from the browser."""
+    model_config = {"extra": "forbid"}
+    deny: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+@app.get("/api/admin/nav-access")
+def api_admin_nav_access(request: Request) -> Dict[str, Any]:
+    """The stored deny list, what may never be denied, and what each tab actually owns."""
+    _require_admin(request)
+    return {"ok": True, **nav_access.get(),
+            "roles": list(nav_access.ROLES),
+            "locked_pages": list(nav_access.LOCKED),
+            "locked_roles": list(nav_access.LOCKED_ROLES),
+            "tabs": nav_access.capability_table()}
+
+
+@app.put("/api/admin/nav-access")
+def api_admin_set_nav_access(payload: NavAccessIn, request: Request) -> Dict[str, Any]:
+    """Replace the deny list. Admin-only, and it will not let a caller shut their own role out.
+
+    A failed WRITE is a 500 that changes nothing: a policy that saved into one container's memory
+    and nowhere else is worse than one that refused, because nobody can tell which happened.
+    """
+    actor = _require_admin(request)
+    locked = nav_access.locked_requested(payload.deny)
+    if locked["pages"] or locked["roles"]:
+        raise HTTPException(400, "These can never be restricted: %s"
+                            % ", ".join(locked["pages"] + locked["roles"]))
+    # EVERY self-lockout starts with somebody testing the toggle on themselves, and this app has
+    # three accounts — there may be nobody else awake to undo it. Lifting a denial from your own role
+    # stays allowed, because that can only give access back.
+    my_role = actor.get("role") or "user"
+    losing = nav_access.newly_denied(nav_access.get().get("deny"), payload.deny, my_role)
+    if losing:
+        raise HTTPException(400, "You can't take %s away from your own role (%s). Change it for a "
+                                 "different role, or ask another admin."
+                            % (", ".join(losing), my_role))
+    try:
+        pol = nav_access.save(payload.deny, actor.get("email") or _user_email(request) or "")
+    except nav_access.NavAccessWriteError as exc:
+        log.error("nav access save failed: %s", exc)
+        raise HTTPException(500, "Couldn't save the tab permissions") from exc
+    drafts.log_event(None, actor.get("email"), "nav_access_changed", {"deny": pol["deny"]})
+    return {"ok": True, **pol,
+            "roles": list(nav_access.ROLES),
+            "locked_pages": list(nav_access.LOCKED),
+            "locked_roles": list(nav_access.LOCKED_ROLES),
+            "tabs": nav_access.capability_table()}
 
 
 # ─── Lead inbox (Basisboard messages + OUR state) ─────────────────────

@@ -111,6 +111,19 @@ def _clear_drafts_cache():
     drafts._cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_profile_cache():
+    """main.py keeps a module-level TTLCache of the caller's profile row — the ONE role reader, which
+    the nav gate now consults on EVERY /api/* request rather than only on admin routes. Clear it
+    around every test for the same reason the drafts list cache is cleared: otherwise the role a
+    previous test monkeypatched into profiles.get_by_email decides this test's requests, and the
+    failure looks like a broken permission gate rather than a stale cache."""
+    import main
+    main._profile_cache_clear()
+    yield
+    main._profile_cache_clear()
+
+
 @pytest.fixture
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""

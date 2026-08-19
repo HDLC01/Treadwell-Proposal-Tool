@@ -379,6 +379,30 @@ def newly_denied(current: Any, proposed: Any, role: str) -> List[str]:
     return sorted(now - was)
 
 
+def locked_requested(deny: Any) -> Dict[str, List[str]]:
+    """What a caller asked for that can never be granted: {"pages": [...], "roles": [...]}.
+
+    save() strips these regardless. This exists so the API can REFUSE the request instead, because
+    a switch that appears to have worked and did not is the worst of the three outcomes — worse than
+    a greyed-out switch and worse than an error.
+    """
+    pages: List[str] = []
+    roles: List[str] = []
+    if not isinstance(deny, dict):
+        return {"pages": pages, "roles": roles}
+    for role, paths in deny.items():
+        role_name = str(role or "").strip().lower()
+        if role_name in LOCKED_ROLES and role_name not in roles:
+            roles.append(role_name)
+        if isinstance(paths, (str, bytes)) or not isinstance(paths, Iterable):
+            continue
+        for raw in paths:
+            href = _norm_href(raw)
+            if href in LOCKED and href not in pages:
+                pages.append(href)
+    return {"pages": sorted(pages), "roles": sorted(roles)}
+
+
 def capability_table() -> List[Dict[str, Any]]:
     """The table above, as JSON for the Admin page: which pages and API prefixes each tab owns.
 
