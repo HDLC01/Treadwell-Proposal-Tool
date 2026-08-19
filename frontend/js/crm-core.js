@@ -157,11 +157,32 @@
    *
    *  `approved_at` as well as the status, because the portal moves a row forward past approval —
    *  stage() below reads deposit state before proposal_status for that very reason — and the stamp
-   *  never unsets. Without it a job falls back out of Won the moment contacts arrive. */
+   *  never unsets. Without it a job falls back out of Won the moment contacts arrive.
+   *
+   *  A BY-HAND MARK WINS OUTRIGHT, and needs neither half of the derived rule. Hanz, 2026-08-19:
+   *  "Is there any way to also mark as won for now other than after the deposit has been received".
+   *  The derived rule describes a FINISHED job, and the commonest way we learn we won one is a
+   *  verbal yes on the phone — days before the customer clicks Approve, weeks before the money
+   *  lands. Until somebody marked it, that job read as Active, which is the same "nobody has said"
+   *  the estimator is trying to correct. So the mark is not another input to the rule, it is a
+   *  person overriding it: `won_at` is set only by a human pressing the button (drafts.set_won), and
+   *  the two paths deliberately do not gate each other — requiring approval as well would refuse
+   *  exactly the case this exists for.
+   *
+   *  Nothing here checks isLost, and that is on purpose: every reader asks isLost FIRST (stage(),
+   *  ppCategory(), chipsHtml()), so a job marked won and then cancelled reads as Lost only. Folding
+   *  it in here would put the same rule in two places, and a SENT project's closed_lost belongs to
+   *  the portal, which the mark cannot see or clear. */
   function isWon(p) {
+    if (p && p.won_at) return true;
     var approved = String((p && p.proposal_status) || "") === "approved" || !!(p && p.approved_at);
     return approved && depositSatisfied(p);
   }
+
+  /** Won because a HUMAN said so, as opposed to won because the deposit landed. The drawer's control
+   *  needs the difference: there is nothing to undo about a deposit that arrived, and offering
+   *  "Undo won" on a paid job would be a button that appears to do nothing. */
+  function wonByHand(p) { return !!(p && p.won_at); }
 
   function stage(p) {
     if (isLost(p)) return STAGE_LOST;
@@ -417,7 +438,8 @@
     STAGE_CREATED: STAGE_CREATED,
     LOST_REASON: LOST_REASON, MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
-    followup: followup, isLost: isLost, isWon: isWon, depositSatisfied: depositSatisfied,
+    followup: followup, isLost: isLost, isWon: isWon, wonByHand: wonByHand,
+    depositSatisfied: depositSatisfied,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
     stage: stage, lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, cardTotal: cardTotal,

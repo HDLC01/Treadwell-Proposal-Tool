@@ -300,6 +300,14 @@ const ROWS = [
     deposit_requested_at: "2026-07-24T10:00:00+00:00", deposit_status: "received",
     contacts_status: "received" },
 
+  // MARKED WON BY HAND (2026-08-19). Hanz: "Is there any way to also mark as won for now other than
+  // after the deposit has been received". Neither half of the derived rule is true of these two —
+  // one was never even sent — so they are what proves the override reaches this page's Won tab.
+  { proposal_id: "w-marked", project_name: "Elmwood Cold Storage", proposal_status: "sent",
+    won_at: "2026-08-19T15:00:00+00:00" },
+  { proposal_id: "w-marked-notsent", project_name: "Pinecrest Distribution", not_sent: true,
+    won_at: "2026-08-19T15:00:00+00:00" },
+
   // Test, by the flag and by the name.
   { proposal_id: "t-flag", project_name: "Cedar Ridge Distribution Center", is_test: true,
     proposal_status: "sent" },
@@ -308,6 +316,10 @@ const ROWS = [
   { proposal_id: "t-won", project_name: "QA Sample Job", is_test: true,
     proposal_status: "approved", approved_at: "2026-07-25T10:00:00+00:00",
     deposit_status: "received" },
+  // MARKED WON BY HAND AND TEST — still Test. A human pressing the button says nothing about whether
+  // the project is real work, so the manual override must not be a way round the same precedence.
+  { proposal_id: "t-marked-won", project_name: "Verify Street zz", is_test: true,
+    proposal_status: "sent", won_at: "2026-08-19T15:00:00+00:00" },
   // Named like a test but FILED as real — the flag's false has to beat the heuristic.
   { proposal_id: "a-testname-real", project_name: "Test Street Remodel", is_test: false,
     proposal_status: "sent" },
@@ -321,6 +333,13 @@ const ROWS = [
   // LOST AFTER BEING APPROVED AND PAID — Lost still wins. Money came in and the job died.
   { proposal_id: "l-was-won", project_name: "Summit Freight", proposal_status: "closed_lost",
     approved_at: "2026-06-01T10:00:00+00:00", deposit_status: "received" },
+  // MARKED WON BY HAND AND THEN CLOSED LOST — Lost still wins. The two facts are stored
+  // independently on purpose (see drafts.set_won), because a sent project's closed_lost belongs to
+  // the portal and no draft-side write can clear it — so this precedence is the ONLY thing keeping a
+  // cancelled job off the Won tab.
+  { proposal_id: "l-was-marked-won", project_name: "Grandview Terminal",
+    proposal_status: "closed_lost", won_at: "2026-08-19T15:00:00+00:00",
+    followup_state: { closed_lost_reason: "canceled" } },
 ];
 
 /** 25 Active rows, for the paging assertions. Page size is read from the page, never retyped. */

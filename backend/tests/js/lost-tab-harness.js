@@ -75,6 +75,15 @@ const ROWS = [
   { proposal_id: "lost-after-won", project_name: "Kellogg Self Storage",
     proposal_status: "closed_lost", approved_at: "2026-08-01T12:00:00Z",
     deposit_status: "received", followup_state: { closed_lost_reason: "canceled" } },
+  // MARKED WON BY HAND (2026-08-19), with neither half of the derived rule true of it: sent,
+  // unapproved, no deposit. The chip is how the board says out loud what a colleague recorded on the
+  // phone — without it the card reads as untouched work.
+  { proposal_id: "won-marked", project_name: "Elmwood Cold Storage", proposal_status: "sent",
+    won_at: "2026-08-19T15:00:00Z" },
+  // Marked won by hand and closed lost afterwards. Lost still takes the chip.
+  { proposal_id: "lost-after-marked-won", project_name: "Grandview Terminal",
+    proposal_status: "closed_lost", won_at: "2026-08-19T15:00:00Z",
+    followup_state: { closed_lost_reason: "canceled" } },
 ];
 
 ALL = ROWS;
