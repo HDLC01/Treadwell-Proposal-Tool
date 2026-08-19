@@ -267,6 +267,26 @@ def set_notify_picks(draft_id: str, add: List[str], mute: List[str],
     return True
 
 
+def get_notify_picks(draft_id: str) -> Dict[str, List[str]]:
+    """The stored deviations, as {"add": [...], "mute": [...]}. Empty lists when there are none.
+
+    Read-only companion to set_notify_picks, and it exists for AUTHORISATION rather than for
+    display: `api_draft_notify` compares what a caller submitted against what is already stored so a
+    non-admin can be held to changing only their own address. A missing project reads as empty, which
+    is the safe direction — every submitted address then counts as a change and has to clear the
+    same check."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return {"add": [], "mute": []}
+    picks = (cur.data[0].get("data") or {}).get("notify_picks") or {}
+    out: Dict[str, List[str]] = {}
+    for key in ("add", "mute"):
+        raw = picks.get(key)
+        out[key] = [str(e) for e in raw] if isinstance(raw, list) else []
+    return out
+
+
 def set_close_lost(draft_id: str, reason: Optional[str],
                    actor_email: Optional[str] = None) -> bool:
     """Close an unsent project as lost, or reopen it. `reason` None reopens.

@@ -4134,6 +4134,32 @@ def api_draft_notify(draft_id: str, payload: NotifyPicksIn, request: Request) ->
     so rather than pretending or losing the change."""
     add = _clean_portal_emails(payload.add)
     mute = _clean_portal_emails(payload.mute)
+
+    # Admin may set anyone's; anybody else may only change THEIR OWN address. Same rule the
+    # per-project override route enforces (api_portal_notify_overrides_set), and it belongs here too:
+    # an `add` is not cosmetic, it makes the portal email that address the proposal-sent and approval
+    # notifications, project and customer detail included. Without this check any signed-in staff
+    # member could route those to an arbitrary outside address on any project.
+    #
+    # Compared as a DELTA against what is stored, not as "every address must be mine". These two
+    # controls submit the WHOLE set of deviations, so a flat rule would 403 a non-admin on any
+    # project where an admin had already muted somebody — the legitimate case, and the one that would
+    # have made the control useless rather than safe.
+    if not _caller_is_admin(request):
+        me = (_user_email(request) or "").strip().lower()
+        try:
+            prior = drafts.get_notify_picks(draft_id)
+        except Exception as exc:  # noqa: BLE001 — cannot authorise without it, so fail closed
+            log.warning("get_notify_picks failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not check your permissions.") from exc
+        lower = lambda xs: {str(e).strip().lower() for e in xs}          # noqa: E731
+        changed = (lower(add) ^ lower(prior.get("add") or [])) \
+            | (lower(mute) ^ lower(prior.get("mute") or []))
+        foreign = sorted(e for e in changed if e and e != me)
+        if foreign:
+            raise HTTPException(
+                403, "You can only change your own notifications for a project.")
+
     try:
         existed = drafts.set_notify_picks(draft_id, add, mute, _user_email(request))
     except Exception as exc:  # noqa: BLE001
