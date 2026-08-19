@@ -368,6 +368,20 @@ def page_denied(role: str, path: str, policy: Optional[Dict[str, Any]] = None) -
     return None
 
 
+def denied_page_map(role: str, policy: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """{page path: the denied tab href that owns it} for `role`.
+
+    The client gets this rather than working the expansion out for itself, because ONE tab owns TWO
+    pages (/polish-intake.html also owns /polish-estimate.html) and a second copy of that mapping in
+    auth.js is the copy that goes stale. The href comes back so the refusal card can name the tab.
+    """
+    out: Dict[str, str] = {}
+    for href in denied_paths(role, policy):
+        for page in TABS.get(href, {}).get("pages", ()):
+            out.setdefault(page, href)
+    return out
+
+
 def newly_denied(current: Any, proposed: Any, role: str) -> List[str]:
     """Paths `role` would LOSE by moving from `current` to `proposed`. [] if it only widens.
 

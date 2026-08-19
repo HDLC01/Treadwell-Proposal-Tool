@@ -4550,11 +4550,13 @@ def api_me(request: Request) -> Dict[str, Any]:
         role = prof.get("role", "user")
         return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
                 "role": role, "status": prof.get("status", "active"),
-                "nav_denied": _nav_denied_for(role)}
+                "nav_denied": _nav_denied_for(role),
+                "nav_denied_pages": _nav_denied_pages_for(role)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
     return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
-            "nav_denied": _nav_denied_for(role)}
+            "nav_denied": _nav_denied_for(role),
+            "nav_denied_pages": _nav_denied_pages_for(role)}
 
 
 # ─── The caller's role, resolved in ONE place ─────────────────────────
@@ -4604,6 +4606,20 @@ def _nav_denied_for(role: str) -> List[str]:
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
+
+
+def _nav_denied_pages_for(role: str) -> Dict[str, str]:
+    """{page path: the denied tab href that owns it}, so auth.js can refuse the page it is ON.
+
+    Expanded HERE rather than in the browser because one tab owns two pages — the Polish beta's step
+    2 is opened from places that are not its sidebar row — and a second copy of that mapping in
+    auth.js is the copy that goes stale. Fails open for the same reason as _nav_denied_for.
+    """
+    try:
+        return nav_access.denied_page_map(role)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("nav policy unreadable for /api/me: %s", exc)
+        return {}
 
 
 def _require_admin(request: Request) -> Dict[str, Any]:
