@@ -974,20 +974,38 @@
       const k = p.email.toLowerCase();
       return mute.has(k) ? false : (add.has(k) ? true : p.base);
     };
+    // Only an admin may toggle somebody else — the same rule the Notification Sending page has, and
+    // now enforced by /api/draft/{id}/notify as well, so an ungated chip would simply 403.
+    let me = "", isAdmin = false;
+    try {
+      const who = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
+      me = String(who.email || "").toLowerCase();
+      isAdmin = who.role === "admin" || who.role === "super_admin";
+    } catch (e) { /* not signed in yet — read-only is the safe default */ }
     wrap.innerHTML = roster.map((p) => {
       const on = effective(p);
+      const mayToggle = isAdmin || p.email.toLowerCase() === me;
       // plainAvatar, not avatar: on this control the colour IS the state (green = will hear about
       // it), so an identity colour would compete with the one signal the chip exists to show.
-      return '<button type="button" class="nt-chip' + (on ? " on" : "") + '"'
+      const body = plainAvatar(p.email) + esc(nameOf(p.email));
+      const cls = "nt-chip" + (on ? " on" : "") + (mayToggle ? "" : " nt-chip-ro");
+      if (!mayToggle) {
+        return '<span class="' + cls + '" title="'
+          + esc(p.email + " — only an admin can change this") + '">' + body + "</span>";
+      }
+      return '<button type="button" class="' + cls + '"'
         + ' data-ns-notify="' + esc(p.email) + '" title="' + esc(p.email) + '">'
-        + plainAvatar(p.email) + esc(nameOf(p.email)) + "</button>";
+        + body + "</button>";
     }).join("");
     if (note) {
       const n = roster.filter(effective).length;
       note.textContent = n + " of " + roster.length
-        + " will hear about this when it is sent.";
+        + " will hear about this when it is sent."
+        + (isAdmin ? "" : " You can change only your own.");
     }
-    wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
+    // `[data-ns-notify]`, not `.nt-chip`: the read-only chips above are spans carrying the same
+    // class, and wiring a click onto one would let a non-admin fire a request the server refuses.
+    wrap.querySelectorAll("[data-ns-notify]").forEach((b) => b.addEventListener("click", async () => {
       const email = b.getAttribute("data-ns-notify");
       const k = email.toLowerCase();
       const person = roster.find((p) => p.email.toLowerCase() === k);
@@ -997,7 +1015,7 @@
       add.delete(k); mute.delete(k);
       if (next !== person.base) (next ? add : mute).add(k);
       const body = { add: [...add], mute: [...mute] };
-      wrap.querySelectorAll(".nt-chip").forEach((x) => { x.disabled = true; });
+      wrap.querySelectorAll("[data-ns-notify]").forEach((x) => { x.disabled = true; });
       try {
         const r = await api("/api/draft/" + encodeURIComponent(pid) + "/notify",
                             { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1006,7 +1024,7 @@
         paintNotSentNotify(pid, roster, { add: body.add, mute: body.mute });
       } catch (err) {
         if (note) note.textContent = "Could not save that: " + err.message;
-        wrap.querySelectorAll(".nt-chip").forEach((x) => { x.disabled = false; });
+        wrap.querySelectorAll("[data-ns-notify]").forEach((x) => { x.disabled = false; });
       }
     }));
   }

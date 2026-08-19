@@ -139,6 +139,11 @@
     font-size:12px; font-weight:700; cursor:pointer; background:#f4f4f5; color:var(--ink-variant); }
   .nt-chip.on { background:#dcf5e3; color:#0f7b34; border-color:#bfe3c8; }
   .nt-chip:disabled { cursor:not-allowed; opacity:.6; }
+  /* A chip somebody may look at but not change: only an admin may toggle another person, so a
+     non-admin's roster renders as spans. Not `:disabled` — these are not buttons at all, and a
+     disabled button invites a click and explains nothing. The cursor is the only cue that changes;
+     the state colour still has to read exactly as it does on a live chip. */
+  span.nt-chip { cursor:default; }
   .nt-chip .nt-av { display:inline-flex; align-items:center; justify-content:center;
     width:20px; height:20px; border-radius:50%; margin-right:5px; flex:0 0 auto;
     font:800 9.5px/1 system-ui; letter-spacing:.02em; vertical-align:middle; text-transform:uppercase;
