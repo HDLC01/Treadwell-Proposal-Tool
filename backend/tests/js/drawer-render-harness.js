@@ -106,6 +106,11 @@ const FN_NAMES = [
   "contactsHtml", "recipientsHtml", "msgHtml", "splitSystem", "depositHtml", "mask4",
   "followupPanelHtml", "followupContactsHtml", "followupRow", "followupState",
   "renderSecTabs", "secTab", "defaultSection", "unreadCount",
+  // The resting-tab rule (2026-08-20), shared by BOTH renderers: defaultSection ends in it and
+  // renderNotSent asks it directly. Fifth entry in this list added for the same reason as the four
+  // below, and it would be the loudest: leaving it out is a ReferenceError inside defaultSection,
+  // which every single render of either drawer goes through.
+  "restingSection",
   "applySecPanel", "focusSection", "loadNotifyChips", "paintNtChips", "wireFollowup",
   "renderDetail", "renderNotSent",
   // renderNotSent calls this at the end of every render (the estimator picker on a project
@@ -129,7 +134,29 @@ const FN_NAMES = [
   // renderNotSent and from wireFollowup — so omitting either is a ReferenceError that takes out the
   // whole drawer on a sent project as well as an unsent one.
   "wonControlHtml", "wireWon",
+  // The "customer opened it" card, synthesised from viewed_at/last_viewed_at (2026-08-20).
+  // renderDetail builds the thread through it on EVERY payload, so leaving it out is a
+  // ReferenceError for the whole drawer rather than a missing bubble.
+  "withViewCard",
 ];
+
+// openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
+//
+// It is lifted because the ?sec= deep link lives in it and nowhere else: four lines that read the
+// query string, gate the value against SEC_TABS and pre-set ACTIVE_SEC, which is the only thing
+// that overrides defaultSection's routing. A source read cannot tell you whether the gate still
+// runs before the render, and the routing changed on 2026-08-20 (Chat is now the resting tab), so
+// the override had to become an executed claim.
+//
+// The rename is textual and touches the NAME only. Nothing inside it calls itself; the stub stays
+// bound for `act()` and the reply button, which is what those really do in the browser — they
+// re-enter through the same entry point, and a real re-entry here would fire a second fetch per
+// click and make every won/deposit scenario depend on the network stub's payload.
+const openDetailRealSrc = fnSrc("openDetail")
+  .replace(/(^|\n)(\s*)async function openDetail\(/, "$1$2async function openDetailReal(");
+if (!/function openDetailReal\(/.test(openDetailRealSrc)) {
+  throw new Error("openDetail's declaration changed shape — the deep-link lift needs rewriting");
+}
 
 // ── the DOM stub ─────────────────────────────────────────────────────────────
 function makeDom() {
@@ -298,6 +325,28 @@ const BOARD_ROWS = [
   { proposal_id: "marknotsent", project_name: "Riverbend Logistics Hub", not_sent: true,
     bid_total: 41250.0, drafted_at: "2026-08-09T12:00:00Z", estimator_email: "kyle@wetreadwell.com" },
   { proposal_id: "paid", project_name: "Westport Retail Center", proposal_status: "approved" },
+  // ── the view stamps (2026-08-20) ──
+  // These live on the BOARD row and nowhere else: the portal's staff detail payload has no
+  // viewed_at on `proposal` (checked against its own handler), so the drawer merges them off the
+  // row exactly as it merges the won mark. Shaped after the real project Hanz was looking at:
+  // sent 20:33, opened 20:36, and opened again the following afternoon.
+  { proposal_id: "viewed", project_name: "Elmwood Cold Storage", proposal_status: "viewed",
+    unread: 0, sent_at: "2026-08-18T20:33:55Z",
+    viewed_at: "2026-08-18T20:36:04Z", last_viewed_at: "2026-08-19T14:02:00Z" },
+  // Opened exactly once: first and last are the same stamp, so the card must NOT grow a "last
+  // opened" footnote repeating the date beside it.
+  { proposal_id: "viewedonce", project_name: "Brookfield Bakery", proposal_status: "viewed",
+    unread: 0, viewed_at: "2026-08-18T20:36:04Z", last_viewed_at: "2026-08-18T20:36:04Z" },
+  // Viewed AND the portal managed to write its own card — the post-2026-08-19 send. One bubble,
+  // and it has to be the stored one, which names who opened it.
+  { proposal_id: "viewedcard", project_name: "Ashford Plant", proposal_status: "viewed",
+    unread: 0, viewed_at: "2026-08-18T20:36:04Z", last_viewed_at: "2026-08-19T14:02:00Z" },
+  // Sent, and nobody has opened it. No stamps, no bubble.
+  { proposal_id: "unviewed", project_name: "Larkspur Depot", proposal_status: "sent", unread: 0 },
+  // Money in AND an unread message: the two top precedence rules against each other, which is the
+  // only shape that can still prove the unread rule exists now that Chat is also the fallback.
+  { proposal_id: "bothwait", project_name: "Halstead Cannery", proposal_status: "approved",
+    unread: 2 },
 ];
 
 /** The drawer payload as /api/portal/proposal/<id> returns it. */
@@ -388,6 +437,68 @@ const SCENARIOS = {
   // must fall back to "no customer link yet" (the same branch an absent url takes), and it must
   // never put that scheme in an href — esc() makes a value safe inside an attribute and says
   // nothing whatever about the scheme.
+  // ── the "customer opened it" card, from the timestamps (2026-08-20) ──────────
+  // Two ordinary messages STRADDLING the view, because where the card lands is half the claim:
+  // Hanz asked for a bubble in the conversation, and a bubble pinned to the top or the bottom
+  // regardless of its date is not part of the conversation.
+  viewed: {
+    pid: "viewed",
+    data: payload({
+      proposal: { project_name: "Elmwood Cold Storage", customer_name: "Dave Nunn",
+                  customer_email: "dave@elmwood.com", url: PORTAL_URL,
+                  proposal_status: "viewed", deposit_status: "pending",
+                  contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
+      messages: [
+        { msg_type: "text", body: "Sending this over for the cold storage build.",
+          author_kind: "staff", created_at: "2026-08-17T10:00:00Z" },
+        { msg_type: "text", body: "Looks good, we will review it internally.",
+          author_kind: "customer", author_email: "dave@elmwood.com",
+          created_at: "2026-08-19T09:00:00Z" },
+      ],
+    }),
+  },
+  // Opened once. Same shape, one stamp.
+  viewedOnce: {
+    pid: "viewedonce",
+    data: payload({
+      proposal: { project_name: "Brookfield Bakery", customer_email: "ops@brookfield.com",
+                  url: PORTAL_URL, proposal_status: "viewed", deposit_status: "pending",
+                  contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
+      messages: [{ msg_type: "text", body: "Proposal attached.", author_kind: "staff",
+                   created_at: "2026-08-17T10:00:00Z" }],
+    }),
+  },
+  // The portal DID write its own view card (a send after 2026-08-19). Exactly one bubble must
+  // render, and it has to be this one — it names who opened it, which the stamps cannot.
+  viewedStoredCard: {
+    pid: "viewedcard",
+    data: payload({
+      proposal: { project_name: "Ashford Plant", customer_email: "dave@ashford.com",
+                  url: PORTAL_URL, proposal_status: "viewed", deposit_status: "pending",
+                  contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
+      messages: [
+        { msg_type: "text", body: "Proposal attached.", author_kind: "staff",
+          created_at: "2026-08-17T10:00:00Z" },
+        { msg_type: "system", body: "Dave opened the proposal.", author_kind: "staff",
+          created_at: "2026-08-18T20:36:10Z", meta: { view: true, internal: true } },
+      ],
+    }),
+  },
+  // Sent, never opened. No stamps on the row, so no card at all.
+  unviewed: {
+    pid: "unviewed",
+    data: payload({
+      proposal: { project_name: "Larkspur Depot", customer_email: "ap@larkspur.com",
+                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "pending",
+                  contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
+      messages: [{ msg_type: "text", body: "Proposal attached.", author_kind: "staff",
+                   created_at: "2026-08-17T10:00:00Z" }],
+    }),
+  },
   bare: {
     pid: "bare",
     data: { ok: true, proposal: { project_name: "Threadbare", customer_email: "",
@@ -420,9 +531,19 @@ const NOTIFY = {
 // because the portal has no column for the mark — and `fails` lets one scenario prove that a refused
 // write does not leave the rep looking at a panel claiming it saved.
 const net = { requests: [], fails: false };
+// The drawer payload the lifted openDetail is served, set by the deep-link scenario. Only the
+// bare detail GET reads it — every other path keeps the generic {ok:true} below, or a deposit
+// request would answer with a whole proposal.
+const detailFetch = { pid: null, data: null };
+const isDetailGet = (p, init) =>
+  !(init && init.method) && /^\/api\/portal\/proposal\/[^/]+$/.test(p);
 const api = (p, init) => {
   net.requests.push({ path: p, method: (init && init.method) || "GET",
                       body: init && init.body ? JSON.parse(init.body) : null });
+  if (isDetailGet(p, init) && detailFetch.data) {
+    return Promise.resolve({ ok: true, status: 200,
+                             json: () => Promise.resolve(detailFetch.data) });
+  }
   if (net.fails) {
     return Promise.resolve({ ok: false, status: 500,
                              json: () => Promise.resolve({ error: "postgrest down" }) });
@@ -441,7 +562,14 @@ const TW = {
   bizToday: () => "2026-08-13",
   confirmDanger: () => Promise.resolve(false),
 };
-const windowStub = { TW, TWAuth: { user: () => ({ email: "hanz@wetreadwell.com", role: "admin" }) } };
+// Where the page tried to navigate. The drawer's "Open the files" and "Info sheet" buttons are
+// <button>s that call window.location.assign, so the URL they send is only visible by firing the
+// click the renderer wired — an href assertion would prove nothing about a button.
+const nav = [];
+const windowStub = { TW, TWAuth: { user: () => ({ email: "hanz@wetreadwell.com", role: "admin" }) },
+                     location: { assign: (u) => nav.push(String(u)) } };
+// The query string, for the lifted openDetail's ?sec= deep link. Mutated per scenario.
+const locationStub = { search: "", assign: (u) => nav.push(String(u)) };
 
 const injected = [
   ["C", C],
@@ -449,6 +577,7 @@ const injected = [
   ["document", { getElementById: dom.getElementById, querySelector: dom.query,
                  querySelectorAll: dom.queryAll, addEventListener() {}, activeElement: null }],
   ["window", windowStub],
+  ["location", locationStub],
   ["TW", TW],
   ["navigator", navigatorStub],
   ["api", api],
@@ -466,10 +595,33 @@ const body = `"use strict";
   ${LET_NAMES.map((n) => declSrc("let", n)).join("\n")}
   ${CONST_NAMES.map((n) => declSrc("const", n)).join("\n")}
   ${FN_NAMES.map(fnSrc).join("\n")}
+  ${openDetailRealSrc}
   return {
     renderDetail, renderNotSent, focusSection, copyPortalLink,
+    // The real entry point, under its lifted name: the ?sec= deep link and the per-project
+    // ACTIVE_SEC reset live in it.
+    openDetail: openDetailReal,
+    // defaultSection, driven directly. The precedence above the fallback is four conditions over
+    // three fields, and since the fallback became "chat" a test that only reads the tab a drawer
+    // opened on can no longer tell "unread won" from "nothing matched" — so the rules are
+    // exercised one at a time, with the sticky value set explicitly.
+    // The thread is the fourth argument on purpose: the resting tab now depends on whether there
+    // is a conversation to land on, so a caller that leaves it out is asking "and what about a
+    // project with nothing in its thread?" rather than accidentally testing a default.
+    // NB no backticks in this comment either: it is inside a template literal.
+    route: (p, unread, sticky, thread) => {
+      ACTIVE_SEC = sticky || null;
+      return defaultSection(p, unread, thread);
+    },
+    withViewCard: (msgs, p) => withViewCard(msgs, p),
     setBoard: (v) => { ALL = v; },
     open: (pid) => { CUR_PID = pid; ACTIVE_SEC = null; DRAWER_SIG = ""; },
+    // DEEPLINK_USED is a page-LIFETIME latch, which is correct in the browser (one navigation, one
+    // deep link) and makes a second ?sec= scenario impossible to run in one process. Reset is the
+    // only honest way to drive the query-string gate twice: the alternative was a scenario that set
+    // location.search and then called renderDetail, which never reads it, and proved nothing at all
+    // while claiming to cover the whitelist.
+    resetDeepLink: () => { DEEPLINK_USED = false; },
     eligible: () => Array.from(SEC_ELIGIBLE),
     activeSec: () => ACTIVE_SEC,
     secTabs: () => SEC_TABS,
@@ -509,6 +661,16 @@ const out = { imported: destructured.map(([n]) => n), tabs: Object.keys(page.sec
 /** What one tab looks like once focusSection has switched to it: which cards are on screen,
  *  which panel is, and which step reads as selected. Read off the classList the real
  *  applySecPanel toggled, not guessed from the markup. */
+/** Which tab panels are on screen right now, read off the classList applySecPanel toggled.
+ *  Separate from tabState because tabState CLICKS a tab first, and the deep-link scenarios need to
+ *  see where a drawer landed on its own. */
+function visiblePanels() {
+  return Object.keys(page.secTabs()).filter((k) => {
+    const el = dom.els.get("#dpanel-" + k);
+    return el && !el.classList.contains("hidden");
+  });
+}
+
 function tabState(sec) {
   page.focusSection(sec);
   const shown = [];
@@ -619,6 +781,10 @@ async function runScenario(name, s) {
     const before = dom.paints;
     page.renderNotSent("notsent", row);
     out.notSent = { html, chars: html.length, paints: before,
+                    // WHICH tab this drawer landed on. It hard-codes its own landing tab (there is
+                    // no portal payload for defaultSection to read), so it is the half of "Chat
+                    // opens first" that the sent scenarios cannot speak for.
+                    openedOn: page.activeSec(),
                     repaintedOnIdenticalPayload: dom.paints > before,
                     missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
     // ── the eligibility half of applySecPanel, which no payload can reach ──────
@@ -784,6 +950,223 @@ async function runScenario(name, s) {
     out.won.derived = { html: dom.html };
   } catch (e) {
     out.errors.won = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── the routing rules, one at a time ──────────────────────────────────────
+  // Chat became the fallback on 2026-08-20 ("In the opening of a project, Chat should be the tab
+  // thats the first to appear"), which quietly made the old proof of the unread rule vacuous: a
+  // drawer opening on Chat no longer distinguishes "a customer is waiting" from "nothing matched".
+  // So each rule is put against the tab it has to BEAT.
+  try {
+    const P = (o) => Object.assign({ proposal_status: "sent", deposit_status: "pending" }, o || {});
+    // A thread with something in it, and one with nothing. The resting tab depends on which of
+    // these the project has: Chat is only worth landing on when there is a conversation there.
+    const SOME = [{ msg_type: "text", body: "Can you start the 24th?", author_kind: "customer",
+                    created_at: "2026-08-11T14:00:00Z" }];
+    const NONE = [];
+    out.route = {
+      // Nothing waiting, and something to read → the conversation.
+      quiet: page.route(P(), 0, null, SOME),
+      // Nothing waiting and NOTHING TO READ → Proposal. This is the shape that made the unsent
+      // drawer open on its own empty panel: landing on Chat is only right when Chat has content.
+      quietNoThread: page.route(P(), 0, null, NONE),
+      // A customer message beats an unconfirmed payment, which is the only pairing that can still
+      // fail if the unread rule is deleted.
+      unreadBeatsDeposit: page.route(P({ deposit_status: "submitted" }), 2, null, SOME),
+      depositSubmitted: page.route(P({ deposit_status: "submitted" }), 0, null, SOME),
+      // Both precedence rules AGAINST an empty thread, because the fallback is now the thing that
+      // changes with the thread: a rule that only wins when there is a conversation to fall back to
+      // is not above the fallback at all.
+      unreadNoThread: page.route(P({ deposit_status: "submitted" }), 2, null, NONE),
+      depositNoThread: page.route(P({ deposit_status: "submitted" }), 0, null, NONE),
+      // Approved, nothing invoiced yet: contacts and the deposit are the next step.
+      approvedNoRequest: page.route(P({ proposal_status: "approved" }), 0, null, SOME),
+      // Approved but the invoice is already out, and one that never wanted a deposit: neither has
+      // anything to action on that tab, so both fall through to the resting tab.
+      approvedRequested: page.route(P({ proposal_status: "approved",
+                                        deposit_requested_at: "2026-08-11T15:04:00Z" }), 0, null, SOME),
+      approvedNoDeposit: page.route(P({ proposal_status: "approved", deposit_required: false }),
+                                    0, null, SOME),
+      // STICKY within an open: renderDetail re-runs after every action and a rep who just replied
+      // must not be thrown back to Chat — or, now, off the tab they walked to.
+      sticky: page.route(P({ deposit_status: "submitted" }), 2, "followup", SOME),
+      // Sticky wins over the resting tab too, empty thread and all: a rep standing on Chat with
+      // nothing in it (they are about to type) must not be walked to Proposal by the next poll.
+      stickyChatNoThread: page.route(P(), 0, "chat", NONE),
+    };
+  } catch (e) {
+    out.errors.route = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── where the view card lands in the thread ───────────────────────────────
+  // The markup section above proves it renders; this proves it lands in the right SLOT, which is
+  // the part Hanz's wording was about ("a chat bubble ... in this chatbox"). Labels rather than
+  // markup, so the failure names the order it got.
+  try {
+    const label = (m) => ((m.meta && m.meta.synthetic) ? "VIEW" : m.body);
+    const msgs = [
+      { msg_type: "text", body: "A", author_kind: "staff", created_at: "2026-08-17T10:00:00Z" },
+      { msg_type: "text", body: "B", author_kind: "customer", created_at: "2026-08-19T09:00:00Z" },
+    ];
+    const both = { viewed_at: "2026-08-18T20:36:04Z", last_viewed_at: "2026-08-19T14:02:00Z" };
+    const stored = msgs.concat([{ msg_type: "system", body: "Dave opened the proposal.",
+                                 author_kind: "staff", created_at: "2026-08-18T20:36:10Z",
+                                 meta: { view: true, internal: true } }]);
+    out.insertion = {
+      middle: page.withViewCard(msgs, both).map(label),
+      // The slot has to MOVE with the stamp, or it is a fixed position dressed up as an order.
+      earliest: page.withViewCard(msgs, { viewed_at: "2026-08-16T00:00:00Z" }).map(label),
+      latest: page.withViewCard(msgs, { viewed_at: "2026-08-20T00:00:00Z" }).map(label),
+      // "+00:00" against "Z". Both come out of Postgres isoformat(), and a string compare orders
+      // them wrongly while looking perfectly reasonable.
+      offsetForm: page.withViewCard(
+        [{ msg_type: "text", body: "B", created_at: "2026-08-19T09:00:00+00:00" }],
+        { viewed_at: "2026-08-18T20:36:04Z" }).map(label),
+      // An unparseable stamp must not throw and must not jump the card to the top.
+      junkStamp: page.withViewCard(
+        [{ msg_type: "text", body: "A", created_at: "not a date" }], both).map(label),
+      never: page.withViewCard(msgs, {}).map(label),
+      // A stored card suppresses the synthetic one, whatever the stamps say.
+      storedWins: page.withViewCard(stored, both).map(label),
+      syntheticCount: page.withViewCard(stored, both).filter((m) => m.meta && m.meta.synthetic).length,
+    };
+  } catch (e) {
+    out.errors.insertion = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── a customer re-reading the proposal must not repaint an open drawer ─────
+  // `last_viewed_at` is stamped by EVERY customer view, and renderDetail reads it off the board row
+  // a few lines before it takes the signature. It used to be merged onto the payload there, which
+  // put it in the signature: a customer reloading the page they were already sent moved it, and the
+  // 12s poll then rebuilt the whole drawer, thread and tab strip and the caret of whoever was
+  // mid-sentence in the reply box. That is the exact cost the signature exists to avoid, so the
+  // exclusion is asserted from both sides here.
+  //
+  // EXECUTED, because which fields end up inside a signature is not something a source read
+  // settles: the answer depends on what those lines above chose to write onto the payload, and the
+  // stamps arrive from the BOARD ROW rather than from the payload the caller passes in.
+  try {
+    const row = page.row("viewed");
+    const keep = { viewed_at: row.viewed_at, last_viewed_at: row.last_viewed_at };
+    const data = JSON.parse(JSON.stringify(SCENARIOS.viewed.data));
+    page.open("viewed");
+    dom.paints = 0;
+    page.renderDetail("viewed", data);
+    const opened = dom.paints;                            // the open itself
+    row.last_viewed_at = "2026-08-20T09:15:00Z";          // the customer opened it a third time
+    page.renderDetail("viewed", data);
+    const afterReread = dom.paints;
+    // THE CONTROL, on the same payload one line later. A quiet drawer and a frozen one look
+    // identical from the re-read half alone, so something a human IS waiting on has to still get
+    // through: money in and unconfirmed.
+    data.proposal.deposit_status = "submitted";
+    page.renderDetail("viewed", data);
+    const afterRealChange = dom.paints;
+    // And the stamp is still READ, which is a different thing from being in the signature: the
+    // repaint above must carry the NEW footnote, not the one from the first paint.
+    const footnote = /last opened 2026-08-20 09:15/.test(dom.html);
+    // ── the FIRST view is news ──
+    // It is what draws the bubble, so `viewed_at` must NOT have been excluded alongside its
+    // neighbour. A project nobody had opened, opened.
+    const unrow = page.row("unviewed");
+    const unkeep = { viewed_at: unrow.viewed_at, last_viewed_at: unrow.last_viewed_at };
+    const un = JSON.parse(JSON.stringify(SCENARIOS.unviewed.data));
+    page.open("unviewed");
+    page.renderDetail("unviewed", un);
+    const beforeFirstView = dom.paints;
+    const bubbleBefore = /opened the proposal/.test(dom.html);
+    unrow.viewed_at = "2026-08-20T09:15:00Z";
+    page.renderDetail("unviewed", un);
+    out.reread = {
+      opened,
+      repaintedOnReread: afterReread > opened,
+      repaintedOnRealChange: afterRealChange > afterReread,
+      footnote,
+      bubbleBefore,
+      repaintedOnFirstView: dom.paints > beforeFirstView,
+      bubbleAfter: /opened the proposal/.test(dom.html),
+    };
+    // Restored: ALL is the board itself and the blocks below render these two projects again.
+    Object.assign(row, keep);
+    Object.assign(unrow, unkeep);
+  } catch (e) {
+    out.errors.reread = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── the ?sec= deep link still wins ────────────────────────────────────────
+  // A notification links straight to a tab (?open=<id>&sec=deposit). That override is the one
+  // thing above defaultSection, it is consumed ONCE per page, and it lives in openDetail — so
+  // this runs the real openDetail, LAST, because DEEPLINK_USED is a page-lifetime latch.
+  try {
+    const s = SCENARIOS.viewed;
+    detailFetch.data = JSON.parse(JSON.stringify(s.data));
+    locationStub.search = "?open=viewed&sec=deposit";
+    await page.openDetail("viewed");
+    for (let i = 0; i < 6; i++) await tick();
+    const first = page.activeSec();
+    // A SECOND open must not be dragged back to that tab: the latch is what stops the deep link
+    // becoming a sticky preference for the rest of the session.
+    detailFetch.data = JSON.parse(JSON.stringify(SCENARIOS.unviewed.data));
+    await page.openDetail("unviewed");
+    for (let i = 0; i < 6; i++) await tick();
+    out.deepLink = { openedOn: first, secondProject: page.activeSec() };
+
+    // ── a ?sec= naming a tab that does not exist ──
+    // THROUGH openDetail, and that is the whole point of this scenario. The gate that ignores an
+    // unknown value is `if (want && SEC_TABS[want])` inside openDetail and nowhere else; the first
+    // version of this scenario set location.search and then called renderDetail, which never reads
+    // the query string, so deleting `SEC_TABS[want]` from portal.js left the entire suite green.
+    // resetDeepLink is needed because DEEPLINK_USED is a page-lifetime latch already spent above.
+    locationStub.search = "?open=viewed&sec=nonsense";
+    page.resetDeepLink();
+    detailFetch.data = JSON.parse(JSON.stringify(s.data));
+    page.open("viewed");
+    await page.openDetail("viewed");
+    for (let i = 0; i < 6; i++) await tick();
+    out.deepLink.junkSec = page.activeSec();
+    // Not merely "some tab": the state and the paint have to AGREE. An ungated value survives as
+    // ACTIVE_SEC while applySecPanel quietly falls back to Proposal, so the drawer shows one tab
+    // and the routing believes another, and defaultSection then returns the junk for the rest of
+    // the open because ACTIVE_SEC is truthy.
+    out.deepLink.junkPanels = visiblePanels();
+    out.deepLink.junkSelected = dom.queryAll(".dtabs .step")
+      .filter((b) => b.getAttribute("aria-selected") === "true").map((b) => b.dataset.sec);
+    locationStub.search = "";
+  } catch (e) {
+    out.errors.deepLink = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── the files and the info sheet, in BOTH drawers ─────────────────────────
+  // Fired, not read: these are <button>s that call window.location.assign, so the URL only exists
+  // at click time. A sent project had NEITHER control until 2026-08-20 — the board card was its
+  // only route to its own paperwork.
+  try {
+    nav.length = 0;
+    const s = SCENARIOS.viewed;
+    page.open("viewed");
+    page.renderDetail("viewed", JSON.parse(JSON.stringify(s.data)));
+    const sentFiles = dom.getElementById("go-files");
+    const sentInfo = dom.getElementById("go-info");
+    if (sentFiles) await sentFiles.fire("click");
+    if (sentInfo) await sentInfo.fire("click");
+    const sentNav = nav.slice();
+
+    nav.length = 0;
+    const nsRow = BOARD_ROWS.find((r) => r.proposal_id === "notsent");
+    page.open("notsent");
+    page.renderNotSent("notsent", nsRow);
+    const nsFiles = dom.query("[data-go-files]");
+    const nsInfo = dom.query("[data-go-info]");
+    const nsEdit = dom.query("[data-go-edit]");
+    if (nsFiles) await nsFiles.fire("click");
+    if (nsInfo) await nsInfo.fire("click");
+    if (nsEdit) await nsEdit.fire("click");
+    out.paperwork = {
+      sent: { files: !!sentFiles, info: !!sentInfo, nav: sentNav },
+      notSent: { files: !!nsFiles, info: !!nsInfo, edit: !!nsEdit, nav: nav.slice() },
+    };
+  } catch (e) {
+    out.errors.paperwork = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
   console.log(JSON.stringify(out));
