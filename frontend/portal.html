@@ -44,7 +44,10 @@
      marked by weight and a filled background as well as tint (this page can be re-tinted by a
      synthesized dark theme, so colour alone would not survive). Its own row above the
      toolbar: it says which board you are on, not how it is filtered. */
-  .tw-tabs { display:flex; gap:8px; align-items:center; margin:0 0 12px; }
+  /* Wraps since 2026-08-20, when Won made it four pills. Flex does not wrap by default, and four
+     pills plus their counts are within reach of a phone's width: a pill pushed off the right edge is
+     a tab that does not exist as far as the rep is concerned. */
+  .tw-tabs { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 12px; }
   .tw-tab { background:#fff; color:var(--ink-v); border:1px solid var(--line); border-radius:999px;
     min-height:36px; padding:0 14px; font:700 13px system-ui; cursor:pointer; display:inline-flex;
     align-items:center; gap:6px; }
@@ -465,10 +468,18 @@
     <h1>Active Projects</h1>
     <p class="sub">Proposals sent to customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
     <!-- Which board, not how it's filtered: the same Active / Test split as the Proposals
-         Database, off the same is_test flag. The closed-lost count sits on this row too
-         because it is the other thing that isn't on the board. -->
+         Database, off the same is_test flag. The two outcomes, Won and Lost, sit on this row too
+         because they are the things that are no longer on the live board. -->
     <div id="crm-tabs" class="tw-tabs">
       <button type="button" class="tw-tab on" data-tab="active" aria-pressed="true">Active <span class="n">0</span></button>
+      <!-- Hanz, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but
+           Not Sent bucket" — and the decision that a Won tab takes every won job, off the Active
+           board the way Lost comes off it. Its columns are what is still outstanding on the job
+           (C.WON_COLS in crm-core.js), which is what makes moving the card safe: the deposit and
+           contacts chasing is visible on the tab that owns it. Placed between Active and Lost: the
+           two outcomes read together beside the live board, and the scratch tab keeps the far end,
+           which is the order he asked for when Lost moved next to Active on 2026-08-15. -->
+      <button type="button" class="tw-tab" data-tab="won" aria-pressed="false">Won <span class="n">0</span></button>
       <!-- Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where the lost projects
            will be held". This REPLACED a "0 closed lost →" link that pointed at the Proposals
            Database, which could not filter to the dead ones — /projects.html lists our drafts and
