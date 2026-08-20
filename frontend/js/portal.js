@@ -68,7 +68,13 @@
   // They now have a TAB. Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where
   // the lost projects will be held." Same intent as before — a dead deal must not take up room
   // on a board of live work — with somewhere to actually look at them.
-  const TABS = ["active", "test", "lost"];
+  //
+  // WON IS THE SAME SHAPE, since 2026-08-20. Hanz: "I marked Trabon Group project as Won but it's
+  // still in the Created but Not Sent bucket." A won job now comes off this board exactly as a lost
+  // one does, into a tab whose columns are what is still OUTSTANDING on it (C.WON_COLS) rather than
+  // how far along the pipeline it got — so nothing gets hidden by the move. This reverses the
+  // 2026-08-19 decision to keep won cards on the live board; see the note in chipsHtml.
+  const TABS = ["active", "won", "lost", "test"];
   let TAB = TABS.includes(ss(TAB_KEY, "")) ? ss(TAB_KEY, "") : "active";
   let VIEW = ss(VIEW_KEY, "") === "table" ? "table" : "board";
 
@@ -127,7 +133,7 @@
   const applySort = (list) => C.sort(list, SORTFIELD, SORTDIR);
 
   /** The rows this board is ABOUT, before any filter the toolbar owns. Which tab you are on is
-   *  the whole of it, and the three pools PARTITION `ALL` — every proposal is in exactly one, so
+   *  the whole of it, and the four pools PARTITION `ALL` — every proposal is in exactly one, so
    *  the tab counts add up to the total and nothing can fall through the gaps.
    *
    *  CLOSED LOST IS ITS OWN TAB, and still absent from the live ones. Hanz, 2026-08-10: "allow
@@ -138,6 +144,17 @@
    *  `is_test` flag, that the Proposals Database uses. Anything that page shows under Test has
    *  to show up under Test here too.
    *
+   *  WON IS ITS OWN TAB TOO, since 2026-08-20 (Hanz: "I marked Trabon Group project as Won but it's
+   *  still in the Created but Not Sent bucket"). Won jobs leave the Active board the way lost ones
+   *  do, and land under C.WON_COLS, which say what is still outstanding on them.
+   *
+   *  THE ORDER OF THE THREE TESTS IS THE PARTITION, and each one is load-bearing:
+   *    · isLost first — a won-then-cancelled job is Lost only, which is the precedence crm-core
+   *      records at isWon ("every reader asks isLost FIRST").
+   *    · then is_test — a TEST project that was won stays under Test. Scratch work does not become
+   *      real work by being marked won, and the Test tab is the one place its owner looks for it.
+   *    · then isWon, over the real live rows only.
+   *
    *  A lost TEST project appears under Lost, not Test — Lost is every dead deal, or its count
    *  would be a lie and the row would be reachable from nowhere (Test excludes lost, and always
    *  did). Those cards carry a Test chip so they can't be read as real work.
@@ -147,7 +164,11 @@
    *  and blank the board when picked. */
   function boardPool() {
     if (TAB === "lost") return ALL.filter(isLost);
-    return ALL.filter((p) => !isLost(p) && isTest(p) === (TAB === "test"));
+    const live = ALL.filter((p) => !isLost(p) && isTest(p) === (TAB === "test"));
+    if (TAB === "test") return live;
+    // C.isWon rather than a destructured isWon, deliberately: chipsHtml reads it the same way, and
+    // the node harnesses that lift these functions bind the module by name.
+    return live.filter((p) => C.isWon(p) === (TAB === "won"));
   }
 
   /** Everything the current filters allow, in the current order. Both views read
@@ -169,16 +190,29 @@
       if (isTest(p)) out.push('<span class="chip chip-test" title="A test or demo project — filed under Test before it was closed">Test</span>');
     } else {
       // WON. Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending
-      // okay?" The Notification Sending page files these under a Won tab and they leave its working
-      // list; this board deliberately KEEPS them, because a won job still has work on it — its
-      // "Deposit received" and "Contact info" columns are both live, and moving the card off would
-      // hide real work from the people doing it. The chip is how the two screens agree without the
-      // board lying about where the job is: same predicate, from crm-core, one definition.
+      // okay?" The Notification Sending page files these under a Won tab; same predicate, from
+      // crm-core, one definition.
+      //
+      // THIS BOARD USED TO KEEP A WON CARD ON THE LIVE TABS, and that reasoning is now REVERSED.
+      // The argument for keeping it (recorded here until 2026-08-20) was that a won job still has
+      // work on it — "Deposit received" and "Contact info" are live columns, and moving the card off
+      // would hide real work from the people doing it. What it missed is the card Hanz actually hit:
+      // "I marked Trabon Group project as Won but it's still in the Created but Not Sent bucket."
+      // A chip cannot argue with a column. He chose the Won TAB instead, on 2026-08-20, and the risk
+      // the old reasoning named is answered by that tab's own columns rather than by keeping the card
+      // among live bids: C.WON_COLS groups won jobs by what is still outstanding, so the deposit and
+      // the contacts chasing stay visible on the tab that owns them.
+      //
+      // The chip STAYS, and now only ever draws on the Won tab and on Test (where a won test project
+      // stays, because scratch work does not become real work by being marked won — and there the
+      // chip is the ONLY thing saying so). On Won it is not redundant with the tab name either: the
+      // columns there answer "what is left to do", so the chip is the only thing on the card that
+      // says why the card is on that board at all.
       //
       // The title names BOTH routes to the chip since 2026-08-19, because a rep who reads only the
       // derived one on a project nobody has approved would take the chip for a bug rather than for
       // the colleague who marked it won on the phone.
-      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Won — either marked won by hand, or approved with the deposit settled. Filed under Won on the Notification Sending page">Won</span>');
+      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Won — either marked won by hand, or approved with the deposit settled. Off the Active board, and counts under Won on the Notification Sending page">Won</span>');
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
       // Only worth saying when it's OFF: automation being on is the norm, and a chip
@@ -257,18 +291,31 @@
   }
 
   function kanbanHtml(items) {
-    // Two shapes: the pipeline (STAGES) on the live tabs, the reasons on Lost.
+    // Three shapes: the pipeline (STAGES) on the live tabs, the close reasons on Lost, and what is
+    // still outstanding (C.WON_COLS) on Won.
     //
-    // There is no Closed lost column on the live tabs — those proposals are not in the pool (see
+    // There is no Closed lost and no Won column on the live tabs — neither is in the pool (see
     // boardPool), and C.group drops any row whose stage has no column, so one arriving by some
     // other route is left out rather than throwing.
     const lost = TAB === "lost";
+    const won = TAB === "won";
     if (lost && !items.length) {
       return '<div class="empty">Nothing closed lost' + (
         boardPool().length ? " matches those filters." : " — every proposal is still live.") + "</div>";
     }
-    const cols = lost ? LOST_COLS : STAGES;
-    const byStage = lost ? groupByReason(items) : C.group(items, STAGES);
+    // Same two kinds of empty the Lost tab distinguishes: "nothing matches your filter" means clear
+    // the filter, and an unfiltered empty tab is just a tab nobody has won a job onto yet.
+    if (won && !items.length) {
+      return '<div class="empty">Nothing won' + (boardPool().length
+        ? " matches those filters."
+        : " yet — a job lands here when somebody marks it won, or when it is approved with the"
+          + " deposit settled.") + "</div>";
+    }
+    // Grouping and columns are chosen in ONE ternary each, and the Won branch reads the module off
+    // `C`, so nothing new is free in this scope. An unbound identifier inside the .map() below is
+    // what took the whole board down on 2026-08-12; see the note at the top of this file.
+    const cols = lost ? LOST_COLS : won ? C.WON_COLS : STAGES;
+    const byStage = lost ? groupByReason(items) : won ? C.groupWon(items) : C.group(items, STAGES);
     return cols.map((s) => {
       const cards = byStage[s].map((p) => {
         const act = lastActivity(p);
@@ -306,9 +353,11 @@
       // proposal under that not sent category". Only this column gets the button, because it is
       // the only one whose membership rule a new project can satisfy — everything to the right
       // requires the customer to have been sent something.
-      // `!lost` is belt as well as braces: no reason label equals STAGE_CREATED today, and a
-      // "+ New" button on a column of dead deals would file a brand-new bid as closed lost.
-      const add = !lost && s === STAGE_CREATED
+      // `!lost && !won` is belt as well as braces: no reason label and no Won column equals
+      // STAGE_CREATED today, and a "+ New" button on a column of dead deals would file a brand-new
+      // bid as closed lost. ("Won before approval" is the near miss on the Won tab — a new bid
+      // started from there would be neither won nor approved.)
+      const add = !lost && !won && s === STAGE_CREATED
         ? '<button type="button" class="col-add" data-new-proposal title="Start a new proposal — opens the intake form">+ New</button>'
         : "";
       return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span>${add}</h2>${cards}</div>`;
@@ -424,9 +473,9 @@
    *  would be a second set of bugs, and the intake form is reached by URL either way.
    *
    *  The test flag follows the TAB you are looking at, which is why this is safe to offer here:
-   *  the board is always on Active or Test, never on an "all" view, so a new project can never
-   *  land un-filed. Same rule Hanz asked for on the Database ("use the Test category so it
-   *  wouldn't mix up"). */
+   *  kanbanHtml only draws the button on Active and Test, never on Lost or Won and never on an
+   *  "all" view, so a new project can never land un-filed. Same rule Hanz asked for on the Database
+   *  ("use the Test category so it wouldn't mix up"). */
   function startNewProposal() {
     try {
       localStorage.removeItem("treadwell.proposal_tool.state");
@@ -850,7 +899,16 @@
              after the deposit has been received". ABOVE the closed-lost control, because that is the
              order the two outcomes deserve to be read in. The whole section goes when there is
              nothing to offer — on a lost bid — rather than leaving an empty .sec taking its parent's
-             gap above the Reactivate button. -->
+             gap above the Reactivate button.
+
+             BOTH OUTCOMES, ON A BID NOBODY HAS SENT. Hanz, 2026-08-20: "Even for created not sent we
+             must be able to mark it as won or lost." Both were already here and both post to the
+             DRAFT endpoint (wireWon and wireNotSentLost below) — this comment exists because the
+             pair is now an asserted invariant rather than two features that happen to coexist, and
+             because it has to survive the card MOVING: this panel is reached from whichever tab the
+             card is on, so a project marked won still offers Mark closed lost from the Won tab, and
+             a won unsent bid the GC then cancels does not have to be un-won first.
+             test_won_tab.py renders this panel on a won not-sent row and asserts both controls. -->
         ${wonHtml ? `<div class="sec" id="dsec-ns-won">${wonHtml}</div>` : ""}
         <div class="sec" id="dsec-ns-lost">
           <div class="lbl">${isLost(row) ? "Closed lost" : "Not going ahead?"}</div>
@@ -976,21 +1034,23 @@
     // separator and splitSystem cuts on it.
     if (C.wonByHand(p)) {
       return `${lbl}Won</div>
-        <p class="note">Somebody marked this won. It carries a Won chip on the board and counts under
-        Won on the Notification Sending page. Follow-ups do NOT stop: the chasing runs until the
-        deposit is in, and the customer is not emailed about this either way.</p>
+        <p class="note">Somebody marked this won, so it sits on the Won tab instead of the Active
+        board, and counts under Won on the Notification Sending page. Follow-ups do NOT stop: the
+        chasing runs until the deposit is in, and the customer is not emailed about this either
+        way.</p>
         <div class="fu-line"><button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>
         <p class="note" id="won-note"></p>`;
     }
     if (C.isWon(p)) {
       return `${lbl}Won</div>
         <p class="note">Approved, and the deposit question is settled, so this already counts as won
-        without anyone marking it.</p>`;
+        without anyone marking it. It sits on the Won tab.</p>`;
     }
     return `${lbl}Won it already?</div>
       <p class="note">Mark it won as soon as they say yes on the phone. It does not wait for the
       customer to click Approve or for the deposit to land, the customer is not emailed, and the
-      follow-ups carry on until the money is in. You can undo it.</p>
+      follow-ups carry on until the money is in. The card moves to the Won tab, which columns it by
+      whatever is still outstanding, so nothing stops being chased. You can undo it.</p>
       <div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark won</button></div>
       <p class="note" id="won-note"></p>`;
   }
@@ -2801,9 +2861,14 @@
 
   function lostCount() { return ALL.filter(isLost).length; }
 
-  /** The Active / Test / Lost switch. The counts come off the same predicates boardPool filters
-   *  with, so a tab can never advertise a number it then refuses to show — and because the three
-   *  pools partition `ALL`, the three counts add up to every proposal there is.
+  /** The Active / Won / Lost / Test switch. The counts come off the same predicates boardPool
+   *  filters with, so a tab can never advertise a number it then refuses to show — and because the
+   *  four pools partition `ALL`, the four counts add up to every proposal there is.
+   *
+   *  Computed here rather than as `boardPool()` per tab because boardPool closes over TAB: asking it
+   *  four times would mean assigning TAB four times mid-render. So the precedence is spelled out a
+   *  second time, in the same order — lost, then test, then won — and test_won_tab.py asserts the
+   *  four numbers sum to `ALL`, which is the property that catches the two copies drifting.
    *
    *  This replaced a "N closed lost →" link out to /projects.html. That link could never do what
    *  it implied: that page reads no filter from the URL, its tabs are Active / Inactive / All /
@@ -2813,7 +2878,12 @@
     const wrap = $("crm-tabs");
     if (!wrap) return;
     const live = ALL.filter((p) => !isLost(p));
-    const n = { test: live.filter(isTest).length, active: live.filter((p) => !isTest(p)).length,
+    // Real live work: what the Active and Won pills split between them. A won TEST project is
+    // counted under Test, exactly as boardPool files it.
+    const real = live.filter((p) => !isTest(p));
+    const n = { test: live.filter(isTest).length,
+                won: real.filter((p) => C.isWon(p)).length,
+                active: real.filter((p) => !C.isWon(p)).length,
                 lost: lostCount() };
     wrap.querySelectorAll("[data-tab]").forEach((b) => {
       const on = b.dataset.tab === TAB;

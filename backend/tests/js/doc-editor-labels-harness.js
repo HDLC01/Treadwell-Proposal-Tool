@@ -1,0 +1,705 @@
+"use strict";
+/* The last locked labels on the proposal page, and a text box that grows instead of clipping.
+ * RUN, not read.
+ *
+ * Kyle, 2026-08-19, on the proposal document editor:
+ *   "Some of the labels are not editable why not make it like a word document??"
+ *   "Everything on that page must be editable like a word doc"
+ *   "instead of it being a textbox why not make it editable like a word document?"
+ *
+ * Two behaviours, neither visible to a source assertion:
+ *
+ *   * THE LABELS. renderSystemPreview builds the WORK rows as a string of HTML, and whether a
+ *     label came out as an editable island or as escaped dead text is a property of the string it
+ *     produced — plus what the delegated `input` handler then writes into state.system_overrides,
+ *     plus what a RE-RENDER shows afterwards. "Option 2:" surviving on the rows the estimator did
+ *     not rename is three functions agreeing, not one line of source.
+ *   * THE GROWTH. Whether a box may get taller is arithmetic against the OTHER boxes' rects on a
+ *     612x792 sheet. Kyle's shapes already overlap each other (Direct epoxy's WORK ends at
+ *     323.65pt and PRICE starts at 320.95pt), so the obvious "is it below my bottom edge" test
+ *     silently classifies the one box you must not grow into as "not below me". Only running it
+ *     with the real geometry catches that.
+ *
+ * The precedent for running it is expensive: on 2026-08-12 `STAGE_CREATED` shipped unbound with
+ * every source-text assertion green and took the production board down.
+ *
+ * DELIBERATELY NOT A FULL DOM, for the reason box-drag-harness.js gives: jsdom lets a missing
+ * binding hide behind a stub. What is shimmed is what these functions touch — elements AND text
+ * nodes (serializeBlock walks childNodes by nodeType), a small real innerHTML parser (the preview
+ * nests islands inside <strong> and <p>), and an offsetHeight that follows the font-size fitTxbx
+ * sets and is floored by minHeight, so "this box overflows" is a measurement rather than a stub
+ * returning whatever the test wants.
+ *
+ * Usage: node doc-editor-labels-harness.js <frontend-dir>   →   one line of JSON
+ */
+const fs = require("fs");
+const path = require("path");
+
+const FRONTEND = process.argv[2];
+// Normalized to LF: the repo's frontend is checked out CRLF on Windows and every pattern below
+// anchors on "\n  " indentation. A CR left in would make the lifted source subtly different from
+// the shipped source, which is the one thing this harness must not allow.
+const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8")
+  .replace(/\r\n/g, "\n");
+
+// ── lifting the real source ──────────────────────────────────────────────────
+function fn(name) {
+  const m = new RegExp("\\n  (?:async )?function " + name + "\\s*\\(").exec(SRC);
+  if (!m) throw new Error(name + "() is gone from proposal-review.js — rewrite this harness, don't delete it");
+  const open = SRC.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  for (let j = open; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) return SRC.slice(m.index, j + 1);
+  }
+  throw new Error("unbalanced braces reading " + name);
+}
+
+function topConst(name) {
+  const m = new RegExp("\\n  const " + name + " =").exec(SRC);
+  if (!m) throw new Error("const " + name + " is gone from proposal-review.js");
+  let depth = 0;
+  for (let j = m.index + m[0].length; j < SRC.length; j++) {
+    const ch = SRC[j];
+    if ("([{".includes(ch)) depth++;
+    else if (")]}".includes(ch)) depth--;
+    else if (ch === ";" && depth === 0) return SRC.slice(m.index, j + 1);
+  }
+  throw new Error("unterminated const " + name);
+}
+
+/** A top-level `const` whose VALUE contains a semicolon — a prose string, in practice.
+ *  topConst() scans for the first `;` at bracket depth 0 and has no idea it is inside a string
+ *  literal, so "…the computed estimate; the estimate sheet…" cut the statement in half and
+ *  produced an unterminated string. This reads whole LINES until one ends the statement, which is
+ *  how these constants are actually written. */
+function stringConst(name) {
+  const m = new RegExp("\\n  const " + name + " =").exec(SRC);
+  if (!m) throw new Error("const " + name + " is gone from proposal-review.js");
+  const lines = SRC.slice(m.index + 1).split("\n");
+  const kept = [];
+  for (const line of lines) {
+    kept.push(line);
+    if (line.trimEnd().endsWith(";")) return kept.join("\n");
+  }
+  throw new Error("unterminated const " + name);
+}
+
+/** One delegated listener body out of the page's top level, by the comment that introduces it.
+ *  Lifted so an edit to a label island goes through the REAL handler — its revert rule ("empty
+ *  or back to computed means delete the override") is the whole reason an emptied label cannot
+ *  leave a bare token or a lone colon in a customer's document. */
+function delegated(anchor) {
+  const i = SRC.indexOf(anchor);
+  if (i < 0) throw new Error("the listener anchored on " + JSON.stringify(anchor) + " is gone");
+  const open = SRC.indexOf("{", SRC.indexOf("(e) =>", i));
+  let depth = 0;
+  for (let j = open; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) return SRC.slice(open, j + 1);
+  }
+  throw new Error("unbalanced braces reading the listener at " + anchor);
+}
+
+/** The box loop out of renderPositioned — the code that actually mounts a box, so this cannot
+ *  quietly test a hand-built element that has drifted from the shipped one. */
+function renderBoxLoop() {
+  const start = SRC.indexOf("    boxDesign.clear();\n    for (const box of (geo.boxes || [])) {");
+  if (start < 0) throw new Error("renderPositioned's box loop moved — rewrite this harness");
+  const open = SRC.indexOf("{", SRC.indexOf("for (const box of", start));
+  let depth = 0;
+  for (let j = open; j < SRC.length; j++) {
+    if (SRC[j] === "{") depth++;
+    else if (SRC[j] === "}" && --depth === 0) return SRC.slice(start, j + 1);
+  }
+  throw new Error("unbalanced braces reading the box loop");
+}
+
+// ── the smallest DOM these functions touch ───────────────────────────────────
+const PX_PER_PT = 96 / 72;
+const Node = { ELEMENT_NODE: 1, TEXT_NODE: 3 };
+
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };
+const unesc = (s) => String(s).replace(/&(#39|amp|lt|gt|quot|nbsp);/g, (_, k) => ENTITIES[k]);
+
+function parseStyle(css) {
+  const out = {};
+  for (const bit of String(css || "").split(";")) {
+    const k = bit.indexOf(":");
+    if (k < 0) continue;
+    const name = bit.slice(0, k).trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (name) out[name] = bit.slice(k + 1).trim();
+  }
+  return out;
+}
+
+function matches(el, sel) {
+  return String(sel).split(",").some((one) => {
+    const part = one.trim();
+    if (!part) return false;
+    const tag = /^[a-zA-Z][\w-]*/.exec(part);
+    if (tag && el.tagName !== tag[0].toUpperCase()) return false;
+    for (const m of part.matchAll(/\.([\w-]+)/g)) if (!el.classList.contains(m[1])) return false;
+    for (const m of part.matchAll(/\[([\w-]+)(?:=["']?([^\]"']*)["']?)?\]/g)) {
+      const have = el.attrs[m[1]];
+      if (have === undefined) return false;
+      if (m[2] !== undefined && String(have) !== m[2]) return false;
+    }
+    return true;
+  });
+}
+
+class Text {
+  constructor(v) {
+    this.nodeType = Node.TEXT_NODE;
+    this.nodeValue = String(v);
+    this.parentNode = null;
+  }
+  get parentElement() { return this.parentNode; }
+}
+
+const VOID = new Set(["BR", "IMG", "HR", "INPUT"]);
+
+class El {
+  constructor(tag) {
+    this.nodeType = Node.ELEMENT_NODE;
+    this.tagName = String(tag).toUpperCase();
+    this.childNodes = [];
+    this.parentNode = null;
+    this.style = {};
+    this.attrs = {};
+    this.title = "";
+    this._classes = new Set();
+    this._listeners = {};
+    this._naturalPx = 0;            // height the content would take at 100% font
+    const self = this;
+    this.dataset = new Proxy({}, {
+      set: (obj, k, v) => {
+        obj[k] = v;
+        self.attrs["data-" + String(k).replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())] = v;
+        return true;
+      },
+      get: (obj, k) => obj[k],
+      deleteProperty: (obj, k) => { delete obj[k]; return true; },
+    });
+    this.classList = {
+      add: (c) => self._classes.add(c),
+      remove: (c) => self._classes.delete(c),
+      contains: (c) => self._classes.has(c),
+      toggle: (c, on) => {
+        const want = on === undefined ? !self._classes.has(c) : !!on;
+        if (want) self._classes.add(c); else self._classes.delete(c);
+        return want;
+      },
+    };
+  }
+  get parentElement() { return this.parentNode; }
+  get children() { return this.childNodes.filter((n) => n.nodeType === Node.ELEMENT_NODE); }
+  get className() { return Array.from(this._classes).join(" "); }
+  set className(v) {
+    this._classes = new Set(String(v).split(/\s+/).filter(Boolean));
+    this.attrs.class = v;
+  }
+  appendChild(c) { c.parentNode = this; this.childNodes.push(c); return c; }
+  get textContent() {
+    return this.childNodes.map((n) =>
+      n.nodeType === Node.TEXT_NODE ? n.nodeValue : n.textContent).join("");
+  }
+  set textContent(v) {
+    this.childNodes = [];
+    if (String(v) !== "") this.appendChild(new Text(v));
+  }
+  /** A real (if small) parser: renderSystemPreview nests a `.tw-fill` island inside a <strong>
+   *  inside a <p>, so a flat one would lose exactly the nesting under test. */
+  set innerHTML(html) {
+    this.childNodes = [];
+    const stack = [this];
+    const re = /<\/([a-zA-Z][\w-]*)\s*>|<([a-zA-Z][\w-]*)((?:\s+[\w-]+="[^"]*")*)\s*\/?>|([^<]+)/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const top = stack[stack.length - 1];
+      if (m[1]) {
+        if (stack.length > 1) stack.pop();
+      } else if (m[2]) {
+        const el = new El(m[2]);
+        for (const a of m[3].matchAll(/([\w-]+)="([^"]*)"/g)) {
+          const v = unesc(a[2]);
+          el.attrs[a[1]] = v;
+          if (a[1] === "class") el.className = v;
+          else if (a[1] === "style") el.style = parseStyle(v);
+          else if (a[1] === "title") el.title = v;
+          else if (a[1].startsWith("data-")) {
+            el.dataset[a[1].slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = v;
+          }
+        }
+        top.appendChild(el);
+        if (!VOID.has(el.tagName)) stack.push(el);
+      } else if (m[4] !== undefined) {
+        top.appendChild(new Text(unesc(m[4])));
+      }
+    }
+  }
+  querySelector(sel) {
+    for (const c of this.children) {
+      if (matches(c, sel)) return c;
+      const deep = c.querySelector(sel);
+      if (deep) return deep;
+    }
+    return null;
+  }
+  querySelectorAll(sel) {
+    const out = [];
+    for (const c of this.children) {
+      if (matches(c, sel)) out.push(c);
+      out.push(...c.querySelectorAll(sel));
+    }
+    return out;
+  }
+  closest(sel) {
+    let el = this;
+    while (el) {
+      if (el.nodeType === Node.ELEMENT_NODE && matches(el, sel)) return el;
+      el = el.parentNode;
+    }
+    return null;
+  }
+  contains(other) {
+    let el = other;
+    while (el) { if (el === this) return true; el = el.parentNode; }
+    return false;
+  }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  setPointerCapture() {}
+  releasePointerCapture() {}
+  blur() { if (document.activeElement === this) document.activeElement = null; }
+  focus() { document.activeElement = this; }
+  getBoundingClientRect() { return { width: 0, height: 0, left: 0, top: 0 }; }
+  get offsetWidth() { return this._offsetWidth || 0; }
+  set offsetWidth(v) { this._offsetWidth = v; }
+  /** Content height in CSS px: scaled by whatever font-size fitTxbx set, floored by minHeight
+   *  (a box shorter than its own shape still occupies the shape). This is the one measurement
+   *  the whole growth decision rests on, so it is modelled rather than stubbed. */
+  get offsetHeight() {
+    const pct = /^(\d+)%$/.exec(this.style.fontSize || "");
+    const k = pct ? Number(pct[1]) / 100 : 1;
+    const floorPt = parseFloat(this.style.minHeight || "0") || 0;
+    return Math.max(Math.round(this._naturalPx * k), Math.round(floorPt * PX_PER_PT));
+  }
+}
+
+// The page root, so `document.querySelectorAll(".tw-txbx")` (fitNotesBox) really finds the boxes.
+const ROOT = new El("div");
+const document = {
+  createElement: (t) => new El(t),
+  activeElement: null,
+  body: new El("body"),
+  querySelectorAll: (sel) => ROOT.querySelectorAll(sel),
+};
+const window = {
+  _listeners: {},
+  addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
+};
+
+function fire(node, type, props) {
+  let stopped = false;
+  const e = Object.assign({
+    target: node,
+    pointerId: 1,
+    preventDefault() { this.defaulted = true; },
+    stopPropagation() { stopped = true; },
+  }, props);
+  let cur = node;
+  while (cur) {
+    for (const f of (cur._listeners[type] || []).slice()) f(e);
+    if (stopped) return e;
+    cur = cur.parentNode;
+  }
+  for (const f of (window._listeners[type] || []).slice()) f(e);
+  return e;
+}
+
+function fireWindow(type, props) {
+  const e = Object.assign({
+    target: (props && props.target) || null,
+    pointerId: 1,
+    preventDefault() { this.defaulted = true; },
+    stopPropagation() {},
+  }, props);
+  for (const f of (window._listeners[type] || []).slice()) f(e);
+  return e;
+}
+
+// ── the page's own collaborators, as the page binds them ─────────────────────
+const docSurface = new El("div");
+ROOT.appendChild(docSurface);
+const systemPreviewEl = new El("div");
+ROOT.appendChild(systemPreviewEl);
+const form = new El("form");
+const boxDesign = new Map();
+const persisted = { calls: 0 };
+
+// THE PAGE'S OWN BINDING, not a friendlier one: proposal-review.js line 2 is
+// `const state = TW.getState()`, a one-shot snapshot, and TW.setState re-reads storage into a NEW
+// object. Everything the code under test does works only because it mutates NESTED objects in
+// place (state.system_overrides) — a harness with a reassignable `state` would be kinder than the
+// page and would hide exactly that class of bug (see box-drag-harness.js for what it cost).
+const SEED = {
+  work_type: "epoxy",
+  audience: "Direct",
+  base_tab_id: "t1",
+  cell_values: {},
+  system_overrides: [],
+  texture: "Light Broadcast",
+};
+const STORE = { blob: JSON.parse(JSON.stringify(SEED)) };
+const TWStub = {
+  getState: () => JSON.parse(JSON.stringify(STORE.blob)),
+  setState: (partial) => {
+    STORE.blob = Object.assign(JSON.parse(JSON.stringify(STORE.blob)), partial || {});
+    return STORE.blob;
+  },
+  readForm: () => ({ texture: "Light Broadcast", cove_height: "6" }),
+};
+
+let API = null;
+
+// Exactly what schedulePersistOverrides does AROUND the shipped collector, so the store this
+// harness reads back is written by the real collectBoxOverrides.
+function schedulePersistOverrides() {
+  persisted.calls += 1;
+  TWStub.setState({ box_overrides: API.collectBoxOverrides() });
+}
+
+const LIFTED = [
+  topConst("focusInside"), topConst("escHtml"), stringConst("_OVERRIDE_TITLE"),
+  topConst("_SYS_LABEL_FIELDS"), stringConst("_SYS_LABEL_TITLE"),
+  fn("effectiveWorkType"), fn("sheetSystems"), fn("renderSystemPreview"), fn("serializeBlock"),
+  topConst("PT_PER_CSS_PX"), topConst("BOX_DRAG_SLOP_PT"), topConst("BOX_EPS_PT"),
+  topConst("isAutoGrown"),
+  fn("zoomScale"), fn("ptFromClientPx"), fn("clampPt"), fn("dragBoxRect"),
+  fn("boxOverrideEntry"), fn("boxReadout"), fn("effectiveBoxRect"), fn("applyBoxGeom"),
+  fn("addBoxTools"), fn("showBoxReadout"), fn("setBoxOverride"),
+  // boxCeilingPt answers "is there a real box under this one?", and growRoomPt returns 0 when
+  // the answer is no — that null is what stops a box growing over the baked letterhead art.
+  fn("boxCeilingPt"),
+  fn("dropAutoGrownHeight"), fn("releaseAutoGrownHeight"), fn("growRoomPt"), fn("otherBoxRects"), fn("growBoxToFit"),
+  fn("wireBoxDrag"), fn("collectBoxOverrides"),
+  // fitOffer is called from inside fitTxbx, so leaving it out does not fail at lift time —
+  // it fails as `ReferenceError: fitOffer is not defined` the first time a box overflows,
+  // which took out all 86 tests in this module. Any function fitTxbx reaches has to be here.
+  fn("fitOffer"),
+  fn("fitTxbx"), fn("fitNotesBox"), fn("wireOverflowExpand"),
+].join("\n\n");
+
+const BOX_LOOP = renderBoxLoop();
+const SYS_INPUT = delegated("  // ── Editable estimate-sourced fills: WORK systems ──");
+
+const api = new Function(
+  "document", "window", "docSurface", "systemPreviewEl", "form", "boxDesign", "Node",
+  "schedulePersistOverrides", "TW",
+  `const state = TW.getState();
+  let boxOverrides = new Map(); let boxLimits = null; let docZoom = null;
+  let templateBlocks = [{ id: 1, txbx: 0 }];
+  // Debounces are collapsed to "run now": what is under test is what gets WRITTEN, and a real
+  // timer would make every assertion below a race.
+  const setTimeout = (f) => { f(); return 1; };
+  const clearTimeout = () => {};
+  let _sysOvTimer = null;
+  const renderNotesPreview = () => {};
+` + LIFTED + `
+  systemPreviewEl.addEventListener("input", (e) => ${SYS_INPUT});
+  wireBoxDrag();
+  wireOverflowExpand();
+  function mountBoxes(geo, byBox, p1, tokens) {
+    const renderBlockList = () => {};
+${BOX_LOOP}
+  }
+  return { mountBoxes, renderSystemPreview, fitTxbx, fitNotesBox, growBoxToFit, growRoomPt,
+           effectiveBoxRect, collectBoxOverrides, dragBoxRect,
+           setLimits: (l) => { boxLimits = l; },
+           clearOverrides: () => { boxOverrides = new Map(); },
+           readOverrides: () => Array.from(boxOverrides.entries()),
+           isAutoGrown: isAutoGrown,
+           liveState: () => state };
+  `
+)(document, window, docSurface, systemPreviewEl, form, boxDesign, Node,
+  schedulePersistOverrides, TWStub);
+API = api;
+
+const out = {};
+
+// ═══ part 1 — the WORK row labels ════════════════════════════════════════════
+// The picks come from the BASE tab's sheet cells, which is the live path (sheetSystems). Two
+// systems is the most that path can resolve — it reads two fixed cell pairs — so the 3-system
+// numbering rule is asserted on the Python side, in the code that actually writes the document.
+function seedSystems(names) {
+  const sf = { epoxy_sf: 5000, cove_lf: 240, epoxy_sf_2: 1800, cove_lf_2: 0 };
+  STORE.blob = JSON.parse(JSON.stringify(SEED));
+  const st = api.liveState();
+  st.system_overrides = [];
+  st.priced_tabs = [{ id: "t1", role: "epoxy", kind: "base", sf: sf, sys_names: names }];
+  st.base_tab_id = "t1";
+  TWStub.setState({ priced_tabs: st.priced_tabs, system_overrides: st.system_overrides });
+  api.renderSystemPreview();
+}
+
+/** Every editable island in the preview, in document order. */
+function islands() {
+  return systemPreviewEl.querySelectorAll("[data-sys-field]").map((s) => ({
+    i: Number(s.dataset.sysIndex),
+    field: s.dataset.sysField,
+    text: s.textContent,
+    computed: s.dataset.computed,
+    editable: s.attrs.contenteditable === "true",
+    warned: s.classList.contains("tw-overridden"),
+    title: s.title || null,
+  }));
+}
+
+/** The preview as the estimator reads it: one string per rendered paragraph. */
+const lines = () => systemPreviewEl.children.map((p) => p.textContent);
+
+/** Type into one island through the page's own delegated `input` handler. */
+function typeInto(i, field, text) {
+  const sp = systemPreviewEl.querySelectorAll("[data-sys-field]")
+    .find((s) => Number(s.dataset.sysIndex) === i && s.dataset.sysField === field);
+  if (!sp) throw new Error("no island for " + i + "/" + field);
+  sp.textContent = text;
+  fire(sp, "input", {});
+  return sp;
+}
+
+// 1. One system: the label is "System:", and it is an island, not dead text.
+seedSystems(["Broadcast Quartz"]);
+out.oneSystem = { islands: islands(), lines: lines() };
+
+// 2. Two systems: the labels number themselves.
+seedSystems(["Broadcast Quartz", "Decorative Flake"]);
+out.twoSystems = { islands: islands(), lines: lines() };
+
+// 3. Rename row 1's label. Row 2 must keep ITS number — the rule is per row.
+typeInto(0, "prefix", "Base System:");
+out.renamedRow1 = {
+  stored: JSON.parse(JSON.stringify(api.liveState().system_overrides)),
+  persisted: JSON.parse(JSON.stringify(TWStub.getState().system_overrides)),
+};
+api.renderSystemPreview();
+out.renamedRow1.lines = lines();
+out.renamedRow1.islands = islands();
+
+// 4. Empty it again. The revert rule has to give the computed label back — not a bare token, not
+//    a lone colon, which is what a customer would otherwise read.
+typeInto(0, "prefix", "");
+api.renderSystemPreview();
+out.emptiedLabel = {
+  stored: JSON.parse(JSON.stringify(api.liveState().system_overrides)),
+  lines: lines(),
+};
+
+// 5. The static labels inside the row — "Texture:" and "Area:" — the two that were genuinely
+//    locked (they live in the read-only {{#system}} region and no token covers them).
+seedSystems(["Broadcast Quartz", "Decorative Flake"]);
+typeInto(0, "texture_label", "Surface texture:");
+typeInto(0, "area_label", "Coverage:");
+api.renderSystemPreview();
+out.staticLabels = {
+  stored: JSON.parse(JSON.stringify(api.liveState().system_overrides)),
+  lines: lines(),
+};
+
+// 6. A renamed LABEL is not a ⚠ "differs from the estimate" edit; an SF typed off the sheet is.
+seedSystems(["Broadcast Quartz"]);
+typeInto(0, "prefix", "Base System:");
+typeInto(0, "sqft", "9,999");
+api.renderSystemPreview();
+out.warnings = islands().map((s) => ({ field: s.field, warned: s.warned, title: s.title }));
+
+// ═══ part 2 — a box that grows instead of clipping ═══════════════════════════
+// Kyle's Direct epoxy template, every box, read out of the .docx with template_geometry — not
+// invented, because the whole question is whether the page has room and the answer depends on
+// where the OTHER boxes are. test_doc_editor_labels.py restates the room arithmetic
+// independently, so a harness that got it wrong cannot agree with itself.
+const DIRECT_EPOXY = [
+  { id: 0, x_pt: 125.20, y_pt: 36.00, w_pt: 324.80, h_pt: 99.00 },   // JOB NAME header
+  { id: 1, x_pt: 18.35, y_pt: 36.00, w_pt: 72.00, h_pt: 18.00 },     // DATE
+  { id: 2, x_pt: 162.35, y_pt: 152.65, w_pt: 423.00, h_pt: 171.00 }, // WORK
+  { id: 3, x_pt: 162.30, y_pt: 494.60, w_pt: 422.65, h_pt: 162.00 }, // NOTES (last on the page)
+  { id: 4, x_pt: 162.30, y_pt: 320.95, w_pt: 422.65, h_pt: 164.50 }, // PRICE
+  { id: 5, x_pt: 23.31, y_pt: 501.95, w_pt: 90.00, h_pt: 90.00 },    // logo, beside NOTES
+];
+const LIM = { pageW: 612, pageH: 792, maxW: 432, maxH: 648, minPt: 12, printBottom: 720 };
+api.setLimits(LIM);
+
+/** Mount the whole page, then give each box `naturalPt` of content. Boxes not named in
+ *  `contentByBox` get 10pt — comfortably inside the shortest box on the sheet (the 18pt DATE
+ *  field), so the only box that overflows in a scenario is the one that scenario is about. */
+function mountPage(contentByBox) {
+  api.clearOverrides();
+  docSurface.childNodes = [];
+  const p1 = new El("div");
+  docSurface.appendChild(p1);
+  const byBox = new Map(DIRECT_EPOXY.map((b) => [b.id, [{ id: b.id }]]));
+  api.mountBoxes({ boxes: DIRECT_EPOXY }, byBox, p1, {});
+  const boxes = new Map();
+  for (const el of p1.children) {
+    const id = Number(el.dataset.boxId);
+    boxes.set(id, el);
+    el._naturalPx = Math.round((contentByBox[id] || 10) * PX_PER_PT);
+  }
+  return boxes;
+}
+
+const geomOf = (el) => ({
+  left: el.style.left, top: el.style.top, width: el.style.width,
+  minHeight: el.style.minHeight, boxHPt: el.dataset.boxHPt,
+  moved: el.classList.contains("tw-box-moved"),
+  grown: el.classList.contains("tw-box-grown"),
+  blocked: el.classList.contains("tw-grow-blocked"),
+  overflow: el.classList.contains("tw-notes-overflow"),
+  fontSize: el.style.fontSize || "",
+  title: el.title || "",
+});
+
+// 7. The room each box actually has, straight out of the shipped growRoomPt.
+{
+  const boxes = mountPage({});
+  out.room = {};
+  for (const b of DIRECT_EPOXY) {
+    out.room[b.id] = Number(api.growRoomPt(
+      { x: b.x_pt, y: b.y_pt, w: b.w_pt, h: b.h_pt },
+      DIRECT_EPOXY.filter((o) => o.id !== b.id)
+        .map((o) => ({ x: o.x_pt, y: o.y_pt, w: o.w_pt, h: o.h_pt })),
+      LIM).toFixed(2));
+  }
+  out.roomBoxCount = boxes.size;
+}
+
+// 8. A box that FITS is not touched. Byte-identical geometry and an empty payload: the generated
+//    .docx has to be the same file it was before this feature existed.
+{
+  const boxes = mountPage({ 3: 100 });
+  const before = geomOf(boxes.get(3));
+  api.fitNotesBox();
+  out.fitsUntouched = { before: before, after: geomOf(boxes.get(3)),
+                        payload: api.collectBoxOverrides(), persisted: persisted.calls };
+}
+
+/** Press "Fit to text" on one box, the way the estimator does.
+ *
+ *  GROWTH IS A GESTURE, NOT A SIDE EFFECT (2026-08-20). It used to happen inside fitNotesBox, so
+ *  a box changed the geometry of the generated .docx on first paint and on every keystroke, off
+ *  a browser measurement the comment above fitTxbx documents as overstating overflow. These
+ *  scenarios therefore lay the page out, then CLICK, which is the only path that may resize now.
+ *  Calling api.growBoxToFit directly would skip the handler and prove less. */
+function pressFit(box) {
+  const btn = box.querySelector("[data-box-fit]");
+  if (!btn) throw new Error("no Fit to text button on this box — is fitOffer offering it?");
+  fire(btn, "click", {});
+}
+
+// 9. A box with ROOM grows to fit, and the height reaches the payload the writer reads.
+//    PRICE, not NOTES: PRICE has NOTES below it, so its room is bounded by a real box (173.65pt
+//    from its top) and growing it is provably safe. NOTES is the last box on the page and its
+//    room is bounded by nothing we can see — scenario 9b covers that case.
+{
+  const boxes = mountPage({ 4: 170 });
+  const persistedBefore = persisted.calls;
+  api.fitNotesBox();
+  pressFit(boxes.get(4));
+  out.grows = {
+    geom: geomOf(boxes.get(4)),
+    payload: api.collectBoxOverrides(),
+    persistCalls: persisted.calls - persistedBefore,
+    stored: TWStub.getState().box_overrides,
+    autoGrown: api.isAutoGrown(boxes.get(4)),
+  };
+}
+
+// 9b. THE ARTWORK CASE. NOTES is the last box on the page: 162pt of box at y=494.6, 225.4pt of
+//     clear space to the bottom margin, and the ACCEPTANCE + signature frame printed across most
+//     of it in the letterhead PNG. There is no element to measure, so the only honest answer is
+//     that there is no room. Growing here used to move its bottom edge to 714.35pt — 57.75pt down
+//     over that frame — and because a grown box disarms the server-side shrink, the customer got
+//     the terms printed over the artwork. The button must not even be offered.
+{
+  const boxes = mountPage({ 3: 220 });
+  api.fitNotesBox();
+  const box = boxes.get(3);
+  out.artBlocked = {
+    geom: geomOf(box),
+    offered: !!box.querySelector("[data-box-fit]") && box.classList.contains("tw-can-grow"),
+    payload: api.collectBoxOverrides(),
+  };
+}
+
+// 10. A box whose room a real box takes keeps the clip-and-warn — and says a DIFFERENT thing,
+//     because "the next box starts here" and "we cannot see what is under you" are not the same
+//     excuse. WORK is 171pt tall and PRICE starts 168.3pt below its top.
+{
+  const boxes = mountPage({ 2: 300 });
+  api.fitNotesBox();
+  out.blocked = { geom: geomOf(boxes.get(2)), payload: api.collectBoxOverrides() };
+}
+
+// 11. Trimming the text gives the space back: the height WE added is recomputed, not accumulated.
+{
+  const boxes = mountPage({ 4: 170 });
+  api.fitNotesBox();
+  pressFit(boxes.get(4));
+  const grown = geomOf(boxes.get(4));
+  boxes.get(4)._naturalPx = Math.round(100 * PX_PER_PT);
+  api.fitNotesBox();
+  out.trimGivesItBack = { grown: grown, after: geomOf(boxes.get(4)),
+                          payload: api.collectBoxOverrides() };
+}
+
+// 12. A height the ESTIMATOR dragged is theirs. Pressing Fit to text must not undo a deliberate
+//     resize, even when the text still does not fit — and the button should not be offered on a
+//     box they have sized themselves, so pressFit is not used here.
+{
+  const boxes = mountPage({ 3: 220 });
+  const box = boxes.get(3);
+  const g = box.querySelector('[data-grip="s"]');
+  fire(g, "pointerdown", { clientX: 0, clientY: 0 });
+  fireWindow("pointermove", { clientX: 0, clientY: -40 * PX_PER_PT });  // drag it SHORTER
+  fireWindow("pointerup", {});
+  const dragged = geomOf(box);
+  api.fitNotesBox();
+  api.growBoxToFit(box);            // the gesture's own effect, forced past the missing button
+  out.manualHeightWins = { dragged: dragged, after: geomOf(box),
+                           offered: box.classList.contains("tw-can-grow"),
+                           payload: api.collectBoxOverrides() };
+}
+
+// 13. "Reset box" means the template's geometry, and it has to STAY. A re-grow on the next
+//     repaint would make the button look broken.
+{
+  const boxes = mountPage({ 4: 170 });
+  api.fitNotesBox();
+  pressFit(boxes.get(4));
+  const grown = geomOf(boxes.get(4));
+  fire(boxes.get(4).querySelector("[data-box-reset]"), "click", {});
+  const reset = geomOf(boxes.get(4));
+  api.fitNotesBox();
+  out.resetSticks = { grown: grown, reset: reset, afterRefit: geomOf(boxes.get(4)),
+                      payload: api.collectBoxOverrides() };
+}
+
+// 14. The tools layer carries the "Grown to fit" note, and adding it did not displace the grips.
+//     On box 4, which is the one that can actually be grown (see scenario 9).
+{
+  const boxes = mountPage({ 4: 170 });
+  api.fitNotesBox();
+  pressFit(boxes.get(4));
+  const tools = boxes.get(4).querySelector(".tw-box-tools");
+  const note = tools.querySelector(".tw-box-grown-note");
+  out.grownNote = {
+    present: !!note,
+    label: note ? note.textContent : null,
+    title: note ? note.title : null,
+    isNotAGrip: !!(note && note.attrs["data-grip"] === undefined),
+    order: tools.children.map((c) => c.className),
+  };
+}
+
+console.log(JSON.stringify(out));

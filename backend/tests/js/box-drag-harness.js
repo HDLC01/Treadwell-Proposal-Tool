@@ -282,6 +282,13 @@ const LIFTED = [
   fn("boxOverrideEntry"), fn("boxReadout"), fn("effectiveBoxRect"), fn("applyBoxGeom"),
   fn("addBoxTools"), fn("showBoxReadout"), fn("setBoxOverride"), fn("wireBoxDrag"),
   fn("savedBoxOverridesFor"), fn("loadBoxOverrides"), fn("collectBoxOverrides"),
+  // The growth family. Two reasons it belongs in THIS harness and not only in the labels one:
+  // fitTxbx calls fitOffer, and wireBoxDrag — lifted above — now carries the "Fit to text"
+  // click handler, which calls growBoxToFit. Both throw ReferenceError at first use rather
+  // than at lift time, which is how a missing bind here took out all 86 tests in this file.
+  topConst("isAutoGrown"),
+  fn("boxCeilingPt"), fn("growRoomPt"), fn("otherBoxRects"),
+  fn("dropAutoGrownHeight"), fn("releaseAutoGrownHeight"), fn("growBoxToFit"), fn("fitOffer"),
   fn("fitTxbx"), fn("wireOverflowExpand"),
 ].join("\n\n");
 

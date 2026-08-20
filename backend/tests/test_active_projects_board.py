@@ -17,6 +17,12 @@ up no room on a board of live work — and what it replaced was a link to /proje
 not filter to the lost ones, because that page lists our own drafts and has never heard of
 `closed_lost`. The count was honest; the destination was not.
 
+AND THEN, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but Not
+Sent bucket." A FOURTH TAB, Won, on the same shape as Lost — a won job comes off this board rather
+than carrying a chip on it, which reverses the decision taken one day earlier. The tab is owned by
+test_won_tab.py; what this file keeps is the tab machinery they share, and it asks portal.js for its
+tab list rather than restating it, so the next tab does not need this file edited to be checked.
+
 WHAT WAS THERE BEFORE, AND WHY IT IS WORTH A TEST THAT IT IS GONE.
 
 `SHOW_LOST` was a sessionStorage-backed toggle that appended `STAGE_LOST` as an eighth kanban
@@ -59,7 +65,30 @@ client = TestClient(main.app)
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 CORE = FRONTEND / "js" / "crm-core.js"
+PORTAL_JS = FRONTEND / "js" / "portal.js"
 PORTAL_HTML = (FRONTEND / "portal.html").read_text(encoding="utf-8")
+
+# The tab list and the stored-tab fallback are RUN, not read. Declared up here rather than beside
+# the node section below because the tab assertions come first in this file and a mark has to exist
+# before the `def` it decorates.
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+TABS_HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "lost-tab-harness.js"
+
+
+@pytest.fixture(scope="module")
+def ran_tabs():
+    """portal.js's own TABS and its stored-tab resolution, executed under node.
+
+    The harness is the Lost tab's — it is the one that already lifts `boardPool` out of the page and
+    binds it to the real crm-core, so extending it beat standing up a second copy. It reports the tab
+    list it found, which tab a stored value resolves to, and the pool each tab draws.
+    """
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    proc = subprocess.run(["node", str(TABS_HARNESS), str(CORE), str(PORTAL_JS)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def _src(name: str) -> str:
@@ -209,9 +238,16 @@ def test_every_tab_prints_the_number_it_holds():
     assert "lost: lostCount()" in body, "the Lost badge is not the count of lost proposals"
     assert re.search(r"c\.textContent = n\[b\.dataset\.tab\]", body), (
         "the badge is not filled from the per-tab counts, so a pill can advertise a wrong number")
-    # The live counts come off `live` (lost already removed), so Active + Test + Lost is every row.
+    # The live counts come off `live` (lost already removed), so Active + Won + Test + Lost is every
+    # row. Won joined them on 2026-08-20.
     assert "ALL.filter((p) => !isLost(p))" in body, (
-        "the Active/Test counts include lost rows, so the three tabs sum to more than exist")
+        "the Active/Won/Test counts include lost rows, so the tabs sum to more than exist")
+    # A missing key in `n` reads as 0 through `n[b.dataset.tab] || 0` — a pill that silently says
+    # nobody has won anything. The NUMBERS are executed in test_won_tab.py
+    # (test_the_won_tab_reads_as_pressed_and_the_four_counts_add_up); what this pins is that the key
+    # exists at all, in the same place the other three are computed.
+    assert re.search(r"\bwon:", body), (
+        "the Won badge is not computed at all, so the pill sits on 0 whatever the board shows")
 
 
 def test_the_count_is_out_of_what_THIS_TAB_holds():
@@ -234,8 +270,9 @@ def test_the_lost_count_is_in_the_board_signature():
 
 def test_the_tabs_are_painted_under_the_signature_guard():
     """Same reason populateEstimators/populateMonths sit below it: work done before the
-    compare-and-return runs on every 25s poll whether or not anything moved. syncTabs paints the
-    three counts, which is the job the retired lost link used to have."""
+    compare-and-return runs on every 25s poll whether or not anything moved. syncTabs paints the tab
+    counts — three of them until 2026-08-20, four since Won became a tab — which is the job the
+    retired lost link used to have."""
     body = _block("portal.js", "renderBoard")
     assert body.index("BOARD_SIG) return") < body.index("syncTabs()")
 
@@ -252,23 +289,55 @@ def test_a_lost_proposal_can_still_be_reactivated():
     assert re.search(r'status:\s*"active"', wire), "Reactivate posts something other than active"
 
 
-# ── Change B: the Active / Test tabs ─────────────────────────────────────────
-def test_the_tabs_exist_and_active_is_the_default():
-    """Test and Lost are both somewhere you go on purpose. Defaulting to either, or to "all"
-    (which would put scratch work back among customer bids), is the failure this pins."""
-    code = _code("portal.js")
-    assert re.search(r'let TAB = TABS\.includes\(ss\(TAB_KEY, ""\)\)', code), (
-        "TAB is no longer validated against the known tabs")
-    assert re.search(r': "active"', code), (
-        "TAB does not fall back to active for a session that has never chosen")
-    # An UNKNOWN stored value has to fall back too: a stale session holding a tab that no longer
-    # exists would otherwise paint no pressed pill over an empty board.
-    assert 'const TABS = ["active", "test", "lost"]' in code, (
-        "the tab list is not one named set, so the stored value and the markup can drift")
-    for t in ("active", "test", "lost"):
-        assert 'data-tab="%s"' % t in PORTAL_HTML, "the %s tab is not in the markup" % t
+# ── Change B: the tabs (Active | Won | Lost | Test) ──────────────────────────
+@needs_node
+def test_the_tabs_exist_and_each_one_has_a_pill(ran_tabs):
+    """The tab set the page RESOLVES, against the pills the markup ships — both sides derived.
+
+    This asserted `'const TABS = ["active", "test", "lost"]' in code` until 2026-08-20. That pin was
+    close to worthless twice over: it could not see a tab in the list with no pill to click, nor a
+    pill with no tab behind it, and it had to be retyped by hand the day Hanz gave won jobs their own
+    tab — a test whose only failure mode is "somebody edited the line" is a chore, not a check.
+
+    Run instead: the harness evaluates portal.js's own `const TABS = […]` and reports what it holds,
+    and the expected value is read out of portal.html in markup order. Neither side is typed here, so
+    a tab and its pill can only arrive or leave together."""
+    pills = re.findall(r'data-tab="([a-z]+)"', PORTAL_HTML)
+    assert pills, "portal.html ships no [data-tab] pills at all"
+    assert ran_tabs["tabs"] == pills, (
+        "TABS and the pills disagree: portal.js says %s, the markup says %s — a tab in one and not "
+        "the other is either an unclickable tab or a pill that falls back to Active"
+        % (ran_tabs["tabs"], pills))
+    # Won is named because it is the one that CHANGED, and because the reversal that put it here is
+    # the kind of decision a later reader undoes by accident. Hanz, 2026-08-20: "I marked Trabon
+    # Group project as Won but it's still in the Created but Not Sent bucket" — won jobs come off the
+    # Active board onto their own tab, reversing the 2026-08-19 decision to keep them on it. Drop the
+    # tab and every won job is back in the bucket he complained about. test_won_tab.py owns the rest.
+    assert "won" in ran_tabs["tabs"], (
+        "the Won tab is gone, so won jobs are back among live bids on the Active board")
     assert re.search(r'data-tab="active" aria-pressed="true"', PORTAL_HTML), (
         "Active is not the tab that reads as selected before the first paint")
+
+
+@needs_node
+def test_a_session_that_never_chose_and_one_that_chose_a_dead_tab_both_land_on_active(ran_tabs):
+    """Test, Won and Lost are all somewhere you go on purpose. Defaulting to any of them, or to
+    "all" (which would put scratch work back among customer bids), is the failure this pins.
+
+    And an UNKNOWN stored value has to fall back the same way: a stale session holding a tab a past
+    deploy had would otherwise paint no pressed pill over an empty board, with nothing to click but
+    another tab.
+
+    Executed through portal.js's own `let TAB = TABS.includes(…) ? … : "active"` line. Mutations
+    verified against a copy of portal.js: dropping the validation (`ss(TAB_KEY, "active")`, which
+    trusts whatever is in storage) and moving the fallback to another tab both fail here, and neither
+    disturbs a single source-text assertion in this file."""
+    assert ran_tabs["resolved"]["nothingStored"] == "active", (
+        "a session that has never chosen a tab does not land on Active")
+    assert ran_tabs["resolved"]["unknown"] == "active", (
+        "a stored tab this deploy no longer has is not coerced back to Active")
+    for tab, got in ran_tabs["resolved"]["stored"].items():
+        assert got == tab, "a stored %s tab resolves to %s instead" % (tab, got)
 
 
 def test_the_tab_is_remembered_like_the_rest_of_the_view_state():
@@ -342,11 +411,11 @@ def test_the_tabs_are_repainted_by_renderBoard_and_not_only_at_boot():
 
 
 def test_each_pill_shows_ITS_OWN_count():
-    """Mutation this kills: `n.active` in place of `n[b.dataset.tab]`, so both pills print the
-    Active number. The counts are still both derived from isTest and still drop the lost rows,
-    so test_the_tab_counts_come_off_the_same_predicate_the_board_filters_with passes."""
+    """Mutation this kills: `n.active` in place of `n[b.dataset.tab]`, so every pill prints the
+    Active number. The counts are still derived from isTest and still drop the lost rows, so
+    test_the_tab_counts_come_off_the_same_predicate_the_board_filters_with passes."""
     body = _block("portal.js", "syncTabs")
-    assert "n[b.dataset.tab]" in body, "the two pills would advertise the same number"
+    assert "n[b.dataset.tab]" in body, "every pill would advertise the same number"
 
 
 def test_clicking_a_tab_changes_it_stores_it_and_repaints():
@@ -385,8 +454,8 @@ def test_clearing_the_filters_does_not_throw_you_off_the_tab():
 
 
 # ── the shared predicate, run for real under node ────────────────────────────
-needs_node = pytest.mark.skipif(shutil.which("node") is None,
-                                     reason="node is not installed")
+# `needs_node` is declared at the top of this file, because the tab assertions above run under node
+# too and a mark has to exist before the `def` it decorates.
 
 
 def _run(script: str):
@@ -546,16 +615,20 @@ def test_the_two_pages_agree_about_the_same_project(monkeypatch):
         assert board[p["id"]]["is_test"] is p["is_test"]
 
 
-def test_the_tabs_read_active_lost_test():
+def test_the_tabs_read_active_won_lost_test():
     """Hanz, 2026-08-15: "Active and Lost should be the beside move the Test to the right most".
 
-    Active and Lost are both real customer work; Test is scratch, so it belongs at the far end.
-    Behaviour-neutral — every click resolves through `data-tab` and the badges fill by
-    `dataset.tab` — which is why the ORDER is the only thing holding it, and why it needs saying.
-    No assertion covered tab order before this one."""
+    What he was buying is that Test is scratch work and belongs at the far end, with real customer
+    work to the left of it. Won landed BETWEEN Active and Lost on 2026-08-20, which separates the two
+    he named — deliberately: Won and Lost are the two outcomes, so they read as a pair after the live
+    board, and putting Won to the right of Test would have broken the constraint he actually stated.
+
+    Behaviour-neutral — every click resolves through `data-tab` and the badges fill by `dataset.tab`
+    — which is why the ORDER is the only thing holding it, and why it needs saying."""
     html = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "portal.html").read_text(
         encoding="utf-8")
     active = html.index('data-tab="active"')
+    won = html.index('data-tab="won"')
     lost = html.index('data-tab="lost"')
     test = html.index('data-tab="test"')
-    assert active < lost < test, "the board tabs are not Active | Lost | Test"
+    assert active < won < lost < test, "the board tabs are not Active | Won | Lost | Test"

@@ -8,7 +8,9 @@
 //   WHICH COLUMN?  `stage()`. Closed-lost wins over everything: a customer who
 //   said they aren't moving forward must not keep sitting halfway down the board
 //   as live work. A deposit gates progress past it, so an unpaid deal can never
-//   read as further along than a paid one.
+//   read as further along than a paid one. A WON job is off the pipeline
+//   altogether since 2026-08-20 and columned by `wonColumn()` instead — what is
+//   still outstanding on it, not how far along it is. See the note there.
 //
 //   WHAT DATE?  `stageTs()` for "how long has it been HERE", `activityTs()` for
 //   "when did anything last happen". Sorting a kanban column by last activity
@@ -169,14 +171,39 @@
    *  the two paths deliberately do not gate each other — requiring approval as well would refuse
    *  exactly the case this exists for.
    *
-   *  Nothing here checks isLost, and that is on purpose: every reader asks isLost FIRST (stage(),
+   *  SINCE 2026-08-20 THIS DECIDES A TAB, not just a chip. Hanz moved won jobs off the Active board
+   *  onto their own tab (see wonColumn), so a false positive here no longer merely mislabels a card,
+   *  it takes the card off the board a rep is watching. Which is why the derived half stays as
+   *  strict as it is: "approved" alone would move every approved-but-unpaid job — the most
+   *  worth-chasing rows there are — off the live board, and the Won tab's "Deposit outstanding"
+   *  column is the safety net for the ones that legitimately get there, not a licence to widen this.
+ *
+ *  Nothing here checks isLost, and that is on purpose: every reader asks isLost FIRST (stage(),
    *  ppCategory(), chipsHtml()), so a job marked won and then cancelled reads as Lost only. Folding
    *  it in here would put the same rule in two places, and a SENT project's closed_lost belongs to
    *  the portal, which the mark cannot see or clear. */
   function isWon(p) {
     if (p && p.won_at) return true;
-    var approved = String((p && p.proposal_status) || "") === "approved" || !!(p && p.approved_at);
-    return approved && depositSatisfied(p);
+    return approvedInPortal(p) && depositSatisfied(p);
+  }
+
+  /** The customer has agreed IN THE PORTAL. Named once and shared, because wonColumn gates on it
+   *  too now and two spellings of "approved" is exactly how the Won tab would come to disagree
+   *  with the pipeline about the same card.
+   *
+   *  `approved_at` as well as the status, for two reasons that both matter. The portal's
+   *  `proposal_status` is ONE terminal column — closed_lost REPLACES 'approved' rather than
+   *  sitting beside it (see portal schema.sql: "Closed-Lost is a terminal pipeline stage, not a
+   *  parallel flag") — and the stamp survives that. And the stamp is what the reopen path reads
+   *  back: reopen_if_closed restores 'approved' only when approved_at is not null.
+   *
+   *  The converse is worth writing down because it is what makes three Active columns reachable:
+   *  the stamp is NOT permanent. reset_for_revision clears approved_at and drops the status back
+   *  to 'sent' when a new revision is published, and deliberately leaves the deposit and contacts
+   *  columns alone ("Money that has already been invoiced or paid is a fact about the project, not
+   *  about which revision is current"). So a job whose deposit is in can be unapproved again. */
+  function approvedInPortal(p) {
+    return String((p && p.proposal_status) || "") === "approved" || !!(p && p.approved_at);
   }
 
   /** Won because a HUMAN said so, as opposed to won because the deposit landed. The drawer's control
@@ -204,6 +231,86 @@
     if (p.proposal_status === "approved") return "Approved";
     if (p.proposal_status === "viewed") return "Viewed";
     return "Sent";
+  }
+
+  // ── the Won tab's columns ──────────────────────────────────────────────────
+  // Hanz, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but Not
+  // Sent bucket", and then the decision: a Won TAB takes every won job, off the Active board
+  // entirely, the same way Lost comes off it.
+  //
+  // THIS REVERSES the reasoning that shipped on 2026-08-19, which is recorded in chipsHtml
+  // (portal.js) and in test_lost_tab.py: the board KEPT a won card because a won job still has work
+  // on it, and moving it would hide "Deposit received" and "Contact info" work from the people
+  // doing it. That reasoning was right about the risk and wrong about the fix — a Won chip on a card
+  // in the Created column is a card that both says it was won and sits in the bucket for bids nobody
+  // has sent, and the estimator reads the bucket, not the chip.
+  //
+  // These four columns are the mitigation, and the whole reason the move is safe: the Won tab is
+  // grouped by WHAT IS STILL OUTSTANDING rather than by pipeline stage, so nothing outstanding
+  // becomes invisible by leaving the Active board. It is the same trade the Lost tab makes with its
+  // close reasons — every card there shares one stage, so stages would say nothing and the columns
+  // have to answer the question the tab is actually opened to ask.
+  //
+  // Deliberately derived from the SAME predicates the rest of this module reads — approvedInPortal,
+  // depositSatisfied, contacts_status — and not from parallel ones: two rules for "is the deposit in"
+  // is how a card ends up under "Deposit outstanding" here while the pipeline calls it "Deposit
+  // received", and two rules for "has the customer approved" is how it ended up there with nothing
+  // owed on it at all.
+  var WON_EARLY = "Won before approval";
+  var WON_DEPOSIT = "Deposit outstanding";
+  var WON_CONTACTS = "Contacts outstanding";
+  var WON_DONE = "Complete";
+  var WON_COLS = [WON_EARLY, WON_DEPOSIT, WON_CONTACTS, WON_DONE];
+
+  /** Which Won column a won job belongs in. Total: every branch returns a member of WON_COLS.
+   *
+   *  THE FIRST COLUMN MEANS "the portal flow has not caught up", not merely "never sent". It read
+   *  "Won before sending" and tested `not_sent` alone for a few hours on 2026-08-20, and that was
+   *  wrong for the single case this whole feature exists for. Two shapes reach it now:
+   *
+   *    · `not_sent` — a bid nobody has emailed. It carries no deposit or contacts fields AT ALL
+   *      (the pipeline sends not_sent, bid_total, drafted_at, estimator_email and won_at, and
+   *      little else — see api_portal_pipeline), so any rule that reads them first files it under
+   *      an invoice that does not exist. This is the card Hanz marked won.
+   *    · sent, and the customer has NOT approved — the verbal yes on the phone. drafts.set_won was
+   *      built for exactly this ("days before the customer clicks Approve, weeks before the money
+   *      lands"), and lost-tab-harness.js fixtures it as `won-marked`: sent, unapproved, no
+   *      deposit. Far from being impossible, it is the commonest way we learn we won.
+   *
+   *  That second shape used to land under "Deposit outstanding", and the comment there claimed it
+   *  could not — that depositSatisfied is false "only when a deposit is actually outstanding".
+   *  It is false whenever `deposit_required` is unset, which is every row that has not reached the
+   *  deposit step. So the board was telling whoever chases money that money was owed on a proposal
+   *  NOBODY HAS INVOICED and the customer has not even approved. depositSatisfied answers "is the
+   *  money question settled"; on an unapproved proposal the honest answer is "it has not been
+   *  asked", which is not the same thing.
+   *
+   *  Hence approval gates the money and contacts questions here exactly as the portal gates them:
+   *  a deposit cannot be requested and contacts cannot be collected until the customer approves.
+   *  Every column's rule is then true of every card in it —
+   *
+   *    Won before approval    the customer has not agreed in the portal (unsent, or sent and
+   *                           unapproved), so nothing downstream of approval has been asked for
+   *    Deposit outstanding    approved, and the money question is not settled — the SAME
+   *                           depositSatisfied the pipeline gates on, so this column and the live
+   *                           board's Approved / Deposit submitted columns cannot disagree
+   *    Contacts outstanding   approved, money settled, the customer has not sent the contacts
+   *    Complete               nothing outstanding
+   *
+   *  — and a DERIVED win can only ever reach the last three, because isWon's derived half already
+   *  requires approval. Every card in the first column is one a person marked by hand.
+   *
+   *  `p.not_sent` in that first test is BELT AND BRACES, and stated as such because mutation testing
+   *  says so: deleting it leaves every assertion in test_won_tab.py green. A synthesised row carries
+   *  no portal state at all, so !approvedInPortal is already true of every one of them. It stays
+   *  because it puts the reason at the branch — this is the same not_sent-before-everything ordering
+   *  stage() depends on — and because a shape that is both unsent and stamped approved would be a
+   *  bug in the pipeline rather than a card for the deposit column. */
+  function wonColumn(p) {
+    if (p.not_sent || !approvedInPortal(p)) return WON_EARLY;
+    if (!depositSatisfied(p)) return WON_DEPOSIT;
+    if (p.contacts_status !== "received") return WON_CONTACTS;
+    return WON_DONE;
   }
 
   function lastActivity(p) {
@@ -433,20 +540,48 @@
     return by;
   }
 
+  /** The same, for the Won tab's four columns.
+   *
+   *  Here and not in portal.js, unlike the Lost tab's groupByReason, for one blunt reason: portal.js
+   *  referring to a grouping function it does not own means nothing new has to be bound into the
+   *  page's scope, and an unbound identifier inside a render callback is what took this board down on
+   *  2026-08-12.
+   *
+   *  The `||` fallback cannot fire today — wonColumn is total over WON_COLS, and the two live three
+   *  lines apart so a fifth branch cannot be added without a column staring at whoever adds it. It is
+   *  here because a throw inside this loop blanks the entire board, and a card in the wrong column is
+   *  a smaller lie than a won job nobody can find: somebody scanning the column opens the card and
+   *  learns the truth.
+   *
+   *  It falls back to the FIRST column rather than "Deposit outstanding", which is where it landed
+   *  until 2026-08-20. The other three each assert something specific about a card — approved and
+   *  the money owed, approved and the contacts missing, nothing left — and a card we could not
+   *  classify has not earned any of those claims. "Won before approval" says only "somebody told us
+   *  we won and the flow has not caught up", which is the weakest true thing left to say. */
+  function groupWon(items) {
+    var by = {};
+    WON_COLS.forEach(function (c) { by[c] = []; });
+    items.forEach(function (p) { (by[wonColumn(p)] || by[WON_EARLY]).push(p); });
+    return by;
+  }
+
   return {
     STAGES: STAGES, STAGE_SUBMITTED: STAGE_SUBMITTED, STAGE_LOST: STAGE_LOST,
     STAGE_CREATED: STAGE_CREATED,
+    WON_COLS: WON_COLS, WON_EARLY: WON_EARLY, WON_DEPOSIT: WON_DEPOSIT,
+    WON_CONTACTS: WON_CONTACTS, WON_DONE: WON_DONE,
     LOST_REASON: LOST_REASON, MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
     followup: followup, isLost: isLost, isWon: isWon, wonByHand: wonByHand,
-    depositSatisfied: depositSatisfied,
+    depositSatisfied: depositSatisfied, approvedInPortal: approvedInPortal,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
-    stage: stage, lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
+    stage: stage, wonColumn: wonColumn,
+    lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, cardTotal: cardTotal,
     pausedUntil: pausedUntil,
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,
     initialsOf: initialsOf, colorOf: colorOf, avatarHtml: avatarHtml, identityKey: identityKey,
     AVATAR_COLORS: AVATAR_COLORS, AVATAR_NONE: AVATAR_NONE,
-    sort: sort, group: group,
+    sort: sort, group: group, groupWon: groupWon,
   };
 });

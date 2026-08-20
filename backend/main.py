@@ -398,7 +398,8 @@ class GenerateIn(BaseModel):
     # stale draft can't misapply ids). Empty = legacy caller = apply unchanged.
     template_version: str = ""
     # Proposal Review doc editor: per-option DISPLAY overrides for the WORK
-    # {{#system}} rows — [{name?, texture?, sqft?}] positionally aligned with
+    # {{#system}} rows — [{name?, texture?, sqft?, prefix?, texture_label?,
+    # area_label?}] positionally aligned with
     # _build_epoxy_systems() output (index i -> systems[i]). These edit only the
     # proposal's displayed text; they are NEVER written back to cell_values and
     # NEVER affect pricing. Applied for epoxy only (other work types pass
@@ -2965,7 +2966,23 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
 # value"), and length-capped. Never raises — a stale draft or hand-built request
 # must not 500 /api/generate.
 _SYSTEM_OVERRIDES_MAX = 12
-_SYSTEM_OVERRIDE_FIELDS = ("name", "texture", "sqft")
+# The three LABEL fields join the three value fields here, and the whitelist is
+# the only thing that lets them through. Kyle, 2026-08-20: "Some of the labels
+# are not editable why not make it like a word document?? ... Everything on that
+# page must be editable like a word doc." The Direct/epoxy WORK rows live inside
+# the template's {{#system}} region, so their labels could not be reached by the
+# paragraph-override channel (_apply_paragraph_overrides skips any id whose
+# in_block is not None); they ride the per-index system_overrides channel with
+# the values instead.
+#
+# LEAVING A LABEL OUT OF THIS TUPLE IS NOT A NO-OP, IT IS A LIE. The editor
+# persists a renamed label to the draft and shows it back after a reload, so a
+# field the sanitizer drops here means Kyle sees "Substrate:" on screen, the
+# draft remembers "Substrate:", and the .docx the customer receives still says
+# "Texture:" — positive confirmation of an edit that never happened. Add the
+# field here in the SAME commit as the island that edits it.
+_SYSTEM_OVERRIDE_FIELDS = ("name", "texture", "sqft",
+                           "prefix", "texture_label", "area_label")
 _SYSTEM_OVERRIDE_FIELD_MAXLEN = 300
 
 
@@ -3817,9 +3834,16 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
                                              _sanitize_sheet_systems(payload.sheet_systems))
                        if str(payload.work_type or "").lower() == "epoxy" else None)
         # Doc-editor DISPLAY overrides for the WORK rows, applied by option index
-        # over the computed systems. `prefix`/`lf_clause` stay computed; nothing
-        # here touches cell_values or the price — display text only. Ignored for
-        # non-epoxy (systems_arg is None there).
+        # over the computed systems. Nothing here touches cell_values or the
+        # price — display text only. Ignored for non-epoxy (systems_arg is None).
+        #
+        # `prefix` USED TO STAY COMPUTED and no longer does (2026-08-20): the
+        # "System:" / "Option N:" label is now editable, so an override replaces
+        # the computed default for THAT ROW ONLY. Renaming row 1 leaves rows 2+
+        # reading "Option 2:" / "Option 3:", because the computed prefix is a
+        # per-index default rather than a sequence contract, and silently
+        # rewriting a row nobody opened in a document a customer receives is the
+        # worse failure. `lf_clause` does still stay computed.
         if systems_arg:
             for i, ov in enumerate(_sanitize_system_overrides(payload.system_overrides)):
                 if i >= len(systems_arg):
@@ -4407,6 +4431,80 @@ class ToDropboxIn(BaseModel):
     draft_id: str
     destination: str   # "gyp" | "plans_specs" | "commercial"
     folder_owner: str | None = None   # Commercial Sales only: blank/None = category folder, else "liz"/"kyle"/"troy"/"hanz"/"rj"
+    # An EXISTING project folder the estimator picked (Kyle 2026-08-19: file into
+    # the folder his team already made instead of inventing a second one). When
+    # set, nothing new is created. Blank/None keeps the old create-a-folder path.
+    folder_path: str | None = None
+
+
+def _dropbox_project_vals(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The intake values step 5 names a folder from.
+
+    A project generated through Screen 3 carries `proposal_payload.values`; older
+    ones never did, and api_to_dropbox reconstructs their payload from the draft's
+    top-level data instead (see the branch below). The folder picker has to read
+    the name the same way or it would rank folders against a blank name for
+    exactly the existing projects Kyle is trying to file."""
+    pp = data.get("proposal_payload")
+    if isinstance(pp, dict) and isinstance(pp.get("values"), dict) and pp["values"]:
+        return pp["values"]
+    return {k: v for k, v in data.items()
+            if k not in ("proposal_payload", "generate_result")}
+
+
+@app.get("/api/dropbox/project-folders")
+def api_dropbox_project_folders(destination: str = "", folder_owner: str = "",
+                                draft_id: str = "") -> Dict[str, Any]:
+    """The project folders that ALREADY exist in the chosen Estimating
+    destination, ranked against this project's name, so step 5 can offer Kyle's
+    own folder instead of making a duplicate beside it.
+
+    For Commercial Sales with no person chosen we descend one level into the
+    `*Name` folders — that category holds no project folders of its own.
+
+    Best-effort by design: any Dropbox trouble still returns ok:True with an
+    empty list plus `error`, so the page can fall back to creating a new folder.
+    Step 5 must never dead-end."""
+    base_path = dropbox_client.destination_path(destination)
+    if not base_path:
+        return {"ok": False, "error": "Unknown destination folder.", "folders": []}
+    owner_subfolder = ""
+    if destination == "commercial":
+        owner_subfolder = dropbox_client.commercial_owner_subfolder(folder_owner)
+        if owner_subfolder:
+            base_path = f"{base_path}/{owner_subfolder}"
+
+    project_name, deadline, previous_path = "", None, None
+    row = drafts.load_draft(draft_id) if draft_id else None
+    if row:
+        data = row.get("data") or {}
+        vals = _dropbox_project_vals(data)
+        project_name = vals.get("project_name") or vals.get("job_name") or ""
+        deadline = vals.get("deadline")
+        prev = data.get("dropbox_result")
+        if isinstance(prev, dict):
+            previous_path = prev.get("folder_path") or None
+
+    out: Dict[str, Any] = {
+        "ok": True,
+        "base_path": base_path,
+        # What the create-a-new-folder option would be called, so the UI can show
+        # the two choices side by side. Same convention _simple_folder_path uses.
+        "suggested_new_name": (
+            dropbox_client._deadline_prefix(deadline) + " "
+            + dropbox_client._sanitize_folder_name(project_name or "Untitled Project")),
+        "previous_path": previous_path,
+        "folders": [],
+    }
+    try:
+        folders = dropbox_client.list_project_folders(
+            base_path,
+            include_owner_subfolders=(destination == "commercial" and not owner_subfolder))
+        out["folders"] = dropbox_client.rank_project_folders(folders, project_name)
+    except Exception as exc:  # noqa: BLE001 — never dead-end step 5
+        log.warning("dropbox project-folder listing failed: %s", exc)
+        out["error"] = "Couldn't read the Dropbox folders — you can still create a new one."
+    return out
 
 
 @app.post("/api/to-dropbox")
@@ -4444,7 +4542,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         # "To Dropbox" still works for them (this is the common existing-project case).
         _list = lambda x: x if isinstance(x, list) else []
         _dict = lambda x: x if isinstance(x, dict) else {}
-        vals = {k: v for k, v in data.items() if k not in ("proposal_payload", "generate_result")}
+        # Same read the folder picker uses, so the name we file under and the name
+        # we rank Dropbox folders against can't drift apart.
+        vals = _dropbox_project_vals(data)
         if not (data.get("cell_values") or vals.get("epoxy_sf") or vals.get("polish_sf") or vals.get("sqft")
                 or vals.get("gyp_soft_sf") or vals.get("gyp_hard_sf") or vals.get("gyp_corridor_sf")):
             return {"ok": False, "error": "This project has no estimate yet — open it and generate first."}
@@ -4462,6 +4562,50 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             tab_structs=_list(data.get("tab_structs")),
             lock_overrides=_dict(data.get("lock_overrides")),
         )
+    # Which folder the files go into, in priority order:
+    #   1. the folder the estimator picked in step 5 (Kyle's own folder);
+    #   2. the folder we filed into LAST time — re-filing after the project name
+    #      or the bid date was corrected used to compute a NEW name and leave the
+    #      first folder behind, which is half of the duplicates Kyle is seeing.
+    #      Only reused when it still sits under the destination now selected, so
+    #      deliberately switching destination (or person) still files afresh.
+    #   3. neither → create the folder as before.
+    #
+    # A folder_path of "" is NOT "neither": it is the estimator picking the
+    # picker's last row, "＋ Create a new folder", and (2) must not overrule it —
+    # that would file into last time's folder while the page reported "(the folder
+    # you picked)", and it dead-ends the case where the recorded folder has since
+    # been renamed in Dropbox (validation then fails with no way forward). So the
+    # fallback applies only when the caller expressed no opinion at all: the field
+    # absent, which frontend/js/dropbox.js sends only when the folder list could
+    # not be read (a Dropbox outage — the one case where reuse is the safer guess).
+    prev = data.get("dropbox_result")
+    prev = prev if isinstance(prev, dict) else {}
+    existing_path = (payload.folder_path or "").strip() or None
+    # The picked folder has to sit under the destination THIS request selected.
+    # Nothing on the page can produce a mismatch — changing the destination or the
+    # person clears the choice and re-queries the list — so a mismatch is a stale
+    # tab, and the old code let it through: the files landed in the picked folder
+    # while log_event below recorded the destination the select was showing, so the
+    # project history said something untrue about where a customer's paperwork went
+    # (review 2026-08-20). Refused rather than logged-as-used, because the request
+    # carries two contradictory intentions and no way to tell which the estimator
+    # meant; a refusal files nothing anywhere, and one reload makes both agree.
+    if existing_path and not existing_path.startswith(base_path.rstrip("/") + "/"):
+        return {"ok": False,
+                "error": "That folder isn't in the destination you picked — "
+                         "reload the page and choose the folder again."}
+    if not existing_path and payload.folder_path is None:
+        recorded = (prev.get("folder_path") or "").strip()
+        if recorded and recorded.startswith(base_path.rstrip("/") + "/"):
+            existing_path = recorded
+    # The paths OUR last run wrote in that same folder: those are ours to
+    # overwrite, so a genuine re-file replaces them instead of piling up
+    # "… (1).xlsx". Anything else in there belongs to a human.
+    known_paths: tuple = ()
+    if existing_path and existing_path == (prev.get("folder_path") or "").strip():
+        known_paths = tuple(p for p in (prev.get("written_paths") or [])
+                            if isinstance(p, str))
     try:
         # persist=False — the payload came OUT of this draft a moment ago; feeding its values back
         # in can only ever re-age it. Re-filing to Dropbox is not an edit.
@@ -4486,6 +4630,8 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             work_type=gi.work_type,
             audience=gi.audience,
             base_path=base_path,
+            existing_folder_path=existing_path,
+            known_paths=known_paths,
         )
     except HTTPException:
         raise
@@ -4494,13 +4640,24 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
         return {"ok": False, "error": "Upload failed — please try again."}
     if result.get("configured"):
         _vals = gi.values or {}
-        drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
-                         {"destination": payload.destination,
-                          "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
-                          "folder_owner": payload.folder_owner,
-                          "project_name": _vals.get("project_name") or _vals.get("job_name"),
-                          "folder": result.get("folder_path"),
-                          "folder_url": result.get("folder_url")})
+        # Bookkeeping only, and deliberately non-fatal — same discipline as the
+        # result-save below. Dropbox has ALREADY accepted the files by the time we
+        # get here, so a store hiccup used to turn a filing that genuinely
+        # succeeded into a 500: the estimator saw "Upload failed — try again",
+        # pressed it again, and filed a second time (review 2026-08-20).
+        try:
+            drafts.log_event(payload.draft_id, _user_email(request), "to_dropbox",
+                             {"destination": payload.destination,
+                              "label": dropbox_client.DESTINATION_LABELS.get(payload.destination),
+                              "folder_owner": payload.folder_owner,
+                              "project_name": _vals.get("project_name") or _vals.get("job_name"),
+                              "folder": result.get("folder_path"),
+                              # Whose folder it went in — the audit question Kyle's
+                              # duplicates raised ("did we make another one?").
+                              "existing_folder": bool(result.get("existing")),
+                              "folder_url": result.get("folder_url")})
+        except Exception as exc:  # noqa: BLE001 — the files are already filed
+            log.warning("to-dropbox: event log failed: %s", exc)
         # Persist the upload result on the draft so the To-Dropbox page shows the
         # "already filed" (green) state whenever the user comes back to it.
         try:
@@ -4513,6 +4670,12 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
                 "xlsx_url": result.get("xlsx_url"),
                 "docx_url": result.get("docx_url"),
                 "pdf_url": result.get("pdf_url"),
+                # Read back on the NEXT filing: `folder_path` above is reused
+                # rather than recomputed, and these are the files we may
+                # overwrite there (everything else in the folder is a human's).
+                "existing": bool(result.get("existing")),
+                "written_paths": result.get("written_paths") or [],
+                "renamed": result.get("renamed") or [],
             }
             drafts.save_draft(payload.draft_id, cur, owner_email=_user_email(request))
         except Exception as exc:  # noqa: BLE001 — never block the response

@@ -1,0 +1,82 @@
+/* Step 5's project-folder chooser (done.html, driven by /js/dropbox.js).
+   Loaded only by done.html — the rest of the app has no radio-group list like this, so it
+   stays out of styles.css. Uses the same tokens styles.css defines; no colours are invented
+   here beyond the amber clash warning, which is copied from .portal-drift on purpose. */
+
+.dbx-search {
+  width: 100%;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  border: 1px solid var(--surface-dim);
+  border-radius: 6px;
+  background: var(--surface-lowest);
+  color: var(--ink);
+}
+
+/* Capped and scrolled: Gyp Estimates returns ~80 folders and the Upload button has to stay
+   reachable without a page-length scroll past the list. */
+.dbx-folders {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--surface-dim);
+  border-radius: 6px;
+  background: var(--surface-lowest);
+}
+
+.dbx-folder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--surface-dim);
+}
+.dbx-folder:last-child { border-bottom: none; }
+.dbx-folder:hover { background: var(--surface-low); }
+.dbx-radio { flex: 0 0 auto; margin: 0; cursor: pointer; accent-color: var(--treadwell-red); }
+
+.dbx-folder-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dbx-folder-name { color: var(--ink); overflow-wrap: anywhere; }
+.dbx-folder-parent { font-size: 11px; color: var(--ink-variant); }
+
+/* The chosen row is marked by CSS off :checked rather than by a re-render — a re-render on
+   `change` throws away the focus the estimator just tabbed into. */
+.dbx-radio:checked ~ .dbx-folder-text .dbx-folder-name { font-weight: 700; }
+
+/* "closest match" is the server's ranking, not a decision — quiet on purpose, because the
+   estimator is the one who decides and a loud badge reads like an instruction. */
+.dbx-badge {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-variant);
+  background: var(--surface-low);
+  border: 1px solid var(--surface-dim);
+  border-radius: 10px;
+  padding: 2px 7px;
+}
+
+/* Creating a folder is a different KIND of action from picking one, so it reads as a footer
+   of the list rather than as one more candidate. */
+.dbx-folder-new { border-top: 1px dashed var(--surface-dim); background: var(--surface-low); }
+.dbx-folder-new .dbx-folder-name { font-style: italic; }
+
+.dbx-none { margin: 0; padding: 10px 12px; font-size: 12px; color: var(--ink-variant); }
+.dbx-folder-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-variant); }
+
+/* A name clash happened and the upload was autorenamed. Amber, not grey: the file landed
+   under a name the estimator did not choose and there are now two of them. */
+.dbx-warn {
+  margin: 8px 0 0;
+  font-weight: 600;
+  color: #7a5c00;
+  background: #fdf6e3;
+  border: 1px solid #e8d9a8;
+  border-radius: 6px;
+  padding: 7px 9px;
+}
