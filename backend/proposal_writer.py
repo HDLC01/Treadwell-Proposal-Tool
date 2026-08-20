@@ -198,6 +198,48 @@ def _set_direct_run_text(run_elem, text: str) -> None:
     _write_t_text(t, text)
 
 
+def _run_text_with_breaks(run_elem) -> str:
+    """One run's text with every `<w:br/>` rendered back as a newline.
+
+    `"".join(t.text …)` is BLIND to line breaks, and that blindness is where a line break
+    dies: `_set_direct_run_text` clears the run's `<w:t>`/`<w:br>`/`<w:tab>` children and
+    rewrites them from the string it is handed, so a caller that measured the run with a
+    br-blind join hands back a string with the breaks already gone.
+
+    Kyle, 2026-08-19: "when he pressed enter to add spacing it did not generate in the
+    proposal." The WORK box is exactly the box `_normalize_work_label_formatting` splits, and
+    a plain-text `paragraph_override` arrives as ONE run holding `<w:t>`/`<w:br>`/`<w:t>` —
+    so every blank line typed into Scope / Schedule / Exclusions / Notes was joined away
+    there. `_write_t_text` turns the newlines back into `<w:br/>` on the way out, which is
+    why round-tripping through a string with them in it is enough to fix it.
+
+    `<w:tab>` is deliberately NOT represented: nothing in these templates writes one into a
+    WORK row, and inventing a character for it would shift the label/colon offsets below.
+    """
+    parts = []
+    for el in run_elem.iter(qn("w:t"), qn("w:br")):
+        parts.append("\n" if el.tag == qn("w:br") else (el.text or ""))
+    return "".join(parts)
+
+
+def _split_after_visible(s: str, n: int) -> tuple[str, str]:
+    """Split `s` after `n` VISIBLE characters, where a newline counts for none.
+
+    The label/colon arithmetic in `_normalize_work_label_formatting` measures offsets in the
+    document's TEXT, which is what `_own_text` reports and which contains no breaks. This
+    converts an index in that coordinate system into a cut in a string that also carries the
+    breaks, so the split lands on the same character it always did and the breaks travel with
+    whichever half they were in.
+    """
+    seen = 0
+    for i, ch in enumerate(s):
+        if seen == n:
+            return s[:i], s[i:]
+        if ch != "\n":
+            seen += 1
+    return s, ""
+
+
 def _normalize_work_label_formatting(d: Document) -> int:
     """Make WORK-box labels bold through their first colon, values normal."""
     changed = 0
@@ -219,7 +261,12 @@ def _normalize_work_label_formatting(d: Document) -> int:
             passed_colon = False
             for run_elem in list(p_elem.findall(qn("w:r"))):
                 # Drawing/object runs only anchor artwork or nested text boxes.
-                run_text = "".join(t.text or "" for t in run_elem.iter(qn("w:t")))
+                # `raw` keeps the run's line breaks; `run_text` is the visible text only, which
+                # is the coordinate system `colon` and `offset` are measured in (`_own_text`
+                # sees no breaks either). A run that is nothing BUT a break has no visible text
+                # and is skipped, exactly as it was before — so its break survives untouched.
+                raw = _run_text_with_breaks(run_elem)
+                run_text = raw.replace("\n", "")
                 if not run_text:
                     continue
                 start, end = offset, offset + len(run_text)
@@ -231,9 +278,10 @@ def _normalize_work_label_formatting(d: Document) -> int:
                 if start <= colon < end:
                     split_at = colon - start + 1
                     if split_at < len(run_text):
+                        head, tail = _split_after_visible(raw, split_at)
                         suffix = copy.deepcopy(run_elem)
-                        _set_direct_run_text(run_elem, run_text[:split_at])
-                        _set_direct_run_text(suffix, run_text[split_at:])
+                        _set_direct_run_text(run_elem, head)
+                        _set_direct_run_text(suffix, tail)
                         _set_run_bold(suffix, False)
                         run_elem.addnext(suffix)
                     _set_run_bold(run_elem, True)
@@ -445,6 +493,92 @@ def _strip_leading_separator(p_elem) -> None:
             t.text = cur[remaining:]
             t.set(qn("xml:space"), "preserve")
             remaining = 0
+
+
+# ── per-row WORK labels ("Texture:", "Area:") ────────────────────────────────
+# Kyle, 2026-08-19, on the document editor: "Everything on that page must be editable like a
+# word doc." Everything on the page IS a contenteditable paragraph — except the {{#system}}
+# region, which the editor replaces with a synthesized preview because the region is expanded
+# per priced system and its paragraph ids stop meaning anything once it is. "System:" was
+# already the computed {{system.prefix}} token, so it only needed whitelisting. "Texture:" and
+# "Area:" are STATIC template text inside those rows, and static text cannot be reached by
+# paragraph_overrides (_apply_paragraph_overrides skips anything with in_block set — deliberately,
+# because that content is engine-owned).
+#
+# So the label rides the row's OWN item dict, on the per-index `system_overrides` channel the
+# values (name/texture/sqft) already use — `texture_label` / `area_label`. Nothing about the id
+# space changes: iter_editable_blocks yields the same blocks in the same order, so every
+# paragraph_override saved against a draft in flight still lands where it did before.
+#
+# Anchored on the row's TOKEN, not on the label's own wording: the Texture row is the one holding
+# {{system.texture}} and the Area row the one holding {{system.sqft}}, which is true of a
+# re-authored template too. Runs at expansion time, BEFORE _substitute_item_tokens consumes the
+# tokens (see _expand_named_block).
+_SYSTEM_ROW_LABELS = (
+    ("texture_label", "texture"),
+    ("area_label", "sqft"),
+)
+
+# The static label is everything up to the row's first token, trimmed to the last colon:
+# "Texture:  " → "Texture:", "Area: ~" → "Area:". The greedy `.*:` is what makes the "~" (and
+# any other separator a template puts between the label and the number) survive untouched.
+_ROW_LABEL_RE = re.compile(r"^(\s*)(.*:)", re.DOTALL)
+
+
+def _splice_t_range(tnodes, start: int, end: int, repl: str) -> bool:
+    """Replace joined-text characters [start, end) across a paragraph's <w:t> nodes with `repl`.
+
+    `repl` lands in the run that owned the FIRST replaced character, so a label keeps the bold /
+    size / colour the template gave it; later runs in the range only lose their share of the old
+    text. Same technique as `_strip_leading_separator`, generalized to an arbitrary span.
+    """
+    pos = 0
+    placed = False
+    for t in tnodes:
+        cur = t.text or ""
+        a, b = pos, pos + len(cur)
+        pos = b
+        if b <= start or a >= end:
+            continue
+        lo = max(0, start - a)
+        hi = min(len(cur), end - a)
+        t.text = cur[:lo] + ("" if placed else repl) + cur[hi:]
+        t.set(qn("xml:space"), "preserve")
+        placed = True
+    return placed
+
+
+def _apply_system_row_labels(p_elem, item: Mapping[str, Any]) -> int:
+    """Rewrite one expanded {{#system}} row's static label from the item's `*_label` override.
+
+    No-op unless the item carries the override for the token this paragraph holds, and no-op if
+    the paragraph has no static label before its first token. Braces are stripped out of the
+    override so a pasted "{{token}}" can never reach a customer-facing document as literal text.
+    """
+    n = 0
+    for key, token in _SYSTEM_ROW_LABELS:
+        raw = item.get(key)
+        if raw is None:
+            continue
+        label = str(raw).replace("{", "").replace("}", "").strip()
+        if not label:
+            continue
+        tnodes = list(p_elem.iter(qn("w:t")))
+        if not tnodes:
+            continue
+        joined = "".join(t.text or "" for t in tnodes)
+        if not re.search(r"\{\{\s*system\." + re.escape(token) + r"\s*\}\}", joined):
+            continue
+        head_end = joined.find("{{")
+        if head_end <= 0:
+            continue
+        m = _ROW_LABEL_RE.match(joined[:head_end])
+        if not m:
+            continue
+        start = len(m.group(1))
+        if _splice_t_range(tnodes, start, start + len(m.group(2)), label):
+            n += 1
+    return n
 
 
 def _strip_bullet(p_elem) -> None:
@@ -1043,6 +1177,11 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
         for item in items:
             for tmpl in template_elems:
                 clone = copy.deepcopy(tmpl)
+                # BEFORE the token substitution: the label rewrite finds its row by the token
+                # that row carries ({{system.texture}} / {{system.sqft}}), and substitution is
+                # what removes those tokens. See _apply_system_row_labels.
+                if block_name == "system":
+                    _apply_system_row_labels(clone, item)
                 _substitute_item_tokens(clone, item, block_name)
                 # Label-only price_line row (empty amount) — drop the now-bare
                 # leading "– " separator so it reads as just the label. Scoped
@@ -2224,6 +2363,10 @@ def fill_proposal(
     `price_line`/`alternate` always run so their markers are stripped (zero
     rows) when empty — never left as literal text. A template with no marker,
     and the default args, is 100% backward-compatible with v1 fills.
+
+    A `systems` row may also carry `texture_label` / `area_label` — the doc editor's per-row
+    rename of that row's STATIC label text, which no {{token}} covers. See
+    `_apply_system_row_labels`; absent keys leave the template's own wording.
 
     `paragraph_overrides` — free-text edits from the Proposal Review document
     editor (Phase 0, runs BEFORE block expansion — see `_apply_paragraph_overrides`

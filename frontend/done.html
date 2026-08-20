@@ -6,6 +6,9 @@
 <title>Treadwell Proposal Generator — Files</title>
 <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg">
 <link rel="stylesheet" href="/styles.css">
+<!-- The step-5 folder chooser's own sheet: it is the only page that has one, and the
+     radio-group rules are long enough that inlining them buried the rest of this <style>. -->
+<link rel="stylesheet" href="/dropbox-picker.css">
 <style>
   .review-card {
     background: var(--surface-lowest);
@@ -321,9 +324,9 @@
     <div class="success-card" id="dbx-main" style="display:none; margin-top:24px;">
       <h2 style="margin-top:0;">📁 Send to the Treadwell Dropbox</h2>
       <p class="lede" id="dbx-project">—</p>
-      <p class="lede">Choose which Estimating folder to file this project into. A folder named
-        <strong>YY.MM.DD Project name</strong> is created there with the estimate (.xlsx),
-        the proposal (.docx), and the proposal PDF.</p>
+      <p class="lede">Choose the Estimating folder, then the project folder inside it that this
+        job already has. The estimate (.xlsx), the proposal (.docx), and the proposal PDF go in
+        there. Creating a new folder is the last option.</p>
 
       <div class="dbx-field">
         <label for="dbx-dest">Destination folder</label>
@@ -346,10 +349,25 @@
         </select>
       </div>
 
+      <!-- Which folder INSIDE the destination. Hidden until a destination is chosen and
+           filled by /js/dropbox.js from /api/dropbox/project-folders. A radio group rather
+           than a <select> because the candidate names differ by a date and a word, and the
+           estimator needs to see them all at once. Gyp Estimates has ~80 of them, hence the
+           filter box; the "create a new folder" row is appended after the filter so a search
+           can never hide the only way forward. -->
+      <div class="dbx-field" id="dbx-folder-field" style="display:none">
+        <label for="dbx-search">Project folder</label>
+        <input id="dbx-search" class="dbx-search" type="search" autocomplete="off"
+               placeholder="Filter by folder name…">
+        <div id="dbx-folders" class="dbx-folders" role="radiogroup" aria-label="Project folder"></div>
+        <p class="dbx-folder-note" id="dbx-folder-note"></p>
+      </div>
+
       <button id="dbx-go" type="button" disabled>Create folder &amp; upload</button>
       <div class="dbx-result" id="dbx-result"></div>
-      <div class="dbx-callout">Files go to the live Treadwell Dropbox. Re-uploading overwrites the
-        files in the same project folder (it won't create duplicates).</div>
+      <div class="dbx-callout">Files go to the live Treadwell Dropbox. Filing into a folder the
+        team already owns keeps whatever is in there — if a file of the same name exists, this one
+        is saved alongside it under a new name.</div>
     </div>
     <div id="dbx-empty" style="display:none;"></div>
 

@@ -3,9 +3,12 @@
  * crm-core predicates.
  *
  * Source assertions can prove `boardPool` mentions the lost tab; only running it proves a lost
- * test project lands somewhere, that the three tabs partition the rows, and that an unrecognised
- * stored reason does not drop a card off the board. portal.js is a browser IIFE that touches the
- * DOM at load, so the functions are lifted out by name rather than the module being required.
+ * test project lands somewhere, that the tabs partition the rows, and that an unrecognised stored
+ * reason does not drop a card off the board. portal.js is a browser IIFE that touches the DOM at
+ * load, so the functions are lifted out by name rather than the module being required.
+ *
+ * It also runs the TAB LIST and the line that resolves a stored tab, which replaced a source-text
+ * pin on `const TABS = [...]` in test_active_projects_board.py on 2026-08-20 — see resolveTab.
  *
  * Usage: node lost-tab-harness.js <crm-core.js> <portal.js>   →   one line of JSON
  */
@@ -30,6 +33,29 @@ function fn(name) {
 
 const colsLine = /const LOST_COLS = .*;/.exec(src);
 if (!colsLine) throw new Error("LOST_COLS is gone from portal.js");
+
+// THE TAB LIST, AND THE LINE THAT RESOLVES IT, both lifted out and RUN rather than matched.
+// test_active_projects_board.py used to pin `const TABS = ["active", "test", "lost"]` as a literal
+// string, which is worth almost nothing here: it cannot see that a tab in the list has no pill in
+// the markup, and it cannot see that boardPool sends nothing to it. It also had to be edited by hand
+// on 2026-08-20 when the Won tab arrived, which is the tell. Both declarations are single-line and
+// semicolon-terminated, so a bracket count is not needed.
+const tabsLine = /const TABS = \[[^\]]*\];/.exec(src);
+if (!tabsLine) throw new Error("const TABS is gone from portal.js — rewrite this harness, don't delete it");
+const tabDecl = /\n\s*let TAB = [^;]*;/.exec(src);
+if (!tabDecl) throw new Error("the `let TAB = …` resolution is gone from portal.js — rewrite this harness");
+
+const TABS = new Function('"use strict";\n' + tabsLine[0] + "\nreturn TABS;")();
+
+/** Which tab the page LANDS on for a stored sessionStorage value, out of portal.js's own
+ *  expression. `null` stands for "nothing stored". The fallback matters on its own: a stale session
+ *  holding a tab that no longer exists must land on Active rather than paint no pressed pill over an
+ *  empty board. */
+function resolveTab(stored) {
+  const f = new Function("ss", "TAB_KEY",
+                         '"use strict";\n' + tabsLine[0] + tabDecl[0] + "\nreturn TAB;");
+  return f((k, d) => (stored === null ? d : stored), "tw_crm_tab");
+}
 
 // Everything the two functions close over, supplied exactly as portal.js supplies it: the
 // predicates come from crm-core, so a change there is felt here rather than being stubbed away.
@@ -84,11 +110,21 @@ const ROWS = [
   { proposal_id: "lost-after-marked-won", project_name: "Grandview Terminal",
     proposal_status: "closed_lost", won_at: "2026-08-19T15:00:00Z",
     followup_state: { closed_lost_reason: "canceled" } },
+  // Somebody's scratch work, won. Here so the PARTITION runs over a row two of the three pool
+  // predicates both claim — since 2026-08-20 the pools are decided by isLost, then is_test, then
+  // isWon, and a row only one predicate has an opinion about cannot exercise the order at all. Which
+  // pool it belongs in (Test: scratch work does not become real work by being marked won) is
+  // asserted by name in test_won_tab.py, not here.
+  { proposal_id: "won-test", project_name: "Will 8/20 Test", is_test: true,
+    proposal_status: "approved", deposit_status: "received", contacts_status: "received" },
 ];
 
 ALL = ROWS;
+// EVERY tab portal.js names, not a list typed here: the partition assertion is only worth anything
+// if a tab added to TABS is a tab this loop visits. It was a hardcoded triple until 2026-08-20,
+// when the Won tab arrived and the sum stopped covering the rows.
 const pools = {};
-for (const t of ["active", "test", "lost"]) {
+for (const t of TABS) {
   TAB = t;
   pools[t] = ids(scope.boardPool());
 }
@@ -103,9 +139,16 @@ for (const col of Object.keys(by)) grouped[col] = ids(by[col]);
 const chips = {};
 for (const r of ROWS) chips[r.proposal_id] = scope.chipsHtml(r);
 
+// Which tab a stored value resolves to, run through portal.js's own expression. "haggis" stands for
+// a tab a past deploy had and this one does not.
+const resolved = { stored: {}, nothingStored: resolveTab(null), unknown: resolveTab("haggis") };
+for (const t of TABS) resolved.stored[t] = resolveTab(t);
+
 console.log(JSON.stringify({
   chips: chips,
   pools: pools,
+  tabs: TABS,
+  resolved: resolved,
   cols: scope.LOST_COLS,
   reasonLabels: Object.keys(C.LOST_REASON).map((k) => C.LOST_REASON[k]),
   grouped: grouped,
