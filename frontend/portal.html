@@ -207,6 +207,20 @@
   .dtabs .step:hover { outline:1px solid var(--ink-v); outline-offset:-1px; }
   .dtabs .step .lbl { margin-bottom:2px; }
   .dtabs .step .val { display:block; font-size:11.5px; font-weight:700; color:var(--ink-v); }
+  /* CHAT IS THE ONE YOU ALWAYS LOOK AT. Hanz, 2026-08-21: "move that tab to the leftmost and
+     make it a different color tab I guess so its just intuittive to always look there". It sits
+     first in the strip and carries a blue tint that nothing else on this page uses, so the eye
+     finds it without reading. Deliberately NOT red: red already means "needs a human" on this
+     strip (.needs) and green means "done", so a third meaning had to pick a third hue.
+     Placed BEFORE .is-done / .needs / [aria-selected] so all three still win over it: a chat tab
+     with unread messages must still read as needing attention, and the tab you are on must still
+     look selected. A left accent bar carries the same signal for anyone whose browser rewrites
+     the tint, or who cannot separate blue from grey. */
+  .dtabs .step#dtab-chat { border-color:#b9cfe8; background:#eff5fc; }
+  .dtabs .step#dtab-chat::before { content:""; position:absolute; left:0; top:6px; bottom:6px;
+    width:3px; border-radius:2px; background:#2f6fb0; }
+  .dtabs .step#dtab-chat .lbl { padding-left:6px; }
+  .dtabs .step#dtab-chat .val { padding-left:6px; color:#2f6fb0; }
   .dtabs .step.is-done { border-color:#bfe3c8; background:#e3f3e6; }
   .dtabs .step.is-done .val { color:var(--ok); }
   .dtabs .step.needs { border-color:var(--red); background:#fdf3f3; }

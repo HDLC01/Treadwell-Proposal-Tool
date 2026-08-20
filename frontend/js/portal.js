@@ -783,11 +783,11 @@
     // not exist yet says so in the panel, which is a fact about the project rather than an empty
     // box that reads as broken.
     const nsTabs = `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("chat", "Chat", { val: "—", hint: "Opens when the customer can see the proposal" }) +
       secTab("proposal", "Proposal", { val: "Not sent",
         hint: "Customer, estimator, who hears about it when it goes out" }) +
       secTab("deposit", "Deposit", { val: "—", hint: "Nothing until the customer approves" }) +
       secTab("contacts", "Contacts", { val: "—", hint: "The customer supplies these after approving" }) +
-      secTab("chat", "Chat", { val: "—", hint: "Opens when the customer can see the proposal" }) +
       secTab("followup", "Follow-up", { val: "Off", hint: "Chasing starts when you send it" }) +
       `</div>`;
     // These sections carry `dsec-ns-*` ids, deliberately outside ALL_SEC_CARDS: applySecPanel's
@@ -1301,6 +1301,12 @@
   // state, ACTIVE_SEC says which tab is ON SCREEN. Only applySecPanel() reads
   // both and touches visibility — nothing else may.
   const SEC_TABS = {
+    // CHAT IS FIRST, on purpose. Hanz, 2026-08-21: "move that tab to the leftmost and make it a
+    // different color tab I guess so its just intuittive to always look there". The conversation
+    // is the thing a rep needs most often, so it gets the position the eye lands on and a tint of
+    // its own (styles.css #dtab-chat). Key order here is what the strips and anything deriving the
+    // tab list from the product both read, so it is changed HERE rather than only in the markup.
+    chat:     ["dsec-chat"],
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
                "dsec-revisions", "dsec-files"],
     deposit:  ["dsec-deposit"],
@@ -1309,7 +1315,6 @@
     // button and its customer email included: Treadwell books the date on the phone and the
     // customer hears it there, so the app had a status, a tile and a notification all restating
     // a call that had already happened. schedule_status stays in the database untouched.
-    chat:     ["dsec-chat"],
     followup: ["dsec-followup"],
   };
   const ALL_SEC_CARDS = Object.values(SEC_TABS).flat();
@@ -1692,13 +1697,13 @@
       : (s.approved && !s.requested) ? { needs: true, val: "Send request" }
       : { val: s.requested ? "Requested" : "Pending" };
     return `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
+        badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
       secTab("proposal", "Proposal", { done: s.approved, val: s.approved ? "Approved" : "Awaiting",
         hint: "Customer, approval, notification recipients" }) +
       secTab("deposit", "Deposit", Object.assign({ hint: "Invoice, what the customer submitted, mark received" }, dep)) +
       secTab("contacts", "Contacts", { done: s.contactsDone, val: s.contactsDone ? "Received" : "Pending",
         hint: "Project contacts the customer supplied" }) +
-      secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
-        badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
       // Closed-lost is "done" in the sense the tab means it: nothing left to chase.
       // Paused isn't flagged either — the customer asked for the quiet.
       secTab("followup", "Follow-up", { done: s.lost, val: s.fuVal,
