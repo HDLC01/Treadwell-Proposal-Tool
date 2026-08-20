@@ -1692,11 +1692,23 @@
   // page does, rather than a copy of it that can drift.
   const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
 
-  /** Runs → the block's innerHTML. Inverse of `editRuns`. */
+  /** Runs → the block's innerHTML. Inverse of `editRuns`.
+   *
+   *  A newline stays a NEWLINE CHARACTER rather than becoming a `<br>`, because `.tw-block` is
+   *  `white-space: pre-wrap` and that is the shape the caret can be put after. `pointAt` can
+   *  only place a caret in a TEXT node — a `<br>` is a synthetic newline it has to skip — so a
+   *  break rendered as `<br>` at the end of a paragraph left the caret at the end of the
+   *  PREVIOUS line, and the next character typed went in above the break instead of after it.
+   *  Blink makes the same choice for the same reason: its own editor inserts "\n" rather than a
+   *  break element when the enclosing style preserves newlines.
+   *
+   *  This also makes a re-render agree with the FIRST render: `blockHtml`/`fillHtml` never
+   *  converted newlines either, so a block that came from the backend with a break in it and
+   *  the same block after a format were built differently. */
   function renderRuns(el, runs) {
     let html = "";
     for (const r of runs) {
-      let inner = escHtml(String(r.text)).replace(/\n/g, "<br>");
+      let inner = escHtml(String(r.text));
       if (r.tok) inner = `<span class="tw-fill" data-token="${escHtml(r.tok)}">${inner}</span>`;
       const css = runEditCss(r);
       html += css ? `<span style="${css}">${inner}</span>` : inner;
@@ -1785,6 +1797,30 @@
     // Reuse the one input handler: dirty flags, the $/SF warning, override persistence and
     // terms repagination all already hang off it.
     el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  /** Replace [start, end) with ONE newline, through the same run algebra as a paste.
+   *
+   *  Kyle, 2026-08-19: "when he pressed enter to add spacing it did not generate in the
+   *  proposal." Two separate things were wrong. The server half is fixed in
+   *  proposal_writer._normalize_work_label_formatting (it was joining the run's `<w:br/>`s away
+   *  while re-bolding the WORK labels). This is the browser half: what the BROWSER does to a
+   *  contenteditable on Enter is not one thing. Depending on the engine and on `white-space`
+   *  it inserts a `<br>`, a bare "\n", or a wrapper `<div>` carrying its own placeholder
+   *  `<br>` — and serializeBlock reads that last shape as TWO newlines, so one Enter could
+   *  become a blank line and two could become three. Splicing the newline in ourselves makes
+   *  one Enter exactly one line break, on every engine.
+   *
+   *  A line break, not a paragraph break, is also the only thing this editor can honestly
+   *  represent: a `.tw-block` IS one Word paragraph, identified by an id from the backend's
+   *  walk over the template, and the editor cannot invent a second one. `<w:br/>` inside the
+   *  run is what the writer emits for a "\n" (_write_t_text), which is the same line break.
+   *
+   *  Returns the caret offset the break leaves behind, or -1 when there was nothing to do. */
+  function insertBreakAt(el, start, end) {
+    if (!el || !(start >= 0) || !(end >= start)) return -1;
+    renderRuns(el, F.spliceRuns(editRuns(el), start, end, [{ text: "\n", tok: null }]));
+    return start + 1;
   }
 
   function applyFormat(el, patch, range) {
@@ -2264,6 +2300,15 @@
     return out;
   }
 
+  // The WORK row fields that are LABELS rather than values. They get the same yellow
+  // editable island as everything else, but not the ⚠ "differs from the estimate" marker:
+  // that warning exists because an SF edited off the sheet is a pricing-review risk, and a
+  // renamed label carries no number to be wrong about. Plain text only (no & < > ") — it is
+  // interpolated into a title="" attribute.
+  const _SYS_LABEL_FIELDS = new Set(["prefix", "texture_label", "area_label"]);
+  const _SYS_LABEL_TITLE = "Renamed — the proposal prints this label instead of the "
+                         + "template's. Clear it to go back to the template wording.";
+
   // WORK systems preview — mirrors main._build_epoxy_systems + the template's
   // {{#system}} rows. Sourced from the resolved BASE tab's sheet cells
   // (sheetSystems), with the legacy Epoxy!-cell reads as a stale-draft fallback.
@@ -2300,19 +2345,42 @@
     // emptied or re-typed back to the computed value. Display-only — never
     // written to cell_values / pricing (see the systemPreviewEl input handler
     // and backend system_overrides).
+    //
+    // LABELS GO THROUGH THIS TOO. Kyle, 2026-08-19: "Some of the labels are not editable why not
+    // make it like a word document??" The {{#system}} rows were the last genuinely locked text on
+    // the page — renderBlockList diverts a {{#block}} region into a read-only .tw-priced-region,
+    // so this preview is the ONLY place those rows can be edited, and it used to emit
+    // "System:" / "Texture:" / "Area:" as plain escaped HTML. They are now islands like every
+    // value beside them:
+    //   * `prefix` is the computed {{system.prefix}} token, which already had an override channel;
+    //   * `texture_label` / `area_label` are new per-row channels for the template's STATIC label
+    //     text (see proposal_writer._apply_system_row_labels).
+    // Emptying any of them reverts to the computed/template text — the same rule the value
+    // islands have always used (see the systemPreviewEl input handler), which is also why an
+    // emptied label can never leave a bare "{{token}}" or a lone colon in a customer's document.
     const editSpan = (i, field, computed) => {
       const ov = ovs[i] || {};
       const has = (typeof ov[field] === "string" && ov[field].trim());
       const v = has ? ov[field] : computed;
       // ⚠ reminder when an SF / system value is edited off the estimate figure.
+      const isLabel = _SYS_LABEL_FIELDS.has(field);
       const overridden = has && String(v) !== String(computed);
-      const cls = "tw-fill tw-fill-edit" + (overridden ? " tw-overridden" : "");
-      const titleAttr = overridden ? ` title="${_OVERRIDE_TITLE}"` : "";
+      const cls = "tw-fill tw-fill-edit" + (overridden && !isLabel ? " tw-overridden" : "");
+      const titleAttr = overridden
+        ? ` title="${isLabel ? _SYS_LABEL_TITLE : _OVERRIDE_TITLE}"` : "";
       return `<span class="${cls}"${titleAttr} contenteditable="true" spellcheck="false"` +
              ` data-sys-index="${i}" data-sys-field="${field}"` +
              ` data-computed="${escHtml(computed)}">${escHtml(v)}</span>`;
     };
     systemPreviewEl.innerHTML = picks.map((s, i) => {
+      // NUMBERING IS PER ROW, and a renamed row does NOT switch it off for the others.
+      // Each row's computed prefix is a DEFAULT for that index only, and every override in this
+      // preview is already per-index (name/texture/sqft have always been). So renaming row 1 to
+      // "Base System:" leaves rows 2 and 3 reading "Option 2:" / "Option 3:" — the label the
+      // estimator did not touch keeps the number of the row it is on. The alternative, letting
+      // one manual label suppress numbering for the whole list, would silently rewrite a row
+      // nobody edited in a customer-facing document; it can also read oddly ("Base System:" then
+      // "Option 2:"), but that is visible on screen before Generate and is one more edit to fix.
       const prefix = multi ? `Option ${i + 1}:` : "System:";
       const coveClause = `${fmt(s.lf)} LF of ${coveH}" epoxy cove base`;
       const lfClause = s.lf > 0 ? ` and ${coveClause}` : "";
@@ -2322,13 +2390,14 @@
       const resolvedSqft = num((typeof ov.sqft === "string" && ov.sqft.trim()) ? ov.sqft : fmt(s.sf));
       // Cove-only system (0 SF but cove present): drop the meaningless
       // "~0 SF of epoxy flooring and " prefix and show just the cove clause.
+      const areaLabel = editSpan(i, "area_label", "Area:");
       const areaInner = (resolvedSqft === 0 && s.lf > 0)
-        ? `Area: ${escHtml(coveClause)}`
-        : `Area: ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lfClause)}`;
+        ? `${areaLabel} ${escHtml(coveClause)}`
+        : `${areaLabel} ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lfClause)}`;
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
-      return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${escHtml(prefix)}</strong>   ${editSpan(i, "name", s.name)}</p>` +
-             `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">Texture:  ${editSpan(i, "texture", texture)}</p>` +
+      return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${editSpan(i, "prefix", prefix)}</strong>   ${editSpan(i, "name", s.name)}</p>` +
+             `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">${editSpan(i, "texture_label", "Texture:")}  ${editSpan(i, "texture", texture)}</p>` +
              `<p class="tw-li" style="margin:0 0 4pt;"><strong>${areaInner}</strong></p>`;
     }).join("");
   }
@@ -2400,7 +2469,17 @@
     box.classList.remove("tw-notes-open");
     const target = parseFloat(box.dataset.boxHPt) * 96 / 72 + 1;   // design height in px (+1 slack)
     if (!(target > 0)) return;
-    const clear = () => { box.classList.remove("tw-notes-overflow"); box.title = ""; };
+    // Clearing the two GROWTH markers is part of clearing the overflow, and it has to happen on
+    // every pass. They are recomputed below from a live measurement, so a box that was blocked and
+    // has since been dragged taller — or trimmed — must not keep a badge and a tooltip describing
+    // the page it used to be on. (This is exactly the stale badge the review caught: the old code
+    // set `tw-grow-blocked` from a different function and nothing anywhere took it off again.)
+    const clear = () => {
+      box.classList.remove("tw-notes-overflow");
+      box.classList.remove("tw-grow-blocked");
+      box.classList.remove("tw-can-grow");
+      box.title = "";
+    };
     if (box.offsetHeight <= target) { clear(); return; }       // fits at full size — no inline size
     // 1) Font-size shrink first — keeps the full box width and matches the .docx
     //    normAutofit "shrink text on overflow". Handles the common moderate case.
@@ -2432,42 +2511,179 @@
     //    fit the box Kyle designed, and Word's own normAutofit will cramp the generated
     //    .docx too. Saying so beats hiding it behind a scale transform.
     box.style.fontSize = "";
+    // Measured HERE, and only here: the design font size is back and the clip below has not been
+    // applied yet, so this is the one moment `offsetHeight` is the box's real content height.
+    // fitOffer sets classes, never geometry — it decides whether the "Fit to text" button is
+    // offered on this box and, when it is not, which of the two reasons to say out loud.
+    const offer = fitOffer(box);
     box.style.maxHeight = Math.round(target) + "px";
     box.style.overflow = "hidden";
     box.classList.add("tw-notes-overflow");
+    // Say what can be done about it, which is not the same sentence on every box. Without this
+    // the estimator sees a box that offers to grow on one job and refuses on the next with no
+    // explanation.
+    const advice =
+      offer === "grow"
+        ? " Fit to text will make the box taller — the generated document gets that size too, and "
+          + "you can drag it back or press Reset box."
+        : offer === "box"
+        ? " Making the box taller is not an option here: the next box on the page starts where "
+          + "this one ends, so a bigger box would print over it."
+        : offer === "art"
+        ? " Making the box taller is not an option here: there is no box below this one to measure "
+          + "against, and what sits under it is part of the letterhead picture — so a bigger box "
+          + "would print over artwork that cannot move."
+        : "";
     box.title = "This section is longer than the box on the template, so the rest is hidden "
               + "here — and Word will cramp it in the generated document too. Click to see "
-              + "all of it; trim it to fix it properly.";
+              + "all of it; trim it to fix it properly." + advice;
   }
 
-  /** Let a clipped box be opened to read the hidden part.
+  /** Let a clipped box be opened to read the hidden part — and let it be closed again.
    *
-   *  Delegated on the surface, because boxes are re-created on every render. Toggling
+   *  Delegated on the surface, because boxes are re-created on every render. Opening
    *  breaks the page layout on purpose — you are looking past the design to check content,
-   *  and the marker stays so it is obvious this is not how it prints. */
+   *  and the marker stays so it is obvious this is not how it prints.
+   *
+   *  THE TRAP THIS FIXES. Kyle, 2026-08-19: "He is confused on how to get out of that Textbox
+   *  view." Opening and closing were the same gesture — a click on the box — and the handler
+   *  deliberately ignores clicks that land on `.tw-block` / `.tw-line-edit` / a contenteditable,
+   *  because a click meant for a paragraph must put a caret in it. An OPEN box is nearly all
+   *  editable content, so in practice there was frequently no pixel left that would close it
+   *  again. So there are now three ways out, and none of them is a click on the text:
+   *    * the Collapse button in `.tw-box-tools` (checked BEFORE the tools exclusion below);
+   *    * Escape, from anywhere on the page;
+   *    * a click on the page outside the box.
+   *  Escape and the outside click are bound on `window` rather than on `document` so this
+   *  function stays reachable with the same collaborators the drag gestures already use. */
   function wireOverflowExpand() {
     if (docSurface.dataset.expandWired) return;
     docSurface.dataset.expandWired = "1";
+
+    /** Open or clip ONE box. The clipped height is re-derived from dataset.boxHPt (which
+     *  applyBoxGeom keeps current through a resize), so collapsing restores exactly the height
+     *  fitTxbx clipped to rather than a height remembered from before a drag. */
+    const setOpen = (box, open) => {
+      if (!box) return;
+      box.classList.toggle("tw-notes-open", !!open);
+      box.style.maxHeight = open ? "none" : Math.round(
+        parseFloat(box.dataset.boxHPt) * 96 / 72 + 1) + "px";
+      box.style.overflow = open ? "visible" : "hidden";
+      box.style.zIndex = open ? "30" : "";
+    };
+    const openBoxes = () => docSurface.querySelectorAll(".tw-txbx.tw-notes-open");
+    // Every open box, not just one: WORK and NOTES can both be expanded, and one left behind
+    // keeps a deliberately broken layout on a page the estimator has stopped looking at.
+    const collapseAll = () =>
+      Array.prototype.forEach.call(openBoxes(), (box) => setOpen(box, false));
+
     docSurface.addEventListener("click", (e) => {
       const box = e.target.closest(".tw-txbx.tw-notes-overflow, .tw-txbx.tw-notes-open");
       if (!box) return;
+      // The explicit way out, tested BEFORE the .tw-box-tools exclusion below — the button
+      // lives in that layer, so the exclusion would otherwise swallow its own control.
+      if (e.target.closest("[data-box-collapse]")) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(box, false);
+        return;
+      }
       // Don't fight the paragraph editor: a click meant for a block should edit it.
       if (e.target.closest(".tw-block, .tw-line-edit, [contenteditable=true]")) return;
       // Nor the drag handles: releasing a resize grip fires a click on the box, and peeking at
       // the hidden text is the opposite of what somebody who just made the box bigger wanted.
       if (e.target.closest(".tw-box-tools")) return;
-      const open = box.classList.toggle("tw-notes-open");
-      box.style.maxHeight = open ? "none" : Math.round(
-        parseFloat(box.dataset.boxHPt) * 96 / 72 + 1) + "px";
-      box.style.overflow = open ? "visible" : "hidden";
-      box.style.zIndex = open ? "30" : "";
+      setOpen(box, !box.classList.contains("tw-notes-open"));
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" && e.key !== "Esc") return;
+      const boxes = openBoxes();
+      if (!boxes.length) return;
+      // Blur BEFORE collapsing, and only when the caret really is inside one of these boxes.
+      // A collapsed box is `overflow: hidden`, so leaving the caret in the clipped part makes
+      // the browser scroll the box back to it — which reads as the collapse not working. The
+      // edit itself is already in the DOM and already marked dirty, so blurring loses nothing.
+      const a = document.activeElement;
+      if (a && typeof a.blur === "function"
+          && Array.prototype.some.call(boxes, (box) => box.contains(a))) {
+        try { a.blur(); } catch { /* a detached node mid-render */ }
+      }
+      collapseAll();
+      e.preventDefault();
+    });
+
+    window.addEventListener("click", (e) => {
+      // Inside a box, its own handler above already decided. Outside one, the estimator has
+      // moved on: put every expanded box back.
+      const t = e.target;
+      if (!t || !t.closest) return;
+      if (t.closest(".tw-txbx")) return;
+      // …except the formatting toolbar, which showFmtBar appends to document.body rather than
+      // to the box (it has to escape the box's clipping to be visible at all). It is chrome FOR
+      // the paragraph being edited, so bolding a word inside an expanded box must not close the
+      // box out from under the selection.
+      if (t.closest(".tw-fmtbar")) return;
+      collapseAll();
     });
   }
   wireOverflowExpand();
 
   // Fit every mounted positioned text box (WORK / PRICE / NOTES / …).
+  //
+  // THIS CHANGES NO GEOMETRY, and that is the whole point of the function. It runs on first paint,
+  // on every repagination and on every NOTES keystroke — i.e. with no gesture behind it — so all
+  // it is allowed to do is what fitTxbx does: pick a font size, clip, and mark the box. A box gets
+  // TALLER only when somebody presses "Fit to text" (growBoxToFit), drags a resize grip, or the
+  // saved layout is loaded. An earlier version of this function grew an overflowing box here and
+  // persisted the new height into box_overrides — from where proposal_writer writes it into the
+  // customer's .docx — off the browser measurement the comment above fitTxbx records as wrong in
+  // the growing direction, and past artwork no DOM measurement can see. Typing is not consent to
+  // resize a printed page.
   function fitNotesBox() {
-    document.querySelectorAll(".tw-txbx").forEach(fitTxbx);
+    document.querySelectorAll(".tw-txbx").forEach(box => {
+      releaseAutoGrownHeight(box);
+      fitTxbx(box);
+    });
+  }
+
+  /** Give back height WE added, once the text no longer needs it.
+   *
+   *  The one automatic geometry change that is allowed here, and it is allowed because it only
+   *  ever goes DOWN: shrinking a box back toward the template can neither print over artwork nor
+   *  over the next box, which is the whole reason growing automatically is not allowed. Without
+   *  it, one long paste followed by a trim would leave the box permanently enlarged wearing a
+   *  "Grown to fit" note about text that now fits anyway, and the only cure would be knowing to
+   *  press Reset box.
+   *
+   *  Strictly limited to a height growBoxToFit produced (isAutoGrown). A height the estimator
+   *  dragged is theirs and is never touched — same rule as growBoxToFit's own first guard. */
+  function releaseAutoGrownHeight(box) {
+    if (!box || !box.dataset || !box.dataset.boxHPt) return false;
+    if (!isAutoGrown(box)) return false;
+    const id = Number(box.dataset.boxId);
+    const design = boxDesign.get(id);
+    if (!design) return false;
+    // PUT THE TEMPLATE'S GEOMETRY BACK BEFORE MEASURING, the same order growBoxToFit uses.
+    // applyBoxGeom writes the override height into style.minHeight, so offsetHeight is floored by
+    // the grown height — measure without dropping it first and the content can never look like it
+    // fits, and the box would stay enlarged forever.
+    const prev = boxOverrides.get(id);
+    const prevEntry = prev ? Object.assign({}, prev) : null;
+    if (!dropAutoGrownHeight(box, id)) return false;
+    box.classList.remove("tw-box-grown");
+    applyBoxGeom(box);
+    box.style.fontSize = ""; box.style.maxHeight = ""; box.style.overflow = "";
+    if (box.offsetHeight > (Number(design.h_pt) * 96 / 72) + 1) {
+      // Still does not fit at the template's size, so the height was doing a job. Put it back
+      // exactly as it was — releasing it here would silently undo the estimator's Fit to text.
+      if (prevEntry) boxOverrides.set(id, prevEntry); else boxOverrides.delete(id);
+      box.classList.add("tw-box-grown");
+      applyBoxGeom(box);
+      return false;
+    }
+    schedulePersistOverrides();     // the .docx must lose the height too, not just the screen
+    return true;
   }
 
   // ── dragging and resizing a text box ──────────────────────────────────────
@@ -2604,15 +2820,42 @@
     return r;
   }
 
-  /** The grips + the size readout + Reset. Absolutely positioned, so they add no height:
-   *  fitTxbx measures offsetHeight to decide what overflows, and a grip in the flow would make
-   *  every box look taller than its text. */
+  /** The grips + the size readout + the "Grown to fit" note + Reset + Collapse. Absolutely
+   *  positioned, so they add no
+   *  height: fitTxbx measures offsetHeight to decide what overflows, and a grip in the flow
+   *  would make every box look taller than its text.
+   *
+   *  Collapse is the way OUT of an expanded box. Kyle, 2026-08-19: "He is confused on how to
+   *  get out of that Textbox view." Expanding was a click on the box, but the click handler
+   *  ignores clicks that land on editable content (see wireOverflowExpand) — and an expanded
+   *  box is almost entirely editable content, so there was often nothing left to click. A
+   *  labelled button that is NOT inside the editable text is the only way out that cannot be
+   *  swallowed by the paragraph editor. It is a word, not a grip, so it does not read as a
+   *  drag handle; CSS shows it only while the box is open. */
   function addBoxTools(el) {
     const tools = document.createElement("div");
     tools.className = "tw-box-tools";
     tools.innerHTML =
       '<span class="tw-grip tw-grip-move" data-grip="move" title="Drag to move this box"></span>' +
       '<span class="tw-box-size"></span>' +
+      // Says out loud that the box on screen is NOT the size the template gives it, because
+      // growBoxToFit made it fit. Silent geometry in a document the customer receives is the
+      // thing to avoid; the dashed .tw-box-moved outline and "Reset box" already come with it.
+      '<span class="tw-box-grown-note" title="This box was made taller so all of its text ' +
+        'fits. The generated document uses this size too. Reset box puts it back.">' +
+        'Grown to fit</span>' +
+      // Offered ONLY on a box fitOffer marked .tw-can-grow, i.e. one whose text fits in room
+      // bounded by a real box below it. Kyle, 2026-08-20: "instead of it being a textbox why not
+      // make it editable like a word document?" — a Word user expects the text to fit. This is
+      // the closest safe answer: a press, a visible result, and Reset box to undo. It is NOT
+      // automatic, because the height it writes goes into the .docx the customer receives and
+      // the browser's own measurement overstates overflow (see the note above fitTxbx).
+      '<button type="button" class="tw-box-fit" data-box-fit="1" ' +
+        'title="Make this box tall enough for all of its text. The generated document gets the ' +
+        'same size; drag the bottom edge or press Reset box to undo.">Fit to text</button>' +
+      '<button type="button" class="tw-box-collapse" data-box-collapse="1" ' +
+        'title="Put this box back to the size the template gives it. Esc does the same, and so ' +
+        'does clicking the page outside the box.">Collapse</button>' +
       '<button type="button" class="tw-box-reset" data-box-reset="1" ' +
         'title="Put this box back where the template has it">Reset box</button>' +
       '<span class="tw-grip tw-grip-e" data-grip="e" title="Drag to change the width"></span>' +
@@ -2633,6 +2876,204 @@
     if (entry) boxOverrides.set(id, entry);
     else boxOverrides.delete(id);
     return entry;
+  }
+
+  // ── a box that GROWS instead of clipping ─────────────────────────────────────
+  // Kyle, 2026-08-19: "instead of it being a textbox why not make it editable like a word
+  // document?" A Word user who types more than fits expects the box to get bigger. Until now
+  // over-long content shrank its own font (fitTxbx's ladder) and, when that failed, was CLIPPED
+  // behind a "Too long for this box" badge — a preview that hides text the .docx also cramps.
+  // Growing is the honest answer, and the plumbing already existed: a dragged height reaches the
+  // .docx through box_overrides → proposal_writer._apply_box_overrides, which runs BEFORE
+  // _shrink_overflowing_text_boxes and therefore stops the server shrinking a box that is now
+  // big enough.
+  //
+  // WHAT STOPS IT, and why the warning path is not a cop-out. The page renders at true point
+  // sizes and every box is registered against baked letterhead PNGs — the red WORK/PRICE/NOTES
+  // frames are ARTWORK, not DOM, so nothing can move them. Growth is therefore bounded by the
+  // geometry we can actually see: the next box below (with x overlap) and the bottom margin.
+  // Measured against the shipped templates (template_geometry output, 2026-08-19) that room is
+  // small and often zero — Direct epoxy's WORK box is 171pt tall and PRICE starts 168.3pt below
+  // its top, so WORK cannot grow by even a point, while the last box on each page has 25-63pt
+  // spare. Where there is no room the box keeps today's clip-and-warn and the badge says growth
+  // was blocked, because a preview that quietly overlapped the next frame would be lying about
+  // what prints.
+  //
+  // Boxes that FIT are never touched: growBoxToFit returns before it can write anything, so
+  // their generated geometry stays byte-identical.
+
+  // WHO SET THIS HEIGHT lives on the ELEMENT, not in a module-level Set, and that is deliberate
+  // twice over. It is the honest lifetime — renderPositioned recreates every box element, so both
+  // flags below reset exactly when the layout is rebuilt, which is when they should. And a Set
+  // here would be a new free variable inside `wireBoxDrag` / `loadBoxOverrides`, which
+  // tests/js/box-drag-harness.js lifts out of this file and runs on their own; a name it does not
+  // bind is a ReferenceError in a passing-looking test file.
+  //
+  //   .tw-box-grown     — growBoxToFit set this height, so it may recompute it. A height the
+  //                       ESTIMATOR dragged is never marked, and is therefore never overwritten:
+  //                       they said how tall the box should be.
+  //   data-grow-off     — "Reset box" was pressed. Reset means "put it back where the template
+  //                       has it", and an auto-grow firing again on the next repaint would make
+  //                       the button look broken.
+  const isAutoGrown = (box) => !!(box && box.classList.contains("tw-box-grown"));
+
+  /** Drop the height WE added, keeping any x/y/w the estimator dragged. */
+  function dropAutoGrownHeight(box, id) {
+    if (box) box.classList.remove("tw-box-grown");
+    const o = boxOverrides.get(id);
+    if (!o || o.h_pt === undefined) return false;
+    delete o.h_pt;
+    if (!Object.keys(o).length) boxOverrides.delete(id);
+    return true;
+  }
+
+  /** The tallest `rect` may become before it hits something. Pure, so a test can drive it with
+   *  the templates' real geometry rather than with numbers invented to make it pass.
+   *
+   *  `others` are the OTHER boxes' live rects. A box counts as "below" when its TOP is below this
+   *  box's TOP — not when it is below this box's BOTTOM, which is the trap: Kyle's shapes already
+   *  overlap (Direct epoxy's WORK ends at 323.65pt and PRICE starts at 320.95pt), so a
+   *  bottom-based test would classify the one box we must not grow into as "not below me" and
+   *  cheerfully grow straight through it. */
+  /** The Y of the nearest box that sits UNDER `rect` and overlaps it horizontally, or null when
+   *  nothing does. Null is the important answer: see growRoomPt. */
+  function boxCeilingPt(rect, others) {
+    let bottom = null;
+    for (const o of (others || [])) {
+      if (!o) continue;
+      if (o.x + o.w <= rect.x || o.x >= rect.x + rect.w) continue;   // beside it, not under it
+      if (!(o.y > rect.y)) continue;                                 // level/above: not a ceiling
+      if (bottom === null || o.y < bottom) bottom = o.y;
+    }
+    return bottom;
+  }
+
+  /** How much taller this box may become, in points. Zero means "not at all".
+   *
+   *  BOUNDED BY A REAL BOX, AND BY NOTHING ELSE. There is no fallback to the page margin, and
+   *  that is the whole point of this function rather than an oversight to tidy up later.
+   *
+   *  The page frame — the red rails, the rotated WORK/PRICE captions, the ACCEPTANCE and
+   *  signature block, the logo — is a full-page PNG baked into the template. It is invisible to
+   *  the DOM: there is no element to measure and no rect to avoid. So the only thing this code
+   *  can see under a box is ANOTHER BOX, and "the page's bottom margin is still far away" says
+   *  nothing whatsoever about whether the space is empty.
+   *
+   *  Bounding by printBottom instead (review 2026-08-20) let Direct/epoxy NOTES — design 162pt
+   *  at y=494.6, content measuring ~220pt — grow its bottom edge from 656.6pt to 714.35pt, i.e.
+   *  57.75pt straight down over the baked signature frame. And because a grown box DISARMS the
+   *  server-side shrink (backend/proposal_writer.py, _shrink_overflowing_text_boxes) nothing
+   *  downstream catches it: the customer receives a proposal with the terms printed over the
+   *  artwork. Four of the six Direct/epoxy boxes are bounded by artwork rather than by a box,
+   *  so this was the common case, not the corner.
+   *
+   *  The honest consequence: on this template only WORK can grow, because PRICE genuinely sits
+   *  under it. Every other box reports zero room and keeps the clip-and-warn. Growing into
+   *  artwork needs the artwork MEASURED (measureTermsBand is the precedent for reading ink off
+   *  the baked page) and that is a separate piece of work, not a constant to relax here. */
+  function growRoomPt(rect, others, lim) {
+    const L = lim || {};
+    const bottom = boxCeilingPt(rect, others);
+    if (bottom === null) return 0;                  // nothing below we can prove is empty
+    let room = bottom - rect.y;
+    const maxH = Number(L.maxH);
+    if (Number.isFinite(maxH) && maxH > 0) room = Math.min(room, maxH);
+    // Never past the printable area even when a box below says there is space — a box that
+    // overlaps the bottom margin is one the server's own clamp would refuse.
+    const floorY = Number(L.printBottom);
+    if (Number.isFinite(floorY)) room = Math.min(room, Math.max(0, floorY - rect.y));
+    return Math.max(0, room);
+  }
+
+  /** Whether this box can be offered a "Fit to text", and when it cannot, WHY.
+   *
+   *  Classes only — this function never writes geometry, so it is safe to call from inside
+   *  fitTxbx on every render and every keystroke. Growing is a deliberate press of the button
+   *  (growBoxToFit); nothing here changes what the generated document looks like.
+   *
+   *  Returns one of:
+   *    "grow" — there is room for all of the text; the button is offered.
+   *    "box"  — the next box on the page starts too soon; a taller box would print over it.
+   *    "art"  — nothing below to measure against, so what sits there is letterhead picture.
+   *
+   *  Called with the design font size restored and before the clip is applied, which is the one
+   *  moment offsetHeight is the real content height. Do not move the call. */
+  function fitOffer(box) {
+    box.classList.remove("tw-can-grow", "tw-grow-blocked");
+    if (!box || !box.dataset || !box.dataset.boxHPt) return "";
+    if (box.dataset.growOff === "1") return "";
+    const id = Number(box.dataset.boxId);
+    if (!boxDesign.has(id)) return "";
+    // A height the estimator set by hand is theirs; offering to overwrite it is not help.
+    const ov = boxOverrides.get(id);
+    if (ov && typeof ov.h_pt === "number" && !isAutoGrown(box)) return "";
+    const rect = effectiveBoxRect(id);
+    const others = otherBoxRects(id);
+    const needPt = Math.ceil(box.offsetHeight * PT_PER_CSS_PX * 100) / 100;
+    const room = growRoomPt(rect, others, boxLimits);
+    if (needPt <= room + BOX_EPS_PT) {
+      box.classList.add("tw-can-grow");
+      return "grow";
+    }
+    box.classList.add("tw-grow-blocked");
+    // Which sentence to say. A real box below means the geometry is genuinely taken; no box
+    // below means we simply cannot see what is there, and the two are not the same excuse.
+    return boxCeilingPt(rect, others) === null ? "art" : "box";
+  }
+
+  /** Every OTHER mounted box's live rect (boxDesign holds exactly the mounted boxes). */
+  function otherBoxRects(id) {
+    const out = [];
+    boxDesign.forEach((_d, other) => { if (other !== id) out.push(effectiveBoxRect(other)); });
+    return out;
+  }
+
+  /** Grow ONE box so its content fits at the DESIGN font size, if there is room for all of it.
+   *
+   *  Partial growth is deliberately not a thing: geometry changes only when it actually solves
+   *  the problem, so a box is either at the template's size, or at a size its text fits in, or at
+   *  the template's size with an honest warning — never at some third size that still clips.
+   *  Returns true when the height changed. */
+  function growBoxToFit(box) {
+    if (!box || !box.dataset || !box.dataset.boxHPt) return false;
+    if (box.dataset.growOff === "1") return false;
+    const id = Number(box.dataset.boxId);
+    if (!boxDesign.has(id)) return false;
+    const ov = boxOverrides.get(id);
+    const prevH = (ov && typeof ov.h_pt === "number") ? ov.h_pt : null;
+    const wasAuto = isAutoGrown(box);
+    if (prevH !== null && !wasAuto) return false;                    // their own drag wins
+    if (wasAuto && dropAutoGrownHeight(box, id)) applyBoxGeom(box);
+    box.classList.remove("tw-box-grown");
+    // Measure the CONTENT, not the last fit: fitTxbx may have left a font-size and a clip on it.
+    box.style.fontSize = "";
+    box.style.maxHeight = "";
+    box.style.overflow = "";
+    const rect = effectiveBoxRect(id);
+    const target = rect.h / PT_PER_CSS_PX + 1;            // the same +1px slack fitTxbx allows
+    if (!(target > 0)) return false;
+    if (box.offsetHeight <= target) { box.classList.remove("tw-grow-blocked"); return false; }
+    const needPt = Math.ceil(box.offsetHeight * PT_PER_CSS_PX * 100) / 100;
+    const room = growRoomPt(rect, otherBoxRects(id), boxLimits);
+    if (needPt > room + BOX_EPS_PT) {
+      box.classList.add("tw-grow-blocked");               // fitTxbx clips; the badge says why
+      return false;
+    }
+    // Through the drag's own clamp, so an auto-grown rect is never one the server would refuse.
+    const grown = dragBoxRect("s", rect, { x: 0, y: needPt - rect.h }, boxLimits);
+    setBoxOverride(id, grown);
+    applyBoxGeom(box);
+    if (box.offsetHeight > grown.h / PT_PER_CSS_PX + 1.5) {
+      // The clamp gave back less than the content needs. Don't leave the box at a third size
+      // that neither fits nor matches the template — put it back and warn.
+      if (dropAutoGrownHeight(box, id)) applyBoxGeom(box);
+      box.classList.add("tw-grow-blocked");
+      return false;
+    }
+    box.classList.remove("tw-grow-blocked");
+    box.classList.add("tw-box-grown");
+    if (prevH === null || Math.abs(prevH - grown.h) > BOX_EPS_PT) schedulePersistOverrides();
+    return true;
   }
 
   /** Delegated pointer gesture on the grips.
@@ -2679,11 +3120,14 @@
 
     const endDrag = () => {
       if (!drag) return;
-      const { box, moved } = drag;
+      const { box, moved, mode } = drag;
       drag = null;
       box.classList.remove("tw-box-dragging");
       box.style.zIndex = "";
       showBoxReadout(box, "", null);
+      // A height the estimator set by hand stops being ours to recompute — growBoxToFit will
+      // leave it alone from here, even if the text still overflows (it clips and warns instead).
+      if (moved && (mode === "s" || mode === "se")) box.classList.remove("tw-box-grown");
       // Re-measure the overflow badge against the new height: a box just made big enough must
       // stop saying its text is cut off, and one made smaller must start.
       fitTxbx(box);
@@ -2702,9 +3146,34 @@
       const box = btn.closest(".tw-txbx");
       if (!box) return;
       boxOverrides.delete(Number(box.dataset.boxId));
+      // "Put this box back where the template has it" has to STAY put. Without this the next
+      // repaint's growBoxToFit would re-grow an overflowing box and the button would look
+      // broken. The estimator gets the template's geometry plus the honest overflow warning.
+      // On the element, so it lasts exactly as long as this layout does.
+      box.classList.remove("tw-box-grown");
+      box.dataset.growOff = "1";
       applyBoxGeom(box);
       fitTxbx(box);
       schedulePersistOverrides();
+    });
+
+    // "Fit to text" — the human gesture that is allowed to change geometry. growBoxToFit does
+    // the arithmetic, persists the height and sets .tw-box-grown, so this is only the trigger.
+    //
+    // It clears growOff, deliberately: that flag exists so a repaint cannot silently undo a
+    // "Reset box", and pressing Fit to text is the estimator changing their mind out loud.
+    docSurface.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-box-fit]");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();      // never let this reach wireOverflowExpand and open the box too
+      const box = btn.closest(".tw-txbx");
+      if (!box) return;
+      delete box.dataset.growOff;
+      growBoxToFit(box);
+      // Re-fit either way: on success to drop the clip now the text fits, and on failure to put
+      // the warning and its advice back rather than leaving a box that looks like it worked.
+      fitTxbx(box);
     });
   }
   wireBoxDrag();
@@ -2732,6 +3201,10 @@
    *  restored box is created at its saved size instead of jumping there a frame later. */
   function loadBoxOverrides(wt, audience) {
     boxOverrides = new Map();
+    // A RESTORED height is treated as the estimator's, even if growBoxToFit produced it in an
+    // earlier session: the store keeps rects, not who set them, and the safe reading of an
+    // unknown height is "somebody chose this size". Nothing to clear here — the "we grew this"
+    // mark lives on the box element (see isAutoGrown), and renderPositioned builds new elements.
     const saved = savedBoxOverridesFor(wt, audience);
     if (!saved || String(saved.template_version || "") !== templateVersion) return;
     for (const key of Object.keys(saved.items || {})) {
@@ -2879,6 +3352,11 @@
       maxW: Number(maxBox.w_pt) || (pageWpt - (margin.left || 0) - (margin.right || 0)),
       maxH: Number(maxBox.h_pt) || (pageH - (margin.top || 0) - (margin.bottom || 0)),
       minPt: Number(maxBox.min_pt) || 12,
+      // The last y an AUTO-grown box may reach (growRoomPt). Not a drag bound — a drag is bounded
+      // by the sheet, because Kyle designs into the margins and every template already has boxes
+      // outside the printable area. Auto-growth is different: nobody is watching the pointer, so
+      // it stops at the bottom margin, past which Word does not print the text anyway.
+      printBottom: pageH - (Number(margin.bottom) || 0),
     };
 
     const arts = (geo.images || []).slice().sort((a, b) => (a.para_index || 0) - (b.para_index || 0));
@@ -3281,6 +3759,26 @@
     // `fmtAt` cannot read — the formatting would show on screen and reach the .docx as nothing.
     e.preventDefault();
     toggleFormat(el, key);
+  });
+
+  // Enter inside a template paragraph = ONE line break, ours rather than the browser's.
+  // See insertBreakAt for why: the browser's own Enter in a contenteditable can arrive as a
+  // wrapper <div> whose placeholder <br> serializeBlock counts as a second newline, so the
+  // blank line the estimator typed was not the blank line that got sent.
+  //
+  // shiftKey is deliberately NOT excluded: Shift+Enter is the line break everywhere else, and
+  // a line break is the only thing this editor can represent, so both spellings do the same
+  // thing. Ctrl/Cmd/Alt+Enter belong to other people and are left alone.
+  docSurface.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (!el) return;
+    const sel = selectionRange(el);
+    if (!sel) return;                       // caret not readable — leave Enter to the browser
+    e.preventDefault();
+    const caret = insertBreakAt(el, sel[0], sel[1]);
+    placeSelection(el, caret, caret);
+    markEdited(el, false);                  // a break is text, not formatting
   });
 
   docSurface.addEventListener("paste", (e) => {
