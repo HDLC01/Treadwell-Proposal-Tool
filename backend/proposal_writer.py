@@ -595,6 +595,412 @@ def _strip_bullet(p_elem) -> None:
         ppr.remove(numpr)
 
 
+# ─── Word PARAGRAPH properties the doc editor can change ─────────────────────
+# Kyle, 2026-08-20, on the proposal document editor:
+#     "I cant dletet the bullet points"
+#     "There is indentation in this but I cant remove tat if I want to to be
+#      aligned on the polished concrete?"
+#
+# Both complaints are about `w:pPr`, not about text. The editor has always been able to rewrite
+# a paragraph's RUNS (text, bold/italic/underline, size); it could never reach the paragraph's
+# own numbering (`w:numPr`) or indentation (`w:ind`), which is where a bullet and a hanging
+# indent live. These helpers are that reach, and they are shared by BOTH override channels:
+# `paragraph_overrides` (the plain WORK rows — Scope / Schedule / Exclusions / Notes) and the
+# per-index `system_overrides` rows (System / Texture / Area, which live inside the
+# `{{#system}}` region and so can never be addressed by a paragraph id — see
+# `_apply_system_row_labels` for the same split).
+#
+# TWO RULES, both read off these templates rather than assumed:
+#
+#  1. REMOVING A BULLET MUST NOT MOVE THE TEXT. A WORK row carries no `w:ind` of its own; its
+#     indentation comes from the numbering level (numId 4 -> `w:ind w:left=288 w:hanging=288`,
+#     so the square prints at 0 and the text at 288). Drop `w:numPr` alone and the level's
+#     indent goes with it, the paragraph falls back to the style chain, and the line jumps.
+#     Kyle's own template shows the target state on the Texture row: pStyle=ListParagraph, NO
+#     numPr, and an explicit `w:ind`. So the level's left indent is copied onto the paragraph
+#     before the numbering reference is removed.
+#
+#  2. AN ORDERED LIST IS OFF LIMITS. numId 5 is the numbered TERMS AND CONDITIONS list. Those
+#     paragraphs are plain body paragraphs with `in_block=None`, so the paragraph-override
+#     channel CAN address them — and removing one item from a decimal list renumbers every
+#     clause after it, silently, in legal boilerplate. `para_props()` reports such a paragraph
+#     as `locked` (the editor hides the controls) and `apply_para_props()` refuses it outright,
+#     so neither half can renumber the Terms.
+#
+# Indents are absolute twips, not "levels": the client sends the left indent it wants, this
+# clamps it, and 0 really is flush left — which is the whole point of Kyle's second complaint.
+_INDENT_STEP_TW = 288       # one step = the WORK/NOTES list level's own indent in these templates
+_INDENT_MAX_TW = 2880       # 2 inches, far past anything that still fits a text box
+# Only used when a paragraph is on a list whose definition cannot be read (no numbering part, a
+# dangling numId). Every Kyle template's bullet levels indent by 288, so a de-bulleted row lands
+# where its neighbours are instead of at the margin.
+_BULLET_FALLBACK_LEFT_TW = 288
+
+
+def _tw_or_none(raw):
+    """A twip measurement off an OOXML attribute as a non-negative int, or None when it is
+    absent or unparseable. Word writes these as decimal strings; a corrupt one must not raise
+    out of a paragraph-property read."""
+    if raw is None:
+        return None
+    try:
+        return max(0, int(float(raw)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_or_make_ppr(p_elem):
+    """The paragraph's `w:pPr`, created (as the FIRST child, which OOXML requires) if absent."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        ppr = OxmlElement("w:pPr")
+        p_elem.insert(0, ppr)
+    return ppr
+
+
+def _numbering_levels(d) -> dict:
+    """`{(numId, ilvl): {"fmt": <numFmt>, "ind": {attr: value}}}` for this document.
+
+    Read once per Document and cached on it (same technique as `_user_sized_paragraphs` — a
+    custom attribute in the XML would be invalid OOXML). A document with no numbering part
+    caches an empty map rather than re-raising on every paragraph."""
+    got = getattr(d, "_tw_num_levels", None)
+    if got is not None:
+        return got
+    levels: dict = {}
+    try:
+        root = d.part.numbering_part.element
+    except Exception:  # noqa: BLE001 — no numbering part, or an unreadable one
+        root = None
+    if root is not None:
+        abstract: dict = {}
+        for anum in root.iter(qn("w:abstractNum")):
+            aid = anum.get(qn("w:abstractNumId"))
+            for lvl in anum.findall(qn("w:lvl")):
+                fmt_el = lvl.find(qn("w:numFmt"))
+                lppr = lvl.find(qn("w:pPr"))
+                ind = lppr.find(qn("w:ind")) if lppr is not None else None
+                abstract[(aid, lvl.get(qn("w:ilvl")))] = {
+                    "fmt": fmt_el.get(qn("w:val")) if fmt_el is not None else None,
+                    "ind": ({k.split("}")[-1]: v for k, v in ind.attrib.items()}
+                            if ind is not None else {}),
+                }
+        for num in root.iter(qn("w:num")):
+            nid = num.get(qn("w:numId"))
+            aref = num.find(qn("w:abstractNumId"))
+            aid = aref.get(qn("w:val")) if aref is not None else None
+            if nid is None or aid is None:
+                continue
+            for (a, ilvl), info in abstract.items():
+                if a == aid:
+                    levels[(nid, ilvl)] = info
+    try:
+        d._tw_num_levels = levels
+    except AttributeError:      # pragma: no cover — a Document always accepts attributes
+        pass
+    return levels
+
+
+def _para_num_ref(p_elem):
+    """`(numId, ilvl)` as STRINGS for a paragraph carrying `w:numPr`, else None.
+
+    A `w:numPr` without an explicit `w:ilvl` means level 0, which is how Kyle's rows are
+    authored."""
+    ppr = p_elem.find(qn("w:pPr"))
+    if ppr is None:
+        return None
+    numpr = ppr.find(qn("w:numPr"))
+    if numpr is None:
+        return None
+    nid = numpr.find(qn("w:numId"))
+    if nid is None or nid.get(qn("w:val")) is None:
+        return None
+    ilvl = numpr.find(qn("w:ilvl"))
+    return nid.get(qn("w:val")), ((ilvl.get(qn("w:val")) if ilvl is not None else None) or "0")
+
+
+def _num_fmt(d, p_elem):
+    """The `w:numFmt` of the list level this paragraph is on ("bullet", "decimal", ...), or None
+    when the paragraph is not on a list / the definition cannot be read."""
+    ref = _para_num_ref(p_elem)
+    if ref is None:
+        return None
+    info = _numbering_levels(d).get(ref)
+    return (info or {}).get("fmt")
+
+
+def _para_ordered_list(d, p_elem) -> bool:
+    """True for a paragraph on a NUMBERED (non-bullet) list — the Terms and Conditions clauses.
+
+    Rule 2 above: this is the one class of paragraph the controls refuse, because dropping its
+    numbering renumbers every clause below it. An unreadable definition counts as ordered —
+    refusing to touch a list we cannot identify is the safe direction when the alternative is
+    renumbering a contract."""
+    if _para_num_ref(p_elem) is None:
+        return False
+    return _num_fmt(d, p_elem) != "bullet"
+
+
+def _effective_left_tw(d, p_elem) -> int:
+    """The paragraph's current left indent in twips, as the renderer resolves it.
+
+    Direct `w:ind` on the paragraph wins; otherwise the numbering level's indent; otherwise 0.
+    The STYLE chain's own indent is deliberately not walked: a `w:ind` written by this feature
+    overrides it anyway, so folding it in here would make the toolbar's readout disagree with
+    what an outdent actually produces."""
+    ppr = p_elem.find(qn("w:pPr"))
+    ind = ppr.find(qn("w:ind")) if ppr is not None else None
+    if ind is not None:
+        for attr in ("w:start", "w:left"):
+            got = _tw_or_none(ind.get(qn(attr)))
+            if got is not None:
+                return got
+    ref = _para_num_ref(p_elem)
+    if ref is not None:
+        lvl_ind = (_numbering_levels(d).get(ref) or {}).get("ind") or {}
+        got = _tw_or_none(lvl_ind.get("start", lvl_ind.get("left")))
+        if got is not None:
+            return got
+    return 0
+
+
+def para_props(d, p_elem) -> dict:
+    """This paragraph's editable paragraph properties, for `/api/proposal-template`.
+
+    `bullet`  — does it currently render a bullet?
+    `indent`  — its resolved left indent in twips (see `_effective_left_tw`).
+    `locked`  — an ordered list; the editor must not offer the controls (rule 2).
+    """
+    return {
+        "bullet": _num_fmt(d, p_elem) == "bullet",
+        "indent": _effective_left_tw(d, p_elem),
+        "locked": _para_ordered_list(d, p_elem),
+    }
+
+
+def _write_left_indent(ppr, left_tw: int, hanging_tw: int | None = None) -> None:
+    """Pin the paragraph's left edge at `left_tw` twips.
+
+    `w:left` AND `w:start` are both written — they are the same property in two schema
+    generations and Word/LibreOffice disagree about which one to read.
+
+    `hanging_tw=None` (the un-bulleted case) clears `w:hanging` / `w:firstLine`, because a
+    hanging indent with no bullet in front of it prints as a first line that starts further
+    left than the rest of its own paragraph.
+
+    A paragraph that KEEPS its bullet passes the hanging it needs instead: the square prints at
+    `left - hanging`, so dropping the hanging would print it inline with the words rather than
+    ahead of them. The caller clamps it to `left` — a hanging bigger than the left indent puts
+    the square at a negative position, i.e. out in the margin or off the page."""
+    ind = ppr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        ppr.append(ind)
+    ind.set(qn("w:left"), str(int(left_tw)))
+    ind.set(qn("w:start"), str(int(left_tw)))
+    for gone in ("w:hanging", "w:firstLine", "w:startChars", "w:leftChars", "w:firstLineChars"):
+        if ind.get(qn(gone)) is not None:
+            del ind.attrib[qn(gone)]
+    if hanging_tw:
+        ind.set(qn("w:hanging"), str(int(hanging_tw)))
+
+
+def _drop_left_indent(p_elem) -> bool:
+    """Remove the paragraph's OWN `w:left`/`w:start`, so whatever it inherits governs again.
+
+    Used when the indent being asked for is already exactly what the paragraph's bullet level
+    provides: keeping an explicit `w:ind` there would be inert at best, and (because the
+    explicit one has no `w:hanging`) actually moves the square. An emptied `w:ind` element is
+    removed with the attributes, so a round trip leaves the XML as it found it."""
+    ppr = p_elem.find(qn("w:pPr"))
+    ind = ppr.find(qn("w:ind")) if ppr is not None else None
+    if ind is None:
+        return False
+    hit = False
+    for gone in ("w:left", "w:start", "w:leftChars", "w:startChars"):
+        if ind.get(qn(gone)) is not None:
+            del ind.attrib[qn(gone)]
+            hit = True
+    if not len(ind.attrib):
+        ppr.remove(ind)
+    return hit
+
+
+def _remove_bullet_keep_indent(d, p_elem) -> bool:
+    """Drop the paragraph's bullet WITHOUT letting its text move (rule 1).
+
+    The numbering level's left indent is copied onto the paragraph as an explicit `w:ind`
+    first, so the line stays where the list had it. Returns False when there was no bullet."""
+    ref = _para_num_ref(p_elem)
+    if ref is None:
+        return False
+    lvl_ind = (_numbering_levels(d).get(ref) or {}).get("ind") or {}
+    left = _tw_or_none(lvl_ind.get("start", lvl_ind.get("left")))
+    if left is None:
+        left = _BULLET_FALLBACK_LEFT_TW
+    ppr = _get_or_make_ppr(p_elem)
+    existing = ppr.find(qn("w:ind"))
+    # A paragraph that already states its own left indent keeps it — that value is what the
+    # renderer was using, and the numbering level's was not.
+    if existing is None or (existing.get(qn("w:left")) is None
+                            and existing.get(qn("w:start")) is None):
+        _write_left_indent(ppr, max(0, left))
+    numpr = ppr.find(qn("w:numPr"))
+    if numpr is not None:
+        ppr.remove(numpr)
+    return True
+
+
+def _sibling_bullet_ref(d, p_elem):
+    """The `(numId, ilvl)` of the BULLET list this paragraph should join when its bullet is
+    switched back on: the one its siblings in the same container already use.
+
+    Sibling-scoped on purpose. Picking "any bullet list in the document" would put a WORK row on
+    the NOTES list, whose level indents differently, and there is no honest way to invent a
+    numbering definition the template's own styles agree with. Returns None when no sibling is
+    on a bullet list, in which case `apply_para_props` leaves the paragraph alone rather than
+    guessing — `para_props()['bullet']` then keeps reporting False, so the toolbar and the
+    document still agree about what happened."""
+    parent = p_elem.getparent()
+    if parent is None:
+        return None
+    levels = _numbering_levels(d)
+    for sib in parent.iterchildren(qn("w:p")):
+        if sib is p_elem:
+            continue
+        ref = _para_num_ref(sib)
+        if ref is not None and (levels.get(ref) or {}).get("fmt") == "bullet":
+            return ref
+    return None
+
+
+def _add_bullet(d, p_elem) -> bool:
+    """Put the paragraph back on its siblings' bullet list.
+
+    Any explicit `w:ind` a previous de-bullet wrote is removed again, so the numbering level's
+    own indent (square at the hanging position, text after it) governs once more — leaving it
+    behind is what would print the square in the middle of the line."""
+    if _para_num_ref(p_elem) is not None:
+        return False                    # already a list item
+    ref = _sibling_bullet_ref(d, p_elem)
+    if ref is None:
+        return False
+    num_id, ilvl = ref
+    ppr = _get_or_make_ppr(p_elem)
+    ind = ppr.find(qn("w:ind"))
+    if ind is not None:
+        ppr.remove(ind)
+    numpr = OxmlElement("w:numPr")
+    ilvl_el = OxmlElement("w:ilvl")
+    ilvl_el.set(qn("w:val"), str(ilvl))
+    num_el = OxmlElement("w:numId")
+    num_el.set(qn("w:val"), str(num_id))
+    numpr.append(ilvl_el)
+    numpr.append(num_el)
+    # w:numPr belongs near the top of w:pPr (right after w:pStyle) per the schema's sequence.
+    style = ppr.find(qn("w:pStyle"))
+    if style is not None:
+        style.addnext(numpr)
+    else:
+        ppr.insert(0, numpr)
+    return True
+
+
+def sanitize_para_props(raw) -> dict:
+    """Coerce one client-supplied paragraph-property dict to `{bullet?: bool, indent?: int}`.
+
+    Defensive like every other override sanitizer here: anything unrecognised is dropped, an
+    out-of-range indent is CLAMPED rather than rejected (a clamp still does what the estimator
+    asked for, as far as the page can go), and an empty result means "no paragraph change" so
+    the caller can skip the work. Never raises."""
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict = {}
+    b = raw.get("bullet")
+    if isinstance(b, bool):
+        out["bullet"] = b
+    ind = raw.get("indent")
+    if isinstance(ind, bool):       # bool is an int subclass; True would mean 1 twip
+        ind = None
+    if isinstance(ind, (int, float, str)):
+        # `round(float("nan"))` raises ValueError and `float("inf")` clamps to the max but
+        # `round` on it raises too, so the conversion is guarded rather than type-gated. A
+        # JSON body really can carry NaN (Python's own json module emits and accepts it), and
+        # this function's whole contract is that it never raises.
+        try:
+            out["indent"] = int(max(0, min(_INDENT_MAX_TW,
+                                           round(float(ind.strip() if isinstance(ind, str) else ind)))))
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return out
+
+
+def apply_para_props(d, p_elem, props) -> int:
+    """Apply `{bullet?, indent?}` to one paragraph. Returns how many properties changed.
+
+    REFUSES an ordered-list paragraph outright (rule 2 — the Terms and Conditions clauses),
+    which is also what `para_props()['locked']` tells the editor so it never offers the controls
+    there.
+
+    Order matters: the bullet change runs FIRST, because turning a bullet off writes the indent
+    it is preserving and turning one on hands the indent back to the list level. An `indent` in
+    the same request is then resolved against whichever of the two the paragraph ended up on —
+    which is why it is read after, not before.
+
+    "Resolved", not "written": on a paragraph that is still bulleted at an indent its own list
+    level already provides, the correct action is to state NOTHING and let the level govern.
+    Stating it would drop the level's `w:hanging` and print the square inline with the words.
+    """
+    clean = sanitize_para_props(props)
+    if not clean:
+        return 0
+    if _para_ordered_list(d, p_elem):
+        return 0
+    n = 0
+    if "bullet" in clean:
+        had = _num_fmt(d, p_elem) == "bullet"
+        if clean["bullet"] and not had:
+            if _add_bullet(d, p_elem):
+                n += 1
+        elif not clean["bullet"] and _para_num_ref(p_elem) is not None:
+            if _remove_bullet_keep_indent(d, p_elem):
+                n += 1
+    if "indent" in clean:
+        want = clean["indent"]
+        # Read the bullet state AFTER the branch above: it may have just changed, and what a
+        # correct indent looks like differs entirely between the two cases.
+        lvl_ind = {}
+        if _num_fmt(d, p_elem) == "bullet":
+            lvl_ind = (_numbering_levels(d).get(_para_num_ref(p_elem)) or {}).get("ind") or {}
+        lvl_left = _tw_or_none(lvl_ind.get("start", lvl_ind.get("left")))
+        if lvl_ind and lvl_left == want:
+            # STILL BULLETED, and the list level already puts the text exactly where this asks
+            # for it. Writing our own `w:left` here would come with no `w:hanging` (the level's
+            # is not ours to restate) and so would move the square from in front of the words
+            # to inline with them — which is what happened to every paragraph the editor sent
+            # its own unchanged state for, including a bullet switched off and straight back on.
+            # Letting the level govern is both correct and byte-identical to the template.
+            if _drop_left_indent(p_elem):
+                n += 1
+        else:
+            ppr_now = p_elem.find(qn("w:pPr"))
+            ind_now = ppr_now.find(qn("w:ind")) if ppr_now is not None else None
+            stated = ind_now is not None and (ind_now.get(qn("w:left")) is not None
+                                             or ind_now.get(qn("w:start")) is not None)
+            # Written whenever the paragraph does not already STATE this indent itself. Comparing
+            # only the resolved value would skip the write on a paragraph that inherits the same
+            # number from its list level — and then a later bullet change would take the indent
+            # with it, which is the bug this feature exists to fix.
+            if not stated or _effective_left_tw(d, p_elem) != want:
+                # A paragraph that kept its bullet keeps a hanging indent too, clamped to the
+                # left indent so the square never lands at a negative position.
+                hang = _tw_or_none(lvl_ind.get("hanging")) if lvl_ind else None
+                _write_left_indent(_get_or_make_ppr(p_elem), want,
+                                   min(hang, want) if hang is not None else None)
+                n += 1
+    return n
+
+
 _A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 # Default text-box insets when <a:bodyPr> omits them (OOXML defaults): 0.1" L/R,
 # 0.05" T/B. In points.
@@ -2281,12 +2687,22 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
     Returns the number of overrides actually applied.
     """
     by_id: dict[int, object] = {}
+    # PARAGRAPH properties (bullet on/off, left indent) ride the SAME entry as the text, under
+    # an optional `para` key — additive, so an entry's identity is unchanged and every override
+    # already saved against a draft in flight still means what it meant. They are collected
+    # separately here because an entry may carry `para` and NO text at all: switching a bullet
+    # off is not an edit to the words, and requiring a text field to come with it would make a
+    # formatting-only change either impossible or a silent rewrite of the paragraph.
+    para_by_id: dict[int, dict] = {}
     for o in overrides or []:
         if not isinstance(o, dict):
             continue
         pid = o.get("id")
         if isinstance(pid, bool) or not isinstance(pid, int):
             continue
+        para = sanitize_para_props(o.get("para"))
+        if para:
+            para_by_id[pid] = para
         # `runs` is the richer shape: [{text, bold?, italic?, underline?, size_pt?}]. It only
         # appears when the estimator applied formatting; a plain edit still sends `text`, so the
         # common case takes the simpler path and the payload stays the size it always was.
@@ -2314,20 +2730,51 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
             continue
         by_id[pid] = text   # last one wins on a duplicate id
 
-    if not by_id:
+    if not by_id and not para_by_id:
         return 0
 
     applied = 0
     for idx, _kind, p_elem, in_block, _text, _txbx in iter_editable_blocks(d):
-        if idx not in by_id or in_block is not None:
+        if in_block is not None or (idx not in by_id and idx not in para_by_id):
             continue
-        val = by_id[idx]
-        if isinstance(val, list):
-            if _set_paragraph_runs(p_elem, val):
-                # Remember the box so the overflow shrink leaves this paragraph's sizes alone.
-                _user_sized_paragraphs(d).add(id(p_elem))
-        else:
-            _set_paragraph_text(p_elem, val)
+        if idx in by_id:
+            val = by_id[idx]
+            if isinstance(val, list):
+                if _set_paragraph_runs(p_elem, val):
+                    # Remember the box so the overflow shrink leaves this paragraph's sizes alone.
+                    _user_sized_paragraphs(d).add(id(p_elem))
+            else:
+                _set_paragraph_text(p_elem, val)
+            # AN EMPTIED ROW KEEPS NO BULLET. `_strip_bullet` already did this for a blank
+            # {{#notes}} item ("a lone empty bullet dot"), but a WORK row emptied by hand went
+            # through this channel instead and kept its numbering: the .docx printed a red
+            # square with nothing after it. Same rule, same reason, now on both channels — and
+            # it is what lets the on-screen preview honestly suppress its own square
+            # (styles.css .tw-block.tw-empty.tw-li::before).
+            #
+            # Skipped when the same entry states a `bullet` explicitly. `apply_para_props` runs
+            # after this and would put a `bullet: True` back, but only by joining whichever list
+            # a SIBLING is on — so not stripping in the first place is how the row keeps its own
+            # numbering identity rather than being re-homed onto the neighbouring list.
+            blank = (not "".join(r["text"] for r in val).strip()) if isinstance(val, list) \
+                else (not val.strip())
+            # A NUMBERED LIST IS NEVER STRIPPED, whatever the text says. numId 5 is the Terms and
+            # Conditions clauses; they are in_block=None so this channel reaches all 27 of them by
+            # id, and stripping one renumbers every clause after it. Measured before this guard:
+            # blanking block 51 ("Agreement. The Proposal...") left 26 numbered clauses of 27,
+            # silently, in a contract.
+            #
+            # Same rule apply_para_props already enforces for the `para` route (_para_ordered_list,
+            # refused outright). The blank-TEXT route was added 2026-08-20 for a real reason - an
+            # emptied BULLETED row printed a lone red square - and never had the check. A bullet
+            # carries no meaning that outlives its text; a clause number carries the clause's identity.
+            if blank and not _para_ordered_list(d, p_elem) and "bullet" not in para_by_id.get(idx, {}):
+                _strip_bullet(p_elem)
+        if idx in para_by_id:
+            # Phase 0 runs long before `_shrink_overflowing_text_boxes`, which is required:
+            # the shrink re-reads the box geometry to decide what overflows, and an indent
+            # applied after it would change how much text fits behind its back.
+            apply_para_props(d, p_elem, para_by_id[idx])
         applied += 1
     return applied
 
