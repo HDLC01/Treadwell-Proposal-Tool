@@ -2756,7 +2756,7 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
             # after this and would put a `bullet: True` back, but only by joining whichever list
             # a SIBLING is on — so not stripping in the first place is how the row keeps its own
             # numbering identity rather than being re-homed onto the neighbouring list.
-            blank = (not "".join(r["text"] for r in val).strip()) if isinstance(val, list) \
+            blank = (not "".join(str(r.get("text") or "") for r in val).strip()) if isinstance(val, list) \
                 else (not val.strip())
             # A NUMBERED LIST IS NEVER STRIPPED, whatever the text says. numId 5 is the Terms and
             # Conditions clauses; they are in_block=None so this channel reaches all 27 of them by
