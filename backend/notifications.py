@@ -789,13 +789,37 @@ def get_notifications() -> Dict[str, Any]:
     items.extend(_retier(state.get("crm_events"), _TIER_CRM_STEP))
     items.extend(_draft_event_notifications())
 
-    # Section order — see the _TIER_* block: messages → CRM steps → activity → overdue → today →
-    # soon → no-deadline, newest-first inside each. EVENTS ABOVE DEADLINES: a deadline will read the
-    # same tomorrow, an event is news exactly once.
+    # ORDER: everything that HAPPENED, newest first, then the deadlines by urgency.
+    #
+    # Hanz, 2026-08-21, looking at a panel whose top row was eight days old: "notification is still
+    # showing the older ones and not in chronological order". He was right, and it was this sort.
+    # It used to order events by TIER first (messages, then CRM steps, then activity) and only then
+    # by time, with a stable sort — so tier won outright and a nine-day-old customer message sat
+    # above everything that happened today, permanently. Worse, the event slots filled up with old
+    # messages and pushed genuinely new rows off the end, which is the other half of what he saw.
+    #
+    # The tier split was right about ONE thing and wrong about the other. Right: an event outranks a
+    # deadline, because a deadline reads the same tomorrow and an event is news exactly once. Wrong:
+    # ranking KINDS of event against each other, which quietly ranked them against time as well. A
+    # customer message does matter more than us moving a card — but not a week later. So the three
+    # event tiers now share one bucket ordered by time alone, and the deadlines keep their urgency
+    # order underneath, where nothing about them is time-sensitive in the same way.
+    #
+    # An item that shipped without a `sort` still lands LAST, not first: a source that forgot its
+    # tier is a bug, and a bug does not get the top slot of the feed the whole team reads first.
+    _EVENTS_RANK, _DEADLINES_RANK, _UNTIERED_RANK = 0, 1, 2
+
+    def _rank(item: Dict[str, Any]) -> tuple:
+        tier = item.get("sort", _TIER_UNKNOWN)
+        group = _TIER_GROUP.get(tier)
+        if group == _GROUP_EVENTS:
+            return (_EVENTS_RANK, 0)            # time alone orders these
+        if group == _GROUP_DEADLINES:
+            return (_DEADLINES_RANK, tier)      # overdue before today before soon
+        return (_UNTIERED_RANK, tier)
+
     items.sort(key=lambda x: x.get("ts") or "", reverse=True)
-    # `_TIER_UNKNOWN`, not a real tier: an item that shipped without a `sort` is a bug, and the one
-    # place it must not land is the top of the feed the whole team reads first.
-    items.sort(key=lambda x: x.get("sort", _TIER_UNKNOWN))
+    items.sort(key=_rank)
     # Per-group BEFORE the total, or the winning group takes all 60 — see the _GROUP_* block.
     items = _cap_by_group(items, _MAX_ITEMS)
     # `unread` is counted AFTER the trim, deliberately, and that is the correct side: the badge is a
