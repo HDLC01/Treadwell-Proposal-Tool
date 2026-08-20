@@ -3821,8 +3821,12 @@
     const ovs = Array.isArray(state.system_overrides) ? state.system_overrides : (state.system_overrides = []);
     while (ovs.length <= i) ovs.push({});          // keep dense — no sparse nulls in JSON
     if (!ovs[i] || typeof ovs[i] !== "object") ovs[i] = {};
-    const v = serializeBlock(sp).replace(/\s*\n+\s*/g, " ").trim();
-    if (!v || v === (sp.dataset.computed || "")) delete ovs[i][field];   // empty / back-to-computed -> revert
+    // Spaces preserved, not trimmed. Kyle, 2026-08-20: editing must reflect 1 to 1 in the
+    // customer's copy. A WORK row is a label and a value in adjacent islands, so a space at
+    // the seam between them is a real edit. Emptiness is tested with .trim(), so a blank
+    // edit still reverts to the computed value without mangling what gets stored.
+    const v = serializeBlock(sp);
+    if (!v.trim() || v === (sp.dataset.computed || "")) delete ovs[i][field];   // empty / back-to-computed -> revert
     else ovs[i][field] = v;
     if (_sysOvTimer) clearTimeout(_sysOvTimer);
     _sysOvTimer = setTimeout(() => { try { TW.setState({ system_overrides: state.system_overrides }); } catch {} }, 500);
@@ -3882,14 +3886,24 @@
   function _handlePoInput(e) {
     // WHOLE-LINE edit: the whole <p> is contenteditable (base / tax / total /
     // combo / option / manual / alternate / headings). Store the full line text
-    // keyed by data-po-linekey. Preserve spaces — collapse only newlines to a
-    // single space (a price line is one line); NEVER trim (leading/trailing
-    // spaces are intentional and must survive to the docx).
+    // keyed by data-po-linekey, EXACTLY AS TYPED — no trim, no collapse, nothing.
+    //
+    // It used to collapse every newline to a single space, on the reasoning that "a
+    // price line is one line". Hanz, 2026-08-21: "if they enter two blank lines then it
+    // should also be 2 blank lines. Im tellign you whatever the update is in the
+    // proposal tool it should be one to one, spacing, font size, indentation ETC."
+    // The writer was never the obstacle — posting a newline straight to /api/generate
+    // has always produced a real <w:br/> — so this was the editor overruling the
+    // estimator about his own document. It no longer does.
+    //
+    // A line that now overflows its box is handled the way every other overflow is:
+    // fitTxbx shrinks, then clips and says so, and "Fit to text" offers the room when
+    // there is any. An honest warning beats silently flattening what he typed.
     const lineNode = e.target && e.target.closest ? e.target.closest('[data-po-kind="line"][data-po-linekey]') : null;
     if (lineNode) {
       const key = lineNode.dataset.poLinekey;
       if (!key) return;
-      const v = serializeBlock(lineNode).replace(/\n+/g, " ");
+      const v = serializeBlock(lineNode);
       const pov = _ensurePov();
       if (v.trim() === "" || v === (lineNode.dataset.computed || "")) delete pov.lines[key];
       else pov.lines[key] = v;
@@ -3903,8 +3917,17 @@
     if (!sp) return;
     const kind = sp.dataset.poKind, field = sp.dataset.poField;
     if (!kind || !field) return;
-    const v = serializeBlock(sp).replace(/\s*\n+\s*/g, " ").trim();
-    const revert = !v || v === (sp.dataset.computed || "");   // empty / back-to-computed
+    // SPACES ARE PRESERVED, exactly as the whole-line branch above preserves them.
+    // Kyle, 2026-08-20: "everything in the Proposals when editing should refelect 1 to 1
+    // in the customer side." This used to .trim(), and an option line renders as three
+    // adjacent islands - amount, desc, tax_phrase - so the seam between them is exactly
+    // where a person adds a space, and exactly what got eaten. The Base Bid line kept its
+    // space because it is a whole-line edit; the Options rows lost theirs because they are
+    // islands. Newlines still collapse to one space: a price line is one line.
+    // `revert` tests .trim() rather than the raw value, so a whitespace-only edit still
+    // means 'put the computed value back' without mangling what gets stored.
+    const v = serializeBlock(sp);
+    const revert = !v.trim() || v === (sp.dataset.computed || "");   // empty / back-to-computed
     const pov = _ensurePov();
     if (kind === "option") {
       const id = sp.dataset.poId || "";
