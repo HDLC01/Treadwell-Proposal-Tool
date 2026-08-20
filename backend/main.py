@@ -3053,14 +3053,32 @@ def _sanitize_price_overrides(pov_in) -> dict:
         return out
 
     def clean(o, fields) -> Dict[str, str]:
+        """SPACES ARE PRESERVED, exactly as the whole-line map below preserves them.
+
+        Kyle, 2026-08-20: "added a sp[ace and when generatred the files still did not
+        appear as spaced out" ... "everything in the Proposals when editing should
+        refelect 1 to 1 in the customer side."
+
+        This used to `.strip()` every field, so a space typed at the START or END of an
+        Options / manual / single-bid / row / alternate field was thrown away here —
+        server-side, after the browser had already shown it. An option line reads as
+        `<amount> - <desc> <tax_phrase>`, so the seam between two of these fields is
+        exactly where a person adds a space, and exactly what got eaten. The whole-line
+        `lines` map three blocks down already had the right rule and said so; these
+        fields simply never got it.
+
+        Whitespace-only still drops the override (= revert to the computed value),
+        which is the same test `lines` uses. That is the one thing `.strip()` was
+        genuinely needed for, and `s.strip()` as a TEST keeps it without mangling the
+        stored value."""
         entry: Dict[str, str] = {}
         if isinstance(o, dict):
             for k in fields:
                 v = o.get(k)
                 if v is None or isinstance(v, (dict, list, bool)):
                     continue
-                s = str(v).strip()
-                if s:
+                s = str(v)
+                if s.strip():
                     entry[k] = s[:_PRICE_OVERRIDE_FIELD_MAXLEN]
         return entry
 

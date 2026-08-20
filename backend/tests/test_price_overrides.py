@@ -148,7 +148,8 @@ def test_malformed_price_overrides_never_500():
 def test_sanitize_price_overrides_caps_and_coerces():
     out = main._sanitize_price_overrides({
         "options": {
-            "A": {"label": 42, "amount": "  $9,999  "},   # int coerces, amount strips
+            # int coerces; the amount KEEPS its padding since 2026-08-20 (see below)
+            "A": {"label": 42, "amount": "  $9,999  "},
             "B": {"label": {"n": 1}, "amount": ["x"]},     # nested dropped -> empty -> not included
             "C": {"label": "", "amount": "   "},           # blank -> empty -> not included (revert)
             "D": {"label": "keep", "bogus": "x"},          # unknown key ignored
@@ -156,7 +157,12 @@ def test_sanitize_price_overrides_caps_and_coerces():
         "manual": [{"label": "m0"}, "not-a-dict", {"amount": ["x"]}, {"label": True}],
         "single_bid": {"amount": "$40,000", "tax_phrase": "(note)", "bogus": "x"},
     })
-    assert out["options"] == {"A": {"label": "42", "amount": "$9,999"}, "D": {"label": "keep"}}
+    # SPACES ARE NO LONGER STRIPPED. Kyle, 2026-08-20: "everything in the Proposals when
+    # editing should refelect 1 to 1 in the customer side." A space he typed at the seam
+    # between two islands on an Options row was being thrown away here, server-side, after
+    # the browser had shown it. Whitespace-ONLY still reverts (see "C" above, still absent).
+    assert out["options"] == {"A": {"label": "42", "amount": "  $9,999  "},
+                             "D": {"label": "keep"}}
     assert out["manual"] == [{"label": "m0"}, {}, {}, {}]  # index-preserving {} placeholders
     assert out["single_bid"] == {"amount": "$40,000", "tax_phrase": "(note)"}
     # options cap
@@ -182,7 +188,8 @@ def test_sanitize_rows_and_alternate():
         "alternate": {"name": "Alt Sys", "total_amount": "$5,000", "bogus": "x",
                       "total_label": {"n": 1}},                    # nested field dropped
     })
-    assert out["rows"] == {"sales_tax": {"amount": "$2,000", "label": "7"},
+    # Padding preserved, same rule as options above (2026-08-20).
+    assert out["rows"] == {"sales_tax": {"amount": "  $2,000 ", "label": "7"},
                            "total": {"amount": "$9", "label": "Grand Total"}}
     assert out["alternate"] == {"name": "Alt Sys", "total_amount": "$5,000"}
     # legacy payload (no rows/alternate) still yields the empty new keys
