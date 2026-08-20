@@ -2914,6 +2914,19 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
+        # PARAGRAPH properties — the bullet toggle and the indent controls. Delegated to
+        # proposal_writer.sanitize_para_props rather than re-validated here: unlike `runs`
+        # (whose duplication is deliberate, see above), the meaning of a paragraph property is
+        # arithmetic against the template's own numbering definitions, and two copies of that
+        # would drift. The writer's copy still runs on the way in — this layer only decides
+        # whether the field travels at all.
+        #
+        # AND IT MUST TRAVEL. See the warning above _SYSTEM_OVERRIDE_FIELDS: this sanitizer
+        # dropping a field the editor already shows and the draft already remembers is not a
+        # no-op, it is positive confirmation of an edit the customer's .docx never got. Kyle's
+        # own words are why this exists: "I cant dletet the bullet points" / "There is
+        # indentation in this but I cant remove tat".
+        para = proposal_writer.sanitize_para_props(o.get("para"))
         # RUNS FIRST — the formatted shape. `proposal_writer._apply_paragraph_overrides` has always
         # accepted [{text, bold, italic, underline, size_pt}] and rebuilt the real w:r runs from it
         # (see its own validation), but this sanitizer only ever emitted {id, text}. So the format
@@ -2946,14 +2959,25 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
                 # `text` rides along as the plain-text fallback for any consumer that ignores runs.
                 entry: Dict[str, Any] = {"id": pid, "runs": clean,
                                          "text": "".join(r["text"] for r in clean)}
+                if para:
+                    entry["para"] = para
                 out.append(entry)
                 continue
             # Runs present but every one of them malformed: fall through to `text` below rather
             # than emitting an entry that would blank the paragraph.
         text = o.get("text")
         if text is None:
+            # A bullet switched off is not an edit to the words, so the editor sends `para`
+            # with NO text on a paragraph whose text it has not touched — and it must not send
+            # text there, because a text override collapses the template's own runs (bold
+            # lead-in, sizes) into one plain run. The entry has to survive without it.
+            if para:
+                out.append({"id": pid, "para": para})
             continue
-        out.append({"id": pid, "text": str(text)})
+        entry_t: Dict[str, Any] = {"id": pid, "text": str(text)}
+        if para:
+            entry_t["para"] = para
+        out.append(entry_t)
     return out
 
 
@@ -3368,6 +3392,14 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             # time (_flatten_price_bullets); flag them so the on-screen editor
             # renders them flush/bullet-less to match the generated .docx.
             "price_flat": proposal_writer._para_price_list(p_elem),
+            # The paragraph's own Word properties: {bullet, indent (twips), locked}. The
+            # toolbar cannot render a bullet toggle without knowing whether the bullet is
+            # currently on, cannot show an indent it cannot read, and — the part that matters —
+            # cannot know to hide both on a numbered TERMS AND CONDITIONS clause, where
+            # dropping the numbering silently renumbers every clause below it. `locked` is that
+            # answer, computed from the template's numbering definitions, not guessed from
+            # `list` (which is True for the contract clauses too).
+            "para": proposal_writer.para_props(d, p_elem),
             "runs": proposal_writer._block_runs(p_elem, p),
         })
 
@@ -3435,7 +3467,12 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # v4: added `geometry.page.max_box` (the resize limit the drag handle must stop at). Nothing
 # reads it yet, so a stale cache is harmless today — but Phase 3's handle would find the field
 # missing on any browser holding a v3 response, which is a confusing way to learn about caching.
-_BLOCK_SCHEMA_VERSION = "4"
+# v5: added per-block `para` ({bullet, indent, locked}) for the bullet/indent controls. NOT
+# harmless if stale: a browser replaying a v4 response has no `locked` for any block, so it
+# cannot tell a WORK row from a numbered contract clause. The frontend's fallback for a block
+# with no `para` is therefore to offer no controls at all, and this bump is what makes sure it
+# never has to.
+_BLOCK_SCHEMA_VERSION = "5"
 
 
 def _template_proposal_version(path: Path) -> str:

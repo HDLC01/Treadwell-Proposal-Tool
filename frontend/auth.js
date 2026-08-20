@@ -209,6 +209,20 @@
   // super_admin is bootstrapped from SUPER_ADMIN_EMAIL and cannot be granted from the UI.
   const ROLES = ["user", "admin", "super_admin"];
 
+  // Tabs this policy governs that have NO SIDEBAR ROW — the mirror of nav_access.py's
+  // NO_SIDEBAR_TABS, which is asserted equal to this list in backend/tests/test_nav_access.py.
+  //
+  // WHY THIS LIST EXISTS AT ALL. Everything else about the menu is reflected out of the real
+  // navItem() calls, deliberately, so a second copy cannot go stale. These tabs have no navItem()
+  // call to reflect: Info Sheet moved into the project drawer on 2026-08-20 and is still a tab the
+  // server can refuse per role. Without a row here the Admin page could not draw its switch, so a
+  // role could be denied it with nothing on screen to see or undo — the one lockout with no way
+  // back in the UI. The section/glyph/label are only what the switch is LABELLED with; what the
+  // policy governs is the href, and nav_access.py is the authority on that.
+  const NO_SIDEBAR_TABS = [
+    { section: "Proposals", href: "/info-sheet.html", glyph: "📋", label: "Info Sheet", tag: "" },
+  ];
+
   // Pull the nav entries back out of rendered sidebar markup: one row per item, in order, tagged
   // with the section heading above it. The Admin page's role matrix reads THIS, so the matrix and
   // the menu cannot disagree — there is one list, and this walks what it produced.
@@ -264,15 +278,55 @@
       parseNav(renderSidebar(role, deny ? (deny[role] || []) : denyFor(role))).forEach(function (e) {
         let row = byHref[e.href];
         if (!row) {
+          // noSidebar false because this row came OUT of a render of the menu. The rows appended
+          // below carry it true, which is how the Admin page can name a governed tab that has no
+          // menu entry instead of counting it as one.
           row = byHref[e.href] = { section: e.section, href: e.href, glyph: e.glyph,
-                                   label: e.label, tag: e.tag, roles: {} };
+                                   label: e.label, tag: e.tag, noSidebar: false, roles: {} };
           ROLES.forEach(function (r) { row.roles[r] = false; });
           rows.push(row);
         }
         row.roles[role] = true;
       });
     });
+    if (deny) addNoSidebarRows(rows, deny);
     return { roles: ROLES.slice(), rows: rows };
+  }
+
+  // The gated-but-undrawn tabs, added to a matrix that is REPORTING ON A POLICY.
+  //
+  // The deny argument is the seam, and it is not incidental: handed a deny map, the caller is asking
+  // "what can this policy reach" — the Admin page's switches, and labelOf() naming a tab somebody
+  // was just refused — and the answer has to include a tab whose switch is real even though its row
+  // is gone. Asked with NO argument, the caller is asking about the MENU (navSpec, and the harness
+  // in backend/tests/js/nav-visibility-harness.js that proves the matrix IS the sidebar), and the
+  // answer stays exactly the sidebar, tab for tab.
+  //
+  // Roles are read straight off the deny map rather than from a render, because there is no render
+  // to read: no navItem() call means nothing to leave out. A tab absent from a role's deny list is
+  // one that role still gets, which is the same default-allow rule the rest of this policy has.
+  //
+  // That default-allow is only as good as the map it reads, so each of these rows is stamped
+  // noSidebar:true. Handed an EMPTY map (a caller that has no policy to show) the ticks below all
+  // come out on, and the flag is what lets the Admin page say "not known" for those cells instead
+  // of showing an on state it cannot back.
+  function addNoSidebarRows(rows, deny) {
+    NO_SIDEBAR_TABS.forEach(function (t) {
+      // If it ever gets a sidebar row back, that row wins and this one is not drawn twice.
+      if (rows.some(function (r) { return r.href === t.href; })) return;
+      const row = { section: t.section, href: t.href, glyph: t.glyph, label: t.label,
+                    tag: t.tag || "", noSidebar: true, roles: {} };
+      ROLES.forEach(function (r) {
+        const list = deny[r];
+        row.roles[r] = !(Array.isArray(list) && list.indexOf(t.href) !== -1);
+      });
+      // Placed after the LAST row of its own section, so the Admin page's print-the-heading-once
+      // pass does not print that heading a second time further down the table. Appended if no row
+      // carries that section at all.
+      let at = -1;
+      for (let i = 0; i < rows.length; i++) if (rows[i].section === t.section) at = i;
+      rows.splice(at === -1 ? rows.length : at + 1, 0, row);
+    });
   }
 
   // renderSidebar() draws the sidebar for the signed-in user. renderSidebar("admin") builds the
@@ -337,10 +391,17 @@
       // due, and when". Both read the Basisboard bids; neither writes to them.
       navItem("/calendar.html", "▧", "Bid Calendar") +
       '<div class="tw-section">Proposals</div>' +
-      // Same glyph as the "Info sheet" button on the project cards, so the two
-      // entry points read as one destination. shared.js appends ?d= for the
-      // project in hand; with none it lands on its own choose-a-project state.
-      navItem("/info-sheet.html", "📋", "Info Sheet") +
+      // INFO SHEET IS NOT A SIDEBAR ITEM ANY MORE (Hanz, 2026-08-20). It moved into the project
+      // drawer's Proposal tab, beside the project it is a hand-off for. The menu row could only
+      // ever land on its own choose-a-project state, which is a step nobody wanted; from the
+      // drawer it is one click on the job already in hand.
+      //
+      // THE TAB STILL EXISTS AS A PERMISSION. nav_access.py keeps its capability entry and names it
+      // in NO_SIDEBAR_TABS, so /api/info-sheet/* is still refused to a denied role and the page
+      // still paints a refusal. The matching NO_SIDEBAR_TABS in THIS file is declared further UP,
+      // just above the nav parser (search for "const NO_SIDEBAR_TABS"), and it is the list
+      // navMatrix uses to keep drawing this tab's switch on the Admin page: a tab that can be
+      // denied has to be one an admin can see.
       // Step 2 for polish jobs, without the spreadsheet. Sits under Proposals rather than
       // getting its own heading: it IS part of making a proposal, unlike the Item Library.
       // The old Estimate Review is untouched and still reachable, so a polish bid can be run
@@ -415,16 +476,12 @@
     if (spec) return aside.innerHTML;
     document.body.appendChild(aside);
 
-    // The sidebar is injected after sign-in resolves, which is long after
-    // shared.js's DOMContentLoaded pass that appends ?d= to project-scoped
-    // links — so any nav item that needs a draft has to carry it itself.
-    try {
-      if (window.TW && TW.getDraftId()) {
-        aside.querySelectorAll('a[href="/info-sheet.html"]').forEach((a) => {
-          a.setAttribute("href", TW.withDraft("/info-sheet.html"));
-        });
-      }
-    } catch {}
+    // NO NAV ITEM NEEDS THE DRAFT ID any more. This is where the ?d= rewrite lived: the sidebar is
+    // injected after sign-in resolves, long after shared.js's DOMContentLoaded pass that appends ?d=
+    // to project-scoped links, so a project-scoped nav item had to carry it itself. Info Sheet was
+    // the only one, and it left the menu on 2026-08-20 for the project drawer, where the project is
+    // already in hand. Every item above is a whole-app page. If a project-scoped item ever comes
+    // back, that rewrite comes back with it — it is not optional, or the link opens the wrong job.
 
     const backdrop = document.createElement("div"); backdrop.id = "tw-backdrop";
     document.body.appendChild(backdrop);
@@ -483,6 +540,10 @@
   // The tab's own label, read back out of the menu, so the card names the page the way the sidebar
   // does and a rename cannot leave it saying something else. Rendered with NO denials, because the
   // row being looked up is by definition one this role does not get.
+  //
+  // The EMPTY MAP rather than no argument is load-bearing: passing a deny map is what makes
+  // navMatrix include the tabs with no sidebar row, and one of those (Info Sheet) is refusable. With
+  // no argument this would fall through to "This page" on exactly the pages nobody can name.
   function labelOf(href) {
     const rows = navMatrix({}).rows;
     for (let i = 0; i < rows.length; i++) if (rows[i].href === href) return rows[i].label;
