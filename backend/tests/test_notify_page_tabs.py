@@ -21,8 +21,8 @@ screens cannot disagree.
     Lost tab carrying a Test chip. Two screens disagreeing about where a dead deal lives is worse
     than either answer, so this page copies the board — chip included.
   * TEST beats WON, because a test project's outcome is fiction. Won is a number a human reads as
-    real work, and somebody's scratch bid must not be able to inflate it. The board agrees: it has
-    no Won tab, and a won test project sits on its Test tab.
+    real work, and somebody's scratch bid must not be able to inflate it. The board agrees: a won
+    test project sits on its Test tab, not on the Won tab it grew on 2026-08-20.
   * ACTIVE is the REMAINDER, never a predicate of its own. That is what makes the four a partition
     and what stops a project the categories don't recognise from being reachable from no tab.
 
@@ -39,11 +39,17 @@ followups.js reached the same line from the other side and its tab is LABELLED "
 than Won, because approval alone does not earn the word. This page has the deposit signal in the
 same row, so it can afford the stricter test and keep the honest label.
 
-THE ONE PLACE THIS PAGE AND THE CRM BOARD DIFFER, stated rather than hidden: a won project is still
-on the board's ACTIVE board (in its "Deposit received" or "Contact info" column) while this page
-files it under Won. That is the whole point of the ask — those rows were the clutter — and no row
-changes category, only which of this page's tabs shows it. Nothing the board calls Closed lost can
-appear under Active here, and nothing it calls Test can either.
+THIS PAGE AND THE CRM BOARD NOW AGREE ABOUT WON, WHICH THEY DID NOT WHEN THIS FILE WAS WRITTEN. On
+2026-08-19 this docstring named the difference rather than hiding it: a won project stayed on the
+board's ACTIVE board, in its "Deposit received" or "Contact info" column, while this page filed it
+under Won. Hanz reversed the board's half on 2026-08-20 — "I marked Trabon Group project as Won but
+it's still in the Created but Not Sent bucket" — so a won job now leaves the Active board for a Won
+TAB, whose columns are what is still outstanding on it (see test_won_tab.py). Both screens read the
+same crm-core predicates and both move a won job out of the working list; the difference is only
+what each does with it afterwards, and the sentence that used to be here is no longer true.
+
+What is unchanged is the precedence, and it is what this file exists to pin: nothing the board calls
+Closed lost can appear under Active here, and nothing it calls Test can either.
 
 EVERYTHING BELOW IS EXECUTED. The house rule, bought the hard way on 2026-08-12: a source-text
 assertion cannot see an unbound identifier, and that class of bug took the board down on prod with

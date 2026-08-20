@@ -65,3 +65,25 @@ backend/data/
 # Kyle's trailing-12 workbook: real win rates and revenue by trade. This repo is public.
 # A sanitized copy of its LAYOUT lives at backend/tests/fixtures/trailing12_layout.xlsx.
 Trailing 12TH MONTH.xlsx
+
+# ── Customer material and working files that live in the repo root ───────────
+# THIS REPO IS PUBLIC. Real customer documents get dropped in the working
+# directory while a bid is being built — a project info sheet, a deposit
+# invoice, an install form, a lock-up drawing. None of it belongs in git, and
+# none of it was ignored until now: on 2026-08-19 a `git add -A` here staged
+# sixteen of them, and the `git reset --hard` that followed deleted the lot.
+# They were recovered from the orphaned commit, but the only durable fix is for
+# git to stop seeing them at all. Ignoring them also keeps `git status` legible,
+# which is what makes an accidental `add -A` less tempting in the first place.
+#
+# Scoped to the repo ROOT (leading /) so a genuine fixture committed under
+# backend/tests/fixtures/ is unaffected.
+/*.docx
+/*.xlsx
+/*.pdf
+/*.png
+/*.jpg
+/*.eml
+/*.msg
+# Drafted outbound messages, written here for review before they are sent.
+/email-*.txt
