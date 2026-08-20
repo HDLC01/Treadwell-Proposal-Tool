@@ -290,19 +290,119 @@ def test_the_pages_with_no_sidebar_row_are_never_denied():
         assert nav_access.page_denied("user", page) is None, page
 
 
+FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
+
+
+def _sidebar_hrefs():
+    """Every href the sidebar draws a row for, read out of auth.js's navItem() calls."""
+    return set(re.findall(r'navItem\("([^"]+)"', (FRONTEND / "auth.js").read_text(encoding="utf-8")))
+
+
 def test_every_tab_in_the_table_is_a_real_page_and_every_sidebar_href_is_in_the_table():
     """The table is keyed on href because href is the only identity the Admin matrix has — auth.js's
     navMatrix keys its rows byHref and admin.js stamps data-href. A typo there is a switch that
-    silently governs nothing."""
-    frontend = pathlib.Path(__file__).resolve().parents[2] / "frontend"
+    silently governs nothing.
+
+    Compared against the NAV-VISIBLE tabs, not against all of TABS: a tab may be governed without
+    being drawn (NO_SIDEBAR_TABS), and the test below is what stops that becoming an accident."""
     for href, tab in nav_access.TABS.items():
         for page in tab["pages"]:
-            assert (frontend / page.lstrip("/")).is_file(), "%s claims %s" % (href, page)
-    hrefs = set(re.findall(r'navItem\("([^"]+)"',
-                           (frontend / "auth.js").read_text(encoding="utf-8")))
-    assert hrefs == set(nav_access.TABS), (
+            assert (FRONTEND / page.lstrip("/")).is_file(), "%s claims %s" % (href, page)
+    hrefs = _sidebar_hrefs()
+    visible = set(nav_access.TABS) - set(nav_access.NO_SIDEBAR_TABS)
+    assert hrefs == visible, (
         "the sidebar and the capability table disagree: only in sidebar %s / only in table %s"
-        % (sorted(hrefs - set(nav_access.TABS)), sorted(set(nav_access.TABS) - hrefs)))
+        % (sorted(hrefs - visible), sorted(visible - hrefs)))
+
+
+def test_every_tab_is_either_in_the_sidebar_or_DELIBERATELY_hidden():
+    """A tab cannot fall out of the sidebar by accident and take its gate with it.
+
+    This is the guard the 2026-08-20 Info Sheet move needed. The test above used to compare the
+    sidebar against ALL of TABS, so the cheap way to keep it green when a row is deleted is to
+    delete the tab's TABS entry — which removes the per-role gate on its API and makes the page
+    undeniable. Nothing failed when that happened, because the only assertion was that the two lists
+    matched, and deleting from both matches.
+
+    So the pair is asserted in both directions: a tab out of the sidebar has to be named in
+    NO_SIDEBAR_TABS on purpose, and NO_SIDEBAR_TABS may only name a real tab that really has no
+    row."""
+    hrefs = _sidebar_hrefs()
+    for href in nav_access.TABS:
+        assert href in hrefs or href in nav_access.NO_SIDEBAR_TABS, (
+            "%s is in the capability table but has no sidebar row and is not in NO_SIDEBAR_TABS. "
+            "Either give it a row back or name it there — do NOT delete its table entry, which is "
+            "what gates %s." % (href, nav_access.TABS[href]["api"] or "its page"))
+    for href in nav_access.NO_SIDEBAR_TABS:
+        assert href in nav_access.TABS, (
+            "%s is listed as a hidden TAB but is not a tab; nothing gates it" % href)
+        assert href not in hrefs, (
+            "%s is back in the sidebar, so it should come out of NO_SIDEBAR_TABS" % href)
+        assert href not in nav_access.LOCKED, (
+            "%s is both hidden and undeniable, which makes its entry decoration" % href)
+
+
+def test_the_hidden_set_is_the_same_list_auth_js_keeps():
+    """auth.js has to name these too — it has no navItem() call to reflect, so navMatrix appends
+    their rows from its own NO_SIDEBAR_TABS list, which is what keeps the Admin page's switch on
+    screen. Two copies of one list is how one of them rots, so they are diffed here.
+
+    The consequence of drift is specific: a tab in this module and not in auth.js is a tab that can
+    be denied with no switch to see or undo it, and the recovery is `rm` on the volume."""
+    src = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    block = src[src.index("const NO_SIDEBAR_TABS = ["):]
+    block = block[:block.index("];")]
+    assert set(re.findall(r'href:\s*"([^"]+)"', block)) == set(nav_access.NO_SIDEBAR_TABS), (
+        "auth.js's NO_SIDEBAR_TABS and nav_access.NO_SIDEBAR_TABS have drifted: auth.js has %s, "
+        "this module has %s" % (block, sorted(nav_access.NO_SIDEBAR_TABS)))
+
+
+def test_a_hidden_tab_STILL_GATES_ITS_API_which_is_why_its_entry_survived_the_move():
+    """THE test for NO_SIDEBAR_TABS, and the loudest claim in this file after the no-op promise.
+
+    Info Sheet left the sidebar on 2026-08-20 for the project drawer's Proposal tab. Its capability
+    entry did NOT leave with it, and this is what that buys: a role denied the Info Sheet tab is
+    still refused /api/info-sheet/* by the middleware and still gets a refusal card instead of the
+    page — even though there is no menu row anywhere to hide.
+
+    The reversal to watch fail: dropping "/info-sheet.html" from TABS. It keeps the sidebar/table
+    comparison above green and turns every assertion here into "nothing is denied", which is a page
+    with no permission at all and an API anybody can read by URL."""
+    hidden = "/info-sheet.html"
+    assert hidden in nav_access.NO_SIDEBAR_TABS
+    assert hidden not in _sidebar_hrefs(), "this test is about a tab with NO sidebar row"
+    assert hidden in nav_access.TABS, "the tab lost its entry, so nothing below can gate anything"
+
+    nav_access.save({"user": [hidden]}, "kyle@wetreadwell.com")
+    assert nav_access.denied_paths("user") == [hidden], (
+        "a tab with no sidebar row could not even be stored as denied")
+    # The API. Both children the page calls, and the bare prefix's neighbours left alone.
+    for path in ("/api/info-sheet/d1", "/api/info-sheet/generate",
+                 "/api/info-sheet/" + "x" * 40):
+        assert nav_access.is_api_denied("user", path) is True, path
+    assert nav_access.denied_api_prefixes("user") == ["/api/info-sheet/"]
+    # The page itself, and the tab named back so the refusal card can say which one.
+    assert nav_access.page_denied("user", hidden) == hidden
+    assert nav_access.denied_page_map("user") == {hidden: hidden}
+    # And only for the role that was denied it.
+    assert nav_access.is_api_denied("admin", "/api/info-sheet/d1") is False
+    assert nav_access.page_denied("admin", hidden) is None
+    assert nav_access.is_api_denied("super_admin", "/api/info-sheet/d1") is False
+
+
+def test_a_hidden_tab_still_has_a_row_in_the_capability_table_flagged_as_hidden():
+    """The Admin page builds its switches from this table plus auth.js's matrix. Dropping the row
+    would make the switch missing rather than obviously present-but-different, which is the state
+    where somebody denied it and cannot take it back."""
+    table = {row["href"]: row for row in nav_access.capability_table()}
+    for href in nav_access.NO_SIDEBAR_TABS:
+        assert href in table, "%s has no row for the Admin page to draw" % href
+        assert table[href]["no_sidebar"] is True
+        assert table[href]["locked"] is False
+        assert table[href]["api"], (
+            "%s owns no private route, so hiding the tab is now all a switch there does — the "
+            "Admin page's wording is derived from `api` and needs re-reading" % href)
+    assert table["/leads.html"]["no_sidebar"] is False, "a drawn tab is not flagged hidden"
 
 
 def test_the_recovery_command_is_written_down_where_somebody_locked_out_would_look():

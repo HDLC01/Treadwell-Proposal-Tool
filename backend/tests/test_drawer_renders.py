@@ -126,7 +126,15 @@ def test_every_name_the_drawer_takes_off_crm_core_really_exists(out):
 def test_the_harness_covers_every_tab_the_drawer_has(out):
     """If somebody adds a sixth tab, these assertions have to walk it too. SEC_TABS is read out of
     the running module rather than counted here, so this cannot silently stop covering a tab."""
-    assert out["tabs"] == ["proposal", "deposit", "contacts", "chat", "followup"], out["tabs"]
+    # SET first, because the job of this assertion is to notice a tab arriving or leaving, and
+    # comparing a list makes it fail for a mere reorder as well - which is what happened when chat
+    # moved to the front on 2026-08-21 and told us nothing about coverage.
+    assert set(out["tabs"]) == {"proposal", "deposit", "contacts", "chat", "followup"}, out["tabs"]
+    # And the order IS a decision now, so it gets its own assertion with its own reason. Hanz:
+    # "move that tab to the leftmost ... so its just intuittive to always look there". The eye
+    # lands on the first tab, and the conversation is what a rep needs most often.
+    assert out["tabs"][0] == "chat", (
+        "chat is no longer the first tab: %r" % (out["tabs"],))
 
 
 @needs_node
@@ -293,6 +301,19 @@ CONDITIONAL_IDS = {
     "won-note": "rendered with either button, so absent when neither is offered",
 }
 
+# The NOT-SENT paint's own additions, kept out of the dict above on purpose. On a sent drawer
+# #thread is always rendered and must stay mandatory, so relaxing it for everybody to fix an unsent
+# lookup would have retired a real check: the chat panel could stop rendering its thread on every
+# sent project and the strict pass would have nothing to say about it.
+NOT_SENT_CONDITIONAL_IDS = {
+    # The chat scroll (2026-08-20). applySecPanel's chat branch reaches for #thread to restore the
+    # scroll position, and it runs on this panel too because the tab strip is the same one. There is
+    # no conversation until somebody sends the proposal, and the lookup is written for exactly that
+    # (`const t = $("thread"); if (!t) return;`), so it is a guarded read and not a handler bound to
+    # nothing.
+    "thread": "no conversation exists on a bid nobody has sent",
+}
+
 
 @needs_node
 @pytest.mark.parametrize("name", SCENARIOS)
@@ -426,14 +447,23 @@ def test_exactly_one_step_reads_as_selected(out, name):
 @needs_node
 def test_the_drawer_opens_on_the_tab_that_needs_a_human(out):
     """defaultSection answers "why is this drawer open?". A customer message beats everything, an
-    unconfirmed payment comes next, and everything else lands on Proposal. Executed rather than
-    read, because the routing is four conditions over three fields and the wrong order reads
-    perfectly well in source."""
+    unconfirmed payment comes next, and everything else lands on the conversation. Hanz, 2026-08-20:
+    "In the opening of a project, Chat should be the tab thats the first to appear." Executed rather
+    than read, because the routing is four conditions over three fields and the wrong order reads
+    perfectly well in source.
+
+    Careful reading of the third line: it is now the same answer the fallback gives, so it no longer
+    pins the rules ABOVE it. test_drawer_chat_default.py puts each of those against the tab it has to
+    beat, which is the only shape that can still fail.
+
+    The last line is the fallback's own exception. `bare` has no messages at all, so Chat would be
+    an empty panel and the drawer opens on Proposal instead."""
     assert out["scenarios"]["sent"]["openedOn"] == "chat", "two unread messages did not win"
     assert out["scenarios"]["submitted"]["openedOn"] == "deposit", (
         "money in and unconfirmed did not win")
-    assert out["scenarios"]["approved"]["openedOn"] == "proposal"
-    assert out["scenarios"]["bare"]["openedOn"] == "proposal"
+    assert out["scenarios"]["approved"]["openedOn"] == "chat"
+    assert out["scenarios"]["bare"]["openedOn"] == "proposal", (
+        "a drawer with nothing in its thread opened on Chat anyway")
 
 
 # ── the redesign's information design ────────────────────────────────────────
@@ -590,8 +620,10 @@ def test_the_not_sent_panel_does_not_wire_the_sent_drawers_cards(out):
     shared_cards = set(out["allSecCards"])
     # CONDITIONAL_IDS too: this panel now has a mutually-exclusive pair of its own
     # (ns-lost / ns-reopen), which is the same guarded-lookup shape the sent drawer has had
-    # for fu-lost / fu-reopen since it shipped, and it is checked by the same list.
-    unexpected = missing - shared_cards - set(CONDITIONAL_IDS)
+    # for fu-lost / fu-reopen since it shipped, and it is checked by the same list. Plus the
+    # handful this paint alone may skip, which is a SEPARATE dict so that widening it here cannot
+    # quietly relax the strict pass every sent scenario runs.
+    unexpected = missing - shared_cards - set(CONDITIONAL_IDS) - set(NOT_SENT_CONDITIONAL_IDS)
     assert not unexpected, "it wires ids it never rendered: %s" % sorted(unexpected)
 
 
@@ -814,3 +846,37 @@ def test_the_panel_spaces_itself_by_layout_rather_than_per_element_margins():
     # .row3 has to state its direction, or `class="sec row3"` (the not-sent panel's button row)
     # inherits column and stacks the two buttons.
     assert re.search(r"\.row3\s*\{[^}]*flex-direction:row", CSS)
+
+
+def test_the_chat_tab_is_tinted_and_still_loses_to_the_state_rules():
+    """Hanz, 2026-08-21: "move that tab to the leftmost and make it a different color tab I guess
+    so its just intuittive to always look there."
+
+    Two properties, and the second is the one that breaks silently. The chat tab needs its own
+    tint, AND that tint must lose to the three states the strip already shows: a tab that needs a
+    human (.needs), a finished one (.is-done), and the one you are on ([aria-selected]). Those are
+    all single-class-plus-element selectors of the same weight as `.step#dtab-chat`... except the
+    id makes chat's rule STRONGER, so source order cannot save it. Which means the state rules
+    must come LATER in the file AND out-specify it, or a chat tab with 3 unread messages would
+    quietly stop looking urgent.
+
+    This repo has shipped that exact bug twice - the `hidden` attribute beaten by a class rule,
+    and an expanded box's message beaten by an equal-specificity rule written later - so the
+    ordering is asserted rather than assumed."""
+    import re
+    html = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "portal.html").read_text(
+        encoding="utf-8")
+    chat = html.find("#dtab-chat {")
+    assert chat > 0, "the chat tab has no tint of its own any more"
+    # a hue nothing else on the strip uses: not the red of .needs, not the green of .is-done
+    rule = html[chat:html.find("}", chat)]
+    assert "background:" in rule, "the chat tab rule sets no background"
+    assert "var(--red" not in rule and "#e3f3e6" not in rule, (
+        "the chat tint reuses a colour that already means something else on this strip")
+    for later in (".dtabs .step.is-done {", ".dtabs .step.needs {",
+                  '.dtabs .step[aria-selected="true"] {'):
+        at = html.find(later)
+        assert at > chat, (
+            "%s is declared BEFORE the chat tint, so a chat tab that needs attention, is done, "
+            "or is selected would render as merely 'chat'" % later.strip())
+

@@ -1,13 +1,24 @@
 "use strict";
-/* The last locked labels on the proposal page, and a text box that grows instead of clipping.
+/* The last locked labels on the proposal page, a text box that grows instead of clipping, and
+ * the paragraph controls (part 3) — the bullet toggle and the two indent steps.
  * RUN, not read.
  *
  * Kyle, 2026-08-19, on the proposal document editor:
  *   "Some of the labels are not editable why not make it like a word document??"
  *   "Everything on that page must be editable like a word doc"
  *   "instead of it being a textbox why not make it editable like a word document?"
+ * and 2026-08-20:
+ *   "I cant dletet the bullet points"
+ *   "There is indentation in this but I cant remove tat if I want to to be aligned on the
+ *    polished concrete?"
  *
- * Two behaviours, neither visible to a source assertion:
+ * Part 3's own reason for running rather than reading: whether the bullet button reads ON,
+ * whether a numbered contract clause is offered anything at all, and whether the state survives
+ * a reload are properties of several functions agreeing — the block record from the endpoint,
+ * paraNow/paraPatch, the toolbar's render, the collector and the restorer. No line of source
+ * says any of that.
+ *
+ * Two behaviours from the earlier pass, neither visible to a source assertion:
  *
  *   * THE LABELS. renderSystemPreview builds the WORK rows as a string of HTML, and whether a
  *     label came out as an editable island or as escaped dead text is a property of the string it
@@ -41,6 +52,9 @@ const FRONTEND = process.argv[2];
 // the shipped source, which is the one thing this harness must not allow.
 const SRC = fs.readFileSync(path.join(FRONTEND, "js", "proposal-review.js"), "utf8")
   .replace(/\r\n/g, "\n");
+// The run algebra, the real module the page loads — collectOverrides reads runs off the DOM and
+// the format bar's own state summary comes out of it.
+const F = require(path.join(FRONTEND, "js", "proposal-format-core.js"));
 
 // ── lifting the real source ──────────────────────────────────────────────────
 function fn(name) {
@@ -156,6 +170,13 @@ class Text {
     this.parentNode = null;
   }
   get parentElement() { return this.parentNode; }
+  get length() { return this.nodeValue.length; }
+  remove() {
+    const p = this.parentNode;
+    if (!p) return;
+    p.childNodes = p.childNodes.filter((n) => n !== this);
+    this.parentNode = null;
+  }
 }
 
 const VOID = new Set(["BR", "IMG", "HR", "INPUT"]);
@@ -269,6 +290,11 @@ class El {
     return false;
   }
   addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  // The format bar builds itself with setAttribute (role/aria-label) and keeps aria-pressed in
+  // step with the buttons' pressed state, so these are part of the surface under test.
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] === undefined ? null : this.attrs[k]; }
+  normalize() {}
   setPointerCapture() {}
   releasePointerCapture() {}
   blur() { if (document.activeElement === this) document.activeElement = null; }
@@ -298,6 +324,9 @@ const document = {
 const window = {
   _listeners: {},
   addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
+  // showFmtBar clamps the toolbar inside the viewport, so it needs one.
+  innerWidth: 1440,
+  innerHeight: 900,
 };
 
 function fire(node, type, props) {
@@ -363,11 +392,25 @@ const TWStub = {
 
 let API = null;
 
-// Exactly what schedulePersistOverrides does AROUND the shipped collector, so the store this
-// harness reads back is written by the real collectBoxOverrides.
+const dirtied = [];        // every markEdited() the lifted format code performs
+const repaginated = [];    // every scheduleRepaginate() a paragraph change asks for
+
+// Exactly what schedulePersistOverrides does AROUND the shipped collectors, so the store this
+// harness reads back is written by the real collectBoxOverrides / collectOverrides /
+// mergeOverrideEntry. The paragraph half matters for the round trip: a bullet the toolbar
+// forgets after a reload is worse than no toolbar, and the only way to prove it does not is to
+// persist through the real collector and restore through the real restorer.
 function schedulePersistOverrides() {
   persisted.calls += 1;
-  TWStub.setState({ box_overrides: API.collectBoxOverrides() });
+  const items = API.collectOverrides();
+  const ver = API.templateVersion();
+  TWStub.setState({
+    box_overrides: API.collectBoxOverrides(),
+    paragraph_overrides_all: API.mergeOverrideEntry(
+      TWStub.getState().paragraph_overrides_all, "epoxy", "Direct", ver, items),
+    paragraph_overrides: items,
+    paragraph_overrides_meta: { template_version: ver, work_type: "epoxy", audience: "Direct" },
+  });
 }
 
 const LIFTED = [
@@ -389,6 +432,20 @@ const LIFTED = [
   // which took out all 86 tests in this module. Any function fitTxbx reaches has to be here.
   fn("fitOffer"),
   fn("fitTxbx"), fn("fitNotesBox"), fn("wireOverflowExpand"),
+  // ── the paragraph controls (bullet / indent) and everything they touch ──
+  // The toolbar's own click handler reaches toggleFormat and applyFormat on the B/I/U buttons,
+  // and showFmtBar reads selectionFormat, so those are lifted too rather than stubbed: a stub
+  // here is exactly how `fitOffer` hid until the first overflowing box (see the note above).
+  topConst("DOC_TOKEN_RE"), topConst("sameFmt"), topConst("SIZE_CHOICES"),
+  topConst("INDENT_STEP_TW"), topConst("INDENT_MAX_TW"), topConst("TWIPS_PER_PT"),
+  fn("fillHtml"), fn("runStyleCss"), fn("blockHtml"), fn("fmtAt"), fn("segmentsOf"),
+  fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"), fn("runEditCss"), fn("renderRuns"),
+  fn("runsArePlain"), fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"),
+  fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
+  fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
+  fn("ensureFmtBar"), fn("showFmtBar"), fn("hideFmtBar"),
+  topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
+  fn("savedOverridesFor"), fn("restoreSavedOverrides"), fn("collectOverrides"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();
@@ -396,7 +453,7 @@ const SYS_INPUT = delegated("  // ── Editable estimate-sourced fills: WORK s
 
 const api = new Function(
   "document", "window", "docSurface", "systemPreviewEl", "form", "boxDesign", "Node",
-  "schedulePersistOverrides", "TW",
+  "schedulePersistOverrides", "TW", "F", "dirtied", "repaginated",
   `const state = TW.getState();
   let boxOverrides = new Map(); let boxLimits = null; let docZoom = null;
   let templateBlocks = [{ id: 1, txbx: 0 }];
@@ -406,6 +463,25 @@ const api = new Function(
   const clearTimeout = () => {};
   let _sysOvTimer = null;
   const renderNotesPreview = () => {};
+  const RUN_KEYS = F.RUN_KEYS;
+  const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
+  const TOKEN_HINTS = {};
+  let _fmtBusy = false;
+  let flowMode = false;
+  let fmtBar = null, fmtBlock = null;   // the page's own two bindings, verbatim
+  let templateVersion = "tv-1";
+  const blockById = new Map();      // id -> the template's block record
+  const pristineById = new Map();   // id -> the block's pristine plain text
+  const paraById = new Map();       // the page's own store, see proposal-review.js
+  const scheduleRepaginate = () => { repaginated.push(1); };
+  // NOT lifted, for the reason doc-editor-harness.js gives: selectionRange and placeSelection
+  // are Range arithmetic against a live selection, the one thing a shim cannot model honestly.
+  // Returning null is what a real collapsed-caret-less block gives selectionFormat, which then
+  // treats the whole paragraph as the range — and a paragraph property applies to the whole
+  // paragraph anyway, so nothing under test here depends on the caret.
+  const selectionRange = () => null;
+  const placeSelection = () => {};
+  const markEdited = (el, formatted) => { dirtied.push([el.dataset.id, !!formatted]); };
 ` + LIFTED + `
   systemPreviewEl.addEventListener("input", (e) => ${SYS_INPUT});
   wireBoxDrag();
@@ -420,10 +496,38 @@ ${BOX_LOOP}
            clearOverrides: () => { boxOverrides = new Map(); },
            readOverrides: () => Array.from(boxOverrides.entries()),
            isAutoGrown: isAutoGrown,
-           liveState: () => state };
+           liveState: () => state,
+           // ── the paragraph controls ──
+           showFmtBar, hideFmtBar, paraAction, paraNow, paraPatch, collectOverrides,
+           restoreSavedOverrides, mergeOverrideEntry,
+           fmtBarEl: () => ensureFmtBar(),
+           templateVersion: () => templateVersion,
+           /** Mount blocks the way renderBlock does — class from the record, no inline para
+            *  styling — so an untouched paragraph starts out exactly as it does today. */
+           mountBlocks: (records) => {
+             docSurface.childNodes = [];
+             blockById.clear(); pristineById.clear(); paraById.clear();
+             templateBlocks = records;
+             const els = new Map();
+             for (const b of records) {
+               blockById.set(b.id, b);
+               const el = document.createElement("div");
+               el.className = "tw-block";
+               el.dataset.id = String(b.id);
+               el.attrs.contenteditable = "true";
+               if (b.list) el.classList.add("tw-li");
+               el.textContent = b.text || "";
+               pristineById.set(b.id, b.text || "");
+               docSurface.appendChild(el);
+               els.set(b.id, el);
+             }
+             return els;
+           },
+           forgetParaState: () => { paraById.clear(); },
+           paraStore: () => Array.from(paraById.entries()) };
   `
 )(document, window, docSurface, systemPreviewEl, form, boxDesign, Node,
-  schedulePersistOverrides, TWStub);
+  schedulePersistOverrides, TWStub, F, dirtied, repaginated);
 API = api;
 
 const out = {};
@@ -700,6 +804,168 @@ function pressFit(box) {
     isNotAGrip: !!(note && note.attrs["data-grip"] === undefined),
     order: tools.children.map((c) => c.className),
   };
+}
+
+// ═══ part 3 — the bullet and the indent ══════════════════════════════════════
+// Kyle, 2026-08-20: "I cant dletet the bullet points" / "There is indentation in this but I cant
+// remove tat if I want to to be aligned on the polished concrete?"
+//
+// The records are the Direct epoxy template's own, read out of the .docx by /api/proposal-template
+// (test_paragraph_controls.py re-derives them from the file, so a harness that invented them
+// cannot agree with itself): four WORK rows on numId 4 (bullet, 288tw), one numbered TERMS clause
+// on numId 5 (decimal, 540tw, locked), and one record with NO `para` at all — a browser replaying
+// a pre-v5 cached response.
+const BLOCK_RECORDS = [
+  { id: 115, text: "Scope:  concrete prep",  list: true,  para: { bullet: true,  indent: 288, locked: false } },
+  { id: 116, text: "Schedule:  4 days",      list: true,  para: { bullet: true,  indent: 288, locked: false } },
+  { id: 117, text: "Exclusions:  none",      list: true,  para: { bullet: true,  indent: 288, locked: false } },
+  { id: 52,  text: "Price and Payment...",   list: true,  para: { bullet: false, indent: 540, locked: true } },
+  { id: 48,  text: "TREADWELL, LLC",         list: false, para: { bullet: false, indent: 270, locked: false } },
+  { id: 999, text: "no para metadata",       list: true },
+];
+
+const barState = () => {
+  const bar = api.fmtBarEl();
+  const read = (sel) => {
+    const n = bar.querySelector(sel);
+    return n ? { display: n.style.display === undefined ? "" : n.style.display,
+                 on: n.classList.contains("on"), pressed: n.getAttribute("aria-pressed"),
+                 disabled: !!n.disabled, label: n.attrs["aria-label"] || null,
+                 title: n.title || null, text: n.textContent } : null;
+  };
+  return { bullet: read("button[data-para='bullet']"),
+           outdent: read("button[data-para='outdent']"),
+           indent: read("button[data-para='indent']"),
+           sep: read("[data-para='sep']"),
+           bold: read("button[data-fmt='bold']") };
+};
+
+const elState = (el) => ({ li: el.classList.contains("tw-li"),
+                           marginLeft: el.style.marginLeft || "",
+                           paddingLeft: el.style.paddingLeft === undefined ? "" : el.style.paddingLeft,
+                           dirty: el.classList.contains("tw-dirty") });
+
+// 15. The toolbar on an ordinary bulleted WORK row: all three controls offered, the bullet
+//     button reading ON because the paragraph really is bulleted, and outdent live because the
+//     row really is indented.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  api.showFmtBar(els.get(116));
+  out.paraBarWork = barState();
+  out.paraBarWorkNow = api.paraNow(116);
+}
+
+// 16. THE CONTRACT. A numbered TERMS AND CONDITIONS clause is offered NOTHING — not a disabled
+//     button, which still invites the click, but no control at all. Removing one item from a
+//     decimal list renumbers every clause after it, silently, in legal boilerplate.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  api.showFmtBar(els.get(52));
+  out.paraBarLocked = barState();
+  out.paraLockedAction = {
+    bulletPressed: api.paraAction(els.get(52), "bullet"),
+    outdentPressed: api.paraAction(els.get(52), "outdent"),
+    el: elState(els.get(52)),
+    patch: api.paraPatch(52),
+  };
+}
+
+// 16b. A block with NO `para` metadata (a stale pre-v5 cached template response). We cannot tell
+//      a WORK row from a contract clause, so nothing is offered — the schema bump exists so this
+//      never happens, and this is what it degrades to if it ever does.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  api.showFmtBar(els.get(999));
+  out.paraBarNoMeta = barState();
+  out.paraNoMetaAction = api.paraAction(els.get(999), "bullet");
+}
+
+// 17. THE FIRST COMPLAINT. Switch the bullet off on ONE row: that row loses its square, its
+//     neighbours keep theirs, and the payload carries `para` with NO text — the words were not
+//     touched, and sending text would flatten the template's own bold lead-in.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  api.paraAction(els.get(116), "bullet");
+  out.bulletOff = {
+    target: elState(els.get(116)),
+    before: elState(els.get(115)),
+    after: elState(els.get(117)),
+    now: api.paraNow(116),
+    payload: api.collectOverrides(),
+    repaginated: repaginated.length,
+  };
+}
+
+// 18. THE SECOND COMPLAINT. Outdent reaches ZERO, so the row aligns with its neighbours, and
+//     indent puts it back. Asserted as the twips that travel, not as pixels.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  const el = els.get(116);
+  api.paraAction(el, "outdent");
+  const zero = { now: api.paraNow(116), el: elState(el), payload: api.collectOverrides() };
+  const again = api.paraAction(el, "outdent");   // already at the margin
+  api.showFmtBar(el);
+  const floored = { now: api.paraNow(116), pressed: again, bar: barState() };
+  api.paraAction(el, "indent");
+  out.indentSteps = { zero: zero, floored: floored,
+                      back: { now: api.paraNow(116), el: elState(el),
+                              payload: api.collectOverrides() } };
+}
+
+// 19. A row nobody touched ships NOTHING. The generated .docx has to be the file it was before
+//     this feature existed, and `paraPatch` comparing against the template's own state is what
+//     guarantees that.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  api.showFmtBar(els.get(115));
+  api.showFmtBar(els.get(116));   // look at two of them, change neither
+  out.untouched = { payload: api.collectOverrides(),
+                    patches: [api.paraPatch(115), api.paraPatch(116), api.paraPatch(48)],
+                    el: elState(els.get(116)) };
+}
+
+// 20. THE ROUND TRIP. Set it, persist through the real schedulePersistOverrides, forget the live
+//     state the way a page reload does, re-mount, and restore. A control that forgets what you
+//     set is worse than no control.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  api.paraAction(els.get(116), "bullet");
+  api.paraAction(els.get(116), "outdent");
+  const sent = api.collectOverrides();
+  const stored = TWStub.getState().paragraph_overrides;
+  // A reload: new elements, empty paraById, the saved blob is all there is.
+  const els2 = api.mountBlocks(BLOCK_RECORDS);
+  api.restoreSavedOverrides("epoxy", "Direct");
+  api.showFmtBar(els2.get(116));
+  out.roundTrip = { sent: sent, stored: stored, now: api.paraNow(116),
+                    el: elState(els2.get(116)), bar: barState(),
+                    resent: api.collectOverrides() };
+}
+
+// 21. AN OVERRIDE SAVED BEFORE THIS FEATURE EXISTED. {id, text} with no `para`: the text comes
+//     back, the paragraph properties stay the template's, and nothing throws on the missing key.
+{
+  api.mountBlocks(BLOCK_RECORDS);
+  TWStub.setState({
+    paragraph_overrides_all: null,
+    paragraph_overrides: [{ id: 116, text: "Schedule:  legacy text" }],
+    paragraph_overrides_meta: { template_version: api.templateVersion(),
+                                work_type: "epoxy", audience: "Direct" },
+  });
+  api.restoreSavedOverrides("epoxy", "Direct");
+  const el = docSurface.querySelector('.tw-block[data-id="116"]');
+  out.legacyOverride = { text: el.textContent, el: elState(el),
+                         now: api.paraNow(116), patch: api.paraPatch(116) };
+}
+
+// 22. A TEXT edit and a bullet change on the SAME paragraph travel together, in one entry, with
+//     the text present this time — because this time the estimator did type.
+{
+  const els = api.mountBlocks(BLOCK_RECORDS);
+  const el = els.get(117);
+  el.textContent = "Exclusions:  striping";
+  api.paraAction(el, "bullet");
+  out.textAndPara = { payload: api.collectOverrides() };
 }
 
 console.log(JSON.stringify(out));

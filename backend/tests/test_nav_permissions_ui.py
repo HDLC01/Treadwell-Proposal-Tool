@@ -12,6 +12,13 @@ is then taken all the way through init() with a stubbed Supabase and a stubbed /
 
 Nothing here duplicates test_role_visibility_matrix.py, which owns the claim that the matrix IS the
 menu with no policy in play. This file is about what a policy does to it.
+
+A SECOND HARNESS (js/no-sidebar-tabs-harness.js) covers the case that has no menu row at all. Info
+Sheet moved into the project drawer's Proposal tab on 2026-08-20 and stayed a tab this policy can
+refuse, so its switch has to keep appearing on the Admin page and its refusal card has to keep
+naming it — neither of which any render of the sidebar can show, because there is nothing there to
+render. Its own file because the harness above declares one policy that every assertion here is
+written against, and denying a rowless tab inside it would move those numbers.
 """
 import json
 import pathlib
@@ -24,19 +31,32 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "nav-permissions-harness.js"
+# The second harness: a tab that is gated and has NO sidebar row (Info Sheet, moved into the project
+# drawer on 2026-08-20). Its own file because the one above declares a single policy that every
+# assertion here is written against, and denying a rowless tab inside it would move those numbers.
+HIDDEN_HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "no-sidebar-tabs-harness.js"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 
-@pytest.fixture(scope="module")
-def ran():
+def _node(harness):
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
-    proc = subprocess.run(["node", str(HARNESS), str(FRONTEND)],
+    proc = subprocess.run(["node", str(harness), str(FRONTEND)],
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, (
         "the harness itself failed — read this before assuming a product bug:\n" + proc.stderr)
     return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.fixture(scope="module")
+def ran():
+    return _node(HARNESS)
+
+
+@pytest.fixture(scope="module")
+def hidden():
+    return _node(HIDDEN_HARNESS)
 
 
 def _hrefs(entries):
@@ -129,6 +149,138 @@ def test_the_stored_policy_drives_the_menu_and_the_matrix_with_no_argument(ran):
 
 
 # ── the refusal ───────────────────────────────────────────────────────────────
+@needs_node
+def test_the_info_sheet_has_no_menu_ROW_and_still_has_a_SWITCH(ran):
+    """The 2026-08-20 move, executed. Info Sheet went into the project drawer's Proposal tab, so it
+    has no navItem() call left to reflect — and it is still a tab nav_access.py can refuse.
+
+    Both halves matter, and each one alone is a bug:
+
+      * still in the menu → the move did not happen, and the row opens a page with no project;
+      * no row in the matrix → an admin can neither see nor undo a denial of it, and the only way
+        back is `rm /app/data/nav_access.json` on the box.
+
+    auth.js keeps a NO_SIDEBAR_TABS list for exactly this and navMatrix appends it whenever it is
+    handed a policy. Executed rather than grepped because "a row appears in the matrix and not in
+    the sidebar" is not a shape you can see in a diff of either file."""
+    hidden = "/info-sheet.html"
+    for role in ran["roles"]:
+        assert hidden not in _hrefs(ran["menusOpen"][role]), (
+            "%s still has an Info Sheet row with nothing denied" % role)
+        assert hidden not in _hrefs(ran["menus"][role])
+    rows = {r["href"]: r for r in ran["matrixDenied"]}
+    assert hidden in rows, "the matrix has no Info Sheet row, so its switch cannot be drawn"
+    # Nothing in this policy denies it, so every role keeps it — default-allow, read off the map
+    # rather than off a render, because there is no render.
+    assert rows[hidden]["roles"] == {"user": True, "admin": True, "super_admin": True}
+    # The label the refusal card reads. labelOf() scans these same appended rows (navMatrix({})),
+    # so an unnamed row is a card that says "This page isn't available".
+    assert rows[hidden]["label"] == "Info Sheet"
+
+
+@needs_node
+def test_the_hidden_rows_appear_only_when_the_matrix_is_asked_about_a_POLICY(ran):
+    """The seam, pinned. Handed a deny map, navMatrix is answering "what can this policy reach" and
+    has to include a tab whose switch is real; asked with no argument it is answering "what is in
+    the menu", and the answer stays exactly the sidebar.
+
+    That second case is not a detail — test_role_visibility_matrix.py's whole claim is that the
+    matrix IS the sidebar, and its harness calls navMatrix() with no argument. If hidden rows leaked
+    into that call, the honest reading is that the two files now disagree about what a matrix is."""
+    assert "/info-sheet.html" not in {r["href"] for r in ran["matrixStored"]}, (
+        "navMatrix() with no argument grew a row with no sidebar entry behind it")
+    assert "/info-sheet.html" not in {r["href"] for r in ran["matrixCleared"]}
+    assert "/info-sheet.html" in {r["href"] for r in ran["matrixOpen"]}, (
+        "navMatrix({}) is a policy question and must carry the hidden tabs")
+
+
+@needs_node
+def test_the_hidden_tabs_switch_is_real_and_sits_in_its_own_section(ran):
+    """Not a decorative row: the same switch every other tab gets, saying it blocks its data,
+    because /api/info-sheet/* is refused to a denied role exactly as before the row went away.
+
+    The placement is asserted because the panel prints each section heading once per RUN of rows —
+    a row dropped at the end of the table would print "Proposals" a second time at the bottom."""
+    rows = ran["panel"]["admin"]
+    at = [i for i, r in enumerate(rows) if r["href"] == "/info-sheet.html"]
+    assert at, "the rendered Admin panel has no Info Sheet row"
+    row = rows[at[0]]
+    assert row["chip"] == "hard", (
+        "the switch does not say it blocks data; /api/info-sheet/* is still gated")
+    assert "/api/info-sheet/" in row["switches"]["user"]["title"], row["switches"]["user"]["title"]
+    assert row["switches"]["user"]["disabled"] is False, "the switch cannot be clicked"
+    assert row["switches"]["user"]["on"] is True
+    # Its section is one contiguous run, so the heading is printed once.
+    band = [i for i, r in enumerate(rows) if r["section"] == row["section"]]
+    assert band == list(range(band[0], band[-1] + 1)), (
+        "the %r rows are split apart: %s" % (row["section"], band))
+
+
+# ── a tab with no sidebar row is still a tab ──────────────────────────────────
+@needs_node
+def test_denying_a_ROWLESS_tab_still_blocks_its_page_and_names_it(hidden):
+    """THE claim behind NO_SIDEBAR_TABS, run all the way through init().
+
+    A member is denied ONLY /info-sheet.html, which has no menu row to take away — so nothing about
+    the sidebar can account for the result. Standing on that page they get a refusal card instead of
+    the page, the card NAMES the tab, and `ready` never settles so the page's own boot cannot paint
+    over it. The server half (/api/info-sheet/* refused, the page path expanded from the tab) is
+    test_nav_access.py's; this is the half a member actually sees.
+
+    The naming is the fragile part and the reason this is executed: labelOf() looks the label up in
+    navMatrix's rows, and a tab with no navItem() call has a row there only because navMatrix appends
+    it. Without that the card reads "This page isn't available", which is the message that gets
+    filed as a bug."""
+    r = hidden["signedIn"]["onDenied"]
+    assert r["role"] == "user" and r["deniedPaths"] == [hidden["hidden"]]
+    assert r["refusals"] == 1, "the page painted itself to a member who was denied it"
+    assert r["emptied"] == 1, "the page's own content was left underneath the card"
+    assert r["ready"] == "pending", (
+        "ready settled after a refusal, so the page's own boot is about to run")
+    assert "Info Sheet isn't available on your account." in r["refusalHtml"], r["refusalHtml"]
+    assert "Info Sheet isn" in r["title"], r["title"]
+    assert "This page isn" not in r["refusalHtml"], (
+        "the card could not name the tab, so navMatrix has no row for it")
+
+
+@needs_node
+def test_the_rowless_tabs_denial_costs_the_member_nothing_else(hidden):
+    """The menu is untouched — there was never a row — and every other page still boots. Kills a
+    refusal driven by "is anything denied" rather than "is THIS page denied", which is easy to write
+    when the denied tab is invisible in the menu you are comparing against."""
+    assert hidden["hidden"] not in hidden["menus"]["user"], (
+        "the tab still has a sidebar row, so this whole file is testing the wrong thing")
+    assert hidden["menus"]["user"] == [h for h in hidden["menus"]["super_admin"]
+                                      if h != "/admin.html"], (
+        "denying a rowless tab changed which rows a member gets: %s" % hidden["menus"]["user"])
+    ok = hidden["signedIn"]["onAllowed"]
+    assert ok["refusals"] == 0 and ok["ready"] == "settled" and ok["sidebars"] == 1
+
+
+@needs_node
+def test_the_rowless_tab_is_not_denied_to_a_role_the_policy_never_mentions(hidden):
+    """An admin, denied nothing, on the same URL. Kills a gate keyed on the tab rather than on the
+    role — which is the shape a rowless tab invites, because there is no menu render to disagree."""
+    r = hidden["signedIn"]["adminOnIt"]
+    assert r["role"] == "admin" and r["deniedPaths"] == []
+    assert r["refusals"] == 0 and r["emptied"] == 0 and r["ready"] == "settled"
+
+
+@needs_node
+def test_the_rowless_tabs_switch_reports_the_DENIED_role_as_off(hidden):
+    """The one tick in this app not derived from a render, and the mutation that matters.
+
+    Every other row's ticks come from rendering the sidebar per role and seeing what survives. This
+    row has no render behind it, so navMatrix reads the deny map directly. A version that always
+    reports "on" looks right in a diff and is unfalsifiable on screen: the switch shows ON for a role
+    that is denied the tab, clicking it saves "deny" again, and the denial can never be lifted from
+    the UI — `rm /app/data/nav_access.json` on the box becomes the only way back."""
+    row = hidden["matrixRow"]
+    assert row, "the matrix has no row for %s at all" % hidden["hidden"]
+    assert row["roles"] == {"user": False, "admin": True, "super_admin": True}, row["roles"]
+    assert row["label"] == "Info Sheet" and row["section"] == "Proposals"
+
+
 @needs_node
 def test_a_denied_page_paints_a_refusal_instead_of_itself(ran):
     r = ran["signedIn"]["denied"]
@@ -355,6 +507,173 @@ def test_with_no_policy_at_all_the_panel_is_exactly_the_old_read_only_table(ran)
     differing = [r["href"] for r in ran["noPolicyRows"]
                  if len({r["roles"][x] for x in ran["roles"]}) > 1]
     assert differing == ["/admin.html"], differing
+
+
+# ── the panel counts and names what it actually drew ────────────────────
+def _flat(html):
+    return re.sub(r"\s+", " ", html)
+
+
+def _header(html):
+    """The strip of the panel head that carries the count, up to the spacer."""
+    flat = _flat(html)
+    i = flat.index("What each role can see")
+    return flat[i:flat.index('<span class="grow">', i)]
+
+
+def _panel_states(ran):
+    """The three states this panel has, and every one of them has to read true.
+
+    A loaded policy (switches), a deny map with no capability table (read-only), and nothing at all
+    (what a failed fetch leaves). The row count and the ticks differ between them, which is exactly
+    why the wording is checked in each rather than in one.
+    """
+    return (("a loaded policy", ran["panelHtml"]["admin"], ran["panel"]["admin"]),
+            ("a deny map only", ran["readOnlyHtml"], ran["readOnlyRows"]),
+            ("no policy at all", ran["noPolicyHtml"], ran["noPolicyRows"]))
+
+
+@needs_node
+def test_the_header_counts_TABS_because_one_row_is_not_a_sidebar_tab(ran):
+    """The label said "N sidebar tabs" over a table with fewer sidebar tabs than rows.
+
+    Info Sheet left the menu on 2026-08-20 and kept its permission entry, so the panel draws a row no
+    navItem() call backs: 14 rows over 13 sidebar tabs. The count and the column header above the
+    names both still said "sidebar", which is a false statement about one of the rows directly
+    beneath it, and the false one is the row an admin most needs to understand.
+
+    Executed rather than grepped because the number is computed: the claim is not "the string
+    changed", it is that the count, the rows it counts and the tabs the menu really draws agree in
+    every state this panel has.
+    """
+    import nav_access
+    drawn = len(_hrefs(ran["menusOpen"]["super_admin"]))
+    rowless = list(nav_access.NO_SIDEBAR_TABS)
+    labels = {c["href"]: c["label"] for c in ran["caps"]}
+    assert rowless, "nothing is gated without a sidebar row any more; this whole section can go"
+    for state, html, rows in _panel_states(ran):
+        flat, head = _flat(html), _header(html)
+        assert len(rows) == drawn + len(rowless), (
+            "%s: %d rows over %d sidebar tabs and %d tabs with no sidebar row"
+            % (state, len(rows), drawn, len(rowless)))
+        assert "%d tabs" % len(rows) in head, "%s: %s" % (state, head)
+        assert "sidebar tabs" not in flat, (
+            "%s: %d rows are called sidebar tabs and %s has no sidebar row"
+            % (state, len(rows), ", ".join(rowless)))
+        assert "<th>Tab</th>" in flat, (
+            "%s: the column over the names still claims every one is a sidebar tab" % state)
+        # And the header SAYS which row the menu does not carry, rather than leaving a number that
+        # disagrees with the sidebar beside it and no way to tell why.
+        assert "no sidebar row" in head, (
+            "%s: the count grew and the header does not say what the extra row is: %s"
+            % (state, head))
+        for href in rowless:
+            assert labels[href] in head, (
+                "%s: the header does not name %s as the tab the menu has no row for: %s"
+                % (state, labels[href], head))
+
+
+@needs_node
+def test_a_failed_policy_fetch_still_draws_a_row_for_every_governed_tab(ran):
+    """The row that could least afford to vanish is the one that did.
+
+    roleMatrixHtml() gets the rowless tabs only by asking navMatrix about a POLICY; with no policy it
+    asked about the MENU instead, and the menu is precisely where that tab is not. So the one tab
+    nobody can navigate to lost the only switch that can re-enable it, on the render where the page is
+    already degraded and somebody is looking for what went wrong. Recovery from that state is a delete
+    of the policy file on the box.
+
+    Both degraded states are checked, against the capability table rather than against a count, so
+    this fails for any governed tab that goes missing and not only for today's one.
+    """
+    governed = {c["href"] for c in ran["caps"]}
+    for state, _html, rows in _panel_states(ran):
+        assert {r["href"] for r in rows} == governed, (
+            "%s: no row for %s" % (state, sorted(governed - {r["href"] for r in rows})))
+
+
+@needs_node
+def test_with_no_policy_the_rowless_rows_read_not_known_rather_than_ON(ran):
+    """A restored row is only worth having if it does not lie.
+
+    Every other row's ticks come from rendering the menu per role. These come from the deny map, and
+    the map handed in when the fetch failed is empty: under default-allow that reads as "every role
+    has this tab", a claim about a policy the page could not load. A cell that says ON for a tab that
+    is in fact denied is the one error nobody can catch from this screen, because there is no menu row
+    anywhere to contradict it. So the cells read a question mark, with the reason on hover.
+
+    Keyed on the DENY MAP and not on the capability table, which the second half pins: the read-only
+    state has a real map, and its ticks there are the real thing.
+    """
+    import nav_access
+    rowless = list(nav_access.NO_SIDEBAR_TABS)
+    rows = {r["href"]: r for r in ran["noPolicyRows"]}
+    flat = _flat(ran["noPolicyHtml"])
+    assert flat.count(">?</span>") == len(rowless) * len(ran["roles"]), (
+        "%d unknown cells for %d rowless tabs across %d roles"
+        % (flat.count(">?</span>"), len(rowless), len(ran["roles"])))
+    assert "Not known" in flat, "the unknown cell does not say why it is unknown"
+    for href in rowless:
+        row = rows[href]
+        assert not any(row["roles"].values()), (
+            "%s is ticked for %s with no policy loaded to say so"
+            % (href, [k for k, v in row["roles"].items() if v]))
+        assert not any(row["switches"].values()), (
+            "%s got a switch over a state the page does not know" % href)
+    # The read-only state DID load a deny map, so the same row's ticks there are real.
+    ro = {r["href"]: r for r in ran["readOnlyRows"]}
+    assert ">?</span>" not in _flat(ran["readOnlyHtml"]), (
+        "a policy that loaded was reported as unknown")
+    for href in rowless:
+        assert ro[href]["roles"] == {r: True for r in ran["roles"]}, (
+            "%s is denied to nobody in this policy: %s" % (href, ro[href]["roles"]))
+
+
+@needs_node
+def test_the_panel_explains_the_rowless_tab_instead_of_leaving_a_bare_number(ran):
+    """A count that grew with no explanation sends somebody hunting for a fourteenth menu row that
+    does not exist. The note names the tab, says the menu does not carry it, and says why its switch
+    is here anyway; where the state is unknown it says that too, so a question mark cannot be read as
+    "off"."""
+    import nav_access
+    labels = {c["href"]: c["label"] for c in ran["caps"]}
+    for state, html, _rows in _panel_states(ran):
+        flat = _flat(html)
+        assert "governed here with no row in the left menu" in flat, (
+            "%s: the note does not account for the extra row" % state)
+        for href in nav_access.NO_SIDEBAR_TABS:
+            assert "<strong>%s</strong>" % labels[href] in flat, (
+                "%s: the note does not name %s" % (state, labels[href]))
+        assert ("question mark" in flat) == (state == "no policy at all"), (
+            "%s: the note %s the unknown cells"
+            % (state, "explains" if "question mark" in flat else "does not explain"))
+
+
+def test_the_note_beside_the_removed_row_points_UP_at_the_list_it_names():
+    """The one job of that sentence is to send a reader to NO_SIDEBAR_TABS.
+
+    The list is declared beside the nav parser, about 170 lines ABOVE the note that names it, so "the
+    list below" walks somebody down through the rest of the sidebar, the injected stylesheet and the
+    notification bell, and off the end of the file. A pointer aimed the wrong way is worse than no
+    pointer: it reads as authoritative, so the reader concludes the list is gone.
+
+    Source, because a comment has nothing to execute. What keeps it honest is that the direction is
+    checked against where the declaration actually is, not against a remembered line number.
+    """
+    js = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    lines = js.splitlines()
+    decl = [i for i, l in enumerate(lines) if l.strip().startswith("const NO_SIDEBAR_TABS = [")]
+    assert len(decl) == 1, "NO_SIDEBAR_TABS is declared %d times" % len(decl)
+    notes = [i for i, l in enumerate(lines)
+             if i > decl[0] and "NO_SIDEBAR_TABS" in l and l.strip().startswith("//")]
+    assert notes, "nothing further down the file points back at the list any more"
+    for i in notes:
+        assert "below" not in lines[i], (
+            "line %d sends the reader DOWN at a list declared on line %d: %s"
+            % (i + 1, decl[0] + 1, lines[i].strip()))
+    window = " ".join(lines[i] + " " + lines[i + 1] for i in notes)
+    assert re.search(r"\bUP\b|\babove\b", window), (
+        "the note names the list without saying where it is: %s" % window)
 
 
 # ── the wiring ────────────────────────────────────────────────────────────────
