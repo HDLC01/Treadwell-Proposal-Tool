@@ -196,36 +196,61 @@ def test_a_step_beats_an_eleven_hour_old_basisboard_row(monkeypatch):
     assert [x["kind"] for x in items] == ["crm_step", "pipeline_stage"]
 
 
-def test_our_pipeline_outranks_basisboard_by_tier_not_by_clock(monkeypatch):
-    """The test above would pass on timestamps alone. With the ages REVERSED the order must not move:
-    our own pipeline moving matters more than a third party's, and one Basisboard sweep can emit
-    dozens of rows — which is what buried the approval in the first place.
+def test_among_things_that_happened_the_clock_decides(monkeypatch):
+    """THIS ASSERTION WAS REVERSED ON 2026-08-21, deliberately.
 
-    Mutation: give crm_step the Basisboard tier. This fails."""
+    It used to require that our own pipeline outrank a Basisboard row even when the Basisboard row
+    was newer, on the reasoning that a third party's sweep can emit dozens of rows. That reasoning
+    ranked KINDS of event against each other, and the side effect was that it ranked them against
+    TIME as well: with a stable sort the tier won outright, so an old row of a favoured kind sat
+    above everything newer, permanently.
+
+    Hanz, 2026-08-21, looking at a bell whose top row was eight days old: "notification is still
+    showing the older ones and not in chronological order". Among things that HAPPENED, the clock is
+    now the only thing that orders them. Events still sit above deadlines, which is the part of the
+    old design that was right and is asserted below.
+
+    Mutation: restore the tier sort within events. This fails."""
     items = _feed(monkeypatch, state={"crm_events": _crm_step(ELEVEN_HOURS_AGO),
                                       "pipeline_events": _pipeline_move(A_MINUTE_AGO)})
-    assert [x["kind"] for x in items] == ["crm_step", "pipeline_stage"], (
-        "a fresher Basisboard row jumped our own pipeline: %r"
+    assert [x["kind"] for x in items] == ["pipeline_stage", "crm_step"], (
+        "an eleven-hour-old row outranked something from a minute ago: %r"
         % [(x["kind"], x["ts"]) for x in items])
 
 
-def test_a_customer_message_still_outranks_our_own_pipeline(monkeypatch):
-    """Unchanged by the retiering, and deliberately tested with the message OLDER than the step so the
-    tier is what does the work: a customer replying outranks us moving a card."""
+def test_an_old_customer_message_does_not_outrank_todays_work(monkeypatch):
+    """ALSO REVERSED ON 2026-08-21, and this is the one that actually bit Hanz.
+
+    A customer message used to carry the top tier outright, so nine-day-old "Hello" messages sat
+    above everything that happened today and filled the event slots, pushing genuinely new rows off
+    the end. A customer replying DOES matter more than us moving a card - but not a week later, and
+    the old rule could not tell the difference because it never looked at the clock.
+
+    The message is deliberately OLDER than the step here, which is exactly the case that used to be
+    ordered backwards."""
     items = _feed(monkeypatch, state={
         "crm_events": _crm_step(A_MINUTE_AGO),
         "portal_messages": [{"id": 7, "proposal_id": "p1", "project_name": "Nearman Creek",
                              "customer_name": "Dana", "body": "Any update?",
                              "created_at": ELEVEN_HOURS_AGO}]})
-    assert [x["kind"] for x in items] == ["portal_message", "crm_step"]
+    assert [x["kind"] for x in items] == ["crm_step", "portal_message"], (
+        "an eleven-hour-old customer message outranked a step from a minute ago")
 
 
 def test_every_event_lands_above_every_deadline_and_the_buckets_keep_their_order(monkeypatch):
     """One item of every section at once — the shape of a real bell.
 
-    Mutation: delete the second `items.sort`. This fails: the feed then orders by ts alone, which
-    puts the freshest activity above the customer message and re-orders the deadline buckets by due
-    DATE (overdue last) instead of by urgency."""
+    THE TWO RULES THIS PINS, after the 2026-08-21 change:
+      * every event sits above every deadline - a deadline reads the same tomorrow, an event is news
+        exactly once. This half of the old tier design was right and is unchanged.
+      * the DEADLINE buckets keep their urgency order (overdue, today, soon, no date), because
+        nothing about a deadline is time-sensitive in the newest-first sense - ordering them by due
+        date would put the overdue ones LAST.
+    What it deliberately no longer pins is the order of events among themselves: that is the clock
+    now, asserted in the two tests above.
+
+    Mutation: delete the second `items.sort`. This fails, because the deadline buckets then order by
+    due date instead of urgency and the events lose their block above them."""
     items = _feed(
         monkeypatch,
         state={"crm_events": _crm_step(ELEVEN_HOURS_AGO),
@@ -247,8 +272,11 @@ def test_every_event_lands_above_every_deadline_and_the_buckets_keep_their_order
     events = [i for i, k in enumerate(kinds) if not k.startswith("deadline_")]
     assert len(deadlines) == 4 and len(events) == 4, kinds
     assert max(events) < min(deadlines), "a deadline outranks an event: %r" % kinds
-    assert kinds[:2] == ["portal_message", "crm_step"], kinds
-    assert set(kinds[2:4]) == {"pipeline_stage", "lead_new"}, kinds
+    # The two freshest events lead, whatever KIND they are (both a minute old here), and the two
+    # eleven-hour-old ones follow. Kinds are compared as sets within each age group because two rows
+    # sharing a timestamp have no defined order between them and pinning one would be a coin toss.
+    assert set(kinds[:2]) == {"pipeline_stage", "lead_new"}, kinds
+    assert set(kinds[2:4]) == {"portal_message", "crm_step"}, kinds
     assert kinds[4:] == ["deadline_overdue", "deadline_today", "deadline_soon",
                          "deadline_none"], kinds
 
@@ -430,7 +458,10 @@ def test_a_wall_of_deadlines_does_not_squeeze_the_events_out_either(monkeypatch)
     items = _feed(monkeypatch, state=_event_state(messages=1, steps=1, pipeline=1),
                   projects=_deadline_projects(overdue=40, today=10, soon=20, none=30))
     kinds = [x["kind"] for x in items]
-    assert kinds[:3] == ["portal_message", "crm_step", "pipeline_stage"], (
+    # The point is that a wall of deadlines cannot bury the things that HAPPENED. Their order among
+    # themselves is the clock now (2026-08-21), so this compares the set: pinning one order would be
+    # asserting the timestamps in the fixture rather than the reserve that keeps them on screen.
+    assert set(kinds[:3]) == {"portal_message", "crm_step", "pipeline_stage"}, (
         "100 deadlines buried the three things that happened: %r" % kinds[:6])
     assert len(items) == n._MAX_ITEMS
     # And the deadlines took the 33 slots the three events left unclaimed, rather than sitting at
@@ -461,10 +492,22 @@ def test_the_cap_chooses_rows_and_never_reorders_them(monkeypatch):
     items = _feed(monkeypatch, state=_event_state(messages=5, steps=15, pipeline=80),
                   projects=_deadline_projects(**PROD_DEADLINES))
     kinds = [x["kind"] for x in items]
-    tiers = [x["sort"] for x in items]
-    assert tiers == sorted(tiers), "the trim reordered the sections: %r" % kinds
-    assert items[0]["id"] == "pmsg:1004", (
-        "the newest row of the top tier no longer leads: %r" % items[0].get("id"))
+    # The invariant the cap must not break is the DISPLAY order, and since 2026-08-21 that order is
+    # "every event, newest first, then the deadlines by urgency" - not ascending tiers. Checking
+    # `tiers == sorted(tiers)` would now fail for a correct feed, because a tier-2 activity row from
+    # a minute ago legitimately sits above a tier-0 message from last week.
+    is_deadline = [k.startswith("deadline_") for k in kinds]
+    assert is_deadline == sorted(is_deadline), (
+        "the trim interleaved events and deadlines: %r" % kinds)
+    ev_ts = [x.get("ts") or "" for x, d in zip(items, is_deadline) if not d]
+    assert ev_ts == sorted(ev_ts, reverse=True), (
+        "the trim reordered the events out of newest-first: %r" % ev_ts[:6])
+    dl_tiers = [x["sort"] for x, d in zip(items, is_deadline) if d]
+    assert dl_tiers == sorted(dl_tiers), (
+        "the trim reordered the deadline buckets out of urgency order: %r" % dl_tiers[:6])
+    # And the very top row is simply the newest thing that happened, whatever kind it is.
+    assert items[0]["ts"] == max(ev_ts), (
+        "the newest event no longer leads: %r" % [(items[0].get("id"), items[0].get("ts"))])
     for a, b in zip(items, items[1:]):
         if a["sort"] == b["sort"]:
             assert (a["ts"] or "") >= (b["ts"] or ""), (
