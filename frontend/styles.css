@@ -775,7 +775,10 @@ button {
    lines) must not break mid-value — a wrapped "(material sales tax INCLUDED)"
    leaves an orphaned highlighted ")" on the next line. Keep each island intact;
    the row still wraps between islands at the plain " – " joins. */
-#base-bid-row .tw-fill, #price-lines-block .tw-fill { white-space: nowrap; }
+/* `pre`, not `nowrap`: both stop the island wrapping mid-parenthesis, but `nowrap` still
+   COLLAPSES a run of spaces, so a second space Kyle typed was invisible on screen even
+   when it was stored. `pre` keeps what he typed and still does not wrap. */
+#base-bid-row .tw-fill, #price-lines-block .tw-fill { white-space: pre; }
 /* Editable NOTES bullet — a real bullet that also takes the caret. */
 .tw-note-edit { outline: none; cursor: text; }
 .tw-note-edit:hover { background: rgba(200, 16, 46, 0.05); }
