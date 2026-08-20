@@ -121,6 +121,10 @@ TABS: Dict[str, Dict[str, Any]] = {
     },
     "/info-sheet.html": {
         "label": "Info Sheet",
+        # NO SIDEBAR ROW since 2026-08-20 — it moved into the project drawer's Proposal tab. The
+        # entry stays anyway; see NO_SIDEBAR_TABS below for why deleting it would have been a
+        # security regression rather than a tidy-up. Being in the menu is not what makes a tab
+        # deniable, and this table is what gates the page and the routes below.
         # Children only: /{draft_id} and /generate. No bare route exists.
         "pages": ("/info-sheet.html",),
         "api": ("/api/info-sheet/",),
@@ -210,6 +214,30 @@ ALWAYS_OPEN_PAGES: Tuple[str, ...] = (
     "/", "/index.html", "/estimate-review.html", "/proposal-review.html", "/done.html",
     "/followups.html", "/dropbox.html", "/login.html",
 )
+
+# GATED BUT NOT IN THE SIDEBAR — the exact opposite of ALWAYS_OPEN_PAGES above, and the reason both
+# sets are spelled out rather than inferred from the menu.
+#
+#   ALWAYS_OPEN_PAGES have no sidebar row AND no TABS entry, so this policy can never reach them.
+#   These have no sidebar row and KEEP their TABS entry: the tab stays deniable per role and still
+#   owns its API prefixes. A tab lands here when its entry point moves somewhere that is not the
+#   menu — a card, a drawer, another page's toolbar.
+#
+#   /info-sheet.html — moved into the project drawer's Proposal tab on 2026-08-20 (Hanz). The
+#                      sidebar row opened a choose-a-project state; from the drawer the hand-off is
+#                      one click on the job already in hand.
+#
+# WHY THE ENTRY DID NOT JUST COME OUT OF TABS. test_nav_access.py compares the sidebar's navItem()
+# hrefs against this table, so deleting the entry is the shortest way to keep that test green — and
+# it would silently drop the per-role gate on /api/info-sheet/*, leaving the page undeniable and its
+# routes ungated. A security regression dressed as a test fix. The set below is the honest version:
+# the tab is still governed, it simply is not drawn.
+#
+# The Admin page can still switch these, so a role cannot be denied a tab with no way to undo it:
+# auth.js keeps a matching NO_SIDEBAR_TABS list and navMatrix appends a row for each whenever it is
+# rendering a policy. The two lists are asserted equal in test_nav_access.py, because two copies of
+# one list is how one of them rots.
+NO_SIDEBAR_TABS: Tuple[str, ...] = ("/info-sheet.html",)
 
 
 class NavAccessError(ValueError):
@@ -422,7 +450,12 @@ def capability_table() -> List[Dict[str, Any]]:
 
     The Admin page needs `api` to tell the truth on screen about the five tabs that own none —
     switching those off hides the tab and blocks the page, and leaves their data reachable.
+
+    `no_sidebar` says the tab has no menu row at all (NO_SIDEBAR_TABS): its switch is real and its
+    routes are refused, but "hide the tab" is not part of what it does, because there is nothing to
+    hide. Served so the page can say that rather than the browser having to know it.
     """
     return [{"href": href, "label": tab["label"], "pages": list(tab["pages"]),
-             "api": list(tab["api"]), "locked": href in LOCKED}
+             "api": list(tab["api"]), "locked": href in LOCKED,
+             "no_sidebar": href in NO_SIDEBAR_TABS}
             for href, tab in TABS.items()]

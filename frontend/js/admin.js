@@ -98,17 +98,35 @@
     function roleMatrixHtml(policy){
       const pol = policy || (typeof NAV_POLICY === "undefined" ? null : NAV_POLICY) || {};
       const deny = pol.deny || null;
+      // ALWAYS A POLICY QUESTION, EVEN WHEN THERE IS NO POLICY. navMatrix appends the rows for tabs
+      // that have no sidebar entry only when it is handed a deny map, so this hands it an empty one
+      // when the fetch failed. Passing nothing dropped exactly the row that matters most on a
+      // degraded page: the one tab that cannot be reached from the menu is the one whose only
+      // visible switch is in this table, so a vanished row is a denial with nothing on screen to
+      // undo it. What an empty map cannot say is whether those tabs are ON, which is what
+      // policyKnown below is for.
       const nav = (window.TWAuth && window.TWAuth.navMatrix)
-        ? window.TWAuth.navMatrix(deny || undefined) : null;
+        ? window.TWAuth.navMatrix(deny || {}) : null;
       if (!nav || !nav.rows.length) {
         return `<div class="panel" id="rv-panel" style="margin-top:18px;"><div class="ph"><strong>What each role can see</strong></div>
           <p class="rv-note">The sidebar didn't report its tabs, so there is nothing to show here.
           Reload the page; if it persists, auth.js failed to load.</p></div>`;
       }
       const roles = nav.roles, rows = nav.rows, mine = ME.role || "user";
+      // Did the stored policy actually arrive? Every row built by rendering the menu is true either
+      // way. The rows for tabs with NO menu entry are read off the deny map instead, so with no map
+      // their state is genuinely not known, and saying so is the only honest thing this page can do
+      // with them: a cell that looks on for a tab that is in fact denied is the one error nobody
+      // can catch from this screen.
+      const policyKnown = !!deny;
+      const rowless = rows.filter(r => r.noSidebar);
+      const unknown = (r) => !!r.noSidebar && !policyKnown;
+      // Counted over the rows this render can speak for, so the tally in the header and the
+      // sentence under the table stay claims it backs. Under a loaded policy that is every row.
+      const known = rows.filter(r => !unknown(r));
       const seen = (r) => roles.filter(x => r.roles[x]).length;
-      const differing = rows.filter(r => seen(r) !== roles.length);
-      const count = {}; roles.forEach(x => { count[x] = rows.filter(r => r.roles[x]).length; });
+      const differing = known.filter(r => seen(r) !== roles.length);
+      const count = {}; roles.forEach(x => { count[x] = known.filter(r => r.roles[x]).length; });
 
       // What each tab actually owns, from the server's capability table. Absent (the lifted copy, or
       // a failed policy fetch) means read-only: no switches, and the note says why.
@@ -116,6 +134,24 @@
       const editable = !!(pol.tabs && pol.tabs.length);
       const lockedRoles = pol.locked_roles || [];
       const hideOnly = (pol.tabs || []).filter(t => !t.locked && !(t.api||[]).length);
+
+      // Named rather than named-and-described: which page a rowless tab is opened from is not in
+      // any of the data this table reads, and a sentence here saying where one lives would be a
+      // second copy of that fact with nothing to keep it true.
+      const NO_ROW_WHY = "This tab is governed here and is not drawn in the left menu. It is "
+        + "opened from inside the app instead, and it can still be refused per role, so its switch "
+        + "has to be somewhere an admin can find it.";
+      const NOT_KNOWN_WHY = "Not known. This tab has no sidebar row to read, and the tab "
+        + "permissions did not load. Reload the page.";
+      // The header used to read "N sidebar tabs", which stopped being true the day a tab could be
+      // governed without being drawn: the number counts ROWS, and one row is a tab with no menu
+      // entry. So it counts tabs, and names the ones the menu does not carry rather than letting
+      // the total quietly absorb them.
+      const rowlessNote = !rowless.length ? "" :
+        (' · <span title="Governed by this table, not drawn in the left menu.">' +
+         rowless.map(r => esc(r.label)).join(", ") +
+         (rowless.length === 1 ? " has" : " have") + " no sidebar row" +
+         (policyKnown ? "" : ", and its state did not load") + "</span>");
 
       // Both helpers are LOCAL because nav-visibility-harness.js lifts this function out on its own
       // to prove the table is the menu; anything it reaches for from the file's top level would be a
@@ -139,6 +175,11 @@
       // ONE cell renderer for both modes, so the tick can never disagree with the switch beside it:
       // there is no switch beside it — the glyph is INSIDE the button.
       function cellHtml(r, role){
+        // A governed tab with no menu row, on a page whose policy fetch failed. There is no render
+        // behind this cell and no map to read, so it says so; a tick here would be the default-allow
+        // of an empty map dressed up as a fact.
+        if (unknown(r)) return `<td class="rv-cell" data-role="${esc(role)}"` +
+          `><span class="rv-no" title="${esc(NOT_KNOWN_WHY)}">?</span></td>`;
         const on = !!r.roles[role];
         const glyph = on ? '<span class="rv-yes">✓</span>' : '<span class="rv-no">—</span>';
         const cap = caps[r.href];
@@ -173,27 +214,37 @@
           <td class="rv-sec">${i && rows[i-1].section === r.section ? "" : esc(r.section)}</td>
           <td><span class="rv-ico">${esc(r.glyph)}</span>${esc(r.label)}${
             r.tag?`<span class="badge b-user" style="margin-left:6px">${esc(r.tag)}</span>`:""}
-            <span class="rv-href">${esc(r.href)}</span>${scopeChip(caps[r.href])}</td>
+            <span class="rv-href">${esc(r.href)}</span>${scopeChip(caps[r.href])}${
+              r.noSidebar?`<span class="badge b-user" style="margin-left:8px"
+                title="${esc(NO_ROW_WHY)}">no sidebar row</span>`:""}</td>
           ${roles.map(x => cellHtml(r, x)).join("")}
         </tr>`).join("");
 
       return `<div class="panel" id="rv-panel" style="margin-top:18px;">
         <div class="ph"><strong>What each role can see</strong>
-          <span style="color:var(--ink-v)">${rows.length} sidebar tabs · ${differing.length}
-            ${differing.length===1?"differs":"differ"} by role</span>
+          <span style="color:var(--ink-v)">${rows.length} tabs · ${differing.length}
+            ${differing.length===1?"differs":"differ"} by role${rowlessNote}</span>
           <span class="grow"></span>
           ${pol.updated_at?`<span class="rv-you">Last changed ${esc(shortDate(pol.updated_at))}${
             pol.updated_by?" by "+esc(pol.updated_by):""}</span>`:""}
           <span class="rv-you">Your role: <strong>${esc(roleLabelOf(mine))}</strong></span>
         </div>
         <div style="overflow-x:auto"><table>
-          <thead><tr><th>Section</th><th>Sidebar tab</th>${head}</tr></thead>
+          <thead><tr><th>Section</th><th>Tab</th>${head}</tr></thead>
           <tbody>${body}</tbody>
         </table></div>
         <div class="rv-note" id="rv-note">
-          <p>${roleDiffSentence(nav, count)}</p>
+          <p>${roleDiffSentence({ roles: roles, rows: known }, count)}</p>
           ${editable ? "" : `<p><strong>Read-only right now.</strong> The tab permissions didn't
             load, so this is showing the menu as it stands with no switches. Reload the page.</p>`}
+          ${rowless.length?`<p><strong>${rowless.length===1
+            ?"One tab is governed here with no row in the left menu"
+            :`${rowless.length} tabs are governed here with no row in the left menu`}:</strong>
+            ${rowless.map(r=>`<strong>${esc(r.label)}</strong>`).join(", ")}. Reached from inside
+            the app instead of from the menu, and still refusable per role, so the switch has to sit
+            somewhere an admin can find it: a denial nobody can see is a denial nobody can lift.${
+            policyKnown?"":` Those cells read a question mark because the permissions did not load,
+            not because the tab is switched off.`}</p>`:""}
           <p><strong>A tab switched off is a real block, but the page is still served.</strong>
             There is no session cookie in this app — the only credential is a header the browser
             attaches to API calls — so a page is still reachable by typing its URL, and what it

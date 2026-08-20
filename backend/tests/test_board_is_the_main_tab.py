@@ -103,19 +103,52 @@ def test_the_proposals_database_has_its_own_category():
 
 
 def test_nothing_else_left_the_sidebar():
-    """Reordering is easy to do destructively. Every page that was linked stays linked.
+    """Reordering is easy to do destructively. Every page that is meant to be linked stays linked.
 
     The polish beta is listed by its INTAKE, which is its own step 1. That door moved there on
     2026-08-17, when the five job conditions moved off the calculator onto the beta intake form:
     opening at step 2 would start an estimator pricing before the switches that change the price
     have been seen. The calculator is still reachable — from the beta's own step nav and from the
-    toolbar link on Estimate Review — so what this list guards is the DOOR, not every page."""
+    toolbar link on Estimate Review — so what this list guards is the DOOR, not every page.
+
+    INFO SHEET CAME OFF THIS LIST ON 2026-08-20, and the removal is the one thing here that was
+    intended. Hanz moved it into the project drawer's Proposal tab: the sidebar row had no project
+    in hand, so it could only ever open a choose-a-project state, while from the drawer the hand-off
+    is one click on the job on screen. The assertion is INVERTED rather than deleted, because a
+    sidebar row reappearing is how you end up with two doors to one page and only one of them
+    carrying the ?d= — auth.js's draft-id rewrite went out with the row.
+
+    Removed from the MENU is not removed from the POLICY: nav_access.py keeps the tab's capability
+    entry and names it in NO_SIDEBAR_TABS, so /api/info-sheet/* is still refused per role. The test
+    below pins that, because deleting the entry is the cheap way to keep a list like this green."""
     bar = _sidebar()
     for href in ("/portal.html", "/projects.html", "/leads.html", "/crm.html", "/calendar.html",
-                 "/info-sheet.html", "/polish-intake.html", "/analytics.html", "/library.html",
+                 "/polish-intake.html", "/analytics.html", "/library.html",
                  "/history.html", "/trash.html", "/notifications.html",
                  "/followup-settings.html", "/admin.html"):
         assert '"%s"' % href in bar, "%s is no longer reachable from the sidebar" % href
+    assert "/info-sheet.html" not in bar, (
+        "Info Sheet is back in the sidebar. It moved into the project drawer's Proposal tab on "
+        "2026-08-20; the menu row opens a page with no project in hand, and the ?d= rewrite that "
+        "used to patch it came out of auth.js with the row.")
+
+
+def test_the_info_sheet_kept_its_permission_when_it_left_the_menu():
+    """The half of that move that is easy to lose. A tab with no sidebar row is still a tab: the
+    entry in nav_access.TABS is what refuses /api/info-sheet/* to a denied role and what makes the
+    page paint a refusal instead of itself.
+
+    Asserted here as well as in test_nav_access.py because THIS file is the one somebody edits when
+    they take a row out of the sidebar, and deleting the capability entry is the change that makes
+    the rest of the suite go quiet while silently removing a gate."""
+    import nav_access
+    assert "/info-sheet.html" in nav_access.TABS, (
+        "the Info Sheet tab lost its capability entry, so its page and /api/info-sheet/* are no "
+        "longer deniable to anybody — that is a removed permission, not a sidebar cleanup")
+    assert "/info-sheet.html" in nav_access.NO_SIDEBAR_TABS, (
+        "the tab has no sidebar row and is not declared hidden, so nothing says the missing row "
+        "was on purpose")
+    assert nav_access.TABS["/info-sheet.html"]["api"] == ("/api/info-sheet/",)
 
 
 def test_the_active_highlight_still_comes_from_the_path():
