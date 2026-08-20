@@ -302,10 +302,19 @@ def test_the_handles_add_no_height_to_the_box(selector):
 def test_the_tools_layer_does_not_swallow_clicks_meant_for_the_text():
     """It covers the whole box so the grips can sit on its edges. Without pointer-events:none on
     the container, every click aimed at a paragraph would land on the overlay instead and the
-    document would stop being editable."""
+    document would stop being editable.
+
+    THE SECOND HALF NO LONGER MEANS WHAT IT USED TO SAY, so it does not claim it any more.
+    `.tw-box-tools > *` still grants the pointer back, but as of 2026-08-20 `.tw-grip` takes it
+    away again at rest and regains it on hover/focus — because an invisible grip was still being
+    hit-tested, and PRICE's move grip sits over WORK's last line on Kyle's template. So the
+    presence of this declaration is NOT what makes a grip draggable, and asserting that it is
+    would be a lying test. What actually decides it is specificity plus source order between
+    these two rules, resolved and asserted in tests/test_editor_overlap.py — including a
+    mutation that reorders them without editing a single declaration."""
     assert "pointer-events: none" in _css_rule(".tw-box-tools")
     assert "pointer-events: auto" in _css_rule(".tw-box-tools > *"), (
-        "the grips would inherit pointer-events:none and stop being draggable")
+        "the non-grip tools (Reset, Collapse, Fit to text) would stop being clickable")
 
 
 # ── persistence, and the guard that keeps a stale id from moving a live box ──
