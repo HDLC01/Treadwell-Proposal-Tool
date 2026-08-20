@@ -856,6 +856,22 @@ button {
 }
 /* A floating text box placed at its Word anchor position. */
 .tw-txbx { position: absolute; z-index: 1; }
+/* THE BOX YOU ARE TYPING IN WINS ITS OWN PIXELS.
+   Kyle, 2026-08-20: "There is a problem when the texboxes overlap, its hard to edit".
+   Kyle's shapes genuinely overlap — Direct epoxy's WORK ends at 323.65pt and PRICE
+   starts at 320.95pt — and every box carries the same z-index above, so which one won
+   a click in that 2.7pt strip was decided by nothing more than the order the shapes
+   happen to appear in the .docx (proposal_writer._iter_txbx, which does not sort by y).
+   For this template that hands the strip to PRICE, so WORK's last line was unreachable.
+
+   MUST STAY IN CSS. fitTxbx clears box.style.zIndex on every pass, and it re-runs on
+   every keystroke and every repagination, so an inline z-index set on focus would be
+   wiped mid-typing. A stylesheet rule is immune to that, and it also leaves the tests
+   that assert an inline zIndex of "" on a closed box telling the truth.
+
+   20 sits BELOW the two states that must still out-rank a focused box: 30 for a box
+   expanded to read past the clip, 40 for one being dragged over its neighbours. */
+.tw-txbx:focus-within { z-index: 20; }
 
 /* ── the drag / resize handles ─────────────────────────────────────────────
    Hanz asked to be able to drag and resize the proposal's text boxes, so every box
@@ -875,9 +891,21 @@ button {
   z-index: 5;
 }
 .tw-box-tools > * { pointer-events: auto; }
+/* AN INVISIBLE GRIP MUST NOT TAKE THE CLICK.
+   These are hidden with opacity, not display, so they can fade in — but an element at
+   opacity 0 is still hit-tested, and .tw-box-tools > * above hands every child the
+   pointer back. PRICE's move grip sits at top:-13px, i.e. 11 CSS px = 8.25pt ABOVE its
+   own top edge, which for this template lands it at y 311.2–319.45pt: inside WORK, on
+   WORK's last line or two. wireBoxDrag's pointerdown then preventDefault()s the click
+   that should have placed the caret, so the caret simply never arrived and nothing on
+   screen explained why (Kyle, 2026-08-20). WORK's own south grips do the same to
+   PRICE's first line from the other side.
+   The hit target is the one thing in this stack that carries no information: opacity 0
+   already says "not now". So it stops taking clicks until it is actually visible. */
 .tw-grip {
   position: absolute;
   opacity: 0;
+  pointer-events: none;
   background: var(--treadwell-red, #9e001f);
   border: 1px solid #fff;
   border-radius: 2px;
@@ -895,9 +923,11 @@ button {
 .tw-grip-e  { right: 0; top: 50%; width: 7px; height: 26px; margin-top: -13px; cursor: ew-resize; }
 .tw-grip-s  { bottom: 0; left: 50%; width: 26px; height: 7px; margin-left: -13px; cursor: ns-resize; }
 .tw-grip-se { right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+/* Visible and grabbable together — the same rule raises both, so they cannot drift
+   apart into a grip you can see but not drag, or one you can drag but not see. */
 .tw-txbx:hover .tw-grip,
 .tw-txbx:focus-within .tw-grip,
-.tw-txbx.tw-box-dragging .tw-grip { opacity: .85; }
+.tw-txbx.tw-box-dragging .tw-grip { opacity: .85; pointer-events: auto; }
 .tw-grip:hover { opacity: 1; }
 /* The size/position readout, only while a drag is in progress — a permanent badge on
    every box would compete with the document it is describing.

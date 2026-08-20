@@ -2328,8 +2328,34 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
                 _user_sized_paragraphs(d).add(id(p_elem))
         else:
             _set_paragraph_text(p_elem, val)
+        # BLANKED A BULLETED ROW → DROP THE BULLET. Kyle, 2026-08-20, on pressing Enter in
+        # the WORK box to add spacing: "it did not generate in the proposal". It did — the
+        # <w:br/> was there — but the paragraph kept its numbering, so what printed was a
+        # lone red square on an empty row with his label gone. Blank vertical space is what
+        # he asked for and a stray bullet is not it.
+        #
+        # This is the SAME rule the notes block already applies to a blank {{#notes}} item
+        # (see _strip_bullet's own docstring: "rather than a lone empty bullet dot"); it was
+        # simply never wired to the paragraph-override path, which is the other way a row
+        # becomes blank. Reusing that function rather than writing a second stripper keeps
+        # the two from disagreeing about what "blank" means.
+        #
+        # Whitespace-only counts as blank, because that is exactly what the editor sends:
+        # his stored override is one newline character and nothing else.
+        if _blanked_by_override(val):
+            _strip_bullet(p_elem)
         applied += 1
     return applied
+
+
+def _blanked_by_override(val) -> bool:
+    """True when an override leaves a paragraph with no visible text.
+
+    Takes either shape the override channel carries — a plain string, or the formatted
+    run list — so a row blanked with formatting still loses its bullet."""
+    if isinstance(val, list):
+        return not any(str(r.get("text") or "").strip() for r in val if isinstance(r, dict))
+    return not str(val or "").strip()
 
 
 def fill_proposal(
