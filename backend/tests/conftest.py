@@ -1,5 +1,6 @@
 """Shared test setup. Makes the backend importable, and bypasses the Supabase
 auth gate for tests that aren't about auth (so /api/* calls don't 401)."""
+import inspect
 import os
 import pathlib
 import sys
@@ -128,6 +129,28 @@ def _clear_profile_cache():
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""
     return _REAL_VERIFY_TOKEN
+
+
+# ── strict test doubles ───────────────────────────────────────────────────────
+def assert_callable_accepts(fn, args=(), kwargs=None):
+    """Fail unless the REAL `fn` would have accepted this call.
+
+    A double written as `lambda **kw: {...}` accepts anything, so it keeps passing
+    after the real callee grows a parameter — and keeps passing when the caller
+    misspells one or drops it. `dropbox_client.upload_project_files` has no
+    **kwargs, so a keyword the real function doesn't declare is a TypeError in
+    production (a caught one: /api/to-dropbox turns it into "Upload failed —
+    please try again" for every filing) while the stubbed test stays green.
+
+    Call this from inside a stub, before it records anything, so the stub can only
+    accept calls the real function could serve.
+    """
+    try:
+        inspect.signature(fn).bind(*args, **(kwargs or {}))
+    except TypeError as exc:
+        raise AssertionError(
+            f"{getattr(fn, '__name__', fn)} would REJECT this call: {exc}. "
+            "The stub only accepted it because it takes **kwargs.") from exc
 
 
 # ── In-memory Supabase fake ───────────────────────────────────────────

@@ -31,7 +31,13 @@ import inspect
 
 import main
 import pytest
+from conftest import assert_callable_accepts
 from fastapi.testclient import TestClient
+
+# The REAL upload, captured before any test monkeypatches the name — the stub in
+# test_to_dropbox_replays_read_only binds against it, and by then
+# `main.dropbox_client.upload_project_files` IS the stub.
+_REAL_UPLOAD = main.dropbox_client.upload_project_files
 
 
 def _payload(**values):
@@ -248,7 +254,11 @@ def test_every_replay_caller_opts_out_of_persisting(caller):
 def test_to_dropbox_replays_read_only(monkeypatch):
     """Executed, not read: To Dropbox regenerates from the SAVED payload so the filed copy matches
     the latest estimate. Feeding those values back into the draft can only re-age it — and the two
-    other replay paths are covered behaviourally in test_revision_endpoints.py."""
+    other replay paths are covered behaviourally in test_revision_endpoints.py.
+
+    The upload double is deliberately strict. It was `lambda **kw`, which accepts any keyword: it
+    would have kept passing if the route stopped passing the estimator's chosen folder, or misspelled
+    one of the kwargs the real function has no **kwargs to absorb."""
     seen = {}
     payload = {"work_type": "epoxy", "audience": "Direct",
                "values": {"project_name": "Westport", "proposal_lump_sum": 13265}}
@@ -267,12 +277,24 @@ def test_to_dropbox_replays_read_only(monkeypatch):
     monkeypatch.setitem(main._FILE_CACHE, "x", {"content": b"xlsx"})
     monkeypatch.setitem(main._FILE_CACHE, "d", {"content": b"docx", "_pdf": b"%PDF-1.4"})
     monkeypatch.setattr(main.dropbox_client, "destination_path", lambda d: "/Estimating/Gyp")
-    monkeypatch.setattr(main.dropbox_client, "upload_project_files",
-                        lambda **kw: {"ok": True, "folder_url": "https://dropbox/x"})
+
+    def fake_upload(**kw):
+        assert_callable_accepts(_REAL_UPLOAD, kwargs=kw)
+        seen["upload_kwargs"] = kw
+        # The unconfigured shape on purpose: `configured: True` sends the route on to
+        # drafts.log_event, which this test does not stub.
+        return {"configured": False, "error": "Dropbox isn't set up in this test."}
+
+    monkeypatch.setattr(main.dropbox_client, "upload_project_files", fake_upload)
     r = TestClient(main.app).post("/api/to-dropbox",
                                   json={"draft_id": "d1", "destination": "gyp"})
     assert r.status_code == 200, r.text
     assert seen.get("persist") is False, "filing to Dropbox wrote the stored payload back"
+    kw = seen["upload_kwargs"]
+    assert kw["base_path"] == "/Estimating/Gyp"     # the destination the estimator chose
+    # Present even when there is no folder to reuse: a route that stops passing them files into a
+    # folder of its own invention beside the one Kyle's team made.
+    assert "existing_folder_path" in kw and "known_paths" in kw
 
 
 def test_no_internal_caller_uses_the_route_function():

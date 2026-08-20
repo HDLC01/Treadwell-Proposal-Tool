@@ -2,10 +2,20 @@
 
 These cover the NEW behavior only; the existing folder/filename conventions are
 pinned by test_dropbox_naming.py and the graceful-degradation contract by
-test_security_misc.py (both left untouched)."""
+test_security_misc.py (both left untouched).
+
+The route-level section at the bottom pins the HAND-OFF: /api/to-dropbox is the
+only place the upload's arguments are assembled, and every one of them is a
+decision the estimator made."""
 import re
 
 import dropbox_client as dc
+import main
+from conftest import assert_callable_accepts
+from fastapi.testclient import TestClient
+
+# The real upload, captured before any test monkeypatches the name.
+_REAL_UPLOAD = dc.upload_project_files
 
 
 def test_destination_map_has_three_with_verified_paths():
@@ -80,6 +90,102 @@ def test_proposal_name_type_word_and_project_name():
     assert "TREADWELL COMBO PROPOSAL" in dc._project_proposal_name("X", "combo", None, None)
     # unknown/blank work type falls back to EPOXY
     assert "TREADWELL EPOXY PROPOSAL" in dc._project_proposal_name("X", "", "2026-01-02", None)
+
+
+# ── /api/to-dropbox → dropbox_client.upload_project_files ────────────────────
+# Written strict on purpose. The double HAS to take **kwargs to record the call,
+# so it binds what it received against the real function — which has no **kwargs,
+# making an undeclared keyword a TypeError in production that the route swallows
+# into "Upload failed — please try again" for every filing.
+GYP = dc.ESTIMATING_DESTINATIONS["gyp"]
+COMMERCIAL = dc.ESTIMATING_DESTINATIONS["commercial"]
+
+XLSX, DOCX, PDF = b"the-estimate-xlsx", b"the-proposal-docx", b"%PDF-1.4 the-proposal-pdf"
+
+
+def _stub_route(monkeypatch, *, owner_subfolder=""):
+    """Stub everything /api/to-dropbox needs except the upload, which records its
+    kwargs into the returned dict."""
+    captured: dict = {}
+    data = {"proposal_payload": {
+        "work_type": "polish", "audience": "GC",
+        "values": {"project_name": "Trabon Group", "deadline": "2026-09-01",
+                   "bid_date": "2026-08-14"}}}
+    monkeypatch.setattr(main.drafts, "load_draft", lambda i: {"id": i, "data": data})
+    monkeypatch.setattr(main.drafts, "save_draft", lambda i, d, **k: None)
+    monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_generate", lambda gi, request, persist=True: main.GenerateOut(
+        work_type=gi.work_type, audience=gi.audience, xlsx_download_url="/api/files/x",
+        docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={}))
+    monkeypatch.setitem(main._FILE_CACHE, "x", {"content": XLSX})
+    monkeypatch.setitem(main._FILE_CACHE, "d", {"content": DOCX, "_pdf": PDF})
+    monkeypatch.setattr(main.dropbox_client, "destination_path",
+                        lambda d: {"gyp": GYP, "commercial": COMMERCIAL}.get(d))
+    monkeypatch.setattr(main.dropbox_client, "commercial_owner_subfolder",
+                        lambda o: owner_subfolder)
+
+    def fake_upload(**kw):
+        assert_callable_accepts(_REAL_UPLOAD, kwargs=kw)
+        captured.update(kw)
+        return {"configured": True, "existing": False,
+                "folder_path": kw["base_path"] + "/26.09.01 Trabon Group",
+                "folder_url": "https://www.dropbox.com/x",
+                "written_paths": [], "renamed": []}
+
+    monkeypatch.setattr(main.dropbox_client, "upload_project_files", fake_upload)
+    return captured
+
+
+def test_the_route_hands_over_every_choice_the_estimator_made(monkeypatch):
+    """The folder is NAMED from project_name + deadline and the proposal file from
+    bid_date + work_type, so a dropped argument here files a correctly-generated
+    proposal under a wrong name — or under today's date, which is half of the
+    duplicate folders Kyle reported."""
+    captured = _stub_route(monkeypatch)
+    r = TestClient(main.app).post("/api/to-dropbox",
+                                  json={"draft_id": "d1", "destination": "gyp"})
+    assert r.status_code == 200, r.text
+    assert captured["project_name"] == "Trabon Group"
+    assert captured["deadline"] == "2026-09-01"
+    assert captured["bid_date"] == "2026-08-14"
+    assert captured["work_type"] == "polish"
+    assert captured["audience"] == "GC"
+    assert captured["base_path"] == GYP
+    # Passed even when there is nothing to reuse — see test_dropbox_existing_folder
+    # for the values themselves.
+    assert "existing_folder_path" in captured and "known_paths" in captured
+
+
+def test_the_estimate_and_proposal_bytes_are_not_crossed(monkeypatch):
+    """Both files come out of the same cache dict two lines apart, and the names
+    they get filed under are decided by which keyword they arrive in: crossing them
+    puts the proposal inside "$ estimate sheet - <project>.xlsx" in Kyle's folder."""
+    captured = _stub_route(monkeypatch)
+    assert TestClient(main.app).post(
+        "/api/to-dropbox", json={"draft_id": "d1", "destination": "gyp"}).status_code == 200
+    assert captured["xlsx_bytes"] == XLSX
+    assert captured["docx_bytes"] == DOCX
+    assert captured["pdf_bytes"] == PDF      # the memoized render, not a re-render
+
+
+def test_commercial_files_into_the_chosen_persons_subfolder(monkeypatch):
+    """$Commercial Sales Estimates holds no project folders — only *Hanz *Kyle *RJ.
+    Dropping the sub-folder join files the job one level too high, in the folder
+    everyone shares."""
+    captured = _stub_route(monkeypatch, owner_subfolder="*Kyle")
+    r = TestClient(main.app).post("/api/to-dropbox", json={
+        "draft_id": "d1", "destination": "commercial", "folder_owner": "kyle"})
+    assert r.status_code == 200, r.text
+    assert captured["base_path"] == COMMERCIAL + "/*Kyle"
+
+
+def test_a_blank_owner_files_into_the_category_folder_itself(monkeypatch):
+    """Hanz 2026-07-14: no person chosen → the category folder, not a *Name guess."""
+    captured = _stub_route(monkeypatch, owner_subfolder="")
+    r = TestClient(main.app).post("/api/to-dropbox",
+                                  json={"draft_id": "d1", "destination": "commercial"})
+    assert r.status_code == 200, r.text
+    assert captured["base_path"] == COMMERCIAL
 
 
 def test_dropbox_events_become_bell_notifications(monkeypatch):
