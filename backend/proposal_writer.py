@@ -241,8 +241,26 @@ def _split_after_visible(s: str, n: int) -> tuple[str, str]:
 
 
 def _normalize_work_label_formatting(d: Document) -> int:
-    """Make WORK-box labels bold through their first colon, values normal."""
+    """Make WORK-box labels bold through their first colon, values normal.
+
+    SKIPS any run whose weight the estimator stated by hand (`_user_bolded_runs`). Without that
+    exemption this pass un-bolded every run after the colon unconditionally, which silently
+    made the format toolbar's most-used button a no-op in the WORK box — the area estimators
+    edit most. Bold on a phrase inside a Scope / Schedule / Exclusions value reached this pass
+    intact and left it as `w:b val="0"`.
+
+    A skipped run is not split either. The split exists ONLY to give the tail its own weight,
+    so with the weight left alone there is nothing to split for, and the row keeps the run
+    structure the estimator's own edit produced.
+
+    The label still gets bolded automatically in every case where nobody said otherwise: a
+    plain-text override registers no runs at all (so a row Kyle retyped is normalized exactly
+    as before), and a runs override carries the template's bold back on the label because the
+    preview renders it as `font-weight:700` and `serializeRuns` reads it back. What changes is
+    only that an EXPLICIT weight now wins over this pass instead of losing to it.
+    """
     changed = 0
+    hand_bolded = _user_bolded_runs(d)
     for txbx in d.element.body.iter(qn("w:txbxContent")):
         paragraphs = list(txbx.iter(qn("w:p")))
         if not any(_WORK_ANCHOR_RE.match(_own_text(p).strip()) for p in paragraphs):
@@ -271,11 +289,22 @@ def _normalize_work_label_formatting(d: Document) -> int:
                     continue
                 start, end = offset, offset + len(run_text)
                 offset = end
+                # THE ESTIMATOR'S OWN WEIGHT OUTRANKS THIS PASS. The check sits inside each
+                # branch rather than short-circuiting the whole run, so `passed_colon` and
+                # `offset` stay maintained by the one piece of code that has always owned them.
+                hand = id(run_elem) in hand_bolded
                 if passed_colon or start > colon:
-                    _set_run_bold(run_elem, False)
-                    changed += 1
+                    if not hand:
+                        _set_run_bold(run_elem, False)
+                        changed += 1
                     continue
                 if start <= colon < end:
+                    passed_colon = True
+                    # No split when the weight is the estimator's: the split exists ONLY to
+                    # give the tail its own weight, so there is nothing to split for, and the
+                    # row keeps the run structure their edit produced.
+                    if hand:
+                        continue
                     split_at = colon - start + 1
                     if split_at < len(run_text):
                         head, tail = _split_after_visible(raw, split_at)
@@ -286,8 +315,7 @@ def _normalize_work_label_formatting(d: Document) -> int:
                         run_elem.addnext(suffix)
                     _set_run_bold(run_elem, True)
                     changed += 1
-                    passed_colon = True
-                else:
+                elif not hand:
                     _set_run_bold(run_elem, True)
                     changed += 1
     return changed
@@ -659,7 +687,17 @@ def _get_or_make_ppr(p_elem):
 
 
 def _numbering_levels(d) -> dict:
-    """`{(numId, ilvl): {"fmt": <numFmt>, "ind": {attr: value}}}` for this document.
+    """`{(numId, ilvl): {"fmt", "text", "start", "ind"}}` for this document.
+
+    `fmt`   — the `w:numFmt` ("bullet", "decimal", ...).
+    `text`  — the `w:lvlText`, i.e. what the level actually PRINTS in front of the paragraph:
+              "%1." for the numbered Terms and Conditions clauses, a Wingdings glyph (U+F0A7)
+              for every bullet list in Kyle's templates. `fmt` answers "decimal or bullet";
+              this answers "what does the reader SEE", which is the question the document
+              editor was getting wrong — it drew a red square in front of all 27 clauses that
+              print "1." to "27." in the signed contract.
+    `start` — the `w:start`, the first ordinal of the level (1 in every template here).
+    `ind`   — the level's own `w:ind` attributes.
 
     Read once per Document and cached on it (same technique as `_user_sized_paragraphs` — a
     custom attribute in the XML would be invalid OOXML). A document with no numbering part
@@ -678,10 +716,14 @@ def _numbering_levels(d) -> dict:
             aid = anum.get(qn("w:abstractNumId"))
             for lvl in anum.findall(qn("w:lvl")):
                 fmt_el = lvl.find(qn("w:numFmt"))
+                txt_el = lvl.find(qn("w:lvlText"))
+                start_el = lvl.find(qn("w:start"))
                 lppr = lvl.find(qn("w:pPr"))
                 ind = lppr.find(qn("w:ind")) if lppr is not None else None
                 abstract[(aid, lvl.get(qn("w:ilvl")))] = {
                     "fmt": fmt_el.get(qn("w:val")) if fmt_el is not None else None,
+                    "text": txt_el.get(qn("w:val")) if txt_el is not None else None,
+                    "start": _tw_or_none(start_el.get(qn("w:val"))) if start_el is not None else None,
                     "ind": ({k.split("}")[-1]: v for k, v in ind.attrib.items()}
                             if ind is not None else {}),
                 }
@@ -741,6 +783,133 @@ def _para_ordered_list(d, p_elem) -> bool:
     return _num_fmt(d, p_elem) != "bullet"
 
 
+# ─── WHAT AN ORDERED LEVEL ACTUALLY PRINTS ───────────────────────────────────
+# The document editor drew a red square in front of all 27 numbered TERMS AND CONDITIONS
+# clauses, because `/api/proposal-template` told it `list: True` (the paragraph carries
+# `w:numPr`) and the renderer read that as "bulleted". The flag was never wrong; it was
+# answering a different question. The question the editor needs answered is what the level
+# PRINTS in front of this paragraph, and for numId 5 that is "1." to "27." — the numbers the
+# signed contract shows and a bulleted preview does not.
+#
+# `w:numFmt` alone cannot answer it either: it says "decimal", not "1." — the trailing period,
+# and any prefix, live in `w:lvlText` ("%1."). So the marker is `w:lvlText` with each `%N`
+# replaced by that level's running count, which is exactly how Word renders one.
+_MAX_ROMAN = 3999
+_ROMAN_PARTS = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+                (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
+
+
+def _roman(n: int) -> str:
+    """`n` as a lowercase Roman numeral. Empty for anything Roman cannot spell (<1, >3999)."""
+    if n < 1 or n > _MAX_ROMAN:
+        return ""
+    out = []
+    for val, sym in _ROMAN_PARTS:
+        while n >= val:
+            out.append(sym)
+            n -= val
+    return "".join(out)
+
+
+def _alpha(n: int) -> str:
+    """`n` as Word's letter sequence: 1→a, 26→z, 27→aa. Empty below 1."""
+    out = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        out = chr(ord("a") + rem) + out
+    return out
+
+
+def _format_ordinal(n: int, fmt: str | None) -> str:
+    """One ordinal in a `w:numFmt`. Anything unrecognised (or unspellable) falls back to the
+    decimal, which is what every ordered level in Kyle's templates uses at the level that
+    matters and is never a worse answer than showing nothing."""
+    if fmt == "lowerLetter":
+        return _alpha(n) or str(n)
+    if fmt == "upperLetter":
+        return (_alpha(n) or str(n)).upper()
+    if fmt == "lowerRoman":
+        return _roman(n) or str(n)
+    if fmt == "upperRoman":
+        return (_roman(n) or str(n)).upper()
+    return str(n)
+
+
+def _render_lvl_text(raw: str, num_id: str, counters: dict, levels: dict) -> str:
+    """`w:lvlText` with every `%N` replaced by level N-1's current count.
+
+    A level the walk has not reached yet contributes its own `w:start` rather than nothing, so a
+    nested "%1.%2" reads as "1.1" rather than ".1". Literal text around the placeholders (the
+    "." in "%1.") is the template's and is kept verbatim."""
+    def one(m):
+        lvl = str(int(m.group(1)) - 1)
+        info = levels.get((num_id, lvl)) or {}
+        n = counters.get((num_id, lvl))
+        if n is None:
+            n = info.get("start")
+            n = 1 if n is None else n
+        return _format_ordinal(n, info.get("fmt"))
+    return re.sub(r"%(\d)", one, raw)
+
+
+def _ordered_markers(d) -> dict:
+    """`{id(w:p): (w:p, marker)}` for every paragraph on a NUMBERED list in this document.
+
+    Document order, one counter per `(numId, ilvl)` starting at the level's `w:start`, which is
+    how Word numbers a plain list. `w:lvlOverride` / `w:startOverride` restarts are NOT modelled:
+    no template here uses one, and a marker this cannot resolve comes back as "" (see
+    `para_props`) rather than as a guess.
+
+    THE VALUE PINS THE ELEMENT, and it has to — same reason `_hand_formatted` gives. lxml frees
+    an element proxy as soon as the last Python reference goes and hands out a brand new one, at
+    a possibly REUSED address, on the next access. Holding the element keeps its proxy alive,
+    which keeps `id()` both stable and unique, and means a caller who looks up the paragraph it
+    is iterating gets that same proxy back.
+
+    Cached per document and keyed on the paragraph COUNT: this map is a read-path answer about
+    document order, so it must not survive a pass that inserts or removes a paragraph (block
+    expansion does exactly that). The count is the cheapest honest way to notice."""
+    paras = list(d.element.body.iter(qn("w:p")))
+    got = getattr(d, "_tw_ordered_markers", None)
+    if got is not None and got[0] == len(paras):
+        return got[1]
+    levels = _numbering_levels(d)
+    counters: dict = {}
+    out: dict = {}
+    for p in paras:
+        ref = _para_num_ref(p)
+        if ref is None:
+            continue
+        info = levels.get(ref)
+        fmt = (info or {}).get("fmt")
+        # An unreadable level, a bullet level and Word's "no marker at all" level are all
+        # "this paragraph prints no number". Only a real ordered level gets a counter.
+        if not info or fmt is None or fmt in ("bullet", "none"):
+            continue
+        prev = counters.get(ref)
+        start = info.get("start")
+        counters[ref] = prev + 1 if prev is not None else (1 if start is None else start)
+        raw = info.get("text")
+        out[id(p)] = (p, _render_lvl_text(raw, ref[0], counters, levels) if raw
+                      else _format_ordinal(counters[ref], fmt) + ".")
+    try:
+        d._tw_ordered_markers = (len(paras), out)
+    except AttributeError:      # pragma: no cover — a Document always accepts attributes
+        pass
+    return out
+
+
+def _para_marker(d, p_elem) -> str:
+    """What an ORDERED list level prints in front of this paragraph ("1.", "27.", "a."), or "".
+
+    Empty for a bullet row (its square is the preview's own CSS, and a Wingdings private-use
+    glyph is not a character a browser can render), for a plain paragraph, and for an ordered
+    level whose definition cannot be read — in that last case the caller keeps whatever it did
+    before rather than being told a number that might be wrong."""
+    hit = _ordered_markers(d).get(id(p_elem))
+    return hit[1] if hit else ""
+
+
 def _effective_left_tw(d, p_elem) -> int:
     """The paragraph's current left indent in twips, as the renderer resolves it.
 
@@ -770,11 +939,19 @@ def para_props(d, p_elem) -> dict:
     `bullet`  — does it currently render a bullet?
     `indent`  — its resolved left indent in twips (see `_effective_left_tw`).
     `locked`  — an ordered list; the editor must not offer the controls (rule 2).
+    `marker`  — what an ORDERED level prints in front of it ("1.", "27."), else "".
+
+    `bullet` and `marker` are the two halves of "what does this paragraph show in front of its
+    text", and they are never both set. `locked` is a different kind of answer — a POLICY, about
+    what the editor may change — and reading one as the other is the bug this field ends: the
+    editor rendered every numbered contract clause as a red square because it trusted `list`,
+    which is True for a bullet row and a numbered clause alike.
     """
     return {
         "bullet": _num_fmt(d, p_elem) == "bullet",
         "indent": _effective_left_tw(d, p_elem),
         "locked": _para_ordered_list(d, p_elem),
+        "marker": _para_marker(d, p_elem),
     }
 
 
@@ -1111,10 +1288,11 @@ def _txbx_insets(txbx):
     return ins["lIns"], ins["rIns"], ins["tIns"], ins["bIns"]
 
 
-def _scale_txbx_runs(txbx, scale: float, exempt: set | None = None) -> None:
+def _scale_txbx_runs(txbx, scale: float, exempt: dict | None = None) -> None:
     """Directly shrink every run's font size in a text box by `scale`.
 
-    `exempt` holds the id()s of paragraphs whose sizes the ESTIMATOR chose. Those are skipped:
+    `exempt` is `_user_sized_paragraphs`' register, keyed by the id() of paragraphs whose sizes
+    the ESTIMATOR chose (it pins the elements; see `_hand_formatted`). Those are skipped:
     an automatic shrink that silently overrides a deliberate size is worse than a box that
     overflows, because the person who set it has no way to see what happened. Measured before
     this existed: an edited GC NOTES line came out of fill_proposal at 4.5pt.
@@ -2531,25 +2709,60 @@ def template_geometry(d: Document) -> dict:
     return {"page": page, "boxes": boxes, "images": images}
 
 
-def _user_sized_paragraphs(d) -> set:
-    """Paragraphs whose run sizes the ESTIMATOR set, per document.
+def _hand_formatted(d, attr: str) -> dict:
+    """A per-document `{id(element): element}` register of what the ESTIMATOR chose by hand.
 
-    Kept on the Document object rather than in the XML: a custom attribute on `w:r` would be
-    invalid OOXML and Word may reject the file. `_shrink_overflowing_text_boxes` consults this
-    so a deliberate size is not rewritten by the automatic shrink — which was measured
-    rewriting an edited NOTES line down to 4.5pt, i.e. silently undoing the estimator on
-    exactly the overflowing boxes they were fixing."""
-    got = getattr(d, "_tw_user_sized", None)
+    Kept on the Document object rather than in the XML: a custom attribute on `w:p`/`w:r`
+    would be invalid OOXML and Word may reject the file.
+
+    THE VALUE IS THE ELEMENT, AND IT HAS TO BE. lxml builds an element proxy on demand and
+    frees it the moment the last Python reference goes, then hands out a BRAND NEW proxy — at
+    a different address — on the next access. Every walk in this module is a generator that
+    keeps no references, so a bare `set()` of `id()`s goes stale as soon as the walk that
+    filled it ends: measured on the GC Resinous template, 1 paragraph marked, 0 still matching
+    one fresh `iter_editable_blocks` later. Worse than useless, because a freed address can be
+    REUSED by an unrelated element and exempt the wrong thing. Holding the element keeps its
+    proxy alive, which keeps its `id()` both stable and unique for as long as the register
+    lives. Membership tests (`id(x) in register`) read exactly as they did against a set.
+    """
+    got = getattr(d, attr, None)
     if got is None:
-        got = set()
+        got = {}
         try:
-            d._tw_user_sized = got
+            setattr(d, attr, got)
         except Exception:  # noqa: BLE001 — a read-only Document still works, just unexempted
-            return set()
+            return {}
     return got
 
 
-def _set_paragraph_runs(p_elem, runs) -> bool:
+def _user_sized_paragraphs(d) -> dict:
+    """Paragraphs whose run sizes the ESTIMATOR set, per document.
+
+    `_shrink_overflowing_text_boxes` consults this so a deliberate size is not rewritten by the
+    automatic shrink — which was measured rewriting an edited NOTES line down to 4.5pt, i.e.
+    silently undoing the estimator on exactly the overflowing boxes they were fixing."""
+    return _hand_formatted(d, "_tw_user_sized")
+
+
+def _user_bolded_runs(d) -> dict:
+    """Runs whose WEIGHT the estimator stated explicitly, per document.
+
+    `_normalize_work_label_formatting` consults this. That pass makes a WORK row bold through
+    its first colon and normal after it, which is right for the template's own text and was
+    wrong for an override: bold applied to a phrase inside a Scope / Schedule / Exclusions /
+    Notes value showed on screen, survived the reload, travelled in the payload, was rebuilt
+    faithfully by `_set_paragraph_runs` — and was flattened one pass later. Measured on Direct
+    block 115 with bold on "3-coat system": the run split survived, `w:b` came out `val="0"`.
+
+    Per RUN, not per paragraph, because the normalization is per run. Exempting the whole
+    paragraph would also drop the automatic label bold, and the label is exactly what should
+    keep it: the browser renders the template's own bold as `font-weight:700` and
+    `serializeRuns` reads it straight back, so a runs override arrives with `bold: True`
+    already on the label — the estimator only ever states the opposite deliberately."""
+    return _hand_formatted(d, "_tw_user_bolded")
+
+
+def _set_paragraph_runs(p_elem, runs, bold_marks: dict | None = None) -> bool:
     """Replace a paragraph's text with `runs`, KEEPING each run's own formatting.
 
     `_set_paragraph_text` (below) collapses a paragraph to run[0]'s rPr. That is fine for a
@@ -2569,7 +2782,9 @@ def _set_paragraph_runs(p_elem, runs) -> bool:
 
     Returns True when any run carries an explicit size, so the caller can exempt this
     paragraph from the overflow shrink (which would otherwise rewrite it — measured at 4.5pt
-    on a real GC NOTES line).
+    on a real GC NOTES line). `bold_marks`, when given, collects the runs whose `bold` the
+    estimator STATED (True or False alike — both are a choice, absent is not), so
+    `_normalize_work_label_formatting` can leave those alone; see `_user_bolded_runs`.
     """
     _MEDIA_TAGS = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
     all_runs = p_elem.findall(qn("w:r"))
@@ -2638,6 +2853,10 @@ def _set_paragraph_runs(p_elem, runs) -> bool:
         r.append(t)
         _write_t_text(t, str(spec.get("text", "")))
         p_elem.insert(insert_at + offset, r)
+        # Registered only once the run is IN the tree — an element that is about to be
+        # discarded must never end up pinned in the register.
+        if bold_marks is not None and spec.get("bold") is not None:
+            bold_marks[id(r)] = r
 
     return user_sized
 
@@ -2690,6 +2909,19 @@ def _set_paragraph_text(p_elem, text: str) -> None:
     t = OxmlElement("w:t")
     first.append(t)
     _write_t_text(t, text)
+
+
+def _override_is_blank(val) -> bool:
+    """True when an override leaves the paragraph with no words at all.
+
+    One definition for both shapes the editor sends — a plain string, or the `runs` list a
+    formatted paragraph travels as (emptying a formatted paragraph sends `runs: []`, which
+    reaches this as the `text: ""` that came with it). Whitespace-only counts as blank: a lone
+    newline is what a browser leaves behind when the last character is deleted, and it prints
+    exactly as nothing."""
+    if isinstance(val, list):
+        return not "".join(str(r.get("text") or "") for r in val).strip()
+    return not str(val or "").strip()
 
 
 def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
@@ -2763,48 +2995,75 @@ def _apply_paragraph_overrides(d: Document, overrides: list) -> int:
         return 0
 
     applied = 0
+    refused = 0
     for idx, _kind, p_elem, in_block, _text, _txbx in iter_editable_blocks(d):
         if in_block is not None or (idx not in by_id and idx not in para_by_id):
             continue
+        text_refused = False
         if idx in by_id:
             val = by_id[idx]
-            if isinstance(val, list):
-                if _set_paragraph_runs(p_elem, val):
-                    # Remember the box so the overflow shrink leaves this paragraph's sizes alone.
-                    _user_sized_paragraphs(d).add(id(p_elem))
+            # A NUMBERED CLAUSE CANNOT BE EMPTIED. The renumbering guard below keeps the clause
+            # count fixed by KEEPING the numbering on a paragraph whose text was just deleted —
+            # so Word printed "1." followed by nothing, in a signed contract, and the estimator
+            # had no way to see it coming (the paragraph controls are hidden on that row and no
+            # warning was raised). Three ways out, and they are not equal:
+            #
+            #   * DROP THE PARAGRAPH — renumbers every clause below it. This is the exact
+            #     regression the guard was written for: measured at 26 numbered clauses of 27.
+            #   * KEEP THE TEXT SILENTLY — the screen says empty, the .docx says otherwise, which
+            #     is the same class of lie as the red squares, pointed the other way.
+            #   * REFUSE THE EDIT AND SAY SO — what "locked" already implies everywhere else in
+            #     this feature (`apply_para_props` refuses an ordered paragraph outright), and the
+            #     only option where screen, document and intent can all agree.
+            #
+            # So: refused here, and refused visibly in the editor (proposal-review.js
+            # restoreEmptiedClause puts the clause back the moment it is emptied and says why).
+            # This half is what protects a request the editor did not build — a stale draft, a
+            # replayed payload — and it is deliberately the authoritative one.
+            blank = _override_is_blank(val)
+            if blank and _para_ordered_list(d, p_elem):
+                log.warning("Refused a blank override on numbered clause block %s: emptying a "
+                            "Terms and Conditions clause would print a bare clause number", idx)
+                refused += 1
+                text_refused = True
             else:
-                _set_paragraph_text(p_elem, val)
-            # AN EMPTIED ROW KEEPS NO BULLET. `_strip_bullet` already did this for a blank
-            # {{#notes}} item ("a lone empty bullet dot"), but a WORK row emptied by hand went
-            # through this channel instead and kept its numbering: the .docx printed a red
-            # square with nothing after it. Same rule, same reason, now on both channels — and
-            # it is what lets the on-screen preview honestly suppress its own square
-            # (styles.css .tw-block.tw-empty.tw-li::before).
-            #
-            # Skipped when the same entry states a `bullet` explicitly. `apply_para_props` runs
-            # after this and would put a `bullet: True` back, but only by joining whichever list
-            # a SIBLING is on — so not stripping in the first place is how the row keeps its own
-            # numbering identity rather than being re-homed onto the neighbouring list.
-            blank = (not "".join(str(r.get("text") or "") for r in val).strip()) if isinstance(val, list) \
-                else (not val.strip())
-            # A NUMBERED LIST IS NEVER STRIPPED, whatever the text says. numId 5 is the Terms and
-            # Conditions clauses; they are in_block=None so this channel reaches all 27 of them by
-            # id, and stripping one renumbers every clause after it. Measured before this guard:
-            # blanking block 51 ("Agreement. The Proposal...") left 26 numbered clauses of 27,
-            # silently, in a contract.
-            #
-            # Same rule apply_para_props already enforces for the `para` route (_para_ordered_list,
-            # refused outright). The blank-TEXT route was added 2026-08-20 for a real reason - an
-            # emptied BULLETED row printed a lone red square - and never had the check. A bullet
-            # carries no meaning that outlives its text; a clause number carries the clause's identity.
-            if blank and not _para_ordered_list(d, p_elem) and "bullet" not in para_by_id.get(idx, {}):
-                _strip_bullet(p_elem)
+                if isinstance(val, list):
+                    if _set_paragraph_runs(p_elem, val, _user_bolded_runs(d)):
+                        # Remember the box so the overflow shrink leaves this paragraph's sizes alone.
+                        _user_sized_paragraphs(d)[id(p_elem)] = p_elem
+                else:
+                    _set_paragraph_text(p_elem, val)
+                # AN EMPTIED ROW KEEPS NO BULLET. `_strip_bullet` already did this for a blank
+                # {{#notes}} item ("a lone empty bullet dot"), but a WORK row emptied by hand went
+                # through this channel instead and kept its numbering: the .docx printed a red
+                # square with nothing after it. Same rule, same reason, now on both channels — and
+                # it is what lets the on-screen preview honestly suppress its own square
+                # (styles.css .tw-block.tw-empty.tw-li::before).
+                #
+                # Reachable only for a BULLET row now: an ordered clause never gets here, because
+                # emptying one is refused above. A bullet carries no meaning that outlives its
+                # text; a clause number carries the identity of the clause, and whatever
+                # references "Section 7" does not move with it.
+                #
+                # Skipped when the same entry states a `bullet` explicitly. `apply_para_props` runs
+                # after this and would put a `bullet: True` back, but only by joining whichever list
+                # a SIBLING is on — so not stripping in the first place is how the row keeps its own
+                # numbering identity rather than being re-homed onto the neighbouring list.
+                if blank and "bullet" not in para_by_id.get(idx, {}):
+                    _strip_bullet(p_elem)
         if idx in para_by_id:
             # Phase 0 runs long before `_shrink_overflowing_text_boxes`, which is required:
             # the shrink re-reads the box geometry to decide what overflows, and an indent
             # applied after it would change how much text fits behind its back.
             apply_para_props(d, p_elem, para_by_id[idx])
+        # A refused entry applied NOTHING, so it is not counted — the same answer this function
+        # already gives for an id it skipped. An entry that also carried `para` still counts,
+        # because that half went through the writer (which refuses it in its own right).
+        if text_refused and idx not in para_by_id:
+            continue
         applied += 1
+    if refused:
+        log.warning("Kept %d numbered clause(s) the payload asked to empty", refused)
     return applied
 
 

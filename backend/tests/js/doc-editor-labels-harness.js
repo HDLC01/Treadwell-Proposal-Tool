@@ -446,6 +446,14 @@ const LIFTED = [
   fn("ensureFmtBar"), fn("showFmtBar"), fn("hideFmtBar"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("restoreSavedOverrides"), fn("collectOverrides"),
+  // BOTH of those reach isNumberedClause: neither will ship or replay an override that empties a
+  // numbered TERMS clause. Left out, it is not a lift-time failure — it is a ReferenceError in
+  // the middle of a persist, which is the failure mode the note above fitOffer describes.
+  fn("isNumberedClause"), fn("blanksANumberedClause"),
+  // collectOverrides calls both of these. Leaving either out does not fail at lift time — it
+  // throws `ReferenceError` on the first formatted paragraph, i.e. in the middle of a persist,
+  // which is the failure mode the note above fitOffer describes.
+  fn("storedRuns"), fn("preserveRichOverrides"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();

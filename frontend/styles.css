@@ -1177,9 +1177,59 @@ button {
    reserve a line's height, so clearing a WORK row left a lone red square floating in the
    preview; the generated .docx printed one too, from the numbering the emptied paragraph still
    carried. Both halves drop it now (proposal_writer._apply_paragraph_overrides calls
-   _strip_bullet on a blank override, the same rule a blank NOTES item already followed), so the
-   preview shows what prints. Two classes, so this outranks `.tw-li::before`. */
+   _strip_bullet on a blank override, the same rule a blank NOTES item already followed), so an
+   emptied BULLET row shows what prints. Two classes, so this outranks `.tw-li::before`.
+
+   SCOPED TO BULLETS, and the scope is the whole point. This comment used to read "the preview
+   shows what prints", full stop, which was false for an ordered list: a numbered Terms clause
+   was ALSO drawn as `.tw-li`, so emptying one hid its red square here while Word printed a bare
+   clause number. Both halves of that are fixed elsewhere — a numbered clause renders as
+   `.tw-num` (its real number, never a square) and cannot be emptied at all — so this rule can
+   only ever reach a bullet row now, which is the only paragraph it was ever true of. */
 .tw-block.tw-empty.tw-li::before { content: none; }
+
+/* NUMBERED paragraphs: the 27 TERMS AND CONDITIONS clauses (numId 5). The number is the
+   document's, not decoration — `data-marker` carries what the level prints ("1." to "27.",
+   resolved by proposal_writer._para_marker), because `w:numFmt` says "decimal" while
+   `w:lvlText` says "%1." and it is the period that makes it look like the contract.
+
+   The geometry is the level's own, in twips off the same file: `w:ind w:left="540"
+   w:hanging="360"` puts the text 27pt in and the number 18pt to the left of it, i.e. 9pt from
+   the margin. And the number prints BOLD: that level carries `w:rPr><w:b/`, which a plain
+   marker here would quietly contradict. */
+.tw-num {
+  position: relative;
+  margin-left: 9pt;
+  padding-left: 18pt;
+}
+.tw-num::before {
+  content: attr(data-marker);
+  font-weight: 700;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* "You cannot empty a numbered clause" — said where it happened, at the moment it happened.
+   Emptying a clause used to be accepted on screen and printed as a lone "1." in a signed
+   contract; the wording is now put back (proposal-review.js restoreEmptiedClause) and refused at
+   the API. The badge is how the estimator learns why, since the paragraph controls are hidden on
+   a clause row and there is nothing else on screen to tell them. It clears on the next keystroke
+   in that paragraph, not on a timer.
+
+   AFTER `.tw-block.tw-dirty-warn::after` and the same specificity, so on the one paragraph that
+   could carry both it wins. That is the right way round: the restored clause matches the template
+   again, so "this differs from the estimate" is no longer true of it, and the sentence explaining
+   what just happened is the one the estimator needs. */
+.tw-block.tw-clause-kept { background: rgba(255, 207, 63, 0.28); }
+.tw-block.tw-clause-kept::after {
+  content: "Kept: a numbered clause cannot be emptied";
+  margin-left: 6pt;
+  font: 700 6.5pt/1 'Inter', system-ui, sans-serif;
+  color: #8a5a00;
+  white-space: nowrap;
+  vertical-align: super;
+}
 /* PRICE lines read FLUSH-LEFT with NO bullet — the generated .docx flattens the
    numId=3 PRICE list at generate time (_flatten_price_bullets, per Kyle), so the
    on-screen preview must match: no red square, no hanging indent. */

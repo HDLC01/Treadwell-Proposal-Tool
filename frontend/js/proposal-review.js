@@ -1669,6 +1669,47 @@
     });
   }
 
+  /** The runs to STORE in the draft: `editRuns` shape, with each run's token recorded when —
+   *  and only when — replaying that token's CURRENT value into it is provably safe.
+   *
+   *  WHY A TOKEN NAME IS SAVED AT ALL. A stored run carries the RESOLVED text ("5,200 SF"),
+   *  because that is what the writer puts in the .docx and there is no new way for a raw
+   *  `{{token}}` to reach a customer. But a reload has to rebuild the paragraph from this
+   *  entry, and rebuilding it from resolved text alone freezes whatever the estimate said when
+   *  the formatting was applied: bold one word of a WORK row, then correct the square footage
+   *  on Estimate Review, and the proposal would print the OLD number for good. The token name
+   *  is what lets the restore re-substitute, and it is also what puts the `.tw-fill` span back
+   *  in one piece — one span per tagged run, so no fill is orphaned and none is duplicated.
+   *
+   *  THE TWO CASES WHERE REPLAYING WOULD DESTROY SOMETHING, both refused here rather than at
+   *  restore time, because this is where the evidence is:
+   *
+   *   1. `textChanged` — the estimator typed somewhere in this paragraph. `{{scope_notes}}`
+   *      renders as an editable fill, and rewording the scope straight in the document is a
+   *      first-class use of this editor, so their characters may live INSIDE a fill span. Once
+   *      the words differ from the pristine rendering the text belongs to them and no run may
+   *      be replaced by a sidebar value. Untouched words mean untouched fills, by definition.
+   *   2. A token that appears in more than one run — formatting HALF a value splits its fill.
+   *      Writing the whole value into each half would duplicate it on screen and in the
+   *      document, so both halves keep their stored text.
+   *
+   *  Refusing is never worse than today: an untagged run restores to exactly the text the old
+   *  code restored. */
+  function storedRuns(el, textChanged) {
+    const runs = editRuns(el).map(r => {
+      const out = { text: r.text };
+      for (const k of RUN_KEYS) if (r[k] !== undefined) out[k] = r[k];
+      if (!textChanged && r.tok) out.tok = r.tok;
+      return out;
+    });
+    const seen = new Map();
+    for (const r of runs) if (r.tok) seen.set(r.tok, (seen.get(r.tok) || 0) + 1);
+    for (const r of runs) if (r.tok && seen.get(r.tok) !== 1) delete r.tok;
+    // Coalesce AFTER the token pass: dropping a token merges the run back into its neighbours,
+    // so a paragraph nobody could safely tag ships the same run list it always did.
+    return F.coalesce(runs);
+  }
+
   // ── Word-like formatting on the focused block ──────────────────────────────
   //
   // Bold / italic / underline / size, applied by rebuilding the block from its runs — NOT via
@@ -2181,6 +2222,72 @@
     el.classList.toggle("tw-empty", !plain.trim());
   }
 
+  /** Is this block one of the NUMBERED Terms and Conditions clauses?
+   *
+   *  Asked of the block record, not the element: `para.marker` is the number the level prints
+   *  ("1." to "27."), so a paragraph that has one is a clause whose number carries the identity
+   *  of the clause. A block with no `para` (a pre-v6 cached response) answers false, which is
+   *  the same "no metadata means no special handling" the controls already take. */
+  function isNumberedClause(id) {
+    const b = blockById.get(Number(id));
+    return !!(b && b.para && b.para.marker);
+  }
+
+  /** Would this override entry leave a numbered clause with no words in it?
+   *
+   *  Tests what would actually be RENDERED (or written to the .docx): a non-empty `runs` array
+   *  wins over `text`, exactly as `restoreSavedOverrides` and `_set_paragraph_runs` treat it.
+   *  `runs: [{text: ""}]` is the shape that matters and the one a length check misses: it is a
+   *  non-empty array of nothing, so it survives every "did we lose the formatting" guard in this
+   *  file while blanking the paragraph.
+   *
+   *  A `para`-only entry is NOT blank by this test — it carries no text at all, so it is not
+   *  trying to empty anything, and `setParaState` refuses a locked paragraph on its own. */
+  function blanksANumberedClause(o) {
+    if (!o || !isNumberedClause(o.id)) return false;
+    const runs = Array.isArray(o.runs) && o.runs.length ? o.runs : null;
+    if (runs) return !runs.map(r => String((r && r.text) || "")).join("").trim();
+    return typeof o.text === "string" && !o.text.trim();
+  }
+
+  // Kyle's contract, 2026-08-20: the clause COUNT must never move. The backend guarantees it by
+  // keeping the numbering on a paragraph whose text was deleted, which prints "1." followed by
+  // nothing. So emptying a clause is refused, here and at the API, and this is the sentence that
+  // says why. Told the moment it happens: the paragraph controls are hidden on a clause row, so
+  // without this the estimator gets no signal at all until a customer reads the contract.
+  const _CLAUSE_KEPT_MSG =
+    "This is a numbered Terms and Conditions clause, so it cannot be emptied: the numbers "
+    + "below it would all shift, and the document would print a bare clause number with nothing "
+    + "after it. The wording has been put back. Edit the words instead.";
+
+  /** Put a numbered clause back the moment it is emptied, and say why. No-op for every other
+   *  paragraph, and no-op on a clause that still has words in it.
+   *
+   *  Restores from the TEMPLATE record (`setBlockContent`), which is the only rendering that is
+   *  guaranteed to still exist: the estimator just deleted everything they had typed. That also
+   *  resets the pristine baseline, so the block comes out of this clean rather than dirty, and
+   *  `collectOverrides` ships nothing for it.
+   *
+   *  The notice clears itself on the next keystroke in that paragraph rather than on a timer:
+   *  a timer would be a race in the harness that executes this, and "it goes when you carry on
+   *  typing" is the moment it has stopped being true. */
+  function restoreEmptiedClause(el) {
+    const id = Number(el.dataset.id);
+    if (!isNumberedClause(id)) return false;
+    if (serializeBlock(el).trim()) {
+      el.classList.remove("tw-clause-kept");
+      if (el.title === _CLAUSE_KEPT_MSG) el.title = "";
+      return false;
+    }
+    // tw-dirty / tw-empty are not touched here: the caller (the delegated `input` handler)
+    // recomputes both from the restored DOM on the very next line, and a paragraph that matches
+    // the template again is not dirty. Two owners of one class is how a stale badge happens.
+    setBlockContent(el, blockById.get(id), computeTokenValues());
+    el.classList.add("tw-clause-kept");
+    el.title = _CLAUSE_KEPT_MSG;
+    return true;
+  }
+
   function renderBlock(b, tokens) {
     const el = document.createElement("div");
     el.className = "tw-block";
@@ -2191,6 +2298,17 @@
     // generated .docx (_flatten_price_bullets) — mirror that here so the on-screen
     // editor matches (Kyle: no bullet points in the pricing).
     if (b.price_flat) el.classList.add("tw-priceline");
+    // A NUMBERED CLAUSE SHOWS ITS NUMBER, not a red square. `b.list` only says the paragraph
+    // carries Word numbering, which is true of a bulleted WORK row and of all 27 numbered TERMS
+    // AND CONDITIONS clauses alike — so trusting it painted a Wingdings square in front of every
+    // clause that prints "1." to "27." in the signed contract. `para.marker` is what the level
+    // actually prints (backend: proposal_writer._para_marker), and it is empty for a bullet row.
+    // Still falls back to the square when there is no marker to show: a list level whose
+    // definition cannot be read is the one case where the old behaviour is the best guess left.
+    else if (b.list && b.para && b.para.marker) {
+      el.classList.add("tw-num");
+      el.dataset.marker = String(b.para.marker);
+    }
     else if (b.list) el.classList.add("tw-li");                  // real Word bullet
     else if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
     if (b.align) el.style.textAlign = b.align;
@@ -2330,14 +2448,48 @@
   // device switch keeps them) — reapplied only when they were made against
   // THIS template file (version + type/audience), otherwise the ids could
   // point at the wrong paragraphs.
-  function restoreSavedOverrides(wt, audience) {
+  function restoreSavedOverrides(wt, audience, tokens) {
     const saved = savedOverridesFor(wt, audience);
     if (!saved || String(saved.template_version || "") !== templateVersion) return;
+    const tk = tokens && typeof tokens === "object" ? tokens : {};
     for (const o of saved.items) {
       if (!o) continue;
       const el = docSurface.querySelector(`.tw-block[data-id="${Number(o.id)}"]`);
       if (!el) continue;
-      if (typeof o.text === "string") {
+      const runs = Array.isArray(o.runs) && o.runs.length ? o.runs : null;
+      // A SAVED ENTRY THAT EMPTIES A NUMBERED CLAUSE IS NOT REPLAYED. Drafts saved while that
+      // was possible still carry one, and replaying it would show a blank clause on screen while
+      // the .docx (which refuses it) prints the wording — the same screen-versus-document lie as
+      // the red squares, pointed the other way. Skipping it renders the template's own clause and
+      // leaves the block clean; `collectOverrides` then drops the stale entry on the next persist.
+      if (blanksANumberedClause(o)) continue;
+      if (runs) {
+        // THE RUNS, not just the words. This branch used to not exist: every reload — F5,
+        // re-opening the draft, a trip to Done and back, a base-bid switch that re-runs
+        // initDocumentEditor in place — replayed the entry as `el.textContent = o.text` and
+        // rebuilt the paragraph as ONE plain text node. So the estimator's bold, italic,
+        // underline and font size were not merely hidden: `collectOverrides` re-serialised the
+        // flattened paragraph, `runsArePlain` agreed it was plain, and the 800ms persist wrote
+        // `{id, text}` back over the good `{id, text, runs}`. The formatting was destroyed in
+        // the saved draft, live on production.
+        //
+        // `tw-fmt` goes back on for the same reason it went on when the format was applied: it
+        // is the only record that this paragraph is formatted, and `collectOverrides` reads it
+        // to decide whether to send runs at all. Without it the very next keystroke would
+        // degrade the entry again — the restore would look right and still lose the work.
+        renderRuns(el, runs.map(r => {
+          const one = Object.assign({}, r);
+          // A tagged run's value comes from the ESTIMATE, so it is re-read here rather than
+          // replayed: an estimator who corrects the square footage must not find the old
+          // number frozen into a paragraph they once formatted. `storedRuns` only tags a run
+          // when replacing its text cannot destroy anything (see there).
+          if (r.tok && Object.prototype.hasOwnProperty.call(tk, r.tok)) one.text = String(tk[r.tok]);
+          return one;
+        }));
+        el.classList.add("tw-dirty");
+        el.classList.add("tw-fmt");
+        el.classList.toggle("tw-empty", !serializeBlock(el).trim());
+      } else if (typeof o.text === "string") {
         el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
         el.classList.add("tw-dirty");
         el.classList.toggle("tw-empty", !o.text.trim());
@@ -2381,10 +2533,70 @@
       // the estimator has actually applied formatting.
       else entry = runsArePlain(runs) && !fmtChanged
         ? { id: id, text: cur }
-        : { id: id, text: cur, runs: runs };
+        : { id: id, text: cur, runs: storedRuns(el, textChanged) };
       if (para) entry.para = para;
       out.push(entry);
     });
+    // Never hand back less than what is already saved. Here rather than at the persist, so the
+    // guard also covers the list Continue puts straight into the generate payload.
+    //
+    // AN ENTRY THAT EMPTIES A NUMBERED CLAUSE IS DROPPED, and it has to be dropped AFTER
+    // preserveRichOverrides rather than inside the loop above: a stale `runs: [{text: ""}]` entry
+    // is a non-empty array, so the rich-override rescue treats it as formatting worth keeping and
+    // pushes it back in for an id the DOM never reported. Without this the draft never heals — it
+    // re-sends the blank clause on every persist for the life of the project, and only the
+    // writer's own refusal keeps it out of the customer's document.
+    return preserveRichOverrides(out).filter(o => !blanksANumberedClause(o));
+  }
+
+  /** `next`, but never poorer than the entry already stored for this template.
+   *
+   *  THE FAILURE THIS EXISTS FOR. `collectOverrides` serialises the DOM, so whatever the DOM
+   *  has lost is missing from the payload too — and the 800ms persist then writes that loss
+   *  over the good copy. That is how run formatting was DESTROYED rather than merely hidden.
+   *
+   *  `restoreSavedOverrides` rebuilding the runs is the fix; this is the guard, and it is
+   *  deliberately independent of it. A guard that only holds while the restore is correct is
+   *  not a guard: the next edit to either function would put the data loss straight back, and
+   *  the symptom is silent and permanent.
+   *
+   *  NARROW ON PURPOSE — it only refuses to drop a non-empty `runs` ARRAY, and only for an id
+   *  whose new entry has no `runs` key at all. Every deliberate way to end up with less
+   *  formatting still gets through, because they all still SEND an array: Reset sends one plain
+   *  run (`tw-fmt` is never removed once set, so `collectOverrides` keeps taking the runs
+   *  branch), and emptying a paragraph sends `runs: []`. So a rescue can only fire on the
+   *  signature of the bug — an id that had runs coming back with the key absent.
+   *
+   *  Only ever merged against a store entry captured against the SAME template file: paragraph
+   *  ids belong to one template, so a version mismatch means the stored entry describes
+   *  different paragraphs and must be left alone. */
+  function preserveRichOverrides(next) {
+    let prev = null;
+    try {
+      const all = liveKey("paragraph_overrides_all");
+      const hit = all && typeof all === "object"
+        ? all[overrideKey(effectiveWorkType(), state.audience || "Direct")] : null;
+      if (hit && String(hit.template_version || "") === String(templateVersion)
+          && Array.isArray(hit.items)) prev = hit.items;
+    } catch { return next; }
+    if (!prev || !prev.length) return next;
+    const rich = new Map();
+    for (const o of prev) {
+      if (o && Array.isArray(o.runs) && o.runs.length) rich.set(Number(o.id), o);
+    }
+    if (!rich.size) return next;
+    const out = next.map(o => {
+      if (!o || Array.isArray(o.runs)) return o;
+      const keep = rich.get(Number(o.id));
+      if (!keep) return o;
+      rich.delete(Number(o.id));
+      return Object.assign({}, o, { runs: keep.runs });
+    });
+    // An id that dropped out of the list entirely keeps its whole stored entry — `para` and
+    // all. Nothing should reach this today (a formatted block still reports itself), which is
+    // exactly why it must not be the difference between keeping the work and losing it.
+    for (const o of next) if (o) rich.delete(Number(o.id));
+    for (const o of rich.values()) out.push(o);
     return out;
   }
 
@@ -2435,17 +2647,59 @@
     _fillsTimer = setTimeout(() => {
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
       docSurface.querySelectorAll(".tw-block").forEach(el => {
-        if (el.classList.contains("tw-dirty")) return;
         // Don't re-fill the block the caret is currently in (a sidebar edit
         // landing within the 150ms window would otherwise clobber it).
         if (el.contains(document.activeElement)) return;
         const b = blockById.get(Number(el.dataset.id));
-        if (b) setBlockContent(el, b, tokens);
+        if (!b) return;
+        if (el.classList.contains("tw-dirty")) {
+          if (el.classList.contains("tw-fmt") && refreshFillsInPlace(el, b, tokens)) {
+            schedulePersistOverrides();   // the stored runs carry the value; it just changed
+          }
+          return;
+        }
+        setBlockContent(el, b, tokens);
       });
       renderSystemPreview();
       renderNotesPreview();
       scheduleRepaginate();
     }, 150);
+  }
+
+  /** Re-substitute the estimate-sourced fills of a block the estimator only FORMATTED.
+   *
+   *  A formatted block is `tw-dirty`, and dirty blocks are skipped above — which is right for a
+   *  block somebody typed in, and wrong for one where only the styling changed: its words are
+   *  still the template's, so its `{{token}}` fills still owe the sidebar their live values. A
+   *  bolded WORK row that kept last week's square footage is the same wrong number whether the
+   *  page has been reloaded or not, so it is fixed on both paths.
+   *
+   *  Updates each fill span's own text rather than rewriting `innerHTML`, because the innerHTML
+   *  IS the formatting. Refuses in two cases, for the reasons `storedRuns` gives: a paragraph
+   *  whose text no longer matches its pristine rendering (the estimator typed, so the words are
+   *  theirs), and a token appearing in more than one span (its fill was split by formatting
+   *  half of it, and writing the value into each half would duplicate it).
+   *
+   *  Moves the pristine baseline with the value it just wrote — without that, the next
+   *  serialise would read the fresh number as a hand edit and freeze it after all. */
+  function refreshFillsInPlace(el, b, tokens) {
+    const id = Number(el.dataset.id);
+    if (serializeBlock(el) !== pristineById.get(id)) return false;
+    const spans = el.querySelectorAll(".tw-fill[data-token]");
+    const counts = new Map();
+    spans.forEach(sp => counts.set(sp.dataset.token, (counts.get(sp.dataset.token) || 0) + 1));
+    let touched = false;
+    spans.forEach(sp => {
+      const name = sp.dataset.token;
+      if (counts.get(name) !== 1) return;
+      if (!Object.prototype.hasOwnProperty.call(tokens, name)) return;
+      const next = String(tokens[name]);
+      if (sp.textContent === next) return;
+      sp.textContent = next;
+      touched = true;
+    });
+    if (touched) pristineById.set(id, fillPlain(b.text, tokens));
+    return touched;
   }
 
   // WORK {{#system}} picks sourced from the resolved EPOXY BASE tab's sheet cells
@@ -3821,7 +4075,9 @@
       if (hasBoxes) renderPositioned(geo, tokens);
       else renderFlow(tokens);
 
-      restoreSavedOverrides(wt, audience);
+      // `tokens` so a restored run tagged with a token gets the CURRENT estimate value rather
+      // than the one that was on screen when the estimator formatted it.
+      restoreSavedOverrides(wt, audience, tokens);
       renderSystemPreview();
       renderNotesPreview();
       // restoreSavedOverrides changed some terms blocks' text (heights), so
@@ -3889,6 +4145,10 @@
   docSurface.addEventListener("input", (e) => {
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
     if (!el) return;
+    // A NUMBERED TERMS CLAUSE CANNOT BE EMPTIED. Refused right here, so the estimator sees the
+    // refusal instead of discovering it as a bare "1." in a signed contract. Everything below
+    // then runs against the restored paragraph, which is why this is not an early return.
+    restoreEmptiedClause(el);
     const cur = serializeBlock(el);
     // `tw-fmt` marks "the estimator formatted this", which the text comparison cannot see.
     // Without it a formatting-only edit stayed un-dirty, so refreshDocumentFills() rewrote the
