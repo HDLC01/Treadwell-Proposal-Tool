@@ -212,15 +212,24 @@
      first in the strip and carries a blue tint that nothing else on this page uses, so the eye
      finds it without reading. Deliberately NOT red: red already means "needs a human" on this
      strip (.needs) and green means "done", so a third meaning had to pick a third hue.
-     Placed BEFORE .is-done / .needs / [aria-selected] so all three still win over it: a chat tab
-     with unread messages must still read as needing attention, and the tab you are on must still
-     look selected. A left accent bar carries the same signal for anyone whose browser rewrites
-     the tint, or who cannot separate blue from grey. */
-  .dtabs .step#dtab-chat { border-color:#b9cfe8; background:#eff5fc; }
-  .dtabs .step#dtab-chat::before { content:""; position:absolute; left:0; top:6px; bottom:6px;
+     TARGETED BY ATTRIBUTE, NOT BY ID, AND THAT IS THE WHOLE POINT. This rule has to LOSE to
+     .is-done, .needs and [aria-selected="true"], because a chat tab with unread messages must
+     still read as needing attention and the tab you are on must still look selected. Those three
+     each weigh (0 ids, 3 classes); `.dtabs .step#dtab-chat` weighed (1, 2), and one id beats any
+     number of classes, so it silently defeated all three no matter what order they were written
+     in. Measured in Brave on staging, on a Test project with one unread message: the chat tab
+     carried `needs is-active` and aria-selected="true" and still painted #eff5fc, not the selected
+     white and not the needs pink. `[data-sec="chat"]` weighs (0, 3) - equal - so being declared
+     FIRST is what makes the three state rules below win. Order matters here only because the
+     weights now match.
+     A left accent bar carries the same signal for anyone whose browser rewrites the tint, or who
+     cannot separate blue from grey; it outlives the state rules on purpose, because it marks WHICH
+     tab this is rather than what state the tab is in. */
+  .dtabs .step[data-sec="chat"] { border-color:#b9cfe8; background:#eff5fc; }
+  .dtabs .step[data-sec="chat"]::before { content:""; position:absolute; left:0; top:6px; bottom:6px;
     width:3px; border-radius:2px; background:#2f6fb0; }
-  .dtabs .step#dtab-chat .lbl { padding-left:6px; }
-  .dtabs .step#dtab-chat .val { padding-left:6px; color:#2f6fb0; }
+  .dtabs .step[data-sec="chat"] .lbl { padding-left:6px; }
+  .dtabs .step[data-sec="chat"] .val { padding-left:6px; color:#2f6fb0; }
   .dtabs .step.is-done { border-color:#bfe3c8; background:#e3f3e6; }
   .dtabs .step.is-done .val { color:var(--ok); }
   .dtabs .step.needs { border-color:var(--red); background:#fdf3f3; }

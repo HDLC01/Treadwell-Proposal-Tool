@@ -1304,7 +1304,7 @@
     // CHAT IS FIRST, on purpose. Hanz, 2026-08-21: "move that tab to the leftmost and make it a
     // different color tab I guess so its just intuittive to always look there". The conversation
     // is the thing a rep needs most often, so it gets the position the eye lands on and a tint of
-    // its own (styles.css #dtab-chat). Key order here is what the strips and anything deriving the
+    // its own (portal.html, `.dtabs .step[data-sec="chat"]`). Key order here is what the strips and anything deriving the
     // tab list from the product both read, so it is changed HERE rather than only in the markup.
     chat:     ["dsec-chat"],
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",

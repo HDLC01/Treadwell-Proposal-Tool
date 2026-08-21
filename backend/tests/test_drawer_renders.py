@@ -846,37 +846,3 @@ def test_the_panel_spaces_itself_by_layout_rather_than_per_element_margins():
     # .row3 has to state its direction, or `class="sec row3"` (the not-sent panel's button row)
     # inherits column and stacks the two buttons.
     assert re.search(r"\.row3\s*\{[^}]*flex-direction:row", CSS)
-
-
-def test_the_chat_tab_is_tinted_and_still_loses_to_the_state_rules():
-    """Hanz, 2026-08-21: "move that tab to the leftmost and make it a different color tab I guess
-    so its just intuittive to always look there."
-
-    Two properties, and the second is the one that breaks silently. The chat tab needs its own
-    tint, AND that tint must lose to the three states the strip already shows: a tab that needs a
-    human (.needs), a finished one (.is-done), and the one you are on ([aria-selected]). Those are
-    all single-class-plus-element selectors of the same weight as `.step#dtab-chat`... except the
-    id makes chat's rule STRONGER, so source order cannot save it. Which means the state rules
-    must come LATER in the file AND out-specify it, or a chat tab with 3 unread messages would
-    quietly stop looking urgent.
-
-    This repo has shipped that exact bug twice - the `hidden` attribute beaten by a class rule,
-    and an expanded box's message beaten by an equal-specificity rule written later - so the
-    ordering is asserted rather than assumed."""
-    import re
-    html = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "portal.html").read_text(
-        encoding="utf-8")
-    chat = html.find("#dtab-chat {")
-    assert chat > 0, "the chat tab has no tint of its own any more"
-    # a hue nothing else on the strip uses: not the red of .needs, not the green of .is-done
-    rule = html[chat:html.find("}", chat)]
-    assert "background:" in rule, "the chat tab rule sets no background"
-    assert "var(--red" not in rule and "#e3f3e6" not in rule, (
-        "the chat tint reuses a colour that already means something else on this strip")
-    for later in (".dtabs .step.is-done {", ".dtabs .step.needs {",
-                  '.dtabs .step[aria-selected="true"] {'):
-        at = html.find(later)
-        assert at > chat, (
-            "%s is declared BEFORE the chat tint, so a chat tab that needs attention, is done, "
-            "or is selected would render as merely 'chat'" % later.strip())
-

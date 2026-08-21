@@ -801,7 +801,11 @@ def _write_left_indent(ppr, left_tw: int, hanging_tw: int | None = None) -> None
     for gone in ("w:hanging", "w:firstLine", "w:startChars", "w:leftChars", "w:firstLineChars"):
         if ind.get(qn(gone)) is not None:
             del ind.attrib[qn(gone)]
-    if hanging_tw:
+    # `is not None`, not truthiness: a hanging of ZERO is a real request ("square and text at the
+    # same place") and used to be silently dropped, which is indistinguishable in the output from
+    # "no hanging wanted" and was half of the vanishing-square bug above. The caller no longer
+    # asks for zero on a bulleted paragraph, but the writer must not be the thing that decides.
+    if hanging_tw is not None:
         ind.set(qn("w:hanging"), str(int(hanging_tw)))
 
 
@@ -992,11 +996,36 @@ def apply_para_props(d, p_elem, props) -> int:
             # number from its list level — and then a later bullet change would take the indent
             # with it, which is the bug this feature exists to fix.
             if not stated or _effective_left_tw(d, p_elem) != want:
-                # A paragraph that kept its bullet keeps a hanging indent too, clamped to the
-                # left indent so the square never lands at a negative position.
+                # A PARAGRAPH THAT KEPT ITS BULLET CANNOT PUT ITS TEXT AT THE MARGIN, because
+                # the square has to go somewhere and it goes `hanging` twips to the LEFT of the
+                # text. `indent` means the text's left edge everywhere in this feature (see
+                # `_effective_left_tw`, which reads w:left), so an indent below the hanging asks
+                # for a square at a negative position - out in the page margin, where Word simply
+                # does not draw it.
+                #
+                # It used to ask for exactly that. `min(hang, want)` with want=0 gave a hanging of
+                # 0, and `_write_left_indent` wrote the hanging under a plain truthiness test, so
+                # a zero hanging was dropped and the paragraph got `<w:ind w:left="0"/>` while
+                # still carrying `w:numPr`. Measured: no U+25AA anywhere on that line in the
+                # rendered PDF. One press of outdent on a WORK row - the exact flow this feature
+                # was built for - silently deleted the row's red square from the customer's
+                # document, while the editor kept drawing it and `para_props()` kept reporting
+                # `bullet: True`. Three readers, three different answers.
+                #
+                # So the floor for a still-bulleted row is its own hanging: the square lands at
+                # `left - hanging` = 0, flush with the margin and in line with the squares of the
+                # rows above and below it, and the text sits one hanging further in. That is as
+                # far left as a bulleted row can travel and still be a bulleted row. An estimator
+                # who wants the text itself at the margin turns the bullet off, which is what the
+                # third control in the same toolbar is for.
+                #
+                # Nothing changes for want >= hang: left is want and the hanging is the level's,
+                # exactly as before, since min(hang, want) was already hang there.
                 hang = _tw_or_none(lvl_ind.get("hanging")) if lvl_ind else None
-                _write_left_indent(_get_or_make_ppr(p_elem), want,
-                                   min(hang, want) if hang is not None else None)
+                if hang is None:
+                    _write_left_indent(_get_or_make_ppr(p_elem), want)
+                else:
+                    _write_left_indent(_get_or_make_ppr(p_elem), max(want, hang), hang)
                 n += 1
     return n
 
