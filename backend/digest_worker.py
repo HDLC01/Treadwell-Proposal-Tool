@@ -44,6 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import atomic_json
+
 log = logging.getLogger("proposal_tool.digest_worker")
 
 try:                                        # py3.9+ stdlib; matches the rest of the app
@@ -191,9 +193,7 @@ def save_state(state: Dict[str, Any]) -> None:
     _MEM_STATE = dict(state)                 # in-process copy is always current
     try:
         if _DATA_DIR.is_dir() and os.access(_DATA_DIR, os.W_OK):
-            tmp = _STATE_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state), encoding="utf-8")
-            tmp.replace(_STATE_FILE)         # atomic
+            atomic_json.write_json(_STATE_FILE, state, make_parent=False)   # atomic, retried
     except Exception as exc:  # noqa: BLE001
         log.warning("digest state write failed: %s", exc)
 

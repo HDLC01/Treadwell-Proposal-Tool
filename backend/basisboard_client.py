@@ -72,6 +72,8 @@ import cachetools
 
 import pull_window
 
+import atomic_json
+
 log = logging.getLogger("proposal_tool.basisboard")
 
 _DEFAULT_BASE = "https://api.basisboard.com/v1"
@@ -987,9 +989,7 @@ def _save_snapshot(result: Dict[str, Any]) -> None:
         if not (_DATA_DIR.is_dir() and os.access(_DATA_DIR, os.W_OK)):
             return
         payload = {"saved_at": time.time(), "snapshot": result}
-        tmp = _SNAPSHOT_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
-        tmp.replace(_SNAPSHOT_FILE)          # atomic: a reader sees old or new, never half
+        atomic_json.write_json(_SNAPSHOT_FILE, payload, make_parent=False)   # atomic, retried
     except Exception as exc:  # noqa: BLE001
         log.warning("Basisboard analytics snapshot write failed: %s", exc)
 
