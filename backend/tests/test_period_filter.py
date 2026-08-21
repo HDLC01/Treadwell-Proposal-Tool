@@ -227,11 +227,38 @@ def test_the_period_is_in_the_board_signature():
     assert "PERIOD" in sig, "the period filter is not in BOARD_SIG, so selecting a week is a no-op"
 
 
+#: Identifiers containing MONTH that portal.js is ALLOWED to declare, each with why.
+#
+# The bare `MONTH` and anything prefixed off it (`MONTH_KEY`) are the period filter's old names and
+# are what this test hunts. Anything else has to be listed here on purpose.
+_MONTH_IDENTIFIERS_ALLOWED = {
+    # The close-out family's hold window (2026-08-20). Nothing to do with this filter: it is how
+    # many months a held bid stops being chased for, and it is asserted against the backend's
+    # HOLD_PAUSE_MONTHS by test_not_sent_lost.py.
+    "HOLD_MONTHS",
+    # Named in HOLD_MONTHS' own comment, as the backend constant it has to equal. Identifiers are
+    # collected out of comments as well as code on purpose: a stale name in a comment is how the
+    # next reader learns the wrong one.
+    "HOLD_PAUSE_MONTHS",
+}
+_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+
 def test_no_stale_MONTH_identifier_survives():
     """A half-rename leaves one site reading a variable nobody writes — which is exactly how the
-    board broke this morning, one unresolved name at a time."""
-    body = PORTAL_JS.replace("PERIOD_KEY", "").replace("tw_crm_month", "")
-    assert "MONTH" not in body, "a MONTH identifier survived the rename"
+    board broke this morning, one unresolved name at a time.
+
+    CHECKED AS WHOLE IDENTIFIERS, not as a substring of the file. The substring form passed for
+    nine days and then failed on `HOLD_MONTHS` (2026-08-20), a close-out constant with nothing to
+    do with this filter — and a test that fires on an unrelated word is a test people learn to
+    edit rather than read. Every identifier carrying MONTH is collected and checked against a
+    named allowlist, so re-introducing `MONTH` or `MONTH_KEY` still fails, and so does adding a
+    new MONTH-ish name without saying here why it is not this one."""
+    found = {n for n in _IDENTIFIER.findall(PORTAL_JS) if "MONTH" in n}
+    stale = found - _MONTH_IDENTIFIERS_ALLOWED
+    assert not stale, (
+        "a MONTH identifier survived the rename, or a new one arrived unannounced: %s"
+        % sorted(stale))
 
 
 def test_the_placeholder_says_period_not_month():

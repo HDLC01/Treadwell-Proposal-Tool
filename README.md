@@ -87,6 +87,54 @@ cd /opt/treadwell-staging && git pull origin staging \
 
 **All changes hit `staging` first, then promote to `main` / prod.**
 
+### Shipping a change that spans the tool and the portal
+
+Some features live in **two repositories at once**: this tool and
+[`treadwell-portal`](https://github.com/HDLC01/Treadwell-Portal). The tool holds
+the staff screens and proxies to the portal; the portal owns the `portal_*`
+tables and validates what the proxy sends it. The close-out vocabulary (the
+reasons a bid can die, plus the required comment) is the current example, and it
+is **not independently deployable in either direction**. Both halves reject
+each other's traffic while only one of them is live:
+
+| Deployed alone | What breaks |
+|---|---|
+| Tool only | The portal 400s `invalid_reason` on the five reason keys it has never heard of. Two of the seven staff choices still work, so the failure looks intermittent. A **hold** is worse: the old portal ignores `reason` and `note`, returns `ok`, and pauses the bid with no record of why. |
+| Portal only | The portal now requires a comment on every close. The old proxy does not send one, so **every** close of a sent bid 400s `note_required`. |
+
+**Order: the portal goes first, then the tool, in one window.**
+
+Three reasons, in order of how much they should matter to you:
+
+1. **The receiver has to know the words before the sender uses them.** The
+   portal validates; the tool only sends. Widening what the portal accepts is
+   the safe half to do early.
+2. **Total and loud beats partial and silent.** In the gap after a portal-first
+   deploy every close fails the same way and the drawer says so, so nobody
+   believes a bid was filed when it was not. The tool-first gap records holds
+   successfully while dropping the reason and the estimator's sentence on the
+   floor, which nothing on any screen would ever show you.
+3. **CI already enforces it.** This repo's CI checks the portal's `main` out and
+   runs `backend/tests/test_close_reason_vocabulary.py` against it, so a tool PR
+   is red until the portal's half is on `main`. Making the deploy order match the
+   merge order leaves one rule to remember instead of two.
+
+Note that merging the portal is **not** deploying it. The portal has CI but no
+CD, and ships by hand (`deploy/ship-prod.sh` in that repo), so its merge is free
+and only its deploy starts the clock. The tool's `main` deploy is gated on the
+`production` environment reviewer. So the tight sequence is:
+
+1. Merge the portal's half to its `main`. Nothing is live yet, and this repo's
+   CI can now see the new vocabulary.
+2. Get the tool's PR green and merged to `main`. The Deploy workflow builds the
+   image and **waits** at the approval gate.
+3. Ship the portal (`ship-prod.sh`). The gap starts here.
+4. Approve the tool's production gate immediately. The gap ends here, usually
+   inside a couple of minutes.
+
+If step 4 cannot happen right away, do not do step 3 either. Roll the portal
+back rather than leaving the pair split overnight.
+
 ### Environment variables
 
 Configuration is via environment variables in `/opt/treadwell/.env` (prod) /

@@ -277,16 +277,27 @@ def test_the_tabs_are_painted_under_the_signature_guard():
     assert body.index("BOARD_SIG) return") < body.index("syncTabs()")
 
 
-def test_a_lost_proposal_can_still_be_reactivated():
-    """Reachable from the Lost tab now, as well as by URL from an old notification. Reactivate is
-    the only way back onto a live tab, so the drawer has to keep handling a lost row."""
+def test_a_lost_proposal_can_still_be_brought_back():
+    """Reachable from the Lost tab now, as well as by URL from an old notification. This is the
+    only way back onto a live tab, so the drawer has to keep handling a lost row.
+
+    WHO AND WHEN: Hanz, 2026-08-20 — "if projects are both won and lost there should be an option
+    to bring it back to its latest step in the CRM but before they do that there should be a prompt
+    saying are they sure". So the button is Bring it back, it asks first, and it posts `bring_back`
+    to the draft route rather than `active` to the portal. This test was
+    `test_a_lost_proposal_can_still_be_reactivated` and pinned that bare `active`, which had one
+    wrong case that had become common: a job marked won by hand and then closed lost reads as Lost
+    only, so clearing the portal's mark alone moved the card to the Won tab instead of back onto the
+    board."""
     panel = _block("portal.js", "followupPanelHtml")
-    assert 'id="fu-reopen"' in panel, "the Reactivate button is gone"
+    assert 'id="fu-reopen"' in panel, "the way back is gone"
     assert "isLost(p)" in panel, "the panel no longer knows a lost proposal when it sees one"
     wire = _block("portal.js", "wireFollowup")
     assert '$("fu-reopen")' in wire, (
-        "Reactivate is rendered but not wired, so it silently does nothing")
-    assert re.search(r'status:\s*"active"', wire), "Reactivate posts something other than active"
+        "the button is rendered but not wired, so it silently does nothing")
+    assert re.search(r'status:\s*"bring_back"', wire), (
+        "it posts something other than bring_back, so one of the two marks survives the press")
+    assert "confirmBringBack" in wire, "it puts a bid back with no prompt at all"
 
 
 # ── Change B: the tabs (Active | Won | Lost | Test) ──────────────────────────

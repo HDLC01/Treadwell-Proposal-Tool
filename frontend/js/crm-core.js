@@ -58,11 +58,84 @@
   var STAGES = [STAGE_CREATED, "Sent", "Viewed", "Approved", STAGE_SUBMITTED,
                 "Deposit received", "Contact info"];
 
-  var LOST_REASON = {
-    price: "Price", another_contractor: "Another contractor",
-    canceled: "Project canceled", scope_changed: "Scope changed",
-    timing: "Timing", other: "Other",
+  // ── why a bid died, and whether it died at all ─────────────────────────────
+  // Kyle's own list, verbatim off his screenshot, adopted 2026-08-20. It replaced a six-answer
+  // vocabulary invented for the CUSTOMER's "not moving forward" form, which is a different
+  // question asked of a different person: a customer says "price", a GC bid dies because we were
+  // not low. Kyle's answers are the ones the sales meeting actually says out loud.
+  //
+  // TWO OF HIS EIGHT DO NOT CLOSE ANYTHING. Hanz, 2026-08-20: "Project on Hold" and
+  // "Small Bid <$25k - Pending" put a bid ON HOLD — the card stays on the Active board and the
+  // reminder emails pause. They ride in this list because they are what an estimator reaches for
+  // in the same moment, from the same control, and hiding them somewhere else is how a live bid
+  // gets filed as dead for want of a better button. `outcome` is what says which is which, and it
+  // is read by the dialog, the tool's draft route and the portal's status route alike.
+  //
+  // `other` is NOT on Kyle's screenshot and stays anyway. The dialog falls back to it when the
+  // select has no value and the tool's draft route 422s an unknown reason, so dropping it would
+  // turn a mis-click into an error message.
+  //
+  // ORDER IS HIS ORDER. This array is what the dialog renders, top to bottom.
+  var CLOSE_CHOICES = [
+    { key: "not_low_bid", label: "Not Low Bid", outcome: "lost" },
+    { key: "no_response", label: "No Response", outcome: "lost" },
+    { key: "to_rebid", label: "Project to Rebid", outcome: "lost" },
+    { key: "on_hold", label: "Project on Hold", outcome: "hold" },
+    { key: "small_bid_pending", label: "Small Bid <$25k - Pending", outcome: "hold" },
+    { key: "different_gc", label: "Went to Different GC", outcome: "lost" },
+    { key: "gc_schedule", label: "Unable to meet GC schedule", outcome: "lost" },
+    // The one key Kyle's list SHARES with the customer's form. His screenshot spells it
+    // "Cancelled" and the customer's radio says "canceled"; one reason must not become two rows
+    // on the Lost tab over an l, so the key is the old one and this label is the only spelling
+    // any staff screen renders. The customer's own radio copy is theirs and is left alone.
+    { key: "canceled", label: "Project Cancelled", outcome: "lost" },
+    { key: "other", label: "Other", outcome: "lost" },
+  ];
+
+  // The four reasons only the CUSTOMER's own form can produce (portal frontend/index.html). They
+  // are not offered to staff — Kyle's list is what staff say — but a customer can still close a
+  // job under any of them, so they have to stay columnable and displayable or a bid the customer
+  // closed themselves would file under "Not recorded" and read as though nobody said.
+  //
+  // "Selected another contractor" rather than "Another contractor": this file said the short form
+  // and the portal said the long one, for weeks, because NOTHING compared them. Now something
+  // does — test_close_reason_vocabulary.py — and the portal's wording won because it is also the
+  // wording on the customer's radio.
+  var CUSTOMER_ONLY_LOST_REASON = {
+    price: "Price",
+    another_contractor: "Selected another contractor",
+    scope_changed: "Scope changed",
+    timing: "Timing",
   };
+
+  /** Key → label for every reason a job can be CLOSED LOST under, staff answers first.
+   *
+   *  DERIVED from CLOSE_CHOICES rather than typed out beside it. This map drives the Lost tab's
+   *  columns and the chip on every dead card, so a hand-kept copy would eventually column a bid
+   *  under a label the dialog no longer offers — and the two hold answers must never appear here
+   *  at all, because a bid on hold is not lost and has no business being a Lost column. */
+  var LOST_REASON = (function () {
+    var out = {};
+    CLOSE_CHOICES.forEach(function (c) { if (c.outcome === "lost") out[c.key] = c.label; });
+    Object.keys(CUSTOMER_ONLY_LOST_REASON).forEach(function (k) {
+      out[k] = CUSTOMER_ONLY_LOST_REASON[k];
+    });
+    return out;
+  })();
+
+  /** The two answers that PAUSE a bid instead of killing it. Same derivation, same reason. */
+  var HOLD_REASON = (function () {
+    var out = {};
+    CLOSE_CHOICES.forEach(function (c) { if (c.outcome === "hold") out[c.key] = c.label; });
+    return out;
+  })();
+
+  /** What pressing one of Kyle's answers DOES: "lost" or "hold". An answer this module has never
+   *  heard of is treated as lost, which is the same bias groupByReason takes with an unknown
+   *  stored reason — a vocabulary that grows must not silently pause a bid nobody meant to pause. */
+  function closeOutcome(key) {
+    return HOLD_REASON[String(key || "")] ? "hold" : "lost";
+  }
 
   // The newest thing that actually happened, NAMED. `sent_at` is never null (a
   // proposal row can't exist before the email goes out), so every card dates.
@@ -570,7 +643,9 @@
     STAGE_CREATED: STAGE_CREATED,
     WON_COLS: WON_COLS, WON_EARLY: WON_EARLY, WON_DEPOSIT: WON_DEPOSIT,
     WON_CONTACTS: WON_CONTACTS, WON_DONE: WON_DONE,
-    LOST_REASON: LOST_REASON, MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
+    LOST_REASON: LOST_REASON, CLOSE_CHOICES: CLOSE_CHOICES, HOLD_REASON: HOLD_REASON,
+    CUSTOMER_ONLY_LOST_REASON: CUSTOMER_ONLY_LOST_REASON, closeOutcome: closeOutcome,
+    MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
     followup: followup, isLost: isLost, isWon: isWon, wonByHand: wonByHand,
     depositSatisfied: depositSatisfied, approvedInPortal: approvedInPortal,

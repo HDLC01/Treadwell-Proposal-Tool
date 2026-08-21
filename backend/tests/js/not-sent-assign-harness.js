@@ -125,12 +125,21 @@ function liftPair(deps) {
     // tests in not-sent-lost-harness.js, where the dialog and the request are the subject; here it
     // is recorded so a rename still fails loudly rather than going quiet.
     "\nfunction wireNotSentLost(pid, row) { lostCalls.push(pid); }" +
+    // nsHoldReason is lifted FOR REAL, unlike the wiring beside it, because renderNotSent's own
+    // MARKUP calls it — three times, in the ternary that chooses between closed lost, on hold and
+    // live. A stub would be choosing which of the three panels this file renders, which is the one
+    // thing a stub must never decide. (2026-08-20: two of Kyle's eight close-out answers put a bid
+    // on hold instead of closing it.)
+    "\n" + source("nsHoldReason") +
+    // Same again for the quoted comment: it is called from the closed-lost and on-hold
+    // arms of the same ternary, so it is markup rather than wiring.
+    "\n" + source("nsCloseNote") +
     // The by-hand Won control (2026-08-19). Its MARKUP is lifted for real — renderNotSent embeds it,
     // it is pure string-building, and a stub would decide what this panel contains — while its
     // WIRING is recorded, on the same division of labour as wireNotSentLost above: the request and
     // the repaint are drawer-render-harness.js's subject.
     "\n" + source("wonControlHtml") +
-    "\nfunction wireWon(pid, repaint) { wonCalls.push(pid); }" +
+    "\nfunction wireWon(pid, row, repaint) { wonCalls.push(pid); }" +
     "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
     "         notifyCalls, panelCalls, lostCalls, wonCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
@@ -153,17 +162,23 @@ function harness(row, opts) {
     // close-lost control, and a stub that always says "live" would leave the reactivate half of
     // this drawer unrendered and unexercised in every case below.
     isLost: (p) => String((p && p.proposal_status) || "") === "closed_lost",
-    lostReason: (p) => ({ price: "Price", another_contractor: "Another contractor",
-                          canceled: "Project canceled", scope_changed: "Scope changed",
-                          timing: "Timing", other: "Other" })[
-      ((p && p.followup_state) || {}).closed_lost_reason] || "",
+    // crm-core's REAL maps, not a copy typed here. A copy is what let the tool and the portal
+    // carry two labels for one key for weeks, and here it would let this file keep testing a
+    // vocabulary the product had replaced (which is what happened on 2026-08-20).
+    lostReason: (p) => CORE.LOST_REASON[((p && p.followup_state) || {}).closed_lost_reason] || "",
     estimatorOf: (p) => String(p.assigned_estimator || p.estimator_email || ""),
     cardTotal: () => null,
     // Only the two Won predicates, taken from crm-core itself: wonControlHtml branches on them and a
     // hand-copy here could disagree with the page while both looked fine.
-    C: { isWon: CORE.isWon, wonByHand: CORE.wonByHand },
+    // The whole of what the not-sent panel reads off crm-core, by their real names. HOLD_REASON,
+    // followup and pausedUntil arrived with the on-hold outcome (2026-08-20): nsHoldReason needs
+    // the first two and the panel's own copy needs the third.
+    C: { isWon: CORE.isWon, wonByHand: CORE.wonByHand, HOLD_REASON: CORE.HOLD_REASON,
+         followup: CORE.followup, pausedUntil: CORE.pausedUntil },
+    // The module wrapper, which supplies Central's today. See the note in not-sent-lost-harness.
+    pausedUntil: (p) => CORE.pausedUntil(p, "2026-08-21"),
     money: (n) => "$" + n,
-    TW: { fmtBizDate: (d) => String(d) },
+    TW: { fmtBizDate: (d) => String(d), fmtBizDay: (d) => String(d) },
     loadEstimators: () => Promise.resolve(o.rosterFails ? [] : ROSTER),
     api: (p, init) => {
       requests.push({ path: p, method: (init && init.method) || "GET",

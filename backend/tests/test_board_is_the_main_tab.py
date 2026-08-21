@@ -219,21 +219,44 @@ def test_losing_local_storage_does_not_stop_you_starting_a_bid():
     assert catch < j, "the navigation is inside the try block and a storage failure would skip it"
 
 
-# ── files and info on every card ─────────────────────────────────────────────
-def test_every_card_gets_files_and_info():
-    """"a button for each container". Not only the unsent ones: this is the page the sales meeting
-    runs on, so a won job's Info Sheet hand-off should be reachable from the same card."""
+# ── the outcome, on every undecided card ─────────────────────────────────────
+def test_every_undecided_card_gets_the_two_outcome_buttons():
+    """The card's two buttons are [Mark as closed] and [Lost].
+
+    WHO AND WHEN: Hanz, 2026-08-20 — "Instead of Files and Info Sheet, we chane it to mark as
+    closed and Lost button". This test was `test_every_card_gets_files_and_info` and pinned the
+    2026-08-12 pair, which is the decision this one reverses: Files and Info sheet moved into BOTH
+    drawers' Proposal tab the same day (#go-files/#go-info on the sent side, [data-go-files]/
+    [data-go-info] on the not-sent side), so nothing is out of reach and the card gets the room
+    back for the thing the sales meeting actually needs from it.
+
+    "Closed" MEANS WON, which is why there is no third state anywhere: the button posts the won
+    mark that already exists. Whether it does is a question for test_card_actions.py, which runs
+    the handler; this file is about the board's structure, so it asks whether the row is rendered
+    on the cards at all and on which of them.
+
+    Still not gated on `not_sent` — both endpoints exist for both kinds of card — but gated on
+    whether the job is already decided, because a Lost button on a lost card saves and changes
+    nothing visible."""
     kanban = _block("portal.js", "kanbanHtml")
     assert "cardActions(p)" in kanban, "the action row is not rendered on cards"
     acts = _block("portal.js", "cardActions")
-    assert "data-files=" in acts and "data-info=" in acts
+    assert "data-won=" in acts and "data-lost=" in acts, (
+        "the card does not carry Mark as closed and Lost")
+    assert "data-files=" not in acts and "data-info=" not in acts, (
+        "the old Files/Info sheet pair is back on the card as well")
     assert "not_sent" not in acts, "the buttons are gated on the not-sent rows only"
+    assert "isLost(p)" in acts and "isWon(p)" in acts, (
+        "an already-decided card is offered a button that cannot change anything")
 
 
 def test_the_urls_match_the_proposals_database_character_for_character():
     """Two spellings of one route is how one of them rots. Asserted in BOTH directions, so
-    renaming a route on either page fails here until both move."""
-    acts = _block("portal.js", "cardActions")
+    renaming a route on either page fails here until both move.
+
+    The two links moved off the card and into the drawers' Proposal tab on 2026-08-20, so this
+    reads the whole of portal.js rather than cardActions. Which element carries them is a
+    different question; that they are spelled the way projects.js spells them is this one."""
     board_click = _code("portal.js")
     theirs = _code("projects.js")
     assert '/done.html?d=' in board_click and '"&files=1"' in board_click
@@ -251,26 +274,36 @@ def test_the_id_is_encoded_before_it_reaches_a_url():
 
 def test_clicking_a_button_does_not_also_open_the_drawer():
     """Both buttons live inside .deal, which is the drawer's own click target. Without an early
-    return the click navigates AND opens the drawer, and the drawer wins the repaint — so the
-    button looks broken."""
+    return the click acts AND opens the drawer, and the drawer wins the repaint — so the button
+    looks broken.
+
+    The pair being guarded changed on 2026-08-20 (Hanz: "Instead of Files and Info Sheet, we chane
+    it to mark as closed and Lost button"), and the property did not: whatever the card's controls
+    are, each branch has to come before the row branch and has to return. The old pair navigated;
+    these two post and repaint, which is strictly worse to lose, because the drawer's repaint would
+    hide the button's own failure message.
+
+    STILL A SOURCE READ, and deliberately not the only test of this: test_card_actions.py drives
+    the real listener with a real click for all six paths and asserts the drawer stayed shut. This
+    one reads the branch ORDER, which a passing behavioural test cannot distinguish from luck."""
     code = _code("portal.js")
     i = code.index('$("board").addEventListener("click"')
     handler = _braced(code, i, "the board click handler")
-    files_at = handler.index("[data-files]")
-    info_at = handler.index("[data-info]")
+    won_at = handler.index("[data-won]")
+    lost_at = handler.index("[data-lost]")
     new_at = handler.index("[data-new-proposal]")
     row_at = handler.index('closest(".deal, .trow")')
-    assert files_at < row_at and info_at < row_at and new_at < row_at, (
-        "a button branch runs after the row branch, so the drawer opens over the navigation")
+    assert won_at < row_at and lost_at < row_at and new_at < row_at, (
+        "a button branch runs after the row branch, so the drawer opens over the action")
     # Each branch scoped to its OWN statement — up to the NEXT branch, not up to the row handler.
-    # Spanning further let a files branch with no `return` be satisfied by the info branch's, and
-    # that mutation survived: the click would navigate AND open the drawer, drawer winning.
-    bounds = sorted([files_at, info_at, new_at, row_at])
-    for needle, start in (("[data-files]", files_at), ("[data-info]", info_at),
+    # Spanning further let one branch with no `return` be satisfied by the next branch's, and that
+    # mutation survived: the click would act AND open the drawer, drawer winning.
+    bounds = sorted([won_at, lost_at, new_at, row_at])
+    for needle, start in (("[data-won]", won_at), ("[data-lost]", lost_at),
                           ("[data-new-proposal]", new_at)):
         end = next(b for b in bounds if b > start)
         assert "return" in handler[start:end], (
-            "the %s branch does not return, so the drawer opens over the navigation" % needle)
+            "the %s branch does not return, so the drawer opens over the action" % needle)
 
 
 def test_the_buttons_are_styled_and_the_column_header_can_hold_one():

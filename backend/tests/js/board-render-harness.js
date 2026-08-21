@@ -215,6 +215,12 @@ function columnsOf(board) {
 
 const out = { imported: NAMES, absent: absent, tabs: TABS, pills: PILLS,
               wonCols: C.WON_COLS, stages: C.STAGES,
+              // The Lost tab's own vocabulary, read the way portal.js builds it (LOST_COLS):
+              // every label in the derived LOST_REASON map, then the catch-all. Exported so the
+              // Lost-tab test can assert column NAMES rather than a bare count, which is the only
+              // way to tell one column set from another.
+              lostCols: Object.keys(C.LOST_REASON).map((k) => C.LOST_REASON[k])
+                              .concat(["Not recorded"]),
               everyId: ROWS.map((p) => p.proposal_id), results: {}, errors: {} };
 for (const tab of TABS) {
   for (const view of ["board", "table"]) {
@@ -237,6 +243,10 @@ for (const tab of TABS) {
         cards: (r.html.match(/class="deal"/g) || []).length,
         rows: (r.html.match(/<tr/g) || []).length,
         newButton: r.html.includes("data-new-proposal"),
+        // The card's two outcome buttons, which replaced Files and Info sheet on 2026-08-20.
+        // Both names are reported so a board that grew the old pair back is visible here too.
+        wonButton: r.html.includes("data-won="),
+        lostButton: r.html.includes("data-lost="),
         filesButton: r.html.includes("data-files="),
         testChip: r.html.includes("chip-test"),
         wonChip: r.html.includes("chip-won"),
