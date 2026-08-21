@@ -284,7 +284,9 @@ def test_a_blocked_clipboard_never_leaves_a_dead_button(out, case):
 CONDITIONAL_IDS = {
     "dsec-recipients": "only rendered for two or more recipients",
     "dsec-approved": "only rendered once somebody has approved",
-    "fu-reopen": "only rendered on a closed-lost proposal",
+    # Closed lost OR on hold since 2026-08-21: a held bid needs the way out too, and it is not lost.
+    # test_sent_hold.py is where that second state is rendered and pressed.
+    "fu-reopen": "only rendered on a closed-lost or held proposal",
     "fu-delay": "not rendered on a closed-lost proposal",
     "fu-lost": "not rendered on a closed-lost proposal",
     "fu-add-contact": "only rendered when the portal knows a recipient",

@@ -197,3 +197,25 @@ def test_the_fallback_that_makes_a_gap_visible_is_still_there(page):
     a reader cannot tell which event they are looking at."""
     assert page["fallbackPresent"], (
         "history.js no longer falls back to the raw action — re-read this test's premise")
+
+
+def test_a_held_bid_is_not_reported_dead_and_a_bring_back_is_not_the_narrow_reopen(page):
+    """Two labels whose exact WORDS matter, which is not true of most of them.
+
+    Hanz, 2026-08-20: two of the eight close-out answers put a bid ON HOLD and leave it on the
+    Active board. A feed that called that "closed as lost" would report a live bid dead to whoever
+    reads the History page, which is worse than the machine word this suite exists to prevent — the
+    machine word is ugly and this would be wrong.
+
+    And `brought_back` must not borrow "reopened": that word belongs to the narrow `reactivated`,
+    which clears one mark. Two verbs reading identically in the feed is how a reader stops being
+    able to tell which button somebody pressed."""
+    labels = page["labels"]
+    for verb in ("on_hold", "brought_back"):
+        assert verb in labels, "%s has no label at all" % verb
+    assert "lost" not in labels["on_hold"], (
+        "a bid on hold is reported as %r, and it is still live" % labels["on_hold"])
+    assert "hold" in labels["on_hold"], labels["on_hold"]
+    assert labels["brought_back"] != labels["reactivated"], (
+        "the combined clear and the narrow reopen read identically in the feed: %r"
+        % labels["brought_back"])

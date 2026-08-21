@@ -364,22 +364,35 @@
     }).join("");
   }
 
-  /** Files and Info Sheet, on every card.
+  /** THE OUTCOME, on the card. Hanz, 2026-08-20: the two buttons become Mark as closed and Lost.
    *
-   *  Hanz, 2026-08-12: "There should be a button for each container for the files and info sheet
-   *  as well." On EVERY card rather than only the unsent ones: this board is where the sales
-   *  meeting happens, so reaching a won job's Info Sheet hand-off should not mean going to
-   *  another page to find the same project.
+   *  "CLOSED" MEANS WON. Hanz confirmed it, so this reuses the existing by-hand won mark — POST
+   *  /api/draft/{id}/status {status:"won"}, the same call the drawer's Mark won button makes — and
+   *  invents no third state. A separate "closed" state would be a second word for won that only the
+   *  board could speak, and the Won tab, the Won chip and the Notification Sending page would all
+   *  have to learn it.
    *
-   *  The URLs are the ones the Proposals Database already uses (projects.js), deliberately
-   *  character-for-character — two spellings of the same route is how one of them rots. That a
-   *  synthesised not-sent row works here at all is because its `proposal_id` IS the draft id.
+   *  THESE REPLACED Files and Info sheet, which shipped here on 2026-08-12 and moved into BOTH
+   *  drawers' Proposal tab on 2026-08-20 — the sent drawer has #go-files/#go-info and the not-sent
+   *  one has [data-go-files]/[data-go-info], both on the same URLs. Nothing is lost by taking them
+   *  off the card, and the card gets back the room to do the thing the sales meeting actually needs
+   *  from it, which is recording an outcome without opening anything.
+   *
+   *  KANBAN ONLY. There is one call site, in kanbanHtml, and the table view has never carried card
+   *  buttons: a row is 7 columns of facts, and a control in a table cell that also opens the drawer
+   *  on click is a click nobody can aim. That is a deliberate asymmetry, not an omission.
+   *
+   *  NOTHING ON A CARD THAT IS ALREADY DECIDED. A lost card offering Lost and a won card offering
+   *  Mark as closed are both buttons that save and change nothing visible, which reads as broken.
+   *  The way back for those two is the drawer's bring-back, which needs a prompt naming the
+   *  destination and so cannot live on a 224px card.
    */
   function cardActions(p) {
+    if (isLost(p) || C.isWon(p)) return "";
     const id = encodeURIComponent(p.proposal_id);
     return `<div class="deal-acts">
-      <button type="button" class="deal-act" data-files="${id}" title="Estimate and proposal files">Files</button>
-      <button type="button" class="deal-act" data-info="${id}" title="Project Info Sheet — the hand-off to accounting and ops">Info sheet</button>
+      <button type="button" class="deal-act" data-won="${id}" title="We won it — marks this closed and moves it to the Won tab">Mark as closed</button>
+      <button type="button" class="deal-act" data-lost="${id}" title="Not going ahead — pick a reason and say what happened">Lost</button>
     </div>`;
   }
 
@@ -456,17 +469,111 @@
       return;
     }
     // These three run BEFORE the row branch below and each returns, because every one of them
-    // sits inside a .deal — without the early return a click would both navigate and open the
-    // drawer, and the drawer would win the paint.
-    const files = e.target.closest("[data-files]");
-    if (files) { window.location.assign("/done.html?d=" + files.dataset.files + "&files=1"); return; }
-    const info = e.target.closest("[data-info]");
-    if (info) { window.location.assign("/info-sheet.html?d=" + info.dataset.info); return; }
+    // sits inside a .deal — without the early return a click would both act and open the drawer,
+    // and the drawer would win the paint.
+    const won = e.target.closest("[data-won]");
+    if (won) { markCardWon(won); return; }
+    const lostBtn = e.target.closest("[data-lost]");
+    if (lostBtn) { closeCardOut(lostBtn); return; }
     if (e.target.closest("[data-new-proposal]")) { startNewProposal(); return; }
 
     const row = e.target.closest(".deal, .trow");
     if (row && row.dataset.id) openDetail(row.dataset.id);
   });
+
+  /** The row this button belongs to, out of the board's own array.
+   *
+   *  ALL, not the filtered pool: the card was drawn from a filtered list, but the poll that runs
+   *  every 25s can move a row out of that list between the paint and the click, and a button that
+   *  silently does nothing is worse than one that acts on the project whose name is on the card.
+   *  A missing row is still possible (the project was trashed in another tab) and both callers
+   *  check. */
+  function cardRowOf(btn) {
+    const id = btn.dataset.won || btn.dataset.lost || "";
+    return ALL.find((x) => String(x.proposal_id) === decodeURIComponent(id)) || null;
+  }
+
+  /** Mark as closed, from the card. "Closed" means WON — Hanz, 2026-08-20 — so this is the same
+   *  draft-side won mark the drawer's Mark won button makes, on the same route, with no new state.
+   *
+   *  NO PROMPT, exactly as the drawer's Mark won has none: nothing is sent, nothing leaves the
+   *  pipeline, and the way back is the drawer's bring-back. The button reports its own progress
+   *  because the card is about to move to another tab and vanish from under the cursor, and a
+   *  silent 12 seconds there is indistinguishable from a dead control. */
+  async function markCardWon(btn) {
+    const row = cardRowOf(btn);
+    if (!row) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Saving…";
+    try {
+      const r = await api("/api/draft/" + encodeURIComponent(row.proposal_id) + "/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "won" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      // Patch the board's own object so the card leaves for the Won tab on this paint rather than
+      // on the next poll — the same reason the drawer patches its row. load() then re-reads.
+      row.won_at = new Date().toISOString();
+      renderBoard();
+      load();
+    } catch (err) {
+      btn.textContent = "Failed: " + (err.message || "retry");
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 2600);
+    }
+  }
+
+  /** Lost, from the card. The SAME dialog the two drawers use, so a reason and a required comment
+   *  are collected here exactly as they are there and there is one close-out vocabulary.
+   *
+   *  WHICH ROUTE depends on whether the customer has the proposal, and that is the same split the
+   *  drawers make: a sent project has a portal row whose close-lost also stops the cadence, and an
+   *  unsent one has no portal row at all, which is why the draft route exists. `not_sent` is the
+   *  flag the pipeline sets for exactly this question. */
+  async function closeCardOut(btn) {
+    const row = cardRowOf(btn);
+    if (!row) return;
+    const why = await closeOutDialog(row, { unsent: !!row.not_sent });
+    if (!why) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Saving…";
+    const id = encodeURIComponent(row.proposal_id);
+    const hold = why.outcome === "hold";
+    const path = row.not_sent ? "/api/draft/" + id + "/status"
+                              : "/api/portal/proposal/" + id + "/status";
+    const body = row.not_sent
+      ? (hold ? { status: "on_hold", reason: why.reason, note: why.note }
+              : { status: "closed_lost", reason: why.reason, note: why.note })
+      : (hold ? { status: "delayed", months: HOLD_MONTHS, reason: why.reason, note: why.note }
+              : { status: "closed_lost", reason: why.reason, note: why.note });
+    try {
+      const r = await api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      // A HOLD IS NOT PATCHED ONTO THE ROW HERE, deliberately: the card stays where it is, so
+      // there is nothing for an optimistic paint to hurry along, and the pause date belongs to the
+      // server. Closing lost moves the card off this tab, which is worth not waiting for.
+      if (!hold) {
+        row.proposal_status = "closed_lost";
+        row.followup_state = Object.assign({}, row.followup_state,
+                                           { closed_lost_reason: why.reason });
+        renderBoard();
+      }
+      load();
+    } catch (err) {
+      btn.textContent = "Failed: " + (err.message || "retry");
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 2600);
+    }
+  }
 
   /** Start a bid from this board. The same three storage keys and the same destination as
    *  "+ New project" on the Proposals Database (projects.js) — a second way of minting a draft
@@ -915,21 +1022,35 @@
              a won unsent bid the GC then cancels does not have to be un-won first.
              test_won_tab.py renders this panel on a won not-sent row and asserts both controls. -->
         ${wonHtml ? `<div class="sec" id="dsec-ns-won">${wonHtml}</div>` : ""}
+        <!-- THREE STATES, not two, since 2026-08-20. Two of the eight answers on Kyle's
+             close-out list put a bid ON HOLD rather than killing it, so a held bid needs its own
+             reading of this section: it is not lost, and it is not simply live either, and a
+             held bid rendered as live would offer no way to say it had woken up. -->
         <div class="sec" id="dsec-ns-lost">
-          <div class="lbl">${isLost(row) ? "Closed lost" : "Not going ahead?"}</div>
+          <div class="lbl">${isLost(row) ? "Closed lost"
+            : nsHoldReason(row) ? "On hold" : "Not going ahead?"}</div>
           ${isLost(row) ? `
             <p class="note">This bid is closed lost${lostReason(row)
               ? ' — <strong>' + esc(lostReason(row)) + '</strong>' : ""}. It sits on the Lost tab and
-            counts in the numbers there. Reactivating puts it back under Created but not sent.</p>
-            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-reopen">Reactivate this bid</button></div>`
+            counts in the numbers there. Bringing it back puts it under Created but not sent.</p>
+            ${nsCloseNote(row, "closed_lost_note")}
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-reopen">Bring this bid back</button></div>`
+          : nsHoldReason(row) ? `
+            <p class="note">This bid is on hold — <strong>${esc(nsHoldReason(row))}</strong>. It
+            stays on the Active board under Created but not sent${pausedUntil(row)
+              ? ", and nothing chases it until " + esc(TW.fmtBizDay(pausedUntil(row))) : ""}.
+            Bring it back the day it wakes up.</p>
+            ${nsCloseNote(row, "on_hold_note")}
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-reopen">Bring this bid back</button></div>`
           : `
-            <p class="note">Close it lost and it moves to the Lost tab under a reason, instead of
-            sitting here as work nobody is going to do. The customer is never emailed, and you can
-            put it back.</p>
+            <p class="note">Close it out and it moves to the Lost tab under a reason, instead of
+            sitting here as work nobody is going to do. Two of the answers put it on hold instead
+            and leave it on this board. The customer is never emailed either way, and you can put
+            it back.</p>
             <!-- .fu-line, the same wrapper the sent drawer's identical buttons sit in. A bare
                  button inside .sec stretches to the full drawer width, which a staging walk showed
                  reads as a banner rather than a control. -->
-            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-lost">Mark closed lost</button></div>`}
+            <div class="fu-line"><button type="button" class="btn btn-s" id="ns-lost">Close this bid out</button></div>`}
           <p class="note" id="ns-lost-note"></p>
         </div>
        </div>
@@ -968,7 +1089,7 @@
     // The row IS the board's own object (renderNotSent is only ever called with ALL.find(...)), so
     // patching it in place is what makes the mark survive the 12s poll that re-opens this drawer
     // before load() has returned — a copy would be repainted away by the next tick.
-    wireWon(pid, (patch) => {
+    wireWon(pid, row, (patch) => {
       Object.assign(row, patch);
       DRAWER_SIG = "";
       renderNotSent(pid, row);
@@ -989,6 +1110,10 @@
    *  happens to be a no-op still repaints. */
   function wireNotSentLost(pid, row) {
     const note = $("ns-lost-note");
+    // `optimistic` may be a FUNCTION of the server's answer, which is how the hold gets its date
+    // without this file learning to add four months to today. The backend already computes it
+    // (_hold_until in main.py) and returns it; a second implementation here would be a second
+    // month-add to keep in step, and it would be the one on screen.
     const post = async (btn, body, optimistic) => {
       btn.disabled = true;
       const orig = btn.textContent;
@@ -1003,7 +1128,8 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
         DRAWER_SIG = "";
-        renderNotSent(pid, Object.assign({}, row, optimistic));
+        const patch = typeof optimistic === "function" ? optimistic(j) : optimistic;
+        renderNotSent(pid, Object.assign({}, row, patch));
         load();
       } catch (err) {
         btn.textContent = orig;
@@ -1014,18 +1140,75 @@
 
     const lost = $("ns-lost");
     if (lost) lost.addEventListener("click", async () => {
-      const why = await lostReasonDialog(row, { unsent: true });
+      const why = await closeOutDialog(row, { unsent: true });
       if (!why) return;
+      // TWO OUTCOMES OUT OF ONE CONTROL, and the branch is the whole of Hanz's 2026-08-20 decision:
+      // six of Kyle's answers close the bid, "Project on Hold" and "Small Bid <$25k - Pending"
+      // pause it. A held bid gets NO proposal_status, so stage() still reads `not_sent` and the
+      // card stays in the Created column — the optimistic patch has to say the same, or the drawer
+      // would repaint as closed lost for the twelve seconds until the board caught up.
+      if (why.outcome === "hold") {
+        await post(lost, { status: "on_hold", reason: why.reason, note: why.note },
+                   (j) => ({ followup_state: { paused_until: j.paused_until || "",
+                                               on_hold_reason: why.reason } }));
+        return;
+      }
       // Shaped as the portal's own closed-lost state, exactly as the synthesised row is, so the
       // redrawn drawer and the reloaded board agree without a second vocabulary.
-      await post(lost, { status: "closed_lost", reason: why },
+      await post(lost, { status: "closed_lost", reason: why.reason, note: why.note },
                  { proposal_status: "closed_lost",
-                   followup_state: { closed_lost_reason: why } });
+                   followup_state: { closed_lost_reason: why.reason } });
     });
 
     const reopen = $("ns-reopen");
-    if (reopen) reopen.addEventListener("click", () =>
-      post(reopen, { status: "active" }, { proposal_status: "", followup_state: {} }));
+    if (reopen) reopen.addEventListener("click", async () => {
+      if (!(await confirmBringBack(row))) return;
+      // `bring_back`, not `active`: this bid may have been marked won and THEN closed lost, in
+      // which case it reads as Lost only, and clearing one mark would drop the card onto the Won
+      // tab instead of back on the board. One press clears both, plus any hold — drafts.clear_outcome.
+      post(reopen, { status: "bring_back" },
+           { proposal_status: "", followup_state: {}, won_at: "" });
+    });
+  }
+
+  /** Why an UNSENT bid is on hold, as a label, or "" if it is not.
+   *
+   *  Read off `on_hold_reason`, which only set_on_hold writes (see _not_sent_rows), and NOT off
+   *  paused_until: a sent project can be paused by the plain "Mark delayed" control, which asks
+   *  for a number of months and no reason at all, and calling that "on hold" would put a reason on
+   *  screen that nobody chose. C.HOLD_REASON, so the label is the one the dialog offered. */
+  function nsHoldReason(p) {
+    return C.HOLD_REASON[String((C.followup(p).on_hold_reason) || "")] || "";
+  }
+
+  /** What somebody WROTE when they closed this bid out, quoted, or "" when there is nothing.
+   *
+   *  THE POINT OF REQUIRING IT. The comment is the tool's one mandatory free-text field, and the
+   *  argument for making it mandatory was that a reason on its own tells the next person nothing:
+   *  "Not Low Bid" is eight identical cards by the end of a quarter. A field that costs the
+   *  estimator a sentence and is then never printed anywhere would be the worst of both.
+   *
+   *  HERE AND NOT ON THE CARD. A card is 224px wide and this is a paragraph. The drawer is where
+   *  somebody has already asked about one project, and where the reason is printed too.
+   *
+   *  THE CLOSE, ONLY HERE. A sent bid's comment goes into the customer thread as an internal card
+   *  the moment it is written (the portal's admin_set_status), which is a better home for a sentence
+   *  about a finished job than a panel nobody opens twice - so there is deliberately no second copy
+   *  of a CLOSED-LOST comment on the sent drawer's follow-up panel.
+   *
+   *  A HOLD IS THE EXCEPTION, added 2026-08-21, and the distinction is a live bid versus a dead
+   *  one. A held bid is still in play, its follow-up panel is the only place its state is stated,
+   *  and the comment is the input to the one decision left on it: bring it back, or leave it. So the
+   *  sent panel prints the hold's comment (see followupPanelHtml) while still leaving the close's to
+   *  the thread. Not through this function, though - a sent hold's reason and note live in
+   *  portal_followups.detail rather than in followup_state, which is what sentHold reads.
+   *
+   *  `white-space:pre-wrap` is NOT used, and `esc` is: this is one sentence typed into a textarea,
+   *  and a newline in it must not be able to reopen the paragraph it sits in. */
+  function nsCloseNote(p, key) {
+    const text = String(C.followup(p)[key] || "").trim();
+    if (!text) return "";
+    return '<p class="note ns-why">“' + esc(text) + '”</p>';
   }
 
   /** "We won it" — the by-hand mark, and what the panel says once somebody has used it.
@@ -1065,9 +1248,16 @@
         <p class="note" id="won-note"></p>`;
     }
     if (C.isWon(p)) {
+      // NO BUTTON, and the copy now SAYS SO rather than leaving a gap where every other state has a
+      // control. Hanz asked for the bring-back on 2026-08-20 and this is the one case with nothing
+      // to bring back: nobody marked this job won, the numbers did, so there is no mark to clear.
+      // An Undo here would save and change nothing, which reads as a broken control. Un-approving
+      // it or unwinding the deposit are different acts and live where those facts do.
       return `${lbl}Won</div>
         <p class="note">Approved, and the deposit question is settled, so this already counts as won
-        without anyone marking it. It sits on the Won tab.</p>`;
+        without anyone marking it. It sits on the Won tab. There is nothing to bring back here:
+        no person marked it, so there is no mark to take off. It stops counting as won if the
+        approval or the deposit changes, and both of those are on the Proposal tab.</p>`;
     }
     return `${lbl}Won it already?</div>
       <p class="note">Mark it won as soon as they say yes on the phone. It does not wait for the
@@ -1090,7 +1280,7 @@
    *  `patch` carries `won_at`, not a boolean, because that is the field the pipeline sends and isWon
    *  reads. The optimistic value is the browser's clock: nothing renders this stamp, the server
    *  writes its own on the row that matters, and the next board load replaces it. */
-  function wireWon(pid, repaint) {
+  function wireWon(pid, row, repaint) {
     const note = $("won-note");
     const post = async (btn, body, patch) => {
       btn.disabled = true;
@@ -1115,14 +1305,25 @@
     };
 
     const mark = $("won-mark");
+    // NO CONFIRM ON THE WAY IN. Nothing is sent, nothing leaves the pipeline, and the way back is
+    // one click, so a modal to say "we won it" would be ceremony over a cheerful, reversible fact.
     if (mark) mark.addEventListener("click", () =>
       post(mark, { status: "won" }, { won_at: new Date().toISOString() }));
-    // No confirm dialog on either half, unlike closing a bid lost. Nothing is sent, nothing leaves
-    // the pipeline, and both directions are one click away from each other — a modal to say "we won
-    // it" would be ceremony over a reversible, cheerful fact.
+    // ON THE WAY OUT THERE IS ONE, since 2026-08-20. This comment used to say neither half had a
+    // prompt and gave the reason above for both. That held while a won card stayed among the live
+    // ones, and stopped holding the day the Won TAB took won jobs off the Active board: undoing the
+    // mark MOVES THE CARD now, to whichever Active column its own timestamps earn, and Hanz asked
+    // for the prompt in the same breath as the bring-back — "before they do that there should be a
+    // prompt saying are they sure". Same helper as the other two, so it names the destination.
+    //
+    // Still `not_won` and not `bring_back`: this button only ever renders on a card that is NOT
+    // lost (see wonControlHtml), so there is no second mark to clear, and `bring_back` would also
+    // forward "active" to the portal and resume a cadence somebody may have paused on purpose.
     const undo = $("won-undo");
-    if (undo) undo.addEventListener("click", () =>
-      post(undo, { status: "not_won" }, { won_at: "" }));
+    if (undo) undo.addEventListener("click", async () => {
+      if (!(await confirmBringBack(row || {}))) return;
+      post(undo, { status: "not_won" }, { won_at: "" });
+    });
   }
 
   /** The notification picker on a project that has not been sent.
@@ -2377,9 +2578,52 @@
     </div>`;
   }
 
+  /** THE HOLD SOMEBODY HERE PRESSED, on a project the customer already has, or null.
+   *
+   *  Two of Kyle's close-out answers pause a bid instead of killing it, and on a SENT project they
+   *  ride the portal's `delayed` status (see the fu-lost handler). That reuse is deliberate and
+   *  stays — it is what keeps the card on the Active board with ONE pause date rather than two —
+   *  but it has a cost this function pays: portal_proposals stores only the date. There is no
+   *  on_hold_reason column on a sent row the way there is on a draft blob, so `followup_state`
+   *  cannot answer "why". The reason and the required comment went into portal_followups.detail
+   *  instead, which is why the feature needed no DDL, and that log is ALREADY in this payload — so
+   *  it is read from there rather than asking the portal for a new field.
+   *
+   *  THE NEWEST EVENT THAT SET THE PAUSE DECIDES, and only that one. The log is newest-first
+   *  (db.list_followups orders by created_at desc, and the History list below renders it in that
+   *  order). Two things can set this date: a staff pause, which writes detail.action "paused" and
+   *  carries a reason only when it came from the close-out dialog, and the customer's own "revisit
+   *  in a few months", which writes detail.status "delayed" and carries no reason at all. Whichever
+   *  is newest is the truth about the pause on the row right now: a held bid whose customer then
+   *  rings and asks for one month is the CUSTOMER's pause from that moment. Scanning for the newest
+   *  entry that happens to have a reason would keep quoting a hold something later replaced.
+   *
+   *  Guarded on pausedUntil first, so a lapsed or cleared pause reports nothing. The log keeps
+   *  every hold ever pressed, and a bid brought back in March must not still read "on hold" in
+   *  July. */
+  function sentHold(p, data) {
+    if (!pausedUntil(p)) return null;
+    const rows = (data && data.followups) || [];
+    for (let i = 0; i < rows.length; i++) {
+      const d = rows[i].detail || {};
+      const staffPause = d.action === "paused";
+      // The customer's own delay. A terminator rather than something to skip past: it is a newer
+      // answer about the same date, and it is not a hold.
+      if (!staffPause && String(d.status || "") !== "delayed") continue;
+      const label = staffPause ? (C.HOLD_REASON[String(d.reason || "")] || "") : "";
+      return label ? { reason: String(d.reason), label, note: String(d.note || "") } : null;
+    }
+    return null;
+  }
+
   /** How the follow-up tab summarises itself, and what the panel leads with. One
-   *  sentence — an estimator opening this tab is asking "is anything chasing this?" */
-  function followupState(p) {
+   *  sentence — an estimator opening this tab is asking "is anything chasing this?"
+   *
+   *  `hold` is sentHold's answer, passed in rather than derived, because it is read out of the
+   *  follow-up LOG and this function is handed only the proposal. Optional on purpose: every
+   *  caller has the payload, and a caller that does not gets the honest generic answer for a
+   *  paused project instead of a claim about who asked for it. */
+  function followupState(p, hold) {
     const f = fu(p);
     if (isLost(p)) {
       const why = lostReason(p);
@@ -2387,6 +2631,17 @@
         + (why ? " (" + why.toLowerCase() + ")" : "") + ". Nothing is being sent." };
     }
     const until = pausedUntil(p);
+    // A HOLD KYLE PRESSED IS NOT A PAUSE THE CUSTOMER ASKED FOR, and this panel stated the second
+    // about the first until 2026-08-21: every held bid read "The customer asked us to come back to
+    // this", which is a sentence about a conversation that never happened. Two of the eight answers
+    // on the close-out list are internal calls ("Project on Hold", "Small Bid <$25k - Pending") and
+    // the customer is deliberately never emailed about either, so attributing them to the customer
+    // is the one reading of this row that cannot be true. Kept as two branches rather than softened
+    // into one vague sentence, because who asked is exactly what the next reader needs: it decides
+    // whether ringing them is following up or is news.
+    if (until && hold) return { val: "On hold", lead: "On hold: " + hold.label
+      + ". Somebody here put this on hold, so the customer was not told and is not being emailed. "
+      + "Nothing chases it until " + TW.fmtBizDay(until) + ", and you can bring it back sooner." };
     if (until) return { val: "Paused", lead: "The customer asked us to come back to this. Follow-ups resume "
       + TW.fmtBizDay(until) + "." };
     if (!f.enrolled) return { val: "Not automated", lead:
@@ -2411,7 +2666,8 @@
   }
 
   function followupPanelHtml(p, data) {
-    const f = fu(p), st = followupState(p), enabled = !!f.enabled && !isLost(p);
+    const hold = sentHold(p, data);
+    const f = fu(p), st = followupState(p, hold), enabled = !!f.enabled && !isLost(p);
     const log = (data.followups || []).map(followupRow).join("")
       || '<p class="note">Nothing logged yet.</p>';
     const assignee = p.assigned_estimator || "";
@@ -2419,6 +2675,20 @@
       <div class="sec" id="dsec-followup">
         <div class="lbl">Follow-up</div>
         <p class="note" id="fu-lead">${esc(st.lead)}</p>
+        <!-- WHAT SOMEBODY WROTE WHEN THEY PUT IT ON HOLD, quoted, directly under the sentence that
+             says it is on hold. nsCloseNote's docstring argues that a sent bid's comment belongs in
+             the customer thread and NOT in a second copy here, and for a bid closed LOST that still
+             holds: closing is an end, the thread card is the record, and nobody reopens this panel
+             to read it. A HOLD IS THE OPPOSITE CASE. It is a live bid, this panel is the only place
+             its state is stated, and the comment is the input to the one decision left on it:
+             whether today is the day to bring it back. Requiring a sentence and then filing it on a
+             different tab from the button it informs is how a required field becomes paperwork.
+             So: the hold, here; the close, in the thread. The reason itself is already in the lead
+             above, so this is the sentence only.
+             The ns-why class is the unsent panel's own, reused rather than twinned: one quoted
+             comment should not have two rules that can drift apart. (No backticks in this comment
+             either, and no em dash: it ships inside a template literal, inside the panel.) -->
+        ${hold && hold.note ? '<p class="note ns-why">“' + esc(hold.note) + '”</p>' : ""}
         <div id="fu-alert" class="note fu-alert"></div>
 
         <div class="fu-line">
@@ -2457,10 +2727,26 @@
 
         <div class="lbl fu-lbl">The customer's timeline</div>
         <p class="note">Use these when a customer tells you by phone instead of clicking the link in their email. The customer is not emailed.</p>
+        <!-- THREE STATES, not two, since 2026-08-21, and the missing third one was a dead end. The
+             close-out dialog tells the estimator, in these words, that a held bid "stays on the
+             Active board and the reminder emails pause for about 4 months ... You can bring it back
+             sooner" - and until today there was no control on this panel that brought it back. The
+             bring-back rendered on isLost only, a held bid is not lost, so pressing Hold on a sent
+             bid left the delay picker, Mark delayed and Mark closed lost and no way out of the four
+             months. The unsent drawer had this right from the day holds shipped (#ns-reopen renders
+             on nsHoldReason too), so this is the same shape in the half that was missed.
+             THE OTHER CONTROLS STAY on a held bid, which is where this deliberately differs from
+             the unsent panel. There, a hold hides the close-out and the two-step costs nothing:
+             nothing is chasing a bid nobody sent. Here, bringing a bid back RESUMES the cadence, so
+             forcing "bring it back, then close it out" on a job Kyle has just learned went to
+             another GC would put an automated chase in front of a customer in between. Mark delayed
+             stays for the same kind of reason: a customer who rings mid-hold and asks for one month
+             is a newer, shorter answer about the same date, and sentHold reads it as theirs. -->
         <div class="fu-line">
           ${isLost(p)
             ? '<button class="btn btn-s" id="fu-reopen">Reactivate this proposal</button>'
-            : `<select id="fu-months" class="tw-select" aria-label="Delay by">
+            : `${hold ? '<button class="btn btn-s" id="fu-reopen">Bring this bid back</button>' : ""}
+               <select id="fu-months" class="tw-select" aria-label="Delay by">
                  <option value="1">1 month</option><option value="2">2 months</option>
                  <option value="3">3 months</option><option value="4">4+ months</option>
                </select>
@@ -2560,8 +2846,30 @@
     });
 
     const toggle = $("fu-toggle");
-    if (toggle) toggle.addEventListener("click", (e) => {
+    if (toggle) toggle.addEventListener("click", async (e) => {
       const on = !(fu(p).enabled && !isLost(p));
+      // TURNING IT ON NOW LIFTS A PAUSE TOO, so it asks first when there is one to lift.
+      //
+      // The route used to call set_followup_enabled only. On a paused project that made the button
+      // a lie: it says "Start the follow-up cadence from today" in its own title, and the cadence
+      // stayed paused, so pressing it changed a flag and sent nothing. It is also the workaround an
+      // estimator reaches for when they cannot find a bring-back, which is exactly the state a held
+      // sent bid was in. So the endpoint resumes as well (admin_followup_automation), and the cost
+      // of that is real: the pause it lifts may be one the CUSTOMER asked for, and dropping that
+      // silently would start chasing somebody who told us not to. Hence the confirm, and hence it
+      // is asked only when a pause exists - the ordinary toggle is still one click.
+      if (on && pausedUntil(p)) {
+        const ok = await TW.confirmDanger({
+          title: "Start chasing again?",
+          before: "Turn automation on for ", name: p.project_name || "this project",
+          after: " and lift the pause?",
+          detail: "Nothing is being sent until " + TW.fmtBizDay(pausedUntil(p))
+            + ". Turning automation on clears that, so the reminders start again. The customer is"
+            + " not emailed by this.",
+          confirmText: "Turn it on", cancelText: "Leave it paused", tone: "warn", icon: "▶",
+        });
+        if (!ok) return;
+      }
       act(path("/followup-automation"), e.target, { body: JSON.stringify({ enabled: on }) });
     });
 
@@ -2594,21 +2902,54 @@
 
     const lost = $("fu-lost");
     if (lost) lost.addEventListener("click", async (e) => {
-      const why = await lostReasonDialog(p);
+      const why = await closeOutDialog(p);
       if (!why) return;
-      act(path("/status"), e.target, { body: JSON.stringify({ status: "closed_lost", reason: why }) });
+      // A HOLD RIDES THE `delayed` STATUS, which is Hanz's instruction and not a shortcut: this
+      // project HAS a portal row and a running cadence, and `delayed` is the one thing that pauses
+      // a cadence while leaving the card exactly where it sits on the board. A second pausing
+      // mechanism beside it would give one bid two pause dates that can disagree. `reason` and
+      // `note` ride along so the pause says WHY in the thread instead of appearing as an
+      // unexplained gap in the chasing.
+      if (why.outcome === "hold") {
+        act(path("/status"), e.target, { body: JSON.stringify(
+          { status: "delayed", months: HOLD_MONTHS, reason: why.reason, note: why.note }) });
+        return;
+      }
+      act(path("/status"), e.target, { body: JSON.stringify(
+        { status: "closed_lost", reason: why.reason, note: why.note }) });
     });
 
     const reopen = $("fu-reopen");
-    if (reopen) reopen.addEventListener("click", (e) =>
-      act(path("/status"), e.target, { body: JSON.stringify({ status: "active" }) }));
+    if (reopen) reopen.addEventListener("click", async (e) => {
+      // THE SAME BUTTON ON A HELD BID, and one word of the prompt changes. The hold is a pause
+      // rather than a closure, so "Follow-up reminders start again" is already the whole of what
+      // this press does to it — the extra sentence just names the thing being cleared, because an
+      // estimator who pressed Hold four months ago is looking for confirmation that THAT is what is
+      // coming off. DETAIL_CACHE rather than a `data` argument: this wiring is handed the proposal
+      // only, and openDetail fills the cache before it ever renders (the won control's repaint
+      // relies on the same thing two blocks down).
+      const held = sentHold(p, DETAIL_CACHE[pid]);
+      if (!(await confirmBringBack(p, held ? "That also lifts the hold." : ""))) return;
+      // THE DRAFT ROUTE, not the portal's own `/status` this used to call, and the reason is the
+      // won mark. A job can be marked won (which lives on OUR blob) and then closed lost (which
+      // for a sent project lives in the PORTAL), and it reads as Lost only — so reopening just the
+      // portal row would move the card straight onto the Won tab. `bring_back` clears our marks
+      // and forwards `active` to the portal itself: one press, both stores, and both legs
+      // idempotent so a failure is fixed by pressing it again.
+      //
+      // AND `active` IS WHAT CLEARS A HOLD: the portal's own handler calls resume_followups there,
+      // which nulls followup_paused_until. That is why a held bid can share this button rather than
+      // needing a route of its own — the pause is the only thing on the row that a hold set.
+      act("/api/draft/" + encodeURIComponent(pid) + "/status", e.target,
+          { body: JSON.stringify({ status: "bring_back" }) });
+    });
 
     // Deliberately NOT through `act`, which every other control here uses. `act` refreshes by
     // re-fetching the PORTAL payload, and the Won mark is not in it — the drawer would repaint from
     // the stale board row and show "Mark won" on the project it had just marked, for the twelve
     // seconds until the next poll caught up. So this patches the board row (the client's one copy of
     // the mark, per the merge in renderDetail) and repaints from the cached payload.
-    wireWon(pid, (patch) => {
+    wireWon(pid, p, (patch) => {
       const r = ALL.find((x) => x.proposal_id === pid);
       if (r) Object.assign(r, patch);
       DRAWER_SIG = "";
@@ -2645,41 +2986,179 @@
     }
   }
 
-  /** Why we lost it. Free text would make the reasons uncountable, so this offers
-   *  the same six the customer's own form does — the two have to agree for a
-   *  "why do we lose bids?" question to have an answer. */
-  function lostReasonDialog(p, opts) {
+  /** How long a hold pauses the chasing for, on a project the customer HAS.
+   *
+   *  FOUR is the picker's open-ended top ("4+ months"), and it is the same number the backend uses
+   *  for the unsent half (HOLD_PAUSE_MONTHS in main.py) — test_close_out_family.py asserts the two
+   *  are equal, because a hold that paused a sent bid for four months and an unsent one for two
+   *  would be one feature behaving two ways for no reason a person could see. A hold has no date
+   *  on it: Kyle presses it when the GC has gone quiet indefinitely, so a shorter guess would
+   *  restart the chasing on a day nobody chose. */
+  const HOLD_MONTHS = 4;
+
+  /** THE CLOSE-OUT DIALOG. Why this bid is not going ahead, in Kyle's own words, and the sentence
+   *  that says what actually happened.
+   *
+   *  Hanz, 2026-08-20, with Kyle's screenshot: eight answers, and TWO OF THEM DO NOT CLOSE
+   *  ANYTHING. "Project on Hold" and "Small Bid <$25k - Pending" leave the card on the Active board
+   *  and pause the reminder emails. `C.closeOutcome` is what decides, so this dialog, the tool's
+   *  draft route and the portal's status route all read one answer from one place.
+   *
+   *  THE COMMENT IS REQUIRED, and it is the first required free-text field in this tool. Every
+   *  other note here is optional on purpose — the follow-up log says so in as many words ("A bare
+   *  'Call' with no note is still worth logging"). This one is different because a reason on its
+   *  own tells the next person nothing: by the end of a quarter "Not Low Bid" is eight identical
+   *  cards, and "we were 12% over Wilson on the pour" is the sentence the sales meeting is
+   *  actually held to read.
+   *
+   *  The house idiom for a field that must be filled, borrowed off the estimator picker two
+   *  sections down: the confirm button starts disabled, a sibling <p class="note"> says what is
+   *  wanted, and both `input` and `change` re-check. `input` alone misses a paste from the context
+   *  menu in some browsers; `change` alone leaves the button dead until the field blurs, which
+   *  reads as broken while you are still typing in it.
+   *
+   *  RESOLVES AN OBJECT — { reason, note, outcome } — or null when dismissed. It resolved a bare
+   *  reason string until 2026-08-20, and could not have done otherwise: there was one field. Both
+   *  callers still test the falsy answer first, so dismissing is unchanged; what they gained is
+   *  the branch on `outcome`, which is the whole of "those two do not close the job".
+   */
+  function closeOutDialog(p, opts) {
     // `unsent` swaps one sentence. "All follow-ups stop" is the reassurance that matters on a
     // proposal the customer has — and it is not true of a bid that was never sent, where nothing
     // was ever chasing. Promising to stop something that is not running reads as a system that
     // does not know its own state.
     const unsent = !!(opts && opts.unsent);
+    const name = p.project_name || "This project";
     return new Promise((resolve) => {
       const ov = document.createElement("div");
       ov.className = "inv-ov";
-      ov.innerHTML = `<div class="inv-dlg" role="dialog" aria-modal="true" aria-label="Mark closed lost">
-        <div class="inv-h">Mark this closed lost?</div>
-        <p class="inv-sub">${esc(p.project_name || "This project")} ${unsent
-          ? "moves to the Lost tab under the reason you pick. It was never sent, so nothing changes for the customer"
-          : "moves out of the pipeline and all follow-ups stop.\n          The customer is not emailed"}. You can reactivate it later.</p>
-        <label class="inv-f" style="text-transform:none;letter-spacing:0;font-size:12.5px">
+      ov.innerHTML = `<div class="inv-dlg" role="dialog" aria-modal="true" aria-label="Close this bid out">
+        <div class="inv-h">Close this bid out?</div>
+        <p class="inv-sub" data-sub></p>
+        <label class="inv-f co-f">
           <span>Why?</span>
-          <select data-why>${Object.keys(C.LOST_REASON).map((k) =>
-            `<option value="${esc(k)}">${esc(C.LOST_REASON[k])}</option>`).join("")}</select>
+          <select data-why>${C.CLOSE_CHOICES.map((c) =>
+            `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("")}</select>
         </label>
+        <label class="inv-f co-f">
+          <span>What happened? Required</span>
+          <textarea data-note rows="3" maxlength="2000"
+            placeholder="We were 12% over Wilson on the pour, GC said they would call us for phase 2."></textarea>
+        </label>
+        <p class="note co-err" data-err></p>
         <div class="inv-act">
           <button type="button" class="btn btn-s" data-x>Cancel</button>
-          <button type="button" class="btn btn-p" data-go>Mark closed lost</button>
+          <button type="button" class="btn btn-p" data-go disabled>Close it out</button>
         </div></div>`;
       document.body.appendChild(ov);
+      const sel = ov.querySelector("[data-why]");
+      const note = ov.querySelector("[data-note]");
+      const err = ov.querySelector("[data-err]");
+      const go = ov.querySelector("[data-go]");
+      const sub = ov.querySelector("[data-sub]");
+
+      /** Repaint the two things the answer changes: what this will do, and what the button says.
+       *  Called on every `change` of the select, so the copy can never describe the answer the
+       *  estimator had selected a moment ago. */
+      const paint = () => {
+        const hold = C.closeOutcome(sel.value) === "hold";
+        go.textContent = hold ? "Put it on hold" : "Close it out";
+        sub.textContent = hold
+          ? name + " stays on the Active board and the reminder emails pause for about "
+            + HOLD_MONTHS + " months. Nothing is sent to the customer. You can bring it back sooner."
+          : name + (unsent
+            ? " moves to the Lost tab under the reason you pick. It was never sent, so nothing"
+              + " changes for the customer."
+            : " moves out of the pipeline and all follow-ups stop. The customer is not emailed.")
+            + " You can bring it back later.";
+        // The required-field state, recomputed here as well as on input so switching the answer
+        // cannot leave a live button above an empty box.
+        const filled = !!note.value.trim();
+        go.disabled = !filled;
+        err.textContent = filled ? ""
+          : "Say what happened. One sentence is plenty, and it is the part the sales meeting reads.";
+      };
+      paint();
+
       const close = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
       const onKey = (e) => { if (e.key === "Escape") close(null); };
       document.addEventListener("keydown", onKey);
+      sel.addEventListener("change", paint);
+      note.addEventListener("input", paint);
+      note.addEventListener("change", paint);
       ov.querySelector("[data-x]").addEventListener("click", () => close(null));
       ov.addEventListener("click", (e) => { if (e.target === ov) close(null); });
-      ov.querySelector("[data-go]").addEventListener("click", () =>
-        close(ov.querySelector("[data-why]").value || "other"));
-      ov.querySelector("[data-why]").focus();
+      go.addEventListener("click", () => {
+        const text = note.value.trim();
+        // Checked again on the way out, not only on the way in. The button being disabled is a
+        // courtesy; this is the guard. A stray repaint, a browser that fires click on a disabled
+        // control, or a future keyboard shortcut all reach here, and the two backend routes 422
+        // an empty comment anyway — better to say so in the dialog than to bounce off the server.
+        if (!text) { paint(); note.focus(); return; }
+        // `|| "other"` for the same reason it was here before: a select with no value at all
+        // (which is what a browser gives for an empty <select>) must be a mis-click landing on
+        // Other, not a 422 the estimator has to decode.
+        const reason = sel.value || "other";
+        close({ reason, note: text, outcome: C.closeOutcome(reason) });
+      });
+      sel.focus();
+    });
+  }
+
+  /** WHERE THIS CARD WOULD LAND if its outcome were cleared, named the way the board names it.
+   *
+   *  Hanz, 2026-08-20: "there should be a prompt saying are they sure". A prompt that only asks
+   *  "are you sure?" is one nobody can answer — sure of WHAT? So the answer is computed, and
+   *  computed the only honest way: by running the board's own stage() over the row with the
+   *  outcome taken off it.
+   *
+   *  THAT WORKS BECAUSE NOTHING WAS OVERWRITTEN. Closing a job lost never touched a pipeline
+   *  timestamp — the portal's close_lost leaves approved_at, the deposit columns and the contacts
+   *  columns exactly as they were, and reopen_if_closed reads approved_at back to choose the status
+   *  it restores. So a card that stops being lost recomputes its own way to the furthest step it
+   *  genuinely reached, and there is deliberately no "remember the previous stage" field: that
+   *  would be a second source of truth for a question the stamps already answer, and it would be
+   *  wrong the first time a deposit landed while the job sat closed.
+   *
+   *  proposal_status is set to what the PORTAL will restore rather than blanked, because blanking
+   *  it would make stage() say "Sent" about a job the customer had signed. reopen_if_closed
+   *  restores 'approved' when approved_at survived and 'sent' otherwise; a synthesised not-sent row
+   *  has no portal status at all and stage() reads `not_sent` before any of this.
+   *
+   *  A DERIVED WIN SURVIVES THE CLEAR, so the answer has to be able to be a Won column. Clearing
+   *  won_at unmarks a by-hand win, but a job that is approved with the deposit settled is won by
+   *  the numbers (C.isWon) and belongs on the Won tab whatever anybody clears — telling the
+   *  estimator it was going back to "Contact info" would be a lie about a card they are about to go
+   *  looking for.
+   *
+   *  TWO FIELDS AND NO MORE. followup_state is left exactly as it is, and that is deliberate rather
+   *  than an omission: stage(), isWon() and wonColumn() read proposal_status, not_sent, the deposit
+   *  and contacts columns and won_at, and none of them touches followup_state - only lostReason,
+   *  pausedUntil, followupOff and stageTs do, and none of those is asked here. A copy that also
+   *  blanked closed_lost_reason and closed_at would be a line no test could tell from its absence,
+   *  which is how a reader comes to believe stage() reads a field it does not. */
+  function reopenDestination(p) {
+    const clean = Object.assign({}, p, {
+      proposal_status: p.not_sent ? "" : (p.approved_at ? "approved" : "sent"),
+      won_at: "",
+    });
+    return C.isWon(clean) ? "Won \u00B7 " + C.wonColumn(clean) : C.stage(clean);
+  }
+
+  /** The prompt. ONE helper for all three controls that put a card back, so the three cannot come
+   *  to describe the same act three different ways.
+   *
+   *  TW.confirmDanger rather than window.confirm, and rather than a fourth hand-rolled overlay: it
+   *  is what the delay and the deposit confirms in this same drawer already use, it traps focus
+   *  between its two buttons, and it focuses Cancel. `warn`, not `danger`: this undoes something
+   *  rather than destroying it. */
+  function confirmBringBack(p, extra) {
+    return TW.confirmDanger({
+      title: "Bring this back?",
+      before: "Put ", name: p.project_name || "this project",
+      after: " back under " + reopenDestination(p) + "?",
+      detail: "Follow-up reminders start again." + (extra ? " " + extra : ""),
+      confirmText: "Bring it back", cancelText: "Leave it", tone: "warn", icon: "\u21A9",
     });
   }
 
@@ -2821,7 +3300,11 @@
       ${renderSecTabs({ approved, depositDone, depositSubmitted, depositNotRequired,
                         contactsDone,
                         requested: !!p.deposit_requested_at, unread,
-                        lost: isLost(p), fuVal: followupState(p).val })}
+                        lost: isLost(p),
+                        // The HOLD is passed through here as well as inside the panel, so the tab
+                        // pill reads "On hold" rather than "Paused" on a bid a staff member held.
+                        // The pill is the only part of this state visible with the panel shut.
+                        fuVal: followupState(p, sentHold(p, data)).val })}
       <div class="dbody">
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
         ${customerHtml(p)}

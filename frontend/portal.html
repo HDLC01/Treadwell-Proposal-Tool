@@ -481,6 +481,27 @@
   .inv-f input:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
   .inv-act { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
   @media (max-width:560px) { .inv-grid { grid-template-columns:1fr; } }
+  /* The close-out dialog. Shares .inv-* with the invoice review above: same overlay, same card,
+     same z-index above the drawer that opened it. These four rules are the parts an invoice form
+     never needed — a select, a textarea, and the required-field line under them. */
+  .co-f { text-transform:none; letter-spacing:0; font-size:12.5px; margin-top:12px; }
+  .co-f select, .co-f textarea { font:400 14px system-ui; color:var(--ink);
+    padding:8px 10px; border:1px solid var(--line); border-radius:7px; width:100%;
+    background:#fff; }
+  .co-f textarea { resize:vertical; min-height:66px; }
+  .co-f select:focus, .co-f textarea:focus { outline:none; border-color:var(--red);
+    box-shadow:0 0 0 1px var(--red); }
+  /* The one required field in this tool, so the line under it has to read as an instruction
+     rather than as help text nobody looks at. Empty most of the time; it has no height then. */
+  .co-err { color:var(--red); font-weight:600; margin:8px 0 0; min-height:0; }
+  /* A card button mid-save. The board repaints every 25s and these two buttons are the only
+     controls on it that outlive a click, so they need a disabled look of their own. */
+  .deal-act:disabled { opacity:.55; cursor:default; }
+  /* What somebody wrote when they closed a bid out, quoted back in the drawer. Set off by a rule
+     rather than a box: it is one sentence in a panel that is already all small grey text, and it
+     is the only part of that panel a person wrote by hand. */
+  .ns-why { border-left:2px solid var(--line); padding-left:9px; font-style:italic;
+    color:var(--ink); }
 </style>
 </head>
 <body>

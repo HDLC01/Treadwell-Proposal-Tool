@@ -5,6 +5,14 @@ name: CI
 # merge — so we don't ALSO run on arbitrary branch pushes (avoids double runs on
 # PR branches). The suite is hermetic (auth + Supabase stubbed, LibreOffice
 # mocked) — no secrets needed.
+#
+# ONE EXCEPTION TO "hermetic", added 2026-08-21: the job also checks out the
+# CUSTOMER PORTAL. backend/tests/test_close_reason_vocabulary.py compares the
+# close-out vocabulary across the two repositories, and until now it could not:
+# with a single checkout its four cross-repo tests hit their skipif on every run,
+# so a tool-only merge went green while the comparison that would have blocked it
+# never executed. It only ever protected the dev box, where both clones sit side
+# by side. Still no secret involved — see the checkout step.
 on:
   push:
     branches: [main, staging]
@@ -22,6 +30,30 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+
+      # ── the sibling checkout the cross-repo close-out guard needs ─────────
+      # NO CREDENTIAL IS REQUIRED. HDLC01/Treadwell-Portal is a PUBLIC repo, so the
+      # built-in GITHUB_TOKEN actions/checkout already uses can read it; a PAT or a
+      # deploy key would only be needed if the portal were made private, and if that
+      # ever happens the guard at the bottom of test_close_reason_vocabulary.py turns
+      # red rather than going quiet, which is the point of it.
+      #
+      # `main`, deliberately, because main is what the portal DEPLOYS from: the
+      # question this comparison asks is "does my change agree with the portal that
+      # is live", not "with some branch". The consequence is that the portal's half
+      # of a shared change has to merge FIRST or this job is red — which is the
+      # merge order README.md documents, enforced instead of remembered.
+      #
+      # `path:` has to stay inside the workspace (actions/checkout refuses a path
+      # above it), so the convention the test file otherwise relies on — the two
+      # clones as siblings — is supplied by TW_PORTAL_REPO on the test step instead.
+      # Nothing in the suite globs the repo root, so an extra directory here is inert.
+      - name: Check out the customer portal beside this repo
+        uses: actions/checkout@v7
+        with:
+          repository: HDLC01/Treadwell-Portal
+          ref: main
+          path: portal
 
       - uses: actions/setup-python@v7
         with:
@@ -45,6 +77,12 @@ jobs:
       #
       # --durations comes from backend/pytest.ini, so every run names its own slowest tests.
       - name: Run tests
+        env:
+          # Where the step above put the portal. Without this the cross-repo tests look for
+          # a sibling directory that does not exist on a runner, skip, and the guard fails
+          # the job — which is the designed outcome, but the job is meant to be GREEN and
+          # actually comparing, not red.
+          TW_PORTAL_REPO: ${{ github.workspace }}/portal
         run: python -m pytest tests/ -q -n auto --dist loadfile
 
   audit:

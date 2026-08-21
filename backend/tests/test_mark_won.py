@@ -332,8 +332,18 @@ def _api(monkeypatch, seen):
     monkeypatch.setattr(main, "_user_email", lambda request: "hanz@wetreadwell.com")
     monkeypatch.setattr(main.drafts, "set_won",
                         lambda pid, won, actor: (seen.append((pid, won, actor)), True)[1])
+    # `note` is keyword-only in practice — the route passes it by name — and it arrived on
+    # 2026-08-20 with the required comment. Spelled out here rather than swallowed by `*a`, so a
+    # route that stopped forwarding it fails in this file too.
     monkeypatch.setattr(main.drafts, "set_close_lost",
-                        lambda pid, reason, actor: (seen.append((pid, reason, actor)), True)[1])
+                        lambda pid, reason, actor, note=None:
+                        (seen.append((pid, reason, actor)), True)[1])
+    monkeypatch.setattr(main.drafts, "clear_outcome",
+                        lambda pid, actor: (seen.append((pid, "CLEARED", actor)), True)[1])
+    # `bring_back` asks whether the project was ever sent before deciding to forward `active` to
+    # the portal. Stubbed to "never sent", so the second leg is out of this file's way — the
+    # forwarding is test_not_sent_lost.py's and test_bring_back's business, not the won mark's.
+    monkeypatch.setattr(main.drafts, "latest_revision_no", lambda pid: None)
 
 
 def test_the_route_marks_it_won(monkeypatch):
@@ -365,9 +375,15 @@ def test_winning_needs_no_approval_and_no_reason(monkeypatch):
 
 
 def test_clearing_won_is_not_the_same_call_as_reopening_a_lost_bid(monkeypatch):
-    """The clearing-status decision, pinned. `active` is the Reactivate button's word for "this bid
-    is live again" and must not also erase a won mark: one call doing both would write the blob twice
-    and log a "reactivated" event for a project nobody had ever closed."""
+    """The clearing-status decision, pinned. `active` is the narrow reopen and must not also erase a
+    won mark: one call doing both would write the blob twice and log a "reactivated" event for a
+    project nobody had ever closed. `not_won` is the other narrow one, and does not reopen.
+
+    THE COMBINED CLEAR IS A THIRD STATUS, `bring_back`, added 2026-08-20 (Hanz: "there should be an
+    option to bring it back to its latest step in the CRM"). It exists because a job marked won and
+    THEN closed lost reads as Lost only, so an undo that clears one mark leaves the card on the
+    other tab. That is one act and one write — drafts.clear_outcome — which is why it shows up here
+    as neither set_won nor set_close_lost. The two narrow undos stay: each says what it undid."""
     seen = []
     _api(monkeypatch, seen)
     client.post("/api/draft/d1/status", json={"status": "active"})
@@ -377,6 +393,10 @@ def test_clearing_won_is_not_the_same_call_as_reopening_a_lost_bid(monkeypatch):
     client.post("/api/draft/d1/status", json={"status": "not_won"})
     assert seen == [("d1", False, "hanz@wetreadwell.com")], (
         "clearing the won mark also reopened a bid nobody had closed")
+    seen.clear()
+    client.post("/api/draft/d1/status", json={"status": "bring_back"})
+    assert seen == [("d1", "CLEARED", "hanz@wetreadwell.com")], (
+        "bringing a bid back went through one of the narrow undos, so the other mark survives")
 
 
 def test_a_status_nobody_defined_is_refused(monkeypatch):

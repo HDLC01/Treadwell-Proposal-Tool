@@ -24,6 +24,11 @@
       // as closed_lost — one says "nobody has decided yet", the other says "we lost it".
       won:"marked won", not_won:"cleared the won mark on",
       closed_lost:"closed as lost", reactivated:"reopened",
+      // On hold is NOT a loss. Two of the eight answers on the close-out list pause a bid and
+      // leave it on the Active board (2026-08-20), and a feed that called that "closed as lost"
+      // would report a live bid dead. `brought_back` is the one undo that clears every mark at
+      // once, which is why it is not spelled "reopened" — that word is taken by the narrow one.
+      on_hold:"put on hold", brought_back:"brought back into the pipeline",
       // Filing and paperwork.
       to_dropbox:"filed to Dropbox", info_sheet_generated:"generated the info sheet for",
       email:"emailed",
