@@ -1173,6 +1173,13 @@ button {
   left: 0;
   top: 0;
 }
+/* An EMPTIED bulleted line keeps no square, on screen as in the file. `.tw-empty` used to only
+   reserve a line's height, so clearing a WORK row left a lone red square floating in the
+   preview; the generated .docx printed one too, from the numbering the emptied paragraph still
+   carried. Both halves drop it now (proposal_writer._apply_paragraph_overrides calls
+   _strip_bullet on a blank override, the same rule a blank NOTES item already followed), so the
+   preview shows what prints. Two classes, so this outranks `.tw-li::before`. */
+.tw-block.tw-empty.tw-li::before { content: none; }
 /* PRICE lines read FLUSH-LEFT with NO bullet — the generated .docx flattens the
    numId=3 PRICE list at generate time (_flatten_price_bullets, per Kyle), so the
    on-screen preview must match: no red square, no hanging indent. */
@@ -1285,6 +1292,16 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   color: var(--treadwell-red-dark);
 }
 .tw-fmtbar button[data-fmt="reset"] { font-size: 12px; color: var(--ink-variant); }
+/* Paragraph controls: the bullet toggle and the two indent steps. They share the bar's button
+   styling; only the glyphs need help, because a small filled square and two arrows read as noise
+   at the size the B / I / U letters use. The square is the template's own list colour, so the
+   button looks like the thing it turns on and off. AFTER `.tw-fmtbar button.on` and at the same
+   specificity, so the pressed state needs its own rule to win back the darker red. */
+.tw-fmtbar button[data-para] { font-size: 15px; line-height: 1; }
+.tw-fmtbar button[data-para="bullet"] { color: #a71320; }
+.tw-fmtbar button[data-para="bullet"].on { color: var(--treadwell-red-dark); }
+/* Outdent at the margin, indent at the clamp: still visible, plainly not pressable. */
+.tw-fmtbar button[data-para]:disabled { opacity: 0.38; cursor: default; }
 .tw-fmtbar select {
   height: 26px;
   border: 1px solid var(--surface-dim);

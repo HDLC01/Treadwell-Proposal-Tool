@@ -127,14 +127,32 @@ def test_the_panel_renders_one_row_per_tab_with_the_right_ticks(ran, role):
 
     Kills the panel rendering the matrix it was handed and then ticking the wrong column — a
     transposed loop reads fine in the source and is nonsense on screen.
+
+    THE PANEL IS THE MENU PLUS THE TABS THAT ARE GATED WITHOUT BEING DRAWN. navMatrix() with no
+    argument is the menu, tab for tab, and stays that (test_nav_permissions_ui.py owns that seam);
+    the panel asks it about a POLICY, which also carries nav_access.NO_SIDEBAR_TABS. So the menu
+    rows are compared in order and the extra rows are compared as a set — no more, no fewer, which
+    is what stops the panel growing a row nothing governs.
     """
+    import nav_access
+    rowless = set(nav_access.NO_SIDEBAR_TABS)
     rows = ran["panel"][role]
-    assert [r["href"] for r in rows] == [r["href"] for r in ran["matrix"]["rows"]]
+    menu = [r for r in rows if r["href"] not in rowless]
+    assert [r["href"] for r in menu] == [r["href"] for r in ran["matrix"]["rows"]]
+    assert {r["href"] for r in rows} - {r["href"] for r in menu} == rowless, (
+        "the panel's extra rows are not the gated-but-undrawn tabs: %s"
+        % sorted({r["href"] for r in rows} - {r["href"] for r in menu}))
     # "Leads &amp; bids" on the way through the markup — the entity is the panel escaping its own
     # output, which is correct; compare the text.
     unesc = lambda s: s.replace("&amp;", "&")           # noqa: E731
-    assert [unesc(r["section"]) for r in rows] == [r["section"] for r in ran["matrix"]["rows"]], (
+    assert [unesc(r["section"]) for r in menu] == [r["section"] for r in ran["matrix"]["rows"]], (
         "the rows carry the wrong section headings")
+    sections = {r["section"] for r in menu}
+    for r in rows:
+        if r["href"] in rowless:
+            assert r["section"] in sections, (
+                "%s is filed under %r, which is not a section of this menu"
+                % (r["href"], r["section"]))
     # The section column prints once per group. Kills the off-by-one that blanks the FIRST row of
     # each section instead of the repeats, which loses every heading.
     for i, r in enumerate(rows):
@@ -217,10 +235,17 @@ def test_the_summary_line_is_computed_from_the_rows(ran):
     """The header count and the sentence beneath the table have to move with the data, because a
     typed "only the Admin tab differs" is a claim that rots quietly.
     """
+    import nav_access
     html = ran["panelHtml"]["admin"]
     total = len(ran["matrix"]["rows"])
     member = len(ran["renderedEntries"]["user"])
-    assert "%d sidebar tabs" % total in html, html[:400]
+    # "sidebar tabs" was true until a tab could be governed without being drawn. The header counts
+    # ROWS, and NO_SIDEBAR_TABS has no sidebar row, so the word came out and the count grew; the
+    # panel names those tabs instead of absorbing them. test_nav_permissions_ui.py owns the wording
+    # in every one of the three states this panel has.
+    assert "%d tabs" % (total + len(nav_access.NO_SIDEBAR_TABS)) in html, html[:400]
+    assert "sidebar tabs" not in html, (
+        "the header counts a tab with no sidebar row among the sidebar tabs")
     assert re.search(r"1\s+differs by role", html), "the header does not count the differing rows"
     assert "Members see %d of the %d tabs" % (member, total) in re.sub(r"\s+", " ", html), (
         "the summary does not count what a member actually sees")

@@ -783,11 +783,11 @@
     // not exist yet says so in the panel, which is a fact about the project rather than an empty
     // box that reads as broken.
     const nsTabs = `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("chat", "Chat", { val: "—", hint: "Opens when the customer can see the proposal" }) +
       secTab("proposal", "Proposal", { val: "Not sent",
         hint: "Customer, estimator, who hears about it when it goes out" }) +
       secTab("deposit", "Deposit", { val: "—", hint: "Nothing until the customer approves" }) +
       secTab("contacts", "Contacts", { val: "—", hint: "The customer supplies these after approving" }) +
-      secTab("chat", "Chat", { val: "—", hint: "Opens when the customer can see the proposal" }) +
       secTab("followup", "Follow-up", { val: "Off", hint: "Chasing starts when you send it" }) +
       `</div>`;
     // These sections carry `dsec-ns-*` ids, deliberately outside ALL_SEC_CARDS: applySecPanel's
@@ -847,9 +847,14 @@
           <div id="ns-nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
           <p class="note" id="ns-nt-note"></p>
         </div>
+        <!-- Info sheet, next to the other two ways out of this drawer. Hanz, 2026-08-20: "Move the
+             info sheet button inside proposals tab." The URL is the one the card and the Proposals
+             Database already use, character for character, because two spellings of one route is
+             how one of them rots (test_board_is_the_main_tab.py holds the other end). -->
         <div class="sec row3">
           <button type="button" class="btn btn-p" data-go-files>Open the files</button>
           <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
+          <button type="button" class="btn btn-s" data-go-info>Info sheet</button>
         </div>
        </div>
 
@@ -935,9 +940,27 @@
       () => go("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
     d.querySelector("[data-go-edit]").addEventListener("click",
       () => go("/?d=" + encodeURIComponent(pid) + "&edit=1"));
-    // Land on Proposal, and paint the strip so one tab reads as selected. Without this the five
+    d.querySelector("[data-go-info]").addEventListener("click",
+      () => go("/info-sheet.html?d=" + encodeURIComponent(pid)));
+    // Land on Chat, and paint the strip so one tab reads as selected. Without the apply the five
     // tabs render with nothing active and every panel visible at once — the strip has to be applied,
     // not merely present.
+    //
+    // THE SAME RULE THE SENT DRAWER USES, for the one input this drawer can ever have: no thread.
+    //
+    // This line read `ACTIVE_SEC = "chat"` for a day, which put the unsent drawer on the only tab
+    // it CANNOT fill. There is no portal row here, so there is no conversation, and the Chat panel
+    // above is one paragraph explaining that. Hanz asked to land where the conversation is, not to
+    // land on an empty box, so restingSection's answer for an empty thread is what belongs here:
+    // Proposal, which carries the customer, the estimator, the bid, the notification picker and
+    // the three ways out of this drawer.
+    //
+    // WRITTEN OUT rather than calling restingSection, and that is a real trade: two other node
+    // harnesses lift renderNotSent on its own, so a call to a function they do not lift is a
+    // ReferenceError for this whole panel rather than a wrong tab. The guard against the two
+    // renderers drifting apart again is therefore a test, not the call: test_drawer_chat_default
+    // asserts this drawer's landing tab EQUALS restingSection's answer for an empty thread, so
+    // changing one without the other fails.
     if (!SEC_TABS[ACTIVE_SEC]) ACTIVE_SEC = "proposal";
     applySecPanel();
     wireNotSentAssign(pid, row);
@@ -1278,15 +1301,20 @@
   // state, ACTIVE_SEC says which tab is ON SCREEN. Only applySecPanel() reads
   // both and touches visibility — nothing else may.
   const SEC_TABS = {
+    // CHAT IS FIRST, on purpose. Hanz, 2026-08-21: "move that tab to the leftmost and make it a
+    // different color tab I guess so its just intuittive to always look there". The conversation
+    // is the thing a rep needs most often, so it gets the position the eye lands on and a tint of
+    // its own (portal.html, `.dtabs .step[data-sec="chat"]`). Key order here is what the strips and anything deriving the
+    // tab list from the product both read, so it is changed HERE rather than only in the markup.
+    chat:     ["dsec-chat"],
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
-               "dsec-revisions"],
+               "dsec-revisions", "dsec-files"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
     // button and its customer email included: Treadwell books the date on the phone and the
     // customer hears it there, so the app had a status, a tile and a notification all restating
     // a call that had already happened. schedule_status stays in the database untouched.
-    chat:     ["dsec-chat"],
     followup: ["dsec-followup"],
   };
   const ALL_SEC_CARDS = Object.values(SEC_TABS).flat();
@@ -1390,6 +1418,27 @@
     });
   }
 
+  /** Where a drawer lands when nothing is waiting on a human.
+   *
+   *  Chat when there is a conversation to read, Proposal when there is not. Hanz, 2026-08-20: "In
+   *  the opening of a project, Chat should be the tab thats the first to appear." The intent is to
+   *  land where the conversation is, and on a project with no thread that intent lands the rep on
+   *  the one panel with nothing in it: a bid nobody has sent has no messages at all, so its Chat
+   *  panel is a single paragraph saying so.
+   *
+   *  ASKED OF THE THREAD, not of which drawer is painting: defaultSection ends in this with the
+   *  messages it is about to show, so a SENT project whose customer has never written also lands on
+   *  Proposal instead of on "No messages yet." A test of NS_MODE would have answered only for the
+   *  unsent half and left that one wrong. (renderNotSent writes the empty-thread answer out; the
+   *  note there says why, and a test pins the two together.)
+   *
+   *  `thread` is the thread AS RENDERED, view card included, so a project whose only entry is
+   *  "The customer opened the proposal" counts as having something to read. That is news, and it
+   *  is the reason Hanz asked for the bubble. */
+  function restingSection(thread) {
+    return (thread && thread.length) ? "chat" : "proposal";
+  }
+
   /** Which tab to open on. Answers "why is this drawer open?" — the two
    *  commonest answers, a customer message and a payment, come first.
    *
@@ -1398,7 +1447,7 @@
    *  open (closeDrawer clears ACTIVE_SEC). Deliberately no per-project memory:
    *  remembering the last tab would permanently defeat this routing, since the
    *  board is one session a rep keeps open all day. */
-  function defaultSection(p, unread) {
+  function defaultSection(p, unread, thread) {
     if (ACTIVE_SEC) return ACTIVE_SEC;
     if (unread > 0) return "chat";
     if (p.deposit_status === "submitted") return "deposit";        // money in, unconfirmed
@@ -1406,7 +1455,18 @@
     // to action there. Contacts/schedule is the real next step.
     if (p.proposal_status === "approved" && !p.deposit_requested_at
         && p.deposit_required !== false) return "deposit";
-    return "proposal";
+    // THE CONVERSATION IS THE RESTING TAB when there is one, not Proposal. Hanz, 2026-08-20: "In
+    // the opening of a project, Chat should be the tab thats the first to appear." The conversation
+    // is what somebody opening a project wants to read: what was said, what was asked, whether they
+    // opened it. Proposal is reference material you go to deliberately. The three answers above
+    // still win, because each of them names something waiting on a human.
+    //
+    // It costs nothing: applySecPanel shows the chat panel out of the payload the drawer already
+    // fetched (the thread ships in /api/portal/proposal/<id>) and DEFERS the Proposal tab's two
+    // requests, loadNotifyChips and loadRevisions, until that tab is actually opened.
+    //
+    // An EMPTY thread is the exception, and restingSection is where that lives.
+    return restingSection(thread);
   }
 
   /** Per-project notification chips: who receives THIS project's emails.
@@ -1637,13 +1697,13 @@
       : (s.approved && !s.requested) ? { needs: true, val: "Send request" }
       : { val: s.requested ? "Requested" : "Pending" };
     return `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
+        badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
       secTab("proposal", "Proposal", { done: s.approved, val: s.approved ? "Approved" : "Awaiting",
         hint: "Customer, approval, notification recipients" }) +
       secTab("deposit", "Deposit", Object.assign({ hint: "Invoice, what the customer submitted, mark received" }, dep)) +
       secTab("contacts", "Contacts", { done: s.contactsDone, val: s.contactsDone ? "Received" : "Pending",
         hint: "Project contacts the customer supplied" }) +
-      secTab("chat", "Chat", { needs: s.unread > 0, val: s.unread > 0 ? s.unread + " unread" : "Open",
-        badge: s.unread > 0 ? s.unread : "", hint: "Conversation with the customer" }) +
       // Closed-lost is "done" in the sense the tab means it: nothing left to chase.
       // Paused isn't flagged either — the customer asked for the quiet.
       secTab("followup", "Follow-up", { done: s.lost, val: s.fuVal,
@@ -2128,6 +2188,65 @@
     }).join("")}</div>`;
   }
 
+  /** "The customer opened the proposal" as a thread card, SYNTHESISED FROM THE TIMESTAMPS.
+   *
+   *  Hanz, 2026-08-20: "If the customer views it why is there no chat bubble like The customer has
+   *  viewed it in this chatbox?"
+   *
+   *  It was never a filtering bug — this drawer already asks the portal for the internal cards
+   *  (its detail route passes include_internal=True). The portal DOES write a staff-only view card,
+   *  but only on a literal sent -> viewed transition: db.mark_viewed returns true for that one row
+   *  state, so a project the customer opened BEFORE that feature shipped has no card and can never
+   *  get one without a re-send. The row that prompted this was sent 20:33 and viewed 20:36 on
+   *  2026-08-18; the card shipped on 2026-08-19.
+   *
+   *  So the DISPLAY stops depending on a one-shot event. `viewed_at` is written by every view
+   *  (coalesced to the first) and cannot be missed, which makes it the honest thing to render from,
+   *  and it also covers a transition lost to a crash, a re-send, or two tabs racing.
+   *
+   *  ONE BUBBLE, NEVER TWO: a stored card wins and this returns the thread untouched. Preferring
+   *  the stored one keeps the name of whoever opened it ("Dave opened the proposal.") — which the
+   *  timestamps do not carry — along with its id, author and meta. The detector is `meta.view`,
+   *  which is what the portal stamps on that row and on nothing else.
+   *
+   *  DATED BY THE FIRST VIEW, which is both the newsworthy one and the one that puts the card where
+   *  it belongs in the conversation. A later re-read is a footnote on the same card ("last opened
+   *  …") rather than a second card: a customer who leaves the tab open would otherwise push a fresh
+   *  bubble into the thread on every poll. */
+  function withViewCard(msgs, p) {
+    const list = msgs || [];
+    const first = (p && p.viewed_at) || "";
+    if (!first) return list;                                        // nobody has opened it
+    if (list.some((m) => m && m.meta && m.meta.view)) return list;   // the portal wrote a real one
+    const last = (p && p.last_viewed_at) || "";
+    // Compared as RENDERED, not as raw stamps: last_viewed_at moves on every open, so a customer
+    // reloading twice inside a minute would otherwise get a hint repeating the date beside it.
+    const again = last && when(last) !== when(first);
+    const card = {
+      msg_type: "system",
+      // The same shape as the portal's own card, author_kind included, so the two are
+      // indistinguishable on screen — sideOf puts both on the staff side.
+      author_kind: "staff",
+      meta: { view: true, synthetic: true },
+      // " — " is what splitSystem cuts on: heading, then the date under it. A CARD carries no
+      // timestamp of its own in this thread (msgHtml dates bubbles only), so the date has to be in
+      // the body or the card would not say when.
+      body: "The customer opened the proposal — " + when(first)
+            + (again ? " · last opened " + when(last) : ""),
+      created_at: first,
+    };
+    // Placed at its chronological slot, and INSERTED rather than sorted: re-sorting would reorder
+    // rows the portal returned in its own order, including any with no created_at at all.
+    // Date.parse rather than a string compare, because these stamps are isoformat() out of
+    // Postgres and reach us as both "…Z" and "…+00:00".
+    const at = (v) => { const t = Date.parse(v || ""); return isNaN(t) ? 0 : t; };
+    const ts = at(first);
+    const i = list.findIndex((m) => at(m && m.created_at) > ts);
+    const out = list.slice();
+    out.splice(i < 0 ? out.length : i, 0, card);
+    return out;
+  }
+
   function msgHtml(m) {
     const t = when(m.created_at);
     // These three render as CARDS, matching the customer portal exactly, so staff
@@ -2593,7 +2712,6 @@
     const msgs = (data.messages && data.messages.length)
       ? data.messages
       : (data.questions || []).map((q) => Object.assign({ msg_type: "text" }, q));
-    const thread = msgs.map(msgHtml).join("") || '<p class="note">No messages yet.</p>';
 
     const contacts = contactsHtml(data.contacts);
 
@@ -2616,6 +2734,26 @@
     // as long as the drawer stays open. Mutating `p` before the signature is what makes the mark
     // part of it — so a colleague's mark repaints this panel on the next poll.
     if (row) p.won_at = row.won_at || "";
+    // The view stamps, read the same way and for the same reason: the staff detail payload has
+    // no viewed_at/last_viewed_at on `proposal` (checked against the portal's own handler), the
+    // BOARD list endpoint serves both, and the thread's "they opened it" card below is rendered
+    // from them. The row WINS when it has a value rather than filling a gap, with the payload's own
+    // field as a fallback so this keeps working if the portal ever starts serving one.
+    //
+    // ONLY `viewed_at` GOES ONTO THE PAYLOAD, and the asymmetry is the fix for a bug this merge
+    // caused. Merging it before the signature is what makes a first view repaint an open drawer,
+    // exactly as the won mark does, and a first view is news: it draws the bubble.
+    if (row) p.viewed_at = row.viewed_at || p.viewed_at || "";
+    // `last_viewed_at` stays a LOCAL, out of `data` and therefore out of the signature below. The
+    // portal stamps it on every customer view, so it moves whenever a customer merely reloads the
+    // page they were already sent. While it lived on `p` the 12s poll rebuilt the whole drawer for
+    // that re-read: thread, tab strip, and the reply box with whatever a rep was half way through
+    // typing in it. The footnote it feeds ("last opened …") is the only thing that reads the
+    // proposal-level stamp, and it catches up on the next repaint something a human is waiting on
+    // earns. (The per-RECIPIENT stamps in data.recipient_activity are a separate set of fields and
+    // are still in the signature, so a re-read by a named contact can still cost a repaint. That
+    // one is older than this drawer and wants the portal's payload pinned down first.)
+    const lastViewed = (row && row.last_viewed_at) || p.last_viewed_at || "";
 
     // Nothing changed? Leave the DOM alone. This is the guard that makes the 12s drawer poll
     // invisible: without it every tick destroyed the thread, the tab strip and every card, and
@@ -2625,6 +2763,12 @@
     // can move while the proposal itself is unchanged — and it drives the Chat badge. ACTIVE_SEC
     // deliberately is NOT: switching tabs only toggles classes, it never re-renders, so putting
     // it here would repaint the whole drawer on every tab click.
+    //
+    // WHAT IS NOT IN IT, on purpose: `lastViewed`. It is a local rather than a field on `data` for
+    // exactly this reason (see the note on the merge above). A customer re-reading the proposal is
+    // not a change anybody is waiting on, and while that stamp was in here it cost the rep with the
+    // drawer open their caret and their scroll position on the next poll after every re-read.
+    // `viewed_at` IS in, through `data`: the first open draws the bubble.
     const sig = JSON.stringify([pid, data, unread]);
     if (sig === DRAWER_SIG) return;
     DRAWER_SIG = sig;
@@ -2635,6 +2779,20 @@
     // in the signature above, so a recipient being added repaints on its own.
     DETAIL_RECIPIENTS = (data && data.recipients) || [];
 
+    // The thread, built HERE rather than at the top of this function, for two reasons. msgHtml
+    // reads DETAIL_RECIPIENTS (the line above) to decide whether to name the author, and it reads
+    // the view stamps read above. `unread` is still counted off the raw `msgs`, so the synthesised
+    // card below can never move the Chat badge.
+    //
+    // Two details in one line below. The stamps are handed over as their own object rather than as
+    // `p`, because one of the two deliberately never reached `p` (the signature note above says
+    // why) and withViewCard wants both. And the ARRAY is kept, not only the markup: defaultSection
+    // asks whether the thread has anything in it before deciding that Chat is worth landing on, and
+    // "as rendered" has to mean the same list the panel below shows, view card included.
+    const threadMsgs = withViewCard(msgs, { viewed_at: p.viewed_at, last_viewed_at: lastViewed });
+    const thread = threadMsgs.map(msgHtml).join("")
+      || '<p class="note">No messages yet.</p>';
+
     // Where the chat was, before the innerHTML below detaches it. Must happen here rather than
     // in the caller: renderDetail is the only place that destroys #thread, and every path
     // through it — poll, action, reply, chip toggle — needs the position kept.
@@ -2643,7 +2801,7 @@
       ? { top: t0.scrollTop, atBottom: t0.scrollHeight - t0.scrollTop - t0.clientHeight < 40 }
       : null;
 
-    ACTIVE_SEC = defaultSection(p, unread);
+    ACTIVE_SEC = defaultSection(p, unread, threadMsgs);
 
     // What the head says on every tab: who it is for, and what it is worth. `row` (above) is the
     // only place a total exists before approval — the drawer payload has no such field — and the
@@ -2687,6 +2845,21 @@
           <p class="note">Each send pins the estimate as it was, so an old version stays readable
           even after the draft moves on.</p>
           <div id="rev-list"><span class="note">Loading…</span></div>
+        </div>
+
+        <!-- The files and the hand-off sheet, ON A SENT PROJECT TOO. Hanz, 2026-08-20: "Move the
+             info sheet button inside proposals tab."
+             This panel had NEITHER control. The not-sent drawer has had "Open the files" since it
+             shipped, and a sent project reached its files only from the board card, so moving the
+             card's buttons into the drawer without adding them here would have left every project
+             the customer has actually seen with no route to its estimate, its proposal or its Info
+             Sheet at all. Same two URLs as the card and the Proposals Database, character for
+             character.
+             NB no em dash in this comment: test_drawer_renders.py greps the whole panel, comments
+             included. -->
+        <div class="sec row3" id="dsec-files">
+          <button type="button" class="btn btn-s" id="go-files">Open the files</button>
+          <button type="button" class="btn btn-s" id="go-info">Info sheet</button>
         </div>
        </div>
 
@@ -2745,6 +2918,15 @@
     setSecEligible("dsec-recipients", ((data.recipient_activity || []).length > 1));
     setSecEligible("dsec-approved", !!a);
     setSecEligible("dsec-notify", true);
+    // Sent versions. This call was MISSING from the day the card shipped (2026-08-19), so the card
+    // was in SEC_TABS, rendered into the Proposal panel, fetched by applySecPanel, painted by
+    // paintRevisions, and hidden by applySecPanel on every single render: SEC_ELIGIBLE never held
+    // its id, and the two conditions are ANDed. Nobody had ever seen "Sent versions". Always
+    // eligible, like the files card below it: every sent project has a version history, and a
+    // project sent before revisions existed says so in the panel.
+    setSecEligible("dsec-revisions", true);
+    // Always: every project has files and an info sheet, sent or not, won or lost.
+    setSecEligible("dsec-files", true);
     setSecEligible("dsec-deposit", true);
     setSecEligible("dsec-contacts", true);
     setSecEligible("dsec-chat", true);
@@ -2753,6 +2935,13 @@
     const d = $("drawer");
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
     wirePortalLink(d);
+
+    // The two ways out of this drawer to the paperwork. The same URLs the board card, the
+    // Proposals Database and the not-sent drawer use, character-for-character.
+    $("go-files").addEventListener("click",
+      () => window.location.assign("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
+    $("go-info").addEventListener("click",
+      () => window.location.assign("/info-sheet.html?d=" + encodeURIComponent(pid)));
 
     // Reveal / re-hide a full account number. The value lives in `acctFull`, so it
     // only reaches the DOM when a human asks for it — and goes back on a second click.

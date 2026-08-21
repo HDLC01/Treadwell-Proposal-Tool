@@ -1380,6 +1380,11 @@
   const blockById     = new Map();   // id -> block record
   const pristineById  = new Map();   // id -> plain-text pristine rendering
   const artUrlCache   = new Map();   // media name -> object-URL promise
+  // Paragraph properties the estimator has changed: id -> {bullet, indent} in TWIPS, the same
+  // unit the backend reads. Only DIFFERENCES live here; the template's own state comes from
+  // blockById.get(id).para, so an untouched paragraph ships nothing and generates the file it
+  // always generated.
+  const paraById      = new Map();   // id -> {bullet, indent} the estimator set
 
   // Box layout the estimator dragged — see "dragging and resizing a text box" below.
   // boxDesign is the template's own geometry (the thing Reset goes back to); boxOverrides holds
@@ -1884,6 +1889,122 @@
     }));
   }
 
+  // ── Paragraph properties: the bullet, and the indent ───────────────────────
+  // Kyle, 2026-08-20, on the proposal editor:
+  //   "I cant dletet the bullet points"
+  //   "There is indentation in this but I cant remove tat if I want to to be aligned on the
+  //    polished concrete?"
+  //
+  // Both are Word PARAGRAPH properties (w:numPr and w:ind), which the format bar has never been
+  // able to reach: it rewrites RUNS. The backend half is proposal_writer.para_props /
+  // apply_para_props; this is the toolbar, and the state it has to keep honest.
+  //
+  // INDENTS ARE TWIPS, absolute, exactly as the backend stores them. One step is 288 twips,
+  // which is the WORK/NOTES list level's own indent in Kyle's templates, so one outdent on an
+  // untouched WORK row lands at 0 and the row aligns with its neighbours. That is literally the
+  // second complaint.
+  const INDENT_STEP_TW = 288;
+  const INDENT_MAX_TW = 2880;      // 2 inches, same clamp as sanitize_para_props
+  const TWIPS_PER_PT = 20;
+
+  /** The template's own paragraph properties for a block, or null when we cannot tell.
+   *
+   *  Null is the answer for a block whose record carries no `para` — a browser replaying a
+   *  pre-v5 cached /api/proposal-template response. Without it there is no `locked`, and
+   *  offering an un-bullet on a numbered TERMS AND CONDITIONS clause renumbers the contract.
+   *  So no metadata means no controls; _BLOCK_SCHEMA_VERSION was bumped so it never comes up. */
+  function paraBase(id) {
+    const b = blockById.get(Number(id));
+    const p = b && b.para;
+    if (!p || typeof p !== "object") return null;
+    return { bullet: !!p.bullet, indent: Math.max(0, Number(p.indent) || 0), locked: !!p.locked };
+  }
+
+  /** Where the paragraph is NOW: what the estimator set, else the template's own state. */
+  function paraNow(id) {
+    const base = paraBase(id);
+    if (!base) return null;
+    const set = paraById.get(Number(id));
+    return set ? { bullet: !!set.bullet, indent: Math.max(0, Number(set.indent) || 0), locked: base.locked }
+               : { bullet: base.bullet, indent: base.indent, locked: base.locked };
+  }
+
+  /** The `para` patch for one block, or null when it still matches the template.
+   *
+   *  Comparing against the template rather than persisting every paragraph keeps an untouched
+   *  document shipping an empty paragraph_overrides list, which is what makes the generated
+   *  .docx byte-identical to the one this feature did not exist for. */
+  function paraPatch(id) {
+    const base = paraBase(id), now = paraNow(id);
+    if (!base || !now) return null;
+    if (now.bullet === base.bullet && now.indent === base.indent) return null;
+    return { bullet: now.bullet, indent: now.indent };
+  }
+
+  /** Coerce a `para` field read back off a saved draft. Mirrors sanitize_para_props: unknown
+   *  keys dropped, indent clamped, and an unusable value means "no paragraph change". */
+  function sanitizeParaPatch(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const out = {};
+    if (typeof raw.bullet === "boolean") out.bullet = raw.bullet;
+    const n = Number(raw.indent);
+    if (raw.indent !== undefined && raw.indent !== null && Number.isFinite(n)) {
+      out.indent = Math.max(0, Math.min(INDENT_MAX_TW, Math.round(n)));
+    }
+    return ("bullet" in out || "indent" in out) ? out : null;
+  }
+
+  /** Show one paragraph's properties on screen, so the preview matches what prints.
+   *
+   *  Inline styles, and only ever on a paragraph the estimator changed: an untouched block keeps
+   *  the class-driven look it has always had, and this surface is a to-scale preview registered
+   *  against baked page artwork, so a stray pixel of reflow is a worse bug than a plain toolbar. */
+  function applyParaToEl(el, st) {
+    if (!el || !st) return;
+    const bullet = !!st.bullet;
+    el.classList.toggle("tw-li", bullet);
+    el.style.marginLeft = (Math.max(0, Number(st.indent) || 0) / TWIPS_PER_PT) + "pt";
+    // .tw-li's own padding is the gap the red square sits in; with no square there is no gap.
+    el.style.paddingLeft = bullet ? "" : "0";
+  }
+
+  /** Record a paragraph's new properties and repaint it. Refuses a locked paragraph. */
+  function setParaState(id, patch, el) {
+    const base = paraBase(id);
+    if (!base || base.locked) return false;
+    const clean = sanitizeParaPatch(patch);
+    if (!clean) return false;
+    const now = paraNow(id);
+    const next = { bullet: "bullet" in clean ? clean.bullet : now.bullet,
+                   indent: "indent" in clean ? clean.indent : now.indent };
+    paraById.set(Number(id), next);
+    applyParaToEl(el, next);
+    return true;
+  }
+
+  /** One toolbar press: the bullet on/off, or one step of indent either way.
+   *
+   *  Outdent reaches 0 — not "one level in from where the template put it". A WORK row inherits
+   *  288 twips from its list level and Kyle wants it flush with the rows around it, so the floor
+   *  has to be the margin itself. Indent puts it back. */
+  function paraAction(el, action) {
+    if (!el) return false;
+    const id = Number(el.dataset.id);
+    const now = paraNow(id);
+    if (!now || now.locked) return false;
+    let next;
+    if (action === "bullet") next = { bullet: !now.bullet, indent: now.indent };
+    else if (action === "indent") next = { bullet: now.bullet, indent: Math.min(INDENT_MAX_TW, now.indent + INDENT_STEP_TW) };
+    else if (action === "outdent") next = { bullet: now.bullet, indent: Math.max(0, now.indent - INDENT_STEP_TW) };
+    else return false;
+    if (!setParaState(id, next, el)) return false;
+    // Persist through the same debounce every other edit uses, and repaginate: an indent
+    // changes how the line wraps, so the terms flow can need a different page break.
+    schedulePersistOverrides();
+    if (el.closest && el.closest(".tw-terms-page")) scheduleRepaginate();
+    return true;
+  }
+
   // ── The toolbar ────────────────────────────────────────────────────────────
   let fmtBar = null, fmtBlock = null;
 
@@ -1902,6 +2023,13 @@
       '<option value="">Template size</option>' +
       SIZE_CHOICES.map(n => `<option value="${n}">${n} pt</option>`).join("") +
       '</select>' +
+      '<span class="tw-fmtsep" data-para="sep" aria-hidden="true"></span>' +
+      '<button type="button" data-para="bullet" aria-label="Bullet point"' +
+      ' title="Bullet point on or off">▪</button>' +
+      '<button type="button" data-para="outdent" aria-label="Decrease indent"' +
+      ' title="Less indent (moves left, all the way to the margin)">⇤</button>' +
+      '<button type="button" data-para="indent" aria-label="Increase indent"' +
+      ' title="More indent (moves right)">⇥</button>' +
       '<span class="tw-fmtsep" aria-hidden="true"></span>' +
       '<button type="button" data-fmt="reset" title="Back to the template’s own formatting">Reset</button>';
     document.body.appendChild(fmtBar);
@@ -1912,6 +2040,16 @@
       if (!e.target.closest("select")) e.preventDefault();
     });
     fmtBar.addEventListener("click", (e) => {
+      // Paragraph properties first: they are a different channel from the run formatting below
+      // (the `para` field on the override, not `runs`), and they act on the whole paragraph
+      // regardless of what is selected inside it.
+      const pbtn = e.target.closest("button[data-para]");
+      if (pbtn && fmtBlock) {
+        e.preventDefault();
+        paraAction(fmtBlock, pbtn.dataset.para);
+        showFmtBar(fmtBlock);
+        return;
+      }
       const btn = e.target.closest("button[data-fmt]");
       if (!btn || !fmtBlock) return;
       e.preventDefault();
@@ -1945,6 +2083,25 @@
     });
     const sizeSel = bar.querySelector("select[data-fmt='size']");
     if (sizeSel) sizeSel.value = f.size_pt ? String(f.size_pt) : "";
+    // The paragraph controls, reflecting THIS paragraph. A locked one (a numbered TERMS AND
+    // CONDITIONS clause) is offered nothing at all: un-bulleting it renumbers every clause
+    // below it, in legal boilerplate, and a disabled-looking button still invites the click.
+    // display, not the `hidden` attribute — a class `display` rule beats `hidden` and this bar
+    // sets display:flex on itself.
+    const pst = paraNow(Number(el.dataset.id));
+    const showPara = !!pst && !pst.locked;
+    bar.querySelectorAll("[data-para]").forEach(n => { n.style.display = showPara ? "" : "none"; });
+    if (showPara) {
+      const bul = bar.querySelector("button[data-para='bullet']");
+      if (bul) {
+        bul.classList.toggle("on", pst.bullet);
+        bul.setAttribute("aria-pressed", String(pst.bullet));
+      }
+      const out = bar.querySelector("button[data-para='outdent']");
+      if (out) out.disabled = pst.indent <= 0;
+      const inn = bar.querySelector("button[data-para='indent']");
+      if (inn) inn.disabled = pst.indent >= INDENT_MAX_TW;
+    }
     bar.style.display = "flex";
     // Viewport coordinates on purpose: the bar is position:fixed, so the page's zoom transform
     // does not enter into it and there is no scale factor to divide out.
@@ -2177,12 +2334,23 @@
     const saved = savedOverridesFor(wt, audience);
     if (!saved || String(saved.template_version || "") !== templateVersion) return;
     for (const o of saved.items) {
-      if (!o || typeof o.text !== "string") continue;
+      if (!o) continue;
       const el = docSurface.querySelector(`.tw-block[data-id="${Number(o.id)}"]`);
       if (!el) continue;
-      el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
-      el.classList.add("tw-dirty");
-      el.classList.toggle("tw-empty", !o.text.trim());
+      if (typeof o.text === "string") {
+        el.textContent = o.text;   // pre-wrap CSS renders the \n line breaks
+        el.classList.add("tw-dirty");
+        el.classList.toggle("tw-empty", !o.text.trim());
+      }
+      // The bullet / indent the estimator set. Restored even on an entry with NO text — a
+      // formatting-only change is a whole override entry of its own (see collectOverrides), and
+      // an override saved before this feature existed simply has no `para` and is unaffected.
+      //
+      // NOT marked tw-dirty by itself: the words were not touched, so refreshDocumentFills
+      // should keep re-substituting this paragraph's {{token}} values as the sidebar changes.
+      // That is safe because setBlockContent only rewrites innerHTML — it leaves the class and
+      // the inline margin this puts on the element alone.
+      setParaState(Number(o.id), o.para, el);
     }
   }
 
@@ -2200,13 +2368,22 @@
       const runs = serializeRuns(el);
       const textChanged = cur !== pristineById.get(id);
       const fmtChanged = el.classList.contains("tw-fmt");
-      if (!textChanged && !fmtChanged) return;
+      const para = paraPatch(id);
+      if (!textChanged && !fmtChanged && !para) return;
+      // A BULLET SWITCHED OFF IS NOT AN EDIT TO THE WORDS, so a paragraph whose text is
+      // untouched ships `para` and NO text. Sending the text as well would look harmless and
+      // would not be: a `text` override rebuilds the paragraph as one plain run, throwing away
+      // the template's own bold lead-in and font sizes on a paragraph nobody typed in.
+      let entry;
+      if (!textChanged && !fmtChanged) entry = { id: id };
       // Send the plain shape whenever nothing is formatted: most edits are plain, the payload
       // stays as small as it was, and the writer keeps its simpler path. Runs only appear when
       // the estimator has actually applied formatting.
-      out.push(runsArePlain(runs) && !fmtChanged
+      else entry = runsArePlain(runs) && !fmtChanged
         ? { id: id, text: cur }
-        : { id: id, text: cur, runs: runs });
+        : { id: id, text: cur, runs: runs };
+      if (para) entry.para = para;
+      out.push(entry);
     });
     return out;
   }
@@ -3628,6 +3805,10 @@
       annotateRegions(templateBlocks);
       blockById.clear();
       templateBlocks.forEach(b => blockById.set(b.id, b));
+      // Ids belong to ONE template file. Carrying a bullet/indent across a base-bid switch
+      // would land it on whatever paragraph happens to hold that id in the other template;
+      // restoreSavedOverrides re-reads the new template's own saved entry below.
+      paraById.clear();
 
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
       const geo = j.geometry || {};
