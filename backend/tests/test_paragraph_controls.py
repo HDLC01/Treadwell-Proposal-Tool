@@ -137,12 +137,18 @@ def test_the_work_rows_are_bulleted_by_a_numbering_level_that_owns_their_indent(
     d = _template()
     ids = _by_id(d)
     level = pw._numbering_levels(d).get(("4", "0"))
-    assert level == {"fmt": "bullet", "ind": {"left": "288", "hanging": "288"}}, level
+    # `text` is the Wingdings private-use glyph the WORK level prints, which is why the preview
+    # draws its own square rather than the level's character: no browser font has U+F0A7.
+    assert level == {"fmt": "bullet", "text": "\uf0a7", "start": 1,
+                     "ind": {"left": "288", "hanging": "288"}}, level
     for label in ("Scope:", "Schedule:", "Exclusions:", "Notes:"):
         p_elem = ids[_free_row_id(label)]
         assert _has_numpr(p_elem), label
         assert _ind(p_elem) is None, (label, _ind(p_elem))
-        assert pw.para_props(d, p_elem) == {"bullet": True, "indent": 288, "locked": False}
+        # `marker` is empty on a bullet row: the two fields are the two halves of "what shows in
+        # front of the text" and are never both set.
+        assert pw.para_props(d, p_elem) == {"bullet": True, "indent": 288, "locked": False,
+                                            "marker": ""}
 
 
 def test_the_terms_clauses_are_a_decimal_list_the_override_channel_can_reach():
@@ -214,7 +220,8 @@ def test_switching_the_bullet_back_on_hands_the_indent_back_to_the_list_level():
     assert _ind(p_elem) is None, (
         "the paragraph is stating its own left indent again, so it has no hanging indent and "
         "the red square prints in the middle of the line: %r" % (_ind(p_elem),))
-    assert pw.para_props(d, p_elem) == {"bullet": True, "indent": 288, "locked": False}
+    assert pw.para_props(d, p_elem) == {"bullet": True, "indent": 288, "locked": False,
+                                        "marker": ""}
 
 
 def test_an_unchanged_paragraph_state_changes_nothing_at_all():
@@ -396,10 +403,15 @@ def test_generate_survives_malformed_para_values():
 # ══ seam 2: the browser has to be able to READ the state ═════════════════════
 # The keys the frontend's paraBase() reads. Grown without the version bump, a browser replaying
 # a cached response has no `locked` and would happily offer to un-bullet a contract clause.
-_BLOCK_KEYS_AT_V5 = {
+_BLOCK_KEYS_AT_V6 = {
     "id", "kind", "text", "style", "in_block", "in_txbx", "txbx",
     "align", "list", "price_flat", "para", "runs",
 }
+# The keys INSIDE `para`. Asserted separately because the block dict's own key set does not move
+# when a nested one grows, and v6 grew a nested one: `marker`. A browser holding a v5 response has
+# every block's `para` without it, and the renderer's fallback for a marker-less list paragraph is
+# the red square that was the bug.
+_PARA_KEYS_AT_V6 = {"bullet", "indent", "locked", "marker"}
 
 
 @pytest.fixture
@@ -426,11 +438,14 @@ def test_the_endpoint_marks_the_work_rows_editable_and_the_terms_locked(epoxy_bl
     """The two answers the toolbar cannot function without."""
     by_id = {b["id"]: b for b in epoxy_blocks}
     sched = by_id[_free_row_id("Schedule:")]
-    assert sched["para"] == {"bullet": True, "indent": 288, "locked": False}
+    assert sched["para"] == {"bullet": True, "indent": 288, "locked": False, "marker": ""}
     clause = by_id[_numbered_terms_id()]
     assert clause["para"]["locked"] is True
     # `list` is True for the contract clauses too, so it could never have been the guard.
     assert clause["list"] is True
+    # And it is not what the renderer reads any more: the clause reports the NUMBER it prints.
+    assert clause["para"]["bullet"] is False
+    assert clause["para"]["marker"] == "1."
 
 
 def test_block_schema_version_was_bumped_for_the_new_field(epoxy_blocks):
@@ -439,12 +454,15 @@ def test_block_schema_version_was_bumped_for_the_new_field(epoxy_blocks):
     replays the old shape against the new frontend."""
     keys = set(epoxy_blocks[0])
     assert "para" in keys
-    assert keys == _BLOCK_KEYS_AT_V5, (
+    assert keys == _BLOCK_KEYS_AT_V6, (
         "the block dict shape changed — bump main._BLOCK_SCHEMA_VERSION and update "
-        "_BLOCK_KEYS_AT_V5 in the same commit")
-    assert main._BLOCK_SCHEMA_VERSION == "5", (
-        "the block shape includes `para` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a "
-        "v4 response has no `locked` for any block" % (main._BLOCK_SCHEMA_VERSION,))
+        "_BLOCK_KEYS_AT_V6 in the same commit")
+    for b in epoxy_blocks:
+        assert set(b["para"]) == _PARA_KEYS_AT_V6, (b["id"], b["para"])
+    assert main._BLOCK_SCHEMA_VERSION == "6", (
+        "`para` includes `marker` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a v5 "
+        "response has no marker for any block, so it paints a red square in front of all 27 "
+        "numbered contract clauses" % (main._BLOCK_SCHEMA_VERSION,))
 
 
 def test_the_schema_version_is_in_the_template_etag():

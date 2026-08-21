@@ -3387,6 +3387,10 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             "in_txbx": txbx_idx is not None,
             "txbx": txbx_idx,
             "align": proposal_writer._para_align(p),
+            # "does this paragraph carry Word numbering at all" — TRUE for a bulleted WORK/NOTES
+            # row AND for a numbered Terms clause, so it cannot answer "what does it print".
+            # `para.bullet` / `para.marker` do that; this stays as the fallback for a level whose
+            # definition cannot be read.
             "list": proposal_writer._para_is_list(p_elem),
             # PRICE-list rows (numId=3) get their bullets stripped at generate
             # time (_flatten_price_bullets); flag them so the on-screen editor
@@ -3472,7 +3476,11 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # cannot tell a WORK row from a numbered contract clause. The frontend's fallback for a block
 # with no `para` is therefore to offer no controls at all, and this bump is what makes sure it
 # never has to.
-_BLOCK_SCHEMA_VERSION = "5"
+# v6: `para` gained `marker` — what an ORDERED list level prints in front of the paragraph
+# ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
+# degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
+# in front of all 27 numbered clauses in the first place.
+_BLOCK_SCHEMA_VERSION = "6"
 
 
 def _template_proposal_version(path: Path) -> str:
