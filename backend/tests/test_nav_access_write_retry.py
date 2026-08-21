@@ -93,37 +93,49 @@ def test_a_failure_that_is_not_a_permission_error_is_not_retried(monkeypatch):
         nav_access.save(_a_policy(), "someone@wetreadwell.com")
     assert calls["n"] == 1, "a disk-full error was retried %d times; it should fail at once" % calls["n"]
 
+def test_the_temp_name_separates_two_processes():
+    """The temp path must differ between PROCESSES, which is the collision the lock cannot prevent.
 
-def test_the_temp_file_name_is_unique_per_writer():
-    """A shared ".tmp" is safe against threads and not against a second process.
+    TWO EARLIER VERSIONS OF THIS TEST WERE WRONG, and both wrongnesses are worth recording because
+    each one passed.
 
-    The lock in save() covers threads in THIS process only. Two processes writing the same fixed
-    temp path can have one truncate the other's half-written file before either rename, and the
-    loser's rename then publishes a partial policy. Asserting the name carries the pid and the
-    thread id is how that stays fixed.
+    The first counted distinct temp names across six threads run to completion and demanded six.
+    Linux RECYCLES thread ids, so six sequential threads produced three names and CI went red on a
+    property the design never promised. It had passed on Windows, where the ids happened not to be
+    reused in that window.
+
+    The second tried to make the six writers genuinely simultaneous with a barrier inside the
+    rename. That CANNOT work: `save()` holds `_LOCK` across the whole write-and-rename, so two
+    writers in one process are never both inside it. The barrier deadlocked, timed out after ten
+    seconds, broke, and every `BrokenBarrierError` was swallowed by save()'s own `except Exception`
+    and then lost inside its thread. The assertions still passed, on names collected by writers that
+    never renamed anything. The only visible symptom was the test taking eleven seconds.
+
+    So: same-process concurrency is not the risk, because the lock already excludes it. The risk is
+    a SECOND PROCESS - a worker, a second uvicorn, a test runner - writing the same fixed path and
+    truncating our half-written file before either rename. That is what the pid in the name buys,
+    and it is what this asserts, by writing as two different pids rather than by pretending to be
+    concurrent.
     """
-    seen = set()
-    lock = threading.Lock()
-
+    seen = []
     real = pathlib.Path.replace
-    names = []
 
-    def capture(self, target):
-        with lock:
-            names.append(self.name)
+    def note(self, target):
+        seen.append(self.name)
         return real(self, target)
 
     import unittest.mock as mock
-    with mock.patch.object(pathlib.Path, "replace", capture):
-        threads = [threading.Thread(target=nav_access.save, args=(_a_policy(), "u%d@x.com" % i))
-                   for i in range(6)]
-        [t.start() for t in threads]
-        [t.join() for t in threads]
+    with mock.patch.object(pathlib.Path, "replace", note):
+        with mock.patch("os.getpid", lambda: 1111):
+            nav_access.save(_a_policy(), "one@x.com")
+        with mock.patch("os.getpid", lambda: 2222):
+            nav_access.save(_a_policy(), "two@x.com")
 
-    assert len(names) == 6, names
-    for n in names:
+    assert len(seen) == 2, seen
+    for n in seen:
         assert n.startswith("nav_access.tmp."), n
-        assert str(os.getpid()) in n, "the pid is missing from %r, so two processes could collide" % n
-    seen = set(names)
-    assert len(seen) == 6, (
-        "six concurrent writers produced only %d distinct temp names: %r" % (len(seen), sorted(seen)))
+    assert "1111" in seen[0] and "2222" in seen[1], (
+        "the temp name does not carry the pid, so two processes would collide on it: %r" % (seen,))
+    assert seen[0] != seen[1], seen
+    # and the thread id is in there too, so removing the lock later would not reintroduce the bug
+    assert str(threading.get_ident()) in seen[0], seen[0]
