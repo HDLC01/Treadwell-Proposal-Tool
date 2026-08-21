@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -324,9 +325,28 @@ def save(deny: Any, by: str = "") -> Dict[str, Any]:
     with _LOCK:
         try:
             _DATA_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = _FILE.with_suffix(".tmp")
+            # A UNIQUE TEMP NAME PER WRITER, not one shared ".tmp". The lock above serialises
+            # writers inside THIS process, but nothing stops a second process - a worker, a
+            # second uvicorn, a test runner - from writing the same fixed path at the same moment
+            # and one truncating the other's half-written file before the rename.
+            tmp = _FILE.with_suffix(".tmp.%d.%d" % (os.getpid(), threading.get_ident()))
             tmp.write_text(json.dumps(out), encoding="utf-8")
-            tmp.replace(_FILE)      # atomic: a reader sees the whole old policy or the whole new one
+            # os.replace IS atomic, but on Windows it raises PermissionError (WinError 5) when
+            # anything else holds a handle on either path for the instant of the rename - an
+            # antivirus scanning the file we just wrote is the common one. Reproduced on the dev
+            # box under deliberate CPU load: four threads doing 20 replaces each, and roughly one
+            # run in eight lost the race and surfaced as NavAccessWriteError. Linux, where this
+            # actually runs in production, does not have that failure mode at all - but a save
+            # that fails for a reason unrelated to the save is worth retrying wherever it happens,
+            # and three tries over ~45ms is far below the point a human notices.
+            for attempt in range(3):
+                try:
+                    tmp.replace(_FILE)
+                    break
+                except PermissionError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.015 * (attempt + 1))
         except Exception as exc:  # noqa: BLE001
             raise NavAccessWriteError(str(exc)) from exc
     log.info("nav access policy set by %s: %s", out["updated_by"] or "?",

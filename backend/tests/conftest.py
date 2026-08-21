@@ -256,3 +256,49 @@ def fake_supabase():
     def _make(store=None):
         return FakeClient(store)
     return _make
+
+
+# ── module-global state that could leak between tests ─────────────────────────
+@pytest.fixture(autouse=True)
+def _reset_basisboard_breaker():
+    """Close the BasisBoard circuit breaker around every test.
+
+    READ THIS BEFORE TRUSTING IT: this is a GUARD, not a fix for a reproduced bug, and the
+    difference matters because a previous version of this docstring claimed the latter.
+
+    WHAT IS PROVEN. The breaker is a module-level global that nothing reset between test FILES.
+    `_Breaker.fail()` opens it for BASISBOARD_BREAKER_COOLDOWN_S, default 120 seconds, which is
+    longer than a whole suite run. With it open, `get_pipeline()` returns
+    {"ok": False, "configured": True, "skipped": True}, so
+    test_basisboard.py::test_pipeline_shapes_filters_and_sorts fails on its first line
+    (`assert r["ok"] is True and r["configured"] is True`) and pytest renders the failing
+    subexpression as `assert (False is True)`. That is character-for-character the message this
+    suite's intermittent failure produces, and it reads as though `configured` were False when it
+    is `ok` that is - a review cycle was spent chasing the wrong field because of it.
+
+    WHAT IS NOT PROVEN, and this is the honest part. I could not find a file that actually leaves
+    the breaker open. Every file that touches it was run on its own with the breaker's state
+    printed at session end - test_basisboard.py, _resilience, _snapshot, _analytics,
+    test_pull_window, test_notifications, test_leads, test_calendar_events, and the two _core_js
+    files - and all ten finished with open=False fails=0. The two files that deliberately open it
+    also reset it. Removing this fixture and re-running the ordering I suspected
+    (resilience -> basisboard) still passed. So the leak path that produces the real flake is
+    UNIDENTIFIED, and this fixture may well not be what fixes it.
+
+    WHY IT STAYS ANYWAY. It costs one attribute reset per test, it makes an entire class of
+    cross-file leak impossible rather than unlikely, and the failure it guards against is one whose
+    error message actively misleads. If the flake recurs WITH this in place, that is useful
+    information: look somewhere other than the breaker, and do not let this docstring send you back
+    here.
+
+    Autouse and in conftest rather than per-file, because a per-file reset is what already existed
+    in the two files that open it, and per-file is exactly the scope that cannot protect a
+    neighbour. A test that WANTS an open breaker still opens it in its own body, after this runs.
+    Reset on the way out as well as in, so a mid-test failure cannot leak either.
+    """
+    import basisboard_client as _bb
+    _bb._BREAKER.ok()
+    try:
+        yield
+    finally:
+        _bb._BREAKER.ok()
