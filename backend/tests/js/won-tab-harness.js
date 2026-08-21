@@ -370,7 +370,11 @@ for (const [name, row] of Object.entries(ROUTING)) {
 // BY ID, not by index: this list read [ROWS[0], ROWS[1], ROWS[11]] and inserting a fixture above
 // silently repointed the third one at a different project, which is a green test about the wrong row.
 out.wonControl = {};
-const WON_CONTROL_ROWS = ["won-unsent", "unsent-plain", "won-marked-sent", "lost-after-won"];
+// `won-complete` is the DERIVED win: approved, deposit in, contacts in, and nobody marked it. It
+// is the one state with nothing to undo, and since 2026-08-20 the panel has to say so out loud
+// rather than leaving a gap where every other state has a control.
+const WON_CONTROL_ROWS = ["won-unsent", "unsent-plain", "won-marked-sent", "lost-after-won",
+                          "won-complete"];
 for (const row of WON_CONTROL_ROWS.map((id) => {
   const hit = ROWS.find((p) => p.proposal_id === id);
   if (!hit) throw new Error("no fixture called " + id + " — rewrite this harness, don't delete it");

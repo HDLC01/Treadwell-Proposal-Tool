@@ -488,6 +488,28 @@ def test_the_drawer_offers_the_mark_on_an_unsent_bid_nobody_has_marked(ran):
 
 
 @needs_node
+def test_a_job_won_by_the_numbers_has_no_button_and_the_copy_says_why(ran):
+    """THE ONE STATE WITH NOTHING TO BRING BACK. Hanz asked for the bring-back on 2026-08-20 and
+    this is the case it cannot serve: approved, deposit in, contacts in, and NOBODY marked it won —
+    the numbers did. There is no mark to clear, so an Undo here would save and change nothing, which
+    reads as a broken control.
+
+    The decision was to keep having no button and to SAY SO, because a gap where every other state
+    has a control is indistinguishable from a control that failed to render. The two things that
+    would actually un-win this job are un-approving it and unwinding the deposit, and the copy points
+    at where those live rather than pretending this panel can do them."""
+    html = ran["wonControl"]["won-complete"]
+    assert html, "the derived-won panel renders nothing at all"
+    assert 'id="won-undo"' not in html, (
+        "it offers to take off a mark nobody made, which would change nothing visible")
+    assert 'id="won-mark"' not in html, "it offers to mark a job that already counts as won"
+    assert "nothing to bring back" in html, (
+        "the panel is silent about why it has no control: %r" % html)
+    assert "Proposal tab" in html, (
+        "it does not say where un-approving it or unwinding the deposit actually live")
+
+
+@needs_node
 def test_a_closed_lost_bid_is_offered_neither(ran):
     """Lost beats Won everywhere, so a Mark won press here would save and change nothing visible,
     which reads as a broken control. Reactivate beside it is the way back."""

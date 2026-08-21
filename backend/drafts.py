@@ -297,7 +297,7 @@ def get_notify_picks(draft_id: str) -> Dict[str, Any]:
 
 
 def set_close_lost(draft_id: str, reason: Optional[str],
-                   actor_email: Optional[str] = None) -> bool:
+                   actor_email: Optional[str] = None, note: Optional[str] = None) -> bool:
     """Close an unsent project as lost, or reopen it. `reason` None reopens.
 
     Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent category."
@@ -315,6 +315,19 @@ def set_close_lost(draft_id: str, reason: Optional[str],
     `updated_at` is deliberately NOT bumped, as with the other two: closing a bid is not work on the
     estimate, and shuffling it to the top of the Projects list on its way out would be backwards.
 
+    THE `note` IS THE COMMENT, and it is required by the route rather than here. Hanz asked for it
+    on 2026-08-20 and it is the tool's first required free-text field — every other note in this
+    module is optional on purpose. It lives on the same blob key rather than a column of its own
+    for the reason this whole family of writers exists: an unsent project has no portal row, and
+    the SENT half stores its own copy in jsonb too (portal_followups.detail), so neither half
+    needs DDL. Stored and logged on the event, and deliberately NOT put on the board's row: a card
+    is 224px wide and this is a paragraph.
+
+    REOPENING CLEARS THE HOLD AS WELL. "Active" is one word meaning one thing to the estimator
+    pressing it: this bid is live again. A hold that survived reactivation would leave the card
+    showing "Paused to ..." with no control left to clear it, because the drawer offers exactly one
+    way back. See set_on_hold for why the two states are separate keys in the first place.
+
     Returns True if the project existed."""
     sb = get_client()
     cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
@@ -323,13 +336,94 @@ def set_close_lost(draft_id: str, reason: Optional[str],
     data = dict(cur.data[0].get("data") or {})
     if reason:
         data["closed_lost"] = {"reason": str(reason), "by": actor_email or "",
-                               "at": _now_iso()}
+                               "at": _now_iso(), "note": str(note or "")}
     else:
         data.pop("closed_lost", None)
+        data.pop("on_hold", None)
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "closed_lost" if reason else "reactivated",
               {"project_name": data.get("project_name"), "id": draft_id,
-               "reason": str(reason) if reason else None})
+               "reason": str(reason) if reason else None,
+               "note": str(note or "") if reason else None})
+    _cache_clear()
+    return True
+
+
+def set_on_hold(draft_id: str, reason: str, note: str,
+                actor_email: Optional[str] = None, until: str = "") -> bool:
+    """Pause an unsent bid without killing it.
+
+    Hanz, 2026-08-20: two of the eight answers on Kyle's close-out list — "Project on Hold" and
+    "Small Bid <$25k - Pending" — are NOT losses. The card stays on the Active board and the
+    reminder emails pause. A sent project gets that from the portal's own `delayed` status, which
+    is where the route sends it; this function is the unsent half, where there is no portal row to
+    pause and nothing chasing the bid in the first place.
+
+    So what is it stored FOR? The board. `until` becomes the synthesised row's
+    followup_state.paused_until (see _not_sent_rows in main.py), which is the field the existing
+    "Paused to ..." chip already reads. One chip for both halves, rather than an on-hold vocabulary
+    that only unsent cards can speak.
+
+    A SEPARATE KEY from `closed_lost`, not a value inside it, for the same reason `won` is
+    separate: these are different facts with different lifetimes, and one key holding a tri-state
+    would turn "is this bid dead" into a string comparison in five readers instead of a presence
+    test in one. Neither writer touches the other's key. A bid held and then genuinely lost carries
+    both, and isLost wins everywhere, which is right — it is lost.
+
+    `updated_at` is deliberately NOT bumped, as with the other blob writers here.
+
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    data["on_hold"] = {"reason": str(reason), "note": str(note or ""),
+                       "by": actor_email or "", "at": _now_iso(), "until": str(until or "")}
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "on_hold",
+              {"project_name": data.get("project_name"), "id": draft_id,
+               "reason": str(reason), "note": str(note or ""), "until": str(until or "")})
+    _cache_clear()
+    return True
+
+
+def clear_outcome(draft_id: str, actor_email: Optional[str] = None) -> bool:
+    """Bring a won or lost job back to the pipeline, in one write.
+
+    Hanz, 2026-08-20: "if projects are both won and lost there should be an option to bring it back
+    to its latest step in the CRM but before they do that there should be a prompt saying are they
+    sure". The prompt is the drawer's; this is the write.
+
+    THE COMBINED CLEAR EARNS ITS EXCEPTION. set_won's docstring argues that popping the other key
+    would be a second rule agreeing with the first only by accident, and that still stands for the
+    two NARROW undos, which each say what they undid. But a job marked won and THEN closed lost
+    reads as Lost only (every reader asks isLost first), so clearing one mark leaves the card on the
+    other tab and the button the estimator just pressed looks broken. "Bring it back" is one act,
+    so it is one write and one event.
+
+    NOTHING IS REMEMBERED ABOUT WHERE THE CARD CAME FROM, and that is the design rather than a
+    shortcut. Closing a job lost never overwrote a pipeline timestamp, and stage() derives the
+    column from those, so a card that stops being lost recomputes its own way back to the furthest
+    step it genuinely reached. A "previous stage" field would be a second source of truth for a
+    question the timestamps already answer, and it would be wrong the first time a deposit landed
+    while the job was closed.
+
+    IDEMPOTENT. Clearing keys that are not there is a no-op, which is what makes the route's second
+    leg — forwarding "active" to the portal for a project that HAS been sent — safe to retry after
+    a failure, rather than leaving the estimator with a half-reopened job and no way to finish.
+
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    for key in ("closed_lost", "on_hold", "won"):
+        data.pop(key, None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "brought_back",
+              {"project_name": data.get("project_name"), "id": draft_id})
     _cache_clear()
     return True
 
@@ -492,6 +586,17 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # Closed lost before it was ever sent — see set_close_lost.
                 "closed_lost_reason:data->closed_lost->>reason,"
                 "closed_lost_at:data->closed_lost->>at,"
+                # …and the sentence somebody had to write to close it. Selected because it has to be
+                # READABLE, not only stored: it is the tool's one required free-text field and the
+                # reason for requiring it was that a reason on its own tells the next person nothing.
+                # It reaches the DRAWER, never the card — see _not_sent_rows.
+                "closed_lost_note:data->closed_lost->>note,"
+                # On hold before it was ever sent — see set_on_hold. Named here for the reason
+                # `won_at` spells out below: this projection selects named JSON paths, so a key
+                # nobody names reaches no card, and the hold would appear to save and vanish.
+                "on_hold_reason:data->on_hold->>reason,"
+                "on_hold_until:data->on_hold->>until,"
+                "on_hold_note:data->on_hold->>note,"
                 # Marked won by hand — see set_won. Selected by NAME like every other field on this
                 # projection, which is exactly why it has to be listed here: this path selects named
                 # JSON paths rather than the blob, so a key that is not named reaches no card. The
@@ -526,6 +631,10 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "has_files": bool(r.get("has_files")),
             "closed_lost_reason": r.get("closed_lost_reason") or None,
             "closed_lost_at": r.get("closed_lost_at") or None,
+            "closed_lost_note": r.get("closed_lost_note") or None,
+            "on_hold_reason": r.get("on_hold_reason") or None,
+            "on_hold_until": r.get("on_hold_until") or None,
+            "on_hold_note": r.get("on_hold_note") or None,
             "won_at": r.get("won_at") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
@@ -801,6 +910,14 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         # so one dead bid reads the same whether or not the customer ever saw it.
         "closed_lost_reason": ((data.get("closed_lost") or {}).get("reason") or None),
         "closed_lost_at": ((data.get("closed_lost") or {}).get("at") or None),
+        "closed_lost_note": ((data.get("closed_lost") or {}).get("note") or None),
+        # On hold — see set_on_hold. Both summary paths expose it for the reason the won mark
+        # gives below: one path serves every real page load and the other serves the day
+        # PostgREST refuses the projection, and a field on only one of them is a bug that
+        # reproduces once a month.
+        "on_hold_reason": ((data.get("on_hold") or {}).get("reason") or None),
+        "on_hold_until": ((data.get("on_hold") or {}).get("until") or None),
+        "on_hold_note": ((data.get("on_hold") or {}).get("note") or None),
         # Marked won by hand — see set_won. Same key, same meaning as the fast projection's jsonb
         # scalar: both paths have to expose it or the Won mark reaches the card on some page loads
         # and not others, which is indistinguishable from the mark not having saved.

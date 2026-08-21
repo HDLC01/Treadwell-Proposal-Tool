@@ -32,6 +32,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import atomic_json
+
 log = logging.getLogger("treadwell.pull_window")
 
 # Beside the analytics snapshot on the data volume, for the reason in the module docstring.
@@ -109,10 +111,10 @@ def set(frm: Any, to: Any, by: str = "") -> Dict[str, Any]:  # noqa: A001 — th
            "updated_by": (by or "").strip() or None}
     with _LOCK:
         try:
-            _DATA_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = _FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(out), encoding="utf-8")
-            tmp.replace(_FILE)               # atomic: a reader sees the old window or the new one
+            # One writer per process AND a retried rename - see atomic_json's docstring. This
+            # module had the identical fixed-".tmp" + bare-replace pair that nav_access did, and
+            # its thread-safety test failed the same way on the next merge.
+            atomic_json.write_json(_FILE, out)
         except Exception as exc:  # noqa: BLE001
             raise PullWindowWriteError(str(exc)) from exc
     log.info("analytics pull window set to %s → %s by %s",

@@ -32,6 +32,8 @@ from typing import Any, Dict, List, Optional
 import basisboard_client
 import drafts as drafts_mod
 
+import atomic_json
+
 log = logging.getLogger("proposal_tool.notifications")
 
 # Persistent state file on the same volume as the drafts DB (audit.py convention).
@@ -168,9 +170,7 @@ def _save_state(state: Dict[str, Any]) -> None:
     _MEM_STATE = dict(state)            # always keep the in-process copy fresh
     try:
         if DATA_DIR.is_dir() and os.access(DATA_DIR, os.W_OK):
-            tmp = _STATE_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state), encoding="utf-8")
-            tmp.replace(_STATE_FILE)   # atomic
+            atomic_json.write_json(_STATE_FILE, state, make_parent=False)   # atomic, retried
     except Exception as exc:           # noqa: BLE001
         log.warning("notif state write failed: %s", exc)
 
