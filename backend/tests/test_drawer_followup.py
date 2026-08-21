@@ -136,15 +136,49 @@ def test_the_delay_options_match_the_months_the_server_allows():
 
 
 def test_marking_closed_lost_asks_why_before_posting():
-    """Free text would make the reasons uncountable. The dialog offers the same six
-    the customer's own form does, so "why do we lose bids?" has an answer."""
-    assert "lostReasonDialog" in WIRE
-    assert "C.LOST_REASON" in _block("lostReasonDialog")
+    """Free text would make the reasons uncountable, so the answer is picked from a list — and
+    since 2026-08-20 the list is Kyle's own and the helper is called closeOutDialog, because two of
+    his eight answers put the bid on hold instead of closing it.
+
+    WHO AND WHEN: Hanz, 2026-08-20, with Kyle's screenshot. This test read `lostReasonDialog` and
+    `C.LOST_REASON`; the dialog is now built from C.CLOSE_CHOICES, which is the one array carrying
+    both the labels and what each one DOES, and LOST_REASON is derived from it. Reading the derived
+    map here would have let a hold answer be offered as a way of killing a bid."""
+    assert "closeOutDialog" in WIRE, "the close-out dialog is not reached from the panel's wiring"
+    dlg = _block("closeOutDialog")
+    assert "C.CLOSE_CHOICES" in dlg, "the dialog no longer offers Kyle's list"
+    assert "C.LOST_REASON" not in dlg, (
+        "the dialog is built from the derived lost map, so the two hold answers are missing from it")
+    assert "C.closeOutcome" in dlg, "the dialog cannot tell a hold from a loss"
+    # The required comment: the answer alone is not enough to post with.
+    assert "[data-note]" in dlg and "Required" in dlg, "the comment field is gone"
+
+
+def test_the_two_hold_answers_do_not_close_the_proposal():
+    """Hanz, 2026-08-20: "Project on Hold" and "Small Bid <$25k - Pending" leave the card on the
+    Active board with the reminders paused. On a SENT proposal that is the portal's existing
+    `delayed` status — the one thing that pauses a cadence without moving the card — and not a
+    mechanism of its own, or one bid would carry two pause dates that can disagree."""
+    assert re.search(r'outcome === "hold"', WIRE), "the hold branch is gone from the wiring"
+    hold = WIRE[WIRE.index('outcome === "hold"'):]
+    assert re.search(r'status:\s*"delayed"', hold[:600]), (
+        "a hold posts something other than delayed, so a live bid is filed as dead")
 
 
 def test_a_closed_proposal_offers_reactivation_instead_of_more_closing():
+    """The button is Bring it back now, and it posts `bring_back` to the DRAFT route.
+
+    WHO AND WHEN: Hanz, 2026-08-20 — "if projects are both won and lost there should be an option
+    to bring it back to its latest step in the CRM but before they do that there should be a prompt
+    saying are they sure". It posted `status: "active"` to the portal until then, which was wrong in
+    one case that had become common: a job marked won by hand and THEN closed lost reads as Lost
+    only, so reopening just the portal row dropped the card onto the Won tab. `bring_back` clears
+    our marks and forwards `active` to the portal itself."""
     assert 'id="fu-reopen"' in PANEL
-    assert 'status: "active"' in WIRE
+    assert "confirmBringBack" in WIRE, "it puts a bid back with no prompt at all"
+    assert re.search(r'status:\s*"bring_back"', WIRE), (
+        "Bring it back posts something other than bring_back, so one of the two marks survives")
+    assert "/api/draft/" in WIRE, "it still reopens only the portal row"
 
 
 def test_the_toggle_is_disabled_on_a_closed_proposal():

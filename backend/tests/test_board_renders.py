@@ -160,10 +160,31 @@ def test_the_live_tabs_draw_the_pipeline_columns(rendered):
 
 @needs_node
 def test_the_lost_tab_draws_the_reason_columns(rendered):
-    """Six close reasons plus "Not recorded" — one fewer than the pipeline, which is also what
-    proves these are different column sets rather than the same one relabelled."""
+    """Every close reason plus "Not recorded", by NAME.
+
+    This read `== 7` until 2026-08-20 — six invented reasons and the catch-all. Kyle's own list
+    replaced them that day and the map became a superset: his seven close-lost answers plus the
+    four only the CUSTOMER's own form can produce, which stay so a bid the customer closed
+    themselves still has a column. That is eleven and the catch-all, twelve. A hardcoded count
+    would have to be edited every time the vocabulary moves and says nothing about WHICH columns
+    were drawn, so this asserts against crm-core's own derived LOST_REASON (the harness builds
+    `lostCols` the way portal.js builds LOST_COLS) and against the pipeline it must not be.
+
+    The two HOLD answers must not appear: a held bid is on the Active board, so a Lost column
+    headed "Project on Hold" would be a column of live work on the tab of dead work."""
     r = rendered["results"]["lost/board"]
-    assert r["columns"] == 7, "the Lost board drew %s columns; expected 7" % r["columns"]
+    lost_cols = rendered["lostCols"]
+    assert lost_cols[-1] == "Not recorded", lost_cols
+    assert r["colNames"] == lost_cols, (
+        "the Lost board drew %s; the reason columns are %s" % (r["colNames"], lost_cols))
+    assert r["columns"] == len(lost_cols), (
+        "the Lost board matched `class=\"col` %s times; expected %s reason columns and no + New "
+        "button, because a bid cannot be started on the tab of dead ones"
+        % (r["columns"], len(lost_cols)))
+    assert r["colNames"] != rendered["stages"], "the Lost board drew the pipeline columns"
+    for held in ("Project on Hold", "Small Bid <$25k - Pending"):
+        assert held not in r["colNames"], (
+            "%r is a Lost column, but a bid on hold is still live" % held)
     assert r["cards"] == 3, "the Lost board drew %s cards; the fixture has 3" % r["cards"]
 
 

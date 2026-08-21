@@ -227,11 +227,31 @@ def test_automation_being_on_says_nothing_but_being_off_does():
 
 
 def test_a_lost_reason_renders_as_words_and_an_unknown_code_as_nothing():
-    got = run("out([C.lostReason(%s), C.lostReason(%s), C.lostReason(%s)]);" % (
-        json.dumps(prop(followup_state={"closed_lost_reason": "another_contractor"})),
-        json.dumps(prop(followup_state={"closed_lost_reason": "invented"})),
-        json.dumps(prop())))
-    assert got == ["Another contractor", "", ""]
+    """Two staff answers, one customer-only answer, an invented code and no reason at all.
+
+    `another_contractor` read "Another contractor" here until 2026-08-20, when the cross-repo
+    comparison went in (test_close_reason_vocabulary.py) and found the portal had been saying
+    "Selected another contractor" about the same key for weeks. The portal's wording won, because
+    it is also the wording on the customer's own radio button. Kyle's two answers are asserted
+    beside it so this test covers both halves of the derived map rather than only the tail of it."""
+    got = run("out([C.lostReason(%s), C.lostReason(%s), C.lostReason(%s), C.lostReason(%s),"
+              " C.lostReason(%s)]);" % (
+                  json.dumps(prop(followup_state={"closed_lost_reason": "another_contractor"})),
+                  json.dumps(prop(followup_state={"closed_lost_reason": "not_low_bid"})),
+                  json.dumps(prop(followup_state={"closed_lost_reason": "canceled"})),
+                  json.dumps(prop(followup_state={"closed_lost_reason": "invented"})),
+                  json.dumps(prop())))
+    assert got == ["Selected another contractor", "Not Low Bid", "Project Cancelled", "", ""]
+
+
+def test_a_hold_answer_is_not_a_lost_reason():
+    """The two answers that pause a bid have no business rendering as a cause of death: a held bid
+    is on the Active board, and a Lost column headed "Project on Hold" would be a column of live
+    work on the tab of dead work. HOLD_REASON is where those two live."""
+    got = run("out([C.lostReason(%s), C.lostReason(%s)]);" % (
+        json.dumps(prop(followup_state={"closed_lost_reason": "on_hold"})),
+        json.dumps(prop(followup_state={"closed_lost_reason": "small_bid_pending"}))))
+    assert got == ["", ""], "a hold answer renders as a lost reason: %r" % got
 
 
 # ── ordering ────────────────────────────────────────────────────────────────

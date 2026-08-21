@@ -40,9 +40,12 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import atomic_json
 
 log = logging.getLogger("treadwell.nav_access")
 
@@ -324,9 +327,15 @@ def save(deny: Any, by: str = "") -> Dict[str, Any]:
     with _LOCK:
         try:
             _DATA_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = _FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(out), encoding="utf-8")
-            tmp.replace(_FILE)      # atomic: a reader sees the whole old policy or the whole new one
+            # THE WRITE ITSELF LIVES IN atomic_json, because four other modules had this same
+            # three-line pattern and the same two bugs in it - a shared temp name that only a
+            # same-process lock protects, and a rename with no retry past a transient Windows
+            # PermissionError. pull_window.py failed identically on the very next merge after this
+            # was fixed here, which is what moved it out. The ERROR SEMANTICS stay here on purpose:
+            # a failed policy write must raise, because an admin who thinks they locked a tab down
+            # and did not is worse than an error message.
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            atomic_json.write_json(_FILE, out, make_parent=False)
         except Exception as exc:  # noqa: BLE001
             raise NavAccessWriteError(str(exc)) from exc
     log.info("nav access policy set by %s: %s", out["updated_by"] or "?",

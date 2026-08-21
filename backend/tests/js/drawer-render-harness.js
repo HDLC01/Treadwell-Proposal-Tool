@@ -90,6 +90,21 @@ for (const m of src.matchAll(/const \{([^}]*)\} = C;/g)) {
 
 // Order matters for the ones that run at declaration time: ALL_SEC_CARDS reads SEC_TABS, and
 // fu/avatar read C.
+/** The value of a module-level `const NAME = <number>;` in portal.js. One use: HOLD_MONTHS, which
+ *  the sent drawer's close-out handler sends as `months`. Read rather than typed, so this harness
+ *  cannot assert a pause length the page does not ship. */
+function numConst(name) {
+  const m = new RegExp("\\n\\s*const " + name + " = (\\d+);").exec(src);
+  if (!m) throw new Error("const " + name + " is gone from portal.js — rewrite this harness");
+  return Number(m[1]);
+}
+const HOLD_MONTHS = numConst("HOLD_MONTHS");
+
+// What the two dialogs answer, and what they were asked. Mutable so one process can run both the
+// yes and the no case; a fresh module per case would cost a node start per assertion.
+const dlg = { answer: null, calls: [] };
+const prompt = { answer: true, calls: [] };
+
 const CONST_NAMES = [
   "$", "esc", "money", "when", "fu", "avatar", "plainAvatar", "pausedUntil", "ROLE_LABEL",
   "ACCT_TYPE_LABEL", "METHOD_LABEL", "METHOD_PHRASE", "CUSTOMER_EVENTS", "sideOf",
@@ -105,6 +120,12 @@ const FN_NAMES = [
   "drawerHead", "customerHtml", "copyPortalLink", "wirePortalLink", "approvalHtml",
   "contactsHtml", "recipientsHtml", "msgHtml", "splitSystem", "depositHtml", "mask4",
   "followupPanelHtml", "followupContactsHtml", "followupRow", "followupState",
+  // The hold on a SENT bid (2026-08-21), read out of the follow-up log because portal_proposals
+  // stores only the pause DATE. FIFTH addition to this list for the same reason as the four below,
+  // and it would be the widest: followupPanelHtml, renderDetail's tab strip and wireFollowup's
+  // bring-back all call it, so leaving it out is a ReferenceError on every sent drawer rather than
+  // a missing sentence.
+  "sentHold",
   "renderSecTabs", "secTab", "defaultSection", "unreadCount",
   // The resting-tab rule (2026-08-20), shared by BOTH renderers: defaultSection ends in it and
   // renderNotSent asks it directly. Fifth entry in this list added for the same reason as the four
@@ -124,11 +145,16 @@ const FN_NAMES = [
   // it caught this the first time it ran.
   "loadRevisions", "paintRevisions", "downloadRevision",
   "loadNotSentNotify", "paintNotSentNotify",
-  // Closing an unsent bid lost (2026-08-19). Third time this list has had to grow for the same
-  // reason: renderNotSent calls it unconditionally, so leaving it out is a ReferenceError for the
-  // whole panel rather than a missing button. lostReasonDialog comes with it because the handler
-  // awaits it.
-  "wireNotSentLost", "lostReasonDialog",
+  // Closing an unsent bid out (2026-08-19, and again 2026-08-20 when it grew a second outcome).
+  // Third time this list has had to grow for the same reason: renderNotSent calls it
+  // unconditionally, so leaving it out is a ReferenceError for the whole panel rather than a
+  // missing button. nsHoldReason comes with it because the PANEL MARKUP calls it — three times,
+  // in the ternary that chooses between closed lost, on hold and live — so it is not optional the
+  // way an awaited dialog is. The dialog itself is stubbed below.
+  // nsCloseNote joins them on the day the comment became required, for the same reason: the
+  // closed-lost and on-hold arms both call it, so leaving it out is a ReferenceError for the
+  // whole panel rather than a missing sentence.
+  "wireNotSentLost", "nsHoldReason", "nsCloseNote",
   // Marking a project won by hand (2026-08-19). FOURTH time, and this pair is called from BOTH
   // renderers — wonControlHtml from renderNotSent and from followupPanelHtml, wireWon from
   // renderNotSent and from wireFollowup — so omitting either is a ReferenceError that takes out the
@@ -347,6 +373,16 @@ const BOARD_ROWS = [
   // only shape that can still prove the unread rule exists now that Chat is also the fallback.
   { proposal_id: "bothwait", project_name: "Halstead Cannery", proposal_status: "approved",
     unread: 2 },
+  // ── the hold on a SENT bid (2026-08-21) ──
+  // On the board as a live SENT row, which is half the claim: Hanz's rule is that a hold leaves the
+  // card on the Active board, so nothing here may set proposal_status to closed_lost.
+  { proposal_id: "held", project_name: "Nearman Creek", proposal_status: "sent",
+    sent_at: "2026-08-10T12:00:00Z", assigned_estimator: "kyle@wetreadwell.com", unread: 0,
+    followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-21" } },
+  { proposal_id: "heldlost", project_name: "Cherrydale Annex", proposal_status: "closed_lost",
+    sent_at: "2026-08-10T12:00:00Z", unread: 0,
+    followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-21",
+                      closed_lost_reason: "different_gc", closed_at: "2026-08-21T12:00:00Z" } },
 ];
 
 /** The drawer payload as /api/portal/proposal/<id> returns it. */
@@ -555,12 +591,19 @@ const api = (p, init) => {
       : { ok: true }),
   });
 };
+// TW.confirmDanger, ANSWERABLE and recorded. It used to be hardwired to `false`, which was enough
+// while every caller of it in this drawer was a pause or a delete that the scenarios only needed to
+// NOT happen. The automation switch changed that on 2026-08-21: on a paused project it now asks
+// before it lifts the pause, so both answers are behaviour — no posts nothing, yes posts the toggle
+// — and the wording of the ask is the thing that has to name what is being cleared. Default stays
+// false so every scenario written before this keeps the answer it was written against.
+const danger = { answer: false, calls: [] };
 const TW = {
   fmtBizDate: (v) => (v ? String(v).slice(0, 10) : ""),
   fmtBizDay: (v) => String(v || ""),
   fmtBizDateTime: (v) => String(v || "").replace("T", " ").slice(0, 16),
   bizToday: () => "2026-08-13",
-  confirmDanger: () => Promise.resolve(false),
+  confirmDanger: (o) => { danger.calls.push(o || {}); return Promise.resolve(danger.answer); },
 };
 // Where the page tried to navigate. The drawer's "Open the files" and "Info sheet" buttons are
 // <button>s that call window.location.assign, so the URL they send is only visible by firing the
@@ -588,7 +631,29 @@ const injected = [
   ["load", () => Promise.resolve()],
   ["loadEstimators", () => Promise.resolve([{ email: "kyle@wetreadwell.com", name: "Kyle" }])],
   ["editInvoiceDialog", () => Promise.resolve(null)],
-  ["lostReasonDialog", () => Promise.resolve(null)],
+  // The close-out dialog. ANSWERABLE, not hardwired: the answer decides which of the two
+  // outcomes the sent drawer sends (six of Kyle's reasons close the bid, two put it on hold), so a
+  // stub with one answer would leave one whole branch of the handler unexercised. The dialog's own
+  // markup and its required comment are close-out-harness.js's subject; what this file drives is
+  // what the drawer DOES with an answer. Every call is recorded, so "it asked before posting" is
+  // an assertion rather than a hope.
+  ["closeOutDialog", (p, opts) => { dlg.calls.push({ name: p && p.project_name, opts: opts || null });
+                                    return Promise.resolve(dlg.answer); }],
+  // The bring-back prompt. Answerable for the same reason, and defaulting to YES so the scenarios
+  // that were written before it existed still press through their buttons — the ones about the
+  // prompt itself set it to no. `calls` carries the row it was asked about, which is what proves
+  // the prompt names the right project.
+  // `extra` is recorded as well as the row, because the second argument is the only difference
+  // between the prompt for a closed bid and the prompt for a held one: it is the sentence that
+  // names the hold as the thing coming off. The prompt's own wording is not-sent-lost-harness's
+  // subject (it lifts the real confirmBringBack); what this file drives is what each caller ASKS.
+  ["confirmBringBack", (p, extra) => { prompt.calls.push({ name: p && p.project_name,
+                                                          extra: extra === undefined ? null : extra });
+                                       return Promise.resolve(prompt.answer); }],
+  // HOLD_MONTHS is a module const the sent drawer's close-out handler reads. Bound by NAME off
+  // portal.js rather than typed here, so a change to the number cannot make this harness test a
+  // different feature than the page ships.
+  ["HOLD_MONTHS", HOLD_MONTHS],
 ];
 
 const body = `"use strict";
@@ -656,7 +721,8 @@ const out = { imported: destructured.map(([n]) => n), tabs: Object.keys(page.sec
   // "wiring an id it never rendered" — the not-sent test subtracts these.
   allSecCards: page.allSecCards(),
               secMap: page.secTabs(),
-              scenarios: {}, clipboard: {}, notSent: {}, won: {}, errors: {} };
+              scenarios: {}, clipboard: {}, notSent: {}, won: {}, closeOut: {}, hold: {},
+              errors: {} };
 
 /** What one tab looks like once focusSection has switched to it: which cards are on screen,
  *  which panel is, and which step reads as selected. Read off the classList the real
@@ -950,6 +1016,235 @@ async function runScenario(name, s) {
     out.won.derived = { html: dom.html };
   } catch (e) {
     out.errors.won = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── closing a SENT bid out, and bringing one back ──────────────────────────
+  // Hanz, 2026-08-20. Three claims, none of them visible in a source read: that the dialog is asked
+  // BEFORE anything is posted, that a hold rides the `delayed` status while a loss rides
+  // `closed_lost`, and that bringing a card back goes through the DRAFT route rather than the
+  // portal's own — which is the fix for a job marked won and then closed lost, where clearing only
+  // the portal row moves the card onto the Won tab instead of back to the board.
+  try {
+    /** Render a sent project's drawer, press one of the Follow-up tab's buttons, and report. */
+    async function pressFu(pid, proposal, id) {
+      const data = payload({ proposal: Object.assign(
+        { project_name: "Nearman Creek", customer_email: "d@x.com", url: PORTAL_URL,
+          deposit_status: "pending", contacts_status: "pending",
+          followup_state: { enrolled: true, enabled: true } }, proposal),
+        approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [] });
+      page.open(pid);
+      page.cache(pid, data);
+      page.renderDetail(pid, data);
+      const before = dom.html;
+      net.requests.length = 0;
+      dlg.calls.length = 0;
+      prompt.calls.length = 0;
+      const b = dom.getElementById(id);
+      if (!b) return { pressed: false, html: before };
+      await b.fire("click");
+      for (let i = 0; i < 8; i++) await tick();
+      return { pressed: true, html: before, requests: net.requests.slice(),
+               asked: dlg.calls.slice(), prompted: prompt.calls.slice() };
+    }
+
+    const SENT = { proposal_status: "sent", sent_at: "2026-08-10T12:00:00Z" };
+    const LOST = { proposal_status: "closed_lost", sent_at: "2026-08-10T12:00:00Z",
+                   followup_state: { enrolled: true, enabled: true,
+                                     closed_lost_reason: "not_low_bid",
+                                     closed_at: "2026-08-18T12:00:00Z" } };
+
+    // Dismissed: nothing posted at all.
+    dlg.answer = null;
+    out.closeOut.dismissed = await pressFu("co-dismiss", SENT, "fu-lost");
+
+    // One of Kyle's six that DO close the bid.
+    dlg.answer = { reason: "not_low_bid", note: "12% over Wilson on the pour.", outcome: "lost" };
+    out.closeOut.lost = await pressFu("co-lost", SENT, "fu-lost");
+
+    // One of the two that DO NOT. Hanz: the card stays on the Active board and the reminders
+    // pause, which on a sent project is exactly what `delayed` does.
+    dlg.answer = { reason: "on_hold", note: "GC pushed the whole job to spring.",
+                   outcome: "hold" };
+    out.closeOut.held = await pressFu("co-hold", SENT, "fu-lost");
+    dlg.answer = { reason: "small_bid_pending", note: "Under 25k, waiting on their PM.",
+                   outcome: "hold" };
+    out.closeOut.heldSmall = await pressFu("co-hold2", SENT, "fu-lost");
+    dlg.answer = null;
+
+    // Bringing one back. The prompt is asked first, and answering no posts nothing.
+    prompt.answer = false;
+    out.closeOut.reopenCancelled = await pressFu("co-reopen-no", LOST, "fu-reopen");
+    prompt.answer = true;
+    out.closeOut.reopened = await pressFu("co-reopen", LOST, "fu-reopen");
+
+    // Undoing a won mark asks the same prompt, and answering no leaves the mark alone.
+    const undoRow = page.row("marknotsent");
+    if (undoRow) undoRow.won_at = "2026-08-19T15:00:00Z";
+    prompt.answer = false;
+    page.open("marknotsent");
+    page.renderNotSent("marknotsent", undoRow);
+    net.requests.length = 0;
+    prompt.calls.length = 0;
+    const undoBtn = dom.getElementById("won-undo");
+    if (undoBtn) await undoBtn.fire("click");
+    for (let i = 0; i < 6; i++) await tick();
+    out.closeOut.wonUndoCancelled = { pressed: !!undoBtn, requests: net.requests.slice(),
+                                      prompted: prompt.calls.slice(),
+                                      rowWonAt: (page.row("marknotsent") || {}).won_at };
+    prompt.answer = true;
+    if (undoRow) undoRow.won_at = "";
+  } catch (e) {
+    out.errors.closeOut = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── A HOLD ON A SENT BID: the way out, and the copy that stops lying ──────
+  // The close-out dialog has promised, in these words, that a held bid "stays on the Active board
+  // and the reminder emails pause ... You can bring it back sooner" since holds shipped on
+  // 2026-08-20. On the SENT half there was no control that brought it back: #fu-reopen rendered on
+  // isLost only, a held bid is not lost, and the panel said "The customer asked us to come back to
+  // this" about a hold a staff member had pressed for internal reasons. All three are behaviour, and
+  // none of them is visible in a source read — the hold is not on the proposal row at all, it is the
+  // newest `paused` entry in the follow-up log, so what this panel says depends on a payload.
+  try {
+    const HOLD_NOTE = "GC pushed the whole job to spring.";
+    const HOLD_ROW = { kind: "staff_note", created_at: "2026-08-20T12:00:00Z",
+                       by: "kyle@wetreadwell.com",
+                       detail: { action: "paused", months: 4, until: "2026-12-21",
+                                 reason: "on_hold", note: HOLD_NOTE } };
+    const SMALL_ROW = { kind: "staff_note", created_at: "2026-08-20T12:00:00Z",
+                        by: "kyle@wetreadwell.com",
+                        detail: { action: "paused", months: 4, until: "2026-12-21",
+                                  reason: "small_bid_pending",
+                                  note: "Under 25k, waiting on their PM." } };
+    // The customer's own "revisit in a month", as the portal writes it: kind customer_status,
+    // detail.status, and NO reason. Newer than the hold above, which is the case that decides
+    // whether sentHold quotes the newest pause or the newest one that happens to have a reason.
+    const CUSTOMER_DELAY = { kind: "customer_status", created_at: "2026-08-21T09:00:00Z",
+                             detail: { status: "delayed", months: 1, until: "2026-09-21" } };
+    // A plain "Mark delayed": a staff pause with no reason on it. Must NOT read as a hold, or the
+    // panel puts a reason on screen that nobody chose.
+    const PLAIN_PAUSE = { kind: "staff_note", created_at: "2026-08-20T12:00:00Z",
+                          by: "kyle@wetreadwell.com",
+                          detail: { action: "paused", months: 2, until: "2026-10-20" } };
+    const AUTO = { kind: "auto_email", created_at: "2026-08-12T12:00:00Z",
+                   detail: { template: "not_viewed", audience: "customer" } };
+
+    /** One sent project's drawer, rendered, with a real follow-up log behind it. */
+    function paintHold(pid, fuState, log, over) {
+      const data = payload(Object.assign({
+        proposal: Object.assign(
+          { project_name: (page.row(pid) || {}).project_name || "Nearman Creek",
+            customer_email: "d@x.com", url: PORTAL_URL, proposal_status: "sent",
+            deposit_status: "pending", contacts_status: "pending",
+            followup_state: fuState }, over || {}),
+        approval: null, contacts: [], deposits: [], recipient_activity: [],
+        followups: log || [],
+      }));
+      page.open(pid);
+      page.cache(pid, data);
+      page.renderDetail(pid, data);
+      const tab = dom.query("#dtab-followup");
+      return { html: dom.html, pill: tab ? tab.getAttribute("aria-label") : null, data };
+    }
+    const PAUSED = { enrolled: true, enabled: true, paused_until: "2026-12-21" };
+    const held = paintHold("held", PAUSED, [HOLD_ROW, AUTO]);
+    out.hold.held = { html: held.html, pill: held.pill };
+    out.hold.heldSmall = paintHold("held", PAUSED, [SMALL_ROW, AUTO]);
+    delete out.hold.heldSmall.data;
+    // The same row with NO reason on its newest pause, and with the customer's own answer on top of
+    // a hold. Both must read as the customer's pause, which is the sentence that was wrong before.
+    out.hold.plainPause = (() => { const r = paintHold("held", PAUSED, [PLAIN_PAUSE, AUTO]);
+                                   return { html: r.html, pill: r.pill }; })();
+    out.hold.customerAfterHold = (() => {
+      const r = paintHold("held", Object.assign({}, PAUSED, { paused_until: "2026-09-21" }),
+                          [CUSTOMER_DELAY, HOLD_ROW, AUTO]);
+      return { html: r.html, pill: r.pill };
+    })();
+    // The comment with markup in it. The one free-text field on this panel, typed by a person and
+    // rendered as typed, so the escaping is a claim about the panel rather than about esc().
+    out.hold.markupNote = (() => {
+      const r = paintHold("held", PAUSED,
+        [{ kind: "staff_note", created_at: "2026-08-20T12:00:00Z",
+           detail: { action: "paused", months: 4, until: "2026-12-21", reason: "on_hold",
+                     note: "GC said <b>no</b> for now." } }, AUTO]);
+      return { html: r.html };
+    })();
+    // A hold that has LAPSED: the log still carries it for good, and the row is no longer paused.
+    out.hold.lapsed = (() => {
+      const r = paintHold("held", { enrolled: true, enabled: true, paused_until: "2026-08-01" },
+                          [HOLD_ROW, AUTO]);
+      return { html: r.html, pill: r.pill };
+    })();
+    // Held, then genuinely closed lost. Lost beats everything in every reader, so this must read as
+    // closed and offer the reactivate rather than the bring-back-from-hold.
+    out.hold.heldThenLost = (() => {
+      const r = paintHold("heldlost",
+                          { enrolled: true, enabled: true, paused_until: "2026-12-21",
+                            closed_lost_reason: "different_gc" },
+                          [{ kind: "staff_note", created_at: "2026-08-21T12:00:00Z",
+                             detail: { action: "closed_lost", reason: "different_gc",
+                                       note: "GC went with Wilson." } }, HOLD_ROW, AUTO],
+                          { proposal_status: "closed_lost" });
+      return { html: r.html, pill: r.pill };
+    })();
+    // WHERE THE CARD SITS, off crm-core rather than off this panel: the drawer cannot answer "is it
+    // still on the Active board", and that is half of what a hold promises.
+    const boardRow = page.row("held");
+    out.hold.board = { isLost: C.isLost(boardRow), stage: C.stage(boardRow),
+                       isWon: C.isWon(boardRow),
+                       pausedUntil: C.pausedUntil(boardRow, "2026-08-13") };
+    const lostRow = page.row("heldlost");
+    out.hold.boardAfterLost = { isLost: C.isLost(lostRow), stage: C.stage(lostRow) };
+
+    /** Press one of the panel's buttons on a rendered drawer and report what it sent. */
+    async function press(id) {
+      net.requests.length = 0;
+      prompt.calls.length = 0;
+      danger.calls.length = 0;
+      const b = dom.getElementById(id);
+      if (!b) return { pressed: false, requests: [], prompted: [], asked: [] };
+      await b.fire("click");
+      for (let i = 0; i < 8; i++) await tick();
+      return { pressed: true, requests: net.requests.slice(), prompted: prompt.calls.slice(),
+               asked: danger.calls.slice() };
+    }
+
+    // THE BRING-BACK, pressed. `bring_back` on the DRAFT route is what clears both stores, and the
+    // portal's `active` leg is the one that calls resume_followups — so the pause coming off is a
+    // claim about which route this button chooses.
+    paintHold("held", PAUSED, [HOLD_ROW, AUTO]);
+    prompt.answer = true;
+    out.hold.broughtBack = await press("fu-reopen");
+    // Answering no to the prompt must leave the hold exactly where it is.
+    paintHold("held", PAUSED, [HOLD_ROW, AUTO]);
+    prompt.answer = false;
+    out.hold.bringBackDeclined = await press("fu-reopen");
+    prompt.answer = true;
+
+    // THE AUTOMATION SWITCH on a paused project. It used to flip a flag and leave the pause, so the
+    // one obvious workaround for a missing bring-back silently sent nothing. It now lifts the pause
+    // and asks first.
+    paintHold("held", { enrolled: true, enabled: false, paused_until: "2026-12-21" },
+              [HOLD_ROW, AUTO]);
+    danger.answer = false;
+    out.hold.toggleDeclined = await press("fu-toggle");
+    paintHold("held", { enrolled: true, enabled: false, paused_until: "2026-12-21" },
+              [HOLD_ROW, AUTO]);
+    danger.answer = true;
+    out.hold.toggleAccepted = await press("fu-toggle");
+    danger.answer = false;
+    // And an UNPAUSED project's switch is still one click: no confirm at all.
+    paintHold("held", { enrolled: true, enabled: false }, [AUTO]);
+    out.hold.toggleUnpaused = await press("fu-toggle");
+    // A held bid can still be closed out without a round trip through the board, which is where the
+    // sent half deliberately differs from the unsent one: bringing it back first would resume the
+    // cadence and put an automated chase in front of a customer whose job we have just lost.
+    paintHold("held", PAUSED, [HOLD_ROW, AUTO]);
+    dlg.answer = { reason: "different_gc", note: "GC went with Wilson.", outcome: "lost" };
+    out.hold.closedFromHold = await press("fu-lost");
+    dlg.answer = null;
+  } catch (e) {
+    out.errors.hold = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
   // ── the routing rules, one at a time ──────────────────────────────────────

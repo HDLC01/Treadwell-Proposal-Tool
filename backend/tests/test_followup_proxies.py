@@ -127,11 +127,85 @@ def test_marking_delayed_requires_one_of_the_offered_windows(monkeypatch):
                            json={"status": "delayed", "months": bad}).status_code == 400
 
 
-def test_closed_lost_forwards_its_reason(monkeypatch):
+#: A comment good enough to get past the required field, and short enough to read in a failure.
+NOTE = "We were 12% over Wilson on the pour."
+
+
+def test_closed_lost_forwards_its_reason_and_its_comment(monkeypatch):
+    """THE PROXY REBUILDS THE OUTBOUND BODY from a fixed key list, so a field added client-side is
+    dropped without a word unless it is added here too — which is what makes this a test and not a
+    formality. `note` joined the list on 2026-08-20 with the required comment."""
+    cap = _wire(monkeypatch)
+    r = client.post(f"/api/portal/proposal/{PID}/status",
+                    json={"status": "closed_lost", "reason": "not_low_bid", "note": NOTE})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["status"] == "closed_lost"
+    assert cap["body"]["reason"] == "not_low_bid"
+    assert cap["body"]["note"] == NOTE, (
+        "the comment never left this process, so the estimator's sentence is lost: %r" % cap["body"])
+
+
+def test_closing_a_sent_bid_is_refused_without_a_reason_or_a_comment(monkeypatch):
+    """This proxy passed `reason` straight through until 2026-08-20 and the portal only checked it
+    `if reason`, so a SENT project could be closed lost with no reason at all or with a made-up one
+    — while the DRAFT route beside it 422s both. The Lost tab has no column for a reason nobody
+    recognises, so that asymmetry filed dead bids under "Not recorded" from one drawer and never
+    from the other. Both ends now refuse, and the whitespace cases are here because the required box
+    is a textarea."""
+    cap = _wire(monkeypatch)
+    for body in ({"status": "closed_lost"},
+                 {"status": "closed_lost", "note": NOTE},
+                 {"status": "closed_lost", "reason": "vibes", "note": NOTE},
+                 {"status": "closed_lost", "reason": "not_low_bid"},
+                 {"status": "closed_lost", "reason": "not_low_bid", "note": "   "},
+                 {"status": "closed_lost", "reason": "not_low_bid", "note": "\n\t"}):
+        r = client.post(f"/api/portal/proposal/{PID}/status", json=body)
+        assert r.status_code == 400, "%r got through" % body
+    assert cap == {}, "one of those reached the portal: %r" % cap
+
+
+def test_a_long_comment_is_capped_on_the_way_out(monkeypatch):
     cap = _wire(monkeypatch)
     client.post(f"/api/portal/proposal/{PID}/status",
-                json={"status": "closed_lost", "reason": "price"})
-    assert cap["body"]["status"] == "closed_lost" and cap["body"]["reason"] == "price"
+                json={"status": "closed_lost", "reason": "to_rebid", "note": "x" * 5000})
+    assert len(cap["body"]["note"]) == 2000
+
+
+def test_a_hold_rides_the_delayed_status_with_its_reason_and_comment(monkeypatch):
+    """Hanz, 2026-08-20: "Project on Hold" and "Small Bid <$25k - Pending" leave the card on the
+    Active board with the reminders paused. On a project the customer HAS, that is the portal's
+    existing `delayed` status — the one thing that pauses a cadence without moving the card — rather
+    than a second pausing mechanism that would give one bid two pause dates able to disagree."""
+    for reason in main.HOLD_REASONS:
+        cap = _wire(monkeypatch)
+        r = client.post(f"/api/portal/proposal/{PID}/status",
+                        json={"status": "delayed", "months": 4, "reason": reason, "note": NOTE})
+        assert r.status_code == 200, r.text
+        assert cap["body"] == {"status": "delayed", "by": cap["body"]["by"], "months": 4,
+                              "reason": reason, "note": NOTE}
+
+
+def test_a_hold_is_refused_without_a_comment_or_with_a_lost_reason(monkeypatch):
+    cap = _wire(monkeypatch)
+    for body in ({"status": "delayed", "months": 4, "reason": "on_hold"},
+                 {"status": "delayed", "months": 4, "reason": "on_hold", "note": "  "},
+                 {"status": "delayed", "months": 4, "reason": "not_low_bid", "note": NOTE}):
+        r = client.post(f"/api/portal/proposal/{PID}/status", json=body)
+        assert r.status_code == 400, "%r got through" % body
+    assert cap == {}
+
+
+def test_the_bare_mark_delayed_control_still_needs_nothing(monkeypatch):
+    """It predates the close-out dialog by three weeks: it picks a number of months and asks for no
+    reason and no comment. Requiring one there would break the control this endpoint was built for
+    in order to tidy up the one added on top of it."""
+    cap = _wire(monkeypatch)
+    r = client.post(f"/api/portal/proposal/{PID}/status", json={"status": "delayed", "months": 2})
+    assert r.status_code == 200, r.text
+    assert cap["body"]["months"] == 2
+    assert "reason" not in cap["body"] and "note" not in cap["body"], (
+        "an empty reason or comment is forwarded as a value, and the portal would file the pause "
+        "as a hold nobody chose: %r" % cap["body"])
 
 
 def test_an_unknown_status_never_reaches_the_portal(monkeypatch):

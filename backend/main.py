@@ -17,6 +17,7 @@ Then open http://127.0.0.1:8888 in a browser.
 from __future__ import annotations
 
 import base64
+import calendar
 import hashlib
 import json
 import logging
@@ -1536,7 +1537,28 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # activity, so without it the Lost tab would date the bid by whenever somebody last
             # touched the estimate rather than by the day it was closed.
             out[-1]["followup_state"] = {"closed_lost_reason": s["closed_lost_reason"],
-                                         "closed_at": s.get("closed_lost_at")}
+                                         "closed_at": s.get("closed_lost_at"),
+                                         # The sentence somebody had to write. Carried so the
+                                         # DRAWER can show it: requiring a comment and then never
+                                         # printing it would cost the estimator a sentence and give
+                                         # the next reader nothing. The card never draws it (224px,
+                                         # and this is a paragraph); the sent half of the feature
+                                         # shows its copy in the customer thread instead.
+                                         "closed_lost_note": s.get("closed_lost_note")}
+        # ON HOLD, which is the opposite instruction to the branch above. Hanz, 2026-08-20: two of
+        # the eight answers on Kyle's close-out list pause a bid instead of killing it, and the card
+        # STAYS on the Active board. So this writes no proposal_status: stage() still reads
+        # `not_sent` and still returns "Created but not sent", and the only visible change is the
+        # "Paused to ..." chip, which chipsHtml already draws off followup_state.paused_until.
+        #
+        # `elif`, because a bid that was held and then genuinely lost must read as lost — the same
+        # isLost-wins ordering every other reader uses — and because these two branches write the
+        # SAME key. An `if` here would let the hold overwrite the closed-lost state and put a dead
+        # bid back on the live board with no reason column to file it under.
+        elif s.get("on_hold_reason"):
+            out[-1]["followup_state"] = {"paused_until": s.get("on_hold_until"),
+                                         "on_hold_reason": s["on_hold_reason"],
+                                         "on_hold_note": s.get("on_hold_note")}
     return out
 
 
@@ -1729,6 +1751,10 @@ class StatusIn(BaseModel):
     status: str = ""
     months: Optional[int] = None
     reason: str = ""
+    # Why. Required alongside a reason, refused empty — see NOTE_REQUIRED. Optional only for the
+    # bare "Mark delayed" control on the Follow-up tab, which picks a number of months and no
+    # reason at all and predates this by three weeks.
+    note: str = ""
 
 
 @app.post("/api/portal/proposal/{proposal_id}/assign")
@@ -1798,19 +1824,47 @@ def api_portal_log_followup(proposal_id: str, request: Request,
 def api_portal_set_status(proposal_id: str, request: Request,
                           payload: Optional[StatusIn] = None) -> Dict[str, Any]:
     """Pause, close-lost or reactivate on the customer's behalf — for when they tell
-    an estimator by phone rather than clicking the link in the email."""
+    an estimator by phone rather than clicking the link in the email.
+
+    VALIDATES THE REASON, which it did not until 2026-08-20. This proxy passed `reason` straight
+    through and the portal only checked it `if reason`, so a SENT project could be closed lost with
+    no reason at all or with a made-up one — while the DRAFT route beside it 422s both. The board's
+    Lost tab has no column for a reason nobody recognises, so that asymmetry filed dead bids under
+    "Not recorded" from one drawer and never from the other. Both ends now refuse.
+
+    THE HOLD ANSWERS ARRIVE HERE AS `delayed`. Kyle's list has two that pause a bid rather than
+    killing it, and Hanz's instruction was to route them through the status the portal already has
+    rather than invent a mechanism: the card stays on the Active board and the cadence pauses,
+    which is exactly what `delayed` does. `reason` and `note` ride along so the pause says WHY in
+    the thread instead of appearing as an unexplained gap in the chasing."""
     status = str((payload.status if payload else "") or "").strip().lower()
     if status not in ("delayed", "closed_lost", "active"):
         raise HTTPException(400, "invalid_status")
     body: Dict[str, Any] = {"status": status, "by": _user_email(request)}
+    reason = str((payload.reason if payload else "") or "").strip().lower()
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
     if status == "delayed":
         months = (payload.months if payload else None) or 0
         if int(months) not in (1, 2, 3, 4):
             raise HTTPException(400, "invalid_months")
         body["months"] = int(months)
-    reason = str((payload.reason if payload else "") or "").strip().lower()
+        # A pause with a reason on it is one of Kyle's two hold answers, and those come from the
+        # close-out dialog, which requires the comment. A pause with NO reason is the older
+        # "Mark delayed" control, which asks for nothing and must keep working.
+        if reason:
+            if reason not in HOLD_REASONS:
+                raise HTTPException(400, "invalid_reason")
+            if not note:
+                raise HTTPException(400, NOTE_REQUIRED)
+    elif status == "closed_lost":
+        if reason not in LOST_REASONS:
+            raise HTTPException(400, "invalid_reason")
+        if not note:
+            raise HTTPException(400, NOTE_REQUIRED)
     if reason:
         body["reason"] = reason
+    if note:
+        body["note"] = note
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
 
 
@@ -3387,6 +3441,10 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
             "in_txbx": txbx_idx is not None,
             "txbx": txbx_idx,
             "align": proposal_writer._para_align(p),
+            # "does this paragraph carry Word numbering at all" — TRUE for a bulleted WORK/NOTES
+            # row AND for a numbered Terms clause, so it cannot answer "what does it print".
+            # `para.bullet` / `para.marker` do that; this stays as the fallback for a level whose
+            # definition cannot be read.
             "list": proposal_writer._para_is_list(p_elem),
             # PRICE-list rows (numId=3) get their bullets stripped at generate
             # time (_flatten_price_bullets); flag them so the on-screen editor
@@ -3472,7 +3530,11 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # cannot tell a WORK row from a numbered contract clause. The frontend's fallback for a block
 # with no `para` is therefore to offer no controls at all, and this bump is what makes sure it
 # never has to.
-_BLOCK_SCHEMA_VERSION = "5"
+# v6: `para` gained `marker` — what an ORDERED list level prints in front of the paragraph
+# ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
+# degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
+# in front of all 27 numbered clauses in the first place.
+_BLOCK_SCHEMA_VERSION = "6"
 
 
 def _template_proposal_version(path: Path) -> str:
@@ -4264,16 +4326,64 @@ def api_assign_draft(draft_id: str, payload: AssignDraftIn, request: Request) ->
     return {"ok": True, "assigned_estimator": email, "portal_updated": portal_ok, "sent": True}
 
 
-# The answers the drawer's dialog can produce. Kept in step with LOST_REASON in
+# Every reason a bid can be closed LOST under. Kept in step with LOST_REASON in
 # frontend/js/crm-core.js, which is also what the Lost tab's columns are built from — a reason the
 # board has no column for would file the bid under "Not recorded" and read as though nobody said.
-LOST_REASONS = ("price", "another_contractor", "canceled", "scope_changed", "timing", "other")
+# test_close_reason_vocabulary.py compares this tuple against that map, against the portal's
+# _LOST_REASONS and against the portal's label map, in every direction. Nothing compared them
+# until 2026-08-20 and two of the four had been carrying different labels for the same key.
+#
+# Kyle's six close-lost answers first, then the four only the CUSTOMER's own form can produce.
+LOST_REASONS = ("not_low_bid", "no_response", "to_rebid", "different_gc", "gc_schedule",
+                "canceled", "other",
+                "price", "another_contractor", "scope_changed", "timing")
+
+# The two answers on Kyle's list that DO NOT close anything. Hanz, 2026-08-20: "Project on Hold"
+# and "Small Bid <$25k - Pending" put the bid on hold — it stays on the Active board and the
+# reminders pause. A SENT project routes these to the portal's existing `delayed` status; an
+# UNSENT one has no portal row and no cadence to pause, so the draft records the fact (see
+# drafts.set_on_hold) and the board reads it back as a paused card in the Created column.
+HOLD_REASONS = ("on_hold", "small_bid_pending")
+
+# Why the comment is required, in one place, since three routes now say it.
+#
+# THIS IS THE FIRST REQUIRED FREE-TEXT FIELD IN THE TOOL. Every other note here is optional and
+# one of them carries a comment saying why ("A bare 'Call' with no note is still worth logging").
+# Hanz asked for this one on 2026-08-20: a reason alone does not tell the next person anything —
+# "Not Low Bid" is eight identical cards by the end of a quarter, and "we were 12% over Wilson on
+# the pour" is the sentence the sales meeting is actually held to read.
+NOTE_REQUIRED = "note_required"
+_NOTE_MAX = 2000
+
+# How long a hold pauses the chasing for, on a project with no portal row to pause.
+#
+# FOUR because four is the picker's open-ended top ("4+ months" — see _delay_window in the
+# portal), and a hold has no date on it. Kyle presses "Project on Hold" when the GC has gone
+# quiet indefinitely; guessing one or two months would restart the chasing on a date nobody
+# chose, and the estimator can always bring the bid back by hand the day it wakes up.
+HOLD_PAUSE_MONTHS = 4
+
+
+def _hold_until(now: Optional[datetime] = None) -> str:
+    """The day an on-hold bid stops being paused, as YYYY-MM-DD in the business timezone.
+
+    A SENT project's pause is computed by the PORTAL (followup_rules.add_months) because the
+    portal owns the cadence. This is the unsent half, which has no portal row and therefore no
+    cadence: nothing is chasing the bid, so the date is not a schedule, it is what the board's
+    "Paused to …" chip says out loud. Reusing that chip rather than inventing an on-hold one is
+    what keeps the two halves of this feature looking like one feature."""
+    d = digest_worker.biz_now(now).date()
+    years, month = divmod(d.month - 1 + HOLD_PAUSE_MONTHS, 12)
+    year, month = d.year + years, month + 1
+    return d.replace(year=year, month=month,
+                     day=min(d.day, calendar.monthrange(year, month)[1])).isoformat()
 
 
 class DraftStatusIn(BaseModel):
-    """Close an unsent project as lost, mark one won by hand, or clear either."""
+    """Close an unsent project as lost or on hold, mark one won by hand, or clear any of it."""
     status: str = "closed_lost"
     reason: str = ""
+    note: str = ""
 
 
 @app.post("/api/draft/{draft_id}/status")
@@ -4309,9 +4419,20 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
     CLEARING WON IS ITS OWN STATUS, `not_won`, rather than more work for "active". Each undo aims at
     the thing it undid: "active" is the Reactivate button's word for "this bid is live again", and
     overloading it would mean one call making two blob writes and logging two events, so a project
-    nobody had ever closed would show a "reactivated" line in its history. There is also nothing for
-    a combined clear to protect: the two facts are stored independently on purpose (see set_won) and
-    every reader asks isLost first, so a project can never READ as both."""
+    nobody had ever closed would show a "reactivated" line in its history.
+
+    `bring_back` IS THE ONE COMBINED CLEAR, added 2026-08-20, and it is not a rethink of the line
+    above. Hanz: "if projects are both won and lost there should be an option to bring it back to
+    its latest step in the CRM". A job marked won and THEN closed lost reads as Lost only (every
+    reader asks isLost first), so an undo that clears one mark leaves the card on the other tab and
+    the button looks broken. One press, one write, one event — see drafts.clear_outcome. The narrow
+    undos stay because they say what they undid; this one exists because "bring it back" is one act.
+
+    ON HOLD, `on_hold`, is not an outcome at all. Kyle's list carries two answers that pause a bid
+    instead of killing it (HOLD_REASONS above), and an unsent project has no portal row to pause,
+    so the draft records the reason and a date and the board keeps the card in its Created column.
+
+    THE COMMENT IS REQUIRED on both closing paths, and only there. See NOTE_REQUIRED."""
     status = (payload.status or "").strip().lower()
     if status in ("won", "not_won"):
         try:
@@ -4323,23 +4444,85 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
             raise HTTPException(404, "project_not_found")
         return {"ok": True, "status": status}
 
+    if status == "bring_back":
+        try:
+            existed = drafts.clear_outcome(draft_id, _user_email(request))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("clear_outcome failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not save the status.") from exc
+        if not existed:
+            raise HTTPException(404, "project_not_found")
+        # THE ONLY DRAFT-SIDE STATUS THAT FORWARDS, and the asymmetry with closed_lost above is the
+        # point rather than an oversight. Closing a bid lost has a portal route of its own that does
+        # strictly more (it stops the cadence), so writing both would give one bid two closed-lost
+        # records that can disagree. Bringing one back has to clear BOTH stores or it clears
+        # neither in the estimator's eyes: the won mark is ours, a sent project's closed_lost is the
+        # portal's, and isLost is asked first by every reader — so a card whose portal row is still
+        # closed stays on the Lost tab no matter what this blob says.
+        #
+        # Draft first, portal second, and both legs are idempotent (clear_outcome pops absent keys;
+        # the portal's "active" resumes an already-live proposal without a card). So a failure here
+        # is recoverable by pressing the button again, which is what the drawer tells the estimator
+        # to do. Reported rather than swallowed, unlike /assign: a bid that looks brought back and
+        # is still filed as lost is the exact confusion this feature exists to end.
+        try:
+            sent = bool(drafts.latest_revision_no(draft_id))
+        except Exception as exc:  # noqa: BLE001 — the draft is already cleared; say what we know
+            log.warning("revision lookup failed for %s: %s", draft_id, exc)
+            sent = False
+        if not sent:
+            return {"ok": True, "status": "active", "portal_updated": False, "sent": False}
+        try:
+            _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/status", "POST",
+                    {"status": "active", "by": _user_email(request)})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("portal reactivate failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not bring it back — try again.") from exc
+        return {"ok": True, "status": "active", "portal_updated": True, "sent": True}
+
+    if status == "on_hold":
+        reason = (payload.reason or "").strip().lower()
+        if reason not in HOLD_REASONS:
+            raise HTTPException(422, "unknown_reason")
+        note = (payload.note or "").strip()[:_NOTE_MAX]
+        if not note:
+            raise HTTPException(422, NOTE_REQUIRED)
+        # ONCE, not once per use: two calls either side of midnight in Kansas would store one
+        # date and report another, and the drawer paints what it is told.
+        until = _hold_until()
+        try:
+            existed = drafts.set_on_hold(draft_id, reason, note, _user_email(request),
+                                         until=until)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("set_on_hold failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not save the status.") from exc
+        if not existed:
+            raise HTTPException(404, "project_not_found")
+        return {"ok": True, "status": "on_hold", "reason": reason, "paused_until": until}
+
     if status in ("active", "reactivated", "reopen"):
-        reason: Optional[str] = None
+        reason = ""
+        note = ""
     elif status == "closed_lost":
         reason = (payload.reason or "").strip().lower()
         if reason not in LOST_REASONS:
             raise HTTPException(422, "unknown_reason")
+        note = (payload.note or "").strip()[:_NOTE_MAX]
+        if not note:
+            raise HTTPException(422, NOTE_REQUIRED)
     else:
         raise HTTPException(422, "unknown_status")
 
     try:
-        existed = drafts.set_close_lost(draft_id, reason, _user_email(request))
+        existed = drafts.set_close_lost(draft_id, reason or None, _user_email(request),
+                                        note=note or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("set_close_lost failed for %s: %s", draft_id, exc)
         raise HTTPException(502, "Could not save the status.") from exc
     if not existed:
         raise HTTPException(404, "project_not_found")
-    return {"ok": True, "status": "closed_lost" if reason else "active", "reason": reason}
+    return {"ok": True, "status": "closed_lost" if reason else "active",
+            "reason": reason or None}
 
 
 class NotifyPicksIn(BaseModel):
