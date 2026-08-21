@@ -45,6 +45,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import atomic_json
+
 log = logging.getLogger("treadwell.nav_access")
 
 # Beside the drafts DB and the analytics pull window on the data volume — the same volume, for the
@@ -325,28 +327,15 @@ def save(deny: Any, by: str = "") -> Dict[str, Any]:
     with _LOCK:
         try:
             _DATA_DIR.mkdir(parents=True, exist_ok=True)
-            # A UNIQUE TEMP NAME PER WRITER, not one shared ".tmp". The lock above serialises
-            # writers inside THIS process, but nothing stops a second process - a worker, a
-            # second uvicorn, a test runner - from writing the same fixed path at the same moment
-            # and one truncating the other's half-written file before the rename.
-            tmp = _FILE.with_suffix(".tmp.%d.%d" % (os.getpid(), threading.get_ident()))
-            tmp.write_text(json.dumps(out), encoding="utf-8")
-            # os.replace IS atomic, but on Windows it raises PermissionError (WinError 5) when
-            # anything else holds a handle on either path for the instant of the rename - an
-            # antivirus scanning the file we just wrote is the common one. Reproduced on the dev
-            # box under deliberate CPU load: four threads doing 20 replaces each, and roughly one
-            # run in eight lost the race and surfaced as NavAccessWriteError. Linux, where this
-            # actually runs in production, does not have that failure mode at all - but a save
-            # that fails for a reason unrelated to the save is worth retrying wherever it happens,
-            # and three tries over ~45ms is far below the point a human notices.
-            for attempt in range(3):
-                try:
-                    tmp.replace(_FILE)
-                    break
-                except PermissionError:
-                    if attempt == 2:
-                        raise
-                    time.sleep(0.015 * (attempt + 1))
+            # THE WRITE ITSELF LIVES IN atomic_json, because four other modules had this same
+            # three-line pattern and the same two bugs in it - a shared temp name that only a
+            # same-process lock protects, and a rename with no retry past a transient Windows
+            # PermissionError. pull_window.py failed identically on the very next merge after this
+            # was fixed here, which is what moved it out. The ERROR SEMANTICS stay here on purpose:
+            # a failed policy write must raise, because an admin who thinks they locked a tab down
+            # and did not is worse than an error message.
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            atomic_json.write_json(_FILE, out, make_parent=False)
         except Exception as exc:  # noqa: BLE001
             raise NavAccessWriteError(str(exc)) from exc
     log.info("nav access policy set by %s: %s", out["updated_by"] or "?",
