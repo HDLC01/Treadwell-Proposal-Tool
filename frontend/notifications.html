@@ -11,7 +11,11 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--surf); color:var(--ink);
     font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  .wrap { padding:24px 28px 64px; max-width:880px; }
+  /* Wider than the other pages because of the matrix: 9 step columns at 76px plus a 200px
+     person column is 884px, and a grid that has to scroll to show its ninth column is a
+     grid nobody reads the right-hand end of. It still scrolls on a narrow window, inside
+     .mx-scroll rather than by moving the page sideways. */
+  .wrap { padding:24px 28px 64px; max-width:1120px; }
   h1 { font-size:26px; font-weight:700; letter-spacing:-.01em; margin:0 0 2px; }
   .sub { color:var(--ink-v); margin:0 0 18px; font-size:13px; }
   .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:16px; }
@@ -94,6 +98,60 @@
     font:800 9.5px/1 system-ui; letter-spacing:.02em; vertical-align:middle; text-transform:uppercase;
     background:rgba(27,28,28,.09); color:var(--ink-v); }
   .nt-chip.on .nt-av { background:rgba(15,123,52,.15); color:#0f7b34; }
+  /* ── per-step matrix ──────────────────────────────────────────────────────────
+     FOUR STATES, and the reason they are four is the risk this feature carries: a green cell
+     inherited from the team list reads as a decision somebody made about this step, and nobody
+     goes looking for a decision they think has already been taken. So inherited is HOLLOW with a
+     DASHED edge and carries the word "team" inside it, while an explicit on is SOLID. Colour
+     alone would not be enough (it is the same green either way, and about 1 in 12 men would not
+     separate the greys from the greens reliably), which is why the difference is also a border
+     style and a word. */
+  .mx-scroll { overflow-x:auto; margin:2px 0 0; }
+  table.mx { border-collapse:separate; border-spacing:0; font-size:12px; }
+  table.mx th, table.mx td { padding:0; }
+  /* Sticky so the name stays put while the right-hand steps scroll into view. A grid of unlabelled
+     toggles is not a grid. */
+  .mx-who { position:sticky; left:0; z-index:2; background:#fff; text-align:left;
+    min-width:196px; max-width:196px; padding:6px 10px 6px 0; border-bottom:1px solid var(--line);
+    font-weight:400; vertical-align:middle; }
+  thead .mx-who { z-index:3; }
+  .mx-name { font-weight:700; }
+  /* The floor state, read only: it explains every inherited cell on the row. Not a control,
+     because the chip above already is one and one state must not have two switches. */
+  .mx-floor { display:block; color:var(--ink-v); font-size:10.5px; margin-left:25px; }
+  .mx-head { min-width:76px; max-width:76px; padding:0 4px 8px; vertical-align:bottom;
+    border-bottom:1px solid var(--line); }
+  .mx-h { display:block; color:var(--ink-v); font-size:10.5px; line-height:1.25; font-weight:700; }
+  /* Only ever drawn on a column that reaches nobody. Amber because it IS an exception to notice,
+     unlike the grey labels around it. */
+  .mx-warn { display:block; margin-top:3px; color:#8a6d00; background:#fff4d6;
+    border:1px solid #f0e0a8; border-radius:4px; padding:1px 3px; font-size:9px; font-weight:800;
+    line-height:1.2; }
+  .mx-quiet .mx-h { color:#8a6d00; }
+  /* A column that may not be emptied. Grey, not amber: nothing is wrong, it is a rule about this
+     column, and it is on screen so the server's refusal is predictable rather than a surprise. */
+  .mx-req { display:block; margin-top:3px; color:var(--ink-v); background:var(--surf-low);
+    border:1px solid var(--line); border-radius:4px; padding:1px 3px; font-size:9px;
+    font-weight:800; line-height:1.2; }
+  .mx-td { border-bottom:1px solid var(--line); text-align:center; padding:4px 4px; }
+  .mx-cell { display:inline-flex; align-items:center; justify-content:center; width:100%;
+    min-height:30px; border-radius:6px; font:800 9.5px system-ui; letter-spacing:.03em;
+    text-transform:uppercase; cursor:pointer; }
+  .mx-cell:disabled { cursor:not-allowed; }
+  .mx-cell:focus-visible { outline:2px solid var(--red); outline-offset:1px; }
+  .mx-g { pointer-events:none; }
+  /* Explicit on: solid, filled, no word. It was chosen here, so it needs no provenance. */
+  .mx-on { background:#0f7b34; border:1.5px solid #0f7b34; color:#fff; }
+  /* Inherited on: hollow, dashed, and it SAYS where it came from. */
+  .mx-inherited { background:#eefaf1; border:1.5px dashed #79c091; color:#0f7b34; }
+  /* Explicit off: a real decision to suppress, so it is drawn as one rather than left blank. */
+  .mx-off { background:#fdeceb; border:1.5px solid #d98b86; color:#9e001f; }
+  /* Not on the team and nothing set: the absence of anything, and it should look like it. */
+  .mx-none { background:var(--surf-low); border:1.5px solid var(--line); color:var(--ink-v); }
+  .mx-legend { display:flex; flex-wrap:wrap; gap:14px; margin:6px 0 10px; color:var(--ink-v);
+    font-size:11.5px; }
+  .mx-key { display:inline-flex; align-items:center; gap:6px; }
+  .mx-key .mx-cell { width:34px; min-height:20px; cursor:default; }
 </style>
 </head>
 <body>
