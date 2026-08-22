@@ -1,11 +1,21 @@
-// Externalized (CSP: no inline scripts). "Notification Sending" — who receives
-// Customer Portal notification emails (approvals, replies, questions, deposits,
-// contacts, customer email replies). Green = receives, gray = off.
-//   • Team (global): the default roster for every project. Admins edit.
-//   • Per-project: assign different people to a specific project; overrides the
-//     global setting for that project only. Admins toggle anyone; other staff
-//     may toggle only themselves (server-enforced). The same overrides also show
-//     in the Customer Portal drawer — one source of truth.
+// Externalized (CSP: no inline scripts). "Notification Sending": who receives Customer Portal
+// notification emails. Green = receives, gray = off. Three cards, widest rule first.
+//   1. Team (global): the floor. Everyone here hears about every CRM step unless the matrix
+//      below says otherwise for one step. Admins edit.
+//   2. Per step: a person x CRM-step matrix. A cell is explicit ON, explicit OFF, or INHERITED
+//      from the team list, and the three look different on purpose. An explicit OFF really does
+//      stop that one email, so what the grid shows is what the resolver does.
+//   3. Per project: assign different people to a specific project; overrides everything above
+//      for that project only. Admins toggle anyone; other staff may toggle only themselves
+//      (server-enforced). The same overrides also show in the Customer Portal drawer, one
+//      source of truth.
+//
+// WHY THE MATRIX EXISTS. Hanz, 2026-08-21: "is there a way like a UI/UX that to implement toggle
+// on and off who gets automatically toggled on for the notif sending for each step of the CRM?"
+// His premise was that Kylene is toggled on for approval. She is not: she sits on the deposit
+// bucket, and approval only LOOKS connected because approving is what triggers a deposit
+// request. The roster had exactly two buckets, general and deposit, so all seven other moments
+// shared one list that could only be set to everything or nothing.
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
@@ -29,70 +39,88 @@
   const C = window.TWCrm;
 
   let ADMIN = false, MY_EMAIL = "";
-  let ROSTER = [];                 // [{email, enabled}] — the GENERAL rows: the global base
-  let DEPOSIT_EXTRAS = [];         // [{email, enabled}] — deposit-kind rows, ADDITIVE to ROSTER
+  let ROSTER = [];                 // [{email, enabled}]: the GENERAL rows, the floor
+  let STEPS = [];                  // [{id, label, hint}], served by the portal, never hardcoded
+  let CELLS = {};                  // { emailLower: { stepId: true|false } }: the EXPLICIT rows
+  let INERT = [];                  // addresses whose only rows resolve to nothing (see stepsOfRow)
+  let RAW = [];                     // the rows exactly as the API returned them, for a repaint
   let PROJECTS = [];               // [{proposal_id, project_name, customer_email, ...}]
   let OVERRIDES = {};              // { proposal_id: { emailLower: 'add'|'mute' } }
 
-  // ── The two roster groups ───────────────────────────────────────────────────
-  // A roster row carries a `kind`. A GENERAL alert resolves to the enabled general rows; a
-  // DEPOSIT alert resolves to those PLUS the enabled deposit rows, deduped. Additive, not a
-  // swap — a swapping rule would cut the whole team off deposits the moment the first
-  // deposit-only person was added, and nothing on screen would have said so.
+  // The one roster group: the FLOOR.
   //
-  // WHY THIS SECOND CARD EXISTS. This page filtered the roster to general rows, so kylene@ —
-  // live as an enabled deposit row — was configuration nobody could see or change from the UI,
-  // and the next person like her needed SQL. Config you cannot see is config that rots.
+  // This used to be two cards, "Team" and "Deposit alerts", because `kind` held exactly
+  // ('general','deposit'). `kind` now holds a CRM STEP, so the deposit list is two COLUMNS of the
+  // matrix below (Deposit sent, Deposit received) rather than a card of its own. Keeping the card
+  // as well would have meant two controls writing one row, which is how they come to disagree.
+  // Nothing became unreachable: kylene@, the row that was live and invisible before 2026-08-20,
+  // is a matrix row with two green cells.
   //
-  // ONE CARD, BUILT TWICE, parameterised by kind: the toggle, the remove and the add all hit the
-  // same kind-agnostic endpoints, so a second hand-written card would only be a second place to
-  // fix the same bug. Rejected alternative: one list with a "deposits only" checkbox per chip.
-  // `kind` is half the row's unique key, so flipping it in place is a delete plus an insert —
-  // a half-failed pair leaves somebody silently unnotified, and a checkbox hides that.
+  // STILL BUILT THROUGH rosterCardHtml/paintGroup, parameterised, rather than inlined now that
+  // there is one of them. The add, the toggle and the remove all hit kind-agnostic endpoints, and
+  // a hand-written card would only be a second place to fix the same bug.
   const GROUPS = [{
-    kind: "general", other: "deposit",
-    lbl: "Team — global default (all projects)",
-    intro: "Everyone here gets every notification, deposits included.",
-    what: "the team", also: "also on deposits",
+    kind: "general", other: "step",
+    lbl: "Team (the floor, all projects, every step)",
+    intro: "Everyone here hears about every step below, unless the matrix switches one off for " +
+      "them. This is the floor: a step nobody has set up still reaches these people, because an " +
+      "alert that reaches nobody is worse than one that reaches too many.",
+    what: "the team", also: "has step exceptions",
     addLbl: "Add someone",
     empty: "No one on the list yet.",
     removeTitle: "Remove from notifications?",
     removeBefore: "Stop sending Customer Portal notifications to ",
-    // Said out loud because these are two separate rows: removing this one leaves the other
-    // standing, and somebody who believes they just removed both stops looking.
-    removeAlso: "? Their deposit row stays, so they keep getting the three deposit emails.",
+    // Said out loud because the team row and a step row are separate rows: removing this one
+    // leaves the step exceptions standing, and somebody who believes they removed everything
+    // stops looking.
+    removeAlso: "? Their per-step settings stay, so any step switched ON for them keeps sending.",
     chips: "nn-chips", input: "nn-email", btn: "nn-add", alert: "nn-alert",
-  }, {
-    kind: "deposit", other: "general",
-    lbl: "Deposit alerts — in addition to the team above",
-    intro: "These people also hear about deposits: the invoice going out, the customer sending " +
-      "payment details, and a deposit marked received. They get nothing else — no approvals, " +
-      "replies, questions or contacts. This list adds to the team above rather than replacing it, " +
-      "so everyone up there keeps getting deposit emails too.",
-    what: "deposit alerts", also: "also on the team",
-    addLbl: "Add someone to deposit alerts",
-    // A deliberate state, not a broken panel: an empty list here means "nobody EXTRA", and the
-    // team above is still told. "No one on the list yet" would read as nobody being told at all.
-    empty: "Nobody extra is told about deposits — the team above still gets them.",
-    removeTitle: "Remove from deposit alerts?",
-    removeBefore: "Stop sending deposit alerts to ",
-    removeAlso: "? They stay on the team list above, which gets deposit emails too.",
-    chips: "nn-depchips", input: "nn-depemail", btn: "nn-depadd", alert: "nn-depalert",
   }];
 
-  /** Which group a row belongs to. Anything that is not "deposit" is general — the same call the
-   *  portal's own resolver makes when it buckets the rows, so a row with a missing or
-   *  unrecognised kind lands on a card somebody can see and remove. Filtering such a row out
-   *  is precisely the failure this card exists to end. */
-  const kindOf = (row) => (row && row.kind === "deposit" ? "deposit" : "general");
+  /** Which bucket a stored row belongs to: the floor, or one CRM step.
+   *
+   *  Anything the step list does not name is treated as the FLOOR, which is the same call the
+   *  portal's resolver makes, so a row with a missing or unrecognised kind lands on a card
+   *  somebody can see and remove. Filtering such a row out is precisely the failure the second
+   *  card was built to end: kylene@ existed, worked, and appeared nowhere.
+   *
+   *  The one legacy value worth naming is "deposit", which is what BOTH money steps were called
+   *  before 2026-08-21. The portal fans such a row out to both steps at resolve time and the
+   *  schema change converts it, so it is a step row here too rather than a mystery on the floor. */
+  const stepIds = () => STEPS.map((x) => x.id);
+  const kindOf = (row) => {
+    const k = (row && row.kind) || "general";
+    if (k === "deposit") return "deposit";
+    return stepIds().indexOf(k) >= 0 ? k : "general";
+  };
+  /** The step buckets one stored row counts for. Two for the legacy deposit kind, one otherwise,
+   *  none for a floor row. Mirrors email_sender.bucket_notify_rows, INCLUDING its one exemption:
+   *  a legacy "deposit" row that is switched OFF counts for NEITHER money step.
+   *
+   *  Under the old vocabulary there was no such thing as a suppression, so an off row could only
+   *  ever mean "an address somebody typed into the Deposit-alerts card and never turned green".
+   *  The resolver skips it, and drawing it as two explicit OFF cells would be the grid claiming a
+   *  suppression that stops no email: the one lie this screen must not tell. It is not hidden
+   *  either, because the person keeps a grid row through INERT below. */
+  const stepsOfRow = (row) => {
+    const k = kindOf(row);
+    if (k === "deposit") {
+      return row && row.enabled !== false ? ["deposit_submitted", "deposit_received"] : [];
+    }
+    return k === "general" ? [] : [k];
+  };
 
-  const listFor = (kind) => (kind === "deposit" ? DEPOSIT_EXTRAS : ROSTER);
+  const listFor = (kind) => (kind === "general" ? ROSTER : []);
 
-  /** Is this address on the OTHER list too? A row's unique key is kind + email, so both at once
-   *  is legal and means "everything, deposits included" — not a duplicate and not a conflict.
-   *  It only ever adds a label to the chip and a sentence to the remove dialog. */
-  const onList = (kind, email) => listFor(kind)
-    .some((m) => m.email.toLowerCase() === String(email || "").trim().toLowerCase());
+  /** Does this address carry any explicit step setting? A team row and a step row are separate
+   *  rows, so both at once is legal and normal. It only ever adds a label to the chip and a
+   *  sentence to the remove dialog, so somebody removing a person from the team knows their step
+   *  exceptions are still there. */
+  const onList = (kind, email) => {
+    const e = String(email || "").trim().toLowerCase();
+    if (kind === "general") return ROSTER.some((m) => m.email.toLowerCase() === e);
+    return Object.keys(CELLS[e] || {}).length > 0;
+  };
 
   // ── per-project categories + paging ─────────────────────────────────────────
   // Hanz, 2026-08-19: "the per project Notification sending should be separate for active and
@@ -211,14 +239,16 @@
       'Green = receives; gray = off. <strong>Toggling a name never sends an email.</strong> It only sets who gets ' +
       'notified the next time a customer replies, approves, or pays.</p>' +
       GROUPS.map(rosterCardHtml).join("") +
+      matrixCardHtml() +
       '<div class="card">' +
         '<div class="lbl">Per-project — assign specific people</div>' +
         '<p class="note" style="margin:0 0 8px">Green = receives THIS project’s emails. Overrides the team list above for that project only. ' +
         (ADMIN ? "Toggle anyone." : "You can toggle only yourself.") + '</p>' +
         // The decision, on screen, so nobody has to read peopleFor() to find out.
-        '<p class="note" style="margin:0 0 8px">Only the team list is shown here — deposit-only people are not. ' +
-        'A per-project toggle covers every email that project sends, and an override is stored by address with no kind, ' +
-        'so switching a deposit-only person on here would sign them up for approvals and replies as well.</p>' +
+        '<p class="note" style="margin:0 0 8px">Only the team list is shown here. Somebody who is ' +
+        'set for one step only (say the deposit) is not, because a per-project toggle covers ' +
+        'every email that project sends: an override is stored by address with no step attached, ' +
+        'so switching them on here would sign them up for approvals and replies as well.</p>' +
         '<input id="pp-search" type="search" class="pp-search" placeholder="Filter by project or customer…" />' +
         // Static markup, updated in place by syncPpTabs/syncPpPager rather than re-rendered:
         // pressing a pill or Next repaints the list under it, and replacing the node you just
@@ -291,27 +321,72 @@
     }
   }
 
+  /** Repaint the roster cards from the rows the last load returned.
+   *
+   *  RAW is kept because a matrix click changes what the team chips SAY: a person's chip carries
+   *  a "has step exceptions" label and its remove dialog warns that those exceptions survive.
+   *  Re-fetching to redraw a label would be a round trip for something already in hand. */
+  function repaintGroups() {
+    GROUPS.forEach((g) => paintGroup(g, RAW.filter((x) => kindOf(x) === g.kind)));
+  }
+
   async function load() {
     try {
       const r = await api("/api/portal/notify-recipients");
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      const rows = j.recipients || [];
-      const byKind = {};
-      GROUPS.forEach((g) => { byKind[g.kind] = rows.filter((x) => kindOf(x) === g.kind); });
-      const asList = (k) => byKind[k].map((x) => ({ email: x.email, enabled: x.enabled !== false }));
-      // Both module lists first, THEN paint: a chip's "also on…" label asks about the other
-      // group, so painting group one before group two's list existed would silently drop it.
-      ROSTER = asList("general");
-      DEPOSIT_EXTRAS = asList("deposit");
-      GROUPS.forEach((g) => { paintGroup(g, byKind[g.kind]); alertOf(g, "", ""); });
+      RAW = j.recipients || [];
+      // THE STEP LIST COMES DOWN THE WIRE. The portal owns the vocabulary (NOTIFY_STEPS) and its
+      // resolver reads the same tuple, so the columns cannot advertise a step nothing resolves.
+      // A hardcoded copy here is a copy that drifts, and the drift would be silent: a toggle that
+      // writes a row no alert ever looks at.
+      STEPS = (j.steps || []).filter((x) => x && x.id);
+      // Bucket first, paint second. A chip's "has step exceptions" label asks about CELLS, so
+      // painting the roster before CELLS existed would silently drop every label.
+      // DEDUPED BY ADDRESS. The table's unique key is (kind, lower(email)), so a real general row
+      // is already unique per person; duplicates only arise from the unknown-kind fallback above,
+      // where two step rows naming a step this page has not been told about both land on the
+      // floor. Two chips for one person, each removing a different row, is worse than one chip
+      // that removes the first: the second row still shows up on the next load.
+      const seenTeam = {};
+      ROSTER = RAW.filter((x) => kindOf(x) === "general").reduce((acc, x) => {
+        const key = String(x.email || "").toLowerCase();
+        if (!key || seenTeam[key]) return acc;
+        seenTeam[key] = 1;
+        acc.push({ email: x.email, enabled: x.enabled !== false });
+        return acc;
+      }, []);
+      CELLS = {};
+      RAW.forEach((x) => {
+        const key = String(x.email || "").toLowerCase();
+        stepsOfRow(x).forEach((step) => {
+          (CELLS[key] = CELLS[key] || {})[step] = x.enabled !== false;
+        });
+      });
+      // Addresses the roster holds whose rows resolve to NOTHING. Today that is exactly a dormant
+      // legacy "deposit" row: it is not floor membership, so it wins no chip, and it suppresses
+      // nothing, so it draws no cell. They still get a GRID ROW, every cell grey and clickable,
+      // because a person the roster holds and the page cannot show is the failure this card was
+      // rebuilt to end. Grey rather than off is also what the resolver does with them.
+      INERT = [];
+      RAW.forEach((x) => {
+        const key = String(x.email || "").toLowerCase();
+        if (!key || kindOf(x) === "general" || stepsOfRow(x).length) return;
+        if (INERT.indexOf(key) < 0) INERT.push(key);
+      });
+      repaintGroups();
+      GROUPS.forEach((g) => alertOf(g, "", ""));
+      paintMatrix();
+      mxAlert("", "");
     } catch (err) {
-      // Both cards say so. One card reading "Could not load" beside another still showing
+      // EVERY card says so. One card reading "Could not load" beside another still showing
       // "Loading…" would look like a half-working page rather than one failed fetch.
       GROUPS.forEach((g) => {
         const wrap = $(g.chips);
         if (wrap) wrap.innerHTML = '<span class="note">Could not load: ' + esc(err.message) + '</span>';
       });
+      const grid = $("mx-grid");
+      if (grid) grid.innerHTML = '<span class="note">Could not load: ' + esc(err.message) + '</span>';
     }
   }
 
@@ -322,7 +397,7 @@
         { method: "PATCH", body: JSON.stringify({ enabled }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      await load(); renderProjects();   // roster base changed → per-project effective states shift
+      await load(); renderProjects();      // load() repaints the matrix; the floor moved   // roster base changed → per-project effective states shift
     } catch (err) { alertOf(g, "err", "Could not update: " + (err.message || "retry")); if (chip) chip.style.opacity = ""; }
   }
 
@@ -338,7 +413,7 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       $(g.input).value = "";
-      await load(); renderProjects();
+      await load(); renderProjects();      // load() repaints the matrix; the floor moved
       alertOf(g, "ok", "Added " + email + " to " + g.what + " — it's off (gray). Click it to turn green and start sending.");
     } catch (err) { alertOf(g, "err", "Could not add: " + (err.message || "retry")); }
     finally { btn.disabled = false; btn.textContent = "Add"; }
@@ -358,8 +433,242 @@
       const r = await api("/api/portal/notify-recipients/" + encodeURIComponent(id), { method: "DELETE" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      await load(); renderProjects();
+      await load(); renderProjects();      // load() repaints the matrix; the floor moved
     } catch (err) { alertOf(g, "err", "Could not remove: " + (err.message || "retry")); }
+  }
+
+  // ── Per-step matrix: people down the side, CRM steps across the top ────────
+  //
+  // FOUR CELL STATES, NOT TWO, and that is the whole design. A green cell that came from the team
+  // list is not a decision anybody made about this step, and reading it as one is the main risk
+  // this feature carries: somebody sees green under "Proposal opened", believes it was chosen,
+  // and never asks. So an inherited cell is drawn differently AND says where it came from, in
+  // the cell, in the word "team".
+  //
+  //   on        an explicit row, enabled. This person hears about this step.
+  //   off       an explicit row, disabled. This person does NOT, even though the team list would
+  //             otherwise have reached them. It really does stop the email (see below).
+  //   inherited no row, and they are on the team. The floor decides, and the floor says yes.
+  //   none      no row, and they are not on the team. Nobody hears anything about them here.
+  //
+  // AN EXPLICIT OFF BEATS THE FLOOR. That was a choice against the alternative (make it a no-op
+  // and let the floor win), and it is the choice that keeps this screen honest: every green cell
+  // receives and every grey cell does not, one rule, readable straight off the grid. The other
+  // way round, the only means of taking one moment off somebody would be removing them from the
+  // team, which takes the other eight as well: a cliff, not a knob.
+  //
+  // WHICH MEANS SWITCHING A WHOLE COLUMN OFF REALLY DOES REACH NOBODY. That is said out loud on
+  // the column itself, in mxColumn's `silent` flag, rather than left for Hanz to discover.
+  const MX_LABEL = { on: "on", off: "off", inherited: "team", none: "" };
+
+  /** A step's label, for a message. Read off STEPS rather than kept here, for the same reason the
+   *  columns are: one source of truth for the vocabulary, and it is the portal. */
+  const stepLabel = (id) => (STEPS.filter((x) => x.id === id)[0] || {}).label || id;
+
+  /** The person rows: everybody the roster mentions, on the team or not, in one order.
+   *
+   *  A step row is enough to appear here, which is what makes a deposit-only person visible and
+   *  removable instead of configuration that only SQL can see. Sorted by name so the grid does
+   *  not reshuffle when somebody is added. */
+  function mxPeople() {
+    const seen = {}, out = [];
+    ROSTER.forEach((m) => {
+      const e = m.email.toLowerCase();
+      seen[e] = 1;
+      out.push({ email: m.email, floorOn: m.enabled !== false, onTeam: true });
+    });
+    Object.keys(CELLS).concat(INERT).forEach((e) => {
+      if (!seen[e]) { seen[e] = 1; out.push({ email: e, floorOn: false, onTeam: false }); }
+    });
+    return out.sort((a, b) => nameOf(a.email).localeCompare(nameOf(b.email)));
+  }
+
+  /** One cell, resolved the way the server resolves it. The mirror is the point: a grid that
+   *  computed its own answer would be a second opinion about who gets emailed. */
+  function mxCell(person, step) {
+    const row = CELLS[person.email.toLowerCase()] || {};
+    const explicit = Object.prototype.hasOwnProperty.call(row, step);
+    const on = explicit ? !!row[step] : person.floorOn;
+    return {
+      email: person.email, step: step, explicit: explicit, on: on, floorOn: person.floorOn,
+      onTeam: !!person.onTeam,
+      state: explicit ? (on ? "on" : "off") : (on ? "inherited" : "none"),
+    };
+  }
+
+  /** What one click writes. Toggles the EFFECTIVE state and stores whichever value produces it,
+   *  preferring "inherit" whenever that matches the team list, so a cell returns to following the
+   *  floor rather than accumulating an explicit row that happens to agree with it. Same rule the
+   *  per-project chips already use (see toggleProject's "clear when back to global"), because two
+   *  toggles on one page should not need two mental models. */
+  function mxNext(cell) {
+    const wantOn = !cell.on;
+    return wantOn === cell.floorOn ? "inherit" : (wantOn ? "on" : "off");
+  }
+
+  /** Who this column actually reaches, and whether that is nobody.
+   *
+   *  Computed from the same three inputs the resolver uses (the floor, this step's opt-ins, this
+   *  step's suppressions) rather than by counting green cells, so the warning cannot drift from
+   *  the rule. Per-project adds are deliberately NOT counted: a column that only reaches somebody
+   *  because one job happens to have an override is still a column nobody set up. */
+  function mxColumn(step) {
+    const reach = mxPeople().filter((person) => mxCell(person, step).on).map((p) => p.email);
+    return { step: step, reach: reach, silent: !reach.length };
+  }
+
+  function matrixCardHtml() {
+    return '<div class="card">' +
+      '<div class="lbl">Per step: who hears about each CRM moment</div>' +
+      '<p class="note" style="margin:0 0 8px">Green = receives. A cell marked ' +
+      '<strong>team</strong> is not a choice anybody made here: it is inherited from the team ' +
+      'list above. Click a cell to set it for that person and that step only.</p>' +
+      // The sentence that has to be on screen, because the resolver's floor is invisible
+      // otherwise and the consequence of switching a column off is not obvious.
+      '<p class="note" style="margin:0 0 8px">Switching a cell off really does stop that one ' +
+      'email for that person, and it leaves their other steps alone. Switch a whole column off ' +
+      'and the column says <strong>nobody is told</strong>, because that is what it means.</p>' +
+      // The one exception, and why it is an exception. This email is also the alert that a
+      // proposal did NOT reach the customer, so an empty column here hides a failed send.
+      '<p class="note" style="margin:0 0 8px">One column cannot be emptied. ' +
+      '<strong>Proposal sent</strong> is also the alert that a proposal did not reach the ' +
+      'customer, so somebody has to stay on it. To hand it over, turn the new person on first, ' +
+      'then switch the old one off.</p>' +
+      '<div id="mx-alert" class="alert"></div>' +
+      '<div id="mx-legend" class="mx-legend"></div>' +
+      '<div class="mx-scroll"><div id="mx-grid"><span class="note">Loading…</span></div></div>' +
+      (ADMIN ? "" : '<p class="note" style="margin-top:12px">Only admins can change this grid.</p>') +
+    '</div>';
+  }
+
+  function mxAlert(kind, msg) {
+    const a = $("mx-alert");
+    if (a) { a.className = "alert " + kind; a.textContent = msg || ""; }
+  }
+
+  /** The legend, built from the same MX_LABEL the cells use so a renamed state cannot label one
+   *  and not the other. */
+  function paintLegend() {
+    const el = $("mx-legend");
+    if (!el) return;
+    el.innerHTML = [["on", "set on here"], ["inherited", "on, from the team list"],
+                    ["off", "switched off here"], ["none", "not on the team"]]
+      .map((x) => '<span class="mx-key"><span class="mx-cell mx-' + x[0] + '" aria-hidden="true">'
+        + '<span class="mx-g">' + esc(MX_LABEL[x[0]]) + '</span></span>' + esc(x[1]) + '</span>')
+      .join("");
+  }
+
+  function paintMatrix() {
+    const grid = $("mx-grid");
+    if (!grid) return;
+    paintLegend();
+    if (!STEPS.length) {
+      grid.innerHTML = '<span class="note">Could not load the step list.</span>';
+      return;
+    }
+    const people = mxPeople();
+    if (!people.length) {
+      grid.innerHTML = '<span class="note">Nobody on the roster yet. Add someone above, then '
+        + 'set their steps here.</span>';
+      return;
+    }
+    // `STEPS.map(mxColumn)` would hand mxColumn the step OBJECT (and the index, and the array),
+    // so every cell lookup would miss and `silent` could never be true while anybody sat on the
+    // floor: the warning would simply never appear, and the grid would look perfectly fine.
+    // Caught by running it, which is the reason this page is tested by execution.
+    const cols = STEPS.map((st) => mxColumn(st.id));
+    const head = '<tr><th class="mx-who">Person</th>' + STEPS.map((st, i) =>
+      '<th class="mx-head' + (cols[i].silent ? " mx-quiet" : "") + '" title="' + esc(st.hint) + '">'
+      + '<span class="mx-h">' + esc(st.label) + '</span>'
+      // Only drawn when true, so the row of headers is quiet until something is actually wrong.
+      + (cols[i].silent ? '<span class="mx-warn">nobody is told</span>' : "")
+      // A step the portal marks `required` cannot be left reaching nobody, and the server refuses
+      // the click that would do it. Said on the column so the refusal is predictable rather than
+      // a surprise, and only when the column is not already shouting something louder.
+      + (st.required && !cols[i].silent
+          ? '<span class="mx-req">one person minimum</span>' : "")
+      + '</th>').join("") + '</tr>';
+    const body = people.map((person) => {
+      const cells = STEPS.map((st) => {
+        const c = mxCell(person, st.id);
+        const cls = "mx-cell mx-" + c.state;
+        // aria-label spells the whole thing out, inherited included: the visual difference is
+        // colour and one small word, and neither reaches a screen reader on its own.
+        // The "none" wording splits on whether they are on the team at all, because those are two
+        // different facts and the row header says which: somebody switched off ON the team list is
+        // following it, and somebody absent from it is not on it. One sentence for both would make
+        // the grid and the row header contradict each other.
+        const label = nameOf(person.email) + ", " + st.label + ": "
+          + (c.state === "inherited" ? "on, inherited from the team list"
+            : c.state === "on" ? "on, set here"
+            : c.state === "off" ? "off, switched off here"
+            : c.onTeam ? "off, following the team list"
+            : "off, not on the team");
+        return '<td class="mx-td">'
+          + '<button type="button" class="' + cls + '" data-email="' + esc(person.email) + '"'
+          + ' data-step="' + esc(st.id) + '" data-state="' + c.state + '"'
+          + ' data-on="' + (c.on ? 1 : 0) + '" data-floor="' + (c.floorOn ? 1 : 0) + '"'
+          + ' data-next="' + mxNext(c) + '" aria-pressed="' + (c.on ? "true" : "false") + '"'
+          + (ADMIN ? "" : " disabled") + ' aria-label="' + esc(label) + '">'
+          + '<span class="mx-g" aria-hidden="true">' + esc(MX_LABEL[c.state]) + '</span>'
+          + '</button></td>';
+      }).join("");
+      // The floor state, READ ONLY. It explains every inherited cell on the row, and it is not a
+      // second control for the chip above: one state, one switch.
+      return '<tr><th class="mx-who" scope="row">' + plainAvatar(person.email)
+        + '<span class="mx-name">' + esc(nameOf(person.email)) + '</span>'
+        + '<span class="mx-floor">' + (person.onTeam
+          ? (person.floorOn ? "on the team" : "on the team, off")
+          : "not on the team") + '</span></th>' + cells + '</tr>';
+    }).join("");
+    grid.innerHTML = '<table class="mx"><thead>' + head + '</thead><tbody>' + body
+      + '</tbody></table>';
+    if (!ADMIN) return;
+    grid.querySelectorAll(".mx-cell").forEach((b) => b.addEventListener("click", () => {
+      if (b.disabled) return;
+      toggleCell(b.dataset.email, b.dataset.step, b.dataset.next, b);
+    }));
+  }
+
+  async function toggleCell(email, step, next, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api("/api/portal/notify-recipients/step",
+        { method: "PUT", body: JSON.stringify({ email: email, step: step, state: next }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) {
+        // The server refuses to leave a required column reaching nobody. Translated here because
+        // "would_silence_step" is a code, not a sentence, and the reader needs the way out.
+        // Both keys: the portal answers {error}, and the tool's proxy re-raises it as {detail}.
+        const code = j.error || j.detail || ("HTTP " + r.status);
+        if (code === "would_silence_step") {
+          const e = new Error("Somebody has to hear about " + stepLabel(step) + ", because that "
+            + "email is also the alert that a proposal did not reach the customer. Turn another "
+            + "person on for it first, then switch this one off.");
+          e.silenced = true;
+          throw e;
+        }
+        throw new Error(code);
+      }
+      const key = String(email).toLowerCase();
+      const row = CELLS[key] || (CELLS[key] = {});
+      if (next === "inherit") {
+        delete row[step];
+        if (!Object.keys(row).length) delete CELLS[key];
+      } else {
+        row[step] = next === "on";
+      }
+      mxAlert("", "");
+      // Both, because a step row is what the team card's "has step exceptions" label reads and
+      // what its remove dialog warns about.
+      paintMatrix();
+      repaintGroups();
+    } catch (err) {
+      // A refusal is an answer, not a failure, so it is not dressed up as one.
+      mxAlert("err", err && err.silenced
+        ? err.message : "Could not update: " + ((err && err.message) || "retry"));
+      paintMatrix();
+    }
   }
 
   // ── Per-project card ────────────────────────────────────────────────────────
@@ -385,14 +694,13 @@
 
   // Roster members + any override-only emails (someone 'add'ed who isn't on the roster).
   //
-  // GENERAL ROWS ONLY — deposit-only people are deliberately absent, and the card says so on
-  // screen. A per-project chip is one on/off that governs everything that project emails, and an
-  // override is stored as (proposal_id, email, mode) with no kind at all: switching a
-  // deposit-only person green here would union their address into that project's general
-  // recipients too, quietly promoting somebody who was added for three deposit emails into
-  // approvals, replies and questions. Rejected alternative: show them with their chip disabled —
-  // a row of permanently dead chips invites exactly the "why can't I click this" that a sentence
-  // answers better.
+  // TEAM ROWS ONLY. Somebody who holds a step row and no team row is deliberately absent, and
+  // the card says so on screen. A per-project chip is one on/off governing everything that
+  // project emails, and an override is stored as (proposal_id, email, mode) with no step at all:
+  // switching a step-only person green here would union their address into that project's whole
+  // recipient list, quietly promoting somebody who was set up for the two deposit emails into
+  // approvals, replies and questions. Rejected alternative: show them with their chip disabled,
+  // which invites exactly the "why can't I click this" that a sentence answers better.
   function peopleFor(pid) {
     const ov = OVERRIDES[pid] || {};
     const seen = {}, people = [];

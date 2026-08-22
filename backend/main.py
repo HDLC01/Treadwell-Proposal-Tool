@@ -1986,6 +1986,47 @@ def api_portal_notify_delete(rid: int, request: Request) -> Dict[str, Any]:
     return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
 
 
+@app.put("/api/portal/notify-recipients/step")
+async def api_portal_notify_step(request: Request) -> Dict[str, Any]:
+    """One cell of the person x step matrix on the Notification Sending page.
+
+    `state` is three-valued because a cell has three meanings, and collapsing them to a boolean
+    is what would make the grid lie: "on" and "off" are both explicit rows somebody set, and
+    "inherit" is the absence of one, which hands the decision back to the team list. An off cell
+    and an untouched cell resolve differently, so they cannot share a representation.
+
+    ADMIN ONLY, unlike the per-project chips below, which let anyone silence their own address on
+    one job. This is the org-wide roster: who hears about a whole class of moment on every project
+    is not a personal preference, and one estimator quietly taking the team off "proposal
+    approved" is the sort of change nobody would notice until a deal went cold.
+
+    The STEP vocabulary is not repeated here. The portal owns it (email_sender.NOTIFY_STEPS),
+    serves it to this page through the roster GET, and validates it on the way back in — so the
+    only thing checked here is the SHAPE, and a step this tool has never heard of still works the
+    day the portal learns it."""
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Invalid body.")
+    email = (body.get("email") or "").strip().lower()
+    step = (body.get("step") or "").strip().lower()
+    state = (body.get("state") or "").strip().lower()
+    if len(email) > 254 or not _PORTAL_EMAIL_RE.match(email):
+        raise HTTPException(400, "Enter a valid email address.")
+    # Shape only: a slug, because it goes into a text column and a JSON body. The portal decides
+    # whether this particular slug is a step it knows.
+    if not step or len(step) > 32 or not re.fullmatch(r"[a-z][a-z_]*", step):
+        raise HTTPException(400, "Invalid step.")
+    if state not in ("on", "off", "inherit"):
+        raise HTTPException(400, "Invalid state.")
+    return _portal("/api/admin/notify-recipients/step", "PUT",
+                   {"email": email, "step": step, "state": state,
+                    "by": _user_email(request)})
+
+
 @app.get("/api/portal/notify-overrides-all")
 def api_portal_notify_overrides_all() -> Dict[str, Any]:
     # Every per-project override at once, for the Notification Sending page's
