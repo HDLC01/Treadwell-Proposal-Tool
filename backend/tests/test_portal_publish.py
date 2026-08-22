@@ -378,3 +378,78 @@ def test_the_creator_is_forwarded_on_a_resend_too(monkeypatch):
     assert r.status_code == 200, r.text
     assert cap["body"]["created_by"] == "rj@wetreadwell.com"
     assert cap["body"]["revision_no"] == 4
+
+
+# ── the per-step cell proxy ──────────────────────────────────────────────────
+# PUT /api/portal/notify-recipients/step is how the Notification Sending page's matrix writes one
+# (person, step) cell. It exists as its own route rather than reusing the POST-then-PATCH pair the
+# chips use, because that pair creates the row disabled and then enables it: a half-failed click
+# would leave a cell reading off that nobody chose, and it would have to fight the roster cap on
+# the way in.
+STEP_URL = "/api/portal/notify-recipients/step"
+
+
+def test_notify_step_forwards_cleaned(monkeypatch):
+    """Address and step normalised, and the caller recorded. `by` is what the portal stores as
+    added_by, so "who turned this on" survives."""
+    cap = _wire(monkeypatch)
+    r = client.put(STEP_URL, json={"email": " Kyle@X.com ", "step": " VIEWED ", "state": "Off"})
+    assert r.status_code == 200, r.text
+    assert cap["path"] == "/api/admin/notify-recipients/step" and cap["method"] == "PUT"
+    assert cap["body"] == {"email": "kyle@x.com", "step": "viewed", "state": "off",
+                           "by": "tester@wetreadwell.com"}
+
+
+def test_notify_step_accepts_the_three_states_and_nothing_else(monkeypatch):
+    """Three, because a cell has three meanings: an explicit on, an explicit off, and no row at
+    all. Collapsing them to a boolean would make an off cell indistinguishable from an untouched
+    one, and the two resolve differently.
+
+    Mutation: drop the state check and "maybe" is forwarded to the portal."""
+    for state in ("on", "off", "inherit"):
+        cap = _wire(monkeypatch)
+        assert client.put(STEP_URL, json={"email": "a@x.com", "step": "sent",
+                                          "state": state}).status_code == 200
+        assert cap["body"]["state"] == state
+    for state in ("maybe", "", "true", "1", "clear"):
+        cap = _wire(monkeypatch)
+        assert client.put(STEP_URL, json={"email": "a@x.com", "step": "sent",
+                                          "state": state}).status_code == 400, state
+        assert cap == {}, state
+
+
+def test_notify_step_checks_the_shape_of_the_step_but_not_its_meaning(monkeypatch):
+    """The PORTAL owns the vocabulary (email_sender.NOTIFY_STEPS) and validates it on the way in.
+    A second copy of the list here is a copy that drifts, and the drift would be silent: this tool
+    would refuse a step the portal had just learned. So the shape is checked and the meaning is
+    not."""
+    cap = _wire(monkeypatch)
+    # A step this tool has never heard of still goes through, because it might be real tomorrow.
+    assert client.put(STEP_URL, json={"email": "a@x.com", "step": "invoice_issued",
+                                      "state": "on"}).status_code == 200
+    assert cap["body"]["step"] == "invoice_issued"
+    for step in ("", "Sent!", "a" * 33, "step-name", "step2", "_sent"):
+        cap = _wire(monkeypatch)
+        assert client.put(STEP_URL, json={"email": "a@x.com", "step": step,
+                                          "state": "on"}).status_code == 400, step
+        assert cap == {}, step
+
+
+def test_notify_step_rejects_a_bad_address(monkeypatch):
+    cap = _wire(monkeypatch)
+    assert client.put(STEP_URL, json={"email": "nope", "step": "sent",
+                                      "state": "on"}).status_code == 400
+    assert cap == {}
+
+
+def test_notify_step_is_admin_only(monkeypatch):
+    """Unlike the per-project chips, where anybody may silence their own address on one job. This
+    is the org-wide roster: one estimator quietly taking the team off "proposal approved" is the
+    sort of change nobody notices until a deal goes cold.
+
+    Mutation: drop the _require_admin call and this returns 200."""
+    cap = _wire(monkeypatch, role="estimator")
+    r = client.put(STEP_URL, json={"email": "tester@wetreadwell.com", "step": "sent",
+                                  "state": "off"})
+    assert r.status_code in (401, 403), r.text
+    assert cap == {}, "a non-admin write reached the portal"

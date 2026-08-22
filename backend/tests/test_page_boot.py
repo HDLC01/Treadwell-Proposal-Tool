@@ -101,15 +101,25 @@ def test_the_person_chip_is_styled_in_exactly_one_place():
 
 
 def test_the_per_project_notify_chips_carry_no_identity_colour():
-    """On that control green already means "receives this project's email", so a
-    per-person avatar colour makes green ambiguous — is the chip on, or is that just
-    Alejandro? State owns colour there; the initials say who it is. The rest of the page
-    (the global roster) keeps the shared coloured chip."""
+    """On a TOGGLE, green already means "receives", so a per-person avatar colour makes green
+    ambiguous: is the chip on, or is that just Alejandro? State owns colour there; the initials
+    say who it is. The plain LIST of people (the global roster chips) keeps the shared coloured
+    avatar, because nothing there competes with it.
+
+    Counted rather than line-matched. This used to read the one line holding
+    `esc(nameOf(person.email))`, and the per-step matrix added a second place rendering a person
+    inside a toggle, on markup split across lines — so the heuristic silently started checking a
+    different control than the one it names. Two toggles now, and the rule is about both."""
     js = (FRONTEND / "js" / "notifications.js").read_text(encoding="utf-8")
-    chip = next(ln for ln in js.splitlines() if "esc(nameOf(person.email))" in ln)
-    assert "plainAvatar(" in chip and "avatar(" not in chip.replace("plainAvatar(", ""), (
-        "the per-project chip is back on TWCrm.avatarHtml — its identity colour fights the "
-        "green/not-green state the chip is there to show")
+    # The colourless avatar is used by BOTH toggles: the per-project chip and the matrix row.
+    assert js.count("plainAvatar(person.email)") == 2, (
+        "a toggle stopped using plainAvatar, or a third one appeared without it")
+    # And the coloured one is used ONLY by the roster chips, which are a list and not a toggle.
+    coloured = [ln.strip() for ln in js.splitlines()
+                if "avatar(" in ln and "plainAvatar" not in ln and "const plainAvatar" not in ln
+                and not ln.strip().startswith("*") and not ln.strip().startswith("//")]
+    assert coloured == ["wrap.innerHTML = rows.map((x) => {"] or all(
+        "avatar(x.email)" in ln for ln in coloured), coloured
     assert "avatar(x.email)" in js, "the global roster chips should still be colour-coded"
     # Neutral by construction, not by overriding the shared class: .tw-av rides an inline
     # background, so re-tinting it would take an !important a page must not own — and
