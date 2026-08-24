@@ -364,7 +364,14 @@
     }).join("");
   }
 
-  /** THE OUTCOME, on the card. Hanz, 2026-08-20: the two buttons become Mark as closed and Lost.
+  /** THE OUTCOME, on the card. Hanz, 2026-08-20: the two buttons become an outcome pair, and
+   *  2026-08-22: they are a MATCHED PAIR - "Mark as won" and "Mark as lost". They were "Mark as
+   *  closed" and "Lost", and Hanz read that and asked whether the two were the same thing. They
+   *  never were: one posts the won mark, the other opens the reason dialog. But only one of them
+   *  said "Mark as", and "closed" sitting beside "Lost" reads as though it might mean lost. Two
+   *  buttons that do opposite things have to be named the same way round. The won one always POSTED
+   *  the won mark; "closed" was a word for the act rather than the result, and on a card that
+   *  sits beside a Lost button it reads as though it might mean either one.
    *
    *  "CLOSED" MEANS WON. Hanz confirmed it, so this reuses the existing by-hand won mark — POST
    *  /api/draft/{id}/status {status:"won"}, the same call the drawer's Mark won button makes — and
@@ -383,7 +390,7 @@
    *  on click is a click nobody can aim. That is a deliberate asymmetry, not an omission.
    *
    *  NOTHING ON A CARD THAT IS ALREADY DECIDED. A lost card offering Lost and a won card offering
-   *  Mark as closed are both buttons that save and change nothing visible, which reads as broken.
+   *  Mark as won are both buttons that save and change nothing visible, which reads as broken.
    *  The way back for those two is the drawer's bring-back, which needs a prompt naming the
    *  destination and so cannot live on a 224px card.
    */
@@ -391,8 +398,8 @@
     if (isLost(p) || C.isWon(p)) return "";
     const id = encodeURIComponent(p.proposal_id);
     return `<div class="deal-acts">
-      <button type="button" class="deal-act" data-won="${id}" title="We won it — marks this closed and moves it to the Won tab">Mark as closed</button>
-      <button type="button" class="deal-act" data-lost="${id}" title="Not going ahead — pick a reason and say what happened">Lost</button>
+      <button type="button" class="deal-act" data-won="${id}" title="We won it — moves this to the Won tab">Mark as won</button>
+      <button type="button" class="deal-act" data-lost="${id}" title="Not going ahead — pick a reason and say what happened">Mark as lost</button>
     </div>`;
   }
 
@@ -493,7 +500,8 @@
     return ALL.find((x) => String(x.proposal_id) === decodeURIComponent(id)) || null;
   }
 
-  /** Mark as closed, from the card. "Closed" means WON — Hanz, 2026-08-20 — so this is the same
+  /** Mark as won, from the card. The label said "Mark as closed" until 2026-08-22; it posted the
+   *  won mark either way, so this is the same
    *  draft-side won mark the drawer's Mark won button makes, on the same route, with no new state.
    *
    *  NO PROMPT, exactly as the drawer's Mark won has none: nothing is sent, nothing leaves the

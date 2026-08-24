@@ -1,10 +1,13 @@
 """The two buttons on a board card — EXECUTED.
 
-Hanz, 2026-08-20: "the board card's two buttons become [Mark as closed] and [Lost]", and Closed
+Hanz, 2026-08-20: "the board card's two buttons become [Mark as closed] and [Lost]". Relabelled to
+[Mark as won] and [Mark as lost] on 2026-08-22, as a matched pair - Hanz read the old labels and
+asked whether the two were the same thing: it always posted the won mark, and "closed" beside a Lost button
+reads as though it might mean either. Closed
 MEANS WON. Files and Info sheet came off the card the same day, having already moved into both
 drawers' Proposal tab.
 
-Everything here is behavioural. "Mark as closed" has to reuse the existing by-hand won mark rather
+Everything here is behavioural. "Mark as won" has to reuse the existing by-hand won mark rather
 than invent a third state; "Lost" has to pick its endpoint off `not_sent`, because a project the
 customer has never seen has no portal_proposals row to close; both have to act on the project whose
 name is on the card and on no other; and neither may open the drawer over its own work, which is a
@@ -47,7 +50,7 @@ def test_every_live_card_carries_both_buttons(out):
     by = out["rendered"]["byCard"]
     assert by, "no cards rendered at all"
     for pid, has in by.items():
-        assert has["won"], "%s has no Mark as closed button" % pid
+        assert has["won"], "%s has no Mark as won button" % pid
         assert has["lost"], "%s has no Lost button" % pid
 
 
@@ -64,7 +67,7 @@ def test_files_and_info_sheet_are_gone_from_the_card(out):
 
 @needs_node
 def test_a_card_that_is_already_decided_offers_nothing(out):
-    """A lost card offering Lost and a won card offering Mark as closed are both controls that save
+    """A lost card offering Lost and a won card offering Mark as won are both controls that save
     and change nothing visible, which reads as broken. The way back for those two is the drawer's
     bring-back, which needs a prompt naming the destination and cannot live on a 224px card."""
     assert "data-won=" not in out["rendered"]["wonBoard"], (
@@ -106,7 +109,7 @@ def test_a_button_finds_its_own_project(out):
         "a row that has gone resolves to something, so the handler would act on a guess")
 
 
-# ── Mark as closed ───────────────────────────────────────────────────────────
+# ── Mark as won ───────────────────────────────────────────────────────────
 @needs_node
 def test_mark_as_closed_posts_the_existing_won_mark(out):
     """"Closed" means WON — Hanz confirmed it. So this is the same draft-side mark the drawer's
