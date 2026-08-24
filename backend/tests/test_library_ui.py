@@ -71,10 +71,134 @@ def test_the_headers_hanz_asked_to_change_have_changed(ran):
 
 # ── Items ─────────────────────────────────────────────────────────────
 @needs_node
-def test_division_is_a_checkbox_group_of_the_three_divisions(ran):
-    assert ran["items"]["hasDivisionCheckboxes"]
+def test_the_division_cell_offers_every_division(ran):
+    """Was test_division_is_a_checkbox_group_of_the_three_divisions. REWRITTEN, not deleted:
+    the control is no longer a stack of checkbox labels.
+
+    Hanz, 2026-08-24: "For the [divisions] can we have it in just one row? Also instead of a
+    checkbox please pick a better UI that allows a material to have multiple divisions but they
+    show up in one row." The old markup this used to pin (`class="division-picks"`, a bare
+    `<label><input type=checkbox>` per division) made every row of the table three lines tall.
+    What has NOT changed is the list it offers, so that half of the old assertion stays exactly
+    as it was."""
+    assert ran["items"]["hasDivisionChips"]
     assert ran["items"]["divisionOptions"] == [
         "Polished Concrete", "Epoxy", "Gypsum Underlayment"]
+
+
+# ── the division chips ────────────────────────────────────────────────
+# Hanz, 2026-08-24, quoted in full above. Every check below runs the real divisionPick and the real
+# onItemEdit; the width ones read the real stylesheet, because "it fits on one line" is a fact about
+# pixels and the OLD control was already display:flex with flex-wrap:wrap. It stacked because the
+# box was 170px wide, so asserting the flex properties alone would have passed on the bug.
+@needs_node
+def test_a_material_in_two_divisions_shows_both_chips_as_on(ran):
+    """The complaint was the height of the row, not the data model: a material has always been able
+    to sit in several divisions, and both have to READ as on at a glance. Case-folded, because the
+    stored value is whatever somebody typed ("polished concrete" here) and the offered spelling is
+    the curated one."""
+    d = ran["divisions"]
+    assert d["group"], "the strip is not a labelled group"
+    assert d["onOff"] == [["Polished Concrete", True], ["Epoxy", True],
+                          ["Gypsum Underlayment", False]], d["onOff"]
+    assert d["noRadios"], "a radio would say these are mutually exclusive, which they are not"
+
+
+@needs_node
+def test_toggling_one_division_off_leaves_the_others_alone(ran):
+    """Executed through the real handler, against a row parsed from the real rendered markup. The
+    failure this guards is a handler that rebuilds the whole list from the input it was handed
+    instead of reading the row, which would silently drop every other division."""
+    d = ran["divisions"]["afterTurningEpoxyOff"]
+    assert d["model"] == ["Polished Concrete"], d["model"]
+    # The legacy single-value column keeps following the first division, as it did before.
+    assert d["category"] == "Polished Concrete"
+    assert ran["divisions"]["afterTurningTwoMoreOn"] == [
+        "Polished Concrete", "Epoxy", "Gypsum Underlayment"]
+    assert ran["divisions"]["canBeEmptied"], (
+        "a material could not be left unfiled - clearing the last chip has to save an empty list")
+
+
+@needs_node
+def test_the_save_payload_is_exactly_what_it_was_before(ran):
+    """The point of keeping a real checkbox is that the save path did not have to move. The handler
+    still reads data-f="divisions" and data-div off the input that changed, and still queues one
+    field-level body of {"divisions": [names]} against `items`."""
+    assert ran["divisions"]["contractUnchanged"]
+    assert ran["divisions"]["afterTurningEpoxyOff"]["queued"] == [
+        'items {"divisions":["Polished Concrete"]}']
+
+
+@needs_node
+def test_a_division_added_on_the_administration_tab_becomes_a_chip(ran):
+    """Divisions are NOT a fixed three - the Administration tab adds them and /api/library/divisions
+    serves them - so the cell has to render an unknown name it has never seen. Escaped on the way
+    out, because a division name is free text somebody typed."""
+    d = ran["divisions"]
+    assert d["customIsOffered"] == ["Polished Concrete", "Epoxy", "Gypsum Underlayment",
+                                    # HTML-escaped, which is what the browser turns back into "&".
+                                    "Sealer &amp; Traffic Coatings"], d["customIsOffered"]
+    assert d["customIsEscaped"], "a division name is injected into the row unescaped"
+    assert d["customRendersAsOn"], "a custom division a material is IN does not read as on"
+    # A name only an old item holds is offered back the same way an off-list vendor is, so deleting
+    # a division on the Administration tab cannot make the items that used it uneditable.
+    assert d["offListItemValueStillOffered"] == [
+        "Polished Concrete", "Epoxy", "Gypsum Underlayment",
+        "Terrazzo Restoration Systems"], d["offListItemValueStillOffered"]
+
+
+@needs_node
+def test_three_divisions_fit_on_one_line_and_more_wrap_instead_of_widening(ran):
+    """ONE ROW - the whole request. The three real divisions have to sit side by side, and the
+    column is capped so a fourth or a tenth wraps downwards instead of stretching the table
+    sideways. At six that is two lines and at ten about four."""
+    w = ran["divisions"]["width"]
+    assert w["stripIsAFlexRow"] and w["chipIsInline"], (
+        "the chips are not laid out side by side with unbreakable labels")
+    assert w["threeFitOnOneLine"], (
+        "the three default divisions need about %spx and the cell only offers %spx, so the cell is "
+        "still more than one line tall" % (w["neededForThree"], w["stripMin"]))
+    assert w["cappedSoTheTableCannotStretch"], (
+        "nothing caps the strip, so six divisions would widen the table instead of wrapping")
+    assert w["sixWraps"] and w["tenWraps"]
+    assert w["textClampChars"] >= 22 and w["textClampEllipsises"], (
+        "a long custom name is clipped at %s characters - two divisions could truncate into "
+        "looking like the same word (\"Gypsum Underlayment\" is already 19)" % w["textClampChars"])
+
+
+@needs_node
+def test_each_chip_is_a_real_control_with_its_state_exposed(ran):
+    """KEYBOARD AND SCREEN READER. The chip is a checkbox drawn as a pill rather than a div with
+    aria-pressed, so Tab, Space and the announced "checked, Epoxy" all come from the platform and
+    the multi-select semantics cannot be mistaken for a radio group. The input is CLIPPED, not
+    display:none or visibility:hidden, either of which would take it out of the tab order and leave
+    the keyboard nothing to press."""
+    s = ran["divisions"]["state"]
+    d = ran["divisions"]
+    assert d["everyChipIsACheckbox"], "the chips are not checkboxes, so nothing announces a state"
+    assert d["everyChipHasAnAccessibleName"], (
+        "a chip's accessible name is not its division, so it reads as an unnamed checkbox")
+    assert d["markIsHiddenFromTheTree"], "the state mark would be read out as part of the name"
+    assert d["everyChipCarriesItsFullNameInATitle"]
+    assert s["inputIsClippedNotRemoved"], (
+        "the checkbox is removed from the page rather than clipped - the chip is unreachable by Tab")
+    assert s["focusRingOnTheFace"], "a focused chip shows no ring, so keyboard users lose their place"
+
+
+@needs_node
+def test_the_on_state_is_not_colour_alone(ran):
+    """Somebody who cannot separate the on-colour from the off-colour must still be able to count
+    the divisions a material is in, so the mark inside the chip changes SHAPE as well: a tick when
+    it is on and a plus when it is not. CSS content keyed off :checked rather than markup, because
+    a click must NOT re-render the row - rebuilding the cell would throw away the focus the
+    estimator just tabbed into."""
+    s = ran["divisions"]["state"]
+    assert s["onHasItsOwnFill"], "the on chip has no fill of its own"
+    assert s["offMark"] and s["onMark"], "one of the two states has no mark at all"
+    assert s["offMark"] != s["onMark"], (
+        "both states draw %r, so the only difference is the colour" % s["onMark"])
+    assert s["oldCheckboxStyleGone"], (
+        "the old .division-picks stack is still in the page - two controls for one field")
 
 
 @needs_node

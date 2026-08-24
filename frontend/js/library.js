@@ -298,14 +298,50 @@
     return s + "</select>";
   }
 
+  /** The Division cell: one toggle chip per division, side by side on ONE line.
+   *
+   *  Hanz, 2026-08-24: "For the [divisions] can we have it in just one row? Also instead of a
+   *  checkbox please pick a better UI that allows a material to have multiple divisions but they
+   *  show up in one row." Three stacked checkbox labels made every row of this table three lines
+   *  tall, which is the whole complaint.
+   *
+   *  N DIVISIONS, NOT THREE. The list is loaded from /api/library/divisions and merged with
+   *  whatever old items already say (divisionNames), and the Administration tab lets anybody with
+   *  the rights add another. So the strip wraps rather than stretches: three fit on one line, six
+   *  take two, and a long custom name keeps its first 22 characters with the rest in the tooltip.
+   *  A fixed-width segmented control could not survive any of that.
+   *
+   *  THE SAME SHAPE AS THE NOTIFICATION CHIPS in the CRM drawer, where a filled pill means on and
+   *  the page says so in words. Its own class rather than nt-chip, for the reason recipientsHtml
+   *  gives in portal.js: green there means "receives this project's emails", and borrowing the
+   *  class would say something untrue here. The rules sit in this page's own style block because
+   *  nt-chip is not in styles.css either, portal.html, notifications.html and done.html each keep
+   *  a copy, and this page may not edit theirs.
+   *
+   *  STILL A REAL CHECKBOX, only drawn as a pill. A div with aria-pressed would have to
+   *  re-implement Tab, Space and the announced state; the input arrives with all three, with
+   *  multi-select semantics no screen reader can mistake for a radio group, and it leaves the save
+   *  contract exactly where it was: onItemEdit still reads data-f="divisions" and data-div off the
+   *  input that changed.
+   *
+   *  COLOUR IS NOT THE ONLY SIGNAL. The face carries a mark that changes SHAPE with the state, a
+   *  tick when the material is in that division and a plus when it is not, so the on chips stay
+   *  countable in greyscale. That mark is CSS content keyed off :checked rather than markup,
+   *  because a click must not re-render the row: rebuilding the cell would throw away the focus
+   *  the estimator just tabbed into, so anything state-dependent has to be reachable by a
+   *  selector instead. */
   function divisionPick(it) {
     var selected = {};
     itemDivisions(it).forEach(function (d) { selected[d.toLowerCase()] = true; });
     var names = divisionNames();
-    return '<div class="division-picks" role="group" aria-label="Divisions">' +
+    return '<div class="division-chips" role="group" aria-label="Divisions">' +
       names.map(function (d) {
-        return '<label><input type="checkbox" data-f="divisions" data-div="' + esc(d) + '"' +
-          (selected[String(d).toLowerCase()] ? " checked" : "") + "> " + esc(d) + "</label>";
+        var on = !!selected[String(d).toLowerCase()];
+        return '<label class="dchip" title="' + esc(d) + '">' +
+          '<input type="checkbox" data-f="divisions" data-div="' + esc(d) + '" aria-label="' +
+          esc(d) + '"' + (on ? " checked" : "") + ">" +
+          '<span class="dchip-f"><span class="dchip-mark" aria-hidden="true"></span>' +
+          '<span class="dchip-t">' + esc(d) + "</span></span></label>";
       }).join("") + "</div>";
   }
 

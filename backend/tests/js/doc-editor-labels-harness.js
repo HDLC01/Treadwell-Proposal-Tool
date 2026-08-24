@@ -415,7 +415,12 @@ function schedulePersistOverrides() {
 
 const LIFTED = [
   topConst("focusInside"), topConst("escHtml"), stringConst("_OVERRIDE_TITLE"),
-  topConst("_SYS_LABEL_FIELDS"), stringConst("_SYS_LABEL_TITLE"),
+  topConst("_SYS_ROW_LINE_FIELDS"), stringConst("_SYS_LINE_TITLE"),
+  // workLabelHtml is called from inside renderSystemPreview, so leaving it out does not fail
+  // at lift time - it fails as `ReferenceError: workLabelHtml is not defined` the first time a
+  // WORK row renders, which is every test in part 1. Any function renderSystemPreview reaches
+  // has to be here (see the fitOffer note below for what that already cost once).
+  fn("workLabelHtml"),
   fn("effectiveWorkType"), fn("sheetSystems"), fn("renderSystemPreview"), fn("serializeBlock"),
   topConst("PT_PER_CSS_PX"), topConst("BOX_DRAG_SLOP_PT"), topConst("BOX_EPS_PT"),
   topConst("isAutoGrown"),
@@ -540,10 +545,18 @@ API = api;
 
 const out = {};
 
-// ═══ part 1 — the WORK row labels ════════════════════════════════════════════
+// ═══ part 1 — the WORK rows, edited as WHOLE LINES ═══════════════════
 // The picks come from the BASE tab's sheet cells, which is the live path (sheetSystems). Two
 // systems is the most that path can resolve — it reads two fixed cell pairs — so the 3-system
 // numbering rule is asserted on the Python side, in the code that actually writes the document.
+//
+// WHAT CHANGED, and why these cases were rewritten rather than deleted. Until 2026-08-24 each
+// row was a string of escaped template words with two contenteditable islands dropped into it,
+// so the words themselves — "~", " SF of epoxy flooring", the whole cove clause — had no
+// element to put a caret in. Kyle asked three times for one editable line per row. The
+// assertions below therefore stop counting islands and start proving that the whole line takes
+// a caret, that every word in it can be replaced or deleted, that an untouched line still
+// follows the estimate, and that an edited one stops.
 function seedSystems(names) {
   const sf = { epoxy_sf: 5000, cove_lf: 240, epoxy_sf_2: 1800, cove_lf_2: 0 };
   STORE.blob = JSON.parse(JSON.stringify(SEED));
@@ -555,76 +568,120 @@ function seedSystems(names) {
   api.renderSystemPreview();
 }
 
-/** Every editable island in the preview, in document order. */
-function islands() {
-  return systemPreviewEl.querySelectorAll("[data-sys-field]").map((s) => ({
-    i: Number(s.dataset.sysIndex),
-    field: s.dataset.sysField,
-    text: s.textContent,
-    computed: s.dataset.computed,
-    editable: s.attrs.contenteditable === "true",
-    warned: s.classList.contains("tw-overridden"),
-    title: s.title || null,
+/** Every WORK row in the preview, in document order — and, for each, whether the WHOLE row is
+ *  the editable element. `islands` counts anything editable strictly INSIDE the row: it has to
+ *  be zero, because a nested editable span is the model Kyle rejected three times. */
+function rows() {
+  return systemPreviewEl.querySelectorAll("[data-sys-line]").map((p) => ({
+    i: Number(p.dataset.sysIndex),
+    field: p.dataset.sysLine,
+    text: p.textContent,
+    computed: p.dataset.computed,
+    editable: p.attrs.contenteditable === "true",
+    wholeLine: p.classList.contains("tw-line-edit"),
+    islands: p.querySelectorAll("[contenteditable]").length,
+    bold: p.querySelectorAll("strong").map((b) => b.textContent),
+    warned: p.classList.contains("tw-overridden"),
+    title: p.title || null,
   }));
 }
 
 /** The preview as the estimator reads it: one string per rendered paragraph. */
 const lines = () => systemPreviewEl.children.map((p) => p.textContent);
 
-/** Type into one island through the page's own delegated `input` handler. */
-function typeInto(i, field, text) {
-  const sp = systemPreviewEl.querySelectorAll("[data-sys-field]")
-    .find((s) => Number(s.dataset.sysIndex) === i && s.dataset.sysField === field);
-  if (!sp) throw new Error("no island for " + i + "/" + field);
-  sp.textContent = text;
-  fire(sp, "input", {});
-  return sp;
+/** Rewrite one whole row through the page's own delegated `input` handler — which is what a
+ *  person does when they select the line and type over it. */
+function typeLine(i, field, text) {
+  const p = systemPreviewEl.querySelectorAll("[data-sys-line]")
+    .find((el) => Number(el.dataset.sysIndex) === i && el.dataset.sysLine === field);
+  if (!p) throw new Error("no editable row for " + i + "/" + field);
+  p.textContent = text;
+  fire(p, "input", {});
+  return p;
 }
 
-// 1. One system: the label is "System:", and it is an island, not dead text.
+// 1. One system: three rows, each ONE editable line, with nothing editable nested inside.
 seedSystems(["Broadcast Quartz"]);
-out.oneSystem = { islands: islands(), lines: lines() };
+out.oneSystem = { rows: rows(), lines: lines() };
 
-// 2. Two systems: the labels number themselves.
+// 2. Two systems: the rows number themselves.
 seedSystems(["Broadcast Quartz", "Decorative Flake"]);
-out.twoSystems = { islands: islands(), lines: lines() };
+out.twoSystems = { rows: rows(), lines: lines() };
 
-// 3. Rename row 1's label. Row 2 must keep ITS number — the rule is per row.
-typeInto(0, "prefix", "Base System:");
+// 3. Rewrite row 1's SYSTEM line, label and all. Row 2 must keep ITS number — the rule is per
+//    row, and a row nobody touched must not be rewritten in a document a customer receives.
+typeLine(0, "name_line", "Base System:   Broadcast Quartz");
 out.renamedRow1 = {
   stored: JSON.parse(JSON.stringify(api.liveState().system_overrides)),
   persisted: JSON.parse(JSON.stringify(TWStub.getState().system_overrides)),
 };
 api.renderSystemPreview();
 out.renamedRow1.lines = lines();
-out.renamedRow1.islands = islands();
+out.renamedRow1.rows = rows();
 
-// 4. Empty it again. The revert rule has to give the computed label back — not a bare token, not
+// 4. Empty it again. The revert rule has to give the computed line back — not a bare token, not
 //    a lone colon, which is what a customer would otherwise read.
-typeInto(0, "prefix", "");
+typeLine(0, "name_line", "");
 api.renderSystemPreview();
-out.emptiedLabel = {
+out.emptiedLine = {
   stored: JSON.parse(JSON.stringify(api.liveState().system_overrides)),
   lines: lines(),
 };
 
-// 5. The static labels inside the row — "Texture:" and "Area:" — the two that were genuinely
-//    locked (they live in the read-only {{#system}} region and no token covers them).
+// 5. THE COMPLAINT, executed. Delete the static words " SF of epoxy flooring" and the cove
+//    clause out of the Area line — the exact text that had no element to put a caret in — and
+//    reword the Texture row's label in the same pass.
 seedSystems(["Broadcast Quartz", "Decorative Flake"]);
-typeInto(0, "texture_label", "Surface texture:");
-typeInto(0, "area_label", "Coverage:");
+typeLine(0, "texture_line", "Surface texture:  Light Broadcast");
+typeLine(0, "area_line", "Coverage: 5,000");
 api.renderSystemPreview();
-out.staticLabels = {
+out.staticWordsDeleted = {
   stored: JSON.parse(JSON.stringify(api.liveState().system_overrides)),
   lines: lines(),
+  rows: rows(),
 };
 
-// 6. A renamed LABEL is not a ⚠ "differs from the estimate" edit; an SF typed off the sheet is.
+// 6. A line whose NUMBERS moved off the estimate is a pricing-review risk and says so; a line
+//    that was only reworded is not, and says that instead. One visual state either way.
 seedSystems(["Broadcast Quartz"]);
-typeInto(0, "prefix", "Base System:");
-typeInto(0, "sqft", "9,999");
+typeLine(0, "name_line", "Base System:   Broadcast Quartz");
+typeLine(0, "area_line", "Area: ~9,999 SF of epoxy flooring and 240 LF of 6\" epoxy cove base");
 api.renderSystemPreview();
-out.warnings = islands().map((s) => ({ field: s.field, warned: s.warned, title: s.title }));
+out.warnings = rows().map((p) => ({ field: p.field, warned: p.warned, title: p.title }));
+
+// 7. UNTOUCHED TRACKS, TOUCHED FREEZES. Edit row 1's Area line, then move the estimate's square
+//    footage underneath it. The edited line keeps the estimator's words; row 2's untouched line
+//    picks the new figure up. This is the whole of constraint 2, and no source assertion can
+//    reach it — it is renderSystemPreview, the input handler and the store agreeing.
+seedSystems(["Broadcast Quartz", "Decorative Flake"]);
+typeLine(0, "area_line", "Coverage: 5,000 SF, cove included");
+{
+  const st = api.liveState();
+  st.priced_tabs = [{ id: "t1", role: "epoxy", kind: "base",
+                      sf: { epoxy_sf: 7777, cove_lf: 240, epoxy_sf_2: 2222, cove_lf_2: 0 },
+                      sys_names: ["Broadcast Quartz", "Decorative Flake"] }];
+  TWStub.setState({ priced_tabs: st.priced_tabs });
+}
+api.renderSystemPreview();
+out.estimateMoved = { lines: lines(), rows: rows() };
+
+// 9. Delete the colon and the label rule has nothing to find. The page then has to show the
+//    row's TEMPLATE weight, which is bold for System and Area and normal for Texture — that is
+//    what proposal_writer writes into the row's first run. Asserted here and against the real
+//    .docx in test_a_line_with_no_colon_keeps_the_row_weight_the_page_shows.
+seedSystems(["Broadcast Quartz"]);
+typeLine(0, "name_line", "Base build no colon");
+typeLine(0, "texture_line", "Finish matte no colon");
+typeLine(0, "area_line", "Coverage 5000 sq ft");
+api.renderSystemPreview();
+out.noColon = rows().map((p) => ({ field: p.field, text: p.text, bold: p.bold }));
+
+// 8. Spaces reach the store untouched. The estimator now types at both ends of a whole line, so
+//    a trim anywhere on this channel is a 1:1 violation on the line he is most likely to space
+//    out. main._sanitize_system_overrides is asserted on the Python side.
+seedSystems(["Broadcast Quartz"]);
+typeLine(0, "area_line", "  Area:  ~5,000 SF  ");
+out.spacesKept = JSON.parse(JSON.stringify(api.liveState().system_overrides));
 
 // ═══ part 2 — a box that grows instead of clipping ═══════════════════════════
 // Kyle's Direct epoxy template, every box, read out of the .docx with template_geometry — not

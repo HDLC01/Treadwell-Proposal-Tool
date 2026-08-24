@@ -19,6 +19,16 @@ own section. Four days later Hanz wanted the clutter gone. He was told in as man
 removing both leaves the cadence page with nothing linking to it, and chose that anyway, so
 /followup-settings.html is now reachable by URL only.
 
+THE BOARD CAME BACK ON 2026-08-24, and half of this file's subject is now a reversal rather than a
+removal. Automated follow-ups went live on production that day and Hanz said: "make sure all follow
+up emails are shown in the Chat box and in the Follow Ups section." /followups.html is linked again,
+under Sales beside Active Projects. The heading did not come back. The assertion below was
+INVERTED, not deleted, because the 2026-08-10 quote is still in the repo and a reader who finds only
+that quote unlinks the page for a third time.
+
+The cadence page stayed where 2026-08-11 put it, under Settings, and everything this file says
+about it still holds.
+
 "Unlinked" is one keystroke away from "deleted", which is the mistake these tests exist to catch.
 The cadence page is the ONLY place the wording of four recurring customer emails is editable, it
 saves by REPLACING the whole single row with no history (see test_followup_settings_page.py), and
@@ -120,10 +130,42 @@ def test_no_sidebar_item_still_carries_an_old_name(sidebar):
     assert "Customer Portal CRM" not in labels, "the old 'Customer Portal CRM' label survives"
 
 
-# ── the follow-ups section, removed ───────────────────────────────────────────
-def test_the_follow_ups_board_is_not_in_the_sidebar(sidebar):
-    """The item Hanz named. Kills a removal that only took the cadence out."""
-    assert "/followups.html" not in sidebar, "the Follow-ups board is still a sidebar item"
+# ── the follow-ups section: removed, then put back ────────────────────────────
+def test_the_follow_ups_board_IS_in_the_sidebar_again(sidebar):
+    """INVERTED ON 2026-08-24, and inverted rather than deleted, because Hanz reversed himself.
+
+    This test asserted "/followups.html" was NOT in the sidebar from 2026-08-10, when he said
+    "Remove the followups on the sidebar", until 2026-08-24, when automated follow-ups went live on
+    production and he said: "make sure all follow up emails are shown in the Chat box and in the
+    Follow Ups section." A section with no link is not a section, so the board went back in.
+
+    Kept pointed at the same line for the same reason the Info Sheet inversion was
+    (test_board_is_the_main_tab.py): the quote behind the removal is still in the repo, and a reader
+    who finds only that quote removes the row again. Both quotes are in auth.js, at the navItem and
+    at the note where the old FOLLOW-UPS heading used to be.
+
+    What did NOT come back is the heading, which is the next test down."""
+    assert "/followups.html" in sidebar, (
+        "the Follow-ups board is unlinked again. Hanz asked for it back on 2026-08-24; if it is "
+        "coming out once more, that is a new decision and this test is where to record it.")
+    assert re.search(r'navItem\("/followups\.html",\s*"[^"]+",\s*"Follow-ups"\)', sidebar), (
+        "the Follow-ups item is not shaped like its neighbours; nav items are %s"
+        % (_nav_labels(sidebar),))
+
+
+def test_the_follow_ups_board_sits_under_sales_with_active_projects(sidebar):
+    """Where it went back, and why that is not arbitrary.
+
+    It is the same population as Active Projects read a different way, and its own rows navigate
+    INTO that page (/portal.html?open=...&sec=followup). Filing it anywhere else would put the link
+    under one heading and land the click under another. Not under Proposals: that heading is the
+    pages that MAKE a proposal, and this one starts after the proposal has gone out."""
+    i = sidebar.index('tw-section">Sales')
+    j = sidebar.index("/followups.html")
+    assert j > i, "the Follow-ups link is above the Sales heading, so it reads as part of nothing"
+    nxt = sidebar.find('tw-section">', i + 1)
+    assert nxt == -1 or j < nxt, "the Follow-ups link fell out of the Sales section"
+    assert sidebar.index("/portal.html") < j, "Active Projects is no longer the first Sales item"
 
 
 def test_the_cadence_page_IS_still_in_the_sidebar(sidebar):
@@ -167,11 +209,16 @@ def test_the_cadence_page_sits_under_settings(sidebar):
             "the cadence link fell past the end of the Settings section")
 
 
-def test_the_follow_ups_heading_went_with_them(sidebar):
-    """Kills deleting the two items and leaving the heading, which renders an empty FOLLOW-UPS
-    label with nothing under it: more clutter than before, not less."""
+def test_the_follow_ups_heading_did_not_come_back_with_the_item(sidebar):
+    """Originally: kills deleting the two items and leaving an empty FOLLOW-UPS heading behind.
+
+    Still asserted after the 2026-08-24 reversal, and now it earns its keep from the other
+    direction. The board is linked again but its two old neighbours are not coming back to sit under
+    this heading: the cadence is settled under Settings and there never was a third item. Restoring
+    the heading would put ONE row under a section label, which is the clutter of 2026-08-10 rebuilt
+    with fewer items. The board's home is Sales, asserted above."""
     assert 'tw-section">Follow-ups' not in sidebar, (
-        "the FOLLOW-UPS heading is still there with no items beneath it")
+        "the FOLLOW-UPS heading is back with one item under it; the board lives under Sales")
 
 
 def test_the_removal_did_not_take_its_neighbours_with_it(sidebar):
@@ -207,12 +254,16 @@ def test_analytics_sits_above_the_database(sidebar):
     ("followups.html", "/js/followups.js"),
 ])
 def test_the_page_still_exists_and_still_loads_its_script(page, script):
-    """Both pages are now URL-only. Kills the cleanup pass that spots an unreferenced page and
-    deletes it, and kills the subtler version where the html survives but its <script src> or the
-    js file behind it does not, so the page opens as an empty shell.
+    """Kills the cleanup pass that spots an unreferenced page and deletes it, and kills the subtler
+    version where the html survives but its <script src> or the js file behind it does not, so the
+    page opens as an empty shell.
 
     The cadence page is the only editor for four recurring customer emails and saving replaces the
     whole row with no history, so losing it loses wording nobody can retype.
+
+    Only the CADENCE page is URL-only now; the board was relinked on 2026-08-24. Both stay in this
+    parametrize: the board was unlinked for a fortnight and could be again, and this pair of
+    assertions is what keeps "unlinked" from sliding into "deleted" while nobody is looking.
     """
     html_path = FRONTEND / page
     assert html_path.is_file(), "%s has been deleted; it is unlinked, not unwanted" % page

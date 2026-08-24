@@ -111,6 +111,13 @@ def test_nothing_else_left_the_sidebar():
     have been seen. The calculator is still reachable — from the beta's own step nav and from the
     toolbar link on Estimate Review — so what this list guards is the DOOR, not every page.
 
+    FOLLOW-UPS JOINED THIS LIST ON 2026-08-24, under Sales, one row below Active Projects. It had
+    been unlinked since 2026-08-10 and Hanz reversed that: "make sure all follow up emails are shown
+    in the Chat box and in the Follow Ups section." It is asserted here as well as in
+    test_sidebar_labels.py because this is the file somebody edits when they reorder the menu, and a
+    second Sales row is the easiest thing in the list to lose to a tidy-up. Its permission entry is
+    pinned below, beside the Info Sheet's, for the same reason.
+
     INFO SHEET CAME OFF THIS LIST ON 2026-08-20, and the removal is the one thing here that was
     intended. Hanz moved it into the project drawer's Proposal tab: the sidebar row had no project
     in hand, so it could only ever open a choose-a-project state, while from the drawer the hand-off
@@ -122,8 +129,8 @@ def test_nothing_else_left_the_sidebar():
     entry and names it in NO_SIDEBAR_TABS, so /api/info-sheet/* is still refused per role. The test
     below pins that, because deleting the entry is the cheap way to keep a list like this green."""
     bar = _sidebar()
-    for href in ("/portal.html", "/projects.html", "/leads.html", "/crm.html", "/calendar.html",
-                 "/polish-intake.html", "/analytics.html", "/library.html",
+    for href in ("/portal.html", "/followups.html", "/projects.html", "/leads.html", "/crm.html",
+                 "/calendar.html", "/polish-intake.html", "/analytics.html", "/library.html",
                  "/history.html", "/trash.html", "/notifications.html",
                  "/followup-settings.html", "/admin.html"):
         assert '"%s"' % href in bar, "%s is no longer reachable from the sidebar" % href
@@ -149,6 +156,26 @@ def test_the_info_sheet_kept_its_permission_when_it_left_the_menu():
         "the tab has no sidebar row and is not declared hidden, so nothing says the missing row "
         "was on purpose")
     assert nav_access.TABS["/info-sheet.html"]["api"] == ("/api/info-sheet/",)
+
+
+def test_the_follow_ups_board_GAINED_a_permission_when_it_came_back_to_the_menu():
+    """The exact mirror of the test above, and the half of the 2026-08-24 relink that is easy to
+    miss: a row in the menu with no entry in nav_access.TABS is a tab the Admin page cannot draw a
+    switch for and the middleware cannot refuse. It was ungoverned for a fortnight because it was
+    also unlinked, which was consistent; a linked row that is still ungoverned is not.
+
+    /api/portal/followups is the feed and followups.js is its only caller, so the tab may own it.
+    The routes its buttons post to are the CRM drawer's as well and are deliberately absent
+    (test_nav_access.py::test_no_tab_claims_a_shared_prefix is the general form)."""
+    import nav_access
+    assert "/followups.html" in nav_access.TABS, (
+        "the Follow-ups board is in the sidebar with no capability entry, so no role can be denied "
+        "it and /api/portal/followups is ungated")
+    assert nav_access.TABS["/followups.html"]["api"] == ("/api/portal/followups",)
+    assert "/followups.html" not in nav_access.NO_SIDEBAR_TABS, (
+        "the board is drawn in the menu, so it is not one of the rowless tabs")
+    assert "/followups.html" not in nav_access.ALWAYS_OPEN_PAGES, (
+        "the page is in TABS and in ALWAYS_OPEN_PAGES at once: governed and ungovernable")
 
 
 def test_the_active_highlight_still_comes_from_the_path():

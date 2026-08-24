@@ -164,6 +164,13 @@ const FN_NAMES = [
   // renderDetail builds the thread through it on EVERY payload, so leaving it out is a
   // ReferenceError for the whole drawer rather than a missing bubble.
   "withViewCard",
+  // Deleting a project (2026-08-24). SIXTH addition to this list for the same reason as the five
+  // above, and this pair is the widest yet: BOTH renderers embed deleteProjectHtml in their
+  // Proposal panel and BOTH call wireDeleteProject at the end, so leaving either out is a
+  // ReferenceError that takes out the sent drawer and the unsent one at once. Lifted for real
+  // rather than stubbed because what the dialog SAYS is the feature: TW.confirmDanger is recorded
+  // (see `danger` below) so the two bodies can be read back and compared.
+  "deleteProjectHtml", "wireDeleteProject",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -609,7 +616,13 @@ const TW = {
 // <button>s that call window.location.assign, so the URL they send is only visible by firing the
 // click the renderer wired — an href assertion would prove nothing about a button.
 const nav = [];
-const windowStub = { TW, TWAuth: { user: () => ({ email: "hanz@wetreadwell.com", role: "admin" }) },
+// The signed-in user, MUTABLE. Two controls read a role off it: the notify chips (which lock for
+// anybody who is not an admin) and, since 2026-08-24, the Delete project section, which renders
+// nothing at all for a non-admin. Hiding it is only half that claim and the endpoint refusing is
+// the other, so this has to be answerable both ways rather than pinned to "admin". Every scenario
+// written before it existed sees admin, which is what they were written against.
+const me = { email: "hanz@wetreadwell.com", role: "admin" };
+const windowStub = { TW, TWAuth: { user: () => Object.assign({}, me) },
                      location: { assign: (u) => nav.push(String(u)) } };
 // The query string, for the lifted openDetail's ?sec= deep link. Mutated per scenario.
 const locationStub = { search: "", assign: (u) => nav.push(String(u)) };
@@ -1462,6 +1475,72 @@ async function runScenario(name, s) {
     };
   } catch (e) {
     out.errors.paperwork = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // == DELETING A PROJECT, in BOTH drawers ===================================
+  // Hanz, 2026-08-24: "In the proposals tab under the Active Projects create a 'delete project'
+  // button", and "make sure there is a confirmation dialog". Five claims, none of them visible in
+  // a source read: that the dialog is asked BEFORE anything is posted, that answering no posts
+  // NOTHING, that the ask NAMES the project, that the two bodies genuinely differ between a sent
+  // project and one nobody sent, and that a non-admin gets no control at all.
+  try {
+    /** Paint one of the two drawers, press #del-project, and report what happened. */
+    async function pressDelete(pid, kind, answer) {
+      danger.answer = answer;
+      if (kind === "sent") {
+        const data = payload({ proposal: { project_name: "Nearman Creek",
+                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           proposal_status: "sent", deposit_status: "pending",
+                                           contacts_status: "pending",
+                                           followup_state: { enrolled: true, enabled: true } },
+                               approval: null, contacts: [], deposits: [],
+                               recipient_activity: [], followups: [] });
+        page.open(pid);
+        page.cache(pid, data);
+        page.renderDetail(pid, data);
+      } else {
+        page.open(pid);
+        page.renderNotSent(pid, { proposal_id: pid, project_name: "Cedar Ridge Distribution Center",
+                                  not_sent: true, bid_total: 88000,
+                                  drafted_at: "2026-08-09T12:00:00Z",
+                                  estimator_email: "kyle@wetreadwell.com" });
+      }
+      const html = dom.html;
+      net.requests.length = 0;
+      danger.calls.length = 0;
+      const b = dom.getElementById("del-project");
+      if (!b) return { offered: false, html: html };
+      b.textContent = "Delete project";
+      await b.fire("click");
+      for (let i = 0; i < 8; i++) await tick();
+      return { offered: true, html: html, asked: danger.calls.slice(),
+               requests: net.requests.slice(),
+               label: b.textContent, disabled: b.disabled,
+               note: (dom.els.get("#del-note") || {}).textContent || "" };
+    }
+
+    out.del = {};
+    out.del.sentCancelled = await pressDelete("del-sent-no", "sent", false);
+    out.del.sent = await pressDelete("del-sent", "sent", true);
+    out.del.notSentCancelled = await pressDelete("del-ns-no", "notsent", false);
+    out.del.notSent = await pressDelete("del-ns", "notsent", true);
+
+    // A REFUSED WRITE. The panel must not close over a delete that did not happen, and the
+    // button has to come back so it can be pressed again.
+    net.fails = true;
+    out.del.refused = await pressDelete("del-fail", "sent", true);
+    net.fails = false;
+
+    // AND THE NON-ADMIN, in both drawers. LAST, and the role is put back straight after: the
+    // notify assertions above are written against an admin.
+    me.role = "user";
+    out.del.notAdminSent = await pressDelete("del-nonadmin-sent", "sent", true);
+    out.del.notAdminNotSent = await pressDelete("del-nonadmin-ns", "notsent", true);
+    me.role = "admin";
+    danger.answer = false;
+  } catch (e) {
+    out.errors.del = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+    me.role = "admin";
   }
 
   console.log(JSON.stringify(out));

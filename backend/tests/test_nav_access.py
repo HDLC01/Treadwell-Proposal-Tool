@@ -10,7 +10,7 @@ Two other claims, both of which cost somebody an outage if taken the wrong way r
   * FAIL OPEN. An unreadable, half-written or hand-mangled policy means everybody gets everything.
     Three accounts use this tool; a lockout is an outage the affected person cannot fix, and the
     data is still behind the _require_admin gates it was always behind.
-  * ONLY SINGLE-CALLER PREFIXES MAY BE OWNED. Five of the fourteen tabs read routes that other
+  * ONLY SINGLE-CALLER PREFIXES MAY BE OWNED. Five of the fifteen tabs read routes that other
     pages read too, so gating "their" API would blank a page nobody restricted. That list is
     measured from frontend/ and re-asserted here by name, because nothing else re-measures it.
 """
@@ -219,15 +219,53 @@ def test_denying_the_bid_calendar_leaves_the_analytics_payload_alone():
         "the calendar and the Analytics page read the same payload")
 
 
+def test_denying_the_follow_ups_board_takes_its_feed_and_leaves_the_drawer_alone():
+    """The tab that came BACK into the sidebar on 2026-08-24 (Hanz reversed his 2026-08-10 removal).
+
+    /api/portal/followups is the whole feed and followups.js is its only caller, so the tab owns it.
+    Everything the page's buttons post to is shared with the CRM drawer in portal.js, and one route
+    with notifications.js as well, so denying this tab must not touch them: a member denied the
+    board would otherwise lose Send, Log a call and the drawer's automation toggle on Active
+    Projects, which nobody restricted.
+
+    The exact-match half is not cosmetic. A trailing slash here would swallow nothing today, but a
+    startswith on "/api/portal/" style thinking is what would reach the proposal routes below."""
+    nav_access.save({"user": ["/followups.html"]}, "k@x.com")
+    assert nav_access.is_api_denied("user", "/api/portal/followups") is True
+    assert nav_access.page_denied("user", "/followups.html") == "/followups.html"
+    for shared in ("/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",
+                   "/api/portal/proposal/p1/followups", "/api/portal/proposal/p1/status",
+                   "/api/portal/proposal/p1/followup-automation", "/api/portal/pipeline",
+                   "/api/followup-settings"):
+        assert nav_access.is_api_denied("user", shared) is False, shared
+
+
+def test_the_follow_ups_feed_really_is_a_single_caller_route():
+    """The measurement behind the entry, re-taken here because nothing else re-takes it. If a second
+    page ever reads this feed, the prefix has to come out of TABS or that page goes blank for a role
+    somebody only meant to keep off the board."""
+    js = sorted(p.name for p in (FRONTEND / "js").glob("*.js")
+                if "/api/portal/followups" in p.read_text(encoding="utf-8"))
+    assert js == ["followups.js"], (
+        "%s also read /api/portal/followups, so the Follow-ups tab may no longer own it" % js)
+
+
 # ── the shared prefixes are never gated ───────────────────────────────────────
 # Measured by grepping frontend/ for every /api/ string: each of these is read by more than one
 # sidebar tab, or by the wizard, which has no sidebar row. Gating any of them breaks a page nobody
 # restricted, so no tab may claim one.
+#
+# The four /api/portal/proposal/{id}/* routes are the Follow-ups board's Send, Log a call, drag and
+# resume, and every one of them is also the CRM drawer's. They joined this list on 2026-08-24 with
+# that tab's entry: the board owns its FEED and nothing else.
 SHARED = ["/api/analytics", "/api/library/items", "/api/library/assemblies",
           "/api/portal/pipeline", "/api/notifications", "/api/notifications/seen",
           "/api/drafts", "/api/draft/abc", "/api/estimators", "/api/generate",
           "/api/file/tok", "/api/portal/notify-recipients", "/api/portal/notify-overrides-all",
-          "/api/me", "/api/price", "/api/reference/counties", "/api/dropbox/folders"]
+          "/api/me", "/api/price", "/api/reference/counties", "/api/dropbox/folders",
+          "/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",
+          "/api/portal/proposal/p1/followups", "/api/portal/proposal/p1/status",
+          "/api/portal/proposal/p1/followup-automation"]
 
 
 def test_no_tab_claims_a_shared_prefix():
