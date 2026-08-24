@@ -221,7 +221,7 @@ def test_losing_local_storage_does_not_stop_you_starting_a_bid():
 
 # ── the outcome, on every undecided card ─────────────────────────────────────
 def test_every_undecided_card_gets_the_two_outcome_buttons():
-    """The card's two buttons are [Mark as closed] and [Lost].
+    """The card's two buttons are [Mark as won] and [Lost].
 
     WHO AND WHEN: Hanz, 2026-08-20 — "Instead of Files and Info Sheet, we chane it to mark as
     closed and Lost button". This test was `test_every_card_gets_files_and_info` and pinned the
@@ -242,7 +242,7 @@ def test_every_undecided_card_gets_the_two_outcome_buttons():
     assert "cardActions(p)" in kanban, "the action row is not rendered on cards"
     acts = _block("portal.js", "cardActions")
     assert "data-won=" in acts and "data-lost=" in acts, (
-        "the card does not carry Mark as closed and Lost")
+        "the card does not carry Mark as won and Lost")
     assert "data-files=" not in acts and "data-info=" not in acts, (
         "the old Files/Info sheet pair is back on the card as well")
     assert "not_sent" not in acts, "the buttons are gated on the not-sent rows only"
