@@ -234,6 +234,8 @@ const CAPS = [
   { href: "/calendar.html", label: "Bid Calendar",
     api: ["/api/calendar/events", "/api/calendar/events/"], locked: false },
   { href: "/info-sheet.html", label: "Info Sheet", api: ["/api/info-sheet/"], locked: false },
+  // Back in the sidebar on 2026-08-24, and gated for the first time: the feed it reads is its own.
+  { href: "/followups.html", label: "Follow-ups", api: ["/api/portal/followups"], locked: false },
   { href: "/polish-intake.html", label: "Polish Estimate", api: [], locked: false },
   { href: "/analytics.html", label: "Analytics", api: ["/api/analytics/"], locked: false },
   { href: "/projects.html", label: "Proposals Database", api: [], locked: false },
