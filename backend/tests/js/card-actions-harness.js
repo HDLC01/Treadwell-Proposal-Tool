@@ -1,14 +1,15 @@
 "use strict";
 /* The two buttons on a board card, EXECUTED: rendered, clicked, and followed to the request.
  *
- * Hanz, 2026-08-20: "the board card's two buttons become Mark as closed and Lost", and "Closed"
+ * Hanz, 2026-08-20: "the board card's two buttons become Mark as closed and Lost", relabelled to "Mark as won" on
+ * 2026-08-22 because "closed" read as though it might mean lost. The POST never changed. "Closed"
  * means WON. Files and Info sheet came off the card the same day, having moved into both drawers'
  * Proposal tab.
  *
  * WHY EXECUTED. Four claims here, none of them settled by a source read:
  *   · the buttons reach the RIGHT project — cardRowOf looks the row up out of ALL by id, and a
  *     board that repainted between the render and the click must not act on a neighbour;
- *   · "Mark as closed" posts the existing won mark rather than inventing a state;
+ *   · "Mark as won" posts the existing won mark rather than inventing a state;
  *   · "Lost" picks its endpoint off `not_sent`, because an unsent project has no portal row;
  *   · a click on either one does NOT also open the drawer. That last one is a returns-from-a-branch
  *     property of a delegated listener, so the listener itself is lifted and fired.
@@ -73,7 +74,7 @@ function boardClickStatement() {
 
 // ── the fixtures ─────────────────────────────────────────────────────────────
 // One of each shape the two buttons have to tell apart. Deliberately including the two that must
-// get NO buttons: a lost card offering "Lost" and a won card offering "Mark as closed" are both
+// get NO buttons: a lost card offering "Mark as lost" and a won card offering "Mark as won" are both
 // controls that save and change nothing visible, which reads as broken.
 const ROWS = [
   { proposal_id: "ns-1", project_name: "Cedar Ridge", not_sent: true,
@@ -230,7 +231,7 @@ async function press(which, id, className) {
   const before = { board: painted.board, load: painted.load };
   const deal = node({ className: className || "deal", dataset: { id } });
   const btn = node({ dataset: { [which]: encodeURIComponent(id) }, className: "deal-act",
-                     text: which === "won" ? "Mark as closed" : "Lost" }, deal);
+                     text: which === "won" ? "Mark as won" : "Mark as lost" }, deal);
   page.click(btn);
   await tick();
   return { requests: net.requests.slice(), asked: answer.calls.slice(),
@@ -279,7 +280,7 @@ async function press(which, id, className) {
       missing: page.cardRowOf({ dataset: { won: "no-such-project" } }),
     };
 
-    // ── Mark as closed ──
+    // ── Mark as won ──
     out.markWon = await press("won", "sent-1");
     out.markWonRow = { wonAt: (page.row("sent-1") || {}).won_at };
     // …and it must not have opened the drawer over its own navigation.
