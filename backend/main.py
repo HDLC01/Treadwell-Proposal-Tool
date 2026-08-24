@@ -399,9 +399,13 @@ class GenerateIn(BaseModel):
     # stale draft can't misapply ids). Empty = legacy caller = apply unchanged.
     template_version: str = ""
     # Proposal Review doc editor: per-option DISPLAY overrides for the WORK
-    # {{#system}} rows — [{name?, texture?, sqft?, prefix?, texture_label?,
-    # area_label?}] positionally aligned with
-    # _build_epoxy_systems() output (index i -> systems[i]). These edit only the
+    # {{#system}} rows — [{name_line?, texture_line?, area_line?, name?, texture?,
+    # sqft?, prefix?, texture_label?, area_label?}] positionally aligned with
+    # _build_epoxy_systems() output (index i -> systems[i]). The three `*_line`
+    # keys are the WHOLE row as the estimator rewrote it (the only channel that
+    # reaches the static words around a token); the rest are the older per-field
+    # keys, still read so a draft saved under the island editor keeps its text.
+    # These edit only the
     # proposal's displayed text; they are NEVER written back to cell_values and
     # NEVER affect pricing. Applied for epoxy only (other work types pass
     # systems=None). Sanitized index-preserving — see _sanitize_system_overrides.
@@ -3111,31 +3115,51 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
 # coerces to {} in place rather than being dropped, because the list is
 # positional (index i -> _build_epoxy_systems()[i]) and dropping an entry would
 # shift every later override onto the wrong system. Values are str()-coerced,
-# stripped, blanks dropped (a blank field = "revert this field to the computed
-# value"), and length-capped. Never raises — a stale draft or hand-built request
+# blanks dropped (a blank field = "revert this field to the computed value"),
+# and length-capped. Never raises — a stale draft or hand-built request
 # must not 500 /api/generate.
 _SYSTEM_OVERRIDES_MAX = 12
-# The three LABEL fields join the three value fields here, and the whitelist is
-# the only thing that lets them through. Kyle, 2026-08-20: "Some of the labels
-# are not editable why not make it like a word document?? ... Everything on that
-# page must be editable like a word doc." The Direct/epoxy WORK rows live inside
-# the template's {{#system}} region, so their labels could not be reached by the
-# paragraph-override channel (_apply_paragraph_overrides skips any id whose
-# in_block is not None); they ride the per-index system_overrides channel with
-# the values instead.
+# The three WHOLE-LINE fields lead this tuple, and the whitelist is the only thing
+# that lets them through. Kyle, three times, most recently 2026-08-24: "every line
+# in the proposal must be editable AS ONE LINE, the way the base bid is ... I cannot
+# delete 'SF of epoxy flooring'." The Direct/epoxy WORK rows live inside the
+# template's {{#system}} region, so nothing in them — not the label, not the static
+# words around the token — can be reached by the paragraph-override channel
+# (_apply_paragraph_overrides skips any id whose in_block is not None). The whole
+# line rides the per-index system_overrides channel instead
+# (proposal_writer._apply_system_row_line).
 #
-# LEAVING A LABEL OUT OF THIS TUPLE IS NOT A NO-OP, IT IS A LIE. The editor
-# persists a renamed label to the draft and shows it back after a reload, so a
-# field the sanitizer drops here means Kyle sees "Substrate:" on screen, the
-# draft remembers "Substrate:", and the .docx the customer receives still says
-# "Texture:" — positive confirmation of an edit that never happened. Add the
-# field here in the SAME commit as the island that edits it.
-_SYSTEM_OVERRIDE_FIELDS = ("name", "texture", "sqft",
+# The per-field keys after them are the older, narrower channels. Nothing writes
+# them any more; they stay because a draft saved under the island editor still
+# carries them, and dropping them here would throw away text the estimator typed.
+#
+# LEAVING A FIELD OUT OF THIS TUPLE IS NOT A NO-OP, IT IS A LIE. The editor persists
+# an edited line to the draft and shows it back after a reload, so a field the
+# sanitizer drops here means Kyle sees his own sentence on screen, the draft
+# remembers it, and the .docx the customer receives still says "Area: ~2,305 SF of
+# epoxy flooring" — positive confirmation of an edit that never happened. Add the
+# field here in the SAME commit as the line that edits it.
+_SYSTEM_OVERRIDE_FIELDS = ("name_line", "texture_line", "area_line",
+                           "name", "texture", "sqft",
                            "prefix", "texture_label", "area_label")
 _SYSTEM_OVERRIDE_FIELD_MAXLEN = 300
 
 
 def _sanitize_system_overrides(overrides_in: list) -> list:
+    """SPACES ARE PRESERVED, exactly as _sanitize_price_overrides preserves them.
+
+    This used to `.strip()` every field. Commit 140a3d8 ("what the estimator types is what
+    the customer gets") took the strip out of the price sanitizer and out of all three browser
+    write paths, and this one was missed — so a space typed at the start or end of a WORK row
+    was stored in the draft, shown back after a reload, and then thrown away server-side on the
+    way to the document. Kyle, 2026-08-20: "everything in the Proposals when editing should
+    refelect 1 to 1 in the customer side." A whole-line override makes that leak much easier to
+    hit, because the estimator is now typing at both ends of the line.
+
+    Whitespace-only still drops the field (= revert to the computed value), which is the one
+    thing the strip was genuinely needed for; `s.strip()` as a TEST keeps that without mangling
+    what gets stored.
+    """
     out = []
     for o in (overrides_in or [])[:_SYSTEM_OVERRIDES_MAX]:
         entry: Dict[str, str] = {}
@@ -3144,8 +3168,8 @@ def _sanitize_system_overrides(overrides_in: list) -> list:
                 v = o.get(k)
                 if v is None or isinstance(v, (dict, list, bool)):
                     continue
-                s = str(v).strip()
-                if s:
+                s = str(v)
+                if s.strip():
                     entry[k] = s[:_SYSTEM_OVERRIDE_FIELD_MAXLEN]
         out.append(entry)
     return out
@@ -3176,8 +3200,9 @@ def _sanitize_sheet_systems(systems_in: list) -> list:
 # TEXT shown on the proposal's PRICE lines (base bid, priced options, manual price
 # lines, the Material Sales Tax / Remodel / Total tax rows, and the ALTERNATE
 # SYSTEM block) — they NEVER touch cell_values, the .xlsx, or GenerateOut totals.
-# Mirrors _sanitize_system_overrides (str()-coerce, .strip(), drop a blank field =
-# "revert to computed", per-field maxlen, never raises). Normalized shape:
+# Mirrors _sanitize_system_overrides (str()-coerce, keep the spaces, drop a
+# whitespace-only field = "revert to computed", per-field maxlen, never raises).
+# Normalized shape:
 #   {"options":    {<option id>: {label?, amount?}},
 #    "manual":     [{label?, amount?}, ...],   # index-preserving, {} placeholders
 #    "single_bid": {amount?, tax_phrase?, desc?},
@@ -4025,13 +4050,18 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         # over the computed systems. Nothing here touches cell_values or the
         # price — display text only. Ignored for non-epoxy (systems_arg is None).
         #
-        # `prefix` USED TO STAY COMPUTED and no longer does (2026-08-20): the
-        # "System:" / "Option N:" label is now editable, so an override replaces
-        # the computed default for THAT ROW ONLY. Renaming row 1 leaves rows 2+
-        # reading "Option 2:" / "Option 3:", because the computed prefix is a
-        # per-index default rather than a sequence contract, and silently
-        # rewriting a row nobody opened in a document a customer receives is the
-        # worse failure. `lf_clause` does still stay computed.
+        # `name_line` / `texture_line` / `area_line` are the WHOLE ROW as the estimator
+        # rewrote it, static words and all — the only channel that can delete text like
+        # " SF of epoxy flooring". A row that carries one prints it verbatim and stops
+        # tracking the sheet; a row that does not is still composed from the tokens
+        # below, so a changed square footage still flows through. The narrower per-field
+        # keys stay for drafts saved under the older island editor.
+        #
+        # An override applies to THAT ROW ONLY. Rewriting row 1 leaves rows 2+ reading
+        # "Option 2:" / "Option 3:", because the computed prefix is a per-index default
+        # rather than a sequence contract, and silently rewriting a row nobody opened in
+        # a document a customer receives is the worse failure. `lf_clause` stays computed
+        # (it is composed into the Area line, which the estimator edits as one line).
         if systems_arg:
             for i, ov in enumerate(_sanitize_system_overrides(payload.system_overrides)):
                 if i >= len(systems_arg):
