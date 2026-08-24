@@ -1065,6 +1065,36 @@ def _safe_id(value: str) -> str:
     return value
 
 
+def _portal_visibility(draft_id: str, action: str, actor: Optional[str]) -> bool:
+    """Hide the portal's copy of a project, or put it back. True when there was a row to change.
+
+    THE PROJECT LIVES IN TWO STORES AND THE BOARD READS THE PORTAL ONE. `drafts` is ours;
+    `portal_proposals` is the customer's, and /api/portal/pipeline builds the board from the
+    portal's rows with ours only decorating them. So trashing the draft alone leaves the card on
+    the board for good — and strips its is_test flag, its bid total and its won mark on the way,
+    because the enrichment reads drafts.list_drafts(), which skips trashed rows. Both halves or
+    neither, which is what the two callers below use this for.
+
+    A 404 IS A NORMAL ANSWER, not a failure: it is what a bid nobody ever sent looks like from
+    here, and that project's card comes off the board through the draft half alone. 503 is the
+    portal being unconfigured on this box, which means the same thing — there cannot be a portal
+    row to hide. Every other status is re-raised, so a delete never half-happens quietly.
+
+    The id is the SAME id in both stores (a portal row's proposal_id IS the draft id), which is
+    the invariant /api/portal/pipeline already relies on to stamp the test flag onto a card.
+    """
+    try:
+        _portal("/api/admin/proposal/%s/%s" % (_safe_id(draft_id), action), "POST",
+                {"by": actor or ""})
+        return True
+    except HTTPException as exc:
+        if exc.status_code in (404, 503):
+            log.info("no portal row to %s for %s (portal said %s)",
+                     action, draft_id, exc.status_code)
+            return False
+        raise
+
+
 # Linear-time email shape check: dot-separated domain labels that exclude '.',
 # so there is no overlap between the label class and the '.' separator (the old
 # [^@\s]+\.[^@\s]+ form backtracked polynomially — a ReDoS). The portal
@@ -4283,9 +4313,53 @@ def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -
 
 @app.post("/api/draft/{draft_id}/restore")
 def api_restore_draft(draft_id: str, request: Request) -> Dict[str, Any]:
-    """Restore a soft-deleted project from Trash back to the active list."""
-    existed = drafts.restore_draft(draft_id, _user_email(request))
-    return {"ok": True, "existed": existed}
+    """Restore a soft-deleted project from Trash back to the active list.
+
+    THE PORTAL ROW COMES BACK FIRST, and it is not optional. A sent project that was deleted has a
+    hidden portal row; clearing only our own deleted_at would put the draft back in the Proposals
+    Database while _not_sent_rows, which synthesises a card for every draft with files and NO
+    portal row, filed it under "Created but not sent" — a project the customer has had for weeks,
+    sitting in the column for paperwork nobody has sent. So the portal half is done before ours and
+    a real failure aborts, leaving the project in Trash where the estimator can press it again.
+
+    THE CADENCE STAYS OFF (db.restore_proposal leaves followup_disabled_at alone). Restoring is
+    somebody looking for a project, not asking us to start emailing their customer again.
+
+    Unchanged for everything else: a project that never had a portal row gets a 404 from that end,
+    which _portal_visibility reads as "nothing to un-hide", and this is still open to any signed-in
+    user because the Trash page is."""
+    actor = _user_email(request)
+    unhidden = _portal_visibility(draft_id, "restore", actor)
+    existed = drafts.restore_draft(draft_id, actor)
+    return {"ok": True, "existed": existed, "portal_restored": unhidden}
+
+
+@app.post("/api/project/{draft_id}/delete")
+def api_delete_project(draft_id: str, request: Request) -> Dict[str, Any]:
+    """Delete a project off the board — BOTH stores — reversibly. Admins only.
+
+    Hanz, 2026-08-24: "In the proposals tab under the Active Projects create a 'delete project'
+    button". This is the route behind it, and it exists rather than reusing DELETE /api/draft/{id}
+    because that route touches one table and the board reads the other: a sent project trashed
+    through it kept its card forever. See _portal_visibility for the whole of why.
+
+    ORDER MATTERS AND SO DOES THE ABORT. The portal is hidden first; only then is the draft
+    trashed. A portal failure raises before anything of ours moves, so the project stays exactly
+    as it was — the alternative is the trashed-but-still-on-the-board card this feature is fixing,
+    now with no way to reach the project that made it.
+
+    REVERSIBLE, which is Hanz's decision and not a hedge: this is a move to Trash, restorable from
+    the Trash page (api_restore_draft above), and the permanent purge stays where it already lives
+    — 'Delete forever' on that page. So this logs the EXISTING `trashed` history verb, written by
+    drafts.trash_draft; `deleted_project` stays the dead verb it has always been rather than
+    becoming a second word for one act.
+
+    ADMINS ONLY, at the endpoint and not merely in the drawer."""
+    actor = _require_admin(request)
+    who = actor.get("email")
+    hidden = _portal_visibility(draft_id, "delete", who)
+    existed = drafts.trash_draft(draft_id, who)
+    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden}
 
 
 @app.post("/api/draft/{draft_id}/archive")

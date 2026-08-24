@@ -104,7 +104,7 @@ function liftPair(deps) {
   if (!fact) throw new Error("could not lift fact");
   const body = 'let DRAWER_SIG = ""; let ACTIVE_SEC = null; const SEC_TABS = { proposal: 1 };'
     + ' const notifyCalls = []; const panelCalls = []; const lostCalls = [];'
-    + ' const wonCalls = [];\n'
+    + ' const wonCalls = []; const delCalls = [];\n'
     + fact[0] + "\n" + source("drawerHead") + "\n" +
     // renderNotSent now builds the same five-tab strip a sent project gets. `secTab` is lifted for
     // real — it is pure markup and cheap — but `applySecPanel` is recorded as a no-op here.
@@ -140,8 +140,16 @@ function liftPair(deps) {
     // the repaint are drawer-render-harness.js's subject.
     "\n" + source("wonControlHtml") +
     "\nfunction wireWon(pid, row, repaint) { wonCalls.push(pid); }" +
+    // Deleting a project (2026-08-24). The MARKUP is lifted for real, on the same division of
+    // labour as wonControlHtml above: renderNotSent embeds it, and a stub would decide what this
+    // panel contains. Note this file's `window` carries NO TWAuth, so the real function takes its
+    // non-admin branch and renders "" -- which is the useful half here, because it proves the
+    // section is absent for anybody who is not an admin rather than merely gated at the endpoint.
+    // The WIRING is recorded: the dialog and the request are not-sent-lost-harness.js's subject.
+    "\n" + source("deleteProjectHtml") +
+    "\nfunction wireDeleteProject(pid, row) { delCalls.push(pid); }" +
     "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
-    "         notifyCalls, panelCalls, lostCalls, wonCalls };";
+    "         notifyCalls, panelCalls, lostCalls, wonCalls, delCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
 }
 
@@ -193,7 +201,8 @@ function harness(row, opts) {
     window: { location: { assign() {} } },
   };
   const pair = liftPair(deps);
-  return { document, requests, painted, render: pair.renderNotSent, sig: pair.sig, deps };
+  return { document, requests, painted, render: pair.renderNotSent, sig: pair.sig, deps,
+           delCalls: pair.delCalls };
 }
 
 const out = {};

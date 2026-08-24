@@ -144,6 +144,11 @@ function lift(deps) {
     // calls BOTH unconditionally: leaving either out is a ReferenceError for the whole panel, which
     // is how this harness found the feature's first bug.
     + source("wonControlHtml") + "\n" + source("wireWon") + "\n"
+    // Deleting a project (2026-08-24). BOTH halves for real, because both are the subject: the
+    // markup is the only place the not-sent copy exists, and the wiring is where the confirmation
+    // is asked and the request is shaped. renderNotSent embeds one and calls the other
+    // unconditionally, so a missing bind is a ReferenceError for the whole panel.
+    + source("deleteProjectHtml") + "\n" + source("wireDeleteProject") + "\n"
     // Recorded rather than lifted: applySecPanel reaches for ALL_SEC_CARDS/SEC_ELIGIBLE and two
     // lazy fetches, the estimator picker is another file's subject, and the notify roster is a
     // network read. Recording each means a RENAME in portal.js still fails loudly here.
@@ -151,6 +156,7 @@ function lift(deps) {
     + "function wireNotSentAssign(pid) { assignCalls.push(pid); }\n"
     + "function loadNotSentNotify() {}\n"
     + "return { renderNotSent, wireNotSentLost, closeOutDialog, reopenDestination,"
+    + "         deleteProjectHtml,"
     + "         sig: () => DRAWER_SIG, setSig: (v) => { DRAWER_SIG = v; },"
     + "         panelCalls, assignCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));
@@ -208,7 +214,12 @@ function harness(row, opts) {
     load: () => painted.push("board"),
     closeDrawer: () => {},
     loadEstimators: () => Promise.resolve([]),
-    window: { location: { assign() {} } },
+    // TWAuth, because deleteProjectHtml reads the signed-in role off it and renders NOTHING for a
+    // non-admin. `role` is switchable so one harness can drive both answers: hiding the control is
+    // half the claim (the endpoint refusing a non-admin is the other, and that half is Python's).
+    window: { location: { assign() {} },
+              TWAuth: { user: () => ({ email: "hanz@wetreadwell.com",
+                                       role: o.role === undefined ? "admin" : o.role }) } },
   };
   const m = lift(deps);
   m.renderNotSent("d-1", row);

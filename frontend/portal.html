@@ -320,6 +320,14 @@
   .btn-p { background:var(--red-dark); color:#fff; } .btn-p:hover { background:var(--red); }
   .btn-s { background:#fff; color:var(--ink); border-color:var(--line); } .btn-s:hover { background:var(--surf-low); }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
+  /* Delete project (2026-08-24). Outlined in the brand red rather than filled with it: a filled
+     button would shout louder than "Send deposit request" two tabs away, and this control is one
+     an estimator should have to aim at. The fill only arrives on hover, which is the last moment
+     before the confirmation dialog. */
+  .btn-dang { color:var(--red-dark); border-color:var(--red-dark); background:#fff; }
+  .btn-dang:hover { background:var(--red-dark); color:#fff; }
+  .del-note:empty { display:none; }
+  .del-note { margin:0; color:var(--red-dark); font-weight:600; }
   /* A utility action beside a fact, rather than the action a panel is FOR — the 42px primary
      height would make "Copy the link" shout as loud as "Send deposit request". */
   .btn-sm { min-height:34px; padding:0 12px; font-size:12.5px; }
