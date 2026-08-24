@@ -153,10 +153,53 @@
     .lines .waste { width:74px; }
     .lines .ru { text-align:center; }
     .lines input[type="checkbox"] { width:16px; height:16px; accent-color:var(--red); cursor:pointer; }
-    .division-picks { display:flex; flex-wrap:wrap; gap:6px; min-width:170px; }
-    .division-picks label { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line);
-      border-radius:7px; padding:4px 7px; background:var(--card); font-size:12px; white-space:nowrap; }
-    .division-picks input { width:14px; height:14px; accent-color:var(--red); }
+    /* THE DIVISION CELL: toggle chips on ONE line, not a stack of checkboxes.
+       Hanz, 2026-08-24: "can we have it in just one row? Also instead of a checkbox please pick a
+       better UI that allows a material to have multiple divisions but they show up in one row."
+       The old control was three checkbox labels in a wrapping flex box that was only 170px wide,
+       so "Polished Concrete", "Epoxy" and "Gypsum Underlayment" wrapped onto three lines and made
+       every row of this table three lines tall.
+
+       THE SAME SHAPE AS THE CRM DRAWER'S NOTIFICATION CHIPS, a row of small pills where the
+       filled ones are on. Own class, not nt-chip: green there means "receives this project's
+       emails" and portal.js says in as many words that borrowing the class would lie. The rules
+       are duplicated here rather than shared through styles.css because nt-chip is not in
+       styles.css either, portal.html, notifications.html and done.html each hold their own copy,
+       and this page is not allowed to edit theirs.
+
+       WIDTH IS THE WHOLE FIX. min-width buys enough room for the three real divisions to sit side
+       by side (the widest is 19 characters), and max-width stops a fourth or a tenth from
+       stretching the table sideways: past three chips the strip WRAPS to a second line and the
+       column keeps its width. At six divisions that is two lines, at ten about four, and the
+       table never grows a horizontal scrollbar it did not already have. */
+    .division-chips { display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+      min-width:372px; max-width:384px; }
+    .dchip { position:relative; display:inline-flex; max-width:100%; cursor:pointer; }
+    /* The input is still here, and still a checkbox: reachable by Tab, toggled by Space, and
+       announced with its own state and name. Clipped rather than display:none or
+       visibility:hidden, either of which would drop it out of the tab order and leave the
+       keyboard nothing to press. */
+    .dchip > input { position:absolute; width:1px; height:1px; margin:0; padding:0; border:0;
+      clip-path:inset(50%); overflow:hidden; white-space:nowrap; }
+    .dchip-f { display:inline-flex; align-items:center; gap:3px; max-width:100%;
+      border:1px solid var(--line); border-radius:999px; padding:3px 9px 3px 7px;
+      background:var(--surf-low); color:var(--ink-v); font:600 11.5px/1.55 system-ui;
+      white-space:nowrap; }
+    .dchip:hover .dchip-f { border-color:var(--red); color:var(--red-dark); }
+    .dchip > input:checked + .dchip-f { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
+    /* COLOUR IS NOT THE ONLY SIGNAL. The mark changes shape, not just hue: a tick when the
+       material is in that division and a plus when it is not, so somebody who cannot separate the
+       green from the grey can still count the ones that are on. CSS content rather than markup,
+       because toggling a chip must NOT re-render the row (that would throw away the focus the
+       estimator just tabbed into), so the state has to be something :checked can reach. */
+    .dchip-mark { flex:0 0 auto; width:9px; text-align:center; font-weight:800; font-size:11px; }
+    .dchip-mark::before { content:"+"; }
+    .dchip > input:checked + .dchip-f .dchip-mark::before { content:"✓"; }
+    /* A long custom division keeps 22 characters, three more than "Gypsum Underlayment", so two
+       of them can never be truncated into looking like the same word. The label's title holds the
+       whole name for the one that runs longer. */
+    .dchip-t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22ch; }
+    .dchip > input:focus-visible + .dchip-f { outline:2px solid var(--red); outline-offset:2px; }
     /* ONE ROW PER LINE ITEM. The picker is a single input; its results float over the table rather
        than expanding the cell, so opening the list cannot change a row's height. Hanz, 2026-08-19:
        "Make one line item, one row." The division and vendor filters that used to sit in here are
@@ -262,7 +305,7 @@
             </table>
             <div id="divisions-empty" class="empty" hidden>
               <h3>No divisions yet</h3>
-              <p>Add divisions and they become checkboxes on every item.</p>
+              <p>Add divisions and they become chips on every item.</p>
               <button class="btn" type="button" data-add-ref="divisions">+ Add your first division</button>
             </div>
           </div>

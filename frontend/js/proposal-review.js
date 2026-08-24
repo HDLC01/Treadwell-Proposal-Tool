@@ -373,54 +373,20 @@
   // keep their decimals ("$36,763.50").
   const fmtUSDdoc = (n) => { const s = fmtUSD(n); return s.endsWith(".00") ? s.slice(0, -3) : s; };
 
-  // ─── Editable PRICE-line DISPLAY overrides (state.price_overrides) ──────
-  // The base bid line, each priced option line, and each manual price line
-  // render their amount + label as editable islands. An edit is stored as a
-  // DISPLAY override (never touches cell_values / pricing — see backend
-  // _sanitize_price_overrides); an emptied / back-to-computed island reverts.
-  // Shape mirrors the backend: { options:{<id>:{label?,amount?}},
-  // manual:[{label?,amount?}...], single_bid:{amount?,tax_phrase?} }.
-  // Tooltip on an edited (overridden) island. Plain text (no &, <, >, ") so it's
+  // ─── Editable DISPLAY overrides (state.price_overrides) ─────────────────
+  // EVERY generated line on this page is edited as ONE line: click anywhere in
+  // it and rewrite the whole thing, static words included. There are no locked
+  // token islands left — the last of them (the WORK {{#system}} rows) moved to
+  // this model on 2026-08-24. Kyle, for the third time: "every line in the
+  // proposal must be editable as one line, the way the base bid is ... I cannot
+  // delete SF of epoxy flooring."
+  //
+  // A stored line is a DISPLAY override: it never touches cell_values, the
+  // .xlsx, or the pricing (see the backend's _sanitize_price_overrides /
+  // _sanitize_system_overrides). Blank it and the computed line comes back.
+  // Tooltip on an edited (overridden) line. Plain text (no &, <, >, ") so it's
   // safe both inside an HTML title="" attribute and as an .title DOM property.
   const _OVERRIDE_TITLE = "Edited — the printed proposal differs from the computed estimate; the estimate sheet and totals are unchanged.";
-  function poOverride(kind, key) {
-    const pov = (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : null;
-    if (!pov) return null;
-    if (kind === "option")     return (pov.options && typeof pov.options === "object") ? pov.options[key] : null;
-    if (kind === "manual")     return Array.isArray(pov.manual) ? pov.manual[key] : null;
-    if (kind === "single_bid") return (pov.single_bid && typeof pov.single_bid === "object") ? pov.single_bid : null;
-    if (kind === "row")        return (pov.rows && typeof pov.rows === "object") ? pov.rows[key] : null;
-    if (kind === "combo")      return (pov.combo && typeof pov.combo === "object") ? pov.combo[key] : null;
-    if (kind === "alt")        return (pov.alternate && typeof pov.alternate === "object") ? pov.alternate : null;
-    return null;
-  }
-  // Current shown value for an override field: the saved override text if present
-  // and non-blank, else the computed value (same resolution as renderSystemPreview).
-  function poValue(kind, key, field, computed) {
-    const ov = poOverride(kind, key);
-    return (ov && typeof ov[field] === "string" && ov[field].trim()) ? ov[field] : computed;
-  }
-  // A contenteditable .tw-fill-edit island for a PRICE line's amount/label. The
-  // data-po-* attrs carry the addressing the delegated input handler uses;
-  // data-computed is the engine value an emptied island reverts to (see poValue).
-  function poIsland(kind, key, field, computed, opts) {
-    const e = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
-      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    const tag = (opts && opts.strong) ? "strong" : "span";
-    const keyAttr = kind === "option" ? ` data-po-id="${e(String(key))}"`
-                  : kind === "manual" ? ` data-po-index="${key}"`
-                  : kind === "row"    ? ` data-po-row="${e(String(key))}"`
-                  : kind === "combo"  ? ` data-po-key="${e(String(key))}"` : "";
-    const shown = poValue(kind, key, field, computed);
-    // ⚠ reminder when this island carries a display override (differs from the
-    // engine-computed value) — the printed doc will differ from the estimate.
-    const overridden = String(shown) !== String(computed);
-    const cls = "tw-fill tw-fill-edit" + (overridden ? " tw-overridden" : "");
-    const titleAttr = overridden ? ` title="${_OVERRIDE_TITLE}"` : "";
-    return `<${tag} class="${cls}"${titleAttr} contenteditable="true" spellcheck="false"` +
-           ` data-po-kind="${kind}"${keyAttr} data-po-field="${field}"` +
-           ` data-computed="${e(computed)}">${e(shown)}</${tag}>`;
-  }
 
   // ── WHOLE-LINE display overrides (state.price_overrides.lines) ─────────────
   // Every PRICE line is edited as ONE contenteditable line (click anywhere,
@@ -919,7 +885,7 @@
       // under the "Options:" heading. (The old renderRoomsPreview painted a
       // duplicate "Base Bid:" + the options into #rooms-block, which mounts BEFORE
       // single_bid — showing the base twice and never showing "Options:".)
-      // Amounts/labels are editable .tw-fill-edit override islands (display-only).
+      // Each line is ONE whole-line editable override (display-only) — see lineEl.
       function renderOptionLinesPreview() {
         if (roomsBlock) roomsBlock.innerHTML = "";      // base shows via single_bid only
         const plBlock = document.getElementById("price-lines-block");
@@ -1428,14 +1394,16 @@
 
   // Region badge wording by the region's leading block name.
   const REGION_LABELS = {
-    system: "Systems — from the estimate & the fields sidebar",
+    system: "Systems — from the estimate & the fields sidebar; click any line to rewrite it",
     notes:  "Notes — edit in the fields sidebar (one per line)",
   };
   const REGION_LABEL_DEFAULT = "Priced content — edit via the Pricing options & fields sidebars";
 
-  // Read-only preview elements mounted into each region, by block name. The
-  // single_bid mount carries the whole base-bid group (incl. the combo
-  // breakout + the nested tax_breakout/remodel/has_options rows).
+  // Live preview elements mounted into each region, by block name. Their content is
+  // engine-generated but NOT read-only: every line inside them is one editable line
+  // (see lineEl / renderSystemPreview / renderNotesPreview). The single_bid mount
+  // carries the whole base-bid group (incl. the combo breakout + the nested
+  // tax_breakout/remodel/has_options rows).
   const systemPreviewEl = document.createElement("div");
   systemPreviewEl.id = "system-preview-block";
   const notesPreviewEl = document.createElement("div");
@@ -2352,9 +2320,11 @@
     }
   }
 
-  // Render one ordered slice of blocks into `container`: editable .tw-blocks
-  // for free paragraphs; contiguous {{#block}} regions collapse into ONE
-  // read-only .tw-priced-region carrying the matching live previews.
+  // Render one ordered slice of blocks into `container`: editable .tw-blocks for free
+  // paragraphs; contiguous {{#block}} regions collapse into ONE .tw-priced-region
+  // carrying the matching live previews. The region is not editable as a paragraph —
+  // its ids stop meaning anything once it is expanded per priced system — but every
+  // LINE the preview renders inside it is editable, whole, in place.
   function renderBlockList(container, list, tokens) {
     let regionWrap = null, regionNames = null;
     const flush = () => {
@@ -2731,20 +2701,44 @@
     return out;
   }
 
-  // The WORK row fields that are LABELS rather than values. They get the same yellow
-  // editable island as everything else, but not the ⚠ "differs from the estimate" marker:
-  // that warning exists because an SF edited off the sheet is a pricing-review risk, and a
-  // renamed label carries no number to be wrong about. Plain text only (no & < > ") — it is
+  // The three {{#system}} WORK rows, each stored as ONE whole line under this key in
+  // state.system_overrides[i]. The row is identified in the template by the token it
+  // carries — name / texture / sqft — which is how the writer finds it too
+  // (proposal_writer._SYSTEM_ROW_LINES). Keep the two tuples in step.
+  const _SYS_ROW_LINE_FIELDS = ["name_line", "texture_line", "area_line"];
+  // A line whose WORDING changed but whose numbers did not is not a pricing-review
+  // risk, so it gets its own tooltip. Plain text only (no & < > ") — it is
   // interpolated into a title="" attribute.
-  const _SYS_LABEL_FIELDS = new Set(["prefix", "texture_label", "area_label"]);
-  const _SYS_LABEL_TITLE = "Renamed — the proposal prints this label instead of the "
-                         + "template's. Clear it to go back to the template wording.";
+  const _SYS_LINE_TITLE = "Reworded — the proposal prints this line instead of the "
+                        + "template's. Clear the line to go back to the template wording.";
+  // Mirrors proposal_writer._normalize_work_label_formatting, which is what actually
+  // decides the weight in the generated .docx: a WORK row prints BOLD through its first
+  // colon and normal after it. Same guards (a label must be non-empty, at most 48
+  // characters and free of sentence punctuation) so a colon buried in prose is not
+  // mistaken for a label. Screen and document therefore agree on the bold lead-in even
+  // after the estimator has rewritten the line.
+  //
+  // `boldFallback` is what the row looks like when there is NO label to find — i.e. when
+  // the estimator deleted the colon. The normalizer stands down in that case and the row
+  // keeps its template run weight, which for the System and Area rows is bold and for the
+  // Texture row is not (the writer rewrites the line into the row's first run). Without
+  // this the page would show a plain line and the customer would receive a bold one.
+  function workLabelHtml(text, boldFallback) {
+    const s = String(text == null ? "" : text);
+    const colon = s.indexOf(":");
+    if (colon >= 0) {
+      const label = s.slice(0, colon).trim();
+      if (label && label.length <= 48 && !/[.?!]/.test(label))
+        return `<strong>${escHtml(s.slice(0, colon + 1))}</strong>${escHtml(s.slice(colon + 1))}`;
+    }
+    return boldFallback ? `<strong>${escHtml(s)}</strong>` : escHtml(s);
+  }
 
   // WORK systems preview — mirrors main._build_epoxy_systems + the template's
   // {{#system}} rows. Sourced from the resolved BASE tab's sheet cells
   // (sheetSystems), with the legacy Epoxy!-cell reads as a stale-draft fallback.
   function renderSystemPreview() {
-    // Don't rebuild while the estimator is editing one of the fill islands.
+    // Don't rebuild while the estimator has the caret in one of these lines.
     if (focusInside(systemPreviewEl)) return;
     const merged = Object.assign({}, state, TW.readForm(form));
     const cells = state.cell_values || {};
@@ -2769,67 +2763,95 @@
     const coveH = String(merged.cove_height || "6").trim() || "6";
     const multi = picks.length > 1;
     const ovs = Array.isArray(state.system_overrides) ? state.system_overrides : [];
-    // An estimate-sourced value rendered as an editable, highlighted island.
-    // The yellow .tw-fill stays as a provenance cue; the text is freely
-    // editable in place. `data-computed` is the value the estimate/fields
-    // produce, so the input handler can revert an override that's been
-    // emptied or re-typed back to the computed value. Display-only — never
-    // written to cell_values / pricing (see the systemPreviewEl input handler
-    // and backend system_overrides).
+    // ONE LINE, ONE EDITABLE REGION. Kyle asked three times, and the first two answers
+    // both handed him more islands, which is what he was objecting to: "do not make them
+    // as subsections to edit but as a whole section you could edit ... I cannot delete SF
+    // of epoxy flooring." The template's Area row is
+    //     Area: ~{{system.sqft}} SF of epoxy flooring{{system.lf_clause}}
+    // so under the old island model the "~", the words " SF of epoxy flooring" and the
+    // whole cove clause were escaped dead text between two contenteditable spans: there
+    // was nowhere to put a caret. They are now ordinary characters in one editable line,
+    // exactly like the base-bid line (lineEl / paintLine).
     //
-    // LABELS GO THROUGH THIS TOO. Kyle, 2026-08-19: "Some of the labels are not editable why not
-    // make it like a word document??" The {{#system}} rows were the last genuinely locked text on
-    // the page — renderBlockList diverts a {{#block}} region into a read-only .tw-priced-region,
-    // so this preview is the ONLY place those rows can be edited, and it used to emit
-    // "System:" / "Texture:" / "Area:" as plain escaped HTML. They are now islands like every
-    // value beside them:
-    //   * `prefix` is the computed {{system.prefix}} token, which already had an override channel;
-    //   * `texture_label` / `area_label` are new per-row channels for the template's STATIC label
-    //     text (see proposal_writer._apply_system_row_labels).
-    // Emptying any of them reverts to the computed/template text — the same rule the value
-    // islands have always used (see the systemPreviewEl input handler), which is also why an
-    // emptied label can never leave a bare "{{token}}" or a lone colon in a customer's document.
-    const editSpan = (i, field, computed) => {
+    // These three rows are the LAST surface on the page to move to this model; there are
+    // no token islands left anywhere. The rows have to be synthesized here rather than
+    // rendered as .tw-block paragraphs because they live inside the template's
+    // {{#system}} region, which is expanded once per priced system at generate time — so
+    // their paragraph ids stop describing anything the estimator saw, and
+    // _apply_paragraph_overrides refuses any id with in_block set. The per-index
+    // `system_overrides` channel reaches inside that region, so the whole line rides
+    // there (proposal_writer._apply_system_row_line).
+    //
+    // UNTOUCHED TRACKS, TOUCHED FREEZES. A row with no stored line is rebuilt from the
+    // estimate on every refresh, so a changed square footage still flows in. Once the
+    // estimator types, their words win and that row stops tracking the sheet — the same
+    // trade already accepted for every PRICE line, including the base bid, which is
+    // money. Clearing the line reverts it to the computed text.
+    //
+    // The per-FIELD keys (name / texture / sqft / prefix / texture_label / area_label) are
+    // still READ here so a draft saved under the old island model still shows, and still
+    // prints, what the estimator typed into it. Nothing writes them any more.
+    const legacy = (i, field, computed) => {
+      const ov = ovs[i] || {};
+      return (typeof ov[field] === "string" && ov[field].trim()) ? ov[field] : computed;
+    };
+    // One whole editable WORK row. `data-computed` is the line the estimate/fields
+    // produce, so the input handler can revert a line that has been emptied or re-typed
+    // back to the computed text. Display-only — never written to cell_values / pricing.
+    const lineRow = (i, field, computed, cls, style, boldFallback) => {
       const ov = ovs[i] || {};
       const has = (typeof ov[field] === "string" && ov[field].trim());
-      const v = has ? ov[field] : computed;
-      // ⚠ reminder when an SF / system value is edited off the estimate figure.
-      const isLabel = _SYS_LABEL_FIELDS.has(field);
-      const overridden = has && String(v) !== String(computed);
-      const cls = "tw-fill tw-fill-edit" + (overridden && !isLabel ? " tw-overridden" : "");
+      const shown = has ? ov[field] : computed;
+      const overridden = String(shown) !== String(computed);
+      // ⚠ + tooltip. A line whose DIGITS moved off the estimate is a pricing-review risk;
+      // a line that was only reworded is not, so it says so instead. One visual state
+      // either way, because two would be the island model again in another costume.
+      // Digits are counted AFTER the row's label, so renaming "Option 1:" to "Base
+      // System:" is not reported as a re-priced square footage.
+      const digits = (t) => {
+        const str = String(t);
+        const c = str.indexOf(":");
+        return (c >= 0 ? str.slice(c + 1) : str).replace(/[^0-9]/g, "");
+      };
+      const numMoved = overridden && digits(shown) !== digits(computed);
       const titleAttr = overridden
-        ? ` title="${isLabel ? _SYS_LABEL_TITLE : _OVERRIDE_TITLE}"` : "";
-      return `<span class="${cls}"${titleAttr} contenteditable="true" spellcheck="false"` +
-             ` data-sys-index="${i}" data-sys-field="${field}"` +
-             ` data-computed="${escHtml(computed)}">${escHtml(v)}</span>`;
+        ? ` title="${numMoved ? _OVERRIDE_TITLE : _SYS_LINE_TITLE}"` : "";
+      return `<p class="${cls} tw-line-edit${overridden ? " tw-overridden" : ""}"${titleAttr}` +
+             ` contenteditable="true" spellcheck="false"` +
+             ` data-sys-index="${i}" data-sys-line="${field}"` +
+             ` data-computed="${escHtml(computed)}" style="${style}">` +
+             `${workLabelHtml(shown, boldFallback)}</p>`;
     };
     systemPreviewEl.innerHTML = picks.map((s, i) => {
-      // NUMBERING IS PER ROW, and a renamed row does NOT switch it off for the others.
+      // NUMBERING IS PER ROW, and an edited row does NOT switch it off for the others.
       // Each row's computed prefix is a DEFAULT for that index only, and every override in this
-      // preview is already per-index (name/texture/sqft have always been). So renaming row 1 to
-      // "Base System:" leaves rows 2 and 3 reading "Option 2:" / "Option 3:" — the label the
-      // estimator did not touch keeps the number of the row it is on. The alternative, letting
-      // one manual label suppress numbering for the whole list, would silently rewrite a row
-      // nobody edited in a customer-facing document; it can also read oddly ("Base System:" then
-      // "Option 2:"), but that is visible on screen before Generate and is one more edit to fix.
-      const prefix = multi ? `Option ${i + 1}:` : "System:";
+      // preview is per-index. So rewriting row 1 as "Base System:   Quartz" leaves rows 2 and 3
+      // reading "Option 2:" / "Option 3:" — the row the estimator did not touch keeps the number
+      // of the row it is on. The alternative, letting one manual label suppress numbering for the
+      // whole list, would silently rewrite a row nobody edited in a customer-facing document; it
+      // can also read oddly ("Base System:" then "Option 2:"), but that is visible on screen
+      // before Generate and is one more edit to fix.
+      const prefix = legacy(i, "prefix", multi ? `Option ${i + 1}:` : "System:");
       const coveClause = `${fmt(s.lf)} LF of ${coveH}" epoxy cove base`;
       const lfClause = s.lf > 0 ? ` and ${coveClause}` : "";
-      // Resolve the shown SF (an emptied/edited sqft island override wins) so the
-      // cove-only case is detected on the DISPLAYED value, not just the computed one.
-      const ov = ovs[i] || {};
-      const resolvedSqft = num((typeof ov.sqft === "string" && ov.sqft.trim()) ? ov.sqft : fmt(s.sf));
+      // Resolve the shown SF (a legacy per-field sqft override wins) so the cove-only
+      // case is detected on the DISPLAYED value, not just the computed one.
+      const sqft = legacy(i, "sqft", fmt(s.sf));
       // Cove-only system (0 SF but cove present): drop the meaningless
       // "~0 SF of epoxy flooring and " prefix and show just the cove clause.
-      const areaLabel = editSpan(i, "area_label", "Area:");
-      const areaInner = (resolvedSqft === 0 && s.lf > 0)
-        ? `${areaLabel} ${escHtml(coveClause)}`
-        : `${areaLabel} ~${editSpan(i, "sqft", fmt(s.sf))} SF of epoxy flooring${escHtml(lfClause)}`;
+      // Mirrors proposal_writer._drop_zero_sf_prefix.
+      const areaLabel = legacy(i, "area_label", "Area:");
+      const areaLine = (num(sqft) === 0 && s.lf > 0)
+        ? `${areaLabel} ${coveClause}`
+        : `${areaLabel} ~${sqft} SF of epoxy flooring${lfClause}`;
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
-      return `<p class="tw-li" style="margin:0 0 1pt;"><strong>${editSpan(i, "prefix", prefix)}</strong>   ${editSpan(i, "name", s.name)}</p>` +
-             `<p class="tw-list" style="margin:0 0 1pt;padding-left:9pt;">${editSpan(i, "texture_label", "Texture:")}  ${editSpan(i, "texture", texture)}</p>` +
-             `<p class="tw-li" style="margin:0 0 4pt;"><strong>${areaInner}</strong></p>`;
+      return lineRow(i, "name_line", `${prefix}   ${legacy(i, "name", s.name)}`,
+                     "tw-li", "margin:0 0 1pt;", true)
+           + lineRow(i, "texture_line",
+                     `${legacy(i, "texture_label", "Texture:")}  ${legacy(i, "texture", texture)}`,
+                     "tw-list", "margin:0 0 1pt;padding-left:9pt;", false)
+           + lineRow(i, "area_line", areaLine, "tw-li", "margin:0 0 4pt;", true);
     }).join("");
   }
 
@@ -4250,22 +4272,27 @@
   // ── Editable estimate-sourced fills: WORK systems ──────────────────────
   // systemPreviewEl is a stable element (its children are rewritten, but it
   // itself is never replaced), so one delegated listener survives every
-  // rebuild. Edits write display-only overrides into state.system_overrides
-  // (dense, by option index); they never touch cell_values or pricing.
+  // rebuild. Each {{#system}} row is ONE whole editable line; an edit writes
+  // that whole line as a display-only override into state.system_overrides
+  // (dense, by option index). It never touches cell_values or pricing.
   let _sysOvTimer = null;
   systemPreviewEl.addEventListener("input", (e) => {
-    const sp = e.target && e.target.closest ? e.target.closest("[data-sys-field]") : null;
+    const sp = e.target && e.target.closest ? e.target.closest("[data-sys-line]") : null;
     if (!sp) return;
     const i = Number(sp.dataset.sysIndex);
-    const field = sp.dataset.sysField;
-    if (!Number.isInteger(i) || i < 0 || !field) return;
+    const field = sp.dataset.sysLine;
+    // The field whitelist, mirroring the backend's. An unrecognized key would be
+    // persisted to the draft, shown back after a reload, and then dropped server-side —
+    // positive confirmation of an edit the customer never receives.
+    if (!Number.isInteger(i) || i < 0 || _SYS_ROW_LINE_FIELDS.indexOf(field) < 0) return;
     const ovs = Array.isArray(state.system_overrides) ? state.system_overrides : (state.system_overrides = []);
     while (ovs.length <= i) ovs.push({});          // keep dense — no sparse nulls in JSON
     if (!ovs[i] || typeof ovs[i] !== "object") ovs[i] = {};
     // Spaces preserved, not trimmed. Kyle, 2026-08-20: editing must reflect 1 to 1 in the
-    // customer's copy. A WORK row is a label and a value in adjacent islands, so a space at
-    // the seam between them is a real edit. Emptiness is tested with .trim(), so a blank
-    // edit still reverts to the computed value without mangling what gets stored.
+    // customer's copy. The template writes a WORK row's label and value with real spaces
+    // between them, so a space the estimator adds or removes anywhere in the line is a
+    // real edit. Emptiness is tested with .trim(), so a blank line still reverts to the
+    // computed value without mangling what gets stored.
     const v = serializeBlock(sp);
     if (!v.trim() || v === (sp.dataset.computed || "")) delete ovs[i][field];   // empty / back-to-computed -> revert
     else ovs[i][field] = v;

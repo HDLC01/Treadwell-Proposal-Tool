@@ -763,14 +763,12 @@ button {
   border-radius: 1px;
   cursor: default;
 }
-/* An estimate-sourced fill that is ALSO editable in place (system name /
-   texture / area). Keeps the yellow provenance cue; the caret + focus ring
-   signal it can be typed into. :empty keeps an emptied span clickable so the
-   estimator can re-type after clearing it. */
-.tw-fill.tw-fill-edit { cursor: text; outline: none; }
-.tw-fill.tw-fill-edit:hover { background: #ffe04d; }
-.tw-fill.tw-fill-edit:focus { background: #ffe975; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.55); }
-.tw-fill.tw-fill-edit:empty { display: inline-block; min-width: 1.2em; }
+/* `.tw-fill-edit` — the editable-ISLAND treatment — is gone. Every generated line on
+   the proposal page (PRICE rows, the WORK {{#system}} rows) is now edited as ONE whole
+   line (.tw-line-edit below), so there is no span that is editable while the words
+   around it are not. Kyle, three times: "every line in the proposal must be editable as
+   one line, the way the base bid is." `.tw-fill` above is still the read-only provenance
+   highlight for a token value inside an editable paragraph. */
 /* PRICE-row islands (base amount / description / tax phrase, and option+manual
    lines) must not break mid-value — a wrapped "(material sales tax INCLUDED)"
    leaves an orphaned highlighted ")" on the next line. Keep each island intact;
@@ -811,19 +809,6 @@ button {
   cursor: help;
 }
 
-/* ⚠ reminder: this value was hand-edited off the computed estimate. The printed
-   proposal shows the edited text; the estimate sheet + on-screen totals are
-   unchanged. Shown on price islands (base / tax rows / combo / options / alternate)
-   and edited SF/LF system islands. */
-.tw-fill.tw-fill-edit.tw-overridden { background: #ffcf3f; }
-.tw-fill.tw-fill-edit.tw-overridden::after {
-  content: "\26A0";                       /* ⚠ */
-  font-size: 0.72em;
-  color: #b26a00;
-  margin-left: 2px;
-  vertical-align: super;
-  cursor: help;
-}
 /* Same reminder on an edited free paragraph that carries a price ($) or an SF/LF
    area measure (e.g. the gyp/GC tax rows, which edit as plain paragraphs). */
 .tw-block.tw-dirty-warn::after {
@@ -1254,10 +1239,13 @@ button {
 }
 
 /* A repeatable/priced block region ({{#single_bid}}, {{#price_line}},
-   {{#system}}, {{#notes}}, …) — read-only, engine-driven content rendered
-   INLINE in the document flow (no card chrome: the page must read as one
-   continuous document). Hover hints where to edit it; the engine-driven
-   amounts inside carry the yellow .tw-fill treatment. */
+   {{#system}}, {{#notes}}, …) — engine-generated content rendered INLINE in the
+   document flow (no card chrome: the page must read as one continuous document).
+   The REGION is not a paragraph anybody can edit, because it is expanded once per
+   priced row at generate time; every LINE inside it is one editable line
+   (.tw-line-edit / .tw-note-edit). Hover tints it to say where the content comes
+   from; `cursor: default` is for the region's own padding, and each editable line
+   overrides it with `cursor: text`. */
 .tw-priced-region { position: relative; cursor: default; }
 .tw-priced-region .tw-region-badge { display: none; }
 .tw-priced-region:hover { background: rgba(255, 233, 117, 0.22); }

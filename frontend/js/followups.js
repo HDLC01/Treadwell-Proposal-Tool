@@ -10,6 +10,24 @@
 // (/api/portal/followups -> digest_worker), the same code that writes the morning email.
 // Recomputing them here in JavaScript is how a page ends up disagreeing with the email it
 // is supposed to explain.
+//
+// WHAT THIS PAGE SHOWED, AND WHAT IT LEFT OUT (2026-08-24). Its feed carries next_followup_at,
+// which is what is COMING, and last_followup_at, which is the portal's last_staff_followup_at:
+// counted from portal_followups rows of kind staff_call / staff_email / staff_text / staff_note
+// only. The automation's own sends are kind auto_email, so they were counted nowhere and shown
+// nowhere. On the day the cadence went live on production its first sweep sent 18 emails and this
+// page still read "never chased" down the column. Hanz: "make sure all follow up emails are shown
+// in the Chat box and in the Follow Ups section."
+//
+// So the column now says "Chased by hand", which is what it measures, and each row has an Emails
+// button that opens that project's real log (portal_followups, through the drawer's own route).
+// No second log was built and nothing is recorded here: the worker writes the row before it sends,
+// and this reads it.
+//
+// WHAT IT STILL CANNOT SAY is the address a reminder went to. The worker records the AUDIENCE with
+// each send ({audience, template}) and not the recipients, so a line can say "sent to the customer"
+// or "sent to the estimator" and must not name anybody. Putting the address on the line would mean
+// stamping it into portal_followups.detail at send time, in the portal.
 (function () {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
@@ -36,6 +54,21 @@
   let Q = ss(K.q, "");
   let VIEW = ss(K.view, "") === "board" ? "board" : "list";
   let DRAGGING = false;   // pauses the 45s poll — a repaint mid-drag drops the card
+
+  // ── the sent log, per project ──────────────────────────────────────────────
+  // WHICH PROJECTS HAVE THEIR HISTORY OPEN, and what came back for them. Kept as page STATE and
+  // rendered by paint(), not poked into the DOM: #list is replaced wholesale on every repaint and
+  // this page repaints itself every 45 seconds, so a panel inserted after the render would vanish
+  // on the next tick while somebody was reading it. Both go into the paint signature below.
+  //
+  // FETCHED PER PROJECT, ON DEMAND. The feed that fills this page (/api/portal/followups, which is
+  // the portal's whole pipeline) does not carry the log, and asking for 60 projects' histories on
+  // load to show one of them would be 60 round trips through the portal for nothing. The route is
+  // the one the CRM drawer already uses, so no new endpoint and no second log: portal_followups is
+  // the record, written by the worker BEFORE it sends.
+  const OPEN = new Set();
+  const HIST = {};        // proposal_id -> { state: "loading"|"ok"|"error", log, error }
+  let HIST_GEN = 0;       // bumped on every store, so a finished fetch changes the paint signature
 
   // ── how a row reads ────────────────────────────────────────────────────────
   const DAY = 86400000;
@@ -146,7 +179,16 @@
     { label: "Estimator", sort: null },
     { label: "Stage", sort: null },
     { label: "Status", sort: null },
-    { label: "Last chased", sort: "chased" },
+    // "BY HAND", and the two words are the whole point. This column is the feed's
+    // last_followup_at, which is the portal's last_staff_followup_at: its SQL counts staff_call,
+    // staff_email, staff_text and staff_note and NOTHING the automation sent. So a project the
+    // cadence emailed this morning reads "never" here, and it read that way to Hanz on the day
+    // the first sweep sent 18 emails. Renamed rather than rewired, because the number is right
+    // for what it measures and the digest scores from the same field. What the automation sent is
+    // under Emails, at the end of the row.
+    { label: "Chased by hand", sort: "chased",
+      title: "A person's own call, text, email or note. Automatic reminders are not counted here: "
+           + "open Emails at the end of the row to see those." },
     { label: "Quiet for", sort: "quiet" },
     { label: "Next reminder", sort: "due" },
     { label: "Why it's here", sort: "score" },
@@ -157,13 +199,52 @@
   function head() {
     return COLS.map((c) => {
       const cls = c.num ? "num" : "";
-      if (!c.sort) return `<th class="${cls}">${esc(c.label)}</th>`;
+      const tip = c.title ? ` title="${esc(c.title)}"` : "";
+      if (!c.sort) return `<th class="${cls}"${tip}>${esc(c.label)}</th>`;
       const on = SORT === c.sort;
-      return `<th class="${cls} th-sort${on ? " is-sorted" : ""}" aria-sort="${
+      return `<th class="${cls} th-sort${on ? " is-sorted" : ""}"${tip} aria-sort="${
         on ? (DIR === "asc" ? "ascending" : "descending") : "none"}">` +
         `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${
           on ? (DIR === "asc" ? " ↑" : " ↓") : ""}</button></th>`;
     }).join("");
+  }
+
+  /** The expandable "what actually went out" panel for one project, as its own table row.
+   *
+   *  A row rather than a tooltip or a dialog because it is a LIST, of unknown length, that
+   *  somebody reads next to the project it belongs to. Rendered from HIST, so a repaint redraws
+   *  it exactly as it was instead of closing it.
+   *
+   *  The counts are stated separately for the two audiences on purpose. Half of the cadence is
+   *  written to the ESTIMATOR ("worth a call", "deposit outstanding") and never reaches the
+   *  customer, so "5 reminders sent" with those in the total would tell somebody the customer had
+   *  been chased five times when they were chased twice. */
+  function histRow(p) {
+    const id = p.proposal_id;
+    const h = HIST[id] || { state: "loading" };
+    const cols = COLS.length;
+    const cell = (inner) => `<tr class="fh-row" data-for="${esc(id)}"><td colspan="${cols}">${
+      inner}</td></tr>`;
+    if (h.state === "loading") return cell('<p class="fh-note">Reading the follow-up history…</p>');
+    if (h.state === "error") {
+      return cell(`<p class="fh-note fh-bad">Couldn't read the history: ${esc(h.error || "")}</p>`);
+    }
+    const log = h.log || { lines: [], emails: 0, toCustomer: 0, toStaff: 0 };
+    if (!log.lines.length) {
+      return cell('<p class="fh-note">Nothing has been sent or logged on this project yet.</p>');
+    }
+    const sum = log.emails
+      ? `${log.emails} email${log.emails === 1 ? "" : "s"} went out: ${log.toCustomer} to the `
+        + `customer, ${log.toStaff} to the estimator.`
+      : "No follow-up email has gone out on this project yet.";
+    return cell(`<p class="fh-sum">${esc(sum)}</p>
+      <p class="fh-note">Automatic reminders go to the contacts opted in to follow-ups on this
+        project. The log records which side each one went to, not the address.</p>
+      <ul class="fh-list">` + log.lines.map((l) => `<li class="fh-line${l.auto ? " is-auto" : ""}">
+        <span class="fh-k">${esc(l.what)}</span>
+        <span class="fh-d">${esc(l.detail)}</span>
+        <span class="fh-t">${esc(TW.fmtBizDate(l.at))}${l.by ? " · " + esc(C.nameOf(l.by)) : ""}</span>
+      </li>`).join("") + "</ul>");
   }
 
   function row(p) {
@@ -193,9 +274,12 @@
             title="Email the customer and add it to their message thread">Send</button>`}
         <button type="button" data-act="log"
           title="Record a call, text or email you sent yourself. Does NOT email the customer.">Log a call</button>
+        <button type="button" data-act="sent" aria-expanded="${OPEN.has(p.proposal_id)}"
+          title="Every follow-up on this project: what the automation emailed, which side got it, and what a person logged.">Emails${
+          OPEN.has(p.proposal_id) ? " ▴" : " ▾"}</button>
         <button type="button" data-act="open" title="Open in Active Projects">Open</button>
       </div></td>
-    </tr>`;
+    </tr>` + (OPEN.has(p.proposal_id) ? histRow(p) : "");
   }
 
   // ── the board ───────────────────────────────────────────────────────────────
@@ -386,7 +470,12 @@
   let LAST_SIG = "";
 
   function paint() {
-    const sig = JSON.stringify([ALL, TAB, EST, SORT, DIR, Q, VIEW]);
+    // OPEN and HIST_GEN are in here for the same reason every other piece of view state is:
+    // expanding a project's history and its fetch landing are both changes the page must redraw
+    // for, and neither of them touches ALL. Without them the panel opens on the click and the
+    // arriving log never appears, because the signature never moved.
+    const sig = JSON.stringify([ALL, TAB, EST, SORT, DIR, Q, VIEW,
+                                Array.from(OPEN).sort(), HIST_GEN]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
 
@@ -647,6 +736,44 @@
     }
   }
 
+  /** Open or close one project's follow-up history, fetching it the first time.
+   *
+   *  Re-fetched every time it is re-opened rather than cached for the session: the point of the
+   *  panel is what has gone out, the worker ticks every 15 minutes, and a stale list is exactly
+   *  the thing that would send somebody to chase a customer the cadence emailed an hour ago. A
+   *  closed panel keeps nothing.
+   *
+   *  Reads the CRM drawer's own route, which returns the whole proposal payload with its
+   *  `followups` log. Nothing new is recorded here and nothing is recomputed: the lines come out
+   *  of followups-core, which is asserted against the drawer's wording under node. */
+  async function toggleSent(id) {
+    if (OPEN.has(id)) {
+      OPEN.delete(id);
+      delete HIST[id];
+      HIST_GEN++;
+      paint();
+      return;
+    }
+    OPEN.add(id);
+    HIST[id] = { state: "loading" };
+    HIST_GEN++;
+    paint();
+    try {
+      const r = await api("/api/portal/proposal/" + encodeURIComponent(id));
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      // Only store it if the panel is still open. Closing it during the round trip must not
+      // reopen it, and a second click while one is in flight must not be overwritten by the first.
+      if (!OPEN.has(id)) return;
+      HIST[id] = { state: "ok", log: B.sentLog(j.followups || []) };
+    } catch (err) {
+      if (!OPEN.has(id)) return;
+      HIST[id] = { state: "error", error: err.message || "try again" };
+    }
+    HIST_GEN++;
+    paint();
+  }
+
   // One delegated listener. The table is replaced wholesale on every paint and on the
   // poll, so per-row handlers would be re-bound continuously and leak.
   $("list").addEventListener("click", (e) => {
@@ -665,11 +792,20 @@
     const mv = e.target.closest("[data-do]");
     if (mv) { e.stopPropagation(); moveTo(mv.dataset.id, mv.dataset.do); return; }
 
+    // The open history panel is its own row and carries no data-id, so a click inside it would
+    // otherwise fall through to the navigation at the bottom of this handler and throw somebody
+    // out of the page they just expanded. Checked BEFORE the holder lookup: a `closest` on the
+    // panel's parent row would find the table, not the project.
+    if (e.target.closest("tr.fh-row")) return;
+
     const holder = e.target.closest("tr[data-id], .fu-card[data-id]");
     if (!holder) return;
     const id = holder.dataset.id;
     if (e.target.closest('[data-act="send"]')) { e.stopPropagation(); sendFollowup(id); return; }
     if (e.target.closest('[data-act="log"]')) { e.stopPropagation(); logFollowup(id); return; }
+    // The row stays a link into the drawer, so this one has to stop the click as much as Send and
+    // Log a call do: expanding the history and navigating away from it at once is no expansion.
+    if (e.target.closest('[data-act="sent"]')) { e.stopPropagation(); toggleSent(id); return; }
     // Anything else on the row opens the full drawer, where the automation toggle,
     // the history and the chat live. This page is the list; that is the detail.
     window.location.assign("/portal.html?open=" + encodeURIComponent(id) + "&sec=followup");

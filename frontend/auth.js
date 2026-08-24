@@ -379,6 +379,21 @@
       // the page you run the meeting from should not be something you scroll past.
       '<div class="tw-section">Sales</div>' +
       navItem("/portal.html", "◆", "Active Projects") +
+      // BACK IN THE MENU ON 2026-08-24, under Sales rather than a heading of its own. Hanz:
+      // "make sure all follow up emails are shown in the Chat box and in the Follow Ups section."
+      // A section nobody can click is not a section, so the board is linked again. The full
+      // history of both decisions is on the note where its old heading used to be, further down.
+      //
+      // FILED WITH ACTIVE PROJECTS because it is the same population read a different way: the
+      // board answers "where does each live job stand", this answers "who has not been chased".
+      // Its own rows even open that page (the row click goes to /portal.html?open=...&sec=followup),
+      // so anywhere else in the menu would file a page under one heading and land you under
+      // another. Not under Proposals: that heading is the pages that MAKE a proposal, and this one
+      // starts after the proposal has gone out.
+      //
+      // ⏱ is the glyph it had before it was unlinked. It has been free since, and no other row
+      // uses it (test_sidebar_labels.py fails if two ever share one).
+      navItem("/followups.html", "⏱", "Follow-ups") +
       // Grouped in the order the job actually happens: work comes in, you price
       // it and send it, then it's a record. Seven items under one "Workspace"
       // heading said nothing about which page did what — and buried Notification
@@ -413,14 +428,24 @@
       // The mid-flow door is different and stays different: the toolbar link on Estimate Review
       // goes straight to /polish-estimate.html, because there the project already exists.
       navItem("/polish-intake.html", "◐", "Polish Estimate", "BETA") +
-      // The FOLLOW-UPS section used to sit here with two items, Follow-ups and Cadence & emails.
-      // Hanz, 2026-08-10: "Remove the followups on the sidebar", then on 2026-08-11, having seen
-      // both gone: "Keep the Cadence and EMAILs... Just the follow up tab." So the BOARD is what
-      // he wanted rid of. The cadence moved down to Settings rather than keeping a one-item
-      // heading up here, because it is a set-once configuration and Notification Sending, its
-      // nearest relative, already lives there.
+      // THE FOLLOW-UPS SECTION USED TO SIT HERE, with two items: Follow-ups and Cadence & emails.
+      // Three decisions ran over it, and the third reverses the first. All three are written out
+      // because the last reader of a half-told version deleted a page from the menu twice.
       //
-      // /followups.html is not deleted, only unlinked: it still exists and still works by URL.
+      //   2026-08-10  Hanz: "Remove the followups on the sidebar." Both items went.
+      //   2026-08-11  Hanz, having seen both gone: "Keep the Cadence and EMAILs... Just the follow
+      //               up tab." So the BOARD was the clutter, not the cadence. The cadence went
+      //               down to Settings rather than keeping a one-item heading up here, because it
+      //               is a set-once configuration and Notification Sending already lives there.
+      //   2026-08-24  Hanz, on the day automated follow-ups went live on production: "make sure
+      //               all follow up emails are shown in the Chat box and in the Follow Ups
+      //               section." HE REVERSED 2026-08-10. The board is linked again, under Sales
+      //               beside Active Projects, which is where the navItem now is. Do not "tidy" it
+      //               back out on the strength of the 2026-08-10 quote: it was answered.
+      //
+      // What did NOT come back is this heading. Two of its three items live under headings that
+      // already describe them (Sales for the board, Settings for the cadence), so re-adding it
+      // would be the clutter he complained about, with one row under it.
 
       // ITS OWN CATEGORY, below the pages that make a proposal. Hanz, 2026-08-12: "Move the
       // Proposal database down and create its own cateogry."

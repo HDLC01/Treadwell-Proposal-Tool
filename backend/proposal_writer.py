@@ -609,6 +609,80 @@ def _apply_system_row_labels(p_elem, item: Mapping[str, Any]) -> int:
     return n
 
 
+# ── per-row WHOLE-LINE WORK overrides ────────────────────────────────────────
+# Kyle, for the third time, 2026-08-24: "every line in the proposal must be editable AS ONE
+# LINE, the way the base bid is. No token islands with untouchable words around them ... I
+# cannot delete 'SF of epoxy flooring' from 'Area: ~2,305 SF of epoxy flooring'."
+#
+# He is right about the mechanism. The template's Area row is
+#     Area: ~{{system.sqft}} SF of epoxy flooring{{system.lf_clause}}
+# and until now the only two things this file could rewrite in that row were the label
+# ("Area:", above) and the token's value. The literal "~", the words " SF of epoxy flooring"
+# and the whole cove clause had NO channel at all — not the label one, not
+# paragraph_overrides, which refuses any paragraph with `in_block` set because a {{#system}}
+# region is expanded once per priced system and its paragraph ids stop describing anything the
+# estimator saw.
+#
+# So the WHOLE LINE rides the same per-index `system_overrides` channel the labels and values
+# already use — `name_line` / `texture_line` / `area_line`. The row is found by the TOKEN it
+# carries, exactly as the labels are, which is true of a re-authored template too. That has to
+# happen BEFORE substitution consumes the tokens; the text is written AFTER it, so the diff the
+# estimator saw on screen (a fully resolved line) is the text that lands.
+#
+# THE TRADE, stated once. A row nobody has touched is still rendered from the tokens, so a
+# changed square footage flows through. A row with a stored line prints that line verbatim and
+# stops tracking the sheet, because a hand-written sentence has no slot to re-substitute a
+# number into. That is the same trade already accepted for every PRICE line including the base
+# bid, which is money; the on-screen ⚠ says the line differs from the estimate, and clearing
+# the line brings the computed text back.
+_SYSTEM_ROW_LINES = (
+    ("name_line", "name"),
+    ("texture_line", "texture"),
+    ("area_line", "sqft"),
+)
+
+
+def _system_row_line_key(p_elem, item: Mapping[str, Any]) -> str | None:
+    """Which `*_line` override belongs to this NOT-YET-SUBSTITUTED {{#system}} row, if any.
+
+    Anchored on the row's own token (`{{system.name}}` / `.texture` / `.sqft`) because that is
+    the only thing that survives a re-authored template — the label wording does not. Must be
+    called before `_substitute_item_tokens`, which is what removes those tokens.
+    """
+    joined = _p_text(p_elem)
+    for key, token in _SYSTEM_ROW_LINES:
+        raw = item.get(key)
+        if raw is None or not str(raw).strip():
+            continue
+        if re.search(r"\{\{\s*system\." + re.escape(token) + r"\s*\}\}", joined):
+            return key
+    return None
+
+
+def _apply_system_row_line(p_elem, text: Any) -> bool:
+    """Replace one expanded {{#system}} row's ENTIRE visible text with the estimator's line.
+
+    Same writer the whole-line PRICE overrides use (`_set_paragraph_text`), so the paragraph
+    keeps its first run's font/size/colour, any anchored drawing in the paragraph survives, and
+    a newline the estimator typed becomes a real `<w:br/>`. The bold lead-in is re-derived
+    afterwards by `_normalize_work_label_formatting` (bold through the first colon), which is
+    also what the on-screen line renders — so screen and document agree on the weight even
+    after the row has been rewritten.
+
+    Braces are stripped, for the reason `_apply_system_row_labels` gives: this runs after the
+    per-item substitution and before the flat pass, so a pasted "{{system.sqft}}" would
+    otherwise reach a customer-facing document as literal text.
+
+    Returns True when the paragraph was rewritten (the caller uses that to keep the row out of
+    `_drop_zero_sf_prefix`'s reach — a hand-typed line must not be re-edited by a regex).
+    """
+    line = str(text).replace("{", "").replace("}", "")
+    if not line.strip():
+        return False
+    _set_paragraph_text(p_elem, line)
+    return True
+
+
 def _strip_bullet(p_elem) -> None:
     """Remove list/bullet formatting (`<w:numPr>`) from a paragraph so a blank
     NOTES item renders as clean vertical spacing — a genuinely empty line —
@@ -1734,12 +1808,25 @@ def _apply_line_overrides(d: Document, values) -> int:
 _AREA_ZERO_RE = re.compile(r"Area:\s*~0 SF of epoxy flooring and ")
 
 
-def _drop_zero_sf_prefix(d: Document) -> int:
+def _drop_zero_sf_prefix(d: Document, protect=None) -> int:
+    """`protect` is the set of Area rows an estimator REWROTE (see `_apply_system_row_line`).
+
+    Those are skipped. This function exists to tidy a line the engine composed; a line a person
+    typed is not the engine's to tidy, and silently re-editing it would be the exact 1:1
+    violation the whole-line channel was built to close — he can type "Area: ~0 SF of epoxy
+    flooring and 240 LF …" on purpose, and if he does, that is what prints.
+
+    Membership is tested by element identity. `protect` holds the paragraph objects themselves,
+    which keeps lxml's proxies alive, so the objects this walk yields for those nodes are the
+    same objects that went in.
+    """
     n = 0
     for p in d.element.body.iter(qn("w:p")):
         # Skip text-box anchor paragraphs (their <w:p> children are visited on
         # their own) — same nesting guard as _apply_gc_phase_override.
         if p.find(".//" + _TXBX_CONTENT) is not None:
+            continue
+        if protect and any(p is q for q in protect):
             continue
         # repl returns a fixed "Area: " (never equal to the matched span, and the
         # result no longer contains the pattern) so the require_braces=False loop
@@ -1748,7 +1835,8 @@ def _drop_zero_sf_prefix(d: Document) -> int:
     return n
 
 
-def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]]) -> int:
+def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any]],
+                        protect: set | None = None) -> int:
     """Expand EVERY `{{#<block_name>}}…{{/<block_name>}}` block in `container`.
 
     `container` is any element whose direct <w:p> children may hold the markers
@@ -1758,6 +1846,10 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
     `block_name`, re-scanning after each so element indices stay valid.
     `items==[]` still removes the markers + template body (renders zero rows).
     Returns how many blocks were expanded.
+
+    `protect`, when given, collects every paragraph this expansion rewrote from a
+    whole-line override, so a later doc-wide tidy-up pass can leave the estimator's
+    own words alone (see `_drop_zero_sf_prefix`).
     """
     expanded = 0
     while True:
@@ -1790,12 +1882,22 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
         for item in items:
             for tmpl in template_elems:
                 clone = copy.deepcopy(tmpl)
-                # BEFORE the token substitution: the label rewrite finds its row by the token
-                # that row carries ({{system.texture}} / {{system.sqft}}), and substitution is
-                # what removes those tokens. See _apply_system_row_labels.
+                # BEFORE the token substitution: both the label rewrite and the whole-line
+                # rewrite find their row by the token that row carries ({{system.texture}} /
+                # {{system.sqft}} / {{system.name}}), and substitution is what removes those
+                # tokens. See _apply_system_row_labels / _system_row_line_key.
+                line_key = None
                 if block_name == "system":
                     _apply_system_row_labels(clone, item)
+                    line_key = _system_row_line_key(clone, item)
                 _substitute_item_tokens(clone, item, block_name)
+                # AFTER it: a whole-line override replaces the row's fully resolved text, which
+                # is what the estimator was looking at when they typed. It therefore also wins
+                # over the label rewrite above on the same row, which is right — the line the
+                # estimator wrote includes whatever label they wanted.
+                if line_key and _apply_system_row_line(clone, item[line_key]):
+                    if protect is not None:
+                        protect.add(clone)
                 # Label-only price_line row (empty amount) — drop the now-bare
                 # leading "– " separator so it reads as just the label. Scoped
                 # to price_line/empty-amount only; every other row/block is
@@ -1824,7 +1926,8 @@ def _expand_named_block(container, block_name: str, items: list[Mapping[str, Any
     return expanded
 
 
-def _expand_all_blocks(d: Document, block_lists: Mapping[str, list]) -> int:
+def _expand_all_blocks(d: Document, block_lists: Mapping[str, list],
+                       protect: set | None = None) -> int:
     """Expand every named block in `block_lists` across the whole document.
 
     Walks the body, every table cell, and every text box (<w:txbxContent>,
@@ -1840,7 +1943,7 @@ def _expand_all_blocks(d: Document, block_lists: Mapping[str, list]) -> int:
     containers += list(body.iter(qn("w:txbxContent")))
     for block_name, items in block_lists.items():
         for container in containers:
-            total += _expand_named_block(container, block_name, list(items or []))
+            total += _expand_named_block(container, block_name, list(items or []), protect)
     return total
 
 
@@ -3099,9 +3202,12 @@ def fill_proposal(
     rows) when empty — never left as literal text. A template with no marker,
     and the default args, is 100% backward-compatible with v1 fills.
 
-    A `systems` row may also carry `texture_label` / `area_label` — the doc editor's per-row
-    rename of that row's STATIC label text, which no {{token}} covers. See
-    `_apply_system_row_labels`; absent keys leave the template's own wording.
+    A `systems` row may also carry `name_line` / `texture_line` / `area_line` — the doc
+    editor's rewrite of that WHOLE row, static words and all, which is the only channel that
+    can reach text like " SF of epoxy flooring" (see `_apply_system_row_line`). The older
+    per-row `texture_label` / `area_label` keys rename just the label and are still honoured
+    for drafts saved before the whole-line editor. Absent keys leave the template's own
+    wording; a row's `*_line` wins over its `*_label` and over its token values.
 
     `paragraph_overrides` — free-text edits from the Proposal Review document
     editor (Phase 0, runs BEFORE block expansion — see `_apply_paragraph_overrides`
@@ -3171,7 +3277,10 @@ def fill_proposal(
     _n_lbl = _apply_price_label_overrides(d, values)
     if _n_lbl:
         log.info("Applied %d PRICE/ALTERNATE label override(s)", _n_lbl)
-    n_blocks = _expand_all_blocks(d, block_lists)
+    # Rows the estimator rewrote whole. Collected here and handed to _drop_zero_sf_prefix
+    # below so a regex tidy-up can never re-edit a hand-typed line.
+    _rewritten_rows: set = set()
+    n_blocks = _expand_all_blocks(d, block_lists, _rewritten_rows)
     if n_blocks:
         log.info("Expanded %d repeatable block(s)", n_blocks)
 
@@ -3200,7 +3309,7 @@ def fill_proposal(
     log.info("Substituted %d tokens", total_subs)
     # Cove-only WORK rows: drop the "~0 SF of epoxy flooring and " prefix now that
     # the sqft/lf_clause tokens are filled (matches the on-screen preview).
-    if _drop_zero_sf_prefix(d):
+    if _drop_zero_sf_prefix(d, _rewritten_rows):
         log.info("Dropped ~0 SF prefix on cove-only WORK row(s)")
     _n_work_format = _normalize_work_label_formatting(d)
     if _n_work_format:

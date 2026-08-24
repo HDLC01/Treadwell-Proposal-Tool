@@ -71,7 +71,7 @@ _VERSION = 1
 #           children only; anything else is an exact path match.
 #
 # ONLY SINGLE-CALLER PREFIXES ARE LISTED, and the empty `api` tuples are the whole point of this
-# comment. Per-tab API gating is incoherent for five of the fourteen tabs because the routes their
+# comment. Per-tab API gating is incoherent for five of the fifteen tabs because the routes their
 # pages read are read by other pages too, measured by grepping frontend/ for every /api/ string:
 #
 #   * bare /api/analytics       — analytics.js AND calendar.js (+ both -core files). Gating it
@@ -131,6 +131,27 @@ TABS: Dict[str, Dict[str, Any]] = {
         # Children only: /{draft_id} and /generate. No bare route exists.
         "pages": ("/info-sheet.html",),
         "api": ("/api/info-sheet/",),
+    },
+    "/followups.html": {
+        "label": "Follow-ups",
+        # BACK IN THE SIDEBAR ON 2026-08-24 (Hanz reversed his own 2026-08-10 removal; auth.js
+        # carries all three decisions). It had NO entry here at all while it was unlinked, which is
+        # the opposite of the Info Sheet case below: that tab kept its entry when its row left, this
+        # one had to GAIN one when its row came back, or the page would be the only sidebar row in
+        # the menu that no policy could reach. It also came out of ALWAYS_OPEN_PAGES in the same
+        # edit; a page cannot be both governed and never-governed.
+        #
+        # /api/portal/followups is the whole feed and followups.js is its ONLY caller (grep
+        # frontend/ for the string). Exact match, no trailing slash: there are no children, and a
+        # slashless prefix is exactly what keeps this from reaching /api/portal/proposal/{id}/...
+        #
+        # THE FOUR ROUTES THE PAGE ALSO CALLS ARE DELIBERATELY NOT LISTED. Its Send, Log a call and
+        # the board's drag all post to /api/portal/proposal/{id}/{reply,followups,status,
+        # followup-automation}, and every one of those is also the CRM drawer's (portal.js) and one
+        # is notifications.js's. Claiming them would 403 the drawer on a page nobody restricted,
+        # which is the single-caller rule this table is built on.
+        "pages": ("/followups.html",),
+        "api": ("/api/portal/followups",),
     },
     "/polish-intake.html": {
         "label": "Polish Estimate",
@@ -206,16 +227,22 @@ LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html")
 # can lock the owner out of his own tool.
 LOCKED_ROLES: Tuple[str, ...] = ("super_admin",)
 
-# Pages with no sidebar row, which this policy never touches. The four wizard screens plus the
-# three unlinked-but-live pages. Listed so the next person does not have to work out why
-# /done.html is absent from TABS and conclude it was forgotten.
+# Pages with no sidebar row, which this policy never touches. The four wizard screens plus the two
+# unlinked-but-live pages. Listed so the next person does not have to work out why /done.html is
+# absent from TABS and conclude it was forgotten.
 #   index / estimate-review / proposal-review / done — the wizard; every proposal goes through them
-#   followups.html   — the board Hanz asked to unlink on 2026-08-10; still live by URL
 #   dropbox.html     — reached from the wizard's step 5, never from the menu
 #   login.html       — signing in cannot require being signed in
+#
+# /followups.html LEFT THIS LIST ON 2026-08-24 and took a TABS entry instead, because Hanz put it
+# back in the sidebar (auth.js records all three decisions). The two lists are mutually exclusive by
+# construction: everything here is ungovernable, and test_the_pages_with_no_sidebar_row_are_never_denied
+# denies every tab in TABS at once and asserts these pages survive it. A page in both lists is a
+# contradiction that test would report as a failure, which is the point of keeping them separate
+# rather than deriving one from the other.
 ALWAYS_OPEN_PAGES: Tuple[str, ...] = (
     "/", "/index.html", "/estimate-review.html", "/proposal-review.html", "/done.html",
-    "/followups.html", "/dropbox.html", "/login.html",
+    "/dropbox.html", "/login.html",
 )
 
 # GATED BUT NOT IN THE SIDEBAR — the exact opposite of ALWAYS_OPEN_PAGES above, and the reason both
