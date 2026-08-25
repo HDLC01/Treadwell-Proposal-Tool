@@ -414,8 +414,18 @@ const LIFTED = [
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.
   fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
-  fn("boxLines"), fn("lineAt"), fn("clearBoxLine"), fn("paintBoxSel"), fn("clearBoxSel"),
+  // One editing host per box: LINE_SEL is the single list of editable line families, and
+  // lineAtSelection / lineTarget / editingBox are how every handler in the wiring region below now
+  // finds the line it is about. They resolve the CARET rather than the event target, because a
+  // contenteditable fires its editing events at the host -- so leaving any of these out is not a
+  // lift-time failure, it is the whole region silently doing nothing.
+  topConst("LINE_SEL"),
+  fn("boxLines"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  fn("clearBoxLine"), fn("paintBoxSel"), fn("clearBoxSel"),
   fn("wholeLineSelected"),
+  // The real splice. This is the function that keeps a multi-line edit from merging two Word
+  // paragraphs into one, so a harness that imitated it would be testing the imitation.
+  fn("spliceLines"),
   fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
   fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
@@ -453,6 +463,38 @@ const api = new Function(
   // caret on what was just formatted, so the model follows.
   const placeSelection = (el, a, b) => { writeSel(el, a, b); };
   const markEdited = (el, formatted) => { dirtied.push([el.dataset.id, !!formatted]); };
+  // A CROSS-PARAGRAPH SELECTION, modelled from boxSel. readSel/writeSel model one selection inside
+  // ONE element -- all the page needed while every paragraph was its own editing host -- so they
+  // cannot express a range that spans four lines. boxSel can: Ctrl+A's widen sets it and then puts
+  // a real native range across exactly those lines, each covered end to end. That is what
+  // selectionLines reads off the markers on the page, so it is what this reports.
+  const selectionLines = () => {
+    if (boxSel && boxSel.length > 1) {
+      return boxSel.map((el) => ({ el: el, start: 0, end: runsLength(editRuns(el)) }));
+    }
+    const el = lineAtSelection() || fmtBlock;
+    if (!el) return [];
+    const r = readSel(el);
+    return r ? [{ el: el, start: r[0], end: r[1] }] : [];
+  };
+  // Recorded rather than performed: placing a real Range across several elements is the one thing
+  // readSel/writeSel cannot model. What IS testable is that the widen asks for it, over exactly
+  // the lines it painted -- a boxSel with no native range behind it is a selection the estimator
+  // can see and Delete cannot act on.
+  const acrossCalls = [];
+  const selectRangeAcross = (lines) => {
+    acrossCalls.push((lines || []).map((n) => String(n.dataset.id)));
+  };
+  // The computed previews and their sweeps belong to doc-editor-labels-harness.js, which builds
+  // that world. Empty stubs are the truthful answer for a harness that mounts none of them, and
+  // they still fail loudly if the page renames one.
+  const systemPreviewEl = null, notesPreviewEl = null;
+  const renderSystemPreview = () => {};
+  const renderNotesPreview = () => {};
+  const refreshPriceDisplay = () => {};
+  const syncSystemRows = () => {};
+  const syncNotesFromDom = () => {};
+  const syncPriceLinesIn = () => {};
 ` + LIFTED + `
 
 // ── the page's own wiring, verbatim ──────────────────────────────────────────
@@ -467,6 +509,8 @@ const api = new Function(
     rememberedRange: () => (fmtRange ? fmtRange.slice() : null),
     /** Which blocks the box selection holds, by id, in document order. */
     boxSelIds: () => (boxSel ? boxSel.map((n) => String(n.dataset.id)) : null),
+    /** Every native range the widen asked for, as the ids it spanned. */
+    acrossCalls: () => acrossCalls.map((a) => a.slice()),
     /** Mount blocks the way renderBlock does — class from the record, no inline para styling — so
      *  an untouched paragraph starts out exactly as it does today. */
     /** Mount blocks the way renderPositioned does: inside a .tw-txbx[data-box-id].

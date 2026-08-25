@@ -491,6 +491,11 @@ const LIFTED = [
   // throws `ReferenceError` on the first formatted paragraph, i.e. in the middle of a persist,
   // which is the failure mode the note above fitOffer describes.
   fn("storedRuns"), fn("preserveRichOverrides"),
+  // The {{#system}} row channel is a whole-container SWEEP now, not a single-row write: the box is
+  // one editing host, so a Delete across three rows arrives as one input event and a handler that
+  // only read the caret's row would leave the other two edited on screen and unedited in the
+  // draft. syncSystemRow is the per-row half the sweep and the per-row listener share.
+  fn("syncSystemRows"), fn("queueSysOvSave"), fn("syncSystemRow"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();

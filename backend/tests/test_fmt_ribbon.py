@@ -543,13 +543,28 @@ def test_backspace_again_walks_the_indent_back_to_the_margin(ran):
     assert g["prevented"]
 
 
-def test_backspace_at_the_margin_gives_the_key_back_to_the_browser(ran):
-    """With no bullet and no indent left there is nothing to undo, so the keystroke must NOT be
-    swallowed — a Backspace that silently does nothing at the left edge reads as a frozen editor.
-    It falls through, and the editing-host boundary makes that a harmless no-op."""
+def test_backspace_at_the_margin_changes_nothing_and_merges_nothing(ran):
+    """REVERSED, 2026-08-26, and the reason it reversed is the whole point of the one-host change.
+
+    This used to assert the keystroke fell through to the browser: with no bullet and no indent
+    left there is nothing to undo, and swallowing a key that does nothing reads as a frozen
+    editor. That was safe only because of the second half of the old reasoning — every paragraph
+    was its own contenteditable, so the browser could not reach past it and "fall through" meant
+    "harmless no-op".
+
+    The box is the editing host now (Hanz: "just make every Major section of the proposal textbox
+    just one BIG TEXT BOX"), so falling through no longer means nothing happens. It means the
+    browser MERGES this paragraph into the one above it. A .tw-block is one Word paragraph carrying
+    an id from the backend's walk, and overrides are applied to a pristine template by that id — a
+    merge destroys one and every override after it lands on the wrong paragraph of a signed
+    document. Refusing the key is the lesser of the two, and it is also indistinguishable from the
+    old behaviour on screen: nothing moved either way.
+
+    What must still hold is that the paragraph is untouched — the refusal is a refusal, not a
+    silent edit."""
     g = ran["backspaceAtTheMargin"]
     assert g["after"] == {"bullet": False, "indent": 0, "locked": False}
-    assert not g["prevented"], "the keystroke was consumed with nothing to show for it"
+    assert g["prevented"], "the keystroke fell through, and the browser would have merged"
 
 
 def test_backspace_anywhere_but_the_start_is_left_alone(ran):
@@ -567,10 +582,16 @@ def test_backspace_cannot_un_number_a_contract_clause(ran):
     """The refusal that has to survive every new route into paragraph formatting: un-bulleting a
     numbered TERMS AND CONDITIONS clause renumbers every clause below it, in the signed contract.
     `paraAction` refuses on `locked`, and this keystroke inherits that instead of checking for
-    itself — one guard, not two that can disagree."""
+    itself — one guard, not two that can disagree.
+
+    The KEY is now consumed as well, which is a change and an improvement. It used to fall through
+    to the browser on the reasoning that a locked clause is not this handler's business; on the
+    terms pages that browser fallback now merges clause 14 into clause 13, which renumbers the
+    contract far more thoroughly than un-bulleting one line ever could. The clause itself is still
+    untouched — that is what the assertions below are about — and the keystroke stops here."""
     g = ran["backspaceOnLockedClause"]
     assert g["after"]["locked"] is True
-    assert not g["prevented"], "the keystroke was consumed on a clause it must not change"
+    assert g["prevented"], "the keystroke fell through, and the browser would have merged clauses"
     assert g["after"]["bullet"] == ran["backspaceOnLockedClause"]["after"]["bullet"]
 
 
