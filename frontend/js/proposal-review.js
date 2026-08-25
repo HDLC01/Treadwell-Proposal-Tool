@@ -2177,7 +2177,7 @@
       // now, and clearing the box restores it. The datalist keeps every size that used to be in
       // the list, so nothing became harder to reach by becoming typeable.
       '<input data-fmt="size" list="tw-size-list" class="tw-fmtsize" type="text"' +
-      ' inputmode="decimal" autocomplete="off" placeholder="Size"' +
+      ' inputmode="decimal" autocomplete="off" placeholder="Size" size="4"' +
       ' aria-label="Text size in points" title="Text size in points — type one or pick from the list">' +
       '<datalist id="tw-size-list">' +
       SIZE_CHOICES.map(n => `<option value="${n}">${n} pt</option>`).join("") +
@@ -2236,7 +2236,12 @@
       // block is formatted over its whole length -- there is no per-block range to remember,
       // because the estimator selected lines rather than characters.
       if (boxSel && boxSel.length > 1) {
-        const els = boxSel.slice();
+        // TEMPLATE PARAGRAPHS ONLY, for now. A computed line's channel stores its TEXT and
+        // nothing else, so a bold applied here would show on screen and reach the customer's
+        // document as plain text -- the formatting silently dropped somewhere between the two.
+        // Better to leave those rows visibly untouched than to lie about them; carrying runs
+        // through the three computed-line channels is the next piece of work.
+        const els = boxSel.filter(one => one.classList.contains("tw-block"));
         els.forEach(one => {
           const total = runsLength(editRuns(one));
           if (!total) return;
@@ -2354,11 +2359,50 @@
   // there yet -- that is what E6's channel work is for.
   let boxSel = null;
 
-  /** Every block the ribbon can act on inside `el`'s box, in document order. */
-  function boxBlocks(el) {
+  /** Every editable LINE inside `el`'s box, in document order.
+   *
+   *  Two families, and they are not interchangeable. `.tw-block` is a real template paragraph with
+   *  an id and a para record. `.tw-line-edit` is a COMPUTED line -- the PRICE rows, the
+   *  {{#system}} rows, the NOTES bullets -- which the page rebuilds from the estimate and which
+   *  persists through its own channel keyed by `data-po-linekey` / `data-sys-line` rather than by
+   *  block id.
+   *
+   *  Both are collected, because "highlight everything in this box" is a claim about what the
+   *  estimator can see, not about which save channel a row happens to use. What differs is what a
+   *  press can then DO to each -- see clearBoxLine and the format handler. */
+  function boxLines(el) {
     const box = el.closest(".tw-txbx") || el.closest(".tw-page");
     if (!box) return [];
-    return Array.from(box.querySelectorAll(".tw-block"));
+    return Array.from(box.querySelectorAll(".tw-block, .tw-line-edit"));
+  }
+
+  /** The editable line the caret is in, whichever family it belongs to. */
+  function lineAt(node) {
+    if (!node || !node.closest) return null;
+    return node.closest(".tw-block, .tw-line-edit");
+  }
+
+  /** Empty one selected line through ITS OWN channel.
+   *
+   *  A template paragraph is cleared through the run algebra and then dispatches the page's own
+   *  `input`, so the dirty flag, the override and the emptied-clause protection all run exactly as
+   *  they would for a hand-delete.
+   *
+   *  A COMPUTED line cannot be "emptied" in the same sense: its channel reads an empty value as
+   *  "no override", which restores the figure the estimate computed. That is the honest behaviour
+   *  for a line the page derives -- blanking a price permanently would need the channel to carry
+   *  an explicit empty, which it does not yet -- so clearing one resets it rather than voiding it.
+   *  Reported by the caller so nobody has to guess which happened. */
+  function clearBoxLine(el) {
+    if (el.classList.contains("tw-block")) {
+      if (!runsLength(editRuns(el))) return "already-empty";
+      renderRuns(el, [{ text: "", tok: null }]);
+      markEdited(el, false);
+      return "cleared";
+    }
+    el.textContent = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return "reset-to-computed";
   }
 
   function paintBoxSel() {
@@ -4796,14 +4840,16 @@
   docSurface.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (String(e.key).toLowerCase() === "a") {
-      const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
-      if (!el) return;                       // a computed line: leave select-all to the browser
+      // EITHER FAMILY. This used to look for `.tw-block` only, so pressing Ctrl+A anywhere in the
+      // PRICE box found nothing and looked broken -- which is exactly what Hanz reported.
+      const el = lineAt(e.target);
+      if (!el) return;
       e.preventDefault();
       // Already got the line? Widen to the box. Otherwise take the line first -- which is what
       // the browser would have done anyway, done explicitly so the SECOND press has a state to
       // recognise rather than depending on what the browser left behind.
       if (boxSel || wholeLineSelected(el)) {
-        boxSel = boxBlocks(el);
+        boxSel = boxLines(el);
         paintBoxSel();
         showFmtBar(el);                      // the ribbon still aims at the caret's own block
       } else {
@@ -4884,11 +4930,7 @@
     e.preventDefault();
     const els = boxSel.slice();
     clearBoxSel();
-    els.forEach(el => {
-      if (!runsLength(editRuns(el))) return;                 // already empty
-      renderRuns(el, [{ text: "", tok: null }]);
-      markEdited(el, false);
-    });
+    els.forEach(clearBoxLine);
     if (els.length) scheduleRepaginate();
   });
 

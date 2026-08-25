@@ -414,7 +414,8 @@ const LIFTED = [
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.
   fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
-  fn("boxBlocks"), fn("paintBoxSel"), fn("clearBoxSel"), fn("wholeLineSelected"),
+  fn("boxLines"), fn("lineAt"), fn("clearBoxLine"), fn("paintBoxSel"), fn("clearBoxSel"),
+  fn("wholeLineSelected"),
   fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
   fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),

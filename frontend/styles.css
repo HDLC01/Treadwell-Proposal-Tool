@@ -817,6 +817,11 @@ button {
    the hover tint and weaker than focus -- it has to read as "these lines are selected" while the
    caret is still visibly in one of them. */
 .tw-block.tw-boxsel { background: rgba(158, 0, 31, 0.14); }
+/* The computed lines get the same cue: a selection is about what the estimator can see, not
+   about which save channel a row uses. Same background-only rule, for the same reason.
+   `.tw-line-edit` already carries its own hover and focus tints, and this has to outrank the
+   hover one -- two classes to its one. */
+.tw-line-edit.tw-boxsel { background: rgba(158, 0, 31, 0.14); }
 .tw-block.tw-dirty-warn::after {
   content: " \26A0";
   font-size: 0.75em;
@@ -1382,11 +1387,21 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 /* The size combobox. Narrow on purpose -- it holds at most five characters ("10.5") and it used
    to be as wide as the words "Template size". The list arrow a datalist input shows is the
    browser's own, so the width is all we control. */
-.tw-fmtsize { width: 54px; height: 26px; padding: 0 6px; text-align: center;
-  border: 1px solid var(--surface-dim); border-radius: 5px;
-  background: var(--surface-lowest); color: var(--ink); font-size: 12px; font: inherit;
-  font-size: 12px; }
+/* The size combobox. `min-width: 0` is the load-bearing declaration, not the width.
+   Hanz, 2026-08-26: "can we make this smaller and one row only?"
+
+   A flex item's automatic minimum size is its INTRINSIC width, and an <input>'s intrinsic width
+   comes from its `size` attribute -- about twenty characters. That minimum beat `width: 54px`, so
+   the box grew to ~170px+, which with flex-wrap pushed the ribbon onto three rows. `min-width: 0`
+   lets the declared width actually apply; `flex: 0 0 auto` stops it being stretched either way. */
+.tw-fmtsize { flex: 0 0 auto; width: 52px; min-width: 0; height: 24px; padding: 0 4px;
+  text-align: center; border: 1px solid var(--surface-dim); border-radius: 5px;
+  background: var(--surface-lowest); color: var(--ink); font: inherit; font-size: 12px; }
 .tw-fmtsize:disabled { opacity: .55; cursor: default; }
+/* ONE ROW. The ribbon is page chrome above a document; a row that reflows as controls come and go
+   is the thing Kyle asked to be rid of when he asked for it to stay put. Nothing here needs to
+   wrap -- there are eight controls -- so it does not. */
+.tw-fmtbar { flex-wrap: nowrap; overflow-x: auto; }
 .tw-fmtbar select {
   height: 26px;
   border: 1px solid var(--surface-dim);
