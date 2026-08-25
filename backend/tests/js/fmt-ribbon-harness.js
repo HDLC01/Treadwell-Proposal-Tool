@@ -426,6 +426,12 @@ const LIFTED = [
   // The real splice. This is the function that keeps a multi-line edit from merging two Word
   // paragraphs into one, so a harness that imitated it would be testing the imitation.
   fn("spliceLines"),
+  // The marker arithmetic, on its own. selectionLines can only run against a live browser Range,
+  // so it is stubbed below -- which would leave the one purely arithmetic part of the change, and
+  // the part where two real off-by-ones already lived, as the part nothing executes.
+  // One declaration, two names on it, so topConst("MARK_A") already carries MARK_B as well --
+  // and asking for MARK_B by its own name would match nothing.
+  topConst("MARK_A"), fn("markedRange"),
   fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
   fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
@@ -501,7 +507,7 @@ const api = new Function(
 ` + WIRING + `
 
   return {
-    editRuns, paraNow, paraPatch,
+    editRuns, paraNow, paraPatch, markedRange, MARK_A, MARK_B,
     bar: () => ensureFmtBar(),
     // Read-only views of the two bindings the whole change turns on. Exposed rather than inferred
     // so a test can say "the ribbon still remembers block 116" instead of guessing from a class.
@@ -532,13 +538,17 @@ const api = new Function(
           box = document.createElement("div");
           box.className = "tw-txbx";
           box.dataset.boxId = bid;
+          box.attrs.contenteditable = "true";
           docSurface.appendChild(box);
           boxes.set(bid, box);
         }
+        // THE HOST IS THE BOX, above, exactly as renderPositioned sets it. This line used to
+        // set contenteditable="true" on the block, which is the structure the
+        // one-host change removed -- and a harness that goes on building the old structure is
+        // worse than none, because it keeps passing after the page stops working that way.
         const el = document.createElement("div");
         el.className = "tw-block";
         el.dataset.id = String(b.id);
-        el.attrs.contenteditable = "true";
         if (b.list) el.classList.add("tw-li");
         el.textContent = b.text || "";
         box.appendChild(el);

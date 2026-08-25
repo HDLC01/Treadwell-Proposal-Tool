@@ -2469,6 +2469,34 @@
    *  line holding MARK_A, the line holding MARK_B, and everything between them in document
    *  order -- and a marker that lands outside any line at all (directly between two paragraphs)
    *  falls back to that end of the box, which is where the selection visibly reaches. */
+  /** What one line reports, given its serialised text with the two markers still in it.
+   *
+   *  Pure arithmetic, split out on purpose. selectionLines can only run against a live browser
+   *  Range, so nothing executes it -- and this is the half where the off-by-ones live, so it is
+   *  the half that has to be executable on its own. Four arrangements, and every one of them
+   *  happens in practice:
+   *
+   *    both markers   a selection that starts and ends inside this line
+   *    MARK_A only    the selection starts here and runs on into the next line
+   *    MARK_B only    the selection started above and ends here
+   *    neither        this line is covered end to end
+   *
+   *  The -1 is the whole subtlety: MARK_A is inserted after MARK_B (the range's end is filled in
+   *  first), so within a line that holds BOTH, A has pushed B one character along. Across lines it
+   *  has pushed nothing, which is why the correction is conditional on A being in this line and
+   *  before B. */
+  function markedRange(raw) {
+    const text = String(raw == null ? "" : raw);
+    const iA = text.indexOf(MARK_A), iB = text.indexOf(MARK_B);
+    const clean = text.split(MARK_A).join("").split(MARK_B).join("");
+    let start = 0, end = clean.length;
+    if (iA >= 0) start = iA;
+    if (iB >= 0) end = iA >= 0 && iB > iA ? iB - 1 : iB;
+    start = Math.max(0, Math.min(start, clean.length));
+    end = Math.max(0, Math.min(end, clean.length));
+    return [Math.min(start, end), Math.max(start, end)];
+  }
+
   function selectionLines() {
     const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
     if (!sel || !sel.rangeCount) return [];
@@ -2501,15 +2529,8 @@
       if (last < first) { const t = first; first = last; last = t; }
       const out = [];
       for (let k = first; k <= last; k++) {
-        const raw = raws[k];
-        const iA = raw.indexOf(MARK_A), iB = raw.indexOf(MARK_B);
-        const clean = raw.split(MARK_A).join("").split(MARK_B).join("");
-        let start = 0, end = clean.length;
-        if (iA >= 0) start = iA;
-        // MARK_A shifted everything after it along by one, exactly as in selectionRange -- but
-        // only within the line that actually holds it.
-        if (iB >= 0) end = iA >= 0 && iB > iA ? iB - 1 : iB;
-        out.push({ el: lines[k], start: Math.max(0, start), end: Math.max(0, end) });
+        const span = markedRange(raws[k]);
+        out.push({ el: lines[k], start: span[0], end: span[1] });
       }
       a.remove(); b.remove();
       lines.forEach(el => { try { el.normalize(); } catch {} });
