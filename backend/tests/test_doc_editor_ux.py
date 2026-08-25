@@ -445,10 +445,11 @@ def test_clicking_the_page_outside_the_box_collapses_it(ran):
 
 
 def test_the_formatting_toolbar_is_not_the_outside_of_the_box(ran):
-    """showFmtBar appends the B / I / U bar to `document.body` — it has to escape the box's own
-    clipping to be visible at all — so in the DOM it IS outside the box. Treating it as such
-    would close the box the moment the estimator bolded a word inside it, taking their selection
-    with it."""
+    """ensureFmtBar mounts the B / I / U bar in the page's top chrome (`#fmt-ribbon`) — it has to
+    escape the box's own clipping to be visible at all — so in the DOM it IS outside the box.
+    Treating it as such would close the box the moment the estimator bolded a word inside it,
+    taking their selection with it. Since 2026-08-24 the bar is a static ribbon and never sits
+    over a box at all, which makes this exclusion permanent rather than positional."""
     assert ran["formatBarClick"]["open"] is True, (
         "clicking the formatting toolbar collapsed the box being formatted")
     assert ran["formatBarClick"]["maxHeight"] == "none"

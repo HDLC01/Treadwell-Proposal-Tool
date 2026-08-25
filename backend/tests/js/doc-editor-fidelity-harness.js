@@ -385,6 +385,12 @@ function makePage(label) {
     const selectionRange = () => CARET;
     const placeSelection = () => {};
     const showFmtBar = () => {};
+    // refreshDocumentFills re-renders the ribbon after a re-fill, because the buttons are read off
+    // a remembered range that the re-fill may have just invalidated — a lit Bold describing a
+    // selection that no longer exists is a button lying about what pressing it will do. The
+    // ribbon itself is fmt-ribbon-harness.js's world; a no-op is the truthful answer for a harness
+    // that mounts no ribbon, and it still fails loudly if the page ever renames the function.
+    const renderFmtBar = () => {};
     // Box geometry belongs to box-drag-harness.js, which builds that world; an empty collector
     // is the truthful answer for a harness that mounts no boxes.
     const collectBoxOverrides = () => ({});
