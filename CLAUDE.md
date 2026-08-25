@@ -7,7 +7,18 @@ context loaded.
 
 ---
 
-## ⚡ CURRENT PRODUCTION STATE (last updated 2026-06-09)
+## ⚡ CURRENT PRODUCTION STATE (last updated 2026-08-24)
+
+> **Start here, then read `../SESSION-HANDOFF-2026-08-24.md`** for the live branch/PR state, the
+> uncommitted work, and what is waiting on Hanz. That file is written per session; this one is the
+> standing brief.
+
+> **Team emails go through the `gmail-draft` subagent**, not by hand — `/gmail-draft`. It knows the
+> recipients, the Central-time subject format, Hanz's three-group checklist and his voice, and works
+> out what shipped on its own. Defined at `.claude/agents/gmail-draft.md` and `~/.claude/agents/`.
+
+> **The clock on the dev box is ~13 hours ahead of Central.** Compute every user-facing date in
+> `America/Chicago`, never off `datetime.now()`.
 
 > **This block overrides any stale info further down.** The sections below
 > were written for v1 and are partly outdated — trust THIS block first.
@@ -72,7 +83,11 @@ context loaded.
 - **Generate moved to the Done page** (was on Proposal Review). One generate
   per project; Done shows a pre-generate review card, then a success view with
   three downloads: estimate (`.xlsx`), proposal (`.docx`), and proposal **PDF**.
-- **Download-only — NO Dropbox folder (changed 2026-06-09).** `/api/generate`
+- **SUPERSEDED — `To Dropbox` is live again (2026-08-20).** Step 5 copies the `$$ Bid Template`
+  into Kyle's real Estimating folders, and the estimator picks the destination folder from a
+  browser of the live tree. Commercial jobs live inside `*Kyle`; `*RJ` has no date prefix. The
+  paragraph below describes the 2026-06-09 download-only period and is kept for history.
+- **(Historic) Download-only — NO Dropbox folder (changed 2026-06-09).** `/api/generate`
   fills the xlsx + docx and returns download links; it no longer creates or
   uploads a Dropbox project folder. The estimator downloads + files them
   manually. (`dropbox_client.py` stays on disk — still exercised by tests — but
@@ -138,8 +153,12 @@ A small, standalone tool that automates Treadwell's bid-paperwork:
 4. Tool creates a new Dropbox folder for the project and uploads both files
 5. Returns Dropbox folder URL + direct download links
 
-**This tool is intentionally narrow.** No auth, no DB, no CRM, no AI helpers
-in v1. Pure file-in / file-out. State held client-side in `sessionStorage`.
+**⚠️ THIS PARAGRAPH IS HISTORY, NOT THE CURRENT DESIGN.** It described v1. As of 2026-08 the
+tool has Google sign-in with a per-href permission matrix, a Supabase database, the CRM board that
+the sales meeting is run from, an AI lead inbox, an AI autofill, a document editor, a customer
+portal, an items-and-assemblies library, its own pricing engine, and an automated follow-up
+cadence that emails customers. Do not use "it is intentionally narrow" to argue against a feature —
+argue on the merits instead.
 
 ---
 
@@ -265,6 +284,10 @@ The `estimate sheet - 5.7.xlsx` template has 16 tabs. Only **Epoxy** and
 as `EPOXY_CELL_MAP` and `POLISH_CELL_MAP` (~30 cells each). Other tabs
 (Sealer, Gyp variants, Leveling) slot in via the same pattern.
 
+**`backend/pricing.py` is the pricing source of truth** (`/api/price`); the older totals paths
+were deleted. The bid is tax-inclusive — D88 already contains sales and remodel tax, so the screen
+shows one price while the document itemises remodel tax so the figures sum.
+
 Computed cells (E24, E31, I12, D88, etc.) are **never written by this
 tool** — Excel re-evaluates formulas when Troy opens the file. The
 backend has a separate `compute_estimate_totals()` Python function that
@@ -322,7 +345,15 @@ use whichever phrasing reads naturally.
 
 ---
 
-## What's deliberately out of scope (v1)
+## What was out of scope in v1 — MOSTLY SHIPPED SINCE
+
+Every row below except voice intake has since been built. Kept as a record of what changed, not as
+a constraint. Current reality: auth = Google sign-in + `nav_access.py` (keyed on href);
+DB = Supabase `drafts`/`events` (+ the portal's `portal_*`); AI = `_autofill_via_cli` with three
+prompts; CRM = `portal.html` + `js/portal.js`, the board the sales meeting runs on;
+email = Resend, from the portal, including an automated cadence.
+
+### The original v1 table
 
 | Out of scope | Reason |
 |---|---|
@@ -341,5 +372,7 @@ use whichever phrasing reads naturally.
 2. **Don't modify Kyle's source files in `Numbers 5.7.26/`** — the
    `backend/templates/` files are committed copies and the only ones
    we're allowed to change.
-3. **Don't add a DB** — that's a different project. The whole point of
-   this tool is that it doesn't have one.
+3. **There IS a DB now** — Supabase, `drafts` + `events`, shared with the customer portal
+   (which owns `portal_*`). The old "don't add a DB" rule is void. What still holds: don't add a
+   SECOND store for something the draft blob already carries, and remember every save PUTs the
+   whole blob, so two tabs can clobber each other.

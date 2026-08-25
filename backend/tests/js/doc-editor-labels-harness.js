@@ -315,16 +315,22 @@ class El {
 
 // The page root, so `document.querySelectorAll(".tw-txbx")` (fitNotesBox) really finds the boxes.
 const ROOT = new El("div");
+// #fmt-ribbon: the row of page chrome the formatting ribbon mounts itself into since 2026-08-24
+// ("keep it static like a ribbon in a word document"). Modelled rather than shimmed away, because
+// ensureFmtBar falls back to document.body when it is missing — a harness that let it take the
+// fallback would be testing the degraded path and calling it the shipped one.
+const FMT_HOST = new El("div");
+FMT_HOST.attrs.id = "fmt-ribbon";
 const document = {
   createElement: (t) => new El(t),
   activeElement: null,
   body: new El("body"),
+  getElementById: (id) => (id === "fmt-ribbon" ? FMT_HOST : null),
   querySelectorAll: (sel) => ROOT.querySelectorAll(sel),
 };
 const window = {
   _listeners: {},
   addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
-  // showFmtBar clamps the toolbar inside the viewport, so it needs one.
   innerWidth: 1440,
   innerHeight: 900,
 };
@@ -448,7 +454,24 @@ const LIFTED = [
   fn("runsArePlain"), fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"),
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
-  fn("ensureFmtBar"), fn("showFmtBar"), fn("hideFmtBar"),
+  // fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became when the bar
+  // stopped floating: it no longer positions anything, it re-checks its REMEMBERED block against
+  // the live document and re-renders. Leaving any of them out is not a lift-time failure — it is
+  // a ReferenceError on the first focusin, i.e. in every test below (see the fitOffer note).
+  //
+  // fmtRangeFor / fmtRangeSource joined them for the same reason and cost the same 30 tests when
+  // they were first left out. renderFmtBar reads the remembered range THROUGH fmtRangeFor now,
+  // because a range is character offsets and offsets mean nothing once the paragraph underneath
+  // has been re-filled — which, since the ribbon holds its target past blur, is something
+  // refreshDocumentFills does to it routinely.
+  fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
+  fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
+  // applyFormat gained two guards in review: runsEqual (a press that changes nothing must not mark
+  // the paragraph edited and ship an override) and selectionInSurface (do not re-place the document
+  // selection when the caret is in a sidebar field). Both must be lifted, not stubbed -- a stub
+  // that always said "changed" would put the spurious-override bug straight back.
+  fn("runsEqual"), fn("selectionInSurface"),
+  fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("restoreSavedOverrides"), fn("collectOverrides"),
   // BOTH of those reach isNumberedClause: neither will ship or replay an override that empties a
@@ -481,7 +504,7 @@ const api = new Function(
   const TOKEN_HINTS = {};
   let _fmtBusy = false;
   let flowMode = false;
-  let fmtBar = null, fmtBlock = null;   // the page's own two bindings, verbatim
+  let fmtBar = null, fmtBlock = null, fmtRange = null, fmtRangeText = null;   // the page's own bindings, verbatim
   let templateVersion = "tv-1";
   const blockById = new Map();      // id -> the template's block record
   const pristineById = new Map();   // id -> the block's pristine plain text
@@ -511,7 +534,7 @@ ${BOX_LOOP}
            isAutoGrown: isAutoGrown,
            liveState: () => state,
            // ── the paragraph controls ──
-           showFmtBar, hideFmtBar, paraAction, paraNow, paraPatch, collectOverrides,
+           showFmtBar, idleFmtBar, paraAction, paraNow, paraPatch, collectOverrides,
            restoreSavedOverrides, mergeOverrideEntry,
            fmtBarEl: () => ensureFmtBar(),
            templateVersion: () => templateVersion,
@@ -894,6 +917,7 @@ const barState = () => {
   const read = (sel) => {
     const n = bar.querySelector(sel);
     return n ? { display: n.style.display === undefined ? "" : n.style.display,
+                 visibility: n.style.visibility === undefined ? "" : n.style.visibility,
                  on: n.classList.contains("on"), pressed: n.getAttribute("aria-pressed"),
                  disabled: !!n.disabled, label: n.attrs["aria-label"] || null,
                  title: n.title || null, text: n.textContent } : null;

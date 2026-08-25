@@ -489,18 +489,22 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
   out.outsideClick = state(box);
 }
 
-// 7b. …but a click on the formatting toolbar does NOT, even though showFmtBar appends it to
-//     document.body and it is therefore "outside the box" in the DOM. It is chrome for the
-//     paragraph being edited.
+// 7b. …but a click on the formatting ribbon does NOT, even though ensureFmtBar mounts it in the
+//     page's top chrome (#fmt-ribbon since 2026-08-24, document.body before that) and it is
+//     therefore "outside the box" in the DOM either way. It is chrome for the paragraph being
+//     edited, and now that it never moves it is the one control that is ALWAYS outside the box.
 {
   const { box } = mountBox(400);
   fire(box, "click", {});
+  const host = new El("div");
+  host.attrs.id = "fmt-ribbon";
   const bar = new El("div");
   bar.className = "tw-fmtbar";
   const boldBtn = new El("button");
   boldBtn.attrs["data-fmt"] = "bold";
   bar.appendChild(boldBtn);
-  document.body.appendChild(bar);
+  host.appendChild(bar);
+  document.body.appendChild(host);
   fire(boldBtn, "click", {});
   out.formatBarClick = state(box);
 }

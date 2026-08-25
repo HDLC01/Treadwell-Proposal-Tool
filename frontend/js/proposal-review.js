@@ -1473,6 +1473,12 @@
       stagingHome.appendChild(stagingPanel);
     }
     docSurface.innerHTML = "";
+    // The formatting ribbon's remembered block was one of the paragraphs just destroyed. Since
+    // 2026-08-24 that target deliberately outlives focus ("keep it static like a ribbon in a word
+    // document"), so nothing else takes it away: `fmtTargetBlock` would notice, but not until the
+    // next press, leaving a ribbon that looks live and does nothing for as long as the estimator
+    // does not try it. Grey it out here, where the paragraphs actually go.
+    idleFmtBar();
   }
 
   // Substituted HTML for one template paragraph: text escaped, each known
@@ -1791,19 +1797,35 @@
   }
 
   /** What the selection currently looks like. A key is `undefined` when the selection spans
-   *  more than one value ("mixed"), so a toggle can decide between on and off honestly. */
-  function selectionFormat(el) {
+   *  more than one value ("mixed"), so a toggle can decide between on and off honestly.
+   *
+   *  `fallback` is the range to use when the live selection is NOT inside `el`; `live` reports
+   *  which of the two was used. Kyle, 2026-08-24, on the format bar that floated beside the
+   *  caret: "Can we move this editable box on top as well but keep it static like a ribbon in a
+   *  word document." A ribbon at the top of the page gets pressed at moments a bar beside the
+   *  caret never was — after focus has gone to the Tax select, the pricing rail, the ribbon's own
+   *  size dropdown — and the widening below then reads as "the whole paragraph" and silently
+   *  reformats every word in it instead of the three that were highlighted. So the ribbon's
+   *  remembered range (`fmtRange`) is passed in, and the press lands where the estimator was
+   *  looking.
+   *
+   *  The clamp is for the fallback: a remembered range can outlive the edit that shortened the
+   *  paragraph it points into. A live range is in bounds by construction. */
+  function selectionFormat(el, fallback) {
     const runs = editRuns(el);
     const total = runsLength(runs);
-    const sel = selectionRange(el);
+    const live = selectionRange(el);
+    const sel = live || fallback || null;
     let start = sel ? sel[0] : 0, end = sel ? sel[1] : total;
+    start = Math.max(0, Math.min(start, total));
+    end = Math.max(start, Math.min(end, total));
     // A collapsed caret means "this whole paragraph". The estimator asked for a section to
     // change size; a pending style that only affects the next keystroke would read as nothing
-    // having happened.
+    // having happened. A remembered caret means the same thing for the same reason.
     if (start === end) { start = 0; end = total; }
     const f = F.summarize(runs, start, end);
     return { bold: f.bold, italic: f.italic, underline: f.underline, size_pt: f.size_pt,
-             range: [start, end], empty: total === 0 };
+             range: [start, end], empty: total === 0, live: !!live };
   }
 
   function markEdited(el, formatted) {
@@ -1837,6 +1859,30 @@
     return start + 1;
   }
 
+  /** Are these two run lists the same text carrying the same formatting?
+   *
+   *  Field by field rather than JSON.stringify: both are plain objects, but they come from
+   *  different producers (editRuns and patchRuns) and key ORDER is not part of what makes two runs
+   *  equal. */
+  function runsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (String(a[i].text) !== String(b[i].text)) return false;
+      for (const k of RUN_KEYS) if (a[i][k] !== b[i][k]) return false;
+    }
+    return true;
+  }
+
+  /** Is the live selection inside the document at all?
+   *
+   *  Read BEFORE renderRuns, because that rewrites the innerHTML the selection points into. */
+  function selectionInSurface() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !docSurface) return false;
+    const r = sel.getRangeAt(0);
+    return !!r && docSurface.contains(r.startContainer);
+  }
+
   function applyFormat(el, patch, range) {
     const runs = editRuns(el);
     let start, end;
@@ -1846,14 +1892,33 @@
       start = f.range[0]; end = f.range[1];
     }
     if (end <= start) return false;
-    renderRuns(el, patchRuns(runs, start, end, patch));
-    placeSelection(el, start, end);
+    const next = patchRuns(runs, start, end, patch);
+    // A PRESS THAT CHANGES NOTHING IS NOT AN EDIT. Reset on a paragraph carrying no formatting
+    // deletes nothing; Bold on already-bold words adds nothing. markEdited ran regardless, which
+    // set tw-fmt, which the input handler reads as dirty, which persists an override for a
+    // paragraph nobody touched — breaking the guarantee paraPatch's own docstring states, that an
+    // untouched document ships no overrides and the generated .docx stays byte-identical. It also
+    // routes the block permanently onto the refreshFillsInPlace branch.
+    //
+    // It matters MORE now the bar is a ribbon. fmtBlock outlives focus and is cleared only by a
+    // non-block editable or a template reload, so the row stays aimed at the last paragraph
+    // touched for the rest of the session, and one stray press on Reset writes an override for a
+    // paragraph the estimator has visually left.
+    if (runsEqual(runs, next)) return false;
+    const hadDocSelection = selectionInSurface();
+    renderRuns(el, next);
+    // Only put the selection back if it was in the document to begin with. A ribbon press made
+    // with the caret in a sidebar field would otherwise paint a highlight the estimator never
+    // made, over the .tw-fmt-target background — and in an engine that focuses the editing host on
+    // a programmatic selection, pull their caret out of that field mid-entry so the next digits
+    // they type land in the proposal paragraph.
+    if (hadDocSelection) placeSelection(el, start, end);
     markEdited(el, true);
     return true;
   }
 
-  function toggleFormat(el, key) {
-    const f = selectionFormat(el);
+  function toggleFormat(el, key, fallback) {
+    const f = selectionFormat(el, fallback);
     if (f.empty) return;
     const patch = {};
     patch[key] = F.nextToggle(f[key]);
@@ -2014,8 +2079,36 @@
     return true;
   }
 
-  // ── The toolbar ────────────────────────────────────────────────────────────
-  let fmtBar = null, fmtBlock = null;
+  // ── The ribbon ─────────────────────────────────────────────────────────────
+  // Kyle, 2026-08-24, on the format bar that floated beside the caret:
+  //   "Can we move this editable box on top as well but keep it static like a ribbon in a word
+  //    document."
+  //
+  // So it is one row of page chrome — #fmt-ribbon in proposal-review.html, between the step-pill
+  // ribbon and the scrolling canvas — always on screen, never moving. Three things that were true
+  // of a bar placed next to the block stop being true, and each one is a way to ship a row of
+  // buttons that quietly does nothing:
+  //
+  //  1. IT NO LONGER KNOWS ITS TARGET BY WHERE IT IS. `fmtBlock` used to be set on focusin and
+  //     thrown away on focusout, so "visible" and "has a target" were ONE state and the
+  //     `!fmtBlock` guard on every button never had to fire. It is now a REMEMBERED target that
+  //     outlives the block losing focus — that is what "static" means — and the ribbon goes
+  //     INERT when there is genuinely nothing to act on rather than vanishing. That is Word's
+  //     own answer, and it is the right one here: a toolbar that disappears is the floating bar
+  //     again under a different name.
+  //  2. IT NO LONGER KNOWS THE SELECTION EITHER. `fmtRange` keeps the last selection that really
+  //     was inside `fmtBlock`, because `selectionFormat` widens to the WHOLE paragraph when it
+  //     cannot read one. Beside the caret that was a rare path; from a ribbon it is what happens
+  //     every time focus went somewhere else first, and the wrong result is invisible — the
+  //     paragraph simply comes out of the generator bold from end to end.
+  //  3. IT IS NO LONGER POSITIONED. The old bar was `position: fixed`, placed from the block's
+  //     `getBoundingClientRect()`, precisely BECAUSE #doc-zoom scales the document: viewport
+  //     coordinates are already post-transform, so there was no scale factor to divide out. The
+  //     ribbon sits in the normal flow OUTSIDE that transform, so the zoom cannot scale it and
+  //     there is nothing left to compute. The capture-phase `scroll` listener that re-placed it
+  //     is gone with it, and it was not free — it re-ran `selectionFormat`, which inserts and
+  //     removes marker text nodes inside the paragraph, on every scroll event.
+  let fmtBar = null, fmtBlock = null, fmtRange = null, fmtRangeText = null;
 
   function ensureFmtBar() {
     if (fmtBar) return fmtBar;
@@ -2041,50 +2134,221 @@
       ' title="More indent (moves right)">⇥</button>' +
       '<span class="tw-fmtsep" aria-hidden="true"></span>' +
       '<button type="button" data-fmt="reset" title="Back to the template’s own formatting">Reset</button>';
-    document.body.appendChild(fmtBar);
+    // The ribbon's own row. `document.body` is the last resort only: a page without the host
+    // still gets a working toolbar at the end of the document, which beats what the old CSS
+    // would have done to an unplaced `position: fixed` element — park it over the top corner.
+    (document.getElementById("fmt-ribbon") || document.body).appendChild(fmtBar);
 
-    // Never let the toolbar take focus: the block has to keep its selection for the format to
-    // land on the words the estimator actually highlighted.
+    // Never let the ribbon take focus: the block has to keep its selection for the format to
+    // land on the words the estimator actually highlighted. This matters MORE than it did when
+    // the bar floated beside the caret — the ribbon is page chrome outside the document, so a
+    // click on it that was allowed to focus would move focus clean out of the editor and there
+    // would be no caret left to format. The size `select` cannot be covered this way
+    // (preventDefault on its mousedown stops it opening at all), which is what `fmtRange` is for.
     fmtBar.addEventListener("mousedown", (e) => {
       if (!e.target.closest("select")) e.preventDefault();
     });
     fmtBar.addEventListener("click", (e) => {
+      // The REMEMBERED block, re-checked against the live document — not whatever had focus,
+      // because from a ribbon there is frequently nothing focused at all.
+      const el = fmtTargetBlock();
+      // Nothing to act on. Re-render rather than just returning: the ribbon has to LOOK dead
+      // from here on, and a press is where an orphaned target gets discovered if some future path
+      // empties the surface without going through clearDocSurface.
+      if (!el) { renderFmtBar(); return; }
       // Paragraph properties first: they are a different channel from the run formatting below
       // (the `para` field on the override, not `runs`), and they act on the whole paragraph
-      // regardless of what is selected inside it.
+      // regardless of what is selected inside it — so they need no range and work unchanged
+      // from a ribbon.
       const pbtn = e.target.closest("button[data-para]");
-      if (pbtn && fmtBlock) {
+      if (pbtn) {
         e.preventDefault();
-        paraAction(fmtBlock, pbtn.dataset.para);
-        showFmtBar(fmtBlock);
+        paraAction(el, pbtn.dataset.para);
+        showFmtBar(el);
         return;
       }
       const btn = e.target.closest("button[data-fmt]");
-      if (!btn || !fmtBlock) return;
+      if (!btn) return;
       e.preventDefault();
       if (btn.dataset.fmt === "reset") {
-        const f = selectionFormat(fmtBlock);
-        applyFormat(fmtBlock, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
-        showFmtBar(fmtBlock);
+        const f = selectionFormat(el, fmtRangeFor(el));
+        applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
+        showFmtBar(el);
         return;
       }
-      toggleFormat(fmtBlock, btn.dataset.fmt);
+      toggleFormat(el, btn.dataset.fmt, fmtRangeFor(el));
     });
     fmtBar.addEventListener("change", (e) => {
       const sel = e.target.closest("select[data-fmt='size']");
-      if (!sel || !fmtBlock) return;
+      const el = fmtTargetBlock();
+      if (!sel) return;
+      if (!el) { renderFmtBar(); return; }
       const v = sel.value ? Number(sel.value) : null;
-      const f = selectionFormat(fmtBlock);
-      applyFormat(fmtBlock, { size_pt: v }, f.range);
-      showFmtBar(fmtBlock);
+      // `fmtRange` and not just whatever the selection is NOW: opening this dropdown is the one
+      // press the mousedown guard above cannot cover, so by the time `change` fires the caret has
+      // usually left the paragraph. Without the remembered range the chosen size landed on the
+      // WHOLE paragraph instead of the highlighted words — true of the floating bar too, and
+      // fixed here rather than left for the ribbon to make routine.
+      const f = selectionFormat(el, fmtRangeFor(el));
+      applyFormat(el, { size_pt: v }, f.range);
+      showFmtBar(el);
     });
     return fmtBar;
   }
 
-  function showFmtBar(el) {
+  /** The block the ribbon acts on, or null.
+   *
+   *  Re-checked against the live document rather than trusted. `clearDocSurface` empties the
+   *  whole surface on every template reload, work-type switch and repagination, so a remembered
+   *  block can be a detached orphan — and a format applied to an orphan lands nowhere while every
+   *  button still looks like it worked. The floating bar could not hit this: it only existed while
+   *  its block had focus, and a detached node has none. */
+  function fmtTargetBlock() {
+    if (fmtBlock && docSurface && !docSurface.contains(fmtBlock)) {
+      fmtBlock = null;
+      fmtRange = null;
+      fmtRangeText = null;
+    }
+    return fmtBlock;
+  }
+
+  /** The exact string `fmtRange`'s offsets index into.
+   *
+   *  The runs, not `serializeBlock`, because the offsets are character positions into
+   *  `runsLength(editRuns(el))` and nothing else — a fingerprint taken from a different
+   *  serialisation would be comparing the range against a string it was never measured in. */
+  function fmtRangeSource(el) {
+    return editRuns(el).map(r => r.text).join("");
+  }
+
+  /** The remembered range, but ONLY if the paragraph still says what it said when it was taken.
+   *
+   *  A range is a pair of character offsets, and offsets are meaningless the moment the text
+   *  underneath them is rewritten. That could not happen while the bar floated beside the caret:
+   *  the bar existed only while its block had focus, and `refreshDocumentFills` skips the block
+   *  containing `document.activeElement` precisely so a sidebar edit cannot clobber what is being
+   *  typed. A ribbon that REMEMBERS its target past blur walks straight out of that protection —
+   *  the remembered block usually is not the focused one, so it is re-filled like any other, and
+   *  the offsets survive the rewrite pointing at whatever characters now happen to sit there.
+   *
+   *  The sequence costs a customer real money: select "1,500" in a WORK row, click into the
+   *  sidebar, correct the square footage, press Bold. The row is re-filled with the new number at
+   *  a different length, and Bold lands on a window of characters nobody highlighted — into the
+   *  runs, into the override, into the generated .docx, with the estimator's eyes on the sidebar
+   *  the whole time.
+   *
+   *  VALIDATED AT USE, NOT INVALIDATED AT THE REWRITE. Telling `refreshDocumentFills` to notify
+   *  the ribbon would fix the one path that is known to do this today and quietly not fix the
+   *  next one; `setBlockContent` alone already has four call sites. Checking here means every
+   *  rewrite, from every path, present or future, is covered by construction — there is no call
+   *  site left to forget.
+   *
+   *  Falling back to null is not a lesser bug, it is the model this file already documents: no
+   *  usable range means the whole paragraph, the same rule `selectionFormat` applies to a
+   *  collapsed caret. The estimator sees the entire row change on screen and can undo it. The
+   *  alternative — keeping the block out of the re-fill to protect the range — would leave last
+   *  week's square footage in a paragraph that prints, which is the worse of the two by far. */
+  /** Is there a highlight on screen that is NOT the one on record?
+   *
+   *  `selectionRange` returns null unless BOTH endpoints are inside the block, which makes "there
+   *  is no readable selection" and "the estimator is highlighting something else" the same answer
+   *  — and the remembered range used to survive both. It must not survive the second.
+   *
+   *  THE SEQUENCE THIS CLOSES, which the text stamp alone does not: highlight "epoxy flooring" in
+   *  a WORK row, then drag from inside that row down past its end — onto the canvas, or into the
+   *  next paragraph. `selectionRange` cannot read that (one endpoint is outside), so nothing
+   *  re-stamps the range, and the paragraph's TEXT never changed, so the stamp still matches. The
+   *  ribbon lights up for the old [12, 26) while a different span is visibly highlighted, and Bold
+   *  lands on fourteen characters nobody selected. Dragging UPWARD out of the row is worse: the
+   *  selectionchange handler returns early on the startContainer check, so nothing is touched at
+   *  all. Same failure class as the re-fill bug, reached by moving the selection instead of
+   *  rewriting the words — and the whole-paragraph fallback's justification ("the estimator sees
+   *  the entire row change and can undo it") does not cover a stale window mid-paragraph.
+   *
+   *  A COLLAPSED CARET IS NOT A CLAIM, and neither is a highlight in the sidebar. Dropping the
+   *  range for either would undo the entire point of a ribbon that outlives focus — click into the
+   *  Tax field, come back, press Bold — so this fires only for a real highlight that touches the
+   *  document surface. */
+  function selectionLeftBlock(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const r = sel.getRangeAt(0);
+    if (!r) return false;
+    if (r.collapsed) return false;
+    if (el.contains(r.startContainer) && el.contains(r.endContainer)) return false;
+    if (!docSurface) return false;
+    return docSurface.contains(r.startContainer) || docSurface.contains(r.endContainer);
+  }
+
+  function fmtRangeFor(el) {
+    if (!fmtRange) return null;
+    // FAILS CLOSED. The previous shape was `fmtRangeText !== null && …`, which returned the range
+    // UNVALIDATED when there was no stamp — a safety net whose actual behaviour was to wave the
+    // range through, so the first future path that set fmtRange without stamping it would have
+    // silently reinstated the original bug. An unstampable range is an unusable range.
+    if (fmtRangeText === null
+        || fmtRangeSource(el) !== fmtRangeText
+        || selectionLeftBlock(el)) {
+      fmtRange = null;
+      fmtRangeText = null;
+      return null;
+    }
+    return fmtRange;
+  }
+
+  /** Say ON THE PAGE which paragraph the ribbon is aimed at.
+   *
+   *  A bar beside the caret answered that by being there. A ribbon cannot, and its target now
+   *  outlives the focus ring, so the paragraph has to say so itself or Bold is a press into the
+   *  dark. `background` and nothing else — see `.tw-block.tw-fmt-target` in styles.css: this
+   *  surface is a to-scale preview of a printed page registered against baked artwork, and a cue
+   *  that reflowed the text by a pixel would be the worse bug. */
+  function markFmtTarget(el) {
+    if (fmtBlock && fmtBlock !== el) fmtBlock.classList.remove("tw-fmt-target");
+    if (el) el.classList.add("tw-fmt-target");
+  }
+
+  /** Sync the ribbon's controls to the remembered block.
+   *
+   *  Also the ONLY place `fmtRange` is captured. Every path that refreshes the ribbon — focusin,
+   *  selectionchange, each press — comes through here, so by the time a press needs a range, the
+   *  last selection that was genuinely inside the block is already on record. */
+  function renderFmtBar() {
     const bar = ensureFmtBar();
-    fmtBlock = el;
-    const f = selectionFormat(el);
+    const el = fmtTargetBlock();
+    // INERT, NOT GONE. `disabled` rather than a dimming class alone, because a dimmed button is
+    // still a live button: this repo has already shipped an `opacity: 0` element that went on
+    // stealing the click underneath it. The blanket enable comes FIRST so the per-paragraph
+    // refusals below — outdent at the margin, indent at the clamp, a locked contract clause —
+    // are what the estimator is actually left looking at.
+    bar.classList.toggle("tw-fmtbar-idle", !el);
+    bar.querySelectorAll("button,select").forEach(n => { n.disabled = !el; });
+    if (!el) {
+      bar.querySelectorAll("button[data-fmt]").forEach(b => {
+        b.classList.remove("on");
+        b.setAttribute("aria-pressed", "false");
+      });
+      const idleSize = bar.querySelector("select[data-fmt='size']");
+      if (idleSize) idleSize.value = "";
+      // THE PARAGRAPH HALF TOO, and this `return` used to be above it. The ribbon is one memoized
+      // element that now lives for the whole session, so whatever is not cleared here is the LAST
+      // target's leftovers sitting on a dead control: Bullet stayed lit and went on announcing
+      // aria-pressed="true" — a screen reader reads "pressed" on a disabled button, which is a
+      // claim about a paragraph that is no longer the target — and the whole `[data-para]` group
+      // stayed `visibility: hidden` if the last target happened to be a locked contract clause,
+      // so the idle ribbon was a different shape depending on what preceded it.
+      bar.querySelectorAll("[data-para]").forEach(n => { n.style.visibility = ""; });
+      const idleBul = bar.querySelector("button[data-para='bullet']");
+      if (idleBul) {
+        idleBul.classList.remove("on");
+        idleBul.setAttribute("aria-pressed", "false");
+      }
+      return;
+    }
+    const f = selectionFormat(el, fmtRangeFor(el));
+    // Stamped with the text it was measured in, so `fmtRangeFor` can tell later whether the
+    // paragraph is still the one this range describes. See its note for what goes wrong without.
+    if (f.live) { fmtRange = f.range; fmtRangeText = fmtRangeSource(el); }
     bar.querySelectorAll("button[data-fmt]").forEach(b => {
       const k = b.dataset.fmt;
       if (k !== "reset") b.classList.toggle("on", f[k] === true);
@@ -2093,37 +2357,68 @@
     const sizeSel = bar.querySelector("select[data-fmt='size']");
     if (sizeSel) sizeSel.value = f.size_pt ? String(f.size_pt) : "";
     // The paragraph controls, reflecting THIS paragraph. A locked one (a numbered TERMS AND
-    // CONDITIONS clause) is offered nothing at all: un-bulleting it renumbers every clause
-    // below it, in legal boilerplate, and a disabled-looking button still invites the click.
-    // display, not the `hidden` attribute — a class `display` rule beats `hidden` and this bar
-    // sets display:flex on itself.
+    // CONDITIONS clause) is offered nothing at all: un-bulleting it renumbers every clause below
+    // it, in legal boilerplate, and a disabled-looking button still invites the click.
+    //
+    // `visibility`, not `display`, since the bar became a ribbon: a row that reflowed every time
+    // the caret crossed from a WORK row to a contract clause would not be static, and Reset would
+    // jump out from under the pointer. visibility:hidden keeps the space AND — unlike `opacity: 0`
+    // — takes the element out of hit-testing and out of the tab order. `disabled` is set as well,
+    // so the refusal survives even if that rule ever loses a cascade: a numbered contract clause
+    // is worth two independent noes.
     const pst = paraNow(Number(el.dataset.id));
     const showPara = !!pst && !pst.locked;
-    bar.querySelectorAll("[data-para]").forEach(n => { n.style.display = showPara ? "" : "none"; });
+    bar.querySelectorAll("[data-para]").forEach(n => {
+      n.style.visibility = showPara ? "" : "hidden";
+      if (n.tagName === "BUTTON") n.disabled = !showPara;
+    });
+    const bul = bar.querySelector("button[data-para='bullet']");
+    if (bul) {
+      // Cleared, not left alone, when the paragraph is offered nothing. The ribbon is one
+      // memoized element that now lives for the whole session, so a pressed state carried over
+      // from the last WORK row would sit on a hidden button waiting for the day the visibility
+      // rule loses a cascade — and then read as "this contract clause is bulleted, press to
+      // un-bullet it".
+      bul.classList.toggle("on", showPara && pst.bullet);
+      bul.setAttribute("aria-pressed", String(showPara && pst.bullet));
+    }
     if (showPara) {
-      const bul = bar.querySelector("button[data-para='bullet']");
-      if (bul) {
-        bul.classList.toggle("on", pst.bullet);
-        bul.setAttribute("aria-pressed", String(pst.bullet));
-      }
-      const out = bar.querySelector("button[data-para='outdent']");
-      if (out) out.disabled = pst.indent <= 0;
+      const outd = bar.querySelector("button[data-para='outdent']");
+      if (outd) outd.disabled = pst.indent <= 0;
       const inn = bar.querySelector("button[data-para='indent']");
       if (inn) inn.disabled = pst.indent >= INDENT_MAX_TW;
     }
-    bar.style.display = "flex";
-    // Viewport coordinates on purpose: the bar is position:fixed, so the page's zoom transform
-    // does not enter into it and there is no scale factor to divide out.
-    const r = el.getBoundingClientRect();
-    const h = bar.offsetHeight || 34, w = bar.offsetWidth || 260;
-    const above = r.top - h - 8;
-    bar.style.top = Math.round(above < 8 ? Math.min(window.innerHeight - h - 8, r.bottom + 8) : above) + "px";
-    bar.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, r.left))) + "px";
   }
 
-  function hideFmtBar() {
-    if (fmtBar) fmtBar.style.display = "none";
+  /** Aim the ribbon at `el`.
+   *
+   *  Kept under its old name because every one of its call sites means what it always meant —
+   *  "this block, refresh the buttons" — but it no longer shows or places anything: the ribbon is
+   *  always shown, and a normal-flow row has nowhere to be put. Everything the old body did after
+   *  `bar.style.display = "flex"` was the `getBoundingClientRect()` arithmetic, which is deleted
+   *  rather than moved; see the note above `fmtBar` for why the zoom no longer needs it. */
+  function showFmtBar(el) {
+    // A different paragraph: the remembered range is character offsets into the OLD one and would
+    // land on arbitrary words of this one.
+    if (el !== fmtBlock) { fmtRange = null; fmtRangeText = null; }
+    markFmtTarget(el);
+    fmtBlock = el;
+    renderFmtBar();
+  }
+
+  /** The ribbon stays; it just has nothing to act on.
+   *
+   *  Replaces `hideFmtBar`, whose behaviour is the thing Kyle asked to be rid of. Reached when
+   *  focus lands on something in the document that run formatting cannot reach — a `.tw-line-edit`
+   *  price line, a box tool — because a ribbon left aiming at whichever paragraph happened to be
+   *  last is how a press silently rewrites a paragraph nobody was looking at. It is also the
+   *  state the ribbon is built in: on page load nothing is selected. */
+  function idleFmtBar() {
+    markFmtTarget(null);
     fmtBlock = null;
+    fmtRange = null;
+    fmtRangeText = null;
+    renderFmtBar();
   }
 
   /** True when the runs carry no formatting at all \u2014 one plain run.
@@ -2633,6 +2928,12 @@
       renderSystemPreview();
       renderNotesPreview();
       scheduleRepaginate();
+      // The ribbon's buttons are read off the remembered range, and the loop above may have just
+      // rewritten the paragraph that range was measured in. `fmtRangeFor` already makes the PRESS
+      // safe wherever the rewrite came from; this is the cosmetic other half, so the lit state
+      // stops describing a selection that no longer exists. Cheap here — 150ms debounced, once —
+      // and deliberately not the thing correctness depends on.
+      renderFmtBar();
     }, 150);
   }
 
@@ -3072,10 +3373,11 @@
       const t = e.target;
       if (!t || !t.closest) return;
       if (t.closest(".tw-txbx")) return;
-      // …except the formatting toolbar, which showFmtBar appends to document.body rather than
-      // to the box (it has to escape the box's clipping to be visible at all). It is chrome FOR
-      // the paragraph being edited, so bolding a word inside an expanded box must not close the
-      // box out from under the selection.
+      // …except the formatting ribbon, which lives in the page's top chrome (#fmt-ribbon) and
+      // never inside the box — it has to escape the box's clipping to be visible at all, and
+      // since 2026-08-24 it does not move at all. It is chrome FOR the paragraph being edited,
+      // so bolding a word inside an expanded box must not close the box out from under the
+      // selection.
       if (t.closest(".tw-fmtbar")) return;
       collapseAll();
     });
@@ -4187,30 +4489,40 @@
     if (el.closest(".tw-terms-page")) scheduleRepaginate();
   });
 
-  // ── Wire the formatting toolbar to the focused block ───────────────────────
+  // ── Wire the formatting ribbon to the focused block ───────────────────────
+  // On screen before anything is focused, in its inert state. That IS the "static like a ribbon
+  // in a word document" part: building the bar lazily on the first focusin is what made the old
+  // one appear out of nowhere and vanish again.
+  idleFmtBar();
+
   docSurface.addEventListener("focusin", (e) => {
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    // A non-block editable inside the document — a `.tw-line-edit` price line, a box tool — is a
+    // channel the run formatting cannot reach, so the ribbon lets go of its target rather than
+    // staying aimed at whichever paragraph came before it.
     if (el) showFmtBar(el);
-    else hideFmtBar();
+    else idleFmtBar();
   });
 
-  docSurface.addEventListener("focusout", (e) => {
-    const to = e.relatedTarget;
-    if (to && fmtBar && fmtBar.contains(to)) return;         // moved into the toolbar itself
-    if (to && to.closest && to.closest(".tw-block")) return; // handled by the next focusin
-    hideFmtBar();
-  });
+  // NO `focusout` HANDLER, deliberately. It called hideFmtBar(), which is exactly the behaviour
+  // Kyle asked to be rid of. Focus leaving the paragraph — for the Tax select, the pricing rail,
+  // another window, this ribbon's own size dropdown — now changes nothing: the ribbon keeps its
+  // target and keeps the range it acts on, and the paragraph says which one it is on screen
+  // (`.tw-fmt-target`). Both guards that handler carried went with it, including the load-bearing
+  // one ("focus moved into the toolbar, so do not hide"), which has nothing left to guard.
 
-  // Keep the button states honest as the estimator drags across differently-formatted words.
+  // Keep the button states honest as the estimator drags across differently-formatted words —
+  // and RECORD the selection while it can still be read. That recording is what makes a press on
+  // a ribbon at the top of the page land on the words highlighted down in the document.
   document.addEventListener("selectionchange", () => {
-    if (_fmtBusy || !fmtBlock || !fmtBar || fmtBar.style.display === "none") return;
+    if (_fmtBusy) return;
+    const el = fmtTargetBlock();
+    if (!el) return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
-    if (!fmtBlock.contains(sel.getRangeAt(0).startContainer)) return;
-    showFmtBar(fmtBlock);
+    if (!el.contains(sel.getRangeAt(0).startContainer)) return;
+    showFmtBar(el);
   });
-
-  window.addEventListener("scroll", () => { if (fmtBlock) showFmtBar(fmtBlock); }, true);
 
   docSurface.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
