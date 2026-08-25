@@ -85,6 +85,26 @@
     .acts .go-send, .fu-acts .go-send { background:var(--red); color:#fff; border-color:var(--red); }
     .acts .go-send:hover, .fu-acts .go-send:hover { background:var(--red-dark); border-color:var(--red-dark); }
     .acts button:hover { color:var(--red); border-color:var(--red); }
+    /* ── the sent-history panel ──
+       One expanded project's follow-up log, opened from the Emails button. Its own row in the
+       same table: it is a list of unknown length read beside the project it belongs to, which is
+       neither a tooltip nor a dialog. White-space is reset because every other cell in this table
+       is nowrap and these lines are sentences. */
+    tr.fh-row > td { background:#faf9f9; white-space:normal; padding:10px 14px 13px; }
+    tr.fh-row { cursor:default; }
+    .fh-sum { margin:0 0 3px; font:700 12.5px system-ui; }
+    .fh-note { margin:0 0 8px; color:var(--ink-v); font-size:11.5px; max-width:70ch; }
+    .fh-bad { color:var(--red-dark); }
+    .fh-list { list-style:none; margin:0; padding:0; display:grid; gap:3px; }
+    .fh-line { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; font-size:12.5px;
+      border-left:3px solid rgba(27,28,28,.15); padding:2px 0 2px 8px; }
+    /* The automation's own sends, marked so they read apart from what a person did: this panel
+       exists because those were invisible everywhere else on the page. */
+    .fh-line.is-auto { border-left-color:var(--red); }
+    .fh-k { font-weight:700; }
+    .fh-d { color:var(--ink-v); }
+    .fh-t { margin-left:auto; color:var(--ink-v); font-size:11.5px; white-space:nowrap;
+      font-variant-numeric:tabular-nums; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
     .alert:empty { display:none; }
@@ -196,7 +216,8 @@
     </div>
   </div>
   <p class="hint" id="hint">Every proposal that has been sent to a customer, and where its chase
-    stands. Logging a call here takes it off tomorrow morning's digest.</p>
+    stands. Press Emails on a row to see what the automation has already sent and who got it.
+    Logging a call here takes it off tomorrow morning's digest.</p>
   <div class="wrap">
     <div id="filters" class="toolbar" hidden></div>
     <div id="toolbar" class="toolbar" hidden>

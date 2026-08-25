@@ -102,6 +102,56 @@ function tableFromHtml(html) {
   });
 }
 
+/** The Division cell, cut out of a rendered row.
+ *
+ *  Ends at the closing tag of the strip's own div, which is the LAST </div> before the next <td>:
+ *  a lazy `[\s\S]*?</div>` would stop at the first one and, if the chip markup ever grows a nested
+ *  div, silently report half the chips as missing. */
+function divisionCellOf(rowHtml) {
+  const i = rowHtml.indexOf('<div class="division-chips"');
+  if (i === -1) return "";
+  const j = rowHtml.indexOf("<td", i);
+  return rowHtml.slice(i, j === -1 ? rowHtml.length : j);
+}
+
+/** Turn the REAL rendered division cell into inputs a test can toggle.
+ *
+ *  Parsed from divisionPick's own output rather than hand-written, for the reason tableFromHtml
+ *  gives: the handler queries `input[data-f="divisions"]:checked` off the row, so a renamed
+ *  attribute or a lost `checked` has to break this. The row object answers only the two things
+ *  onItemEdit asks it for.
+ *
+ *  Toggling is the browser's job, not the handler's — a label wrapping a checkbox flips it before
+ *  `change` fires — so `toggle()` flips the input first and then calls the handler, which is the
+ *  order a click produces. */
+function chipRowFromHtml(itemId, cellHtml) {
+  const tags = cellHtml.match(/<input[^>]*data-f="divisions"[^>]*>/g) || [];
+  if (!tags.length) {
+    throw new Error("no input[data-f=\"divisions\"] in the division cell — the save contract moved "
+      + "and onItemEdit's own selector cannot find the chips either");
+  }
+  const inputs = tags.map((tag) => ({
+    tag,
+    div: (/data-div="([^"]*)"/.exec(tag) || ["", ""])[1],
+    checked: / checked>/.test(tag) || / checked /.test(tag),
+    type: (/type="([^"]*)"/.exec(tag) || ["", ""])[1],
+    ariaLabel: (/aria-label="([^"]*)"/.exec(tag) || ["", ""])[1],
+    getAttribute(k) { return k === "data-f" ? "divisions" : k === "data-div" ? this.div : null; },
+  }));
+  const row = {
+    inputs,
+    getAttribute: (k) => (k === "data-item" ? itemId : null),
+    querySelectorAll(sel) {
+      if (sel !== 'input[data-f="divisions"]:checked') {
+        throw new Error("the handler asked for " + sel + ", which this row does not model");
+      }
+      return inputs.filter((x) => x.checked);
+    },
+  };
+  inputs.forEach((inp) => { inp.closest = (sel) => (sel === "[data-item]" ? row : null); });
+  return row;
+}
+
 /** A document stub that records what `paintDates` looked for and what it wrote.
  *
  *  Deliberately NOT a DOM emulator. It answers one question — does the repaint address a selector
@@ -131,6 +181,11 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   var pickerOpen = state.pickerOpen === undefined ? null : state.pickerOpen;
   ${grab(/^  var DIVISIONS = \[[^\]]*\];$/m, "DIVISIONS")}
   ${grab(/^  var UNITS = \[[^\]]*\];$/m, "UNITS")}
+  var DEFAULT_DIVISIONS = DIVISIONS.slice();
+  // The hardcoded literal above is the FALLBACK. On a loaded page load() replaces it with the
+  // Administration tab's list, so a test that wants to prove a curated division reaches the chips
+  // passes that list in here — built by the real assignment out of load(), not restated.
+  if (state.DIVISIONS) DIVISIONS = state.DIVISIONS;
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${fn("current")}
   ${fn("itemOf")}
@@ -228,10 +283,10 @@ const out = {};
   api.renderItems();
   const row = d.nodes["items-body"].innerHTML.split("</tr>")[0];
   out.items = {
-    // Present.
-    hasDivisionCheckboxes: /class="division-picks"/.test(row) &&
-      /data-f="divisions"/.test(row),
-    divisionOptions: (row.match(/<div class="division-picks"[\s\S]*?<\/div>/) || [""])[0]
+    // Present. The division cell is now a chip strip (see out.divisions below); the checkbox
+    // markup this used to pin was replaced on 2026-08-24 at Hanz's request.
+    hasDivisionChips: /class="division-chips"/.test(row) && /data-f="divisions"/.test(row),
+    divisionOptions: divisionCellOf(row)
       .split('data-div="').slice(1).map((o) => o.split('"')[0]),
     hasBuyQty: /data-f="buy_qty"/.test(row),
     hasUnitDropdown: /<select data-f="unit"/.test(row),
@@ -255,6 +310,182 @@ const out = {};
   out.items.offListVendorKept = /<option value="Gone Supply Co" selected>/.test(vendSel);
   out.items.offListVendorNotDuplicated =
     (vendSel.match(/<option value="Gone Supply Co"/g) || []).length === 1;
+}
+
+// ── EXECUTED: the division chips ─────────────────────────────────────────────
+// Hanz, 2026-08-24: "For the [divisions] can we have it in just one row? Also instead of a
+// checkbox please pick a better UI that allows a material to have multiple divisions but they show
+// up in one row." Three stacked checkbox labels made every row three lines tall.
+//
+// EXECUTED, because every interesting failure here is invisible to a grep:
+//   * "two divisions render as on" is about which inputs carry `checked`, which depends on
+//     itemDivisions, the case-folding, and the legacy `category` fallback all agreeing.
+//   * "toggling one leaves the other alone" runs the REAL onItemEdit against a row parsed from the
+//     REAL rendered markup, so a renamed attribute breaks the selector rather than the assertion.
+//   * "one line for three" is a width fact. The old control was `flex-wrap:wrap` too — it stacked
+//     because the box was 170px. Asserting `display:flex` alone would have passed on the bug.
+{
+  const twoDivs = build({ ITEMS: [{ id: "i1", name: "OPF", divisions: ["Epoxy", "polished concrete"],
+    unit: "Gallon", buy_qty: 5, unit_cost: 100, coverage: 275, vendor: "Sika",
+    created_at: "2026-08-01T14:30:00Z", cost_updated_at: null }] });
+  twoDivs.api.renderItems();
+  const cell = divisionCellOf(twoDivs.dom.nodes["items-body"].innerHTML.split("</tr>")[0]);
+  const chips = (cell.match(/<label class="dchip"[\s\S]*?<\/label>/g) || []);
+  const inputTags = cell.match(/<input[^>]*data-f="divisions"[^>]*>/g) || [];
+
+  out.divisions = {
+    // MULTI-SELECT, AND IT LOOKS IT: two chips on at once, each an independent checkbox inside a
+    // group. Nothing here is a radio, and nothing here is a select.
+    group: /<div class="division-chips" role="group" aria-label="Divisions">/.test(cell),
+    chipCount: chips.length,
+    onOff: inputTags.map((t) => [(/data-div="([^"]*)"/.exec(t) || ["", ""])[1], / checked>/.test(t)]),
+    noRadios: !/type="radio"/.test(cell),
+    // KEYBOARD AND SCREEN READER: a real checkbox, so Tab and Space and the announced state come
+    // for free. Each carries its own accessible name, so "checked, Epoxy" is what gets read out
+    // rather than "checked" on an unnamed box.
+    everyChipIsACheckbox: inputTags.length > 0 && inputTags.every((t) => /type="checkbox"/.test(t)),
+    everyChipHasAnAccessibleName: inputTags.length > 0 && inputTags.every((t) => {
+      const div = (/data-div="([^"]*)"/.exec(t) || ["", ""])[1];
+      return (/aria-label="([^"]*)"/.exec(t) || ["", ""])[1] === div;
+    }),
+    // The state mark must not end up in that name, which is why it is hidden from the tree.
+    markIsHiddenFromTheTree: /<span class="dchip-mark" aria-hidden="true">/.test(cell),
+    // The full name is always available even when the visible text is clipped.
+    everyChipCarriesItsFullNameInATitle: chips.length > 0 && chips.every((c) => {
+      const t = (/<label class="dchip" title="([^"]*)"/.exec(c) || ["", ""])[1];
+      return t === (/data-div="([^"]*)"/.exec(c) || ["", "x"])[1];
+    }),
+    // THE SAVE CONTRACT IS UNCHANGED: still data-f="divisions" + data-div="NAME" on the input.
+    // The length guard matters — `every` on an empty list is true, so a renamed attribute would
+    // pass this while onItemEdit's own selector found nothing.
+    contractUnchanged: inputTags.length === 3 &&
+      inputTags.every((t) => /data-f="divisions"/.test(t) && /data-div="/.test(t)),
+  };
+
+  // A DIVISION ADDED ON THE ADMINISTRATION TAB reaches the chips. The step that turns the fetched
+  // refs into the offered list is LIFTED OUT OF load() rather than restated here, so deleting it
+  // there breaks this instead of leaving a test that agrees with itself.
+  const REFS = [{ id: "d1", name: "Polished Concrete", notes: "" },
+                { id: "d2", name: "Epoxy", notes: "" },
+                { id: "d3", name: "Gypsum Underlayment", notes: "" },
+                { id: "d4", name: "Sealer & Traffic Coatings", notes: "" }];
+  const offeredList = new Function("DIVISION_REFS", "DEFAULT_DIVISIONS", `
+    "use strict";
+    var DIVISIONS;
+    ${grab(/^\s*DIVISIONS = \(DIVISION_REFS\.length \?[^\n]*$/m, "the DIVISIONS assignment in load()")}
+    return DIVISIONS;
+  `);
+  const custom = build({
+    DIVISION_REFS: REFS,
+    DIVISIONS: offeredList(REFS, ["Polished Concrete", "Epoxy", "Gypsum Underlayment"]),
+    ITEMS: [{ id: "i1", name: "OPF", divisions: ["Sealer & Traffic Coatings"], unit: "Gallon",
+              buy_qty: 1, unit_cost: 1, coverage: 275, vendor: "", created_at: null,
+              cost_updated_at: null }],
+  });
+  custom.api.renderItems();
+  const customCell = divisionCellOf(custom.dom.nodes["items-body"].innerHTML.split("</tr>")[0]);
+  out.divisions.customIsOffered =
+    (customCell.match(/data-div="([^"]*)"/g) || []).map((m) => m.slice(10, -1));
+  // Escaped, not injected — a division name is free text somebody typed on the Administration tab.
+  out.divisions.customIsEscaped = /data-div="Sealer &amp; Traffic Coatings"/.test(customCell) &&
+    !/data-div="Sealer & Traffic/.test(customCell);
+  out.divisions.customRendersAsOn = / checked>/.test(
+    (customCell.match(/<input[^>]*data-div="Sealer &amp; Traffic Coatings"[^>]*>/) || [""])[0]);
+  // And a name only an OLD ITEM holds, which is not on any list at all: still offered, still
+  // correctable. A division can be deleted from the Administration tab without rewriting items.
+  const orphan = build({
+    ITEMS: [{ id: "i1", name: "OPF", divisions: ["Terrazzo Restoration Systems"], unit: "Gallon",
+              buy_qty: 1, unit_cost: 1, coverage: 275, vendor: "", created_at: null,
+              cost_updated_at: null }],
+  });
+  orphan.api.renderItems();
+  const orphanCell = divisionCellOf(orphan.dom.nodes["items-body"].innerHTML.split("</tr>")[0]);
+  out.divisions.offListItemValueStillOffered =
+    (orphanCell.match(/data-div="([^"]*)"/g) || []).map((m) => m.slice(10, -1));
+
+  // TOGGLING ONE LEAVES THE OTHERS ALONE. The browser flips the box, then the handler reads the
+  // row — the same order a click on the label produces.
+  const row = chipRowFromHtml("i1", cell);
+  const target = row.inputs.filter((x) => x.div === "Epoxy")[0];
+  target.checked = false;
+  twoDivs.api.onItemEdit({ target: target });
+  out.divisions.afterTurningEpoxyOff = {
+    model: twoDivs.api.ITEMS[0].divisions.slice(),
+    category: twoDivs.api.ITEMS[0].category,
+    queued: twoDivs.api.QUEUED.map((q) => q.kind + " " + JSON.stringify(q.body)),
+  };
+  // And back on, plus a third: two selected at once is legal and stays legal.
+  target.checked = true;
+  row.inputs.filter((x) => x.div === "Gypsum Underlayment")[0].checked = true;
+  twoDivs.api.onItemEdit({ target: target });
+  out.divisions.afterTurningTwoMoreOn = twoDivs.api.ITEMS[0].divisions.slice();
+  // Emptying it is allowed: a material can be waiting to be filed.
+  row.inputs.forEach((x) => { x.checked = false; });
+  twoDivs.api.onItemEdit({ target: row.inputs[0] });
+  out.divisions.canBeEmptied = twoDivs.api.ITEMS[0].divisions.length === 0 &&
+    twoDivs.api.QUEUED[twoDivs.api.QUEUED.length - 1].body.divisions.length === 0;
+
+  // ── ONE ROW. The width facts, read off the real stylesheet ─────────────────
+  const rule = (sel) => (new RegExp(sel.replace(/[.>*+?^${}()|[\]\\]/g, "\\$&") +
+    "\\s*\\{[^}]*\\}").exec(html) || [""])[0];
+  const strip = rule(".division-chips");
+  const face = rule(".dchip-f");
+  const px = (re, s) => Number((re.exec(s) || [0, 0])[1]);
+  const stripMin = px(/min-width:(\d+)px/, strip);
+  const stripMax = px(/max-width:(\d+)px/, strip);
+  const fontPx = px(/font:\s*\d+\s+([\d.]+)px/, face);
+  const padParts = ((/padding:([^;]+);/.exec(face) || ["", "0"])[1]).trim().split(/\s+/)
+    .map((v) => parseFloat(v));
+  const padX = padParts.length >= 4 ? padParts[1] + padParts[3]
+             : padParts.length === 2 ? padParts[1] * 2 : padParts[0] * 2;
+  const innerGap = px(/gap:(\d+)px/, face);
+  const markW = px(/width:(\d+)px/, rule(".dchip-mark"));
+  const stripGap = px(/gap:(\d+)px/, strip);
+  // 0.55em per character. A UI sans at this size averages nearer 0.52em over mixed-case text, so
+  // this over-estimates slightly on purpose: the question is whether the column has room to spare,
+  // and a floor-value estimate would let a too-narrow column pass and wrap in the browser.
+  const chipWidth = (name) => name.length * fontPx * 0.55 + padX + innerGap + markW + 2;
+  const three = ["Polished Concrete", "Epoxy", "Gypsum Underlayment"];
+  const needFor = (names) => names.reduce((s, n) => s + chipWidth(n), 0) +
+    stripGap * Math.max(0, names.length - 1);
+  out.divisions.width = {
+    fontPx: fontPx, stripMin: stripMin, stripMax: stripMax,
+    // Side by side, not stacked, and a name never breaks across two lines.
+    stripIsAFlexRow: /display:flex/.test(strip) && /flex-wrap:wrap/.test(strip),
+    chipIsInline: /display:inline-flex/.test(face) && /white-space:nowrap/.test(face),
+    // The three real divisions fit on ONE line.
+    neededForThree: Math.round(needFor(three)),
+    threeFitOnOneLine: needFor(three) <= stripMin,
+    // Six and ten WRAP rather than widen the table: the column is capped, so the strip grows
+    // downwards. Two lines at six, four at ten.
+    neededForSix: Math.round(needFor(three.concat(three))),
+    sixWraps: needFor(three.concat(three)) > stripMax,
+    tenWraps: needFor(three.concat(three, three, ["Sealer"])) > stripMax,
+    cappedSoTheTableCannotStretch: stripMax > 0 && stripMax < needFor(three.concat(three)),
+    // A long custom name keeps enough of itself to stay distinct from the next one along.
+    textClampChars: px(/max-width:(\d+)ch/, rule(".dchip-t")),
+    textClampEllipsises: /text-overflow:ellipsis/.test(rule(".dchip-t")),
+  };
+
+  // ── the state is not colour alone, and the input is still operable ─────────
+  const onFace = rule(".dchip > input:checked + .dchip-f");
+  const hiddenInput = rule(".dchip > input");
+  out.divisions.state = {
+    // The pill fills in when it is on, the way the CRM drawer's notification chips do.
+    onHasItsOwnFill: /background:/.test(onFace) && /border-color:/.test(onFace),
+    // SHAPE, not just hue: the mark differs between the two states, so the on chips can be counted
+    // by somebody who cannot separate the green from the grey.
+    offMark: (/content:"([^"]*)"/.exec(rule(".dchip-mark::before")) || ["", ""])[1],
+    onMark: (/content:"([^"]*)"/.exec(
+      rule(".dchip > input:checked + .dchip-f .dchip-mark::before")) || ["", ""])[1],
+    // Hidden from sight, NOT from the keyboard. display:none or visibility:hidden would take the
+    // control out of the tab order and leave Space nothing to press.
+    inputIsClippedNotRemoved: /clip-path:inset\(50%\)/.test(hiddenInput) &&
+      !/display:none|visibility:hidden/.test(hiddenInput),
+    focusRingOnTheFace: /outline:/.test(rule(".dchip > input:focus-visible + .dchip-f")),
+    // The control the old markup used is gone, along with its stacking box.
+    oldCheckboxStyleGone: !/\.division-picks/.test(html) && !/class="division-picks"/.test(src),
+  };
 }
 
 // ── the price date lands on screen without a reload ──────────────────────────

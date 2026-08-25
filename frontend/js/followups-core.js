@@ -255,11 +255,114 @@
     return { count: n, value: total };
   }
 
+  // ── what actually went out ──────────────────────────────────────────────────
+  // WHY THIS IS HERE AT ALL. Hanz, 2026-08-24, the day the cadence started sending on production:
+  // "make sure all follow up emails are shown in the Chat box and in the Follow Ups section."
+  // The feed this page loads carries next_followup_at (what is COMING) and last_followup_at, and
+  // that second one is the portal's `last_staff_followup_at`: its SQL counts only staff_call,
+  // staff_email, staff_text and staff_note, so an automated reminder never touches it. A project
+  // the cadence emailed three times reads "never" in the Last chased column. Nothing on the page
+  // showed a send.
+  //
+  // The log itself already exists and is not rebuilt here: portal_followups, one row per send,
+  // reserved by the worker BEFORE it sends. This turns those rows into lines of text.
+  //
+  // A SECOND COPY OF THE DRAWER'S VOCABULARY, on purpose and pinned by a test. portal.js has the
+  // same three maps for the drawer's History list; they cannot be shared without moving them out
+  // of portal.js, which is where backend/tests/js/drawer-render-harness.js lifts them from by name.
+  // So test_followups_sent_log.py asserts the two copies are equal, the same way auth.js's
+  // NO_SIDEBAR_TABS is asserted equal to nav_access.py's.
+  var FU_KIND_LABEL = {
+    staff_call: "Call", staff_email: "Email", staff_text: "Text", staff_note: "Note",
+    call: "Call", email: "Email", text: "Text", note: "Note",
+    auto_email: "Automatic email", customer_status: "Customer update",
+  };
+  // `template`, not `rule_key`: the worker records what it SENT, and the rule key that deduped it
+  // is scheduling bookkeeping. Staff templates read "Told the team" because nothing in them reached
+  // the customer, which is the difference between having bothered them and having bothered us.
+  var FU_TEMPLATE_LABEL = {
+    not_viewed: "Nudge: not opened yet",
+    next_steps: "Next steps after viewing",
+    second_nudge: "Second nudge",
+    checkin: "Check-in",
+    deposit_nudge: "Deposit reminder",
+    staff_not_viewed: "Told the team: still not opened",
+    staff_pause_expired: "Told the team: the pause ended",
+    staff_personal_followup: "Told the team: worth a call",
+    staff_deposit_outstanding: "Told the team: deposit outstanding",
+  };
+  // Bookkeeping the portal writes as a staff_note carrying an `action` key. Kept rather than
+  // filtered out: "automation off" three weeks ago is the answer to "why has nothing gone out".
+  var FU_ACTION = {
+    reassigned: "Reassigned", automation_on: "Automation on", automation_off: "Automation off",
+    paused: "Paused", closed_lost: "Closed lost", reactivated: "Reactivated",
+  };
+
+  /** Was this row an email that LEFT the building, and which way? "customer", "staff" or "".
+   *
+   *  The audience is the worker's own word for it (followup_worker reserves the row with
+   *  {audience, template}), so this reads what sent it rather than guessing from the template
+   *  name. A staff-logged email counts as customer outreach: somebody typed it to them. */
+  function sentSide(f) {
+    var d = (f && f.detail) || {};
+    var kind = String((f && f.kind) || "");
+    if (kind === "auto_email") return d.audience === "staff" ? "staff" : "customer";
+    if (d.action) return "";                       // bookkeeping, not outreach
+    if (kind === "staff_email" || kind === "email") return "customer";
+    return "";
+  }
+
+  /** One log row as the words to print: { what, detail, side, at, by, auto }.
+   *
+   *  Pure and separate from the markup so it can be asserted under node. The audience wording is
+   *  the part that must not drift, because "sent to the customer" on a staff-only note would tell
+   *  an estimator the customer has been chased when only the team has. */
+  function sentLine(f) {
+    var d = (f && f.detail) || {};
+    var kind = String((f && f.kind) || "");
+    var side = sentSide(f);
+    var what = FU_KIND_LABEL[kind] || kind || "Follow-up";
+    var detail = d.note || "";
+    if (kind === "auto_email") {
+      what = FU_TEMPLATE_LABEL[d.template] || "Automatic email";
+      detail = side === "staff" ? "sent to the estimator, not the customer"
+                                : "sent to the customer";
+    } else if (kind === "customer_status") {
+      what = "The customer told us where it stands";
+    } else if (d.action) {
+      what = FU_ACTION[d.action] || "System";
+    }
+    return { what: what, detail: detail, side: side, at: (f && f.created_at) || "",
+             by: (f && f.by) || "", auto: kind === "auto_email" };
+  }
+
+  /** The whole log as lines, newest first, plus the counts the summary line needs.
+   *
+   *  Order is the server's (db.list_followups is created_at desc) and is NOT re-sorted here: two
+   *  rows written in the same second by one tick (the customer email and the note about it) would
+   *  swap under an unstable sort and read as the reply arriving before the send. */
+  function sentLog(followups) {
+    var lines = [], emails = 0, toCustomer = 0, toStaff = 0, last = "";
+    var rows = followups || [];
+    for (var i = 0; i < rows.length; i++) {
+      var line = sentLine(rows[i]);
+      lines.push(line);
+      if (line.side) {
+        emails++;
+        if (line.side === "customer") toCustomer++; else toStaff++;
+        if (!last && line.at) last = line.at;      // newest first, so the first one wins
+      }
+    }
+    return { lines: lines, emails: emails, toCustomer: toCustomer, toStaff: toStaff, last: last };
+  }
+
   return {
     COLUMNS: COLUMNS, COLD_DAYS: COLD_DAYS, WARM_DAYS: WARM_DAYS,
     columnById: function (id) { return BY_ID[id] || null; },
     column: column, canMove: canMove, actionPlan: actionPlan, actionsFor: actionsFor,
     automation: automation, depositIn: depositIn, hasSeen: hasSeen, hasReplied: hasReplied, seenHow: seenHow,
     neglect: neglect, group: group, load: load, pausedUntil: pausedUntil, isLost: isLost,
+    FU_KIND_LABEL: FU_KIND_LABEL, FU_TEMPLATE_LABEL: FU_TEMPLATE_LABEL, FU_ACTION: FU_ACTION,
+    sentSide: sentSide, sentLine: sentLine, sentLog: sentLog,
   };
 });

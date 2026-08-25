@@ -553,6 +553,63 @@ def test_system_override_empty_string_reverts_to_computed():
     assert "Zeta Broadcast System" in txt             # blank override -> computed name shows
 
 
+# ── whole-line WORK rows, end to end through /api/generate ─────────────────
+def _numbered_terms(docx_bytes):
+    """How many Terms and Conditions clauses still carry their number.
+
+    A release shipped this week on the back of this count: a tidy-up that stripped list
+    formatting without asking whether the list was ORDERED renumbered the contract."""
+    d = Document(io.BytesIO(docx_bytes))
+    return len([1 for _i, _k, p, ib, _t, _x in pw.iter_editable_blocks(d)
+                if ib is None and pw._para_ordered_list(d, p)])
+
+
+def _generate_epoxy(**extra):
+    body = {"work_type": "epoxy", "audience": "Direct", "values": dict(_BASE_VALS),
+            "cell_values": _epoxy_cells()}
+    body.update(extra)
+    r = client.post("/api/generate", json=body)
+    assert r.status_code == 200, r.text
+    return client.get(r.json()["docx_download_url"]).content
+
+
+def test_a_whole_line_work_row_survives_the_api():
+    """The channel end to end: browser key -> payload -> sanitizer whitelist -> writer -> file.
+    The static words Kyle could not delete are gone from the document, and only from the row he
+    edited."""
+    typed = "Coverage: 12,000 square feet, cove included"
+    raw = _generate_epoxy(system_overrides=[{"area_line": typed}])
+    txt = _rendered(raw)
+    assert typed in txt, txt
+    assert "SF of epoxy flooring" not in txt, txt
+    # The row he did NOT touch is untouched.
+    assert "Zeta Broadcast System" in txt
+
+
+def test_a_whole_line_row_does_not_renumber_the_terms_and_conditions():
+    """The guard a release shipped on. A whole-line override rewrites a paragraph inside the
+    WORK text box; the numbered contract clauses are elsewhere in the document and must not
+    notice."""
+    plain = _numbered_terms(_generate_epoxy())
+    assert plain > 1, "the numbered Terms list is gone - re-read this test"
+    edited = _numbered_terms(_generate_epoxy(
+        system_overrides=[{"name_line": "Base System:  Zeta", "texture_line": "Finish:  OP",
+                           "area_line": "Coverage: 12,000"}]))
+    assert edited == plain, (
+        "a WORK row edit renumbered the contract: %d of %d clauses still numbered"
+        % (edited, plain))
+
+
+def test_a_whole_line_row_reaches_the_document_with_its_spaces():
+    """1 to 1. The browser stores the line untrimmed and nothing between it and the .docx may
+    trim it either — asserted on the RUN text, because `_rendered` strips for readability."""
+    typed = "Area:   ~12,000 SF   "
+    d = Document(io.BytesIO(_generate_epoxy(system_overrides=[{"area_line": typed}])))
+    hits = [p.text for p in pw._iter_all_paragraphs(d) if p.text.startswith("Area:")]
+    assert hits, "the Area row is gone"
+    assert all(t == typed for t in hits), hits
+
+
 def test_system_override_ignored_for_non_epoxy():
     body = {"work_type": "polish", "audience": "Direct", "values": dict(_BASE_VALS),
             "system_overrides": [{"name": "ShouldNotAppearInPolish"}]}
@@ -573,14 +630,16 @@ def test_generate_survives_malformed_system_overrides():
 
 def test_sanitize_system_overrides_index_preserving_cap_and_coercion():
     out = main._sanitize_system_overrides([
-        {"name": 42, "texture": "T", "sqft": "  1,000  "},   # int coerces, sqft strips
+        # sqft keeps its spaces: this sanitizer no longer strips, because the estimator now
+        # types at both ends of a whole line and a server-side trim is an edit he never made.
+        {"name": 42, "texture": "T", "sqft": "  1,000  "},
         "not-a-dict",                                         # -> {} placeholder, NOT dropped
         {"name": {"nested": 1}, "sqft": ["x"]},               # nested containers dropped
         {"name": "", "bogus": "ignored"},                     # blank dropped, unknown key ignored
         {"name": True},                                       # bool dropped
     ])
     assert out == [
-        {"name": "42", "texture": "T", "sqft": "1,000"},
+        {"name": "42", "texture": "T", "sqft": "  1,000  "},
         {},                                                   # index preserved
         {},
         {},

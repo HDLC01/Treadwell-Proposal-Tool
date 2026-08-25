@@ -1,33 +1,53 @@
-"""The last locked labels on the proposal page, and a text box that grows instead of clipping.
+"""The last locked WORDS on the proposal page, and a text box that grows instead of clipping.
 
-Kyle, 2026-08-19, on the proposal document editor:
+Kyle, 2026-08-19 and again 2026-08-20 and again 2026-08-24, on the proposal document editor:
     "Some of the labels are not editable why not make it like a word document??"
     "Everything on that page must be editable like a word doc"
-    "instead of it being a textbox why not make it editable like a word document?"
+    "do not make them as subsections to edit but as a whole section you could edit"
+    "I cant delete SF of epoxy flooring"
 
 WHAT WAS ACTUALLY LOCKED, measured against the template files rather than assumed. Every label
 in every proposal template is real docx text — only the page frame, the rotated WORK/PRICE rail
 captions and the logo are pictures. "Scope:", "Schedule:", "Exclusions:" and "Notes:" were
-already inside contenteditable paragraphs. The genuinely locked ones were the three inside the
-Direct epoxy template's `{{#system}}` region:
+already inside contenteditable paragraphs. The genuinely locked text is the three rows inside
+the Direct epoxy template's `{{#system}}` region:
 
     {{system.prefix}}   {{system.name}}          ← "System:" / "Option N:", a COMPUTED token
     Texture:  {{system.texture}}                 ← static template text
     Area: ~{{system.sqft}} SF of epoxy flooring… ← static template text
 
-The editor cannot make that region editable paragraph-by-paragraph: a `{{#block}}` region is
-expanded once per priced system at generate time, so its paragraph ids stop describing anything
-the estimator saw. `_apply_paragraph_overrides` refuses any id with `in_block` set for exactly
-that reason. So the labels ride the row's own item dict instead, on the per-index
-`system_overrides` channel the values already used — `prefix` (whitelisted in main.py) plus two
-new keys, `texture_label` / `area_label`, consumed by `_apply_system_row_labels`.
+The first answer gave each of those an editable ISLAND — the label got one, the value got one —
+and that is what Kyle rejected. An island model leaves the words BETWEEN the islands dead: in the
+Area row the "~", the phrase " SF of epoxy flooring" and the whole cove clause had no element to
+put a caret in, so "I cant delete SF of epoxy flooring" was literally true. Nothing in either
+half of the system could write that text.
+
+WHAT IT IS NOW. One line, one editable region, every word typeable — the model the PRICE lines
+(base bid, tax rows, options, alternate) already use. The whole row is stored as one string:
+`name_line` / `texture_line` / `area_line`, on the same per-index `system_overrides` channel the
+narrower fields used, and written by `proposal_writer._apply_system_row_line`. The row is found
+by the TOKEN it carries, so a re-authored template still works. The older per-field keys
+(`prefix`, `texture_label`, `area_label`, `name`, `texture`, `sqft`) are still honoured, because
+a draft saved under the island editor carries them and throwing them away would delete text the
+estimator typed.
+
+THE REGION STILL CANNOT BE EDITED PARAGRAPH-BY-PARAGRAPH, which is why a per-row channel has to
+exist at all: a `{{#block}}` region is expanded once per priced system at generate time, so its
+paragraph ids stop describing anything the estimator saw, and `_apply_paragraph_overrides`
+refuses any id with `in_block` set for exactly that reason.
+
+UNTOUCHED TRACKS, TOUCHED FREEZES. A row with no stored line is still composed from the tokens,
+so a changed square footage flows through. A row the estimator typed in prints verbatim and stops
+following the sheet — a hand-written sentence has no slot to re-substitute a number into. That is
+the same trade already accepted for every PRICE line including the base bid, which is money, and
+the screen carries a ⚠ saying the line differs from the estimate.
 
 THE ID SPACE IS UNTOUCHED, which is the load-bearing part. `iter_editable_blocks` yields the same
 blocks in the same order as before, so every `paragraph_overrides` entry saved against a draft in
 flight still lands on the paragraph it was captured from.
 
 THE NUMBERING RULE. One system renders "System:", two or more render "Option 1:" / "Option 2:".
-Renaming one row does NOT switch numbering off for the rows the estimator did not touch: each
+Rewriting one row does NOT switch numbering off for the rows the estimator did not touch: each
 row's computed label is a default for that index only. Asserted below for one system and for
 three.
 
@@ -37,9 +57,10 @@ to the writer through the same `box_overrides` channel a manual drag uses. Room 
 not optimism: on Kyle's Direct epoxy sheet PRICE starts 2.7pt ABOVE the bottom of WORK, so WORK
 cannot grow by a single point and keeps the clip — with a badge that now says so.
 
-The browser half RUNS in `js/doc-editor-labels-harness.js` rather than being read: whether a
-label came out as an editable island, and whether a box may get taller given where the other five
-boxes are, are both properties of executed code. The precedent is expensive — on 2026-08-12 an
+The browser half RUNS in `js/doc-editor-labels-harness.js` rather than being read: whether the
+whole row came out as ONE editable element with nothing editable nested inside it, whether an
+untouched row still follows the estimate after the sheet moves, and whether a box may get taller
+given where the other five boxes are, are all properties of executed code. The precedent is expensive — on 2026-08-12 an
 unbound identifier shipped with every source-text assertion green and took the production board
 down.
 """
@@ -79,7 +100,11 @@ def _blocks(path):
 
 def test_the_system_labels_really_do_live_in_a_repeatable_region():
     """The whole reason a per-row channel had to exist. These three rows are inside
-    `{{#system}}`, and `_apply_paragraph_overrides` skips anything with `in_block` set."""
+    `{{#system}}`, and `_apply_paragraph_overrides` skips anything with `in_block` set.
+
+    The Area row's text is quoted in full on purpose: " SF of epoxy flooring" is the phrase
+    Kyle could not delete, and it is template text sitting between two tokens — not a token,
+    not a label, so neither the token channel nor the label channel could ever reach it."""
     rows = {text: in_block for _i, in_block, text in _blocks(DIRECT_EPOXY)}
     assert rows.get("{{system.prefix}}   {{system.name}}") == "system"
     assert rows.get("Texture:  {{system.texture}}") == "system"
@@ -148,11 +173,139 @@ def test_a_renamed_label_keeps_its_bold_run():
 
 
 def test_the_static_texture_and_area_labels_can_be_renamed():
+    """The older, narrower channel. Kept because a draft saved under the island editor still
+    carries these keys, and dropping them would delete text the estimator typed."""
     got = _texts(_fill([_row(texture_label="Surface texture:", area_label="Coverage:")]))
     assert "Surface texture:  Light Broadcast" in got, got
     assert any(t.startswith("Coverage: ~5,000 SF") for t in got), got
     assert not any(t.startswith("Texture:") for t in got)
     assert not any(t.startswith("Area:") for t in got)
+
+
+# ── THE COMPLAINT, at the end that writes the customer's document ────────────────
+def test_the_static_words_around_a_token_can_be_deleted():
+    """"I cant delete SF of epoxy flooring." This is that sentence as a test. The phrase is
+    template text between {{system.sqft}} and {{system.lf_clause}}; under the island model no
+    code path in either half of the system could write it."""
+    got = _texts(_fill([_row(area_line="Area: ~5,000")]))
+    assert "Area: ~5,000" in got, got
+    assert not any("SF of epoxy flooring" in t for t in got), got
+    assert not any("epoxy cove base" in t for t in got), got
+
+
+def test_a_whole_line_prints_exactly_what_the_estimator_typed():
+    """Every word, including ones the template never had, and including the label. Nothing
+    re-composes the line from parts, because there are no parts."""
+    line = "Coverage 5,000 square feet of quartz broadcast, cove included"
+    got = _texts(_fill([_row(area_line=line)]))
+    assert line in got, got
+
+
+def test_each_row_has_its_own_whole_line_channel():
+    got = _texts(_fill([_row(name_line="Base build:  Quartz broadcast",
+                             texture_line="Finish:  matte",
+                             area_line="Coverage:  5,000 sf")]))
+    assert "Base build:  Quartz broadcast" in got, got
+    assert "Finish:  matte" in got, got
+    assert "Coverage:  5,000 sf" in got, got
+    assert not any(t.startswith(("System:", "Texture:", "Area:")) for t in got), got
+
+
+def test_a_whole_line_wins_over_the_label_and_the_value_on_the_same_row():
+    """Both channels can be present on one row: the line is what the estimator was looking at
+    when they typed, so it is what prints. Anything else would show them one thing on screen and
+    send the customer another."""
+    got = _texts(_fill([_row(area_label="Coverage:", sqft="1,234",
+                             area_line="Area: ~5,000 SF")]))
+    assert "Area: ~5,000 SF" in got, got
+    assert not any(t.startswith("Coverage:") for t in got), got
+    assert not any("1,234" in t for t in got), got
+
+
+def test_an_edited_line_keeps_the_bold_lead_in():
+    """Kyle's page design is the bold label. `_normalize_work_label_formatting` re-derives it
+    from the rewritten text (bold through the first colon), and the on-screen line renders the
+    same split — so the page and the file agree about the weight."""
+    d = _fill([_row(name_line="Base System:   Quartz", area_line="Coverage: 5,000 SF")])
+    rows = {}
+    for p in pw._iter_all_paragraphs(d):
+        if p.text.startswith(("Base System:", "Coverage:")):
+            rows[p.text.split(":")[0]] = [(r.text, r.bold) for r in p.runs if r.text]
+    assert rows["Base System"][0] == ("Base System:", True)
+    assert rows["Base System"][-1][1] is False, "the value ran into the label's bold"
+    assert rows["Coverage"][0] == ("Coverage:", True)
+    assert rows["Coverage"][-1][1] is False
+
+
+def test_a_line_with_no_colon_keeps_the_row_weight_the_page_shows():
+    """Delete the colon and the normalizer stands down, so the row keeps its template run
+    weight: bold for System and Area, normal for Texture. The preview's `workLabelHtml`
+    boldFallback argument is exactly these three values — if they diverge the customer gets a
+    weight the estimator never saw."""
+    d = _fill([_row(name_line="Base build no colon",
+                    texture_line="Finish matte no colon",
+                    area_line="Coverage 5000 sq ft")])
+    weight = {}
+    for p in pw._iter_all_paragraphs(d):
+        for lead in ("Base build", "Finish matte", "Coverage 5000"):
+            if p.text.startswith(lead):
+                weight[lead] = [r.bold for r in p.runs if r.text]
+    assert weight["Base build"] == [True]
+    assert weight["Finish matte"] == [None], "Texture's template run is not bold"
+    assert weight["Coverage 5000"] == [True]
+    js = (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
+    assert 'lineRow(i, "name_line"' in js and 'lineRow(i, "area_line", areaLine, "tw-li", "margin:0 0 4pt;", true)' in js, (
+        "renderSystemPreview's boldFallback arguments moved — re-derive them from the runs above")
+
+
+def test_a_rewritten_cove_only_row_is_not_re_edited_by_the_zero_sf_regex():
+    """`_drop_zero_sf_prefix` tidies a line the ENGINE composed. A line a person typed is not
+    the engine's to tidy: he can write "~0 SF of epoxy flooring and …" on purpose, and if he
+    does that is what prints. Without the protect set this row silently became "Area: 240 LF …"
+    on the way to the customer while the page went on showing what he typed."""
+    typed = 'Area: ~0 SF of epoxy flooring and 240 LF of 6" epoxy cove base'
+    got = _texts(_fill([_row(sqft="0", lf_clause=' and 240 LF of 6" epoxy cove base',
+                             area_line=typed)]))
+    assert typed in got, got
+
+
+def test_an_untouched_cove_only_row_is_still_tidied():
+    """The other half of the same rule — the protect set must not switch the tidy-up off for
+    rows nobody edited."""
+    got = _texts(_fill([_row(sqft="0", lf_clause=' and 240 LF of 6" epoxy cove base')]))
+    assert any(t.startswith('Area: 240 LF of 6" epoxy cove base') for t in got), got
+    assert not any("~0 SF of epoxy flooring" in t for t in got), got
+
+
+def test_an_untouched_row_still_follows_the_estimate():
+    """The freeze is per row and per line. Row 2 has no stored line, so its SF is still the one
+    the estimate produced."""
+    got = _texts(_fill([
+        _row("Broadcast Quartz", area_line="Coverage: whatever I typed"),
+        _row("Decorative Flake", prefix="Option 2:", sqft="1,800"),
+    ]))
+    assert "Coverage: whatever I typed" in got
+    assert any(t.startswith("Area: ~1,800 SF of epoxy flooring") for t in got), got
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "{{system.sqft}}", "{{", "}}"])
+def test_a_blank_or_brace_only_line_cannot_reach_the_document(blank):
+    """Same defence in depth the labels get. A blank line means "revert", and a literal
+    "{{token}}" printed to a customer is the exact failure the writer exists to prevent — this
+    applier runs after the per-item substitution and before the flat pass, so an unstripped
+    brace would survive all the way to the file."""
+    got = _texts(_fill([_row(area_line=blank)]))
+    body = "\n".join(got)
+    # Same caveat test_no_work_row_carries_a_raw_token gives: `values` is deliberately minimal
+    # here, so the front-page {{job_name}}-style tokens ARE still present. What must never
+    # survive is a {{system.…}} token, which is what an unstripped brace would leave.
+    assert "{{system." not in body, body
+    assert not any("{{" in t or "}}" in t
+                   for t in got if t.startswith(("Area:", "system.sqft"))), got
+    if blank.strip() in ("", "{{", "}}"):
+        assert any(t.startswith("Area: ~5,000 SF") for t in got), got
+    else:
+        assert "system.sqft" in body, body
 
 
 def test_a_rename_is_per_row():
@@ -178,7 +331,7 @@ def test_an_absent_label_leaves_the_template_wording():
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "{{system.texture}}", "{{", "}}"])
-def test_a_blank_or_brace_only_label_cannot_reach_the_document(blank):
+def test_a_blank_or_brace_only_label_cannot_reach_the_document(blank):  # noqa: D401
     """Defence in depth. main._sanitize_system_overrides already drops a blank, but
     proposal_writer is also called directly (the To-Dropbox reconstruction path, and tests), and
     a literal "{{token}}" printed to a customer is the exact failure the writer exists to
@@ -255,20 +408,40 @@ def test_renaming_row_one_leaves_the_other_rows_numbered():
 
 
 # ── the payload gate in main.py ───────────────────────────────────────────────
-def test_the_label_fields_are_on_the_override_whitelist():
+def test_the_line_and_label_fields_are_on_the_override_whitelist():
     """`_sanitize_system_overrides` drops anything not named here, so the whitelist IS the
-    channel. Without `prefix` the "System:" label could be typed but never printed."""
-    for field in ("prefix", "texture_label", "area_label"):
+    channel. A field the editor writes and the sanitizer drops is worse than no field: the draft
+    remembers the edit and shows it back, and the customer's document does not have it."""
+    for field in ("name_line", "texture_line", "area_line",
+                  "prefix", "texture_label", "area_label"):
         assert field in main._SYSTEM_OVERRIDE_FIELDS, field
 
 
-def test_the_sanitizer_keeps_a_label_and_drops_a_blank_one():
+def test_the_browser_and_the_sanitizer_agree_on_the_whole_line_field_names():
+    """Two files, one vocabulary. The preview writes these keys and the sanitizer is the only
+    thing that lets them through, so a rename in one place has to fail here."""
+    js = (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
+    m = re.search(r"const _SYS_ROW_LINE_FIELDS = \[([^\]]*)\]", js)
+    assert m, "the preview no longer declares _SYS_ROW_LINE_FIELDS"
+    browser = re.findall(r'"([\w]+)"', m.group(1))
+    assert browser == ["name_line", "texture_line", "area_line"], browser
+    for field in browser:
+        assert field in main._SYSTEM_OVERRIDE_FIELDS, field
+    assert [k for k, _tok in pw._SYSTEM_ROW_LINES] == browser, (
+        "the writer's row order/names drifted from the browser's")
+
+
+def test_the_sanitizer_keeps_what_was_typed_and_drops_a_blank_field():
+    """SPACES SURVIVE. This sanitizer used to `.strip()` every field, so a space typed at
+    either end of a WORK row was stored in the draft, shown back after a reload, and then
+    thrown away server-side. Kyle: "everything in the Proposals when editing should refelect 1
+    to 1 in the customer side." Whitespace-only still means "revert"."""
     got = main._sanitize_system_overrides([
-        {"prefix": " Base System: ", "texture_label": "", "area_label": "Coverage:",
-         "junk": "dropped"},
+        {"area_line": "  Area:  ~5,000 SF  ", "texture_line": "   ",
+         "prefix": " Base System: ", "junk": "dropped"},
         {},
     ])
-    assert got == [{"prefix": "Base System:", "area_label": "Coverage:"}, {}]
+    assert got == [{"area_line": "  Area:  ~5,000 SF  ", "prefix": " Base System: "}, {}]
 
 
 def test_the_sanitizer_stays_index_preserving():
@@ -349,80 +522,143 @@ def ran():
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def _fields(islands):
-    return [(s["i"], s["field"]) for s in islands]
+def _fields(rows):
+    return [(r["i"], r["field"]) for r in rows]
 
 
-def test_every_work_row_label_is_rendered_as_an_editable_island(ran):
-    """The (a) answer. Before this, "System:", "Texture:" and "Area:" were escaped HTML inside a
-    read-only region — there was no element to put a caret in."""
-    got = ran["oneSystem"]["islands"]
-    assert _fields(got) == [(0, "prefix"), (0, "name"), (0, "texture_label"), (0, "texture"),
-                            (0, "area_label"), (0, "sqft")]
-    assert all(s["editable"] for s in got), got
-    labels = {s["field"]: s["text"] for s in got}
-    assert labels["prefix"] == "System:"
-    assert labels["texture_label"] == "Texture:"
-    assert labels["area_label"] == "Area:"
+def test_every_work_row_is_one_editable_line_with_nothing_editable_inside_it(ran):
+    """THE ANSWER TO THE COMPLAINT, executed. Three rows, three editable elements, and ZERO
+    editable descendants — that last number is the whole point. A nested contenteditable span is
+    the island model, and an island model is what makes " SF of epoxy flooring" untypeable: the
+    words between the islands belong to no editable element."""
+    got = ran["oneSystem"]["rows"]
+    assert _fields(got) == [(0, "name_line"), (0, "texture_line"), (0, "area_line")]
+    assert all(r["editable"] for r in got), got
+    assert all(r["wholeLine"] for r in got), (
+        "a WORK row stopped using the same whole-line model as the base bid")
+    assert [r["islands"] for r in got] == [0, 0, 0], (
+        "something editable is nested inside a row again — that is the island model returning")
+
+
+def test_the_whole_line_the_estimator_edits_carries_every_static_word(ran):
+    """The static words are IN the editable element's own text, not beside it. Nothing else has
+    to be true for him to be able to delete them."""
+    area = next(r for r in ran["oneSystem"]["rows"] if r["field"] == "area_line")
+    assert area["text"] == (
+        'Area: ~5,000 SF of epoxy flooring and 240 LF of 6" epoxy cove base')
+    for phrase in ("Area:", "~", " SF of epoxy flooring", 'LF of 6" epoxy cove base'):
+        assert phrase in area["text"], phrase
 
 
 def test_the_rendered_rows_still_read_like_the_template(ran):
-    """Making the labels editable must not change what the page says. These are the template's
-    own three lines, with the estimate's values in them."""
+    """Making the rows editable must not change what the page says. These are the template's own
+    three lines, with the estimate's values in them."""
     assert ran["oneSystem"]["lines"] == [
         "System:   Broadcast Quartz",
         "Texture:  Light Broadcast",
         'Area: ~5,000 SF of epoxy flooring and 240 LF of 6" epoxy cove base']
 
 
+def test_the_bold_lead_in_matches_what_the_writer_will_print(ran):
+    """One <strong> per row, ending at the first colon — the same split
+    `_normalize_work_label_formatting` applies to the .docx. If these two ever disagree the
+    estimator approves one weight and the customer receives another."""
+    assert [r["bold"] for r in ran["oneSystem"]["rows"]] == [
+        ["System:"], ["Texture:"], ["Area:"]]
+
+
 def test_two_systems_number_themselves(ran):
-    labels = [s["text"] for s in ran["twoSystems"]["islands"] if s["field"] == "prefix"]
+    labels = [r["text"].split(":")[0] + ":" for r in ran["twoSystems"]["rows"]
+              if r["field"] == "name_line"]
     assert labels == ["Option 1:", "Option 2:"]
 
 
-def test_renaming_one_row_leaves_the_next_row_numbered(ran):
+def test_rewriting_one_row_leaves_the_next_row_numbered(ran):
     """The browser half of the rule. The store holds one entry, for row 1 only, and the re-render
     shows row 2 still carrying its own number."""
-    assert ran["renamedRow1"]["stored"] == [{"prefix": "Base System:"}]
-    assert ran["renamedRow1"]["persisted"] == [{"prefix": "Base System:"}]
+    assert ran["renamedRow1"]["stored"] == [{"name_line": "Base System:   Broadcast Quartz"}]
+    assert ran["renamedRow1"]["persisted"] == [{"name_line": "Base System:   Broadcast Quartz"}]
     assert ran["renamedRow1"]["lines"][0] == "Base System:   Broadcast Quartz"
     assert ran["renamedRow1"]["lines"][3] == "Option 2:   Decorative Flake"
-    row1 = next(s for s in ran["renamedRow1"]["islands"]
-                if s["i"] == 0 and s["field"] == "prefix")
-    assert (row1["text"], row1["computed"]) == ("Base System:", "Option 1:"), (
-        "the island lost the computed value it reverts to")
+    row1 = next(r for r in ran["renamedRow1"]["rows"]
+                if r["i"] == 0 and r["field"] == "name_line")
+    assert (row1["text"], row1["computed"]) == (
+        "Base System:   Broadcast Quartz", "Option 1:   Broadcast Quartz"), (
+        "the line lost the computed text it reverts to")
 
 
-def test_emptying_a_label_reverts_it_instead_of_printing_a_token(ran):
-    """The one outcome that would be visible to a customer. Clearing the label deletes the
+def test_emptying_a_line_reverts_it_instead_of_printing_a_token(ran):
+    """The one outcome that would be visible to a customer. Clearing the line deletes the
     override, so the computed text comes back — never a bare "{{system.prefix}}", never a lone
     colon left where the label was."""
-    assert ran["emptiedLabel"]["stored"] == [{}]
-    assert ran["emptiedLabel"]["lines"][0] == "Option 1:   Broadcast Quartz"
-    body = " ".join(ran["emptiedLabel"]["lines"])
+    assert ran["emptiedLine"]["stored"] == [{}]
+    assert ran["emptiedLine"]["lines"][0] == "Option 1:   Broadcast Quartz"
+    body = " ".join(ran["emptiedLine"]["lines"])
     assert "{{" not in body and "}}" not in body
 
 
-def test_the_static_labels_round_trip_per_row(ran):
-    """"Texture:" and "Area:" are the two that were genuinely locked. Renaming them on row 1
-    writes the new per-row channel and leaves row 2 on the template's wording."""
-    assert ran["staticLabels"]["stored"] == [
-        {"texture_label": "Surface texture:", "area_label": "Coverage:"}]
-    assert ran["staticLabels"]["lines"][1] == "Surface texture:  Light Broadcast"
-    assert ran["staticLabels"]["lines"][2].startswith("Coverage: ~5,000 SF")
-    assert ran["staticLabels"]["lines"][4] == "Texture:  Light Broadcast"
-    assert ran["staticLabels"]["lines"][5].startswith("Area: ~1,800 SF")
+def test_the_static_words_can_be_deleted_on_screen_and_only_on_that_row(ran):
+    """The Area line loses " SF of epoxy flooring" AND the cove clause, and the label with them.
+    Row 2, which nobody touched, still reads the template's wording with the estimate's SF."""
+    assert ran["staticWordsDeleted"]["stored"] == [
+        {"texture_line": "Surface texture:  Light Broadcast", "area_line": "Coverage: 5,000"}]
+    assert ran["staticWordsDeleted"]["lines"][1] == "Surface texture:  Light Broadcast"
+    assert ran["staticWordsDeleted"]["lines"][2] == "Coverage: 5,000"
+    assert ran["staticWordsDeleted"]["lines"][4] == "Texture:  Light Broadcast"
+    assert ran["staticWordsDeleted"]["lines"][5].startswith("Area: ~1,800 SF")
+    edited = next(r for r in ran["staticWordsDeleted"]["rows"]
+                  if r["i"] == 0 and r["field"] == "area_line")
+    assert "SF of epoxy flooring" not in edited["text"]
+    assert "SF of epoxy flooring" in edited["computed"], (
+        "the row forgot the computed line, so clearing it could not revert")
 
 
-def test_a_renamed_label_is_not_flagged_as_a_pricing_edit(ran):
+def test_an_untouched_line_follows_the_estimate_and_an_edited_one_stops(ran):
+    """CONSTRAINT 2, and the honest cost of the model Kyle asked for. The sheet moves from
+    5,000/1,800 to 7,777/2,222 AFTER the edit. Row 2 (untouched) picks the new figure up. Row 1
+    keeps his sentence and stops tracking — a hand-written line has no slot to re-substitute a
+    number into. The ⚠ and the remembered computed text are what make that visible and
+    reversible."""
+    lines = ran["estimateMoved"]["lines"]
+    assert lines[2] == "Coverage: 5,000 SF, cove included", "his words were overwritten"
+    assert lines[5] == "Area: ~2,222 SF of epoxy flooring", (
+        "an untouched row stopped following the estimate")
+    frozen = next(r for r in ran["estimateMoved"]["rows"]
+                  if r["i"] == 0 and r["field"] == "area_line")
+    assert frozen["warned"] is True
+    assert "~7,777" in frozen["computed"], (
+        "the frozen row must still remember the current estimate line to revert to")
+
+
+def test_a_reworded_line_is_not_reported_as_a_re_priced_one(ran):
     """The ⚠ marker means "this differs from the estimate", which is a review risk for a NUMBER.
-    A renamed label carries no number, so it gets the highlight and a plain tooltip instead —
-    otherwise every job with a reworded label would look like it had been re-priced by hand."""
-    by_field = {s["field"]: s for s in ran["warnings"]}
-    assert by_field["prefix"]["warned"] is False
-    assert "Renamed" in by_field["prefix"]["title"]
-    assert by_field["sqft"]["warned"] is True
-    assert "differs from the computed estimate" in by_field["sqft"]["title"]
+    Digits are compared AFTER the label, so renaming "System:" is reported as a rewording and an
+    SF typed off the sheet is reported as a pricing edit. One visual state either way — two
+    would be the island model again in another costume."""
+    by_field = {r["field"]: r for r in ran["warnings"]}
+    assert by_field["name_line"]["warned"] is True
+    assert "Reworded" in by_field["name_line"]["title"]
+    assert by_field["area_line"]["warned"] is True
+    assert "differs from the computed estimate" in by_field["area_line"]["title"]
+    assert by_field["texture_line"]["warned"] is False
+    assert by_field["texture_line"]["title"] is None
+
+
+def test_a_colon_less_line_keeps_the_rows_template_weight_on_screen(ran):
+    """The other half of test_a_line_with_no_colon_keeps_the_row_weight_the_page_shows. Delete
+    the colon and there is no label to bold, so the page must fall back to the weight the writer
+    will actually produce — the row's first run: bold on System and Area, normal on Texture. A
+    fallback that always returned plain text would show him a light line and print a bold one."""
+    by_field = {r["field"]: r for r in ran["noColon"]}
+    assert by_field["name_line"]["bold"] == ["Base build no colon"]
+    assert by_field["texture_line"]["bold"] == []
+    assert by_field["area_line"]["bold"] == ["Coverage 5000 sq ft"]
+
+
+def test_the_browser_stores_the_line_with_its_spaces(ran):
+    """The estimator now types at both ends of a whole line. The browser keeps what he typed;
+    test_the_sanitizer_keeps_what_was_typed_and_drops_a_blank_field is the server half."""
+    assert ran["spacesKept"] == [{"area_line": "  Area:  ~5,000 SF  "}]
 
 
 # ── growth, run against the template's real geometry ─────────────────────────

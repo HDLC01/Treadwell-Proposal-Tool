@@ -971,6 +971,11 @@
           <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
           <button type="button" class="btn btn-s" data-go-info>Info sheet</button>
         </div>
+        <!-- Delete, LAST and in a section of its own. Hanz, 2026-08-24. Deliberately not a fourth
+             button in the .row3 above: that row is the three ways OUT of this drawer and a delete
+             sitting in it is one an estimator can hit while reaching for the estimate. Admin-only,
+             and empty markup for everybody else (the endpoint refuses them too). -->
+        ${deleteProjectHtml(row)}
        </div>
 
        <!-- The other four. Each says what has to happen before it has anything in it, which is a
@@ -1094,6 +1099,7 @@
     applySecPanel();
     wireNotSentAssign(pid, row);
     wireNotSentLost(pid, row);
+    wireDeleteProject(pid, row);
     // The row IS the board's own object (renderNotSent is only ever called with ALL.find(...)), so
     // patching it in place is what makes the mark survive the 12s poll that re-opens this drawer
     // before load() has returned — a copy would be repainted away by the next tick.
@@ -1516,8 +1522,10 @@
     // its own (portal.html, `.dtabs .step[data-sec="chat"]`). Key order here is what the strips and anything deriving the
     // tab list from the product both read, so it is changed HERE rather than only in the markup.
     chat:     ["dsec-chat"],
+    // dsec-delete is LAST on this tab on purpose: the order here is the order the cards are read
+    // in, and the way to remove a project belongs after everything that describes it.
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
-               "dsec-revisions", "dsec-files"],
+               "dsec-revisions", "dsec-files", "dsec-delete"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -3170,6 +3178,122 @@
     });
   }
 
+  /** DELETING A PROJECT, in either drawer. "" for anybody who is not an admin.
+   *
+   *  Hanz, 2026-08-24: "In the proposals tab under the Active Projects create a 'delete project'
+   *  button", and "make sure there is a confirmation dialog". He had two SENT test bids that no
+   *  control in either app could take off the Active Projects board: the Proposals Database's
+   *  Trash button deletes the DRAFT, and the board is built from the portal's rows, whose query
+   *  deliberately ignores the draft's deleted_at. So the card outlived the project.
+   *
+   *  ONE FUNCTION FOR BOTH PANELS, because a sent project and an unsent one differ in the copy and
+   *  in nothing else. `not_sent` is the only field that tells them apart and only the synthesised
+   *  rows carry it, so the sent drawer (which is handed the portal's own proposal object) gets the
+   *  sent wording without having to ask for it.
+   *
+   *  APART FROM THE THREE WAYS OUT of this drawer, in its own section under them, and that
+   *  placement is the point rather than layout: Open the files, Edit the estimate and Info sheet
+   *  sit in one .row3, and a fourth button in that row would be a delete an estimator could hit
+   *  while reaching for the estimate.
+   *
+   *  The admin read is inline rather than a helper for the same reason paintNtChips does it inline:
+   *  it is three lines, it must never throw on a page where sign-in has not landed yet, and a
+   *  helper would be a fourth name for three harnesses to bind.
+   */
+  function deleteProjectHtml(p) {
+    let isAdmin = false;
+    try {
+      const who = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
+      isAdmin = who.role === "admin" || who.role === "super_admin";
+    } catch (e) { /* not signed in yet, so the safe answer is "no control at all" */ }
+    if (!isAdmin) return "";
+    const sent = !(p && p.not_sent);
+    // Two ids, because the sent drawer's cards are hidden per-card by applySecPanel (so this one
+    // has to be in SEC_TABS) while the not-sent panel hides whole PANELS and keeps its dsec-ns-*
+    // ids deliberately outside that machinery.
+    return `
+        <div class="sec" id="${sent ? "dsec-delete" : "dsec-ns-delete"}">
+          <div class="lbl">Delete this project</div>
+          <p class="note">${sent
+            ? "Takes the card off the board and stops the follow-up emails. The link the customer "
+              + "already has keeps working, and you can restore the project from Trash."
+            : "Takes the card off the board and files the project in Trash. Nothing reaches the "
+              + "customer, and you can restore it from there."}</p>
+          <div class="fu-line">
+            <button type="button" class="btn btn-s btn-dang" id="del-project">Delete project</button>
+          </div>
+          <p class="note del-note" id="del-note"></p>
+        </div>`;
+  }
+
+  /** The button, its confirmation, and what it does. Called by BOTH renderers.
+   *
+   *  TW.confirmDanger, the same helper confirmBringBack is built on: it traps focus between its two
+   *  buttons and focuses Cancel, and it is what every other destructive control in this app asks
+   *  through. Never window.confirm.
+   *
+   *  TWO BODIES, because an unsent scratch bid and a live customer job are not the same act. The
+   *  sent one names the two things that go quiet (the card and the chasing) and is honest about the
+   *  one thing that does NOT change: the customer's existing link keeps working, because it renders
+   *  the revision that was pinned when the proposal was sent rather than anything we are hiding
+   *  here. Deleting is not revoking, and a dialog that implied it was would get pressed by somebody
+   *  trying to take a link away.
+   *
+   *  Both name the project. "Are you sure?" is a question nobody can answer.
+   *
+   *  ONE REQUEST, to a route that owns both halves. Two calls from here (hide the portal row, then
+   *  trash the draft) would leave a half-deleted project on a dropped connection, and half is the
+   *  exact state this feature exists to remove.
+   */
+  function wireDeleteProject(pid, row) {
+    const btn = $("del-project");
+    if (!btn) return;                  // not an admin: there is no control to wire
+    const note = $("del-note");
+    btn.addEventListener("click", async () => {
+      const sent = !(row && row.not_sent);
+      const name = (row && row.project_name) || "this project";
+      const ok = await TW.confirmDanger(sent ? {
+        title: "Delete this project?",
+        name: name,
+        after: " comes off the board and its follow-up emails stop.",
+        detail: "The link the customer already has keeps working: it reads the version pinned"
+              + " when you sent it. Restore it from Trash and the reminders stay off.",
+        confirmText: "Move it to Trash", cancelText: "Keep it",
+        tone: "danger", icon: "🗑",
+      } : {
+        title: "Delete this project?",
+        name: name,
+        after: " comes off the board and out of the Proposals Database.",
+        detail: "It was never sent, so nothing changes for the customer. You can restore it"
+              + " from Trash.",
+        confirmText: "Move it to Trash", cancelText: "Keep it",
+        tone: "danger", icon: "🗑",
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = "Deleting…";
+      if (note) note.textContent = "";
+      try {
+        const r = await api("/api/project/" + encodeURIComponent(pid) + "/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        // The drawer is showing a project that is no longer on the board, so it closes rather than
+        // repainting into a panel about a deleted job. The board reload is what makes the card go.
+        closeDrawer();
+        load();
+      } catch (err) {
+        btn.textContent = orig;
+        btn.disabled = false;
+        if (note) note.textContent = "Couldn't delete that. " + (err.message || "Try again.");
+      }
+    });
+  }
+
   /** The active roster, fetched once per page. Reassign is rare and the list barely
    *  changes, so re-fetching it on every drawer open would be pure waste. */
   let EST_LIST = null;
@@ -3201,6 +3325,11 @@
       : (data.questions || []).map((q) => Object.assign({ msg_type: "text" }, q));
 
     const contacts = contactsHtml(data.contacts);
+
+    // Built BEFORE the template literal so eligibility below can read the ONE answer to "did this
+    // render": a second `isAdmin` computed at setSecEligible time is a second answer, and the two
+    // halves of applySecPanel's condition disagreeing is how this drawer ships an empty tab.
+    const delHtml = deleteProjectHtml(p);
 
     // Full account numbers stay in this array, NOT in the markup — see depositHtml.
     const acctFull = [];
@@ -3352,6 +3481,14 @@
           <button type="button" class="btn btn-s" id="go-files">Open the files</button>
           <button type="button" class="btn btn-s" id="go-info">Info sheet</button>
         </div>
+
+        <!-- Delete, on a SENT project too. Hanz, 2026-08-24: a sent bid keeps its card otherwise,
+             which is the bug he hit. Its own section below the files row for the reason the
+             not-sent panel gives: that row is the ways out of the drawer, not a place to put a
+             delete. The dialog this button opens carries the heavier of the two bodies, because
+             this one stops the follow-up emails.
+             NB no em dash in this comment: test_drawer_renders.py greps the whole panel. -->
+        ${delHtml}
        </div>
 
        <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
@@ -3418,6 +3555,9 @@
     setSecEligible("dsec-revisions", true);
     // Always: every project has files and an info sheet, sent or not, won or lost.
     setSecEligible("dsec-files", true);
+    // Only when the markup exists. A non-admin renders nothing here, and an eligible id with no
+    // element is exactly the mismatch test_drawer_renders.py asserts against.
+    setSecEligible("dsec-delete", !!delHtml);
     setSecEligible("dsec-deposit", true);
     setSecEligible("dsec-contacts", true);
     setSecEligible("dsec-chat", true);
@@ -3433,6 +3573,7 @@
       () => window.location.assign("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
     $("go-info").addEventListener("click",
       () => window.location.assign("/info-sheet.html?d=" + encodeURIComponent(pid)));
+    wireDeleteProject(pid, p);
 
     // Reveal / re-hide a full account number. The value lives in `acctFull`, so it
     // only reaches the DOM when a human asks for it — and goes back on a second click.
