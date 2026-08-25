@@ -2314,7 +2314,7 @@ def _price_bundle(payload: PriceIn, systems_in: list, coves_in: list,
         crews = [tuple(c) for c in crews] if crews else None
         resp["full_bid"] = pricing.compute_full_bid(
             mt, patch_sf,
-            crews=crews, labor_rate=lb.get("labor_rate", 32.2),
+            crews=crews, labor_rate=lb.get("labor_rate", 33.0),
             day_hours=lb.get("day_hours", 8), travel_hours=lb.get("travel_hours", 0),
             prevailing_wage=lb.get("prevailing_wage", False), demo_sf=lb.get("demo_sf", 0),
             local=lb.get("local", True), super_pct=lb.get("super_pct", 0.03),

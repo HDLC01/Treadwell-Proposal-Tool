@@ -681,7 +681,7 @@ def test_intake_seeds_the_first_measurement_only_when_nothing_is_measured(ran):
     assert m["freshFromIntake"] == 8250, (
         "a brand-new project did not pick up intake's square footage: %r" % m["freshFromIntake"])
     # A fresh model also seeds the three labor rows the template itself carries.
-    assert m["freshLabor"] == [["polishing", 3, 32.2], ["mockup", 3, 32.2], ["jointfill", 3, 32.2]]
+    assert m["freshLabor"] == [["polishing", 3, 33.0], ["mockup", 3, 33.0], ["jointfill", 3, 33.0]]
 
 
 # ── H. boot ──────────────────────────────────────────────────────────────────

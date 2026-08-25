@@ -815,7 +815,10 @@ def test_the_fresh_model_carries_the_templates_own_labour_seeds(ran):
     two an estimator has to judge, which is why a fresh model reports them as unfinished."""
     fresh = ran["fresh"]
     assert [r["guys"] for r in fresh["labor"]] == [3, 3, 3]
-    assert [r["rate"] for r in fresh["labor"]] == [32.2, 32.2, 32.2]
+    # $33.00 from 2026-08-26 (Kyle: "The new epoxy/polish/sealed rate is $33/hr"). These seeds
+    # stand in for the workbook's own Polish!C37 / C44, so they move with it or the beta prices a
+    # polish job at a rate the spreadsheet no longer uses.
+    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0]
     assert [r["days"] for r in fresh["labor"]] == ["", 0.5, ""]
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False}

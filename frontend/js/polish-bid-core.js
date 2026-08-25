@@ -319,17 +319,17 @@
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
-  /** The labour rows the template itself seeds: A37 = 3 guys at C37 = $32.20/hr, the mock-up at
-   *  B40 = half a day, and joint filling at C44 = $32.20. Days are left blank on the two an
+  /** The labour rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
+   *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge. */
   function freshModel() {
     return {
       version: 2,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
       labor: [
-        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 32.2 },
-        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 32.2 },
-        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 32.2 }
+        { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33.0 },
+        { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
+        { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 }
       ],
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
                     taxable: true, remodel_tax: false },

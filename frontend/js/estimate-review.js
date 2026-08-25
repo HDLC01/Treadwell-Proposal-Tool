@@ -364,11 +364,16 @@ function applyHeuristics(intake, putIfBlank) {
     putIfBlank("Epoxy!A47", crew);
     putIfBlank("Epoxy!B47", days);
   }
-  // Labor rate from Prevailing Wage flag (D5). Default $32.20 standard,
-  // $48.00 PW. The flag itself gets set by the AI Autofill button.
+  // Labor rate from Prevailing Wage flag (D5). Default $33.00 standard, $48.00 PW.
+  // The flag itself gets set by the AI Autofill button.
+  //
+  // $33.00 since 2026-08-26 (Kyle: "The new epoxy/polish/sealed rate is $33/hr"), matching
+  // Epoxy!C47 in the template. It has to match: putIfBlank only writes when the cell is empty,
+  // so a stale default here re-seeds the OLD rate onto any project whose cell was cleared, and
+  // the sheet would then disagree with itself depending on which screen touched it last.
   const pwRaw = (intake.cell_values || {})["Epoxy!D5"] || "";
   const pw = String(pwRaw).toLowerCase() === "yes";
-  putIfBlank("Epoxy!C47", pw ? 48.00 : 32.20);
+  putIfBlank("Epoxy!C47", pw ? 48.00 : 33.00);
 }
 
 // Quantity fields that belong to ONE work type, and which types they belong to.
