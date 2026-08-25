@@ -106,6 +106,14 @@
    *  which is how every line written before today keeps its number. */
   function priceLine(line, items, area) {
     line = line || {};
+    // A LINE NOBODY HAS FILLED IN IS NOT A BROKEN LINE, and this is the only place that
+    // distinction can be drawn once. `findItem` returns null for an empty id and for a deleted
+    // one alike, so "the estimator just clicked + line" and "the material this line used was
+    // removed from the library" both arrived as missing_item -- and every consumer then reported
+    // a fresh, empty row as a fault: amber "Item removed" in the quantity cell, a "Pick a
+    // replacement item" note, a red-tinted row, "1 to fix" in the sidebar, and a warning on the
+    // Polish beta page. Five surfaces, one wrong answer, because they all trusted this reason.
+    if (!(line.item_id || line.item)) return { ok: false, reason: "no_item", qty: 0, cost: 0 };
     var item = findItem(items, line.item_id || line.item);
     if (!item) return { ok: false, reason: "missing_item", qty: 0, cost: 0 };
 
@@ -158,7 +166,11 @@
     for (var i = 0; i < lines.length; i++) {
       var r = priceLine(lines[i], items, area);
       rows.push(r);
-      if (!r.ok) { broken += 1; continue; }
+      // `broken_lines` means "faults to fix" -- what the sidebar badge and the Polish page's
+      // warning both count. An unfilled line is work not started, not work gone wrong, so it is
+      // deliberately not counted here; that is what fixes both of those readouts without either
+      // of them knowing about this change.
+      if (!r.ok) { if (r.reason !== "no_item") broken += 1; continue; }
       if (r.priced) { total += r.cost; priced += 1; }
     }
     var a = num(area);
