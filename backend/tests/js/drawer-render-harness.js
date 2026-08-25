@@ -111,6 +111,9 @@ const CONST_NAMES = [
   "FU_KIND_LABEL", "FU_TEMPLATE_LABEL", "FU_ACTION", "STATUS_LABEL",
   "SEC_TABS", "ALL_SEC_CARDS", "SEC_ELIGIBLE", "setSecEligible",
   "REPLY_DRAFT", "NT_CACHE", "REV_CACHE", "DETAIL_CACHE", "fact", "metaLine", "headMoney",
+  // attHtml reads nothing from it, but hydrateAtts owns it and the two are declared together --
+  // lifting one name out of a pair is how a rename goes unnoticed.
+  "ATT_URLS",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -119,6 +122,14 @@ const LET_NAMES = ["ALL", "ACTIVE_SEC", "CUR_PID", "RENDER_GEN", "DEEPLINK_USED"
 const FN_NAMES = [
   "drawerHead", "customerHtml", "copyPortalLink", "wirePortalLink", "approvalHtml",
   "contactsHtml", "recipientsHtml", "msgHtml", "splitSystem", "depositHtml", "mask4",
+  // The attachment renderer and its size formatter (2026-08-26). SIXTH addition to this list for
+  // the same reason as the five below: msgHtml is lifted and now calls attHtml, so leaving it out
+  // is a ReferenceError on every drawer that has a chat thread -- which is every sent one.
+  // hydrateAtts comes with them because renderDetail calls it -- so leaving it out swaps one
+  // ReferenceError for another. It is safe to run here: it is async and unawaited, every
+  // request goes through the harness's own `api` stub, and a failure `continue`s, so a
+  // renderer test neither waits for it nor is broken by it.
+  "attHtml", "fileSize", "hydrateAtts",
   "followupPanelHtml", "followupContactsHtml", "followupRow", "followupState",
   // The hold on a SENT bid (2026-08-21), read out of the follow-up log because portal_proposals
   // stores only the pause DATE. FIFTH addition to this list for the same reason as the four below,

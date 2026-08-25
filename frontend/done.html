@@ -274,6 +274,23 @@
       <textarea id="portal-message" rows="3" maxlength="2000"
                 placeholder="e.g. Thanks for meeting today — here's your proposal. Let me know if you have any questions."
                 style="width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--surface-dim,#ccc);border-radius:6px;resize:vertical;"></textarea>
+      <!-- Anything else the customer should get WITH the proposal: a site photo, a spec sheet,
+           a colour chart. Attached to the email and kept on the proposal card in their portal,
+           so they can find it again next week without going back through their inbox. The
+           proposal and the estimate are attached by the portal already and are not listed here. -->
+      <label class="hint" style="display:block;margin:12px 0 4px;font-weight:600;">
+        Attachments <span style="font-weight:400;">(optional — sent with the email)</span>
+      </label>
+      <div id="send-atts" class="att-strip" hidden></div>
+      <input type="file" id="send-file" multiple hidden
+             accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt">
+      <button type="button" class="btn-secondary" id="send-attach" style="margin-top:2px;">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+             style="vertical-align:-2px;margin-right:5px;">
+          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+        </svg>Add a photo or file</button>
+      <p id="send-att-note" class="hint" style="margin:6px 0 0;"></p>
       <!-- Whether this job collects the 25% deposit. Defaults from the intake
            audience (Direct yes, GC no) but is free to toggle either way — done.js
            sets it and reads it on send. No inline handler (CSP). -->

@@ -1064,6 +1064,36 @@ def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = Non
     return resp.json()
 
 
+async def _portal_raw(path: str, method: str, blob: bytes, ctype: str) -> Response:
+    """The same proxy as `_portal`, for calls whose body is BYTES rather than JSON.
+
+    Separate rather than a flag on `_portal`, because almost everything about the two differs:
+    the request carries a raw body and a content type instead of a dict, and the RESPONSE is
+    handed back whole — its own status, its own content type, its own Content-Disposition — where
+    `_portal` returns parsed JSON and raises on anything over 400. An error is passed through here
+    too, so an "that kind of file cannot be attached" written by the portal is the sentence the
+    estimator reads, rather than a generic 502 invented on the way past.
+    """
+    import httpx
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        raise HTTPException(503, "Customer portal isn't configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).")
+    headers = {"X-Service-Token": token}
+    if ctype:
+        headers["Content-Type"] = ctype
+    try:
+        # Generous, and deliberately so: this can be a 15 MB photograph over a VPS link, where the
+        # 20 seconds the JSON proxy allows would time out a perfectly good upload.
+        with httpx.Client(timeout=120.0, headers=headers) as c:
+            resp = c.request(method, base + path, content=blob or None)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Could not reach the customer portal.") from exc
+    keep = {k: v for k, v in resp.headers.items()
+            if k.lower() in ("content-type", "content-disposition", "content-length")}
+    return Response(content=resp.content, status_code=resp.status_code, headers=keep)
+
+
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
@@ -1138,6 +1168,14 @@ class PortalPublishIn(BaseModel):
     # (chase everybody, as it has always worked) needs no entry and a caller that omits the field
     # forwards nothing.
     no_followups: list[str] = Field(default_factory=list)
+    # Files attached to the proposal EMAIL, chosen on the Files screen. `[{name, mime, b64}]`.
+    #
+    # They ride in this body rather than being uploaded first, for the same reason the notify
+    # picks do: on a first send the portal proposal row does not exist until this request creates
+    # it, so there is nothing for an upload to hang off. Forwarded to the portal without being
+    # decoded here — the portal owns the allow-list, the size caps and the storage, and a second
+    # weaker copy of those rules on this side is how the two drift apart.
+    attachments: list[dict] = Field(default_factory=list)
     # Which STAFF hear about this send, chosen on the Files screen before pressing Send (Hanz,
     # 2026-08-19: "we need that notifcation sending selection in the Files. so we can select who
     # receives it first"). Deviations from the global Notification Sending roster, not the whole
@@ -1301,6 +1339,11 @@ def api_portal_publish(draft_id: str, request: Request,
     # very request creates it — so a gate on that route alone would have left the door people
     # actually use wide open. Compared against the draft's stored picks, which is what the Files
     # chips were seeded from, so an untouched send is a no-op change and needs no permission.
+    # Forwarded whole, and only when there are any, so a send with nothing attached carries the
+    # byte-for-byte legacy body.
+    if payload and payload.attachments:
+        body["attachments"] = payload.attachments[:10]
+
     _picked = {}
     for field in ("notify_add", "notify_mute"):
         picked = _clean_portal_emails(getattr(payload, field) if payload else [])
@@ -1678,7 +1721,40 @@ async def api_portal_reply(proposal_id: str, request: Request) -> Dict[str, Any]
     proposal_id = _safe_id(proposal_id)
     body = await request.json()
     return _portal(f"/api/admin/proposal/{proposal_id}/reply", "POST",
-                   {"body": (body or {}).get("body") or "", "by": _user_email(request)})
+                   {"body": (body or {}).get("body") or "", "by": _user_email(request),
+                    # Passed through UNVALIDATED on purpose: the portal owns these files and
+                    # rebuilds every field of every record in uploads.sanitize before storing it.
+                    # A second, weaker copy of that rule here is how the two drift apart.
+                    "attachments": (body or {}).get("attachments") or []})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/upload")
+async def api_portal_upload(proposal_id: str, request: Request) -> Response:
+    """Hand one file straight through to the portal, bytes untouched.
+
+    The portal owns attachments — it owns the thread they hang off, the volume they live on and
+    the access rule that serves them back. This route exists only because the staff browser is on
+    a different origin and holds no portal admin token.
+    """
+    proposal_id = _safe_id(proposal_id)
+    blob = await request.body()
+    name = request.query_params.get("name") or "attachment"
+    ctype = request.headers.get("content-type") or "application/octet-stream"
+    return await _portal_raw(
+        f"/api/admin/proposal/{proposal_id}/upload?name={quote(str(name))}",
+        "POST", blob, ctype)
+
+
+@app.get("/api/portal/proposal/{proposal_id}/file/{file_id}")
+async def api_portal_file(proposal_id: str, file_id: str, request: Request) -> Response:
+    """The attachment itself, streamed back through this origin.
+
+    Linking the drawer straight at the portal would not work: the customer routes need a customer
+    session and the admin routes need the service token, which cannot be put in an <img src>.
+    """
+    proposal_id = _safe_id(proposal_id)
+    return await _portal_raw(
+        f"/api/admin/proposal/{proposal_id}/file/{_safe_id(file_id)}", "GET", b"", "")
 
 
 @app.post("/api/portal/proposal/{proposal_id}/deposit-request")
