@@ -220,7 +220,7 @@
   // back in the UI. The section/glyph/label are only what the switch is LABELLED with; what the
   // policy governs is the href, and nav_access.py is the authority on that.
   const NO_SIDEBAR_TABS = [
-    { section: "Proposals", href: "/info-sheet.html", glyph: "📋", label: "Info Sheet", tag: "" },
+    { section: "Active", href: "/info-sheet.html", glyph: "📋", label: "Info Sheet", tag: "" },
   ];
 
   // Pull the nav entries back out of rendered sidebar markup: one row per item, in order, tagged
@@ -369,123 +369,98 @@
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
       '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
       '<nav class="tw-nav">' +
-      // ACTIVE PROJECTS IS THE FIRST THING IN THE SIDEBAR, on its own, above the work-order
-      // grouping below. Hanz, 2026-08-12: "This active Projects tab will be the Main tab for
-      // all. Majority of the Sales Meeting will be held in this tab."
+      // THREE HEADINGS, NOT EIGHT. Hanz, 2026-08-25, after a week of using the tool daily:
+      //   "Instead of Separate Headers for the Side bar we have to change that to ACtive, Beta and
+      //    Settings and remove the rest."
       //
-      // It used to be the second item under Proposals, below the Database. That ordering was
-      // right when the Database was where you started a bid; it is wrong now that this board can
-      // start one too (the + New proposal button in its Created but not sent column), because
-      // the page you run the meeting from should not be something you scroll past.
-      '<div class="tw-section">Sales</div>' +
+      // PRESENTATION ONLY, and that is load-bearing. Every href, label, glyph and BETA tag below is the
+      // one it already had; nothing was added, dropped or renamed. PERMISSIONS ARE KEYED ON HREF
+      // (nav_access.py TABS, whose docstring says keying on the label would break on a rename), never on
+      // the label or the heading - so regrouping cannot change who sees what, and no permission rule
+      // moves with it.
+      //
+      // WHAT WAS WRONG WITH EIGHT. Each heading said something true on its own - Sales, Leads & bids,
+      // Proposals, Analytics, Database, Library, Records, Settings - and together they said very little:
+      // most carried one or two rows, so the labels were a good share of what you scrolled past. Three is
+      // the only split an estimator acts on: a page I work in today, a beta I am trying out, a setting I
+      // touch twice a year.
+      //
+      // The per-item notes below are kept where they still apply. Several record decisions that were
+      // reversed at least once, and the quotes behind them are still live.
+      '<div class="tw-section">Active</div>' +
+      // ACTIVE PROJECTS IS FIRST. Hanz, 2026-08-12: "This active Projects tab will be the Main
+      // tab for all. Majority of the Sales Meeting will be held in this tab." It used to sit second,
+      // below the Proposals Database - right when the Database was where you started a bid, wrong once
+      // this board could start one too. The page you run the meeting from should not be something you
+      // scroll past.
       navItem("/portal.html", "◆", "Active Projects") +
-      // BACK IN THE MENU ON 2026-08-24, under Sales rather than a heading of its own. Hanz:
-      // "make sure all follow up emails are shown in the Chat box and in the Follow Ups section."
-      // A section nobody can click is not a section, so the board is linked again. The full
-      // history of both decisions is on the note where its old heading used to be, further down.
+      // BACK IN THE MENU ON 2026-08-24, and this is the THIRD decision about it; the first two
+      // took it out. All three are written down because the last reader of a half-told version deleted
+      // this page from the menu twice.
       //
-      // FILED WITH ACTIVE PROJECTS because it is the same population read a different way: the
-      // board answers "where does each live job stand", this answers "who has not been chased".
-      // Its own rows even open that page (the row click goes to /portal.html?open=...&sec=followup),
-      // so anywhere else in the menu would file a page under one heading and land you under
-      // another. Not under Proposals: that heading is the pages that MAKE a proposal, and this one
-      // starts after the proposal has gone out.
+      //   2026-08-10  Hanz: "Remove the followups on the sidebar." Both its items went.
+      //   2026-08-11  Hanz, having seen both gone: "Keep the Cadence and EMAILs... Just the follow up
+      //               tab." So the BOARD was the clutter, not the cadence - which is why Auto Followups
+      //               is down in Settings rather than up here.
+      //   2026-08-24  Hanz, the day automated follow-ups went live on production: "make sure all follow
+      //               up emails are shown in the Chat box and in the Follow Ups section." HE REVERSED
+      //               2026-08-10. Do not "tidy" it back out on the strength of that quote; it has been
+      //               answered.
       //
-      // ⏱ is the glyph it had before it was unlinked. It has been free since, and no other row
-      // uses it (test_sidebar_labels.py fails if two ever share one).
+      // Directly under Active Projects because it is the same population read a different way: the board
+      // answers "where does each live job stand", this answers "who has not been chased". Its own rows
+      // even open that page (/portal.html?open=...&sec=followup), so filing it anywhere else would put
+      // the link under one heading and land the click under another.
       navItem("/followups.html", "⏱", "Follow-ups") +
-      // Grouped in the order the job actually happens: work comes in, you price
-      // it and send it, then it's a record. Seven items under one "Workspace"
-      // heading said nothing about which page did what — and buried Notification
-      // Sending, a setting, in the middle of the daily pages.
-      '<div class="tw-section">Leads &amp; bids</div>' +
+      // The daily queue, in the order the work actually arrives: it comes in, you price it,
+      // you watch what is due. Bid Calendar sits right after Bid Pipeline because the two answer halves
+      // of one question - the board is "where does each bid stand", the calendar is "what is due, and
+      // when". Both read the Basisboard bids; neither writes to them.
       navItem("/leads.html", "▤", "Lead Inbox") +
       navItem("/crm.html", "▦", "Bid Pipeline") +
-      // Right after the board, because they answer the two halves of the same
-      // question: the board is "where does each bid stand", the calendar is "what is
-      // due, and when". Both read the Basisboard bids; neither writes to them.
       navItem("/calendar.html", "▧", "Bid Calendar") +
-      '<div class="tw-section">Proposals</div>' +
-      // INFO SHEET IS NOT A SIDEBAR ITEM ANY MORE (Hanz, 2026-08-20). It moved into the project
-      // drawer's Proposal tab, beside the project it is a hand-off for. The menu row could only
-      // ever land on its own choose-a-project state, which is a step nobody wanted; from the
-      // drawer it is one click on the job already in hand.
+      // THE LOOK-BACK PAGES. These four had three headings between them until 2026-08-25 -
+      // Analytics, Database, Records - and none of the three earned a line of its own. Their ORDER still
+      // carries the decision that arranged them: Analytics above the Proposals Database at Hanz's ask on
+      // 2026-08-15 ("move Analytics above the Proposal Database Please"), because Analytics is something
+      // you open to answer a question while the Database is a filing cabinet you go to on purpose.
       //
-      // THE TAB STILL EXISTS AS A PERMISSION. nav_access.py keeps its capability entry and names it
-      // in NO_SIDEBAR_TABS, so /api/info-sheet/* is still refused to a denied role and the page
-      // still paints a refusal. The matching NO_SIDEBAR_TABS in THIS file is declared further UP,
-      // just above the nav parser (search for "const NO_SIDEBAR_TABS"), and it is the list
-      // navMatrix uses to keep drawing this tab's switch on the Admin page: a tab that can be
-      // denied has to be one an admin can see.
-      // Step 2 for polish jobs, without the spreadsheet. Sits under Proposals rather than
-      // getting its own heading: it IS part of making a proposal, unlike the Item Library.
-      // The old Estimate Review is untouched and still reachable, so a polish bid can be run
-      // both ways and compared while this is in beta.
-      // Opens at the beta's INTAKE, which is step 1 of its own four. A door straight into step 2
-      // starts an estimator on a project with no name, no bid date and no job conditions, and the
-      // conditions are exactly what moved onto the intake form in the 2026-08-17 rework — so
-      // pricing first means pricing before the five switches that change the price have been seen.
-      // The mid-flow door is different and stays different: the toolbar link on Estimate Review
-      // goes straight to /polish-estimate.html, because there the project already exists.
-      navItem("/polish-intake.html", "◐", "Polish Estimate", "BETA") +
-      // THE FOLLOW-UPS SECTION USED TO SIT HERE, with two items: Follow-ups and Cadence & emails.
-      // Three decisions ran over it, and the third reverses the first. All three are written out
-      // because the last reader of a half-told version deleted a page from the menu twice.
-      //
-      //   2026-08-10  Hanz: "Remove the followups on the sidebar." Both items went.
-      //   2026-08-11  Hanz, having seen both gone: "Keep the Cadence and EMAILs... Just the follow
-      //               up tab." So the BOARD was the clutter, not the cadence. The cadence went
-      //               down to Settings rather than keeping a one-item heading up here, because it
-      //               is a set-once configuration and Notification Sending already lives there.
-      //   2026-08-24  Hanz, on the day automated follow-ups went live on production: "make sure
-      //               all follow up emails are shown in the Chat box and in the Follow Ups
-      //               section." HE REVERSED 2026-08-10. The board is linked again, under Sales
-      //               beside Active Projects, which is where the navItem now is. Do not "tidy" it
-      //               back out on the strength of the 2026-08-10 quote: it was answered.
-      //
-      // What did NOT come back is this heading. Two of its three items live under headings that
-      // already describe them (Sales for the board, Settings for the cadence), so re-adding it
-      // would be the clutter he complained about, with one row under it.
-
-      // ITS OWN CATEGORY, below the pages that make a proposal. Hanz, 2026-08-12: "Move the
-      // Proposal database down and create its own cateogry."
-      //
-      // It is every proposal ever drafted, most never sent — a filing cabinet you go to on
-      // purpose, not a step in the day. Sitting directly above Active Projects it read as the
-      // place to start, which is the opposite of how the board is meant to be used now.
-      // The href is untouched: navItem takes the active highlight from location.pathname, never
-      // from the label or position, so moving an item cannot break its highlight.
-      // Its own heading rather than a third item under Leads & bids: those two
-      // are the daily queue, this is the look back over all of it.
-      //
-      // Above the Database at Hanz's ask (2026-08-15). It reads better there for the same reason
-      // the Database moved down in the first place: Analytics is something an estimator opens to
-      // answer a question, while the Database is a filing cabinet you go to on purpose.
-      '<div class="tw-section">Analytics</div>' +
+      // INFO SHEET IS NOT HERE, and that is not an oversight. It moved into the project drawer's Proposal
+      // tab on 2026-08-20 (Hanz), beside the job it is a hand-off for; the menu row could only ever land
+      // on its own choose-a-project state. THE TAB STILL EXISTS AS A PERMISSION - nav_access.py keeps its
+      // capability entry, so /api/info-sheet/* is still refused to a denied role - and the matching row in
+      // NO_SIDEBAR_TABS (declared further UP, just above the nav parser) is what lets the Admin page draw
+      // its switch. That row now reads section "Active", because "Proposals" is one of the headings this
+      // change removed, and a rowless tab filed under a heading that no longer exists is a row the matrix
+      // cannot group.
       navItem("/analytics.html", "◫", "Analytics") +
-
-      '<div class="tw-section">Database</div>' +
       navItem("/projects.html", "▣", "Proposals Database") +
-      // Reference data, not a daily page — the materials Treadwell buys and the assemblies
-      // built out of them. Its own heading for the same reason Analytics has one: filed under
-      // Proposals it would read as a step in making one, which it deliberately is not. (The
-      // Polish Estimate beta does price its takeoff from these assemblies, but no live bid does.)
-      '<div class="tw-section">Library</div>' +
-      // 🧱 rather than another shaded square: ▤ already belongs to Lead Inbox, and the
-      // geometric set is low-distinction enough without two items sharing a glyph. A brick
-      // also says "materials" at a glance, which none of the squares do.
-      navItem("/library.html", "🧱", "Items and Assemblies", "BETA") +
-      '<div class="tw-section">Records</div>' +
       navItem("/history.html", "⟲", "History") +
       navItem("/trash.html", "🗑", "Trash") +
+      // THE BETAS, TOGETHER. One sat under Proposals and the other under a Library heading of
+      // its own, which put work that is still being proven in the middle of the daily list. Both keep
+      // their BETA tag as well as the heading: the heading says which shelf, and the tag is what survives
+      // being read alone in the Admin role matrix, which prints labels without headings.
+      '<div class="tw-section">Beta</div>' +
+      // Opens at the beta's INTAKE, step 1 of its own four. A door straight into step 2 starts
+      // an estimator on a project with no name, no bid date and no job conditions - and the conditions are
+      // exactly what moved onto the intake form in the 2026-08-17 rework, so pricing first would mean
+      // pricing before the five switches that change the price have been seen. The mid-flow door is
+      // different and stays different: the toolbar link on Estimate Review goes straight to
+      // /polish-estimate.html, because there the project already exists.
+      navItem("/polish-intake.html", "◐", "Polish Estimate", "BETA") +
+      // Reference data, not a daily page - the materials Treadwell buys and the assemblies
+      // built out of them. (The Polish Estimate beta does price its takeoff from these assemblies; no
+      // live bid does.) The brick rather than another shaded square: the geometric set is low-distinction
+      // enough without two rows sharing a glyph, and a brick says "materials" at a glance.
+      navItem("/library.html", "🧱", "Items and Assemblies", "BETA") +
       '<div class="tw-section">Settings</div>' +
       navItem("/notifications.html", "✉", "Notification Sending") +
-      // Kept at Hanz's request on 2026-08-11 after the Follow-ups board came out; see the note
-      // where its old heading used to be. Sits beside Notification Sending because the two
-      // answer the same question from opposite ends: who hears from us, and what they hear.
-      // This page is the only editor for the four recurring customer emails, and its save
-      // REPLACES the single settings row with no history, so an unreachable version of it is
-      // one wording change away from being unrecoverable.
+      // Kept at Hanz's request on 2026-08-11 after the Follow-ups board came out; the full
+      // sequence is on Follow-ups above. Beside Notification Sending because the two answer one question
+      // from opposite ends: who hears from us, and what they hear. This page is the only editor for the
+      // four recurring customer emails, and its save REPLACES the single settings row with no history, so
+      // an unreachable version of it is one wording change away from being unrecoverable.
       navItem("/followup-settings.html", "⏲", "Auto Followups") +
       (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
       '</nav>' +
