@@ -89,17 +89,31 @@ def test_the_proposals_database_moved_BELOW_active_projects():
         "Proposals Database is still above Active Projects")
 
 
-def test_the_proposals_database_has_its_own_category():
-    """"create its own cateogry" — a heading of its own, not a tail item under Proposals, which
-    is the group of pages that MAKE a proposal."""
+def test_the_proposals_database_is_not_where_a_bid_starts():
+    """"create its own cateogry" (Hanz, 2026-08-12). It was a tail item under Proposals sitting
+    directly above Active Projects, which read as the place to start a bid. It is the opposite of
+    that: every proposal ever drafted, most of them never sent — a filing cabinet you go to on
+    purpose.
+
+    IT HAD A "Database" HEADING FROM THAT DAY UNTIL 2026-08-25, when the sidebar collapsed to three
+    headings and it joined the other look-back pages under Active. The heading is gone; the
+    decision behind it is not, and what carries it now is POSITION — the Database sits below every
+    page the day actually runs on, never above them. Asserted against all five of those rather than
+    against Active Projects alone, because "below the board" was already true of the arrangement he
+    complained about."""
     bar = _sidebar()
     i = bar.index('"/projects.html"')
+    for href in ('"/portal.html"', '"/followups.html"', '"/leads.html"', '"/crm.html"',
+                 '"/calendar.html"'):
+        assert bar.index(href) < i, (
+            "%s is below the Proposals Database, so the filing cabinet is back among the daily "
+            "pages" % href)
     heading = None
     for m in re.finditer(r'tw-section">([^<]+)</div>', bar):
         if m.start() < i:
             heading = m.group(1)
-    assert heading == "Database", (
-        "Proposals Database sits under %r rather than its own heading" % heading)
+    assert heading == "Active", (
+        "Proposals Database sits under %r rather than Active" % heading)
 
 
 def test_nothing_else_left_the_sidebar():

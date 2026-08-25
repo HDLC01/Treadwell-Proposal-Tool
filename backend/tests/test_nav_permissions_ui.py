@@ -89,13 +89,21 @@ def test_it_stays_in_every_other_roles_menu(ran):
 
 @needs_node
 def test_the_sections_survive_a_removed_item(ran):
-    """A section heading whose only item is gone would print an empty group. Leads & bids keeps two
-    of its three here, so this is about the heading still belonging to the items that remain."""
+    """A section heading whose only item is gone would print an empty group, and every row that
+    does survive has to keep the heading it belongs to.
+
+    This used to read "Leads & bids keeps two of its three". That heading was one of the five
+    removed on 2026-08-25: Lead Inbox, Bid Pipeline and Bid Calendar are now three of the nine rows
+    under Active, and the denied user loses the first of them. The claim is unchanged and the group
+    is bigger — nothing loses its heading, and the survivors stay in order with a hole where the
+    denied row was, rather than closing up into some other arrangement."""
     user = ran["menus"]["user"]
     for e in user:
         assert e["section"], "%s lost its section heading" % e["href"]
-    lb = [e["href"] for e in user if e["section"] == "Leads & bids"]
-    assert lb == ["/crm.html", "/calendar.html"], lb
+    active = [e["href"] for e in user if e["section"] == "Active"]
+    assert "/leads.html" not in active, "the denied row is still in the menu"
+    assert active == ["/portal.html", "/followups.html", "/crm.html", "/calendar.html",
+                      "/analytics.html", "/projects.html", "/history.html", "/trash.html"], active
 
 
 @needs_node
@@ -278,7 +286,12 @@ def test_the_rowless_tabs_switch_reports_the_DENIED_role_as_off(hidden):
     row = hidden["matrixRow"]
     assert row, "the matrix has no row for %s at all" % hidden["hidden"]
     assert row["roles"] == {"user": False, "admin": True, "super_admin": True}, row["roles"]
-    assert row["label"] == "Info Sheet" and row["section"] == "Proposals"
+    # The section reads "Active" and not "Proposals" since 2026-08-25. NO_SIDEBAR_TABS names a
+    # heading only so the Admin page can GROUP the switch; what the policy governs is the href, and
+    # nav_access.py is the authority on that. But the name still has to be a heading that EXISTS,
+    # or this row lands in a group the matrix cannot draw — and an undrawable switch is the one
+    # lockout with no way back in the UI, which is why it is asserted rather than commented.
+    assert row["label"] == "Info Sheet" and row["section"] == "Active", row
 
 
 @needs_node
