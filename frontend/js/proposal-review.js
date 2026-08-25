@@ -4556,6 +4556,50 @@
     markEdited(el, false);                  // a break is text, not formatting
   });
 
+  /** Backspace at the very start of a line takes the LIST FORMATTING off, one rung at a time.
+   *
+   *  Hanz, 2026-08-25: "When I back space, it doesnt remove the bullet point."
+   *
+   *  It did nothing at all, and the reason is structural rather than a missing branch. Every
+   *  `.tw-block` is its own editing host (`renderBlock` sets contentEditable per block;
+   *  #doc-surface has none), so a browser cannot merge or delete across the boundary — Backspace
+   *  at offset 0 has nowhere to go and is silently dropped. That same structure is what stops two
+   *  paragraphs ever merging into one, which is worth keeping: a `.tw-block` IS one Word
+   *  paragraph, identified by an id from the backend's walk, and the editor cannot invent a
+   *  second one.
+   *
+   *  So Backspace at offset 0 does what Word does with the space it has: removes the bullet
+   *  first, then walks the indent back to the margin, and only then gives up. The ladder is
+   *  deliberate — in Word, Backspace on a bulleted line un-bullets it before it starts eating the
+   *  indent, and an estimator pressing Backspace on a bullet is asking for the bullet to go.
+   *
+   *  Everything here is `paraAction`, the same call the ribbon's Bullet and Outdent buttons make,
+   *  so this route cannot drift from them: it inherits the locked-clause refusal (un-bulleting a
+   *  numbered TERMS clause renumbers the contract), the override persistence, and the terms
+   *  repagination. The only thing it adds is the keystroke.
+   *
+   *  NOT handled, on purpose: the synthesized `{{#system}}` rows and the notes/price lines have no
+   *  paragraph record at all (no `dataset.id`, no `paraNow` state), so there is no bullet state to
+   *  turn off — `paraNow` misses and this returns without preventing the default, leaving them
+   *  exactly as they were. */
+  docSurface.addEventListener("keydown", (e) => {
+    if (e.key !== "Backspace" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (!el) return;
+    const sel = selectionRange(el);
+    // Only a COLLAPSED caret at the very start. A selection means "delete these characters", and
+    // mid-line Backspace is the browser's job; both must fall through untouched.
+    if (!sel || sel[0] !== 0 || sel[1] !== 0) return;
+    const now = paraNow(Number(el.dataset.id));
+    if (!now || now.locked) return;
+    // The ladder: bullet first, then the indent, then stop. `paraAction` decides whether the
+    // change is allowed and reports it; only a change consumes the keystroke.
+    const rung = now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null);
+    if (!rung) return;                      // at the margin with no bullet: nothing left to undo
+    if (!paraAction(el, rung)) return;
+    e.preventDefault();
+  });
+
   docSurface.addEventListener("paste", (e) => {
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
     if (!el) return;
