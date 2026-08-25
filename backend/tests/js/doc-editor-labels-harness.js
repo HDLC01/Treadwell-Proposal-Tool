@@ -368,7 +368,14 @@ function fireWindow(type, props) {
 const docSurface = new El("div");
 ROOT.appendChild(docSurface);
 const systemPreviewEl = new El("div");
-ROOT.appendChild(systemPreviewEl);
+// INSIDE A REAL TEXT BOX, because that is where renderPositioned puts it and because the box is
+// now the editing host. Mounted bare, every WORK row would sit under nothing that declares
+// contenteditable at all, and "is this row editable?" would have no honest answer to give.
+const SYS_BOX = new El("div");
+SYS_BOX.className = "tw-txbx";
+SYS_BOX.attrs.contenteditable = "true";
+SYS_BOX.appendChild(systemPreviewEl);
+ROOT.appendChild(SYS_BOX);
 const form = new El("form");
 const boxDesign = new Map();
 const persisted = { calls: 0 };
@@ -420,6 +427,12 @@ function schedulePersistOverrides() {
 }
 
 const LIFTED = [
+  // focusInside asks TWO questions now, and the second one is the caret's own line. It has to:
+  // the box is the editing host, so document.activeElement is an ANCESTOR of the paragraph being
+  // typed in and `el.contains(activeElement)` is false exactly when the guard matters. These
+  // three are what the second question is made of -- leaving them out is a ReferenceError the
+  // first time renderSystemPreview asks whether it may repaint.
+  topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"),
   topConst("focusInside"), topConst("escHtml"), stringConst("_OVERRIDE_TITLE"),
   topConst("_SYS_ROW_LINE_FIELDS"), stringConst("_SYS_LINE_TITLE"),
   // workLabelHtml is called from inside renderSystemPreview, so leaving it out does not fail
@@ -491,6 +504,11 @@ const LIFTED = [
   // throws `ReferenceError` on the first formatted paragraph, i.e. in the middle of a persist,
   // which is the failure mode the note above fitOffer describes.
   fn("storedRuns"), fn("preserveRichOverrides"),
+  // The {{#system}} row channel is a whole-container SWEEP now, not a single-row write: the box is
+  // one editing host, so a Delete across three rows arrives as one input event and a handler that
+  // only read the caret's row would leave the other two edited on screen and unedited in the
+  // draft. syncSystemRow is the per-row half the sweep and the per-row listener share.
+  fn("syncSystemRows"), fn("queueSysOvSave"), fn("syncSystemRow"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();
@@ -553,17 +571,22 @@ ${BOX_LOOP}
              docSurface.childNodes = [];
              blockById.clear(); pristineById.clear(); paraById.clear();
              templateBlocks = records;
+             // One box holding all of them, carrying the contenteditable, the way
+             // renderPositioned builds a page. The blocks themselves declare nothing.
+             const box = document.createElement("div");
+             box.className = "tw-txbx";
+             box.attrs.contenteditable = "true";
+             docSurface.appendChild(box);
              const els = new Map();
              for (const b of records) {
                blockById.set(b.id, b);
                const el = document.createElement("div");
                el.className = "tw-block";
                el.dataset.id = String(b.id);
-               el.attrs.contenteditable = "true";
                if (b.list) el.classList.add("tw-li");
                el.textContent = b.text || "";
                pristineById.set(b.id, b.text || "");
-               docSurface.appendChild(el);
+               box.appendChild(el);
                els.set(b.id, el);
              }
              return els;
@@ -603,13 +626,30 @@ function seedSystems(names) {
 /** Every WORK row in the preview, in document order — and, for each, whether the WHOLE row is
  *  the editable element. `islands` counts anything editable strictly INSIDE the row: it has to
  *  be zero, because a nested editable span is the model Kyle rejected three times. */
+/** The element that actually makes `el` editable: the nearest ancestor-or-self declaring
+ *  contenteditable. With one host per box, that has to be the box. */
+function hostOf(el) {
+  let n = el;
+  while (n) {
+    if (n.attrs && n.attrs.contenteditable === "true") return n;
+    n = n.parentNode;
+  }
+  return null;
+}
+
 function rows() {
   return systemPreviewEl.querySelectorAll("[data-sys-line]").map((p) => ({
     i: Number(p.dataset.sysIndex),
     field: p.dataset.sysLine,
     text: p.textContent,
     computed: p.dataset.computed,
-    editable: p.attrs.contenteditable === "true",
+    // WHAT MAKES THIS ROW EDITABLE, by name. `ownHost` says the row declares it itself, which it
+    // must NOT any more: a row with its own contenteditable is its own editing host, and a
+    // browser selection cannot cross a host boundary -- which is what stopped a drag at one line
+    // and is the whole complaint the one-host change answers. `host` names the element that does
+    // declare it, so "editable" is proved rather than assumed.
+    ownHost: p.attrs.contenteditable === "true",
+    host: (hostOf(p) || {}).className || null,
     wholeLine: p.classList.contains("tw-line-edit"),
     islands: p.querySelectorAll("[contenteditable]").length,
     bold: p.querySelectorAll("strong").map((b) => b.textContent),

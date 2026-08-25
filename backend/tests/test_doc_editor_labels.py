@@ -533,14 +533,31 @@ def _fields(rows):
     return [(r["i"], r["field"]) for r in rows]
 
 
-def test_every_work_row_is_one_editable_line_with_nothing_editable_inside_it(ran):
-    """THE ANSWER TO THE COMPLAINT, executed. Three rows, three editable elements, and ZERO
-    editable descendants — that last number is the whole point. A nested contenteditable span is
-    the island model, and an island model is what makes " SF of epoxy flooring" untypeable: the
-    words between the islands belong to no editable element."""
+def test_every_work_row_is_editable_through_the_box_and_declares_no_host_of_its_own(ran):
+    """THE ANSWER TO THE COMPLAINT, executed — and rewritten, because the complaint moved on.
+
+    It used to assert that each row declared `contenteditable` ITSELF. That was the right shape
+    while the argument was about islands: the words between two editable spans belonged to no
+    editable element, so " SF of epoxy flooring" could not be typed in, and one editable element
+    per row fixed it.
+
+    Hanz, 2026-08-26: "just make every Major section of the proposal textbox just one BIG TEXT
+    BOX not One big and some smaller textboxes. That is not how the Word DOc textboxes work."
+    An element with its own `contenteditable` is its own EDITING HOST, and a browser selection
+    cannot cross a host boundary — so three editable rows meant three places a drag could stop.
+    The host moved up to the box, and these rows now inherit from it.
+
+    So the assertion inverts, and what it protects does not: every row still takes a caret
+    anywhere in it, and nothing inside a row is separately editable. `islands` is unchanged and
+    still zero — a nested editable span would re-create both the island model AND a host boundary
+    in the middle of a line."""
     got = ran["workGeometry"]["rows"]
     assert _fields(got) == [(0, "name_line"), (0, "texture_line"), (0, "area_line")]
-    assert all(r["editable"] for r in got), got
+    assert all(r["host"] == "tw-txbx" for r in got), (
+        "a WORK row is not editable through its text box: %r" % [r["host"] for r in got])
+    assert not any(r["ownHost"] for r in got), (
+        "a WORK row declared contenteditable itself — that is a second editing host inside the "
+        "box, and a drag through the section will stop at it again")
     assert all(r["wholeLine"] for r in got), (
         "a WORK row stopped using the same whole-line model as the base bid")
     assert [r["islands"] for r in got] == [0, 0, 0], (

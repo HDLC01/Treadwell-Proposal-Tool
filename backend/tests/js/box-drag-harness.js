@@ -290,6 +290,12 @@ const LIFTED = [
   fn("boxCeilingPt"), fn("growRoomPt"), fn("otherBoxRects"),
   fn("dropAutoGrownHeight"), fn("releaseAutoGrownHeight"), fn("growBoxToFit"), fn("fitOffer"),
   fn("fitTxbx"), fn("wireOverflowExpand"),
+  // wireOverflowExpand's click handler asks `lineAt(e.target)` -- "was this click meant for a
+  // line, which should take the caret rather than expand the box". It used to ask with a
+  // hand-written selector list ending in `[contenteditable=true]`, and the BOX carries that
+  // attribute now, so every click inside a truncated NOTES box matched it on the way up and the
+  // box would never have expanded again.
+  topConst("LINE_SEL"), fn("lineAt"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();
