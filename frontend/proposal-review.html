@@ -421,6 +421,20 @@
   <button type="button" id="generate-btn">Continue to Done →</button>
 </div>
 
+<!-- The formatting ribbon's row. Kyle, 2026-08-24, on the B / I / U bar that used to float
+     beside the caret: "Can we move this editable box on top as well but keep it static like a
+     ribbon in a word document." proposal-review.js (ensureFmtBar) mounts `.tw-fmtbar` in here
+     once, on load, and never moves or hides it again.
+
+     THE PLACE IS THE POINT, twice over.
+       * It is PINNED for free. `body.word-app` is a flex column and `.word-canvas` below is
+         `flex: 1; overflow-y: auto`, so the canvas is the scroller and the rows above it are the
+         permanently-visible chrome. No `position: sticky`, no `fixed` coordinates.
+       * It is OUTSIDE #doc-zoom, which is what the old bar's `position: fixed` was for: the
+         document surface sits under a `scale()` transform and the ribbon must not be scaled with
+         it. A normal-flow sibling of `.word-canvas` never enters that transform. -->
+<div id="fmt-ribbon" class="fmt-ribbon"></div>
+
 <!-- LEFT rail: the structured "Proposal fields" that feed the document's
      highlighted values. Same form + field names as before (state round-trips
      unchanged); only the placement moved — the document surface on the right

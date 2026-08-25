@@ -1139,6 +1139,23 @@ button {
   background: #fffdf0;
   box-shadow: inset 2px 0 0 rgba(158, 0, 31, 0.45), 0 0 0 1.5px rgba(158, 0, 31, 0.55);
 }
+/* WHICH paragraph the formatting ribbon is aimed at, for as long as it is aimed at it.
+   Kyle, 2026-08-24: "Can we move this editable box on top as well but keep it static like a
+   ribbon in a word document." The bar that floated beside the caret answered "which paragraph?"
+   by being next to it, and it only existed while that paragraph had focus. A ribbon at the top of
+   the page can do neither, and its target now deliberately outlives the focus ring — so the
+   paragraph has to say so itself, or Bold is a press into the dark.
+
+   `background` and nothing else, for the reason stated above `.tw-block:hover`: no border, no
+   outline, no padding. This surface is a to-scale preview of a printed page registered against
+   baked artwork, and a cue that reflowed the text by a pixel would be worse than the confusion.
+
+   `:not(:focus)` because a focused block already has the brighter focus ring and does not need
+   telling twice. `:not(.tw-clause-kept)` because that amber is a REFUSAL the estimator has to be
+   able to read — the numbered clause they just tried to empty — and at (0,3,0) this rule would
+   otherwise outrank `.tw-block.tw-clause-kept` at (0,2,0) and paint it out. */
+.tw-block.tw-fmt-target:not(:focus):not(.tw-clause-kept) { background: #fffdf0; }
+
 /* A token value inside an editable paragraph IS editable, so it must not claim otherwise —
    `.tw-fill` sets `cursor: default` for the read-only priced regions, where it is true. */
 .tw-block .tw-fill { cursor: text; }
@@ -1294,23 +1311,39 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   }
 }
 
-/* ── Formatting toolbar on the focused proposal block ──────────────────────
-   position:fixed on purpose — the document surface sits under a zoom
-   transform, so viewport coordinates keep the bar the right size and in the
-   right place at every zoom level with no scale factor to divide out. */
+/* ── The formatting ribbon ─────────────────────────────────────────────────
+   Kyle, 2026-08-24: "Can we move this editable box on top as well but keep it
+   static like a ribbon in a word document."
+
+   It used to be `display: none` + `position: fixed`, placed each time from the
+   focused block's `getBoundingClientRect()` — on purpose, because the document
+   surface sits under a zoom transform and viewport coordinates are already
+   post-transform, so there was no scale factor to divide out. A ribbon needs
+   neither: #fmt-ribbon (proposal-review.html) is a normal-flow row of page
+   chrome between `.word-ribbon` and `.word-canvas`, which is OUTSIDE
+   #doc-zoom's transform, so it is never scaled and there are no coordinates
+   left to compute.
+
+   `display: flex` and no `display: none` anywhere: the bar is on screen from
+   page load. The JS no longer touches `style.display` at all — when there is
+   nothing to format the ribbon goes INERT (`.tw-fmtbar-idle` + real
+   `disabled`), the way Word greys its ribbon out instead of removing it. */
+.fmt-ribbon { flex: 0 0 auto; }        /* page chrome, never squeezed by the canvas below */
 .tw-fmtbar {
-  display: none;
-  position: fixed;
-  z-index: 60;
+  display: flex;
+  flex-wrap: wrap;        /* a narrow window wraps the controls; the row itself still never moves */
   align-items: center;
   gap: 2px;
-  padding: 4px 6px;
-  border: 1px solid var(--surface-dim);
-  border-radius: 8px;
+  padding: 5px 14px;      /* 14px lines the B up with the step pills in the ribbon above */
+  border-bottom: 1px solid #d2d0ce;   /* same hairline as .word-ribbon's */
   background: var(--surface-lowest);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, .16);
   font-size: 13px;
 }
+/* Nothing selected. Word greys its ribbon out rather than taking it away, and so does this —
+   but the dimming is only the LOOK: renderFmtBar sets a real `disabled` on every control, because
+   a dimmed-but-live button is how an element nobody can see goes on stealing the click. */
+.tw-fmtbar-idle { opacity: 0.55; }
+.tw-fmtbar button:disabled, .tw-fmtbar select:disabled { cursor: default; }
 .tw-fmtbar button {
   min-width: 28px;
   height: 26px;
