@@ -2358,6 +2358,12 @@
   // from the estimate whenever focus leaves them, so "selected" and "cleared" have no meaning
   // there yet -- that is what E6's channel work is for.
   let boxSel = null;
+  // The line the last Ctrl+A landed on. The widen used to depend on reading the selection back and
+  // finding it covered the whole line -- which is a round trip through the browser's Range, and a
+  // block ending in a <br> reports a length the selection cannot actually reach. When that check
+  // said "not the whole line" the second press just re-selected the line and the feature looked
+  // dead. Remembering the target is what makes press-again reliable.
+  let lastSelectAll = null;
 
   /** Every editable LINE inside `el`'s box, in document order.
    *
@@ -4798,8 +4804,8 @@
 
   // Typing, clicking or moving the caret means the box selection is over. Registered before the
   // focusin handler below so the class is gone by the time the ribbon re-renders.
-  docSurface.addEventListener("mousedown", () => { clearBoxSel(); });
-  docSurface.addEventListener("input", () => { clearBoxSel(); });
+  docSurface.addEventListener("mousedown", () => { clearBoxSel(); lastSelectAll = null; });
+  docSurface.addEventListener("input", () => { clearBoxSel(); lastSelectAll = null; });
   window.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !boxSel) return;
     // Stop here: the window handler below this one collapses an expanded text box, and somebody
@@ -4848,15 +4854,18 @@
       // Already got the line? Widen to the box. Otherwise take the line first -- which is what
       // the browser would have done anyway, done explicitly so the SECOND press has a state to
       // recognise rather than depending on what the browser left behind.
-      if (boxSel || wholeLineSelected(el)) {
+      // Second press on the SAME line -- or any press while a box is already held -- widens.
+      if (boxSel || lastSelectAll === el || wholeLineSelected(el)) {
         boxSel = boxLines(el);
+        lastSelectAll = null;
         paintBoxSel();
-        showFmtBar(el);                      // the ribbon still aims at the caret's own block
+        if (el.classList.contains("tw-block")) showFmtBar(el);
       } else {
         clearBoxSel();
+        lastSelectAll = el;
         const total = runsLength(editRuns(el));
-        placeSelection(el, 0, total);
-        showFmtBar(el);
+        if (total) placeSelection(el, 0, total);
+        if (el.classList.contains("tw-block")) showFmtBar(el);
       }
       return;
     }

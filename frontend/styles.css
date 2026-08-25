@@ -816,12 +816,20 @@ button {
    text by a pixel would be a worse bug than the one it is reporting. Deliberately stronger than
    the hover tint and weaker than focus -- it has to read as "these lines are selected" while the
    caret is still visibly in one of them. */
-.tw-block.tw-boxsel { background: rgba(158, 0, 31, 0.14); }
+/* STRONG ENOUGH TO SEE. The first version was a 14% red wash, which is invisible on this page:
+   every overridden value already carries a yellow .tw-fill / .tw-overridden highlight, and a faint
+   tint underneath it reads as nothing at all -- so a selection that HAD happened looked like a
+   feature that had not. Still background-and-outline only, never geometry: this surface is a
+   to-scale preview registered against baked artwork, so a cue that reflowed the text by a pixel
+   would be the worse bug. */
+.tw-block.tw-boxsel, .tw-line-edit.tw-boxsel {
+  background: rgba(158, 0, 31, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(158, 0, 31, 0.45);
+}
 /* The computed lines get the same cue: a selection is about what the estimator can see, not
    about which save channel a row uses. Same background-only rule, for the same reason.
    `.tw-line-edit` already carries its own hover and focus tints, and this has to outrank the
    hover one -- two classes to its one. */
-.tw-line-edit.tw-boxsel { background: rgba(158, 0, 31, 0.14); }
 .tw-block.tw-dirty-warn::after {
   content: " \26A0";
   font-size: 0.75em;
@@ -1394,10 +1402,26 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
    comes from its `size` attribute -- about twenty characters. That minimum beat `width: 54px`, so
    the box grew to ~170px+, which with flex-wrap pushed the ribbon onto three rows. `min-width: 0`
    lets the declared width actually apply; `flex: 0 0 auto` stops it being stretched either way. */
-.tw-fmtsize { flex: 0 0 auto; width: 52px; min-width: 0; height: 24px; padding: 0 4px;
+/* SPECIFICITY, not the width, is what this rule is fighting.
+   Hanz, twice: "make this smaller", then "The size texbox is still too biug fix this first".
+
+   styles.css carries a global form rule -- `input[type="text"], input[type="email"], ... { width:
+   100%; display: block; margin-top: 4px }` -- and `input[type="text"]` scores (0,1,1) against a
+   lone class's (0,1,0). So it OUTRANKED `.tw-fmtsize` and `width: 100%` won; the 52px was never
+   applied, no matter how many times it was declared. `min-width: 0` was a real fix for a real
+   second problem (a flex item's automatic minimum is its intrinsic width) but it could not save a
+   width that was already losing.
+   `.tw-fmtbar input.tw-fmtsize` scores (0,2,1) and wins on specificity rather than on source
+   order, so moving the rule cannot silently un-fix it. The three declarations that global rule
+   forces are each undone explicitly: width, display and margin-top. */
+.tw-fmtbar input.tw-fmtsize {
+  flex: 0 0 auto; width: 52px; min-width: 0; max-width: 52px;
+  display: inline-block; margin: 0; height: 24px; padding: 0 4px;
   text-align: center; border: 1px solid var(--surface-dim); border-radius: 5px;
-  background: var(--surface-lowest); color: var(--ink); font: inherit; font-size: 12px; }
-.tw-fmtsize:disabled { opacity: .55; cursor: default; }
+  background: var(--surface-lowest); color: var(--ink); font: inherit; font-size: 12px;
+  box-sizing: border-box;
+}
+.tw-fmtbar input.tw-fmtsize:disabled { opacity: .55; cursor: default; }
 /* ONE ROW. The ribbon is page chrome above a document; a row that reflows as controls come and go
    is the thing Kyle asked to be rid of when he asked for it to stay put. Nothing here needs to
    wrap -- there are eight controls -- so it does not. */

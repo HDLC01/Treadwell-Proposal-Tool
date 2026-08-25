@@ -438,6 +438,9 @@ const api = new Function(
   // The whole-box selection. Its own binding, verbatim from the page, because a format press and
   // the delete key both branch on it -- a stub would let the branch go untested.
   let boxSel = null;
+  // The line the last Ctrl+A landed on -- what makes press-again widen without needing to read
+  // the browser's Range back. The page's own binding, verbatim.
+  let lastSelectAll = null;
   const blockById = new Map();      // id -> the template's block record
   const paraById = new Map();       // the page's own store, see proposal-review.js
   const schedulePersistOverrides = () => { persisted.push(1); };
