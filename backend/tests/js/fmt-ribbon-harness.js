@@ -334,8 +334,21 @@ const document = {
   addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
 };
 
-// THE MODELLED SELECTION. `null` means "the caret is not in any paragraph" — the state the ribbon
-// has to survive, and the state the old floating bar simply did not exist in.
+// THREE STATES, NOT TWO, AND THE THIRD IS WHY THIS MODEL GREW.
+//
+// The first version of this harness could say "the selection is inside `el`" or "it is not", which
+// is exactly the distinction `selectionRange` draws — and that is precisely how it missed a real
+// bug. `selectionRange` needs BOTH endpoints inside the block, so a highlight that STARTS in the
+// target and runs out of it reads as "no readable selection", the remembered range survives
+// untouched because the paragraph's TEXT did not change, and a press formats the old characters
+// while a different span is visibly highlighted.
+//
+// So the model now carries where each endpoint is:
+//   { block, range }                  — wholly inside `block`: selectionRange reads it
+//   { block, range, endsIn: <node> }  — starts in `block`, ends somewhere else: unreadable
+//   { block: <node>, foreign: true }  — a highlight in the sidebar: unreadable, and NOT the
+//                                       document's business, so the memory must survive it
+//   null                              — nothing selected at all
 let SEL = null;
 
 const window = {
@@ -343,10 +356,16 @@ const window = {
   addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
   innerWidth: 1440,
   innerHeight: 900,
-  // What the page's selectionchange listener reads. `startContainer` is the block itself, which
-  // is all `fmtBlock.contains(...)` needs to decide whether the selection is still in there.
+  // A range honest about BOTH ends. `startContainer` alone is all the page's selectionchange
+  // listener reads, but `selectionLeftBlock` reads `endContainer` and `collapsed` too, and giving
+  // it a stub that lied about either would put the bug back where the harness cannot see it.
   getSelection: () => (SEL
-    ? { rangeCount: 1, getRangeAt: () => ({ startContainer: SEL.block }) }
+    ? { rangeCount: 1,
+        getRangeAt: () => ({
+          startContainer: SEL.block,
+          endContainer: SEL.endsIn || SEL.block,
+          collapsed: !SEL.endsIn && !SEL.foreign && SEL.range && SEL.range[0] === SEL.range[1],
+        }) }
     : { rangeCount: 0, getRangeAt: () => null }),
 };
 
@@ -391,7 +410,8 @@ const LIFTED = [
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.
   fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
-  fn("fmtRangeSource"), fn("fmtRangeFor"),
+  fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
+  fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
 ].join("\n\n");
 
@@ -413,8 +433,9 @@ const api = new Function(
   const paraById = new Map();       // the page's own store, see proposal-review.js
   const schedulePersistOverrides = () => { persisted.push(1); };
   const scheduleRepaginate = () => { repaginated.push(1); };
-  // Modelled, not lifted — see the header. The CONTRACT is what matters: offsets when the caret
-  // is inside \`el\`, null when it is anywhere else.
+  // Modelled, not lifted — see the header. The CONTRACT is what matters: offsets when the
+  // selection is WHOLLY inside el, null when either endpoint is anywhere else — which is the real
+  // function's own rule and the one the escaped-selection bug hid behind.
   const selectionRange = (el) => readSel(el);
   // applyFormat calls this after re-rendering the runs, and the browser really does leave the
   // caret on what was just formatted, so the model follows.
@@ -473,7 +494,9 @@ const api = new Function(
   };
   `
 )(document, window, docSurface, Node, F, dirtied, persisted, repaginated,
-  (el) => (SEL && SEL.block === el ? SEL.range.slice() : null),
+  // Refuses an escaped or foreign selection, exactly as the real selectionRange does when one of
+  // its endpoints is outside the block.
+  (el) => (SEL && SEL.block === el && !SEL.endsIn && !SEL.foreign ? SEL.range.slice() : null),
   (el, a, b) => { SEL = { block: el, range: [a, b] }; });
 
 // ── driving it the way a person does ────────────────────────────────────────
@@ -491,6 +514,21 @@ function focusBlock(el) {
  *  selectionchange, which is where the ribbon records the range it will act on later. */
 function highlight(el, a, b) {
   SEL = { block: el, range: [a, b] };
+  fireDoc("selectionchange");
+}
+
+/** Drag from inside `el` and keep going past its end — onto the canvas, or into the next
+ *  paragraph. THE GESTURE THAT EXPOSED THE BUG: the browser reports a real, non-collapsed
+ *  selection, `selectionRange` cannot read it, and the paragraph's text is untouched. */
+function highlightEscaping(el, a, b, endsIn) {
+  SEL = { block: el, range: [a, b], endsIn: endsIn || DOC_ZOOM };
+  fireDoc("selectionchange");
+}
+
+/** Highlight a word in a sidebar field. Unreadable too, but it is not a claim about the document,
+ *  and the ribbon outliving it is the whole feature — so the remembered range MUST survive. */
+function highlightForeign(node) {
+  SEL = { block: node, foreign: true };
   fireDoc("selectionchange");
 }
 
@@ -883,6 +921,113 @@ function goIdle() {
   const hidden = barSnapshot().controls;
   goIdle();
   out.idleAfterLockedClause = { hidden: hidden, idle: barSnapshot() };
+}
+
+// ═══ 17. THE SELECTION LEFT THE BLOCK: the remembered range must not survive ═
+// The hole the text stamp does not cover. `selectionRange` needs BOTH endpoints inside the block,
+// so a drag that starts in the WORK row and runs past its end is unreadable — nothing re-stamps
+// the range, the paragraph's TEXT is untouched so the stamp still matches, and the ribbon lights
+// up for a span that is no longer highlighted.
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(117);
+  focusBlock(el);
+  highlight(el, 12, 26);                       // "epoxy flooring"
+  const remembered = api.rememberedRange();
+  highlightEscaping(el, 12, 40);               // …and keep dragging, out of the paragraph
+  const pressed = press(CONTROLS.bold);
+  out.selectionEscaped = {
+    remembered: remembered,
+    rememberedAfter: api.rememberedRange(),
+    pressed: pressed,
+    runs: runsOf(el),
+  };
+}
+
+// ═══ 18. Dragging UPWARD out of the row: the handler never even fires ═══
+// The selectionchange listener returns early when startContainer is outside the block, so nothing
+// is touched at all — which is why the guard has to live in fmtRangeFor and not in that listener.
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(117);
+  focusBlock(el);
+  highlight(el, 12, 26);
+  SEL = { block: DOC_ZOOM, range: [0, 5], endsIn: el };   // started above, ended inside
+  fireDoc("selectionchange");
+  press(CONTROLS.bold);
+  out.selectionEscapedUpward = { runs: runsOf(el) };
+}
+
+// ═══ 19. …but a highlight in the SIDEBAR leaves the memory alone ═════
+// This is the feature, not a leak. Kyle asked for a ribbon that still works after focus has gone;
+// double-clicking a word in the Tax field is not a claim about which words in the document to
+// format, and dropping the range for it would undo the whole thing.
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(117);
+  focusBlock(el);
+  highlight(el, 12, 26);
+  const taxField = new El("input");
+  WORD_RIBBON.appendChild(taxField);
+  highlightForeign(taxField);
+  leaveFor(taxField);
+  SEL = { block: taxField, foreign: true };    // the highlight is still up, in the sidebar
+  press(CONTROLS.bold);
+  out.foreignSelection = { runs: runsOf(el) };
+}
+
+// ═══ 20. A press that changes nothing writes nothing ══════════
+// Reset on a paragraph carrying no formatting deletes nothing, and Bold on already-bold words adds
+// nothing — but markEdited ran regardless, so the block went tw-fmt, then dirty, then persisted an
+// override for a paragraph nobody changed. The ribbon makes it reachable with no caret in the
+// document at all, because the target now outlives focus for the whole session.
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(116);
+  focusBlock(el);
+  leaveFor(null);
+  const before = dirtied.length, persistedBefore = persisted.length;
+  press(CONTROLS.reset);                       // nothing to reset: no formatting anywhere
+  out.noOpReset = {
+    dirtiedDelta: dirtied.length - before,
+    persistedDelta: persisted.length - persistedBefore,
+    runs: runsOf(el),
+  };
+  // …and the real thing still works: bold it, then reset it, and only those two count.
+  const el2 = els.get(115);
+  focusBlock(el2);
+  const d0 = dirtied.length;
+  press(CONTROLS.bold);
+  const afterBold = runsOf(el2);
+  press(CONTROLS.reset);
+  out.realEditsStillCount = {
+    dirtiedDelta: dirtied.length - d0,
+    boldLanded: afterBold.some((r) => r.bold === true),
+    resetCleared: !runsOf(el2).some((r) => r.bold === true),
+  };
+}
+
+// ═══ 21. A press with the caret outside the document does not paint a highlight ═
+// applyFormat re-placed the document selection unconditionally. Before the ribbon that was
+// unreachable with focus elsewhere; now every press made from a sidebar field runs it, putting a
+// highlight on screen the estimator never made — and in an engine that focuses the editing host on
+// a programmatic selection, pulling their caret out of the field they were typing in.
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(116);
+  focusBlock(el);
+  highlight(el, 0, 8);
+  const field = new El("input");
+  WORD_RIBBON.appendChild(field);
+  leaveFor(field);
+  SEL = null;                                  // caret in the sidebar: nothing selected in the doc
+  press(CONTROLS.bold);
+  out.noSelectionRepaint = {
+    // The format still landed…
+    runs: runsOf(el),
+    // …and nothing was written back into the document's selection.
+    selectionAfter: SEL === null ? null : { sameBlock: SEL.block === el, range: SEL.range },
+  };
 }
 
 // ═══ 13. Nothing anywhere measured a block, and nothing was ever hidden ══

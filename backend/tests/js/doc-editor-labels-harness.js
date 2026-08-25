@@ -465,7 +465,12 @@ const LIFTED = [
   // has been re-filled — which, since the ribbon holds its target past blur, is something
   // refreshDocumentFills does to it routinely.
   fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
-  fn("fmtRangeSource"), fn("fmtRangeFor"),
+  fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
+  // applyFormat gained two guards in review: runsEqual (a press that changes nothing must not mark
+  // the paragraph edited and ship an override) and selectionInSurface (do not re-place the document
+  // selection when the caret is in a sidebar field). Both must be lifted, not stubbed -- a stub
+  // that always said "changed" would put the spurious-override bug straight back.
+  fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("restoreSavedOverrides"), fn("collectOverrides"),

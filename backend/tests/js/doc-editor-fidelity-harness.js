@@ -357,7 +357,17 @@ const INPUT_HANDLER = delegated("  // Mark blocks dirty as they're edited (deleg
  *  template version. Built twice for the two-tabs case. */
 function makePage(label) {
   const document = makeDoc();
-  const window = { _listeners: {}, addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); } };
+  // getSelection is what selectionInSurface reads: applyFormat only re-places the document
+  // selection when there WAS one in the document, so a ribbon press made from a sidebar field does
+  // not paint a highlight the estimator never made. This harness drives formatting through CARET,
+  // which IS a document selection, so the honest stub reports one anchored on the surface -- and it
+  // is defined as a getter over `docSurface` below rather than a constant, so a future test that
+  // clears CARET gets the other branch for free.
+  const window = { _listeners: {}, addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
+                   getSelection: () => ({ rangeCount: 1,
+                                          getRangeAt: () => ({ startContainer: docSurface,
+                                                               endContainer: docSurface,
+                                                               collapsed: false }) }) };
   const docSurface = new El("div", document);
   const persists = [];
   return new Function(
@@ -385,6 +395,8 @@ function makePage(label) {
     const selectionRange = () => CARET;
     const placeSelection = () => {};
     const showFmtBar = () => {};
+    ${fn("runsEqual")}
+    ${fn("selectionInSurface")}
     // refreshDocumentFills re-renders the ribbon after a re-fill, because the buttons are read off
     // a remembered range that the re-fill may have just invalidated — a lit Bold describing a
     // selection that no longer exists is a button lying about what pressing it will do. The
