@@ -3695,7 +3695,7 @@ def api_proposal_template_media(request: Request, work_type: str = "epoxy",
 # ("1." to "27." for the Terms and Conditions clauses). Stale is WRONG ON SCREEN, not merely
 # degraded: with no `marker` the renderer falls back to `list`, which is what drew a red square
 # in front of all 27 numbered clauses in the first place.
-_BLOCK_SCHEMA_VERSION = "6"
+_BLOCK_SCHEMA_VERSION = "7"
 
 
 def _template_proposal_version(path: Path) -> str:

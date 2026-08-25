@@ -405,11 +405,16 @@ const LIFTED = [
   fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"),
   fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"), fn("insertBreakAt"),
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
+  // applyParaGeom is where the paragraph's real geometry now lands -- left/hanging/first-line
+  // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
+  // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
+  fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
   // The ribbon itself. fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.
   fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
+  fn("boxBlocks"), fn("paintBoxSel"), fn("clearBoxSel"), fn("wholeLineSelected"),
   fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
   fn("runsEqual"), fn("selectionInSurface"),
   fn("ensureFmtBar"), fn("showFmtBar"), fn("idleFmtBar"),
@@ -429,6 +434,9 @@ const api = new Function(
   const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
   let _fmtBusy = false;
   let fmtBar = null, fmtBlock = null, fmtRange = null, fmtRangeText = null;   // the page's own bindings, verbatim
+  // The whole-box selection. Its own binding, verbatim from the page, because a format press and
+  // the delete key both branch on it -- a stub would let the branch go untested.
+  let boxSel = null;
   const blockById = new Map();      // id -> the template's block record
   const paraById = new Map();       // the page's own store, see proposal-review.js
   const schedulePersistOverrides = () => { persisted.push(1); };
@@ -453,21 +461,39 @@ const api = new Function(
     // so a test can say "the ribbon still remembers block 116" instead of guessing from a class.
     targetId: () => (fmtBlock ? String(fmtBlock.dataset.id) : null),
     rememberedRange: () => (fmtRange ? fmtRange.slice() : null),
+    /** Which blocks the box selection holds, by id, in document order. */
+    boxSelIds: () => (boxSel ? boxSel.map((n) => String(n.dataset.id)) : null),
     /** Mount blocks the way renderBlock does — class from the record, no inline para styling — so
      *  an untouched paragraph starts out exactly as it does today. */
+    /** Mount blocks the way renderPositioned does: inside a .tw-txbx[data-box-id].
+     *
+     *  The box wrapper is not decoration here -- it is what Ctrl+A's second press scopes to, so a
+     *  flat list of siblings on docSurface would make the box selection untestable (and would have
+     *  quietly matched the whole page instead of one box). Records may name a box; everything
+     *  without one lands in box 1, which is the single-box shape every earlier scenario assumes. */
     mountBlocks: (records) => {
       while (docSurface.childNodes.length) docSurface.removeChild(docSurface.childNodes[0]);
       blockById.clear(); paraById.clear();
       const els = new Map();
+      const boxes = new Map();
       for (const b of records) {
         blockById.set(b.id, b);
+        const bid = String(b.box == null ? 1 : b.box);
+        let box = boxes.get(bid);
+        if (!box) {
+          box = document.createElement("div");
+          box.className = "tw-txbx";
+          box.dataset.boxId = bid;
+          docSurface.appendChild(box);
+          boxes.set(bid, box);
+        }
         const el = document.createElement("div");
         el.className = "tw-block";
         el.dataset.id = String(b.id);
         el.attrs.contenteditable = "true";
         if (b.list) el.classList.add("tw-li");
         el.textContent = b.text || "";
-        docSurface.appendChild(el);
+        box.appendChild(el);
         els.set(b.id, el);
       }
       return els;
@@ -501,6 +527,9 @@ const api = new Function(
 
 // ── driving it the way a person does ────────────────────────────────────────
 const bar = () => api.bar();
+/** The modelled selection's offsets, when it is inside `el`. */
+const readSelRange = (el) => (SEL && SEL.block === el && !SEL.endsIn && !SEL.foreign
+  ? SEL.range.slice() : null);
 
 /** Click into a paragraph: the browser focuses it and fires focusin, which is the ONLY place the
  *  ribbon ever learns a target. */
@@ -1185,6 +1214,95 @@ function backspace(el) {
   out.escapeAbandons = {
     runsUnchanged: JSON.stringify(runsOf(el)) === JSON.stringify(before),
   };
+}
+
+/** Ctrl+A, as the keyboard sends it. */
+function selectAll(el) {
+  return fire(el, "keydown", { ctrlKey: true, key: "a" });
+}
+
+// ═══ 30. CTRL+A: THE LINE, THEN THE WHOLE BOX ══════════════════
+// Hanz: "when I click Ctrl+A It doesnt select everything in the box there still sub boxes." Those
+// "sub boxes" are the paragraphs -- each is its own editing host, so the browser's select-all
+// physically cannot reach past the one the caret is in. The second press is an editor-level
+// selection over the box instead.
+{
+  const els = api.mountBlocks(REFILL);           // 4 records, all box 1
+  const el = els.get(116);
+  focusBlock(el);
+  const first = selectAll(el);
+  const afterFirst = { range: readSelRange(el), boxSel: api.boxSelIds(),
+                       prevented: !!first.defaulted };
+  const second = selectAll(el);
+  out.selectAllWidens = {
+    afterFirst: afterFirst,
+    afterSecondIds: api.boxSelIds(),
+    secondPrevented: !!second.defaulted,
+    painted: (api.boxSelIds() || []).every((id) => els.get(Number(id)).classList.contains("tw-boxsel")),
+  };
+}
+
+// ═══ 31. …and it stops at the box it was pressed in ════════════
+// The scope Hanz chose. A second box on the same page must not be dragged in -- otherwise one
+// press would format the PRICE box because the caret happened to be in WORK.
+{
+  const two = RECORDS.map((r, i) => Object.assign({}, r, { box: i === 0 ? 2 : 1 }));
+  const els = api.mountBlocks(two);
+  const el = els.get(116);                       // box 1
+  focusBlock(el);
+  selectAll(el); selectAll(el);
+  out.selectAllStopsAtTheBox = {
+    ids: api.boxSelIds(),
+    otherBoxUntouched: !els.get(115).classList.contains("tw-boxsel"),
+  };
+}
+
+// ═══ 32. One format press covers every selected line ══════════
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(116);
+  focusBlock(el);
+  selectAll(el); selectAll(el);
+  const ids = api.boxSelIds();
+  press(CONTROLS.bold);
+  out.boxFormat = {
+    ids: ids,
+    allBold: ids.map((id) => runsOf(els.get(Number(id))).every((r) => r.bold === true || !r.text)),
+    dirtiedCount: dirtied.length,
+  };
+}
+
+// ═══ 33. Delete empties every selected line, and the clause survives ═
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(116);
+  focusBlock(el);
+  selectAll(el); selectAll(el);
+  const ids = api.boxSelIds();
+  fire(el, "keydown", { key: "Delete" });
+  out.boxDelete = {
+    ids: ids,
+    // TRIMMED, because an emptied paragraph in this editor is one newline, not zero characters --
+    // that is the shape a hand-delete leaves and what restoreEmptiedClause tests for.
+    trimmedLengths: ids.map((id) => runsOf(els.get(Number(id)))
+      .map((r) => r.text).join("").trim().length),
+    clearedAfter: api.boxSelIds(),
+  };
+}
+
+// ═══ 34. Anything else the estimator does drops the selection ══
+{
+  const els = api.mountBlocks(REFILL);
+  const el = els.get(116);
+  focusBlock(el);
+  selectAll(el); selectAll(el);
+  const held = api.boxSelIds();
+  fire(el, "mousedown", {});
+  const afterClick = api.boxSelIds();
+  selectAll(el); selectAll(el);
+  fire(el, "input", {});
+  const afterTyping = api.boxSelIds();
+  out.boxSelLetsGo = { held: (held || []).length, afterClick: afterClick, afterTyping: afterTyping };
 }
 
 // ═══ 13. Nothing anywhere measured a block, and nothing was ever hidden ══

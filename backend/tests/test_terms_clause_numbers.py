@@ -429,12 +429,36 @@ def test_the_fixture_clause_is_the_shape_the_endpoint_really_sends():
     by_id = {b["id"]: b for b in _blocks()}
     clause = by_id[51]
     assert clause["list"] is True
-    assert clause["para"] == {"bullet": False, "indent": 540, "locked": True, "marker": "1."}
+    # v7 geometry. `hanging` is what makes this clause hang its number: text at 540tw (27pt),
+    # the "1." at 540-360 = 180tw (9pt). Those are exactly the 9pt/18pt that .tw-num already
+    # hardcoded -- the numbered clauses were the ONE place the editor was already reading the
+    # file correctly, and this pins that they still agree now the numbers come from the record
+    # rather than from the stylesheet.
+    #
+    # `contextual` is True here and False on the WORK rows: these clauses inherit
+    # contextualSpacing from their own style, which is why a numbered contract has no gaps
+    # between consecutive clauses.
+    assert clause["para"] == {
+        "bullet": False, "indent": 540, "hanging": 360, "first_line": None,
+        "locked": True, "marker": "1.",
+        "spacing": {"before": None, "after": None, "line": None,
+                    "line_rule": None, "contextual": True},
+    }
     assert clause["align"] == "justify"
     assert by_id[52]["para"]["marker"] == "2."
     work = by_id[115]
     assert work["list"] is True
-    assert work["para"] == {"bullet": True, "indent": 288, "locked": False, "marker": ""}
+    # The contrast the test is drawing: an editable WORK row, bulleted by a numbering level
+    # that owns BOTH halves of its indent (288/288 -- text at 14.4pt, marker at the margin),
+    # against the locked clause above. Spacing is compared for shape: this row carries the
+    # file's own line spacing and no gaps, and no contextualSpacing of its own.
+    wsp = work["para"].pop("spacing")
+    assert work["para"] == {
+        "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
+        "locked": False, "marker": "",
+    }
+    assert wsp["before"] is None and wsp["after"] is None, wsp
+    assert wsp["line_rule"] == "auto" and wsp["line"] in (276, 300), wsp
 
 
 def test_a_clause_is_drawn_as_its_number_and_not_as_a_bullet(ran):
