@@ -399,6 +399,98 @@ def test_the_idle_ribbon_is_the_same_shape_whatever_preceded_it(ran):
             "different shape depending on what came before it" % name)
 
 
+def test_a_selection_that_left_the_paragraph_does_not_leave_a_stale_range_live(ran):
+    """THE HOLE THE TEXT STAMP DOES NOT COVER, found in review after the first fix shipped green.
+
+    `selectionRange` returns offsets only when BOTH endpoints are inside the block. So a drag that
+    starts in a WORK row and runs past its end — onto the canvas, into the next paragraph — is
+    unreadable: nothing re-stamps the range, and the paragraph's TEXT never changed, so the stamp
+    still matches. The ribbon lit up for the old [12, 26) while a different span was visibly
+    highlighted, and Bold landed on fourteen characters nobody selected.
+
+    Same failure class as the re-fill bug, reached by moving the SELECTION instead of rewriting the
+    words — and the whole-paragraph fallback's justification does not cover this one: "the estimator
+    sees the entire row change and can undo it" is true of a whole row and false of a stale window
+    in the middle of it.
+
+    The first version of the harness could not express this state at all. It modelled the selection
+    as "inside `el`" or "not inside `el`", which is exactly the distinction `selectionRange` draws —
+    so it agreed with the bug. The model now carries both endpoints."""
+    g = ran["selectionEscaped"]
+    assert g["remembered"] == [12, 26], "the harness did not set up the selection under test"
+    assert g["pressed"]["disabled"] is False, "the ribbon went inert, so this proves nothing"
+    assert g["runs"] == [{"text": "5,200 SF of epoxy flooring", "bold": True}], (
+        "Bold landed on the stale range instead of falling back to the paragraph: %r" % (g["runs"],))
+    assert g["rememberedAfter"] != [12, 26], "the stale offsets are still on record"
+
+
+def test_dragging_upward_out_of_the_paragraph_is_caught_too(ran):
+    """The nastier half of the same gesture, and the reason the guard lives in `fmtRangeFor` rather
+    than in the selectionchange listener: when the selection STARTS outside the block, that listener
+    returns early on its `startContainer` check and nothing is touched at all. A guard added there
+    would have fixed the downward drag and missed this one."""
+    assert ran["selectionEscapedUpward"]["runs"] == [
+        {"text": "5,200 SF of epoxy flooring", "bold": True}]
+
+
+def test_a_highlight_in_the_sidebar_leaves_the_remembered_range_alone(ran):
+    """The half that makes the fix safe rather than merely strict, and it IS the feature.
+
+    Kyle asked for a bar that stays put and keeps working after focus has gone. Double-clicking a
+    word in the Tax field is not a claim about which words in the proposal to format, so the memory
+    has to survive it — a guard that dropped the range for any unreadable selection would satisfy
+    the two tests above and quietly undo the whole point of the ribbon.
+
+    So the guard fires only for a real, non-collapsed highlight that touches the document surface."""
+    assert ran["foreignSelection"]["runs"] == [
+        {"text": "5,200 SF of "}, {"text": "epoxy flooring", "bold": True}], (
+        "a highlight in a sidebar field threw away the estimator's document selection")
+
+
+def test_a_press_that_changes_nothing_writes_nothing(ran):
+    """`applyFormat` had no did-anything-change test. Reset on a paragraph carrying no formatting
+    deletes nothing and Bold on already-bold words adds nothing, but `markEdited` ran regardless —
+    which set `tw-fmt`, which the input handler reads as dirty, which persists an override for a
+    paragraph nobody touched. `paraPatch`'s own docstring names what that breaks: an untouched
+    document ships no overrides, and that is what keeps the generated .docx byte-identical.
+
+    The ribbon is what makes it reachable. `fmtBlock` outlives focus and is cleared only by a
+    non-block editable or a template reload, so the row stays aimed at the last paragraph touched
+    for the rest of the session, and one stray press writes an override for a paragraph the
+    estimator has visually left."""
+    g = ran["noOpReset"]
+    assert g["dirtiedDelta"] == 0, "a no-op press marked the paragraph edited"
+    assert g["persistedDelta"] == 0, "a no-op press persisted an override"
+    assert g["runs"] == [{"text": "Schedule:  4 days on site"}]
+
+
+def test_the_no_op_guard_does_not_swallow_real_edits(ran):
+    """The other direction, and the one that would make the guard worse than the bug: a comparison
+    that reported "nothing changed" too eagerly would silently drop every format the estimator
+    applied, with the button lighting up as though it had worked."""
+    g = ran["realEditsStillCount"]
+    assert g["boldLanded"], "Bold stopped working"
+    assert g["resetCleared"], "Reset stopped working"
+    assert g["dirtiedDelta"] == 2, (
+        "a real bold and a real reset should be exactly two edits, got %s" % g["dirtiedDelta"])
+
+
+def test_a_press_from_the_sidebar_does_not_paint_a_selection_in_the_document(ran):
+    """`applyFormat` re-placed the document selection unconditionally. Before the bar became a
+    ribbon that was unreachable with focus elsewhere — the bar did not exist. Now every press made
+    while the caret is in a sidebar field runs it, which paints a highlight the estimator never
+    made on top of the target's own background, and in an engine that focuses the editing host on a
+    programmatic selection pulls their caret out of the field mid-entry, so the next digits they
+    type land in the proposal paragraph.
+
+    The format still has to land — that is the feature — so this asserts both halves."""
+    g = ran["noSelectionRepaint"]
+    assert g["runs"] == [{"text": "Schedule", "bold": True}, {"text": ":  4 days on site"}], (
+        "the format did not land on the remembered range")
+    assert g["selectionAfter"] is None, (
+        "a selection was written into the document while the caret was in the sidebar")
+
+
 # ══ where the ribbon sits, and which CSS rules have to win ════════════════════
 def _css_rule(selector):
     """The declarations of EVERY top-level rule with exactly this selector, concatenated.
