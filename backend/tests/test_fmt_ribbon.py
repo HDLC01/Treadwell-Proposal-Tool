@@ -121,6 +121,9 @@ def test_with_nothing_selected_the_ribbon_is_inert_rather_than_absent(ran):
     assert load["bar"]["idle"] is True, "the idle class is missing, so nothing looks greyed out"
     for name in ("bold", "italic", "reset", "size", "bullet", "outdent", "indent"):
         assert load["bar"]["controls"][name]["disabled"] is True, name
+    # `size` is in that list for a reason that changed on 2026-08-25: it became an <input>, and an
+    # input matches neither `button` nor `select`. The sweep that disables the ribbon had to grow
+    # `input` or the one control you can type into would have stayed live on a dead ribbon.
 
 
 def test_focusing_a_paragraph_wakes_the_ribbon_and_marks_that_paragraph(ran):
@@ -184,6 +187,10 @@ def test_the_mousedown_guard_keeps_the_selection_alive(ran):
     matters MORE from a ribbon than from a bar beside the caret, because the ribbon is page chrome
     outside the document and an allowed focus move would take the caret clean out of the editor.
     The `select` is exempt because preventDefault on its mousedown stops it opening at all."""
+    # The size box joins the <select> in being exempt. Both are controls you have to put a caret
+    # in, and preventDefault on their mousedown stops that happening at all -- for the select it
+    # stopped the list opening, for the input it would stop focus outright. Focus therefore really
+    # does leave the paragraph when either is used, which is what the remembered range exists for.
     assert ran["mousedownGuard"] == {"button": True, "select": False}
     assert ran["blurThenBold"]["pressed"]["prevented"] is True
 
@@ -565,6 +572,71 @@ def test_backspace_cannot_un_number_a_contract_clause(ran):
     assert g["after"]["locked"] is True
     assert not g["prevented"], "the keystroke was consumed on a clause it must not change"
     assert g["after"]["bullet"] == ran["backspaceOnLockedClause"]["after"]["bullet"]
+
+
+def test_a_typed_size_the_old_dropdown_could_not_offer(ran):
+    """Hanz, 2026-08-25: "Make this dropdown menu smaller please. ALso make it so that we could
+    type in it."
+
+    The size was a <select>, so the only sizes that existed were the ten in SIZE_CHOICES. The
+    writer stores half-points and Word uses them, so 10.5pt was a size the document could carry
+    and the editor could not ask for. Typing reaches it.
+
+    The dropdown was also as wide as its widest option, "Template size", which is why it dwarfed
+    the buttons beside it. The placeholder carries that meaning now and the box is 54px."""
+    g = ran["typedHalfPoint"]
+    assert g["runs"] == [{"text": "Schedule", "size_pt": 10.5},
+                         {"text": ":  4 days on site"}], g["runs"]
+    assert g["mousedownPrevented"] is False, (
+        "the ribbon's mousedown guard cancelled the size box, so it can never be focused")
+
+
+def test_a_size_that_is_not_a_size_changes_nothing_and_dirties_nothing(ran):
+    """THE FAILURE A DROPDOWN MADE IMPOSSIBLE, and the reason typing needed validation the client
+    never had before.
+
+    `Number("abc")` is NaN, and NaN is the single value that defeats `runsEqual` — NaN !== NaN, so
+    every press would read as a change: the paragraph would be marked edited, an override
+    persisted, and `JSON.stringify(NaN)` is `null` so the server would drop the size anyway. The
+    estimator would be left with a dirty document and no visible effect.
+
+    The bounds mirror the backend deliberately (1..200, half-point granularity, checked in
+    main.py's sanitizer AND again in the writer), so the box cannot ask for something the document
+    will silently refuse."""
+    g = ran["junkSize"]
+    assert g["runsUnchanged"], "junk in the size box changed the runs"
+    assert g["dirtiedDelta"] == 0, "junk marked the paragraph edited"
+    assert g["persistedDelta"] == 0, "junk persisted an override"
+    assert g["boxShows"] != "500", (
+        "the box kept the rejected text instead of showing what the paragraph says")
+
+
+def test_clearing_the_size_box_goes_back_to_the_templates_own_size(ran):
+    """Empty means "whatever the template says" — the meaning the old `<option value="">Template
+    size</option>` carried, now carried by the placeholder. `patchRuns` deletes the key rather than
+    storing a zero, which is what keeps an untouched paragraph shipping no size at all."""
+    g = ran["clearedSize"]
+    assert any(r.get("size_pt") == 14 for r in g["at14"]), g["at14"]
+    assert not any("size_pt" in r for r in g["cleared"]), (
+        "clearing the box left a size behind: %r" % (g["cleared"],))
+
+
+def test_the_ribbon_does_not_overwrite_a_size_being_typed(ran):
+    """`renderFmtBar` runs on every focusin, every selectionchange and after every press — it is
+    the only place the remembered range is captured, so it cannot simply be skipped. With a
+    <select> writing the value back each time was invisible. With an input it would overwrite
+    half-typed text mid-keystroke, so the write-back is guarded on focus while the range capture
+    above it still happens."""
+    g = ran["readbackRespectsTyping"]
+    assert g["whileTyping"] == "1", (
+        "the ribbon overwrote a size that was still being typed: %r" % g["whileTyping"])
+
+
+def test_escape_abandons_a_typed_size(ran):
+    """Escape has to reach the box before the window-level handler that collapses an expanded text
+    box — somebody abandoning a half-typed size is not asking for the box they are editing to
+    fold. So it stops propagating, and puts back what the paragraph says."""
+    assert ran["escapeAbandons"]["runsUnchanged"], "Escape applied the typed size anyway"
 
 
 # ══ where the ribbon sits, and which CSS rules have to win ════════════════════

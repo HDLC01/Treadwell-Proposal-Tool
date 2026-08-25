@@ -552,18 +552,33 @@ function press(sel) {
   return { prevented: !!down.defaulted, clickPrevented: !!click.defaulted, disabled: !!btn.disabled };
 }
 
-function chooseSize(pt) {
-  const sel = bar().querySelector("select[data-fmt='size']");
-  fire(sel, "mousedown", {});
-  sel.value = String(pt);
-  fire(sel, "change", {});
+/** Type a size and commit it. The size control is a combobox now, not a dropdown, so this
+ *  models the real gesture: mousedown (which the ribbon's guard must NOT cancel, or the box could
+ *  never be focused), focus, type, then commit. */
+function chooseSize(pt, commitWith) {
+  const box = bar().querySelector("input[data-fmt='size']");
+  if (!box) throw new Error("the size combobox is gone from the ribbon");
+  const down = fire(box, "mousedown", {});
+  document.activeElement = box;
+  box.value = String(pt);
+  if (commitWith === "enter") fire(box, "keydown", { key: "Enter" });
+  else if (commitWith === "escape") fire(box, "keydown", { key: "Escape" });
+  else fire(box, "change", {});
+  document.activeElement = null;
+  return { mousedownPrevented: !!down.defaulted, value: box.value };
+}
+
+/** What the box shows right now, without touching it. */
+function sizeBoxValue() {
+  const box = bar().querySelector("input[data-fmt='size']");
+  return box ? box.value : null;
 }
 
 const CONTROLS = {
   bold: "button[data-fmt='bold']",
   italic: "button[data-fmt='italic']",
   reset: "button[data-fmt='reset']",
-  size: "select[data-fmt='size']",
+  size: "input[data-fmt='size']",
   bullet: "button[data-para='bullet']",
   outdent: "button[data-para='outdent']",
   indent: "button[data-para='indent']",
@@ -1094,6 +1109,81 @@ function backspace(el) {
     prevented: !!ev.defaulted,
     after: api.paraNow(52),
     stillNumbered: el.classList.contains("tw-num") || true,
+  };
+}
+
+// ═══ 25. A TYPED half-point size the old dropdown could not offer ═════
+// Hanz asked to be able to type in it. 10.5pt is a real Word size, the writer stores half-points,
+// and the <select> had no such option -- so it was unreachable.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  highlight(el, 0, 8);
+  leaveFor(null);
+  const typed = chooseSize("10.5", "enter");
+  out.typedHalfPoint = { runs: runsOf(el), mousedownPrevented: typed.mousedownPrevented };
+}
+
+// ═══ 26. Junk changes NOTHING, and dirties nothing ════════════════
+// The failure a <select> made impossible. Number("abc") is NaN, and NaN is the one value that
+// defeats runsEqual (NaN !== NaN), so an unguarded input would mark the paragraph edited and
+// persist an override for a press that did nothing at all.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  const before = runsOf(el);
+  const d0 = dirtied.length, p0 = persisted.length;
+  chooseSize("abc");
+  chooseSize("0");          // below the backend's floor of 1
+  chooseSize("500");        // above its ceiling of 200
+  out.junkSize = {
+    runsUnchanged: JSON.stringify(runsOf(el)) === JSON.stringify(before),
+    dirtiedDelta: dirtied.length - d0,
+    persistedDelta: persisted.length - p0,
+    // …and the box shows what the paragraph actually says, rather than the rejected text.
+    boxShows: sizeBoxValue(),
+  };
+}
+
+// ═══ 27. Clearing the box goes back to the template's own size ════
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  chooseSize("14");
+  const at14 = runsOf(el);
+  chooseSize("");
+  out.clearedSize = { at14: at14, cleared: runsOf(el) };
+}
+
+// ═══ 28. The read-back does not overwrite what is being typed ═════
+// renderFmtBar runs on every focusin, selectionchange and press. With a dropdown, writing the
+// value back was invisible; with an input it would eat half-typed text.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  const box = bar().querySelector("input[data-fmt='size']");
+  document.activeElement = box;
+  box.value = "1";                       // mid-way through typing "12"
+  fireDoc("selectionchange");             // …and the ribbon re-renders underneath
+  const whileTyping = box.value;
+  document.activeElement = null;
+  fireDoc("selectionchange");             // once focus is elsewhere it may sync again
+  out.readbackRespectsTyping = { whileTyping: whileTyping, afterBlur: sizeBoxValue() };
+}
+
+// ═══ 29. Escape abandons the typed size ══════════════════════════
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  const before = runsOf(el);
+  chooseSize("18", "escape");
+  out.escapeAbandons = {
+    runsUnchanged: JSON.stringify(runsOf(el)) === JSON.stringify(before),
   };
 }
 
