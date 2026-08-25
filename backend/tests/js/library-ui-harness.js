@@ -38,9 +38,13 @@ const src = read(path.join(ROOT, "js", "library.js"));
 const html = read(path.join(ROOT, "library.html"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
 
-/** Lift a named function out of the page's IIFE (two-space indent), braces balanced. */
+/** Lift a named function out of the page's IIFE (two-space indent), braces balanced.
+ *
+ *  `async` is optional in the pattern because confirmItemPatch awaits TW.confirmDanger. Without
+ *  that the lift throws "confirmItemPatch() is gone", which reads as a deleted function rather
+ *  than an unmatched keyword and sends the next reader looking in the wrong file. */
 function fn(name) {
-  const m = new RegExp("\\n  function " + name + "\\s*\\(").exec(src);
+  const m = new RegExp("\\n  (?:async )?function " + name + "\\s*\\(").exec(src);
   if (!m) throw new Error(name + "() is gone from library.js — rewrite this harness, don't stub it");
   const i = src.indexOf("{", m.index + m[0].length - 1);
   let depth = 0;
@@ -211,6 +215,13 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("singular")}
   ${fn("renderRefSection")}
   ${fn("renderVendors")}
+  // The Items tab's own search. itemQuery is settable from state so a test can render the
+  // filtered view; on the page it is a plain variable that nothing serialises, which is the whole
+  // point of it (the dropdown filters deleted on 2026-08-19 were being saved to the server).
+  var itemQuery = state.itemQuery === undefined ? "" : state.itemQuery;
+  ${fn("visibleItems")}
+  ${fn("nameKey")}
+  ${fn("duplicateName")}
   ${fn("itemMatches")}
   ${fn("itemResultsHtml")}
   ${fn("lineForSave")}
@@ -224,11 +235,20 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   // model — the coercion list, the duplicate hint, the queued body — is the code the page runs.
   var QUEUED = [];
   function patchSoon(kind, id, body) { QUEUED.push({ kind: kind, id: id, body: body }); }
+  // The pre-edit snapshot the confirmation dialog quotes and Cancel restores from. LIFTED, not
+  // stubbed: onItemEdit calls rememberItem on every keystroke, so a stub here would be testing a
+  // different function from the one that ships. The DIALOG itself is not reachable from this
+  // scope — it fires at flush time inside the real patchSoon, which is stubbed here and exercised
+  // in saveScope below, and that split is the whole reason the dialog was not put in onItemEdit.
+  var itemBefore = {};
+  ${fn("snapshotItem")}
+  ${fn("rememberItem")}
   ${fn("onItemEdit")}
   return { renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
            onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
-           itemMatches, itemResultsHtml, lineForSave };
+           itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
+           snapshotOf: function (id) { return itemBefore[id]; } };
 `);
 
 // Two materials: a legacy pack-of-one and a five-gallon pail, so the pack column has something to
@@ -826,7 +846,7 @@ const out = {};
 // Driven by a hand-cranked clock so the race is deterministic: type → PATCH in flight → keep
 // typing (re-arming the timer) → 409 lands → the repaint empties the buffer.
 async function conflictChecks() {
-  const saveScope = new Function("api", "clock", "hooks", "state", `
+  const saveScope = new Function("api", "clock", "hooks", "state", "TW", "L", `
     "use strict";
     var timers = {};
     var pendingPatch = {};
@@ -836,13 +856,25 @@ async function conflictChecks() {
     function say(m) { hooks.said.push(m); }
     function renderList() { hooks.renders.push("list"); }
     function renderPanel() { hooks.renders.push("panel"); }
+    function renderItems() { hooks.renders.push("items"); }
     function paintDates() {}
     function datesHtml() { return ""; }
+    // The item-change confirmation, REAL, because this is the scope that has the real patchSoon —
+    // and the dialog fires from inside its timer callback, after the payload has been coalesced.
+    // TW is a parameter so a test can answer Yes or No and read back what it was asked.
+    var itemBefore = {};
+    ${grab(/^  var ITEM_FIELD_LABELS = \{[\s\S]*?\n  \};$/m, "ITEM_FIELD_LABELS")}
+    ${fn("itemOf")}
+    ${fn("snapshotItem")}
+    ${fn("rememberItem")}
+    ${fn("shownValue")}
+    ${fn("confirmItemPatch")}
     ${fn("byId")}
     ${fn("adoptSaved")}
     ${fn("adoptConflict")}
     ${fn("patchSoon")}
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
+             rememberItem: rememberItem,
              armed: function () { return Object.keys(timers).length; },
              pending: function () { return Object.keys(pendingPatch).length; },
              // Empties the buffer WITHOUT disarming, which is the state the empty-payload guard
@@ -852,8 +884,12 @@ async function conflictChecks() {
              dropBuffer: function () { pendingPatch = {}; } };
   `);
 
-  function run409(fix) {
-    const hooks = { saving: [], said: [], renders: [], requests: [], errors: [] };
+  function run409(fix, answer) {
+    const hooks = { saving: [], said: [], renders: [], requests: [], errors: [], asked: [] };
+    // The confirmation the real patchSoon now puts in front of an ITEM save. `answer` is what the
+    // estimator presses; the default is Yes so every assembly-side scenario below is unaffected,
+    // which is the point — the dialog is scoped to items and must not appear anywhere else.
+    const TW = { confirmDanger: async (opts) => { hooks.asked.push(opts); return answer !== false; } };
     let due = [];
     // Handles start at 1, as every browser's do — a 0 handle would make `if (timers[key])` skip,
     // which is a condition the real page never meets and would fake a pass here.
@@ -868,9 +904,11 @@ async function conflictChecks() {
       return inflight;
     };
     const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF", lines: [], updated_at: "T1" }],
-                    ITEMS: [], VENDORS: [] };
-    const s = saveScope(api, clock, hooks, state);
-    return { hooks, clock, s, release, fire: async () => {
+                    ITEMS: [{ id: "i1", name: "Densifier", unit: "Gallon", unit_cost: 42,
+                              buy_qty: 5, vendor: "Sika", divisions: ["Polished Concrete"] }],
+                    VENDORS: [] };
+    const s = saveScope(api, clock, hooks, state, TW, L);
+    return { hooks, clock, s, state, release, fire: async () => {
       const now = due; due = [];
       for (const t of now) if (t.live) { try { await t.fn(); } catch (e) { hooks.errors.push(String(e)); } }
     }, cancelledCount: () => due.filter((t) => !t.live).length };
@@ -908,6 +946,209 @@ async function conflictChecks() {
   await d2.fire();
   out.conflict.emptyTimerIsQuiet = d2.hooks.errors.length === 0;
   out.conflict.emptyTimerSendsNothing = d2.hooks.requests.length === 0;
+  // An ASSEMBLY save is never confirmed. Read off the run above rather than asserted in its own
+  // scenario, because that run is a realistic assembly edit — two keystrokes, a conflict, a
+  // repaint — and if the dialog had leaked out of the items branch it would have fired in it.
+  out.conflict.neverAskedAboutAnAssembly = c.hooks.asked.length === 0
+    && d2.hooks.asked.length === 0;
+
+  // ── the confirmation in front of an ITEM save ──────────────────────────────
+  // Hanz, 2026-08-25: items "will be connected to many assemblies and an accidental change could
+  // alter the pricing." Driven through the REAL patchSoon, because the design decision under test
+  // is WHERE the question is asked — at flush time, on the payload after 600ms of coalescing, not
+  // on the keystroke. A test that called confirmItemPatch directly would pass with the call site
+  // deleted.
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  async function itemRun(answer, edit, payload) {
+    const c = run409(undefined, answer);
+    const it = c.state.ITEMS[0];
+    c.s.rememberItem(it);            // what onItemEdit does on the first keystroke of a round
+    edit(it);                        // …and the model really is updated live, before the save
+    c.s.patchSoon("items", "i1", payload);
+    const firing = c.fire();
+    await settle();
+    c.release({ status: 200, ok: true,
+                json: async () => ({ item: { id: "i1", name: it.name, updated_at: "T2" } }) });
+    await firing;
+    return { c, it };
+  }
+
+  // YES: it asks once, quotes the field that moved, and the payload goes.
+  {
+    const { c, it } = await itemRun(true, (x) => { x.unit_cost = 58; }, { unit_cost: "58" });
+    out.itemConfirm = {
+      asked: c.hooks.asked.length,
+      title: (c.hooks.asked[0] || {}).title,
+      name: (c.hooks.asked[0] || {}).name,
+      detail: (c.hooks.asked[0] || {}).detail,
+      confirmText: (c.hooks.asked[0] || {}).confirmText,
+      tone: (c.hooks.asked[0] || {}).tone,
+      requests: c.hooks.requests,
+      costAfter: it.unit_cost,
+      errors: c.hooks.errors,
+    };
+  }
+
+  // TWO FIELDS IN ONE PAUSE: still one dialog, and it lists both. This is the whole reason the
+  // question is asked at flush time rather than in onItemEdit.
+  {
+    const { c } = await itemRun(true, (x) => { x.unit_cost = 58; x.vendor = "Euclid"; },
+                                { unit_cost: "58", vendor: "Euclid" });
+    out.itemConfirmTwoFields = {
+      asked: c.hooks.asked.length,
+      title: (c.hooks.asked[0] || {}).title,
+      detail: (c.hooks.asked[0] || {}).detail,
+    };
+  }
+
+  // NO: nothing is sent, and the model goes back to what it said. Leaving the edit on screen with
+  // the server never told is worse than the accidental change this dialog exists to catch.
+  {
+    const c = run409(undefined, false);
+    const it = c.state.ITEMS[0];
+    c.s.rememberItem(it);
+    it.unit_cost = 999;
+    it.vendor = "Wrong Co";
+    c.s.patchSoon("items", "i1", { unit_cost: "999", vendor: "Wrong Co" });
+    // Resolved BEFORE the flush, deliberately. A Cancel is supposed to send nothing, so nothing
+    // should ever await this — but if the dialog stops appearing (which is what a broken snapshot
+    // does: "before" mutates with the edit, the fields compare equal, and no question is asked)
+    // the save proceeds and awaits a promise that would otherwise never settle. That turns a
+    // detectable bug into a hung harness and 56 tests failing with no reason attached.
+    c.release({ status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) });
+    await c.fire();
+    await settle();
+    out.itemCancel = {
+      asked: c.hooks.asked.length,
+      requests: c.hooks.requests,
+      costAfter: it.unit_cost,
+      vendorAfter: it.vendor,
+      repainted: c.hooks.renders.join(","),
+      neverSaidSaving: c.hooks.saving.every((m) => !/Saving/.test(String(m))),
+      errors: c.hooks.errors,
+    };
+  }
+
+  // A DIVISION toggle is an ARRAY field, and the snapshot has to have copied it rather than
+  // referenced it — otherwise "before" mutated along with the edit and Cancel would restore the
+  // very value it was meant to undo, silently and with the dialog still saying it worked.
+  {
+    const c = run409(undefined, false);
+    const it = c.state.ITEMS[0];
+    c.s.rememberItem(it);
+    it.divisions.push("Epoxy");                 // toggled on, in place, as onItemEdit does
+    c.s.patchSoon("items", "i1", { divisions: ["Polished Concrete", "Epoxy"] });
+    // Resolved BEFORE the flush, deliberately. A Cancel is supposed to send nothing, so nothing
+    // should ever await this — but if the dialog stops appearing (which is what a broken snapshot
+    // does: "before" mutates with the edit, the fields compare equal, and no question is asked)
+    // the save proceeds and awaits a promise that would otherwise never settle. That turns a
+    // detectable bug into a hung harness and 56 tests failing with no reason attached.
+    c.release({ status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) });
+    await c.fire();
+    await settle();
+    out.itemCancelArray = {
+      asked: c.hooks.asked.length,
+      detail: (c.hooks.asked[0] || {}).detail,
+      divisionsAfter: it.divisions.slice(),
+    };
+  }
+
+  // TYPED AND TYPED BACK: no dialog. patchSoon MERGES a row's fields across the quiet period, so a
+  // value changed and then restored arrives identical to where it started. Asking about that is
+  // how an estimator learns to dismiss the dialog without reading it, which costs more than it
+  // ever saves.
+  {
+    const { c } = await itemRun(true, (x) => { x.unit_cost = 42; }, { unit_cost: "42" });
+    out.itemNoChange = { asked: c.hooks.asked.length, requests: c.hooks.requests };
+  }
+}
+
+// ── B. the Items tab's own search box ───────────────────────────────────────
+// One box, no dropdowns: the division/vendor dropdowns that used to sit in the assembly picker
+// were deleted on 2026-08-19 partly because their state was being persisted to the server. This
+// one reuses itemMatches, the SAME matcher the picker searches with, so the two boxes on this page
+// cannot disagree about what a query finds.
+{
+  const all = build();
+  all.api.renderItems();
+  const hit = build({ itemQuery: "opf primer" });
+  hit.api.renderItems();
+  const miss = build({ itemQuery: "nothing like this" });
+  miss.api.renderItems();
+  const rowsIn = (d) => (d.nodes["items-body"].innerHTML.match(/data-item=/g) || []).length;
+  out.itemsSearch = {
+    unfiltered: rowsIn(all.dom),
+    filtered: rowsIn(hit.dom),
+    missed: rowsIn(miss.dom),
+    // The tab badge counts what Treadwell HAS, not what is on screen. A badge that fell as
+    // somebody typed would read as materials being deleted.
+    badgeWhileFiltering: all.dom.nodes["n-items"].textContent === hit.dom.nodes["n-items"].textContent,
+    hits: hit.dom.nodes["item-hits"].textContent,
+    hitsHiddenWhenNotFiltering: all.dom.nodes["item-hits"].hidden,
+    noMatchShown: miss.dom.nodes["items-nomatch"].hidden === false,
+    noMatchHiddenOnAHit: hit.dom.nodes["items-nomatch"].hidden,
+    // "No materials yet" offers an Add button. It must not stand in for a bad search, or the
+    // answer to a typo is an invitation to create a duplicate.
+    emptyPanelStaysHidden: miss.dom.nodes["items-empty"].hidden,
+    sameMatcherAsThePicker:
+      JSON.stringify(hit.api.visibleItems().map((x) => x.id))
+      === JSON.stringify(all.api.ITEMS.filter((x) => all.api.itemMatches(x, "opf primer")).map((x) => x.id)),
+  };
+}
+
+// ── D. the name a copy gets ─────────────────────────────────────────────────
+{
+  const plain = build().api;
+  const crowded = build({ ITEMS: [
+    { id: "x1", name: "Densifier", unit: "Gallon", divisions: [] },
+    { id: "x2", name: "Densifier (2)", unit: "Gallon", divisions: [] },
+    { id: "x3", name: "densifier(3)", unit: "Gallon", divisions: [] },
+  ] }).api;
+  out.duplicateName = {
+    first: plain.duplicateName("Densifier"),
+    // The "(n)" comes off the stem first, or a copy of a copy is "Densifier (2) (2)".
+    ofACopy: plain.duplicateName("Densifier (2)"),
+    // Skips both taken numbers — and the third is taken in a DIFFERENT spelling, which only
+    // counts because the comparison goes through nameKey. The server strips punctuation the same
+    // way, so a counter matching exact strings would hand back a name the save then refuses.
+    skipsTaken: crowded.duplicateName("Densifier"),
+    blank: plain.duplicateName(""),
+  };
+}
+
+// ── E. a line nobody has filled in is not a broken line ─────────────────────
+// "Item removed" is what a line says when its material was DELETED. A line added ten seconds ago
+// says the same thing today, in the same amber, on a row flagged broken — which is a fault report
+// about the estimator not having finished typing yet.
+{
+  const blank = build({
+    ASMS: [{ id: "b1", name: "Test", unit: "SF", updated_at: "T1",
+             lines: [{ role: "", item_id: "", coverage: null, waste_pct: 5, roundup: true }] }],
+    openId: "b1",
+  });
+  blank.api.renderPanel();
+  blank.api.refreshNumbers();
+  const row = blank.dom.nodes["lines-body"].rows[0];
+  out.blankLine = {
+    qtyCell: row.cells[5].innerHTML,
+    saysPick: /Pick a material/.test(row.cells[5].innerHTML),
+    saysRemoved: /Item removed/.test(row.cells[5].innerHTML),
+    flaggedBroken: row.classList.has("broken"),
+  };
+  // …while a line pointing at a material that really is gone still says so, and still is.
+  const gone = build({
+    ASMS: [{ id: "b2", name: "Test", unit: "SF", updated_at: "T1",
+             lines: [{ role: "", item_id: "deleted-one", coverage: 275, waste_pct: 5, roundup: true }] }],
+    openId: "b2",
+  });
+  gone.api.renderPanel();
+  gone.api.refreshNumbers();
+  const grow = gone.dom.nodes["lines-body"].rows[0];
+  out.removedLine = {
+    saysRemoved: /Item removed/.test(grow.cells[5].innerHTML),
+    flaggedBroken: grow.classList.has("broken"),
+  };
 }
 
 // ── the picker resolves typed text to a material ─────────────────────────────

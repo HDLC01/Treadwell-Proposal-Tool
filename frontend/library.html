@@ -91,6 +91,12 @@
 
     /* The measured area is the one input every number below depends on, so it gets its own
        band rather than becoming another column in the line table. */
+    /* .quiet drops the card treatment: no fill, no full border, no radius — see the note where
+       the band is used. It keeps a hairline above it so it reads as a footnote to the totals
+       rather than as another row of them. */
+    .areaband.quiet { background:none; border:0; border-top:1px solid var(--line);
+      border-radius:0; margin-top:10px; padding:10px 0 0; }
+    .areaband.quiet label { font-weight:400; color:var(--ink-v); }
     .areaband { background:var(--surf-low); border:1px solid var(--line); border-radius:10px;
       padding:12px 14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
     .areaband label { font-weight:600; font-size:13px; }
@@ -110,6 +116,11 @@
     .calc { font-size:11px; color:var(--ink-v); margin-top:3px; }
     .qty { font-weight:700; font-variant-numeric:tabular-nums; }
     .gone { color:var(--warn); font-size:11.5px; margin-top:3px; font-weight:600; }
+    /* "Pick a material" on a line that has never been filled in. Deliberately NOT .gone: amber is
+       this page's colour for something that broke, and a line the estimator added ten seconds ago
+       and has not chosen yet has not broken. Same size and weight so the row does not jump when
+       the pick turns it into a real quantity. */
+    .unpicked { color:var(--ink-v); font-size:11.5px; margin-top:3px; font-weight:600; }
     tr.broken { background:var(--warn-bg); }
 
     .totals { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
@@ -218,6 +229,11 @@
     .item-result b { display:block; font-size:12.5px; }
     .item-result span { display:block; color:var(--ink-v); font-size:11px; line-height:1.35; }
     .th-help { cursor:help; border-bottom:1px dotted rgba(92,64,63,.55); }
+    .itemsearch { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
+    .itemsearch input { width:100%; max-width:360px; }
+    .itemsearch .hits { color:var(--ink-v); font-size:12px; }
+    /* Pushes the action to the far end of the tab row without joining the tab set. */
+    .tabaction { margin-left:auto; display:inline-flex; align-items:center; }
     .admin-grid { display:grid; gap:18px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px system-ui; }
 
@@ -253,6 +269,13 @@
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
+      <!-- OUTSIDE the tablist, in its own wrapper. Hanz asked for New assembly to sit beside
+           Administration, and the obvious way to do that — dropping the button in among the tabs —
+           puts a control that is not a tab inside role="tablist". A screen reader then announces
+           it as "tab 4 of 4", arrow-key navigation lands on it, and activating it does not change
+           panels. The wrapper keeps it visually in the row and honestly out of the tab set. -->
+      <span class="tabaction"><button class="btn sm" type="button" id="asm-new-top">+ New
+        assembly</button></span>
     </div>
 
     <!-- ── Items ──────────────────────────────────────────────────────── -->
@@ -260,6 +283,16 @@
       <p class="paneintro"><b>Items are entered as we buy them.</b> One row per thing on the
         invoice — the pack you order, and what that pack costs. A five-gallon pail is
         <b>5</b> · <b>Gallon</b>, priced as the pail.</p>
+      <!-- ONE search box, and no dropdowns beside it. Division and vendor dropdown filters existed
+           in the assembly picker and were deleted on 2026-08-19 for three reasons that all still
+           hold here: they made every row tall, Hanz asked for one matcher "not two dropdowns", and
+           their state lived on the line object so it was being PERSISTED to the server on every
+           save. This box's query is a plain variable that nothing serialises. -->
+      <div class="itemsearch">
+        <input id="item-q" type="search" placeholder="Search materials, divisions or vendors"
+               aria-label="Search materials" autocomplete="off" />
+        <span class="hits" id="item-hits" hidden></span>
+      </div>
       <div class="card tw">
         <table class="items-table">
           <thead>
@@ -271,6 +304,11 @@
           </thead>
           <tbody id="items-body"></tbody>
         </table>
+        <div id="items-nomatch" class="empty" hidden>
+          <h3>Nothing matches that</h3>
+          <p>Every word has to appear somewhere in the material's name, its divisions or its
+            vendor. Try fewer words.</p>
+        </div>
         <div id="items-empty" class="empty" hidden>
           <h3>No materials yet</h3>
           <p>Add the products you buy, named the way the manufacturer names them — how much comes
@@ -368,14 +406,6 @@
             <span class="saving" id="asm-saving"></span>
           </div>
 
-          <div class="areaband">
-            <label for="area">Test area</label>
-            <input id="area" class="num" inputmode="decimal" value="1000" />
-            <span>SF</span>
-            <span class="why">Every quantity below is worked out from this. It is a what-if —
-              it is not saved with the assembly.</span>
-          </div>
-
           <!-- Not `.tw`: that wrapper sets overflow-x:auto, which becomes a clipping context and
                cuts off the item picker's floating results at the cell edge. This table's columns
                are fixed-width and fit the panel, so it does not need the scroller. -->
@@ -383,13 +413,13 @@
             <table class="lines">
               <thead>
                 <tr>
-                  <th>Items</th>
-                  <th class="n" style="width:112px;">Order Amount</th>
-                  <th class="n" style="width:116px;">Coverage per Unit</th>
+                  <th><span class="th-help" tabindex="0" title="The material this line uses. Pick one from the library; its cost and pack size come with it." aria-label="Items. The material this line uses. Pick one from the library; its cost and pack size come with it.">Items</span></th>
+                  <th class="n" style="width:112px;"><span class="th-help" tabindex="0" title="How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon." aria-label="Order Amount. How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon.">Order Amount</span></th>
+                  <th class="n" style="width:116px;"><span class="th-help" tabindex="0" title="How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF." aria-label="Coverage per Unit. How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF.">Coverage per Unit</span></th>
                   <th class="n" style="width:104px;"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor</span></th>
                   <th style="width:78px;text-align:center;"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
-                  <th class="n" style="width:132px;">Quantity</th>
-                  <th class="n" style="width:132px;">Cost</th>
+                  <th class="n" style="width:132px;"><span class="th-help" tabindex="0" title="How much of this material the test area needs, after waste and rounding. The working is shown underneath." aria-label="Quantity. How much of this material the test area needs, after waste and rounding. The working is shown underneath.">Quantity</span></th>
+                  <th class="n" style="width:132px;"><span class="th-help" tabindex="0" title="What that quantity costs at this material's purchase price. The working is shown underneath." aria-label="Cost. What that quantity costs at this material's purchase price. The working is shown underneath.">Cost</span></th>
                   <th style="width:34px;"></th>
                 </tr>
               </thead>
@@ -409,6 +439,17 @@
               <div class="v" id="t-unit">—</div>
             </div>
           </div>
+
+          <!-- BELOW the totals and de-emphasised, at Hanz's ask. It sat at the top in a filled,
+               bordered card, which read as the first thing to fill in — and it is the opposite of
+               that: a what-if that is never saved with the assembly. The input still carries
+               id="area" and is still read by renderList, renderPanel and refreshNumbers, so
+               moving it is presentational and nothing recalculates differently. -->
+          <div class="areaband quiet">
+            <label for="area">Test area</label>
+            <input id="area" class="num" inputmode="decimal" value="1000" />
+            <span>SF</span>
+          </div>
         </div>
 
         <div class="card empty" id="asm-empty" style="grid-column:1/-1;" hidden>
@@ -420,10 +461,6 @@
       <div id="asm-newrow" style="margin-top:12px;" hidden>
         <button class="btn ghost" type="button" id="asm-new-2">+ New assembly</button>
       </div>
-      <p class="foot">Coverage is per single unit, and waste is added <b>on top</b> — 5% means buy
-        5% more than the area needs. With <b>Roundup?</b> ticked the quantity climbs to whole
-        purchases, because you cannot buy 3.7 kits; untick it for anything measured out of the bag
-        rather than bought by it, and the line prices the fraction at the single-unit price.</p>
     </section>
   </div>
 

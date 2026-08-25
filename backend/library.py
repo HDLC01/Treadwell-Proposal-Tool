@@ -431,8 +431,48 @@ def get_item(item_id: str) -> Optional[Dict[str, Any]]:
     return _shape_item(rows[0]) if rows else None
 
 
+def _item_key(name: Any) -> str:
+    """The comparison form of a material name: "is this the same thing, typed differently".
+
+    Case-folded with every non-alphanumeric character dropped, so "Concrete bar", "concretebar"
+    and "Concrete-Bar" are one name. That pair is the specific gap Hanz hit: the on-screen hint
+    (similarNames in library.js) is a bidirectional SUBSTRING match, and neither of those strings
+    contains the other, so it stayed silent on the clearest duplicate there is.
+
+    PLURALS ARE NOT FOLDED, and that is a decision rather than an omission. A trailing "s" is a
+    real distinction in product names, and this check BLOCKS — refusing a name that is genuinely
+    different is worse than letting a near-duplicate through, because the near-duplicate still
+    gets the on-screen hint while a false block leaves the estimator unable to enter the material
+    they have in front of them, with no way round it."""
+    return "".join(ch for ch in str(name or "").casefold() if ch.isalnum())
+
+
+def _clashing_item(name: Any, *, ignore_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """An existing live material whose name matches once case, spacing and punctuation are ignored.
+
+    Compared in Python rather than with an `ilike` filter, for the reason _clashing_vendor gives
+    in full: product names carry commas and parentheses, and those are PostgREST filter syntax.
+
+    WHY THIS BLOCKS NOW, WHEN THE OLD CHECK DELIBERATELY DID NOT. similarNames was a hint on
+    purpose, and its docstring gave the reason: "the same product legitimately appears twice at
+    different coverages". THAT REASON EXPIRED when coverage left the Items tab — coverage is a
+    property of an assembly LINE now, which test_coverage_left_the_items_tab pins. Two materials
+    with one name no longer have anything to distinguish them, so Hanz's "dont allow" does not
+    overrule his earlier "make it a hint"; the ground moved under it."""
+    target = _item_key(name)
+    if not target:
+        return None
+    for it in list_items():
+        if it.get("id") != ignore_id and _item_key(it.get("name")) == target:
+            return it
+    return None
+
+
 def create_item(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str, Any]:
     row = validate_item(payload)
+    clash = _clashing_item(row.get("name"))
+    if clash:
+        raise ValidationError("\"%s\" is already in the library." % clash["name"])
     row["id"] = str(uuid.uuid4())
     row["owner_email"] = (owner_email or "").lower() or None
     row["created_at"] = row["updated_at"] = _now_iso()
@@ -452,6 +492,12 @@ def update_item(item_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any
     rows = cur.data or []
     if not rows:
         return None
+    # Checked AFTER the row is known to exist, so renaming something already deleted stays a 404
+    # rather than becoming a confusing 400 about a name clash.
+    if "name" in patch:
+        clash = _clashing_item(patch["name"], ignore_id=item_id)
+        if clash:
+            raise ValidationError("\"%s\" is already in the library." % clash["name"])
     # A PRICE REVISION, which is what Hanz asked to be able to see: "Date modified update should
     # only trigger when cost is modified". So the stamp moves when the number actually changes —
     # not when the name is corrected, and not when the same cost is saved again by the debounced

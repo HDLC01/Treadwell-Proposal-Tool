@@ -199,6 +199,97 @@
     return out;
   }
 
+  // ── confirming an Item change ─────────────────────────────────────────────
+  // Hanz, 2026-08-25: every Item field change is confirmed first, because items "will be
+  // connected to many assemblies and an accidental change could alter the pricing." That makes
+  // this a PRICING-INTEGRITY control rather than a politeness — an item's unit_cost reprices
+  // every assembly built on it, live, and nothing else on this page asks before doing that.
+  //
+  // ONE DIALOG PER ROW PER PAUSE, NOT ONE PER KEYSTROKE. onItemEdit is bound to both `input` and
+  // `change`, so asking on the raw event would ask once per character typed, and twice over for a
+  // <select> that fires both. patchSoon already coalesces a row's edits into a single payload
+  // after 600ms of quiet, which is exactly the grain this question belongs at: one dialog, per
+  // row, per pause, listing every field that actually moved.
+  //
+  // AND IT CANNOT LIVE IN onItemEdit FOR A MECHANICAL REASON WORTH WRITING DOWN.
+  // library-ui-harness.js lifts that function and runs it against a stub `document` that has only
+  // querySelector; TW.confirmDanger calls document.createElement and reads document.activeElement.
+  // A dialog inside onItemEdit would fail all 38 of that harness's tests in one go, which is a
+  // loud failure — but it would also have to be un-picked afterwards, and this is the better
+  // shape regardless.
+  var ITEM_FIELD_LABELS = {
+    name: "Name", unit: "Unit", unit_cost: "Cost", buy_qty: "Order amount",
+    coverage: "Coverage per unit", vendor: "Vendor", divisions: "Division",
+  };
+
+  // The item as it stood before this round of edits, captured on the first keystroke after each
+  // flush. Two jobs: the dialog quotes before → after, and Cancel has something to put back.
+  var itemBefore = {};
+
+  function snapshotItem(it) {
+    var out = {};
+    // Arrays are COPIED, not referenced: `divisions` is the one array field on an item, and a
+    // shared reference would make the snapshot mutate along with the edit it is meant to remember,
+    // so Cancel would restore the value it was supposed to undo.
+    Object.keys(it).forEach(function (k) {
+      out[k] = Array.isArray(it[k]) ? it[k].slice() : it[k];
+    });
+    return out;
+  }
+
+  function rememberItem(it) {
+    if (!itemBefore[it.id]) itemBefore[it.id] = snapshotItem(it);
+  }
+
+  function shownValue(v) {
+    if (Array.isArray(v)) return v.length ? v.join(", ") : "(none)";
+    var t = String(v === undefined || v === null ? "" : v).trim();
+    return t === "" ? "(blank)" : t;
+  }
+
+  /** Ask before an item's edits go to the server, and put them back if the answer is no.
+   *
+   *  Returns true to let the save proceed.
+   *
+   *  ON A NO, THE MODEL IS RESTORED AND THE PAGE REDRAWN. Without that the screen would keep
+   *  showing a value the server was never told about — a lie that outlives the dialog and is worse
+   *  than the accidental edit this exists to catch, because the next person to open the row reads
+   *  the wrong number with nothing marking it.
+   *
+   *  Compares against the snapshot rather than trusting the payload to be a change: patchSoon
+   *  MERGES fields across a quiet period, so a value typed and then typed back lands in the
+   *  payload identical to where it started. Asking about that would train the estimator to dismiss
+   *  the dialog, which is the failure mode that makes a confirmation worthless. */
+  async function confirmItemPatch(id, payload) {
+    var before = itemBefore[id];
+    delete itemBefore[id];
+    var it = itemOf(id);
+    if (!before || !it) return true;
+    var fields = Object.keys(payload).filter(function (f) {
+      return f !== "expected_updated_at" && shownValue(payload[f]) !== shownValue(before[f]);
+    });
+    if (!fields.length) return true;
+    var lines = fields.map(function (f) {
+      return (ITEM_FIELD_LABELS[f] || f) + ":  " + shownValue(before[f]) + "  →  "
+        + shownValue(payload[f]);
+    });
+    var ok = await TW.confirmDanger({
+      tone: "warn",
+      icon: "✎",
+      title: fields.length === 1 ? "Save this change?" : "Save these changes?",
+      name: before.name || it.name || "this item",
+      after: " is priced into every assembly that uses it, so this changes what those cost.",
+      detail: lines.join("\n"),
+      confirmText: "Save change",
+      cancelText: "Leave it as it was",
+    });
+    if (ok) return true;
+    Object.keys(before).forEach(function (k) { it[k] = before[k]; });
+    renderItems(); renderList(); renderPanel();
+    saving("");
+    return false;
+  }
+
   function patchSoon(kind, id, body) {
     var key = kind + ":" + id;
     if (body && Array.isArray(body.lines)) {
@@ -221,6 +312,10 @@
         var known = byId(kind, id);
         if (known && known.updated_at) payload.expected_updated_at = known.updated_at;
       }
+      // Items only. An assembly's lines are a takeoff somebody is actively building and a dialog
+      // per pause would be unusable; an item is reference data that other records are priced from,
+      // which is the whole distinction Hanz drew.
+      if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
       saving("Saving…");
       try {
         var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
@@ -457,10 +552,48 @@
            "<div>Price " + priced + "</div></div>";
   }
 
+  /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
+   *
+   *  Mirrors `_item_key` in backend/library.py, which is what actually REFUSES a duplicate. It is
+   *  a mirror rather than the authority, and the two differ on one point worth knowing: Python's
+   *  str.isalnum() keeps accented letters, this drops them. That only ever makes the client more
+   *  cautious about a name than the server is, so the worst case is a copy numbered (3) when (2)
+   *  was free — never a name the client offers and the server then rejects. */
+  function nameKey(s) {
+    return String(s == null ? "" : s).toLowerCase().replace(/[\s\W_]+/g, "");
+  }
+
+  /** "Densifier" → "Densifier (2)", and a copy of that → "Densifier (3)".
+   *
+   *  HANZ'S FORMAT, 2026-08-25, and it diverges from the house one deliberately: `uniqueLabel` in
+   *  estimate-review.js produces "Densifier copy 2". He asked for the parenthesised form on this
+   *  page, the two lists never appear together, and following the wording he gave costs nothing.
+   *
+   *  Counts from 2, as uniqueLabel does — "(1)" reads as the first of a set and implies the
+   *  original was renamed too. The trailing "(n)" is stripped off the stem first, so duplicating a
+   *  copy gives "Densifier (3)" rather than "Densifier (2) (2)".
+   *
+   *  Collisions are checked through nameKey and not by exact string, because the server's block
+   *  strips punctuation: "Densifier(2)" and "Densifier (2)" are one name to it. A counter that
+   *  only avoided exact matches would hand back a name the save then refuses, which reads as the
+   *  Duplicate button being broken. */
+  function duplicateName(base) {
+    var stem = String(base == null ? "" : base).trim().replace(/\s*\(\d+\)$/, "").trim();
+    if (!stem) stem = "New material";
+    var taken = {};
+    ITEMS.forEach(function (x) { taken[nameKey(x.name)] = true; });
+    for (var n = 2; n <= 999; n++) {
+      var candidate = stem + " (" + n + ")";
+      if (!taken[nameKey(candidate)]) return candidate;
+    }
+    return stem + " (copy)";
+  }
+
   function renderItems() {
     var out = "";
-    for (var i = 0; i < ITEMS.length; i++) {
-      var it = ITEMS[i];
+    var shown = visibleItems();
+    for (var i = 0; i < shown.length; i++) {
+      var it = shown[i];
       out += '<tr data-item="' + esc(it.id) + '">' +
         '<td><input data-f="name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials" style="width:100%;min-width:150px;">' +
           dupeHtml(similarNames(it.name, it.id)) + "</td>" +
@@ -471,11 +604,26 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor",
                       ' style="width:100%;min-width:130px;"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
-        '<td><button class="icon" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">🗑</button></td>' +
+        '<td><button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">⧉</button>' +
+          '<button class="icon" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">🗑</button></td>' +
       "</tr>";
     }
     $("items-body").innerHTML = out;
+    // Three states, not two: nothing in the library, nothing matching the search, and rows. The
+    // "No materials yet" panel offers an Add button, which is the wrong thing to offer somebody
+    // who has 40 materials and a typo in the search box.
+    var filtering = !!String(itemQuery).trim();
     $("items-empty").hidden = ITEMS.length > 0;
+    if ($("items-nomatch")) {
+      $("items-nomatch").hidden = !(filtering && ITEMS.length > 0 && shown.length === 0);
+    }
+    if ($("item-hits")) {
+      $("item-hits").hidden = !filtering;
+      $("item-hits").textContent = filtering
+        ? shown.length + " of " + ITEMS.length + " shown" : "";
+    }
+    // The tab badge stays the TOTAL. It is how many materials Treadwell has, not how many are on
+    // screen right now, and a badge that moved as somebody typed would read as rows disappearing.
     $("n-items").textContent = ITEMS.length;
     // Feeds both the name field's own autosuggest and the assemblies' searchable picker.
     $("dl-materials").innerHTML = ITEMS.map(function (it) {
@@ -561,6 +709,23 @@
    *
    *  Every word has to land somewhere, so "polished glaze" narrows instead of finding nothing:
    *  the fields are searched as one haystack, which is what "combination of those" asks for. */
+  /** What the Items tab is currently showing.
+   *
+   *  A PLAIN VARIABLE, never a field on an item, an assembly or anything else that gets
+   *  serialised. The dropdown filters deleted on 2026-08-19 kept their state on the line object,
+   *  so every debounced save shipped the estimator's filter to the server and `lineForSave` had to
+   *  strip `_`-prefixed keys to undo it. A filter is a view of the data, not part of it. */
+  var itemQuery = "";
+
+  /** The materials the query leaves, in the order they already had.
+   *
+   *  Reuses itemMatches — the same every-word-must-appear matcher the assembly picker searches
+   *  with — so the two boxes on this page cannot disagree about what "Sika primer" finds. */
+  function visibleItems() {
+    if (!String(itemQuery).trim()) return ITEMS;
+    return ITEMS.filter(function (it) { return itemMatches(it, itemQuery); });
+  }
+
   function itemMatches(it, query) {
     var words = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return true;
@@ -747,6 +912,10 @@
     if (!row) return;
     var it = itemOf(row.getAttribute("data-item"));
     if (!it) return;
+    // BEFORE the model is touched, and before the divisions branch below returns early — this is
+    // what Cancel puts back and what the dialog quotes. No-op after the first keystroke of a
+    // round, so a row typed into for ten seconds still remembers where it started.
+    rememberItem(it);
     if (f === "divisions") {
       var vals = Array.from(row.querySelectorAll('input[data-f="divisions"]:checked'))
         .map(function (x) { return x.getAttribute("data-div"); })
@@ -774,6 +943,17 @@
   // Both events: a text input reports `input`, and a <select> is only guaranteed to report
   // `change`. The handler is idempotent and the PATCH is debounced, so a browser firing both
   // costs one write either way.
+  // The search box lives OUTSIDE #items-body, so it needs its own listener — and it must not go
+  // through onItemEdit, which would look for a data-f attribute, find none, and return anyway.
+  // Re-rendering on every keystroke is safe here in a way it is not inside the table: the query
+  // input is not one of the rows being replaced, so it keeps its focus and its caret.
+  if ($("item-q")) {
+    $("item-q").addEventListener("input", function (e) {
+      itemQuery = e.target.value;
+      renderItems();
+    });
+  }
+
   $("items-body").addEventListener("input", onItemEdit);
   $("items-body").addEventListener("change", onItemEdit);
 
@@ -924,6 +1104,10 @@
       if (!r) continue;
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
+      // "Never picked" and "the material was deleted" both arrive here as missing_item, and they
+      // are not the same news. A line the estimator has not filled in yet is not broken, so it is
+      // not painted as a fault — it is told what to do next.
+      var neverPicked = !((asm.lines || [])[i] || {}).item_id;
       if (r.ok && r.priced) {
         tds[QTY_TD].innerHTML = '<div class="line-primary"><span class="qty">' + esc(L.qtyLabel(r)) +
                            '</span></div><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
@@ -933,7 +1117,9 @@
       } else {
         tds[QTY_TD].innerHTML = r.ok
           ? '<span style="color:var(--ink-v)">—</span>'
-          : '<span class="gone">' + (r.reason === "missing_item" ? "Item removed"
+          : '<span class="' + (neverPicked ? "unpicked" : "gone") + '">'
+            + (neverPicked ? "Pick a material"
+              : r.reason === "missing_item" ? "Item removed"
               : r.reason === "no_coverage" ? "Needs a coverage" : "Needs a cost") + "</span>";
         tds[COST_TD].innerHTML = "—";
         if (tds[QTY_TD].innerHTML.indexOf("line-primary") === -1) {
@@ -942,7 +1128,7 @@
         if (tds[COST_TD].innerHTML.indexOf("line-primary") === -1) {
           tds[COST_TD].innerHTML = '<div class="line-primary">' + tds[COST_TD].innerHTML + "</div>";
         }
-        rows[i].classList.toggle("broken", !r.ok);
+        rows[i].classList.toggle("broken", !r.ok && !neverPicked);
       }
     }
     $("t-total").textContent = p.priced_lines > 0 ? L.money(p.total) : "—";
@@ -984,6 +1170,33 @@
       return;
     }
 
+    var dup = t.getAttribute && t.getAttribute("data-dupe-item");
+    if (dup) {
+      var src = itemOf(dup);
+      if (!src) return;
+      try {
+        // Every priced field comes across. A copy that dropped the cost or the pack size would be
+        // a row that looks finished and prices at nothing, which is the failure this button is
+        // meant to save people from by hand-typing.
+        var copy = await post("items", {
+          name: duplicateName(src.name),
+          unit: src.unit || "",
+          buy_qty: src.buy_qty,
+          unit_cost: src.unit_cost,
+          vendor: src.vendor || "",
+          divisions: itemDivisions(src),
+        });
+        ITEMS.push(copy.item);
+        ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        showView("items"); paint();
+        // Focused and selected, like the Add button does: the name is the one field a copy always
+        // needs changing, and "(2)" is a placeholder rather than an answer.
+        var nf = $("items-body").querySelector('[data-item="' + copy.item.id + '"] input[data-f="name"]');
+        if (nf) { nf.focus(); nf.select(); }
+      } catch (err) { say("Couldn't copy that material. " + err.message); }
+      return;
+    }
+
     var di = t.getAttribute && t.getAttribute("data-del-item");
     if (di) {
       var it = itemOf(di);
@@ -1013,7 +1226,7 @@
       return;
     }
 
-    if (t.id === "asm-new" || t.id === "asm-new-2") {
+    if (t.id === "asm-new" || t.id === "asm-new-2" || t.id === "asm-new-top") {
       try {
         var a = await post("assemblies", { name: "New assembly", unit: "SF" });
         ASMS.push(a.assembly);
@@ -1027,14 +1240,19 @@
     if (t.id === "add-line") {
       var asm = current();
       if (!asm) return;
-      var first = ITEMS[0];
-      // 5% and rounding up are the defaults Hanz asked for, and they are set HERE as well as
-      // read-shaped server-side, so the row shows the same numbers it will be saved with.
-      asm.lines.push({ role: "", item_id: first ? first.id : "",
-                       coverage: first ? first.coverage : null,
+      // BLANK, not pre-filled with ITEMS[0]. That was whichever material sorts first
+      // alphabetically, carried in with its coverage — a real material, on a line nobody chose,
+      // pricing real money if it was left there. Hanz, 2026-08-25: the line should start empty.
+      asm.lines.push({ role: "", item_id: "", coverage: null,
+                       // 5% and rounding up are the defaults he asked for, set HERE as well as
+                       // read-shaped server-side so the row shows the numbers it will save with.
                        waste_pct: 5, roundup: true, note: "" });
+      // NOT SAVED YET, and that is the second half of the answer. `_clean_lines` on the server
+      // DROPS a line with no item_id, so a PATCH here would report success and the line would be
+      // gone on the next load, with nothing to explain it. The line becomes data on the first
+      // pick, which is also the moment it becomes worth saving.
+      pickerOpen = asm.lines.length - 1;
       paint();
-      patchSoon("assemblies", asm.id, { lines: asm.lines });
       return;
     }
 
