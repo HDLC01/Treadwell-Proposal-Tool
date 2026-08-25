@@ -826,6 +826,10 @@
       } else if (r.ok) {
         qtyCell = '<span style="color:var(--ink-v)">—</span>';       // no area typed yet
         costCell = '<span style="color:var(--ink-v)">—</span>';
+      } else if (r.reason === "no_item") {
+        // The instruction, not a fault. Grey, and the row is NOT tinted below.
+        qtyCell = '<span class="unpicked">Pick a material</span>';
+        costCell = "—";
       } else if (r.reason === "missing_item") {
         qtyCell = '<span class="gone">Item removed</span>';
         costCell = "—";
@@ -843,7 +847,11 @@
         costCell = '<div class="line-primary">' + costCell + "</div>";
       }
       var lineItem = itemOf(ln.item_id);
-      out += '<tr data-line="' + i + '"' + (r.ok ? "" : ' class="broken"') + ">" +
+      // An unfilled line is not tinted. This is the amber row refreshNumbers could clear only
+      // after an unrelated keystroke -- and `paint()` (which is what + line calls) never runs
+      // refreshNumbers at all, so it was the first thing the estimator saw.
+      out += '<tr data-line="' + i + '"' +
+        (r.ok || r.reason === "no_item" ? "" : ' class="broken"') + ">" +
         "<td>" + pickerFor(ln, i) +
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
@@ -1104,10 +1112,10 @@
       if (!r) continue;
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
-      // "Never picked" and "the material was deleted" both arrive here as missing_item, and they
-      // are not the same news. A line the estimator has not filled in yet is not broken, so it is
-      // not painted as a fault — it is told what to do next.
-      var neverPicked = !((asm.lines || [])[i] || {}).item_id;
+      // The pricing core tells them apart now (reason "no_item" vs "missing_item"), so this no
+      // longer re-derives it from the line. One source of truth: renderPanel, renderList and the
+      // Polish page all read the same distinction.
+      var neverPicked = r.reason === "no_item";
       if (r.ok && r.priced) {
         tds[QTY_TD].innerHTML = '<div class="line-primary"><span class="qty">' + esc(L.qtyLabel(r)) +
                            '</span></div><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
