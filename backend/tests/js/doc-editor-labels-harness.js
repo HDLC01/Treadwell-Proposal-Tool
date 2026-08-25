@@ -420,6 +420,12 @@ function schedulePersistOverrides() {
 }
 
 const LIFTED = [
+  // focusInside asks TWO questions now, and the second one is the caret's own line. It has to:
+  // the box is the editing host, so document.activeElement is an ANCESTOR of the paragraph being
+  // typed in and `el.contains(activeElement)` is false exactly when the guard matters. These
+  // three are what the second question is made of -- leaving them out is a ReferenceError the
+  // first time renderSystemPreview asks whether it may repaint.
+  topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"),
   topConst("focusInside"), topConst("escHtml"), stringConst("_OVERRIDE_TITLE"),
   topConst("_SYS_ROW_LINE_FIELDS"), stringConst("_SYS_LINE_TITLE"),
   // workLabelHtml is called from inside renderSystemPreview, so leaving it out does not fail

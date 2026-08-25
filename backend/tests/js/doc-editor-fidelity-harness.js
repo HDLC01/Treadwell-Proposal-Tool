@@ -301,7 +301,11 @@ class Ev {
 }
 
 function makeDoc() {
-  const doc = { activeElement: null, querySelectorAll: () => [] };
+  // getElementById returns null, which is the truthful answer for a harness that mounts no pricing
+  // rail and no notes textarea: the box-wide input sweep asks for #price-lines-block, #base-bid-row
+  // and #notes-text by id and skips whichever are absent. Without the method at all the sweep
+  // throws mid-format, which is exactly how this was found.
+  const doc = { activeElement: null, querySelectorAll: () => [], getElementById: () => null };
   doc.createElement = (t) => new El(t, doc);
   doc.body = new El("body", doc);
   return doc;

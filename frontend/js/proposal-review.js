@@ -1372,11 +1372,24 @@
   // works). Cached so switching work-types doesn't re-scan the same PNG.
   const _termsBandCache = new Map();   // work_type:media name -> reserved top band (pt)
 
-  // True when the keyboard focus is inside `el` — used to skip any re-render
-  // that would rebuild `el`'s innerHTML (and destroy the caret) while the
-  // estimator is typing in one of its editable islands. Skipped repaints
-  // self-heal on the next focusout re-render / refreshDocumentFills.
-  const focusInside = (el) => !!(el && document.activeElement && el.contains(document.activeElement));
+  // True when the estimator is typing inside `el` — used to skip any re-render that would rebuild
+  // `el`'s innerHTML (and destroy the caret) mid-word. Skipped repaints self-heal on the next
+  // focusout re-render / refreshDocumentFills.
+  //
+  // TWO QUESTIONS, because one of them stopped being enough. `document.activeElement` was the
+  // right answer while every editable line carried its own contenteditable: focus landed on the
+  // line, so a container holding the caret contained the focus. Now the BOX is the editing host,
+  // focus lands on it once and stays there while the caret moves between the paragraphs inside
+  // it — so activeElement is an ANCESTOR of the line being typed in, and
+  // `el.contains(activeElement)` is false exactly when this guard matters most. The caret's own
+  // line answers it directly, and nothing about it depends on where focus happens to sit.
+  const focusInside = (el) => {
+    if (!el) return false;
+    const a = document.activeElement;
+    if (a && el.contains && el.contains(a)) return true;
+    const line = lineAtSelection();
+    return !!(line && el.contains && el.contains(line));
+  };
 
   const escHtml = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -2447,31 +2460,48 @@
    *  the thing that trick exists to avoid, and it does not get easier with more elements in play.
    *
    *  A line the range covers ENTIRELY holds neither marker and reports its whole length. That is
-   *  the case that matters: it is how "these four lines are selected" becomes four splices. */
+   *  the case that matters: it is how "these four lines are selected" becomes four splices.
+   *
+   *  WHICH lines are covered is decided by the markers too, not by `Range.intersectsNode`. That
+   *  predicate answers "yes" for a node the range merely TOUCHES, and the two cases are
+   *  indistinguishable once you have the offsets: a fully covered empty line reports start == end
+   *  == 0, and so does a line the range only abutted. The marker positions say it exactly -- the
+   *  line holding MARK_A, the line holding MARK_B, and everything between them in document
+   *  order -- and a marker that lands outside any line at all (directly between two paragraphs)
+   *  falls back to that end of the box, which is where the selection visibly reaches. */
   function selectionLines() {
     const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
     if (!sel || !sel.rangeCount) return [];
     const r = sel.getRangeAt(0);
     const box = editingBox(r.commonAncestorContainer);
     if (!box) return [];
-    const lines = boxLines(box).filter(el => {
-      try { return r.intersectsNode(el); } catch { return false; }
-    });
-    if (!lines.length) return [];
-    // One line is the case the existing reader already handles exactly, markers and all.
-    if (lines.length === 1) {
-      const one = selectionRange(lines[0]);
-      return one ? [{ el: lines[0], start: one[0], end: one[1] }] : [];
+    // A CARET IS ALWAYS ONE LINE. Asking a range predicate about a collapsed caret sitting at the
+    // end of a paragraph gets "both of them", because it touches the start of the next -- which
+    // would turn a single Enter at the end of a line into a two-line splice that empties the line
+    // below it. Answered here, before any of the arithmetic can see it.
+    if (r.collapsed) {
+      const el = lineAtSelection();
+      if (!el) return [];
+      const one = selectionRange(el);
+      return one ? [{ el: el, start: one[0], end: one[1] }] : [];
     }
+    const lines = boxLines(box);
+    if (!lines.length) return [];
     const prev = _fmtBusy;
     _fmtBusy = true;
     try {
       const a = document.createTextNode(MARK_A), b = document.createTextNode(MARK_B);
       const rb = r.cloneRange(); rb.collapse(false); rb.insertNode(b);
       const ra = r.cloneRange(); ra.collapse(true); ra.insertNode(a);
+      const raws = lines.map(el => segmentsOf(el).map(seg => seg.text).join(""));
+      let first = raws.findIndex(t => t.indexOf(MARK_A) >= 0);
+      let last = raws.findIndex(t => t.indexOf(MARK_B) >= 0);
+      if (first < 0) first = 0;                     // the selection began above the first line
+      if (last < 0) last = lines.length - 1;        // ...or ran past the last
+      if (last < first) { const t = first; first = last; last = t; }
       const out = [];
-      for (const el of lines) {
-        const raw = segmentsOf(el).map(seg => seg.text).join("");
+      for (let k = first; k <= last; k++) {
+        const raw = raws[k];
         const iA = raw.indexOf(MARK_A), iB = raw.indexOf(MARK_B);
         const clean = raw.split(MARK_A).join("").split(MARK_B).join("");
         let start = 0, end = clean.length;
@@ -2479,14 +2509,14 @@
         // MARK_A shifted everything after it along by one, exactly as in selectionRange -- but
         // only within the line that actually holds it.
         if (iB >= 0) end = iA >= 0 && iB > iA ? iB - 1 : iB;
-        out.push({ el: el, start: Math.max(0, start), end: Math.max(0, end) });
+        out.push({ el: lines[k], start: Math.max(0, start), end: Math.max(0, end) });
       }
       a.remove(); b.remove();
       lines.forEach(el => { try { el.normalize(); } catch {} });
       // Put back what the markers disturbed, across the whole span rather than one line.
-      const first = out[0], last = out[out.length - 1];
+      const head = out[0], tail = out[out.length - 1];
       try {
-        const pa = pointAt(first.el, first.start), pb = pointAt(last.el, last.end);
+        const pa = pointAt(head.el, head.start), pb = pointAt(tail.el, tail.end);
         if (pa && pb) {
           const back = document.createRange();
           back.setStart(pa.node, Math.max(0, Math.min(pa.offset, pa.node.length)));
@@ -2495,7 +2525,7 @@
           sel.addRange(back);
         }
       } catch {}
-      return out;
+      return out.length ? out : [];
     } catch {
       return [];
     } finally {
@@ -3320,9 +3350,14 @@
     if (_fillsTimer) clearTimeout(_fillsTimer);
     _fillsTimer = setTimeout(() => {
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      const caretLine = lineAtSelection();
       docSurface.querySelectorAll(".tw-block").forEach(el => {
         // Don't re-fill the block the caret is currently in (a sidebar edit
         // landing within the 150ms window would otherwise clobber it).
+        // BOTH TESTS. activeElement is the BOX now, an ancestor of this paragraph, so the
+        // containment test below can no longer see the caret — see the note on focusInside.
+        // `caretLine` is the paragraph the caret is actually in, which is what was meant.
+        if (el === caretLine) return;
         if (el.contains(document.activeElement)) return;
         const b = blockById.get(Number(el.dataset.id));
         if (!b) return;
@@ -3808,8 +3843,12 @@
         setOpen(box, false);
         return;
       }
-      // Don't fight the paragraph editor: a click meant for a block should edit it.
-      if (e.target.closest(".tw-block, .tw-line-edit, [contenteditable=true]")) return;
+      // Don't fight the paragraph editor: a click meant for a LINE should edit it, not expand the
+      // box. `lineAt` rather than a hand-written selector list, because the list used to end in
+      // `[contenteditable=true]` -- and the box itself now carries that attribute, so every click
+      // inside a truncated NOTES box found it on the way up and returned. The box would never have
+      // expanded again. (Using lineAt also picks up `.tw-note-edit`, which that list was missing.)
+      if (lineAt(e.target)) return;
       // Nor the drag handles: releasing a resize grip fires a click on the box, and peeking at
       // the hidden text is the opposite of what somebody who just made the box bigger wanted.
       if (e.target.closest(".tw-box-tools")) return;
@@ -5287,7 +5326,8 @@
     if (type === "insertCompositionText") return;
     const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
     if (!sel || !sel.rangeCount) return;
-    if (sel.getRangeAt(0).collapsed) {
+    const r = sel.getRangeAt(0);
+    if (r.collapsed) {
       if (type !== "deleteContentBackward" && type !== "deleteContentForward") return;
       const el = lineAtSelection();
       if (!el) return;
@@ -5298,6 +5338,18 @@
           || (type === "deleteContentForward" && one[1] >= total)) e.preventDefault();
       return;
     }
+    // BOTH ENDS IN THE SAME LINE means the browser's own edit cannot cross a paragraph, so it is
+    // left alone -- and, more importantly, left alone WITHOUT reading the selection first. Reading
+    // it means inserting and removing the two markers and then re-placing the range, and doing
+    // that inside `beforeinput` -- before the browser has applied the edit it is asking about --
+    // moves the very range that edit is about to use. Two `closest()` calls answer the question
+    // without touching anything.
+    const startEl = r.startContainer && r.startContainer.nodeType === 1
+      ? r.startContainer : (r.startContainer && r.startContainer.parentNode);
+    const endEl = r.endContainer && r.endContainer.nodeType === 1
+      ? r.endContainer : (r.endContainer && r.endContainer.parentNode);
+    const oneLine = lineAt(startEl);
+    if (oneLine && oneLine === lineAt(endEl)) return;
     let lines;
     try { lines = selectionLines(); } catch { lines = []; }
     if (lines.length <= 1) return;
