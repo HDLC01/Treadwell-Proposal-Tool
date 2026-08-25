@@ -408,6 +408,35 @@
      one run, which is most of why a signature read as a wall of text. anywhere, not
      break-word, so a long tracking URL cannot push the bubble past its max-width. */
   .msg .mbody { white-space:pre-wrap; overflow-wrap:anywhere; }
+  /* ── attachments ────────────────────────────────────────────────────────────
+     A picture is SHOWN, not listed: the commonest attachment on a bid is a photo of a slab, and
+     a column of filename chips makes the estimator open every one to find it. Capped so a tall
+     phone photo cannot push the rest of the thread off the drawer. */
+  .att-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .att-img { display:block; line-height:0; border-radius:8px; overflow:hidden; }
+  .att-img img { max-width:200px; max-height:200px; width:auto; height:auto; display:block; }
+  .att-file { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:8px;
+    text-decoration:none; background:rgba(0,0,0,.06); color:inherit; font-size:12px; max-width:240px; }
+  .att-file:hover { background:rgba(0,0,0,.11); }
+  .att-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .att-size { opacity:.65; flex:none; }
+  /* On our own red bubbles a neutral wash disappears — lift it off the bubble instead. */
+  .msg.staff .att-file { background:rgba(255,255,255,.2); }
+  .msg.staff .att-file:hover { background:rgba(255,255,255,.32); }
+  /* The queue above the composer, before anything is sent. */
+  .att-strip { display:flex; flex-wrap:wrap; gap:6px; }
+  .att-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 6px 4px 4px;
+    border-radius:8px; background:rgba(0,0,0,.06); font-size:12px; max-width:220px; }
+  .att-chip img { width:26px; height:26px; object-fit:cover; border-radius:5px; display:block; }
+  .att-chip.is-uploading { opacity:.7; }
+  /* A failed upload keeps its chip and says why, ON the file it happened to. */
+  .att-chip.is-error { background:rgba(200,16,46,.12); }
+  .att-chip.is-error .att-size { color:#9e001f; opacity:1; }
+  .att-x { border:0; background:none; cursor:pointer; font-size:15px; line-height:1; padding:0 2px;
+    opacity:.55; color:inherit; }
+  .att-x:hover { opacity:1; }
+  .icon-btn { display:inline-flex; align-items:center; gap:6px; }
+  #chat-compose.drop-on { outline:2px dashed rgba(200,16,46,.5); outline-offset:3px; border-radius:8px; }
   /* WHICH contact wrote it, on a proposal with more than one. The blanket author label was
      removed on 2026-08-11 ("just the reply contents and the date") because with a single contact
      it restated what the side and colour already said. On a multi-recipient proposal it says

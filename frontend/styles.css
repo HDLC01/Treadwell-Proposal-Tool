@@ -826,6 +826,24 @@ button {
    feature that had not. Still background-and-outline only, never geometry: this surface is a
    to-scale preview registered against baked artwork, so a cue that reflowed the text by a pixel
    would be the worse bug. */
+/* ── attachment chips (Files send card) ──────────────────────────────────────
+   Shared shape with the CRM drawer's chips deliberately: it is the same gesture in both places,
+   and two different-looking answers to "what have I attached?" is worse than one plain one. */
+.att-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.att-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 4px; border-radius: 8px; background: rgba(0, 0, 0, .06);
+  font-size: 12px; max-width: 260px;
+}
+.att-chip img { width: 26px; height: 26px; object-fit: cover; border-radius: 5px; display: block; }
+.att-chip .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-chip .att-size { opacity: .65; flex: none; }
+.att-x {
+  border: 0; background: none; cursor: pointer; font-size: 15px; line-height: 1;
+  padding: 0 2px; opacity: .55; color: inherit;
+}
+.att-x:hover { opacity: 1; }
+
 .tw-block.tw-boxsel, .tw-line-edit.tw-boxsel {
   background: rgba(158, 0, 31, 0.22);
   box-shadow: inset 0 0 0 1px rgba(158, 0, 31, 0.45);

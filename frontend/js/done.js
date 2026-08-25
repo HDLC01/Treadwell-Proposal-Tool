@@ -637,6 +637,106 @@
     document.getElementById("gen-btn").addEventListener("click", doGenerate);
   }
 
+  /** The files going out WITH this proposal.
+   *
+   *  Held in the browser until Send, unlike the chat's attachments which upload the moment they
+   *  are picked. That difference is forced: the chat always has a proposal row to hang an upload
+   *  off, and a first send does not have one until the publish creates it.
+   *
+   *  So the cost is paid at Send instead — which is why the total is capped at 10 MB and said out
+   *  loud on the page. Resend would take four times that; the customer's own mail server is the
+   *  one that would bounce it, and they would find out from the customer.
+   */
+  const sendAtts = (() => {
+    const MAX_TOTAL = 10 * 1024 * 1024;
+    const MAX_ONE = 15 * 1024 * 1024;
+    let items = [];
+    const size = (n) => (n < 1024 ? n + " B"
+      : n < 1024 * 1024 ? Math.round(n / 1024) + " KB"
+      : (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0) + " MB");
+    const total = () => items.reduce((a, b) => a + (b.size || 0), 0);
+
+    function draw() {
+      const strip = document.getElementById("send-atts");
+      const note = document.getElementById("send-att-note");
+      if (!strip) return;
+      strip.innerHTML = items.map((a, i) => `
+        <span class="att-chip">
+          ${a.preview ? `<img src="${a.preview}" alt="">` : ""}
+          <span class="att-name"></span>
+          <span class="att-size">${size(a.size)}</span>
+          <button type="button" class="att-x" data-att-remove="${i}" aria-label="Remove">&times;</button>
+        </span>`).join("");
+      // Names go in as TEXT, never as markup: a filename is the one string on this page that
+      // came from outside it.
+      strip.querySelectorAll(".att-name").forEach((el, i) => { el.textContent = items[i].name; });
+      strip.hidden = !items.length;
+      if (note) {
+        note.textContent = items.length
+          ? `${items.length} file${items.length > 1 ? "s" : ""} · ${size(total())} of 10 MB`
+          : "";
+      }
+    }
+
+    function add(files) {
+      for (const f of Array.from(files || [])) {
+        if (items.length >= 10) break;
+        if (f.size > MAX_ONE) { alert(`${f.name} is larger than 15 MB.`); continue; }
+        if (total() + f.size > MAX_TOTAL) {
+          alert(`${f.name} would take this over 10 MB. Send the large files in the chat instead — `
+                + `the customer gets them the same way, without risking the email bouncing.`);
+          continue;
+        }
+        const image = /^image\//.test(f.type || "");
+        items.push({ file: f, name: f.name || "attachment", size: f.size,
+                     mime: f.type || "application/octet-stream",
+                     preview: image ? URL.createObjectURL(f) : "" });
+      }
+      draw();
+    }
+
+    document.addEventListener("click", (e) => {
+      if (e.target.closest("#send-attach")) {
+        e.preventDefault();
+        const inp = document.getElementById("send-file");
+        if (inp) inp.click();
+        return;
+      }
+      const rm = e.target.closest("#send-atts [data-att-remove]");
+      if (!rm) return;
+      const i = Number(rm.dataset.attRemove);
+      if (items[i] && items[i].preview) URL.revokeObjectURL(items[i].preview);
+      items.splice(i, 1);
+      draw();
+    });
+    const inp = document.getElementById("send-file");
+    if (inp) inp.addEventListener("change", (e) => { add(e.target.files); e.target.value = ""; });
+
+    return {
+      /** Read every file as base64, in parallel, at Send time.
+       *
+       *  Not at pick time: an estimator who attaches four photos and then removes three should
+       *  not have paid to encode all four, and holding the encoded copies as well as the File
+       *  objects doubles the memory for no gain.
+       */
+      payload: () => Promise.all(items.map((a) => new Promise((res) => {
+        const r = new FileReader();
+        r.onload = () => res({ name: a.name, mime: a.mime,
+                               // readAsDataURL gives "data:<mime>;base64,<data>" — the server
+                               // wants the data only.
+                               b64: String(r.result || "").split(",")[1] || "" });
+        r.onerror = () => res(null);
+        r.readAsDataURL(a.file);
+      }))).then((all) => all.filter(Boolean)),
+      clear: () => {
+        items.forEach((a) => { if (a.preview) URL.revokeObjectURL(a.preview); });
+        items = [];
+        draw();
+      },
+      count: () => items.length,
+    };
+  })();
+
   /** Compare the pricing the server just SENT against the pricing this page is showing.
    *  Returns a human sentence naming the difference, or "" when they agree.
    *
@@ -843,8 +943,17 @@
                             + "check your connection and try again.");
           }
           portalBtn.textContent = "Sending…";
+          // AWAITED, and read here rather than at pick time: an estimator who attaches four
+          // photos and removes three should not have paid to encode all four, and holding the
+          // encoded copies alongside the File objects doubles the memory for nothing.
+          const attachments = await sendAtts.payload();
           const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
                                       { emails, message, require_deposit: requireDeposit,
+                                        // They travel in this body rather than being uploaded
+                                        // first because on a FIRST send the portal proposal row
+                                        // does not exist until this request creates it — there is
+                                        // nothing yet for an upload to hang off.
+                                        attachments,
                                         assigned_estimator: assignedEstimator,
                                         // Which of those contacts should not be chased. Filtered
                                         // to the addresses actually being sent to, so a removed
@@ -856,6 +965,9 @@
                                         notify_add: notifyPick.adds(),
                                         notify_mute: notifyPick.mutes() });
           if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+          // Only now. Clearing before the request would lose the files on a failed send and leave
+          // the estimator re-picking them with no idea they had gone.
+          sendAtts.clear();
           // Remember both for a re-send. require_deposit persists so a deliberate
           // GC-with-deposit (or Direct-without) choice survives a reload instead of
           // snapping back to the audience default.
