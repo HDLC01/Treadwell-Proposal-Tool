@@ -530,20 +530,38 @@ def test_the_toolbar_offers_all_three_controls_on_a_work_row(ran):
     assert bar["bullet"]["on"] is True
     assert bar["bullet"]["pressed"] == "true"
     for key in ("bullet", "outdent", "indent"):
-        assert bar[key]["display"] == "", key
+        assert bar[key]["visibility"] == "", key
         assert bar[key]["disabled"] is False, key
         assert bar[key]["label"], key            # every control is named for a screen reader
     assert bar["outdent"]["title"] == "Less indent (moves left, all the way to the margin)"
 
 
 def test_a_locked_paragraph_is_offered_nothing(ran):
-    """A numbered TERMS clause. Not a disabled button — a disabled button still invites the click
-    and still says the feature applies here. It does not."""
+    """A numbered TERMS clause. Not a button that merely looks disabled — that still invites the
+    click and still says the feature applies here. It does not.
+
+    `visibility: hidden` since 2026-08-24, where it used to be `display: none`. Kyle asked for the
+    bar to become "static like a ribbon in a word document", and a row that reflowed every time
+    the caret crossed from a WORK row to a contract clause would not be static — Reset would jump
+    out from under the pointer. visibility keeps the space, and unlike `opacity: 0` it still takes
+    the element out of hit-testing and out of the tab order. `disabled` is asserted alongside it
+    because renderFmtBar sets both: if that rule ever loses a cascade the refusal has to survive
+    anyway."""
     bar = ran["paraBarLocked"]
     for key in ("bullet", "outdent", "indent", "sep"):
-        assert bar[key]["display"] == "none", key
+        assert bar[key]["visibility"] == "hidden", key
+        assert bar[key]["display"] == "", (
+            "%s is hidden with `display`, so the ribbon reflows when the caret reaches a locked "
+            "clause" % key)
+    for key in ("bullet", "outdent", "indent"):
+        assert bar[key]["disabled"] is True, key
+    # And no stale pressed state waiting on the hidden button: the ribbon is one memoized element
+    # that lives for the whole session, so "on" from the last WORK row would otherwise stay there.
+    assert bar["bullet"]["on"] is False
+    assert bar["bullet"]["pressed"] == "false"
     # Run formatting is untouched: bold on a contract clause is fine, renumbering is not.
-    assert bar["bold"]["display"] == ""
+    assert bar["bold"]["visibility"] == ""
+    assert bar["bold"]["disabled"] is False
     acted = ran["paraLockedAction"]
     assert acted["bulletPressed"] is False and acted["outdentPressed"] is False
     assert acted["el"] == {"li": True, "marginLeft": "", "paddingLeft": "", "dirty": False}
@@ -554,7 +572,7 @@ def test_a_block_with_no_para_metadata_is_offered_nothing_either(ran):
     """The pre-v5 cached-response case. With no `locked` we cannot tell a WORK row from a
     contract clause, so the honest degradation is no controls at all."""
     for key in ("bullet", "outdent", "indent", "sep"):
-        assert ran["paraBarNoMeta"][key]["display"] == "none", key
+        assert ran["paraBarNoMeta"][key]["visibility"] == "hidden", key
     assert ran["paraNoMetaAction"] is False
 
 

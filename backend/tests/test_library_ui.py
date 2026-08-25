@@ -587,3 +587,192 @@ def test_typed_text_resolves_to_a_material_or_to_nothing(ran):
     assert p["exact"] == "i2" and p["caseInsensitive"] == "i2" and p["trimmed"] == "i1"
     assert p["partialRefused"] is None, "a half-typed name was resolved to a material"
     assert p["unknownRefused"] is None and p["blank"] is None
+
+# ══ confirming an Item change ════════════════════════════════════════════════
+# Hanz, 2026-08-25: items "will be connected to many assemblies and an accidental change could
+# alter the pricing." Every one of these runs through the REAL patchSoon — a test that called
+# confirmItemPatch directly would still pass with the call site deleted, which is the failure this
+# whole feature consists of.
+
+
+@needs_node
+def test_an_item_change_is_confirmed_before_it_is_sent(ran):
+    """One dialog, naming the item and quoting the field that moved.
+
+    It quotes before → after rather than saying "are you sure": the estimator is being asked about
+    a number, and a dialog that does not show the number is one they can only answer by trusting
+    the click they already made."""
+    g = ran["itemConfirm"]
+    assert g["errors"] == []
+    assert g["asked"] == 1, "the save was sent without asking, or asked more than once"
+    assert g["title"] == "Save this change?"
+    assert g["name"] == "Densifier", "the dialog does not say which item"
+    assert g["detail"] == "Cost:  42  \u2192  58", g["detail"]
+    assert g["confirmText"] == "Save change", (
+        "confirmDanger defaults its button to 'Delete', which is the wrong verb and the wrong "
+        "promise for a save")
+    assert g["tone"] == "warn", "danger tone is for destruction; this is a save"
+    assert g["requests"] == ["PATCH /api/library/items/i1"]
+    assert g["costAfter"] == 58
+
+
+@needs_node
+def test_two_fields_edited_in_one_pause_ask_once(ran):
+    """THE REASON THE DIALOG LIVES AT FLUSH TIME. onItemEdit is bound to both `input` and `change`,
+    so asking on the raw event would ask once per character and twice over for a <select>.
+    patchSoon already merges a row's fields across 600ms of quiet, so that is the grain the
+    question belongs at: one dialog per row per pause, listing everything that moved."""
+    g = ran["itemConfirmTwoFields"]
+    assert g["asked"] == 1, "two fields in one quiet period produced %s dialogs" % g["asked"]
+    assert g["title"] == "Save these changes?", "the title did not pluralise"
+    assert g["detail"] == "Cost:  42  \u2192  58\nVendor:  Sika  \u2192  Euclid", g["detail"]
+
+
+@needs_node
+def test_saying_no_sends_nothing_and_puts_the_value_back(ran):
+    """The half that is easy to leave out, and worse than the bug it guards.
+
+    A dialog that stops the PATCH but leaves the edit on screen means the row shows a price the
+    server was never told about. Nothing marks it, a reload silently reverts it, and in between,
+    anyone reading that item is reading a number that does not exist. So Cancel restores the
+    snapshot taken before the first keystroke and repaints."""
+    g = ran["itemCancel"]
+    assert g["errors"] == []
+    assert g["asked"] == 1
+    assert g["requests"] == [], "Cancel still sent the change"
+    assert (g["costAfter"], g["vendorAfter"]) == (42, "Sika"), (
+        "the model kept the cancelled edit: %r" % ((g["costAfter"], g["vendorAfter"]),))
+    assert g["repainted"] == "items,list,panel", (
+        "the screen was not redrawn, so the cancelled value is still in the input: %r"
+        % g["repainted"])
+    assert g["neverSaidSaving"], "it announced 'Saving' for a save it then did not do"
+
+
+@needs_node
+def test_cancelling_a_division_toggle_restores_the_array(ran):
+    """`divisions` is the one ARRAY field on an item, and it is mutated IN PLACE by the chip
+    handler. A snapshot taken with Object.assign would share that array, so "before" would grow
+    the new division along with the edit and Cancel would restore the exact value it was meant to
+    undo — with the dialog still reporting success and nothing on screen wrong.
+
+    This is the case that makes the copy in snapshotItem load-bearing rather than tidy."""
+    g = ran["itemCancelArray"]
+    assert g["asked"] == 1
+    assert g["detail"] == ("Division:  Polished Concrete  \u2192  Polished Concrete, Epoxy"), g["detail"]
+    assert g["divisionsAfter"] == ["Polished Concrete"], (
+        "the cancelled division is still on the item: %r" % (g["divisionsAfter"],))
+
+
+@needs_node
+def test_a_value_typed_and_typed_back_is_not_asked_about(ran):
+    """patchSoon merges a row's fields across the quiet period, so a value changed and then put
+    back arrives in the payload identical to where it started. Asking about that teaches the
+    estimator to dismiss the dialog without reading it, which costs more than the confirmation
+    ever saves — so the comparison is against the snapshot, not against the payload existing."""
+    g = ran["itemNoChange"]
+    assert g["asked"] == 0, "it asked about a change that was not one"
+    assert g["requests"] == ["PATCH /api/library/items/i1"], (
+        "the save itself was dropped; a no-op payload is harmless and still gets sent")
+
+
+@needs_node
+def test_an_assembly_save_is_never_confirmed(ran):
+    """The dialog is scoped to items on purpose. An assembly's lines are a takeoff somebody is
+    actively building, where a dialog per pause would be unusable; an item is reference data that
+    other records are priced from, which is the distinction Hanz drew.
+
+    Read off the 409 scenario rather than its own run, because that one is a realistic assembly
+    edit — two keystrokes, a conflict, a repaint — so a dialog leaking out of the items branch
+    would have fired somewhere in it."""
+    assert ran["conflict"]["neverAskedAboutAnAssembly"], (
+        "the confirmation escaped the items branch and is now in front of assembly saves")
+
+# ══ searching, copying, and a line nobody has filled in yet ══════════════════
+
+
+@needs_node
+def test_the_items_tab_can_be_searched(ran):
+    """One box, reusing the matcher the assembly picker already searches with, so the two cannot
+    disagree about what "opf primer" finds.
+
+    No dropdowns beside it, deliberately. Division and vendor dropdown filters existed in the
+    picker and were deleted on 2026-08-19 for three reasons that all still apply here: they made
+    every row tall, Hanz asked for one matcher "not two dropdowns", and their state lived on the
+    line object, so it was being PERSISTED to the server on every save — which is why lineForSave
+    still strips underscore-prefixed keys."""
+    g = ran["itemsSearch"]
+    assert (g["unfiltered"], g["filtered"], g["missed"]) == (2, 1, 0)
+    assert g["sameMatcherAsThePicker"], "the tab filters by a different rule than the picker"
+    assert g["hits"] == "1 of 2 shown"
+    assert g["hitsHiddenWhenNotFiltering"], "it reports a count when nothing is being filtered"
+    assert g["badgeWhileFiltering"], (
+        "the tab badge moved with the search, so filtering reads as materials disappearing")
+
+
+@needs_node
+def test_a_search_with_no_hits_does_not_offer_to_add_one(ran):
+    """The empty state and the no-match state are different news and had one panel between them.
+    "No materials yet" carries an Add button — offering that to somebody who has 40 materials and a
+    typo in the box invites them to create the duplicate the rest of this work is about
+    preventing."""
+    g = ran["itemsSearch"]
+    assert g["noMatchShown"], "a search with no hits showed nothing at all"
+    assert g["emptyPanelStaysHidden"], "the 'add your first material' panel answered a bad search"
+    assert g["noMatchHiddenOnAHit"], "the no-match panel showed alongside results"
+
+
+@needs_node
+def test_a_duplicate_is_named_the_way_hanz_asked(ran):
+    """Hanz, 2026-08-25: "Densifier (2)". That diverges from the house format — `uniqueLabel` in
+    estimate-review.js produces "Densifier copy 2" — and his wording wins on his page; the two
+    lists never appear together.
+
+    Counting starts at 2 because "(1)" reads as the first of a set and implies the original was
+    renamed too."""
+    g = ran["duplicateName"]
+    assert g["first"] == "Densifier (2)"
+
+
+@needs_node
+def test_a_copy_of_a_copy_does_not_stack_suffixes(ran):
+    """The stem is stripped of its trailing "(n)" before counting, or duplicating a copy gives
+    "Densifier (2) (2)" and the one after that gives "Densifier (2) (2) (2)"."""
+    g = ran["duplicateName"]
+    assert g["ofACopy"] == "Densifier (2)", g["ofACopy"]
+    assert "(2) (2)" not in g["ofACopy"]
+
+
+@needs_node
+def test_the_copy_counter_skips_names_taken_in_any_spelling(ran):
+    """Collisions are compared through nameKey — case, spacing and punctuation dropped — because
+    the SERVER's duplicate block normalises the same way. "Densifier(3)" and "Densifier (3)" are
+    one name to it, so a counter that only avoided exact strings would hand back a name the save
+    then refuses, which reads on screen as the Duplicate button being broken."""
+    assert ran["duplicateName"]["skipsTaken"] == "Densifier (4)", (
+        "the counter reused a name that is already taken in another spelling")
+
+
+@needs_node
+def test_a_line_with_no_material_yet_is_not_reported_as_broken(ran):
+    """It used to arrive pre-filled with ITEMS[0] — whichever material sorts first alphabetically,
+    carried in with its coverage. A real material, on a line nobody chose, pricing real money if
+    it was left there.
+
+    Starting blank exposes a second problem: "no material" and "the material was deleted" both
+    reach the updater as missing_item, so a line added ten seconds ago announced "Item removed" in
+    amber on a row flagged broken. That is a fault report about the estimator not having finished
+    typing."""
+    g = ran["blankLine"]
+    assert g["saysPick"], "a blank line does not say what to do: %r" % g["qtyCell"]
+    assert not g["saysRemoved"], "a line nobody filled in claims its material was removed"
+    assert not g["flaggedBroken"], "an unfinished line is painted as a fault"
+
+
+@needs_node
+def test_a_line_whose_material_really_went_still_says_so(ran):
+    """The other side of that, and the reason the two states are told apart by item_id rather than
+    by the pricing reason: softening BOTH would hide a real broken line behind a friendlier
+    message, and a broken line is the one thing on this page that must keep shouting."""
+    g = ran["removedLine"]
+    assert g["saysRemoved"], "a deleted material no longer reports itself"
+    assert g["flaggedBroken"], "a genuinely broken line stopped being flagged"

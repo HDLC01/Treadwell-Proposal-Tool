@@ -153,19 +153,30 @@ def test_the_follow_ups_board_IS_in_the_sidebar_again(sidebar):
         % (_nav_labels(sidebar),))
 
 
-def test_the_follow_ups_board_sits_under_sales_with_active_projects(sidebar):
+def test_the_follow_ups_board_sits_directly_under_active_projects(sidebar):
     """Where it went back, and why that is not arbitrary.
 
     It is the same population as Active Projects read a different way, and its own rows navigate
-    INTO that page (/portal.html?open=...&sec=followup). Filing it anywhere else would put the link
-    under one heading and land the click under another. Not under Proposals: that heading is the
-    pages that MAKE a proposal, and this one starts after the proposal has gone out."""
-    i = sidebar.index('tw-section">Sales')
+    INTO that page (/portal.html?open=...&sec=followup), so filing it away from the board would put
+    the link under one heading and land the click under another.
+
+    THE HEADING USED TO BE THE ASSERTION AND CANNOT BE ANY MORE. It sat under "Sales" until
+    2026-08-25, when the sidebar collapsed to Active / Beta / Settings. "Which section is it in" no
+    longer separates it from Lead Inbox or the Proposals Database, because all nine daily pages
+    share one heading now. What still carries the decision is ADJACENCY - Active Projects first,
+    this immediately after it, ahead of the daily queue - so that is what is pinned. It is also the
+    part that would really be wrong if somebody sorted the group alphabetically or dropped this to
+    the bottom of it, neither of which the old heading check would have caught either."""
+    i = sidebar.index('tw-section">Active')
     j = sidebar.index("/followups.html")
-    assert j > i, "the Follow-ups link is above the Sales heading, so it reads as part of nothing"
+    assert j > i, "the Follow-ups link is above the Active heading, so it reads as part of nothing"
     nxt = sidebar.find('tw-section">', i + 1)
-    assert nxt == -1 or j < nxt, "the Follow-ups link fell out of the Sales section"
-    assert sidebar.index("/portal.html") < j, "Active Projects is no longer the first Sales item"
+    assert nxt == -1 or j < nxt, "the Follow-ups link fell out of the Active section"
+    k = sidebar.index("/portal.html")
+    assert k < j, "Active Projects is no longer the first item under Active"
+    assert sidebar[k:j].count("navItem(") == 1, (
+        "something was inserted between Active Projects and Follow-ups; they are one population "
+        "read two ways and are meant to be read together")
 
 
 def test_the_cadence_page_IS_still_in_the_sidebar(sidebar):
@@ -222,30 +233,69 @@ def test_the_follow_ups_heading_did_not_come_back_with_the_item(sidebar):
 
 
 def test_the_removal_did_not_take_its_neighbours_with_it(sidebar):
-    """The section sat between Polish Estimate and the Analytics heading, so an over-wide delete
-    lands on those. Kills losing the last item of Proposals or the whole Analytics heading.
+    """The section sat between Polish Estimate and Analytics, so an over-wide delete lands on
+    those. Kills losing Polish Estimate or the Analytics link.
 
     Polish Estimate's href became /polish-intake.html on 2026-08-17 — the beta's own step 1, after
     the job conditions moved onto its intake form. Matched on the LABEL here rather than the path,
-    because what this test is about is the item still being in the list, not where it goes."""
+    because what this test is about is the item still being in the list, not where it goes.
+
+    ANALYTICS IS PINNED AS A LINK NOW, NOT A HEADING. Its heading was one of the five removed on
+    2026-08-25. That is the half that mattered anyway: a heading disappearing is a decision somebody
+    made and can be read straight off a diff, a LINK disappearing is a page nobody can reach.
+
+    The two are no longer asserted in a fixed order, and that is deliberate rather than dropped:
+    the same change moved Polish Estimate into Beta and left Analytics in Active, so the order
+    between them reversed ON PURPOSE. Where each one lives now is pinned by
+    test_the_sidebar_has_exactly_three_headings below, which is the assertion that would actually
+    fail if a beta leaked back into the daily list."""
     assert '"Polish Estimate"' in sidebar, "Polish Estimate was removed along with the section"
-    assert 'tw-section">Analytics' in sidebar, "the Analytics heading went with the section"
-    assert sidebar.index('"Polish Estimate"') < sidebar.index('tw-section">Analytics'), (
-        "Proposals and Analytics have been reordered, which was not part of this change")
+    assert "/analytics.html" in sidebar, "the Analytics link went with the section"
 
 
 def test_analytics_sits_above_the_database(sidebar):
     """Hanz, 2026-08-15: "move Analytics above the Proposal Database Please".
 
-    Both are look-back sections rather than steps in a day, so nothing about the page breaks if
-    they swap — which is exactly why the order needs an assertion. Nothing pinned it before, so
-    the previous arrangement could have come back on any edit to this function."""
-    assert sidebar.index('tw-section">Analytics') < sidebar.index('tw-section">Database'), (
-        "the Database heading is back above Analytics")
-    # And the item still belongs to its own heading rather than drifting under the other one.
-    assert (sidebar.index('tw-section">Analytics')
-            < sidebar.index("/analytics.html")
-            < sidebar.index('tw-section">Database')), "Analytics is filed under the wrong heading"
+    Both are look-back pages rather than steps in a day, so nothing about either breaks if they
+    swap — which is exactly why the order needs an assertion. Nothing pinned it before, so the
+    previous arrangement could have come back on any edit to this function.
+
+    IT USED TO BE ONE HEADING ABOVE ANOTHER. Both went on 2026-08-25 and the two pages are now
+    adjacent rows inside Active, so the same instruction is pinned as the order of the two LINKS.
+    That is closer to what he asked for than the heading check ever was: the ask was about which of
+    the two an estimator meets first, and that is unchanged by the labels going away."""
+    assert sidebar.index("/analytics.html") < sidebar.index("/projects.html"), (
+        "the Proposals Database is back above Analytics")
+
+
+def test_the_sidebar_has_exactly_three_headings(sidebar):
+    """Hanz, 2026-08-25: "Instead of Separate Headers for the Side bar we have to change that to
+    ACtive, Beta and Settings and remove the rest."
+
+    A whole-shape assertion rather than three `in` checks, because the failure worth catching is a
+    FOURTH heading creeping back — which is how the sidebar got to eight in the first place, one
+    reasonable-looking addition at a time, each defensible on its own.
+
+    The membership of each group is pinned too, and the load-bearing part is which pages are NOT in
+    Active: a beta leaking into the daily list is the one mistake here that changes what an
+    estimator trusts on a live bid. Permissions key on href in nav_access.py and never on the
+    heading, so no arrangement of these can change who sees what — which is exactly why this needs
+    a test of its own instead of being caught by a permissions failure somewhere else."""
+    import re as _re
+    order = [m.group(1) for m in _re.finditer(r'tw-section">([^<]+)</div>', sidebar)]
+    assert order == ["Active", "Beta", "Settings"], order
+    grouped, cur = {}, None
+    for m in _re.finditer(r'tw-section">([^<]+)</div>|navItem\("([^"]+)"', sidebar):
+        if m.group(1):
+            cur = m.group(1)
+        else:
+            grouped.setdefault(cur, []).append(m.group(2))
+    assert grouped["Beta"] == ["/polish-intake.html", "/library.html"], grouped["Beta"]
+    assert grouped["Settings"] == ["/notifications.html", "/followup-settings.html",
+                                   "/admin.html"], grouped["Settings"]
+    assert len(grouped["Active"]) == 9, grouped["Active"]
+    for beta in ("/polish-intake.html", "/library.html"):
+        assert beta not in grouped["Active"], "%s leaked into the daily list" % beta
 
 
 # ── unlinked must not become deleted ──────────────────────────────────────────

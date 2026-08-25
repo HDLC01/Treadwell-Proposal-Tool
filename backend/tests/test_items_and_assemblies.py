@@ -415,3 +415,70 @@ def test_the_gate_is_checked_before_the_write_not_after(store, as_user):
     while telling the person it hadn't."""
     client.post("/api/library/vendors", json={"name": "Snuck In"})
     assert store["library_vendors"] == []
+
+# ══ one material, one name ═══════════════════════════════════════════════════
+# Hanz, 2026-08-25, on two items with the same name: "dont allow". That reverses a deliberate
+# earlier decision, and the reversal is sound because its premise expired — see _clashing_item.
+
+
+def test_the_same_name_cannot_be_entered_twice(store):
+    """The plain case, and the one the old on-screen hint already caught — but only as a hint."""
+    _mk_item(name="Densifier")
+    with pytest.raises(library.ValidationError) as e:
+        _mk_item(name="Densifier")
+    assert "already in the library" in str(e.value)
+    assert "Densifier" in str(e.value), "the message does not say which material it clashes with"
+
+
+def test_the_same_name_typed_differently_is_still_the_same_name(store):
+    """THE CASE THAT MADE HANZ ASK. similarNames is a bidirectional SUBSTRING match, so
+    "Concretebar" against "Concrete bar" was silent: neither string contains the other. Spacing,
+    case and punctuation are all dropped before comparing, which is what makes those one name.
+
+    Each spelling is asserted separately rather than in a loop, because a loop that stopped at the
+    first failure would hide which of them the matcher actually misses."""
+    _mk_item(name="Concrete bar")
+    for retyped in ("Concretebar", "concretebar", "CONCRETE BAR", "Concrete-Bar",
+                    "  Concrete   bar  "):
+        with pytest.raises(library.ValidationError):
+            _mk_item(name=retyped)
+
+
+def test_a_plural_is_left_alone_on_purpose(store):
+    """The explicit non-decision, written down so nobody "fixes" it later without reading why.
+
+    Folding a trailing "s" would catch "Densifiers" against "Densifier" — and would also refuse
+    genuinely different product names. This check BLOCKS, so a false positive costs more than a
+    miss: the estimator is left unable to enter what is in front of them, while a real
+    near-duplicate still gets the on-screen hint from similarNames."""
+    _mk_item(name="Densifier")
+    assert _mk_item(name="Densifiers")["name"] == "Densifiers"
+
+
+def test_a_rename_cannot_collide_either(store):
+    """create_item was the obvious half. Renaming an existing material onto another one reaches
+    exactly the same end state and had no check at all — and the table has no unique constraint
+    behind it, so nothing else would have stopped it."""
+    _mk_item(name="Densifier")
+    other = _mk_item(name="Sealer")
+    with pytest.raises(library.ValidationError):
+        library.update_item(other["id"], {"name": "densifier"})
+    assert library.get_item(other["id"])["name"] == "Sealer", "the failed rename was saved anyway"
+
+
+def test_a_material_can_still_be_saved_under_its_own_name(store):
+    """The off-by-one that would make the library read-only: comparing a rename against every row
+    INCLUDING itself refuses every save of an unchanged name — and the debounced PATCH sends the
+    name on any edit to that row, so it would fire constantly and look like the server was down."""
+    it = _mk_item(name="Densifier")
+    assert library.update_item(it["id"], {"name": "Densifier"})["name"] == "Densifier"
+    assert library.update_item(it["id"], {"unit_cost": 99})["unit_cost"] == 99
+    assert library.update_item(it["id"], {"name": "Densifier XL"})["name"] == "Densifier XL"
+
+
+def test_a_deleted_material_does_not_block_its_own_name(store):
+    """_clashing_item reads list_items(), which is live rows only. A soft-deleted material holding
+    its name hostage would be a name nobody can use and nobody can see to free up."""
+    it = _mk_item(name="Densifier")
+    library.delete_item(it["id"])
+    assert _mk_item(name="Densifier")["name"] == "Densifier"
