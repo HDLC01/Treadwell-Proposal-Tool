@@ -81,6 +81,7 @@ import proposal_writer
 import pull_window
 import reference_tax
 import supabase_client
+import verbal_intake
 
 _SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
 
@@ -423,6 +424,12 @@ class GenerateIn(BaseModel):
     # Empty -> _build_epoxy_systems keeps its legacy Epoxy!-cell reads (stale
     # drafts / the To-Dropbox reconstruction path). Sanitized in api_generate.
     sheet_systems: list = Field(default_factory=list)
+
+
+class VerbalIntakeIn(BaseModel):
+    """One spoken or typed account of a job, on its way to becoming intake fields."""
+
+    transcript: str | None = None
 
 
 class AutofillIn(BaseModel):
@@ -2767,6 +2774,64 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         _autofill_rate_refund(bucket)
         log.warning("Autofill failed: %s", exc)        # detail to server log, not the client
         return {"ok": False, "error": "Autofill failed. Please try again."}
+
+
+@app.post("/api/polish/verbal-intake")
+def api_verbal_intake(payload: VerbalIntakeIn, request: Request) -> Any:
+    """Turn what an estimator just said about a job into intake fields.
+
+    THE FOURTH PROMPT ON THE ONE AI PATH. Every strict-JSON Claude call in this app goes through
+    `_autofill_via_cli`, so the subprocess flags, the fence stripping and the error handling exist
+    once. This adds a prompt and a route and nothing else — a second subprocess or a direct API
+    call would be the first break in that pattern.
+
+    IT RETURNS, IT DOES NOT WRITE. The extraction comes back to the page, which fills the form the
+    estimator is looking at and saves through the path that already owns the draft. A route that
+    wrote straight into `polish_estimate` would be a second writer for an object the intake screen
+    is mid-edit on, and the whole blob is PUT on every save.
+
+    The rate limit is the same three-per-five-minutes as every other AI button here, and it is
+    tight for this feature on purpose-of-design grounds worth stating: a first pass plus one
+    re-ask already spends two of the three. That is the budget the "ask ONCE" rule is built
+    around, not an accident to be worked round with retries."""
+    transcript = (payload.transcript or "").strip()
+    if len(transcript) < 20:
+        # Not an error worth a 4xx — the estimator has simply not said enough yet, and the page
+        # shows this as a prompt rather than a failure.
+        return {"ok": False, "too_short": True,
+                "error": "Say a bit more first — a name, a place, and when it is due."}
+
+    bucket = _autofill_bucket(request)
+    retry = _autofill_rate_retry(bucket)
+    if retry is not None:
+        return _ai_rate_limited(retry, "Verbal intake")
+    _autofill_rate_record(bucket)
+
+    # The date is GIVEN, never inferred. This box runs ~13 hours ahead of Central, so a model left
+    # to work out "next Thursday" from its own clock would put a bid date a day out.
+    today = datetime.now(leads._biz_tz()).date().isoformat()
+    user_input = (
+        f"Today's date is {today} (America/Chicago).\n\n"
+        f"TRANSCRIPT:\n{transcript}\n"
+    )
+
+    try:
+        ai = _autofill_via_cli(user_input, verbal_intake.SYSTEM_PROMPT)
+    except FileNotFoundError:
+        _autofill_rate_refund(bucket)
+        return {"ok": False,
+                "error": "`claude` CLI not on PATH. Install it from "
+                         "https://claude.com/cli to enable verbal intake."}
+    except Exception as exc:  # noqa: BLE001
+        _autofill_rate_refund(bucket)
+        log.warning("Verbal intake failed: %s", exc)
+        return {"ok": False, "error": "That didn't come back. Please try again."}
+
+    # The evidence gate runs on the SERVER's copy of the transcript — the one it actually sent —
+    # so a model cannot supply both the claim and the proof of it.
+    result = verbal_intake.clean(ai, transcript)
+    result["ok"] = True
+    return result
 
 
 def _fmt_usd(n, parens: bool = False) -> str:

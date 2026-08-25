@@ -138,6 +138,44 @@
     saveSoon();
   }
 
+  /** Fill this form from a verbal-intake extraction, and report what was actually applied.
+   *
+   *  PUBLISHED RATHER THAN REACHED INTO. js/polish-verbal.js owns the panel and the dictation; the
+   *  conditions live here, behind toggleCondition, which also repaints the switch, refreshes the
+   *  county note that quotes it by name, and schedules the save. A panel that flipped
+   *  M.conditions directly would leave all three of those undone and the screen disagreeing with
+   *  the model it just changed.
+   *
+   *  Only ever sets what the SERVER accepted. Everything it hands over has already cleared the
+   *  evidence gate in backend/verbal_intake.py; nothing here re-decides that, and nothing here
+   *  touches a county key — the picker below is the only thing allowed to write those four. */
+  function applyVerbal(res) {
+    var filled = [], applied = [];
+    var fields = (res && res.fields) || {};
+    Object.keys(fields).forEach(function (key) {
+      var el = form ? form.querySelector('[name="' + key + '"]') : null;
+      if (!el) return;
+      el.value = fields[key];
+      // Through a real input event, so the form's own change handling runs — the same path a
+      // keystroke takes. Setting .value alone leaves the draft unsaved and the page unaware.
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      filled.push(key);
+    });
+    var conditions = (res && res.conditions) || {};
+    Object.keys(conditions).forEach(function (key) {
+      if (!isCondition(key)) return;
+      var item = conditions[key];
+      if (!item || typeof item.value !== "boolean") return;
+      // Toggled only when it DIFFERS. Calling toggleCondition unconditionally would flip a switch
+      // that was already right, which is the one way this could turn a correct form wrong.
+      if (!!M.conditions[key] !== item.value) toggleCondition(key);
+      applied.push(key);
+    });
+    return { filled: filled, applied: applied };
+  }
+
+  window.TWPolishIntake = { applyVerbal: applyVerbal };
+
   // ── the county, and the real remodel-tax rate ────────────────────────────────
   //
   // WHY THIS FIELD EXISTS. Kyle's workbook hardcodes the remodel tax at 10% (Polish!B75). That is

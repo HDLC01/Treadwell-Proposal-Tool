@@ -64,6 +64,31 @@
     .btn:hover{background:var(--red-dark)}
 
     .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+    .vcheat{background:var(--surf-low);border:1px solid var(--line);border-radius:10px;
+      padding:10px 12px;font-size:13px;line-height:1.5;margin:0 0 12px}
+    .vrow{display:flex;gap:10px;align-items:flex-start}
+    .vrow textarea{flex:1;min-height:96px;font:inherit;line-height:1.5;padding:9px 11px;
+      border:1px solid var(--line);border-radius:9px;background:var(--surf);color:var(--ink)}
+    .vmic{flex:none;min-width:84px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;
+      background:var(--surf);color:var(--ink);font-weight:600;cursor:pointer}
+    /* Listening is not colour alone: the label itself changes to "Stop", so the state survives a
+       greyscale screen and a screen reader gets it from the text rather than from the fill. */
+    .vmic.on{background:var(--treadwell-red,#9e001f);border-color:var(--treadwell-red,#9e001f);
+      color:#fff}
+    .vmsg{margin:10px 0 0;font-size:13px}
+    .vmsg.warn{color:var(--warn)}
+    #verbal-out{margin-top:14px;display:grid;gap:10px}
+    .vgroup{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+    .vgroup h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+      color:var(--ink-v)}
+    .vgroup ul{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
+    .vgroup p{margin:6px 0 0;font-size:13px;color:var(--ink-v)}
+    .vgroup.warn{border-color:var(--warn)}
+    .vgroup.ask textarea{width:100%;margin:6px 0 8px;font:inherit;padding:8px 10px;
+      border:1px solid var(--line);border-radius:8px;background:var(--surf);color:var(--ink)}
+    /* The words a price flag rests on, next to the flag. Its own line so a long sentence does not
+       push the switch name off the row. */
+    .vq{display:block;color:var(--ink-v);font-size:12px}
     .f label{display:flex;align-items:baseline;gap:6px;font:600 12.5px var(--sans);
              margin:0 0 5px;flex-wrap:wrap}
     .unit{font:600 10.5px var(--mono);color:var(--ink-3);background:var(--surf-low);
@@ -140,6 +165,42 @@
       <p class="cap" style="margin:0 0 14px">This intake belongs to the <b>beta polish
         calculator</b> and is deliberately separate from the live intake form at
         <b>/</b> — beta work is filed under the Test tab and never touches a real bid.</p>
+
+      <!-- VERBAL INTAKE. Hanz, 2026-08-25: the estimator says or types what they have, a cheat
+           sheet says what is needed, the AI fills what it can and asks ONCE for what is missing.
+           Reaching the form below stays OPTIONAL - everything this fills is editable underneath,
+           and an estimator who would rather type straight into the form can ignore this entirely.
+
+           It sits OUTSIDE #intake-form on purpose: a <textarea> and two buttons inside the form
+           would be submitted with it, and the Speak button would default to type="submit" in the
+           one browser that forgets. -->
+      <section class="sec verbal" id="verbal">
+        <div class="sec-h">
+          <h2>Say it instead</h2>
+          <p>Tell it what you know and it fills in what it can. It never guesses anything that
+            changes the price - those it asks you for.</p>
+        </div>
+        <div class="sec-b">
+          <div class="vcheat">
+            <b>Worth saying:</b> the job name, the street and town, when the bid is due, who to
+            reply to - and, in your own words, whether it is a <b>hard bid</b>, <b>prevailing
+            wage</b>, <b>tax exempt</b>, or a <b>remodel</b>.
+          </div>
+          <div class="vrow">
+            <textarea id="verbal-text" rows="5" aria-label="What you know about this job"
+              placeholder="Blue Valley West High School, 16200 Antioch Road, Overland Park Kansas. It's a hard bid through the district and they said it's prevailing wage. Due the third of September, contact is Dana Whitfield."></textarea>
+            <button type="button" class="vmic" id="verbal-mic" aria-pressed="false"
+                    hidden>Speak</button>
+          </div>
+          <p class="hint" id="verbal-nomic" hidden>Your browser cannot do dictation - Chrome, Brave
+            and Edge can. Typing in the box works exactly the same.</p>
+          <p class="hint">Dictation is your browser's own. In Chrome that means the audio goes to
+            Google; type it instead if that is not right for this job.</p>
+          <p class="vmsg" id="verbal-msg" role="status" aria-live="polite" hidden></p>
+          <button type="button" class="btn" id="verbal-go">Fill the form</button>
+          <div id="verbal-out" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
 
       <form id="intake-form">
         <section class="sec">
@@ -252,5 +313,8 @@
        nothing may be rendered until it has settled which draft this page may write to. -->
   <script src="/js/polish-sandbox.js"></script>
   <script src="/js/polish-intake.js"></script>
+  <!-- After polish-intake.js: the panel calls window.TWPolishIntake.applyVerbal, which that file
+       publishes as it boots. -->
+  <script src="/js/polish-verbal.js"></script>
 </body>
 </html>

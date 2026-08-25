@@ -665,9 +665,15 @@ def test_the_page_loads_no_formula_engine(html):
     assert "hyperformula" not in markup.lower(), "the beta intake form loads a formula engine"
     assert "xl-core.js" not in markup, "the beta intake form loads the workbook helpers"
     srcs = re.findall(r'<script[^>]*src="([^"]+)"', markup)
+    # polish-verbal.js joined the list on 2026-08-25 — the verbal intake panel. It is browser
+    # dictation (Web Speech API, no library) plus one fetch, and it loads AFTER polish-intake.js
+    # because it calls window.TWPolishIntake.applyVerbal, which that file publishes as it boots.
+    # The order is asserted, not just the membership: swapped, the panel would find no hook and
+    # silently fill nothing.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/auth.js", "/shared.js", "/js/polish-bid-core.js",
-                    "/js/polish-sandbox.js", "/js/polish-intake.js"], (
+                    "/js/polish-sandbox.js", "/js/polish-intake.js",
+                    "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
     # polish-bid-core is the model's shape and the condition keys, NOT a formula engine: no CDN, no
     # workbook fetch. It is here because this page writes the model the calculator prices, and the
