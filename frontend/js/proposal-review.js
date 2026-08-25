@@ -1859,6 +1859,30 @@
     return start + 1;
   }
 
+  /** Are these two run lists the same text carrying the same formatting?
+   *
+   *  Field by field rather than JSON.stringify: both are plain objects, but they come from
+   *  different producers (editRuns and patchRuns) and key ORDER is not part of what makes two runs
+   *  equal. */
+  function runsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (String(a[i].text) !== String(b[i].text)) return false;
+      for (const k of RUN_KEYS) if (a[i][k] !== b[i][k]) return false;
+    }
+    return true;
+  }
+
+  /** Is the live selection inside the document at all?
+   *
+   *  Read BEFORE renderRuns, because that rewrites the innerHTML the selection points into. */
+  function selectionInSurface() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !docSurface) return false;
+    const r = sel.getRangeAt(0);
+    return !!r && docSurface.contains(r.startContainer);
+  }
+
   function applyFormat(el, patch, range) {
     const runs = editRuns(el);
     let start, end;
@@ -1868,8 +1892,27 @@
       start = f.range[0]; end = f.range[1];
     }
     if (end <= start) return false;
-    renderRuns(el, patchRuns(runs, start, end, patch));
-    placeSelection(el, start, end);
+    const next = patchRuns(runs, start, end, patch);
+    // A PRESS THAT CHANGES NOTHING IS NOT AN EDIT. Reset on a paragraph carrying no formatting
+    // deletes nothing; Bold on already-bold words adds nothing. markEdited ran regardless, which
+    // set tw-fmt, which the input handler reads as dirty, which persists an override for a
+    // paragraph nobody touched — breaking the guarantee paraPatch's own docstring states, that an
+    // untouched document ships no overrides and the generated .docx stays byte-identical. It also
+    // routes the block permanently onto the refreshFillsInPlace branch.
+    //
+    // It matters MORE now the bar is a ribbon. fmtBlock outlives focus and is cleared only by a
+    // non-block editable or a template reload, so the row stays aimed at the last paragraph
+    // touched for the rest of the session, and one stray press on Reset writes an override for a
+    // paragraph the estimator has visually left.
+    if (runsEqual(runs, next)) return false;
+    const hadDocSelection = selectionInSurface();
+    renderRuns(el, next);
+    // Only put the selection back if it was in the document to begin with. A ribbon press made
+    // with the caret in a sidebar field would otherwise paint a highlight the estimator never
+    // made, over the .tw-fmt-target background — and in an engine that focuses the editing host on
+    // a programmatic selection, pull their caret out of that field mid-entry so the next digits
+    // they type land in the proposal paragraph.
+    if (hadDocSelection) placeSelection(el, start, end);
     markEdited(el, true);
     return true;
   }
@@ -2205,9 +2248,47 @@
    *  collapsed caret. The estimator sees the entire row change on screen and can undo it. The
    *  alternative — keeping the block out of the re-fill to protect the range — would leave last
    *  week's square footage in a paragraph that prints, which is the worse of the two by far. */
+  /** Is there a highlight on screen that is NOT the one on record?
+   *
+   *  `selectionRange` returns null unless BOTH endpoints are inside the block, which makes "there
+   *  is no readable selection" and "the estimator is highlighting something else" the same answer
+   *  — and the remembered range used to survive both. It must not survive the second.
+   *
+   *  THE SEQUENCE THIS CLOSES, which the text stamp alone does not: highlight "epoxy flooring" in
+   *  a WORK row, then drag from inside that row down past its end — onto the canvas, or into the
+   *  next paragraph. `selectionRange` cannot read that (one endpoint is outside), so nothing
+   *  re-stamps the range, and the paragraph's TEXT never changed, so the stamp still matches. The
+   *  ribbon lights up for the old [12, 26) while a different span is visibly highlighted, and Bold
+   *  lands on fourteen characters nobody selected. Dragging UPWARD out of the row is worse: the
+   *  selectionchange handler returns early on the startContainer check, so nothing is touched at
+   *  all. Same failure class as the re-fill bug, reached by moving the selection instead of
+   *  rewriting the words — and the whole-paragraph fallback's justification ("the estimator sees
+   *  the entire row change and can undo it") does not cover a stale window mid-paragraph.
+   *
+   *  A COLLAPSED CARET IS NOT A CLAIM, and neither is a highlight in the sidebar. Dropping the
+   *  range for either would undo the entire point of a ribbon that outlives focus — click into the
+   *  Tax field, come back, press Bold — so this fires only for a real highlight that touches the
+   *  document surface. */
+  function selectionLeftBlock(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const r = sel.getRangeAt(0);
+    if (!r) return false;
+    if (r.collapsed) return false;
+    if (el.contains(r.startContainer) && el.contains(r.endContainer)) return false;
+    if (!docSurface) return false;
+    return docSurface.contains(r.startContainer) || docSurface.contains(r.endContainer);
+  }
+
   function fmtRangeFor(el) {
     if (!fmtRange) return null;
-    if (fmtRangeText !== null && fmtRangeSource(el) !== fmtRangeText) {
+    // FAILS CLOSED. The previous shape was `fmtRangeText !== null && …`, which returned the range
+    // UNVALIDATED when there was no stamp — a safety net whose actual behaviour was to wave the
+    // range through, so the first future path that set fmtRange without stamping it would have
+    // silently reinstated the original bug. An unstampable range is an unusable range.
+    if (fmtRangeText === null
+        || fmtRangeSource(el) !== fmtRangeText
+        || selectionLeftBlock(el)) {
       fmtRange = null;
       fmtRangeText = null;
       return null;
