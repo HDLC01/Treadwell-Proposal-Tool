@@ -12,7 +12,18 @@
 <style>
   /* ─── Microsoft Word-style chrome ──────────────────────────────── */
   body { background: #f3f2f1; overflow-x: hidden; }
-  .word-app { display: flex; flex-direction: column; min-height: 100vh; }
+  /* HEIGHT, not min-height, and this is what keeps the format ribbon on screen.
+     Hanz, 2026-08-25: "Make the ribbon sticky when I scroll down."
+
+     The ribbon is pinned by being a flex sibling ABOVE the scroller rather than by any
+     position:sticky -- which only works while .word-canvas really is the scroller. With
+     min-height the column had no upper bound, so nothing stopped the canvas growing to the full
+     height of nine-plus paper pages and letting the PAGE scroll instead, carrying the ribbon out
+     of view. 100dvh (with a vh fallback for older engines) bounds the column, and min-height:0 on
+     the canvas lets it actually shrink to fit -- a flex item's automatic minimum size is its
+     content, which is the other half of why the bound was escaping. */
+  .word-app { display: flex; flex-direction: column; min-height: 100vh; height: 100vh; }
+  @supports (height: 100dvh) { .word-app { height: 100dvh; } }
   .word-titlebar {
     background: #2b579a;
     color: white;
@@ -75,6 +86,10 @@
 
   .word-canvas {
     flex: 1;
+    /* Lets the scroller shrink inside the bounded column instead of being floored at its own
+       content height. Without it the pages push the column taller than the viewport and the page
+       scrolls, ribbon and all. */
+    min-height: 0;
     overflow-y: auto;
     padding: 28px 0 60px;
     display: flex;
@@ -354,7 +369,11 @@
      inline above the document (matches #fields-panel's own breakpoint). */
   @media (max-width: 1400px) {
     .options-panel {
-      position: static; width: auto; max-height: none;
+      /* Bounded even when inline. `max-height: none` on a normal-flow panel between the ribbon
+         and the canvas is the one thing that can still outgrow the column: a long options list
+         made the body taller than the viewport, the page scrolled, and the ribbon went with it.
+         It scrolls itself now. */
+      position: static; width: auto; max-height: 40vh; overflow-y: auto;
       margin: 12px 16px 0; box-shadow: none;
     }
     body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 0; }

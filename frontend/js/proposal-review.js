@@ -2121,10 +2121,23 @@
       '<button type="button" data-fmt="italic" aria-label="Italic" title="Italic (Ctrl+I)"><i>I</i></button>' +
       '<button type="button" data-fmt="underline" aria-label="Underline" title="Underline (Ctrl+U)"><u>U</u></button>' +
       '<span class="tw-fmtsep" aria-hidden="true"></span>' +
-      '<select data-fmt="size" aria-label="Text size" title="Text size">' +
-      '<option value="">Template size</option>' +
+      // A COMBOBOX, not a dropdown. Hanz, 2026-08-25: "Make this dropdown menu smaller please.
+      // ALso make it so that we could type in it."
+      //
+      // It was a <select> whose width was set by its widest option -- "Template size" -- which is
+      // why it dwarfed the buttons beside it. As an input it is 54px and takes any size the
+      // document can actually carry, including the half-points the writer supports (10.5pt is a
+      // real Word size and there was no way to ask for it).
+      //
+      // The empty value still means "whatever the template says" -- the placeholder carries that
+      // now, and clearing the box restores it. The datalist keeps every size that used to be in
+      // the list, so nothing became harder to reach by becoming typeable.
+      '<input data-fmt="size" list="tw-size-list" class="tw-fmtsize" type="text"' +
+      ' inputmode="decimal" autocomplete="off" placeholder="Size"' +
+      ' aria-label="Text size in points" title="Text size in points — type one or pick from the list">' +
+      '<datalist id="tw-size-list">' +
       SIZE_CHOICES.map(n => `<option value="${n}">${n} pt</option>`).join("") +
-      '</select>' +
+      '</datalist>' +
       '<span class="tw-fmtsep" data-para="sep" aria-hidden="true"></span>' +
       '<button type="button" data-para="bullet" aria-label="Bullet point"' +
       ' title="Bullet point on or off">▪</button>' +
@@ -2146,7 +2159,12 @@
     // would be no caret left to format. The size `select` cannot be covered this way
     // (preventDefault on its mousedown stops it opening at all), which is what `fmtRange` is for.
     fmtBar.addEventListener("mousedown", (e) => {
-      if (!e.target.closest("select")) e.preventDefault();
+      // The size box is exempt for the same reason the <select> was: a control you have to put a
+      // caret in cannot have its mousedown cancelled, or it can never be focused at all. Focus
+      // therefore genuinely leaves the paragraph when it is used, which is precisely what the
+      // remembered range (`fmtRange`) exists to survive -- and it does, because the focusin
+      // listener that clears the ribbon's target is scoped to docSurface and this row is not in it.
+      if (!e.target.closest("select, input")) e.preventDefault();
     });
     fmtBar.addEventListener("click", (e) => {
       // The REMEMBERED block, re-checked against the live document — not whatever had focus,
@@ -2178,20 +2196,73 @@
       }
       toggleFormat(el, btn.dataset.fmt, fmtRangeFor(el));
     });
-    fmtBar.addEventListener("change", (e) => {
-      const sel = e.target.closest("select[data-fmt='size']");
+    /** The typed size, or undefined when the box does not hold a usable one.
+     *
+     *  A <select> could only ever offer valid values; an input cannot, so the validation the
+     *  client never needed is needed now. `Number("abc")` is NaN, and NaN is the one value that
+     *  defeats `runsEqual` -- NaN !== NaN, so every press would look like a change, mark the
+     *  paragraph edited and persist an override for a no-op. It also serialises as null and is
+     *  dropped by the server, so the estimator would see a dirty document and no effect.
+     *
+     *  Bounds and granularity mirror the backend deliberately (main.py's sanitizer and
+     *  proposal_writer's own copy both take 1..200, and the writer stores half-points), so the box
+     *  cannot ask for something the document will silently refuse. */
+    function typedSize(raw) {
+      const t = String(raw == null ? "" : raw).trim().replace(/\s*pt$/i, "");
+      if (t === "") return null;                        // empty = back to the template's own size
+      const n = Number(t);
+      if (!Number.isFinite(n)) return undefined;
+      const half = Math.round(n * 2) / 2;               // the writer's real granularity
+      if (half < 1 || half > 200) return undefined;
+      return half;
+    }
+
+    /** Apply whatever the size box holds to the remembered range.
+     *
+     *  A named function rather than a listener both paths reach: Enter has to commit without
+     *  waiting for a blur, and synthesizing a change event to reuse the listener would work in a
+     *  browser while making the behaviour unreachable to anything that drives the code directly.
+     */
+    function commitSize(box) {
       const el = fmtTargetBlock();
-      if (!sel) return;
       if (!el) { renderFmtBar(); return; }
-      const v = sel.value ? Number(sel.value) : null;
-      // `fmtRange` and not just whatever the selection is NOW: opening this dropdown is the one
-      // press the mousedown guard above cannot cover, so by the time `change` fires the caret has
-      // usually left the paragraph. Without the remembered range the chosen size landed on the
-      // WHOLE paragraph instead of the highlighted words — true of the floating bar too, and
-      // fixed here rather than left for the ribbon to make routine.
+      const v = typedSize(box.value);
+      // `fmtRange` and not whatever the selection is NOW: the size box is one of the two controls
+      // the mousedown guard cannot cover, so focus has genuinely left the paragraph by the time
+      // this runs. Without the remembered range the size would land on the whole paragraph
+      // instead of the highlighted words.
       const f = selectionFormat(el, fmtRangeFor(el));
+      if (v === undefined) {
+        // REFUSED, and the refusal has to be visible. renderFmtBar's write-back deliberately
+        // skips a focused box (or it would eat half-typed text) and Enter commits without
+        // blurring -- so the rejected text would otherwise just sit there looking accepted.
+        // Putting the paragraph's real size back is the whole signal the estimator gets.
+        box.value = f.size_pt ? String(f.size_pt) : "";
+        return;
+      }
       applyFormat(el, { size_pt: v }, f.range);
       showFmtBar(el);
+    }
+
+    fmtBar.addEventListener("change", (e) => {
+      const box = e.target.closest && e.target.closest("input[data-fmt='size']");
+      if (!box) return;
+      commitSize(box);
+    });
+    // Enter commits without leaving the box, Escape puts back what the paragraph says. Both stop
+    // propagating: the window-level Escape handler collapses an expanded text box, which is not
+    // what somebody abandoning a typed size is asking for.
+    fmtBar.addEventListener("keydown", (e) => {
+      const box = e.target.closest && e.target.closest("input[data-fmt='size']");
+      if (!box) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitSize(box);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        renderFmtBar();
+      }
     });
     return fmtBar;
   }
@@ -2322,13 +2393,16 @@
     // refusals below — outdent at the margin, indent at the clamp, a locked contract clause —
     // are what the estimator is actually left looking at.
     bar.classList.toggle("tw-fmtbar-idle", !el);
-    bar.querySelectorAll("button,select").forEach(n => { n.disabled = !el; });
+    // `input` included: an input matches neither `button` nor `select`, so without it the size box
+    // would stay live on an inert ribbon -- and this repo has already shipped a control that was
+    // invisible and still took the click.
+    bar.querySelectorAll("button,select,input").forEach(n => { n.disabled = !el; });
     if (!el) {
       bar.querySelectorAll("button[data-fmt]").forEach(b => {
         b.classList.remove("on");
         b.setAttribute("aria-pressed", "false");
       });
-      const idleSize = bar.querySelector("select[data-fmt='size']");
+      const idleSize = bar.querySelector("input[data-fmt='size']");
       if (idleSize) idleSize.value = "";
       // THE PARAGRAPH HALF TOO, and this `return` used to be above it. The ribbon is one memoized
       // element that now lives for the whole session, so whatever is not cleared here is the LAST
@@ -2354,8 +2428,14 @@
       if (k !== "reset") b.classList.toggle("on", f[k] === true);
       b.setAttribute("aria-pressed", k === "reset" ? "false" : String(f[k] === true));
     });
-    const sizeSel = bar.querySelector("select[data-fmt='size']");
-    if (sizeSel) sizeSel.value = f.size_pt ? String(f.size_pt) : "";
+    const sizeSel = bar.querySelector("input[data-fmt='size']");
+    // NOT while it has focus. renderFmtBar runs on every focusin, every selectionchange and after
+    // every press; with a <select> writing the value back was invisible, but an input being typed
+    // into would have half-typed text overwritten mid-keystroke. The `fmtRange` capture above this
+    // line still happens either way -- that is the reason renderFmtBar is on the hot path at all.
+    if (sizeSel && document.activeElement !== sizeSel) {
+      sizeSel.value = f.size_pt ? String(f.size_pt) : "";
+    }
     // The paragraph controls, reflecting THIS paragraph. A locked one (a numbered TERMS AND
     // CONDITIONS clause) is offered nothing at all: un-bulleting it renumbers every clause below
     // it, in legal boilerplate, and a disabled-looking button still invites the click.
@@ -4554,6 +4634,50 @@
     const caret = insertBreakAt(el, sel[0], sel[1]);
     placeSelection(el, caret, caret);
     markEdited(el, false);                  // a break is text, not formatting
+  });
+
+  /** Backspace at the very start of a line takes the LIST FORMATTING off, one rung at a time.
+   *
+   *  Hanz, 2026-08-25: "When I back space, it doesnt remove the bullet point."
+   *
+   *  It did nothing at all, and the reason is structural rather than a missing branch. Every
+   *  `.tw-block` is its own editing host (`renderBlock` sets contentEditable per block;
+   *  #doc-surface has none), so a browser cannot merge or delete across the boundary — Backspace
+   *  at offset 0 has nowhere to go and is silently dropped. That same structure is what stops two
+   *  paragraphs ever merging into one, which is worth keeping: a `.tw-block` IS one Word
+   *  paragraph, identified by an id from the backend's walk, and the editor cannot invent a
+   *  second one.
+   *
+   *  So Backspace at offset 0 does what Word does with the space it has: removes the bullet
+   *  first, then walks the indent back to the margin, and only then gives up. The ladder is
+   *  deliberate — in Word, Backspace on a bulleted line un-bullets it before it starts eating the
+   *  indent, and an estimator pressing Backspace on a bullet is asking for the bullet to go.
+   *
+   *  Everything here is `paraAction`, the same call the ribbon's Bullet and Outdent buttons make,
+   *  so this route cannot drift from them: it inherits the locked-clause refusal (un-bulleting a
+   *  numbered TERMS clause renumbers the contract), the override persistence, and the terms
+   *  repagination. The only thing it adds is the keystroke.
+   *
+   *  NOT handled, on purpose: the synthesized `{{#system}}` rows and the notes/price lines have no
+   *  paragraph record at all (no `dataset.id`, no `paraNow` state), so there is no bullet state to
+   *  turn off — `paraNow` misses and this returns without preventing the default, leaving them
+   *  exactly as they were. */
+  docSurface.addEventListener("keydown", (e) => {
+    if (e.key !== "Backspace" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    if (!el) return;
+    const sel = selectionRange(el);
+    // Only a COLLAPSED caret at the very start. A selection means "delete these characters", and
+    // mid-line Backspace is the browser's job; both must fall through untouched.
+    if (!sel || sel[0] !== 0 || sel[1] !== 0) return;
+    const now = paraNow(Number(el.dataset.id));
+    if (!now || now.locked) return;
+    // The ladder: bullet first, then the indent, then stop. `paraAction` decides whether the
+    // change is allowed and reports it; only a change consumes the keystroke.
+    const rung = now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null);
+    if (!rung) return;                      // at the margin with no bullet: nothing left to undo
+    if (!paraAction(el, rung)) return;
+    e.preventDefault();
   });
 
   docSurface.addEventListener("paste", (e) => {

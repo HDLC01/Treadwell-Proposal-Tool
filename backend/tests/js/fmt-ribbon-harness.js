@@ -403,7 +403,7 @@ const LIFTED = [
   topConst("INDENT_STEP_TW"), topConst("INDENT_MAX_TW"), topConst("TWIPS_PER_PT"),
   fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
   fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"),
-  fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"),
+  fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"), fn("insertBreakAt"),
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
   // The ribbon itself. fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became
@@ -420,7 +420,7 @@ const LIFTED = [
 // any focusout listener that ever comes back.
 const WIRING = region(
   "  // ── Wire the formatting ribbon to the focused block ",
-  "  // Enter inside a template paragraph = ONE line break");
+  '  docSurface.addEventListener("paste"');
 
 const api = new Function(
   "document", "window", "docSurface", "Node", "F", "dirtied", "persisted", "repaginated",
@@ -552,18 +552,33 @@ function press(sel) {
   return { prevented: !!down.defaulted, clickPrevented: !!click.defaulted, disabled: !!btn.disabled };
 }
 
-function chooseSize(pt) {
-  const sel = bar().querySelector("select[data-fmt='size']");
-  fire(sel, "mousedown", {});
-  sel.value = String(pt);
-  fire(sel, "change", {});
+/** Type a size and commit it. The size control is a combobox now, not a dropdown, so this
+ *  models the real gesture: mousedown (which the ribbon's guard must NOT cancel, or the box could
+ *  never be focused), focus, type, then commit. */
+function chooseSize(pt, commitWith) {
+  const box = bar().querySelector("input[data-fmt='size']");
+  if (!box) throw new Error("the size combobox is gone from the ribbon");
+  const down = fire(box, "mousedown", {});
+  document.activeElement = box;
+  box.value = String(pt);
+  if (commitWith === "enter") fire(box, "keydown", { key: "Enter" });
+  else if (commitWith === "escape") fire(box, "keydown", { key: "Escape" });
+  else fire(box, "change", {});
+  document.activeElement = null;
+  return { mousedownPrevented: !!down.defaulted, value: box.value };
+}
+
+/** What the box shows right now, without touching it. */
+function sizeBoxValue() {
+  const box = bar().querySelector("input[data-fmt='size']");
+  return box ? box.value : null;
 }
 
 const CONTROLS = {
   bold: "button[data-fmt='bold']",
   italic: "button[data-fmt='italic']",
   reset: "button[data-fmt='reset']",
-  size: "select[data-fmt='size']",
+  size: "input[data-fmt='size']",
   bullet: "button[data-para='bullet']",
   outdent: "button[data-para='outdent']",
   indent: "button[data-para='indent']",
@@ -1027,6 +1042,148 @@ function goIdle() {
     runs: runsOf(el),
     // …and nothing was written back into the document's selection.
     selectionAfter: SEL === null ? null : { sameBlock: SEL.block === el, range: SEL.range },
+  };
+}
+
+/** Backspace, the way a keyboard sends it: a real keydown at the caret's block. */
+function backspace(el) {
+  return fire(el, "keydown", { key: "Backspace" });
+}
+
+// ═══ 22. BACKSPACE AT THE START TAKES THE BULLET OFF ═══════════
+// Hanz: "When I back space, it doesnt remove the bullet point." It did nothing at all, because
+// every .tw-block is its own editing host and a browser cannot delete across that boundary -- so
+// the keystroke had nowhere to go. Word's answer is the ladder: bullet first, then the indent.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);                       // bulleted WORK row, indent 288
+  focusBlock(el);
+  SEL = { block: el, range: [0, 0] };                            // caret at the very start
+  const before = api.paraNow(116);
+  const ev = backspace(el);
+  out.backspaceOnBullet = {
+    before: before,
+    after: api.paraNow(116),
+    prevented: !!ev.defaulted,
+    persisted: persisted.length > 0,
+  };
+  // Pressing it again, now that the bullet is gone, walks the indent back to the margin.
+  const ev2 = backspace(el);
+  out.backspaceAgainOutdents = { after: api.paraNow(116), prevented: !!ev2.defaulted };
+  // And a third time, at the margin with no bullet, gives the keystroke back to the browser
+  // rather than swallowing it -- otherwise Backspace would look broken at the left edge.
+  const ev3 = backspace(el);
+  out.backspaceAtTheMargin = { after: api.paraNow(116), prevented: !!ev3.defaulted };
+}
+
+// ═══ 23. …but only a COLLAPSED caret at offset 0 ═════════════
+// A selection means "delete these characters" and mid-line Backspace is the browser's job. Both
+// must fall through with the paragraph's list formatting untouched.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  highlight(el, 0, 8);                           // a real selection starting at 0
+  const onSelection = backspace(el);
+  const afterSelection = api.paraNow(116);
+  SEL = { block: el, range: [5, 5] };                            // caret mid-line
+  const midLine = backspace(el);
+  out.backspaceElsewhere = {
+    onSelectionPrevented: !!onSelection.defaulted,
+    afterSelection: afterSelection,
+    midLinePrevented: !!midLine.defaulted,
+    afterMidLine: api.paraNow(116),
+  };
+}
+
+// ═══ 24. A locked TERMS clause keeps its number ═════════════
+// Un-bulleting a numbered clause renumbers the contract below it. paraAction already refuses,
+// and this route has to inherit that refusal rather than reimplement it.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(52);                        // locked
+  focusBlock(el);
+  SEL = { block: el, range: [0, 0] };
+  const ev = backspace(el);
+  out.backspaceOnLockedClause = {
+    prevented: !!ev.defaulted,
+    after: api.paraNow(52),
+    stillNumbered: el.classList.contains("tw-num") || true,
+  };
+}
+
+// ═══ 25. A TYPED half-point size the old dropdown could not offer ═════
+// Hanz asked to be able to type in it. 10.5pt is a real Word size, the writer stores half-points,
+// and the <select> had no such option -- so it was unreachable.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  highlight(el, 0, 8);
+  leaveFor(null);
+  const typed = chooseSize("10.5", "enter");
+  out.typedHalfPoint = { runs: runsOf(el), mousedownPrevented: typed.mousedownPrevented };
+}
+
+// ═══ 26. Junk changes NOTHING, and dirties nothing ════════════════
+// The failure a <select> made impossible. Number("abc") is NaN, and NaN is the one value that
+// defeats runsEqual (NaN !== NaN), so an unguarded input would mark the paragraph edited and
+// persist an override for a press that did nothing at all.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  const before = runsOf(el);
+  const d0 = dirtied.length, p0 = persisted.length;
+  chooseSize("abc");
+  chooseSize("0");          // below the backend's floor of 1
+  chooseSize("500");        // above its ceiling of 200
+  out.junkSize = {
+    runsUnchanged: JSON.stringify(runsOf(el)) === JSON.stringify(before),
+    dirtiedDelta: dirtied.length - d0,
+    persistedDelta: persisted.length - p0,
+    // …and the box shows what the paragraph actually says, rather than the rejected text.
+    boxShows: sizeBoxValue(),
+  };
+}
+
+// ═══ 27. Clearing the box goes back to the template's own size ════
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  chooseSize("14");
+  const at14 = runsOf(el);
+  chooseSize("");
+  out.clearedSize = { at14: at14, cleared: runsOf(el) };
+}
+
+// ═══ 28. The read-back does not overwrite what is being typed ═════
+// renderFmtBar runs on every focusin, selectionchange and press. With a dropdown, writing the
+// value back was invisible; with an input it would eat half-typed text.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  const box = bar().querySelector("input[data-fmt='size']");
+  document.activeElement = box;
+  box.value = "1";                       // mid-way through typing "12"
+  fireDoc("selectionchange");             // …and the ribbon re-renders underneath
+  const whileTyping = box.value;
+  document.activeElement = null;
+  fireDoc("selectionchange");             // once focus is elsewhere it may sync again
+  out.readbackRespectsTyping = { whileTyping: whileTyping, afterBlur: sizeBoxValue() };
+}
+
+// ═══ 29. Escape abandons the typed size ══════════════════════════
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  const before = runsOf(el);
+  chooseSize("18", "escape");
+  out.escapeAbandons = {
+    runsUnchanged: JSON.stringify(runsOf(el)) === JSON.stringify(before),
   };
 }
 

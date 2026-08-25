@@ -1373,6 +1373,14 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .tw-fmtbar button[data-para="bullet"].on { color: var(--treadwell-red-dark); }
 /* Outdent at the margin, indent at the clamp: still visible, plainly not pressable. */
 .tw-fmtbar button[data-para]:disabled { opacity: 0.38; cursor: default; }
+/* The size combobox. Narrow on purpose -- it holds at most five characters ("10.5") and it used
+   to be as wide as the words "Template size". The list arrow a datalist input shows is the
+   browser's own, so the width is all we control. */
+.tw-fmtsize { width: 54px; height: 26px; padding: 0 6px; text-align: center;
+  border: 1px solid var(--surface-dim); border-radius: 5px;
+  background: var(--surface-lowest); color: var(--ink); font-size: 12px; font: inherit;
+  font-size: 12px; }
+.tw-fmtsize:disabled { opacity: .55; cursor: default; }
 .tw-fmtbar select {
   height: 26px;
   border: 1px solid var(--surface-dim);
