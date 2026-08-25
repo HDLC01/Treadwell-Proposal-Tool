@@ -405,6 +405,10 @@ const LIFTED = [
   fn("runStyleCss"), fn("runEditCss"), fn("renderRuns"),
   fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"), fn("insertBreakAt"),
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
+  // applyParaGeom is where the paragraph's real geometry now lands -- left/hanging/first-line
+  // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
+  // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
+  fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
   // The ribbon itself. fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became
   // when it stopped floating; leaving any of them out is not a lift-time failure but a

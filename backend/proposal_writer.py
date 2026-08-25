@@ -1007,6 +1007,70 @@ def _effective_left_tw(d, p_elem) -> int:
     return 0
 
 
+def _effective_ind_tw(d, p_elem, attr: str):
+    """One `w:ind` measurement in twips — `hanging` or `firstLine` — direct first, then the
+    numbering level's, else None.
+
+    Same resolution order as `_effective_left_tw` and for the same reason: what the renderer
+    actually applies. These two are what put the BULLET in a different place from the text, so an
+    editor that reads `left` and ignores `hanging` draws the marker where the text belongs.
+    """
+    ppr = p_elem.find(qn("w:pPr"))
+    ind = ppr.find(qn("w:ind")) if ppr is not None else None
+    if ind is not None:
+        got = _tw_or_none(ind.get(qn("w:" + attr)))
+        if got is not None:
+            return got
+    ref = _para_num_ref(p_elem)
+    if ref is not None:
+        lvl_ind = (_numbering_levels(d).get(ref) or {}).get("ind") or {}
+        got = _tw_or_none(lvl_ind.get(attr))
+        if got is not None:
+            return got
+    return None
+
+
+def _para_spacing(p_elem) -> dict:
+    """This paragraph's own `w:spacing`, as the file states it.
+
+    Direct only — no style-chain walk, matching `_effective_left_tw`'s deliberate choice, and for
+    the same reason: the editor's readout has to agree with what a later write produces.
+
+    `line` is NOT converted. Word measures it in 240ths of a line when `lineRule` is `auto`
+    (240 = single, 276 = 1.15, 300 = 1.25) and in twips when it is `exact` or `atLeast`, so the
+    rule has to travel with the number or the consumer cannot tell which unit it is holding.
+
+    Absent means absent, not zero. `None` lets the editor fall back to its own default; a 0 would
+    assert that the file says "no space", which is a different claim.
+    """
+    ppr = p_elem.find(qn("w:pPr"))
+    sp = ppr.find(qn("w:spacing")) if ppr is not None else None
+    if sp is None:
+        return {"before": None, "after": None, "line": None, "line_rule": None,
+                "contextual": _para_contextual(ppr)}
+    return {
+        "before": _tw_or_none(sp.get(qn("w:before"))),
+        "after": _tw_or_none(sp.get(qn("w:after"))),
+        "line": _tw_or_none(sp.get(qn("w:line"))),
+        "line_rule": sp.get(qn("w:lineRule")) or None,
+        "contextual": _para_contextual(ppr),
+    }
+
+
+def _para_contextual(ppr) -> bool:
+    """`w:contextualSpacing` — "don't add space between paragraphs of the same style".
+
+    The WORK box's rows inherit it from ListParagraph, which is part of why the real document has
+    no gaps between them at all.
+    """
+    if ppr is None:
+        return False
+    el = ppr.find(qn("w:contextualSpacing"))
+    if el is None:
+        return False
+    return (el.get(qn("w:val")) or "1").lower() not in ("0", "false")
+
+
 def para_props(d, p_elem) -> dict:
     """This paragraph's editable paragraph properties, for `/api/proposal-template`.
 
@@ -1020,10 +1084,24 @@ def para_props(d, p_elem) -> dict:
     what the editor may change — and reading one as the other is the bug this field ends: the
     editor rendered every numbered contract clause as a red square because it trusted `list`,
     which is True for a bullet row and a numbered clause alike.
+
+    `hanging` / `first_line` — the other two `w:ind` measurements, in twips. `left` alone cannot
+    place a bulleted line: Word puts the TEXT at `left` and the marker at `left - hanging`, so an
+    editor reading only `left` draws the bullet where the text should be and indents the whole row
+    by the hanging distance. The epoxy WORK rows are `left=288 hanging=288` — text at 14.4pt,
+    bullet hard against the margin.
+
+    `spacing` — `before`/`after` in twips, plus `line` with the `line_rule` it is measured in, and
+    `contextual`. All four were dropped before, which is why the editor rendered one flat
+    `line-height` for a box whose rows are genuinely 1.15 and 1.25, and invented gaps between
+    paragraphs the file spaces at zero.
     """
     return {
         "bullet": _num_fmt(d, p_elem) == "bullet",
         "indent": _effective_left_tw(d, p_elem),
+        "hanging": _effective_ind_tw(d, p_elem, "hanging"),
+        "first_line": _effective_ind_tw(d, p_elem, "firstLine"),
+        "spacing": _para_spacing(p_elem),
         "locked": _para_ordered_list(d, p_elem),
         "marker": _para_marker(d, p_elem),
     }

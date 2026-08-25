@@ -426,6 +426,11 @@ const LIFTED = [
   // at lift time - it fails as `ReferenceError: workLabelHtml is not defined` the first time a
   // WORK row renders, which is every test in part 1. Any function renderSystemPreview reaches
   // has to be here (see the fitOffer note below for what that already cost once).
+  // sysRowStyle / sysRowTemplate / sysRowSizePt put the synthesized {{#system}} rows where their
+  // TEMPLATE paragraphs go, instead of the hand-written inline margins that produced a sub-group
+  // the document does not have. Lifted, not stubbed: this harness owns those rows, and a stub
+  // returning "" would test the old geometry while calling it the new one.
+  fn("sysRowTemplate"), fn("sysRowStyle"), fn("sysRowSizePt"),
   fn("workLabelHtml"),
   fn("effectiveWorkType"), fn("sheetSystems"), fn("renderSystemPreview"), fn("serializeBlock"),
   topConst("PT_PER_CSS_PX"), topConst("BOX_DRAG_SLOP_PT"), topConst("BOX_EPS_PT"),
@@ -453,6 +458,10 @@ const LIFTED = [
   fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"), fn("runEditCss"), fn("renderRuns"),
   fn("runsArePlain"), fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"),
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
+  // applyParaGeom is where the paragraph's real geometry now lands -- left/hanging/first-line
+  // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
+  // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
+  fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"), fn("paraAction"),
   // fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became when the bar
   // stopped floating: it no longer positions anything, it re-checks its REMEMBERED block against
@@ -606,6 +615,13 @@ function rows() {
     bold: p.querySelectorAll("strong").map((b) => b.textContent),
     warned: p.classList.contains("tw-overridden"),
     title: p.title || null,
+    // THE GEOMETRY, as the row is actually rendered. These three rows are DISPLAY stand-ins for
+    // real template paragraphs, and they used to be positioned by hand-written inline margins
+    // with no relationship to those paragraphs -- which is where the phantom "sub group" came
+    // from: `margin:0 0 1pt` zeroes margin-left, silently overriding .tw-li's own indent, so the
+    // synthesized rows sat further left AND (carrying no font-size) rendered a size larger than
+    // every real block beside them.
+    style: p.attrs.style || "",
   }));
 }
 
@@ -622,6 +638,37 @@ function typeLine(i, field, text) {
   fire(p, "input", {});
   return p;
 }
+
+// The epoxy WORK box's three {{#system}} paragraphs, as the TEMPLATE states them. Every number
+// here is the file's own, and test_doc_editor_labels asserts these same numbers against the .docx
+// itself -- so the fixture cannot drift away from what Kyle's template says while still passing.
+//
+// This is what the synthesized preview rows are stand-ins FOR. Without the template records
+// mounted, sysRowStyle has nothing to look up and falls back to a bare margin, which is exactly
+// the state that let the hand-written inline margins go unnoticed.
+const SYS_TEMPLATE = [
+  { id: 301, text: "{{system.prefix}}   {{system.name}}", list: true, txbx: 0,
+    para: { bullet: true, indent: 288, hanging: 288, first_line: null, locked: false, marker: "",
+            spacing: { before: null, after: null, line: 276, line_rule: "auto",
+                       contextual: false } },
+    runs: [{ text: "System:", bold: true, size_pt: 8 }] },
+  { id: 302, text: "Texture:  {{system.texture}}", list: false, txbx: 0,
+    para: { bullet: false, indent: 1008, hanging: null, first_line: 72, locked: false, marker: "",
+            spacing: { before: null, after: null, line: 276, line_rule: "auto",
+                       contextual: false } },
+    runs: [{ text: "Texture:", bold: false, size_pt: 8 }] },
+  { id: 303, text: "Area: ~{{system.sqft}} SF of epoxy flooring", list: true, txbx: 0,
+    para: { bullet: true, indent: 288, hanging: 288, first_line: null, locked: false, marker: "",
+            spacing: { before: null, after: null, line: 300, line_rule: "auto",
+                       contextual: false } },
+    runs: [{ text: "Area:", bold: true, size_pt: 8 }] },
+];
+
+// 0. THE GEOMETRY. Mount the template paragraphs first, then render the preview, and record where
+// each synthesized row actually landed.
+api.mountBlocks(SYS_TEMPLATE);
+seedSystems(["Broadcast Quartz"]);
+out.workGeometry = { rows: rows() };
 
 // 1. One system: three rows, each ONE editable line, with nothing editable nested inside.
 seedSystems(["Broadcast Quartz"]);

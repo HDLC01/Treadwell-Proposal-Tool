@@ -2033,13 +2033,57 @@
    *  Inline styles, and only ever on a paragraph the estimator changed: an untouched block keeps
    *  the class-driven look it has always had, and this surface is a to-scale preview registered
    *  against baked page artwork, so a stray pixel of reflow is a worse bug than a plain toolbar. */
+  /** Put one paragraph where the FILE says it goes, not where a class guessed.
+   *
+   *  Hanz, 2026-08-25: "is this really the spacing format for the epoxy? Because it doesnt follow
+   *  the exact font size and spacing on the editor in which it should."
+   *
+   *  He was right, and the generated document was the honest one. In the epoxy template every WORK
+   *  row — System, Area, Scope, Schedule, Exclusions, Notes — is the same list level
+   *  (`left=288 hanging=288`), all 8pt, with NO before/after spacing at all. The editor showed an
+   *  indented sub-group that exists nowhere in the file, because geometry came from hand-picked
+   *  class values (`.tw-li { margin-left: 14pt; padding-left: 9pt }`) rather than from the record.
+   *
+   *  THE HANGING INDENT IS THE WHOLE TRICK. Word puts the TEXT at `left` and the marker at
+   *  `left - hanging`. Reading only `left` — which is all the editor had — draws the bullet where
+   *  the text belongs and pushes the row in by the hanging distance. So: margin-left carries
+   *  `left - hanging` and padding-left carries `hanging`, which is the gap `.tw-li::before` sits
+   *  in at `left: 0`. For the WORK rows that is margin 0 / padding 14.4pt: text at 14.4pt, bullet
+   *  hard against the margin, exactly as it prints.
+   *
+   *  `line` is 240ths of a line under `lineRule="auto"` (240 single, 276 = 1.15, 300 = 1.25) and
+   *  twips under `exact`/`atLeast`, so the rule decides the unit. Absent stays absent — the
+   *  stylesheet's own default then applies, rather than this asserting a number the file never
+   *  gave.
+   *
+   *  `st` is the LIVE state (what the estimator has set); `tpl` is the template's record, which is
+   *  where hanging, first-line and spacing come from since the toolbar cannot change them. */
+  function applyParaGeom(el, st, tpl) {
+    const leftTw = Math.max(0, Number((st && st.indent) || 0));
+    const hangTw = Math.max(0, Number((tpl && tpl.hanging) || 0));
+    const pt = (tw) => (tw / TWIPS_PER_PT) + "pt";
+    // Never negative: a paragraph whose hanging exceeds its left indent would pull the marker off
+    // the page. Word clamps at the margin and so does this.
+    el.style.marginLeft = pt(Math.max(0, leftTw - hangTw));
+    el.style.paddingLeft = hangTw ? pt(hangTw) : "0";
+    const firstTw = Number((tpl && tpl.first_line) || 0);
+    el.style.textIndent = firstTw ? pt(firstTw) : "";
+    const sp = (tpl && tpl.spacing) || {};
+    el.style.marginTop = sp.before ? pt(Number(sp.before)) : "0";
+    el.style.marginBottom = sp.after ? pt(Number(sp.after)) : "0";
+    if (sp.line && sp.line_rule === "auto") el.style.lineHeight = String(Number(sp.line) / 240);
+    else if (sp.line) el.style.lineHeight = pt(Number(sp.line));
+    else el.style.lineHeight = "";
+  }
+
   function applyParaToEl(el, st) {
     if (!el || !st) return;
     const bullet = !!st.bullet;
     el.classList.toggle("tw-li", bullet);
-    el.style.marginLeft = (Math.max(0, Number(st.indent) || 0) / TWIPS_PER_PT) + "pt";
-    // .tw-li's own padding is the gap the red square sits in; with no square there is no gap.
-    el.style.paddingLeft = bullet ? "" : "0";
+    // The template's own record, for the measurements the toolbar cannot change. Without it an
+    // indent press would rebuild the geometry from `left` alone and undo the hanging indent.
+    const rec = blockById.get(Number(el.dataset.id));
+    applyParaGeom(el, st, (rec && rec.para) || null);
   }
 
   /** Record a paragraph's new properties and repaint it. Refuses a locked paragraph. */
@@ -2728,6 +2772,12 @@
     if (b.style && b.style.bold && !(Array.isArray(b.runs) && b.runs.length)) {
       el.classList.add("tw-bold");                               // run-less fallback only
     }
+    // GEOMETRY FROM THE RECORD, on the first paint rather than only after a toolbar press. This is
+    // what made the editor disagree with the document until somebody happened to press indent:
+    // `renderBlock` set classes and nothing else, so `.tw-li`'s hand-picked 14pt/9pt stood in for
+    // the file's real numbers. Blocks with no `para` (a pre-v5 cached response) keep the class
+    // fallback, which is what it was always for.
+    if (b.para) applyParaGeom(el, b.para, b.para);
     if (flowMode) {
       // The positioned view's letterhead artwork carries the real DATE:/JOB
       // NAME: labels; only the flow fallback needs synthetic captions.
@@ -3174,6 +3224,63 @@
   // keeps its template run weight, which for the System and Area rows is bold and for the
   // Texture row is not (the writer rewrites the line into the row's first run). Without
   // this the page would show a plain line and the customer would receive a bold one.
+  /** The template paragraph a synthesized {{#system}} row stands in for.
+   *
+   *  Matched on the token that paragraph carries, which is how the writer finds them too
+   *  (proposal_writer._SYSTEM_ROW_LINES). Without this the rows were styled by hand-written inline
+   *  margins with no relationship to the paragraphs they represent -- and those margins are where
+   *  the phantom "sub group" came from: `margin:0 0 1pt` zeroes margin-left, so it silently
+   *  overrode .tw-li's own indent and left these three rows sitting further left than every real
+   *  block beside them.
+   */
+  function sysRowTemplate(field) {
+    const token = { name_line: "system.name", texture_line: "system.texture",
+                    area_line: "system.sqft" }[field];
+    if (!token) return null;
+    for (const b of (templateBlocks || [])) {
+      if (String(b.text || "").indexOf(token) !== -1) return b;
+    }
+    return null;
+  }
+
+  /** Put a synthesized row exactly where its template paragraph goes, at its real size.
+   *
+   *  Same arithmetic as applyParaGeom -- text at `left`, marker at `left - hanging` -- expressed as
+   *  an inline style because these rows are built as an HTML string. The explicit font-size is the
+   *  other half of the fidelity fix: without it the row inherits `.tw-page { font-size: 9pt }`
+   *  while every real block beside it carries 8pt from its runs, so System, Texture and Area
+   *  rendered 12.5% larger than the rows underneath them.
+   */
+  function sysRowStyle(field) {
+    const b = sysRowTemplate(field);
+    if (!b || !b.para) return "margin:0;";
+    const p = b.para, sp = p.spacing || {};
+    const tw = (n) => (Math.max(0, Number(n) || 0) / TWIPS_PER_PT);
+    const left = tw(p.indent), hang = tw(p.hanging), first = tw(p.first_line);
+    const out = ["margin:" + tw(sp.before) + "pt 0 " + tw(sp.after) + "pt "
+                 + Math.max(0, left - hang) + "pt",
+                 "padding-left:" + hang + "pt"];
+    if (first) out.push("text-indent:" + first + "pt");
+    if (sp.line && sp.line_rule === "auto") out.push("line-height:" + (Number(sp.line) / 240));
+    const size = sysRowSizePt(b.id);
+    if (size) out.push("font-size:" + size + "pt");
+    return out.join(";") + ";";
+  }
+
+  /** The explicit run size for a synthesized row, from the template block it stands in for.
+   *
+   *  Without this the row inherits `.tw-page { font-size: 9pt }` while every real block beside it
+   *  carries an explicit 8pt from its runs — so System, Texture and Area rendered 12.5% larger
+   *  than the rows underneath them, which is half of what Hanz saw as a "sub group". It is also
+   *  what `fitTxbx`'s percentage shrink was silently singling out: a % only scales INHERITED
+   *  sizes, so the box-overflow shrink hit these three rows and left the rest alone. */
+  function sysRowSizePt(id) {
+    const rec = blockById.get(Number(id));
+    const runs = (rec && rec.runs) || [];
+    for (const r of runs) if (r && r.size_pt) return Number(r.size_pt);
+    return null;
+  }
+
   function workLabelHtml(text, boldFallback) {
     const s = String(text == null ? "" : text);
     const colon = s.indexOf(":");
@@ -3298,11 +3405,11 @@
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
       return lineRow(i, "name_line", `${prefix}   ${legacy(i, "name", s.name)}`,
-                     "tw-li", "margin:0 0 1pt;", true)
+                     "tw-li", sysRowStyle("name_line"), true)
            + lineRow(i, "texture_line",
                      `${legacy(i, "texture_label", "Texture:")}  ${legacy(i, "texture", texture)}`,
-                     "tw-list", "margin:0 0 1pt;padding-left:9pt;", false)
-           + lineRow(i, "area_line", areaLine, "tw-li", "margin:0 0 4pt;", true);
+                     "tw-list", sysRowStyle("texture_line"), false)
+           + lineRow(i, "area_line", areaLine, "tw-li", sysRowStyle("area_line"), true);
     }).join("");
   }
 
