@@ -811,6 +811,12 @@ button {
 
 /* Same reminder on an edited free paragraph that carries a price ($) or an SF/LF
    area measure (e.g. the gyp/GC tax rows, which edit as plain paragraphs). */
+/* A whole-box selection. BACKGROUND ONLY, for the reason .tw-fmt-target gives: this surface is a
+   to-scale preview of a printed page registered against baked artwork, so a cue that reflowed the
+   text by a pixel would be a worse bug than the one it is reporting. Deliberately stronger than
+   the hover tint and weaker than focus -- it has to read as "these lines are selected" while the
+   caret is still visibly in one of them. */
+.tw-block.tw-boxsel { background: rgba(158, 0, 31, 0.14); }
 .tw-block.tw-dirty-warn::after {
   content: " \26A0";
   font-size: 0.75em;

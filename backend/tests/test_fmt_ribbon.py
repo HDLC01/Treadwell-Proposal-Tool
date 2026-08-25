@@ -639,6 +639,76 @@ def test_escape_abandons_a_typed_size(ran):
     assert ran["escapeAbandons"]["runsUnchanged"], "Escape applied the typed size anyway"
 
 
+def test_ctrl_a_takes_the_line_then_the_whole_box(ran):
+    """Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still
+    sub boxes."
+
+    The "sub boxes" are the paragraphs. Each `.tw-block` is its own editing host, so a native
+    select-all physically cannot reach past the line the caret is in — and no browser selection can
+    span two editing hosts, so there is nothing to widen a Range into. The second press is
+    therefore an EDITOR-level selection: a set of blocks the ribbon and the delete key both
+    understand, painted so it reads as selected.
+
+    It deliberately does not pretend to be a DOM selection. `selectionRange` still refuses
+    anything spanning two blocks, which is what stops a stale cross-block range being formatted —
+    the bug `selectionLeftBlock` exists for."""
+    g = ran["selectAllWidens"]
+    assert g["afterFirst"]["prevented"], "Ctrl+A was left to the browser"
+    assert g["afterFirst"]["range"] == [0, 25], (
+        "the first press did not take the whole line: %r" % (g["afterFirst"]["range"],))
+    assert g["afterFirst"]["boxSel"] is None, "the first press already widened to the box"
+    assert sorted(g["afterSecondIds"]) == sorted(["115", "116", "52", "117"]), (
+        "the second press did not select every line in the box: %r" % (g["afterSecondIds"],))
+    assert g["painted"], "the selected lines are not marked, so nothing on screen shows it"
+
+
+def test_the_box_selection_stops_at_the_box_it_was_pressed_in(ran):
+    """The scope Hanz picked when asked: everything in THAT box. A page holds several — WORK,
+    PRICE, NOTES — and dragging a neighbour in would mean one press reformatted the pricing
+    because the caret happened to be in the scope text.
+
+    Scoped by `closest(".tw-txbx")`, which is a real container: the absolutely-positioned div
+    registered against the baked page artwork. Not a guess about which paragraphs look grouped."""
+    g = ran["selectAllStopsAtTheBox"]
+    assert "115" not in (g["ids"] or []), (
+        "a block from another box was selected: %r" % (g["ids"],))
+    assert g["otherBoxUntouched"], "the other box's line was painted as selected"
+
+
+def test_one_press_formats_every_selected_line(ran):
+    """The point of selecting a box: one press, not one per line. Each block is formatted over its
+    whole length — there is no per-block character range to remember, because the estimator
+    selected LINES rather than characters."""
+    g = ran["boxFormat"]
+    assert all(g["allBold"]), "some selected lines were left unformatted: %r" % (g["allBold"],)
+    assert g["dirtiedCount"] >= len(g["ids"]), (
+        "fewer edits were recorded than lines formatted, so some will not persist")
+
+
+def test_delete_empties_every_selected_line(ran):
+    """Each block is cleared through the same run algebra a hand-delete uses and then dispatches
+    the page's own input event, so the dirty flags, the override persistence and the
+    emptied-clause protection all run per block exactly as if they had been cleared one at a time.
+
+    `collectOverrides` already handles N emptied blocks — one entry each — and
+    `blanksANumberedClause` still filters a numbered TERMS clause out of the payload, so a
+    box-wide delete cannot renumber the contract."""
+    g = ran["boxDelete"]
+    assert g["trimmedLengths"] == [0] * len(g["ids"]), (
+        "some selected lines still have text: %r" % (g["trimmedLengths"],))
+    assert g["clearedAfter"] is None, "the selection outlived the delete that consumed it"
+
+
+def test_the_box_selection_lets_go_when_the_estimator_does_something_else(ran):
+    """A selection that outlived a click would make the next format press hit lines the estimator
+    had visibly moved away from — the same class of bug as the stale remembered range, at box
+    scale. Clicking and typing both drop it."""
+    g = ran["boxSelLetsGo"]
+    assert g["held"] > 1, "the fixture never held a box selection"
+    assert g["afterClick"] is None, "a click left the box selection standing"
+    assert g["afterTyping"] is None, "typing left the box selection standing"
+
+
 # ══ where the ribbon sits, and which CSS rules have to win ════════════════════
 def _css_rule(selector):
     """The declarations of EVERY top-level rule with exactly this selector, concatenated.

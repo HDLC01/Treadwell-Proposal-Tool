@@ -2188,6 +2188,23 @@
       const btn = e.target.closest("button[data-fmt]");
       if (!btn) return;
       e.preventDefault();
+      // A box selection means the press is about every line in it, not just the caret's own. Each
+      // block is formatted over its whole length -- there is no per-block range to remember,
+      // because the estimator selected lines rather than characters.
+      if (boxSel && boxSel.length > 1) {
+        const els = boxSel.slice();
+        els.forEach(one => {
+          const total = runsLength(editRuns(one));
+          if (!total) return;
+          if (btn.dataset.fmt === "reset") {
+            applyFormat(one, { bold: null, italic: null, underline: null, size_pt: null }, [0, total]);
+          } else {
+            toggleFormat(one, btn.dataset.fmt, [0, total]);
+          }
+        });
+        showFmtBar(el);
+        return;
+      }
       if (btn.dataset.fmt === "reset") {
         const f = selectionFormat(el, fmtRangeFor(el));
         applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
@@ -2265,6 +2282,59 @@
       }
     });
     return fmtBar;
+  }
+
+  // ── selecting a whole text box ─────────────────────────────────────────────
+  //
+  // Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still sub
+  // boxes."
+  //
+  // He is describing the editing-host boundary. Every paragraph is its own contenteditable, so the
+  // browser's own select-all cannot reach past the line the caret is in -- the "sub boxes" are the
+  // paragraphs. There is no browser selection that spans them, and there is no making one: a
+  // native Range across two editing hosts is not something a document can hold.
+  //
+  // So the second press is an EDITOR-level selection instead: a set of blocks the ribbon and the
+  // delete key both understand, painted so it reads as selected. It is not a DOM selection and
+  // deliberately does not pretend to be one -- `selectionRange` still refuses anything spanning
+  // two blocks, which is what keeps a stale range from being formatted (see `selectionLeftBlock`).
+  //
+  // Scope is one text box, per his answer when asked: first press takes the line, pressing again
+  // takes every line in that box. The box is a real container -- `.tw-txbx[data-box-id]`, the
+  // absolutely-positioned div registered against the baked page artwork -- so this is a
+  // `closest()` call rather than a guess about which paragraphs look grouped. On the terms pages
+  // there is no box, so the page is the unit.
+  //
+  // The computed lines (`.tw-line-edit`, `.tw-note-edit`) are NOT included. They are re-rendered
+  // from the estimate whenever focus leaves them, so "selected" and "cleared" have no meaning
+  // there yet -- that is what E6's channel work is for.
+  let boxSel = null;
+
+  /** Every block the ribbon can act on inside `el`'s box, in document order. */
+  function boxBlocks(el) {
+    const box = el.closest(".tw-txbx") || el.closest(".tw-page");
+    if (!box) return [];
+    return Array.from(box.querySelectorAll(".tw-block"));
+  }
+
+  function paintBoxSel() {
+    docSurface.querySelectorAll(".tw-boxsel").forEach(n => n.classList.remove("tw-boxsel"));
+    (boxSel || []).forEach(n => n.classList.add("tw-boxsel"));
+  }
+
+  /** Drop the box selection. Called by anything that means "I am doing something else now". */
+  function clearBoxSel() {
+    if (!boxSel) return false;
+    boxSel = null;
+    paintBoxSel();
+    return true;
+  }
+
+  /** Is the whole of `el` already selected? That is what turns a second Ctrl+A into a widen. */
+  function wholeLineSelected(el) {
+    const sel = selectionRange(el);
+    if (!sel) return false;
+    return sel[0] === 0 && sel[1] === runsLength(editRuns(el)) && sel[1] > 0;
   }
 
   /** The block the ribbon acts on, or null.
@@ -4575,6 +4645,18 @@
   // one appear out of nowhere and vanish again.
   idleFmtBar();
 
+  // Typing, clicking or moving the caret means the box selection is over. Registered before the
+  // focusin handler below so the class is gone by the time the ribbon re-renders.
+  docSurface.addEventListener("mousedown", () => { clearBoxSel(); });
+  docSurface.addEventListener("input", () => { clearBoxSel(); });
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !boxSel) return;
+    // Stop here: the window handler below this one collapses an expanded text box, and somebody
+    // dismissing a selection is not asking for the box they are reading to fold shut.
+    e.stopPropagation();
+    clearBoxSel();
+  }, true);
+
   docSurface.addEventListener("focusin", (e) => {
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
     // A non-block editable inside the document — a `.tw-line-edit` price line, a box tool — is a
@@ -4606,6 +4688,25 @@
 
   docSurface.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (String(e.key).toLowerCase() === "a") {
+      const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+      if (!el) return;                       // a computed line: leave select-all to the browser
+      e.preventDefault();
+      // Already got the line? Widen to the box. Otherwise take the line first -- which is what
+      // the browser would have done anyway, done explicitly so the SECOND press has a state to
+      // recognise rather than depending on what the browser left behind.
+      if (boxSel || wholeLineSelected(el)) {
+        boxSel = boxBlocks(el);
+        paintBoxSel();
+        showFmtBar(el);                      // the ribbon still aims at the caret's own block
+      } else {
+        clearBoxSel();
+        const total = runsLength(editRuns(el));
+        placeSelection(el, 0, total);
+        showFmtBar(el);
+      }
+      return;
+    }
     const key = { b: "bold", i: "italic", u: "underline" }[String(e.key).toLowerCase()];
     if (!key) return;
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
@@ -4662,6 +4763,28 @@
    *  paragraph record at all (no `dataset.id`, no `paraNow` state), so there is no bullet state to
    *  turn off — `paraNow` misses and this returns without preventing the default, leaving them
    *  exactly as they were. */
+  /** Delete or Backspace with a box selected: empty every line in it, in one go.
+   *
+   *  Each block is cleared through the same run algebra a hand-delete uses and then dispatches the
+   *  page's own `input` event, so the dirty flags, the override persistence and the emptied-clause
+   *  protection all run per block exactly as they would if somebody had cleared them one at a
+   *  time. `collectOverrides` already handles N emptied blocks -- it emits one entry each -- and
+   *  `blanksANumberedClause` still filters a numbered TERMS clause out of the payload, so a
+   *  box-wide delete cannot renumber the contract. */
+  docSurface.addEventListener("keydown", (e) => {
+    if (!boxSel || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    if (e.key !== "Backspace" && e.key !== "Delete") return;
+    e.preventDefault();
+    const els = boxSel.slice();
+    clearBoxSel();
+    els.forEach(el => {
+      if (!runsLength(editRuns(el))) return;                 // already empty
+      renderRuns(el, [{ text: "", tok: null }]);
+      markEdited(el, false);
+    });
+    if (els.length) scheduleRepaginate();
+  });
+
   docSurface.addEventListener("keydown", (e) => {
     if (e.key !== "Backspace" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
     const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
