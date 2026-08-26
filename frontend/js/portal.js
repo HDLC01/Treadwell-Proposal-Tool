@@ -1246,20 +1246,44 @@
    *    · won anyway→ the state, and NO control. There is nothing to undo about a deposit that
    *                  arrived, and a Mark won button would file a redundant human mark over a fact.
    *    · otherwise → the offer. */
-  function wonControlHtml(p, lblClass) {
-    const lbl = '<div class="' + (lblClass || "lbl") + '">';
+  function wonControlHtml(p, lblClass, acts) {
     if (isLost(p)) return "";
+    // TWO LAYOUTS, ONE SET OF FACTS. `acts` is the sent drawer's consequential group (2026-08-27),
+    // where this control sits beside Mark delayed and Mark closed lost: the group's own heading
+    // names it, the group's own line already says the customer is not emailed, so the heading goes
+    // and the paragraph becomes the one-line consequence beside the button. The not-sent panel,
+    // which has no such group, keeps the heading and the paragraph it has always had.
+    //
+    // A FLAG RATHER THAN A SECOND FUNCTION, on purpose: three harnesses lift this function by name
+    // (drawer-render, not-sent-assign, not-sent-lost, plus won-tab which calls it directly), and a
+    // helper beside it would be a fifth name for four of them to bind. The two callers that predate
+    // the group pass nothing and get exactly what they got before.
+    const open = acts ? '<div class="act">' : "";
+    const close = acts ? "</div>" : "";
+    const head = (words) => (acts ? "" : '<div class="' + (lblClass || "lbl") + '">' + words + "</div>");
+    /** The control and its sentence, in the order each layout wants them.
+     *
+     *  In the group the sentence goes BESIDE the button, which is the whole point of the group. In
+     *  the not-sent panel it stays exactly where it was, above the button, because that panel is
+     *  not what this change is about and moving a paragraph there would be a redesign nobody
+     *  asked for. */
+    const control = (btn, words) => (acts
+      ? btn + '<span class="acts-say">' + words + "</span>"
+      : '<p class="note">' + words + "</p>" + btn);
     // No em dash anywhere in this copy: it renders in the sent drawer, where that is a house rule
     // (test_no_em_dash_in_the_panels_copy) because the portal's own system lines use one as a field
     // separator and splitSystem cuts on it.
     if (C.wonByHand(p)) {
-      return `${lbl}Won</div>
-        <p class="note">Somebody marked this won, so it sits on the Won tab instead of the Active
-        board, and counts under Won on the Notification Sending page. Follow-ups do NOT stop: the
-        chasing runs until the deposit is in, and the customer is not emailed about this either
-        way.</p>
-        <div class="fu-line"><button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>
-        <p class="note" id="won-note"></p>`;
+      return `${open}${head("Won")}
+        ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>',
+          acts
+          ? "Somebody marked this won, so it is on the Won tab. The chasing carries on until the "
+            + "deposit is in."
+          : "Somebody marked this won, so it sits on the Won tab instead of the Active board, and "
+            + "counts under Won on the Notification Sending page. Follow-ups do NOT stop: the "
+            + "chasing runs until the deposit is in, and the customer is not emailed about this "
+            + "either way.")}
+        <p class="note" id="won-note"></p>${close}`;
     }
     if (C.isWon(p)) {
       // NO BUTTON, and the copy now SAYS SO rather than leaving a gap where every other state has a
@@ -1267,19 +1291,22 @@
       // to bring back: nobody marked this job won, the numbers did, so there is no mark to clear.
       // An Undo here would save and change nothing, which reads as a broken control. Un-approving
       // it or unwinding the deposit are different acts and live where those facts do.
-      return `${lbl}Won</div>
-        <p class="note">Approved, and the deposit question is settled, so this already counts as won
-        without anyone marking it. It sits on the Won tab. There is nothing to bring back here:
-        no person marked it, so there is no mark to take off. It stops counting as won if the
-        approval or the deposit changes, and both of those are on the Proposal tab.</p>`;
+      return `${open}${head("Won")}
+        ${control("", "Approved, and the deposit question is settled, so this already counts as won "
+          + "without anyone marking it. It sits on the Won tab. There is nothing to bring back "
+          + "here: no person marked it, so there is no mark to take off. It stops counting as won "
+          + "if the approval or the deposit changes, and both of those are on the Proposal tab.")}${close}`;
     }
-    return `${lbl}Won it already?</div>
-      <p class="note">Mark it won as soon as they say yes on the phone. It does not wait for the
-      customer to click Approve or for the deposit to land, the customer is not emailed, and the
-      follow-ups carry on until the money is in. The card moves to the Won tab, which columns it by
-      whatever is still outstanding, so nothing stops being chased. You can undo it.</p>
-      <div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark won</button></div>
-      <p class="note" id="won-note"></p>`;
+    return `${open}${head("Won it already?")}
+      ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark won</button></div>',
+        acts
+        ? "Moves it to the Won tab. The chasing carries on until the deposit is in. You can undo it."
+        : "Mark it won as soon as they say yes on the phone. It does not wait for the customer to "
+          + "click Approve or for the deposit to land, the customer is not emailed, and the "
+          + "follow-ups carry on until the money is in. The card moves to the Won tab, which "
+          + "columns it by whatever is still outstanding, so nothing stops being chased. You can "
+          + "undo it.")}
+      <p class="note" id="won-note"></p>${close}`;
   }
 
   /** Wire the pair of buttons wonControlHtml can render. Shared by both drawers, which is why the
@@ -1319,10 +1346,36 @@
     };
 
     const mark = $("won-mark");
-    // NO CONFIRM ON THE WAY IN. Nothing is sent, nothing leaves the pipeline, and the way back is
-    // one click, so a modal to say "we won it" would be ceremony over a cheerful, reversible fact.
-    if (mark) mark.addEventListener("click", () =>
-      post(mark, { status: "won" }, { won_at: new Date().toISOString() }));
+    // THERE IS A CONFIRM ON THE WAY IN NOW, since 2026-08-27, and this comment used to argue there
+    // should not be: "nothing is sent, nothing leaves the pipeline, and the way back is one click".
+    // The first two halves of that are still true and the third one stopped being the whole story
+    // the day the Won TAB took won jobs off the Active board. This press MOVES THE CARD to another
+    // tab, and it was the only control in this group without a prompt, sitting between Mark delayed
+    // and Mark closed lost, which both have one. A pointer landing one row high files a live bid as
+    // won, and the estimator's next look at the Active board simply does not have it on there.
+    //
+    // WHAT THE DIALOG SAYS IS THE FEATURE, not the fact that it exists. Every one of these four
+    // sentences answers a question somebody would otherwise have to ask the person who built it:
+    // it does not wait for the customer to approve, it does not wait for the deposit, the customer
+    // is not emailed, the chasing carries on until the money is in, and it can be undone. `tone`
+    // is warn rather than danger, and that is the honest reading: winning a job is good news and
+    // reversible, so it takes the same tone as pausing the chasing rather than the tone of a delete.
+    if (mark) mark.addEventListener("click", async () => {
+      const ok = await TW.confirmDanger({
+        title: "Mark this won?",
+        before: "Move ", name: (row && row.project_name) || "this project",
+        after: " to the Won tab?",
+        detail: "It does not wait for the customer to approve or for the deposit to land, and the"
+          + " customer is not emailed. The follow-ups carry on until the money is in, and you can"
+          + " undo this.",
+        // A tick, not a trophy: confirmDanger's own warn default is a WASTEBASKET, which is the
+        // wrong picture entirely on the one dialog here that is good news. Kept to the same kind of
+        // glyph the other two in this file use (the pause and the play) rather than an emoji.
+        confirmText: "Mark it won", cancelText: "Not yet", tone: "warn", icon: "✓",
+      });
+      if (!ok) return;
+      post(mark, { status: "won" }, { won_at: new Date().toISOString() });
+    });
     // ON THE WAY OUT THERE IS ONE, since 2026-08-20. This comment used to say neither half had a
     // prompt and gave the reason above for both. That held while a won card stayed among the live
     // ones, and stopped holding the day the Won TAB took won jobs off the Active board: undoing the
@@ -1745,30 +1798,90 @@
     }
   }
 
+  /** ONE ROW AT FULL WEIGHT, AND THE REST BEHIND A FOLD.
+   *
+   *  Eight sends used to be eight identical 57px rows and twenty-seven download buttons in one
+   *  card, which pushed everything under it off the panel. Only the current version is downloaded
+   *  in a meeting; the rest are downloaded when somebody is answering "what did we send them in
+   *  July", which is a deliberate trip rather than a glance. So the current row stays open and the
+   *  earlier ones collapse into a summary that says how many there are and whether the price ever
+   *  moved, which is the only reason anybody opens it.
+   *
+   *  NO INNER SCROLLER. The drawer body already scrolls and the chat thread owns a second; a third
+   *  nested scroll region inside a card is worse than the wall of rows it would hide.
+   *
+   *  AN UNCHANGED PRICE IS DEMOTED, NOT HIDDEN. `.same` prints the same figure at the same size in
+   *  the muted ink, so the rows where the price actually moved are the rows that read. Compared
+   *  against the NEXT row down, which is the previous send: these arrive newest first.
+   *
+   *  It also paints the heading's answer line, because it is the only thing here that knows how
+   *  many sends there were. */
   function paintRevisions(revs, gen) {
     const box = $("rev-list");
     if (!box || gen !== RENDER_GEN) return;
+    const ans = $("rev-count");
     if (!revs.length) {
+      if (ans) ans.textContent = "No versions recorded";
       // A sent project with no snapshot is one sent before revisions existed, which is a fact
       // about the record rather than an error.
       box.innerHTML = '<span class="note">No snapshots yet — this went out before versions were '
         + "recorded.</span>";
       return;
     }
-    box.innerHTML = revs.map((rv, i) => `
-      <div class="rev-row">
-        <strong>Rev ${esc(rv.revision_no)}</strong>
+    if (ans) {
+      ans.textContent = revs.length + (revs.length === 1 ? " send" : " sends")
+        + (revs[0].revision_no == null ? "" : ", latest Rev " + revs[0].revision_no);
+    }
+    const day = (v) => (v ? TW.fmtBizDate(v) : "—");
+    const revRow = (rv, i) => {
+      const prev = revs[i + 1];
+      // Same figure as the send before it. Never true of the CURRENT row, whatever it repeats: that
+      // is the price this customer is holding, it is the one figure the card exists to state, and a
+      // demoted current row would be the whole point of the change inverted. Never true of the
+      // oldest either, which has nothing below it: that is the price they were first quoted.
+      const same = i > 0 && prev && rv.total != null && prev.total != null && rv.total === prev.total;
+      const amt = rv.total == null ? "—" : money(rv.total);
+      return `<div class="rev-row${i === 0 ? " is-current" : ""}${same ? " same" : ""}">
+        <span class="rev-n">Rev ${esc(rv.revision_no)}</span>
         ${i === 0 ? '<span class="rev-cur">current</span>' : ""}
-        <span class="note">${esc(rv.created_at ? TW.fmtBizDate(rv.created_at) : "—")}</span>
-        <span class="note">${rv.created_by
+        <span class="rev-when">${esc(day(rv.created_at))}</span>
+        <span class="rev-who">${rv.created_by
           ? avatar(rv.created_by) + esc(nameOf(rv.created_by)) : "—"}</span>
-        <strong class="rev-amt">${rv.total == null ? "—" : money(rv.total)}</strong>
+        ${same ? `<span class="rev-amt">${amt}</span>`
+               : `<strong class="rev-amt">${amt}</strong>`}
         ${rv.has_documents
           ? ["xlsx", "docx", "pdf"].map((k) =>
               `<button type="button" class="btn btn-s rev-dl" data-rev="${esc(rv.revision_no)}"`
               + ` data-kind="${k}">${k === "pdf" ? "PDF" : "." + k}</button>`).join("")
           : '<span class="note">no documents</span>'}
-      </div>`).join("");
+      </div>`;
+    };
+    const older = revs.slice(1);
+    // HOW MANY TIMES THE PRICE ACTUALLY MOVED, which is the one thing worth putting on a summary
+    // for a list nobody opens idly. Counted as TRANSITIONS between neighbouring sends rather than
+    // as distinct figures: a bid that went 84k, 90k and back to 84k moved twice and has two
+    // distinct prices, so counting the set would under-report every re-quote that landed back
+    // where it started. Compared as the printed figure, because two totals a hundredth of a cent
+    // apart are the same price to a customer.
+    let moves = 0;
+    for (let i = 0; i + 1 < revs.length; i++) {
+      const a = revs[i].total, b = revs[i + 1].total;
+      if (a != null && b != null && money(a) !== money(b)) moves++;
+    }
+    const moved = moves > 1 ? "The price moved " + moves + " times."
+      : moves === 1 ? "The price moved once."
+      : "The price never moved.";
+    box.innerHTML = `<div class="rev-list">
+      ${revRow(revs[0], 0)}
+      ${!older.length ? "" : `<details class="why rev-fold">
+        <summary>${CHEV}${older.length} earlier ${older.length === 1 ? "send" : "sends"}, ${
+          esc(day(older[older.length - 1].created_at))} to ${esc(day(older[0].created_at))}. ${
+          moved}</summary>
+        <div class="rev-folded">${older.map((rv, i) => revRow(rv, i + 1)).join("")}</div>
+        <p class="note">Each send pins the estimate as it was, so an old version stays readable
+        even after the draft moves on.</p>
+      </details>`}
+    </div>`;
   }
 
   /** Rebuild one sent version's documents and save the requested one.
@@ -1849,12 +1962,19 @@
     // #nt-chips outright and rewrites it on every toggle, so anything that has to survive a
     // toggle needs somewhere else to live. Says who as well as how many when it is you,
     // because "am I on this one?" is the question people ask about their own name.
+    //
+    // SHORTENED on 2026-08-27 with the node's move onto the heading line. It used to read "4 of 9
+    // people get this project's emails, including you." and the middle of that sentence was the
+    // card's own title said again: the heading two words to its left says Notifications, and the
+    // disclosure under the chips explains what green means. What is left is the part that was
+    // worth reading, and it fits on a heading line beside the title without wrapping, which is
+    // what lets the count be the first thing read instead of the third.
     const count = $("nt-count");
     if (count) {
       count.textContent = !people.length ? ""
-        : on === 0 ? "Nobody is being emailed about this project."
-        : on + " of " + people.length + (on === 1 ? " person gets" : " people get")
-          + " this project's emails" + (mine ? ", including you." : ".");
+        : on === 0 ? "Nobody is being emailed"
+        : on + " of " + people.length + (on === 1 ? " person" : " people")
+          + (mine ? ", including you" : "");
     }
     wrap.querySelectorAll(".nt-chip").forEach((b) => b.addEventListener("click", async () => {
       if (b.disabled) return;
@@ -2012,11 +2132,20 @@
 
   // System lines read "Heading — detail"; split so they render as a card. Length
   // guard stops a long sentence containing a dash becoming a giant title.
+  /** The portal writes its system rows as "Heading — detail". Split on exactly that separator.
+   *
+   *  `titled` is the third field, added on 2026-08-27, and it is the answer to a question the
+   *  caller could not previously ask: did this row HAVE a heading, or is "Update" the fallback? A
+   *  card could ignore that, because a card has a title slot and "Update" filled it harmlessly. A
+   *  one-line system note cannot: it renders as one sentence, and "Update · Dave opened the
+   *  proposal." puts a word in front of the sentence that says nothing. Returned rather than
+   *  inferred by comparing the title against the literal "Update" at the call site, which is the
+   *  same fact discovered twice and would go stale the day this fallback is reworded. */
   function splitSystem(body) {
     const s = String(body == null ? "" : body);
     const i = s.indexOf(" — ");
-    if (i > 0 && i <= 60) return { title: s.slice(0, i), body: s.slice(i + 3) };
-    return { title: "Update", body: s };
+    if (i > 0 && i <= 60) return { title: s.slice(0, i), body: s.slice(i + 3), titled: true };
+    return { title: "Update", body: s, titled: false };
   }
 
   // ── edit the invoice before sending ────────────────────────────────────────
@@ -2229,6 +2358,26 @@
   // over real payloads. Source assertions were what let an unbound identifier take this
   // board down on 2026-08-12; a panel this large has to be run, not read.
 
+  /** THE ONLY ICON THIS DRAWER GAINS, and the one place it is allowed to live.
+   *
+   *  Lucide-shaped, like every other icon in this app: a 24x24 viewBox, fill:none,
+   *  stroke:currentColor, stroke-width 2, round caps. Never an emoji.
+   *
+   *  A DISCLOSURE, NOT A BUTTON, and that is a hard constraint rather than a preference. Almost
+   *  every button in this drawer has its textContent overwritten for a busy state -- act() writes
+   *  "Working…", downloadRevision writes "…", wireDeleteProject and wireWon write "Deleting…" and
+   *  "Saving…" -- and assigning textContent destroys every child element, so an icon inside one of
+   *  them survives exactly until the first click. The three exceptions are #go-files, #go-info and
+   *  #reply-attach; Attach already carries one and the other two are deliberately left plain,
+   *  because they are utilities rather than the point of the panel. So the drawer's iconography
+   *  lives in headings, disclosures and chips, which nothing rewrites.
+   *
+   *  One const rather than eight copies: this mark appears on every disclosure in the drawer, and
+   *  eight hand-pasted paths are eight chances for one of them to drift. */
+  const CHEV = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"'
+    + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<polyline points="9 18 15 12 9 6"/></svg>';
+
   /** One labelled fact: the drawer's unit of information.
    *
    *  `v` is MARKUP, not text — the cells carry money spans, secondary lines and monospaced
@@ -2285,20 +2434,44 @@
    *  open this at all", and `javascript:alert(1)` is not a link a customer has. That answer is
    *  the sentence at the bottom of the card, and nothing else in here reads p.url.
    */
-  function customerHtml(p) {
-    const name = String(p.customer_name || "").trim();
+  function customerHtml(p, seen) {
     const email = String(p.customer_email || "").trim();
     // http(s), because a local portal is http://localhost:8899/p/…. A value that fails this is
     // not a link the customer can use, whatever else it may be.
     const reachable = /^https?:\/\//i.test(String(p.url || ""));
-    // The name leads when we have one, otherwise the address is the identity — never an
-    // empty strong line with the email demoted underneath it.
-    const lead = name || email;
+    const s = seen || {};
+    const day = (v) => (v ? TW.fmtBizDate(v) : "");
+    const first = s.first || "", last = s.last || "", sent = s.sentAt || "";
+    const opens = Number(s.count) || 0;
+    // THE ANSWER, ON THE HEADING. Every branch is a real state of the payload, and the
+    // never-opened one is the most useful of them: a proposal sent nine days ago that nobody has
+    // opened is the reason to pick the phone up, and until now the drawer said it nowhere.
+    // The count comes from the per-contact view counts, which is the only place the portal keeps
+    // one, so "opened" with no count still has to read as a sentence rather than "Opened 0 times".
+    //
+    // AN APPROVED PROPOSAL WITH NO VIEW STAMP SAYS NOTHING, rather than "Not opened yet". Nobody
+    // approves a document they have not read, so on a row from before the portal recorded views
+    // that sentence would be a flat contradiction of the Approved card two rows down. Silence is
+    // the honest answer to "how many times", and the news is already on screen.
+    const answer = first
+      ? (opens > 1 ? "Opened " + opens + " times, last " + day(last || first)
+         : opens === 1 ? "Opened once, " + day(first)
+         : (last && day(last) !== day(first)) ? "Opened, last " + day(last)
+         : "Opened " + day(first))
+      : s.approved ? ""
+      : "Not opened yet";
+    // The name is NOT here any more: the head carries it on every tab, 40px above this card, and
+    // a card whose whole content repeats the head is a card with no job. What is left is the
+    // address (the thing you would search for or phone about) and the two dates that answer
+    // whether this proposal has reached a human at all.
     return `<div class="sec" id="dsec-customer">
-      <div class="lbl">Customer</div>
-      <div class="idn">
-        <div class="idn-n">${esc(lead || "No customer on this proposal")}</div>
-        ${name && email ? `<div class="idn-e">${esc(email)}</div>` : ""}
+      <div class="lbl">Customer<span class="sec-ans">${esc(answer)}</span></div>
+      <div class="facts">
+        ${email ? fact("Email", esc(email))
+                : fact("Email", '<span class="fact-s">No address on this proposal</span>')}
+        ${first ? fact("First opened", esc(day(first))) : ""}
+        ${sent ? fact("Sent", esc(day(sent)) + (s.by
+          ? `<span class="fact-s">by ${esc(nameOf(s.by))}</span>` : "")) : ""}
       </div>
       ${reachable ? ""
         : '<p class="note">This proposal has no customer link yet, so there is nothing for the customer to open.</p>'}
@@ -2417,34 +2590,44 @@
     // but it's a status line, not something they typed — card it like the portal
     // does, or it renders as a speech bubble putting our words in their mouth.
     // It still lands on their side, because they are the ones who did it.
+    // WHAT THE SYSTEM SAYS IS A LINE, NOT A BLOCK, since 2026-08-27. "Marcus opened the proposal",
+    // "Approved by Marcus, $90,885.00" and "Project contacts received" are not speech and are not
+    // documents: they are the thread telling you what happened, and each one was a 60px bordered
+    // card anchored to one side, which is the shape a MESSAGE has. Three of them in a row read as
+    // three people talking. Centred on one line they read as what they are, and the two things
+    // that ARE speech (the bubbles) and the one thing that is a document (the live card) get the
+    // whole of the weight.
+    // .note.sys is a class this drawer already had, for exactly two of these cases. It now takes
+    // all of them, including the day markers threadHtml inserts.
     if (m.msg_type === "system" || m.msg_type === "deposit_submitted") {
       const s = splitSystem(m.body);
-      return `<div class="chat-card system ${sideOf(m)}"><div class="cc-title">${esc(s.title)}</div>
-        <div class="cc-body">${esc(s.body)}</div></div>`;
+      // The heading and the detail on one line. An untitled row prints its body alone: splitSystem's
+      // fallback title is a card's word, and "Update · Dave opened the proposal." says less than the
+      // sentence on its own.
+      const line = s.titled ? s.title + " · " + s.body : s.body;
+      return `<p class="note sys">${esc(line)}</p>`;
     }
+    // A DOCUMENT KEEPS THE CARD, and only the LIVE one is in the thread. The superseded ones are
+    // folded away by threadHtml before it ever calls this, which is why neither branch below has a
+    // `superseded` arm any more: it used to render a dimmed copy with a tag on it, and seven of
+    // those on a bid re-sent eight times was 700px of near-identical cards all saying the same
+    // thing. What replaced them says how many and when, in one line, in their own slot.
     if (m.msg_type === "proposal_card") {
-      // A revised estimate posts a new card and retires the old one, so the thread
-      // shows which version is current instead of two identical-looking cards.
       const meta = m.meta || {};
-      const dead = !!meta.superseded;
       const rev = meta.revision_no;
       const title = (rev && rev > 1) ? `Revision ${esc(rev)} of the proposal` : "Your proposal is ready";
-      return `<div class="chat-card proposal ${sideOf(m)}${dead ? " is-superseded" : ""}">
-        <div class="cc-title">${title}${dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
-        ${dead && meta.superseded_by ? `<div class="cc-meta">Replaced by revision ${esc(meta.superseded_by)}</div>` : ""}
+      return `<div class="chat-card proposal ${sideOf(m)}">
+        <div class="cc-title">${title}</div>
         <div class="cc-body">${esc(m.body)}</div>${attHtml(m)}</div>`;
     }
     if (m.msg_type === "deposit_request") {
       const meta = m.meta || {};
       const amt = meta.amount != null ? money(meta.amount) : "";
-      const dead = !!meta.superseded;   // replaced by a later resend
       const line = meta.invoice_no
         ? `Invoice ${esc(meta.invoice_no)}${meta.reference ? ` · Reference ${esc(meta.reference)}` : ""}`
-          + (dead && meta.superseded_by ? ` · replaced by ${esc(meta.superseded_by)}` : "")
         : "";
-      return `<div class="chat-card deposit ${sideOf(m)}${dead ? " is-superseded" : ""}">
-        <div class="cc-title">Deposit invoice${amt ? ` — <span class="cc-amt">${amt}</span>` : ""}${
-          dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
+      return `<div class="chat-card deposit ${sideOf(m)}">
+        <div class="cc-title">Deposit invoice${amt ? ` — <span class="cc-amt">${amt}</span>` : ""}</div>
         ${line ? `<div class="cc-meta">${line}</div>` : ""}
         <div class="cc-body">${esc(m.body)}</div></div>`;
     }
@@ -2466,6 +2649,79 @@
       ${attHtml(m)}
       <div class="when">${t}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
     </div>`;
+  }
+
+  /** THE WHOLE THREAD, in three registers rather than six shapes.
+   *
+   *  msgHtml renders one row and cannot see the row before it, so two things that belong to the
+   *  thread rather than to any message in it live here:
+   *
+   *  DAY MARKERS. A conversation that ran from July to August was one unbroken column of bubbles
+   *  whose only date was a timestamp inside each one. The marker is the same .note.sys line
+   *  everything else the system says now uses, with no fill, so it divides rather than reports.
+   *  The day is TW.fmtBizDate's answer, which does double duty: it is the label AND the key that
+   *  decides where a boundary is, so the two can never disagree. Central, not the viewer's clock,
+   *  or a rep testing from another timezone sees the break in a different place than Kyle does.
+   *  It is the app's own date format rather than the "Tuesday, Aug 19" of the mockup, because
+   *  TW.fmtBizDate and bizYM are the only date formatters this codebase is allowed to use and a
+   *  second one would be a second answer to what day it is in Kansas.
+   *
+   *  THE FOLD. A revision or an invoice that has been replaced is not news, and there is one of
+   *  them per re-send: a bid sent eight times carried seven dimmed copies of the same card, which
+   *  is around 700px of thread saying the same thing seven times, plus the replaced invoice. They
+   *  collapse into ONE line that says how many there were and over what dates, in the slot of the
+   *  LATEST of them, which is where the conversation left them: immediately before whatever
+   *  replaced them. Nothing is lost, because opening the line lists every one of them with its
+   *  date and what replaced it.
+   *
+   *  No day marker is emitted for the fold's own day. The fold names its date range itself, and a
+   *  marker above a line that already says "Jul 2 to Aug 14" would be dating a range. */
+  function threadHtml(msgs) {
+    const list = msgs || [];
+    if (!list.length) return '<p class="note">No messages yet.</p>';
+    // A DOCUMENT that has been replaced. Only these two kinds carry meta.superseded, and the test
+    // is written against the kind as well as the flag so a future message type cannot fall into
+    // the fold by accident and vanish out of the conversation.
+    const isDead = (m) => !!(m && m.meta && m.meta.superseded
+      && (m.msg_type === "proposal_card" || m.msg_type === "deposit_request"));
+    const dead = list.filter(isDead);
+    const lastDead = dead.length ? list.lastIndexOf(dead[dead.length - 1]) : -1;
+    const day = (v) => (v ? TW.fmtBizDate(v) : "");
+    // Counted by kind, because "7 replaced revisions and 1 replaced invoice" is a truer sentence
+    // than "8 replaced documents": one of those is a price and one of them is a bill.
+    const revs = dead.filter((m) => m.msg_type === "proposal_card").length;
+    const invs = dead.length - revs;
+    const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+    const summary = [revs ? plural(revs, "replaced revision") : "",
+                     invs ? plural(invs, "replaced invoice") : ""].filter(Boolean).join(" and ");
+    const from = day(dead.length ? dead[0].created_at : "");
+    const to = day(dead.length ? dead[dead.length - 1].created_at : "");
+    const span = from && to && from !== to ? ", " + from + " to " + to : from ? ", " + from : "";
+    const foldLine = (m) => {
+      const meta = m.meta || {};
+      const what = m.msg_type === "proposal_card"
+        ? (meta.revision_no ? "Revision " + esc(meta.revision_no) : "The proposal")
+        : "Deposit invoice" + (meta.invoice_no ? " " + esc(meta.invoice_no) : "");
+      const by = meta.superseded_by ? " · replaced by " + esc(meta.superseded_by) : "";
+      return `<div class="note">${what} · ${esc(day(m.created_at) || "no date")}${by}</div>`;
+    };
+    const fold = `<div class="note sys"><details class="why">
+        <summary>${CHEV}${esc(summary)}${esc(span)}</summary>
+        <div class="sup-list">${dead.map(foldLine).join("")}</div>
+      </details></div>`;
+    let out = "", marker = "";
+    list.forEach((m, i) => {
+      if (isDead(m)) {
+        // Only at the slot of the last one, so eight replaced documents make one line and not
+        // eight identical folds.
+        if (i === lastDead) out += fold;
+        return;
+      }
+      const d = day(m.created_at);
+      if (d && d !== marker) { marker = d; out += `<p class="note sys is-day">${esc(d)}</p>`; }
+      out += msgHtml(m);
+    });
+    return out;
   }
 
   /** Human file size. Two significant figures is all anybody reads on a chip. */
@@ -2698,12 +2954,38 @@
   function followupPanelHtml(p, data) {
     const hold = sentHold(p, data);
     const f = fu(p), st = followupState(p, hold), enabled = !!f.enabled && !isLost(p);
-    const log = (data.followups || []).map(followupRow).join("")
+    const fups = data.followups || [];
+    const log = fups.map(followupRow).join("")
       || '<p class="note">Nothing logged yet.</p>';
     const assignee = p.assigned_estimator || "";
+    // ── the three answer lines ──
+    // The state pill on the tab strip says On / Off / Paused with the panel shut; this says the
+    // same word plus the date it turns on the one state where a date is the whole question.
+    const until = pausedUntil(p);
+    const fuAns = until ? st.val + " until " + TW.fmtBizDay(until) : st.val;
+    // The newest entry by INSTANT, not by position: this array is the portal's order, and "last"
+    // is a claim about time. Date.parse rather than a string compare because these stamps arrive
+    // both as "…Z" and as "…+00:00" (the same reason withViewCard parses them).
+    const at = (v) => { const t = Date.parse(v || ""); return isNaN(t) ? 0 : t; };
+    const newest = fups.reduce((best, r) => (at(r && r.created_at) > at(best) ? r.created_at : best), "");
+    const doneAns = !fups.length ? "Nothing logged yet"
+      : fups.length + (fups.length === 1 ? " entry" : " entries")
+        + (newest ? ", last " + TW.fmtBizDate(newest) : "");
     return `
       <div class="sec" id="dsec-followup">
-        <div class="lbl">Follow-up</div>
+       <!-- FOUR GROUPS, ONE SECTION ID. The tab reads as four cards because that is what it is:
+            the chasing, the record, where the bid goes, and the history. What it must NOT do is
+            grow four dsec-* ids, because SEC_TABS and setSecEligible are keyed on those and a card
+            registered in one and not the other renders an empty panel, which this drawer has
+            shipped twice. So the groups nest inside the one registered section: applySecPanel
+            still hides exactly one element, and every heading below is a direct child of a .sec
+            and therefore reads at rank 1. -->
+       <div class="fu-groups">
+
+        <!-- GROUP 1: THE CHASING. Everything here is reversible and nothing here reaches the
+             customer, which is why it reads as the ordinary business of the tab. -->
+        <div class="sec">
+        <div class="lbl">Follow-up<span class="sec-ans">${esc(fuAns)}</span></div>
         <p class="note" id="fu-lead">${esc(st.lead)}</p>
         <!-- WHAT SOMEBODY WROTE WHEN THEY PUT IT ON HOLD, quoted, directly under the sentence that
              says it is on hold. nsCloseNote's docstring argues that a sent bid's comment belongs in
@@ -2729,8 +3011,18 @@
             enabled ? "Turn automation off" : "Turn automation on"}</button>
         </div>
 
-        <div class="lbl fu-lbl">Log what you did</div>
-        <p class="note">Recording a call or a text keeps this proposal out of tomorrow's digest, and tells whoever picks it up next what already happened.</p>
+        ${followupContactsHtml(data.recipient_activity)}
+        </div>
+
+        <!-- GROUP 2: THE RECORD. The two safest things on the tab, so they read quietest: rank-2
+             headings, no group fill, and the consequence UNDER the control instead of a paragraph
+             above it. Both sentences are kept word for word, because both say something an
+             estimator acts on: one is why logging a call matters, the other is what being assigned
+             costs you. -->
+        <div class="sec">
+        <div class="lbl">What has been done<span class="sec-ans">${esc(doneAns)}</span></div>
+
+        <div class="lbl fu-lbl">Log a call, a text or a note</div>
         <div class="fu-line">
           <select id="fu-kind" class="tw-select" aria-label="What you did">
             <option value="call">Call</option>
@@ -2742,6 +3034,7 @@
                  placeholder="Left a voicemail with Dave, will try Thursday" aria-label="Note" />
           <button class="btn btn-s" id="fu-log">Log it</button>
         </div>
+        <p class="note">Recording a call or a text keeps this proposal out of tomorrow's digest, and tells whoever picks it up next what already happened.</p>
 
         <div class="lbl fu-lbl">Assigned to</div>
         <div class="fu-line">
@@ -2754,13 +3047,22 @@
         <p class="note">${assignee
           ? "They get this project's follow-up emails and its line in the morning digest."
           : "Nobody is assigned. The digest skips unassigned proposals, so this one is being chased by nobody."}</p>
+        </div>
 
-        <div class="lbl fu-lbl">The customer's timeline</div>
-        <p class="note">Use these when a customer tells you by phone instead of clicking the link in their email. The customer is not emailed.</p>
-        <!-- THREE STATES, not two, since 2026-08-21, and the missing third one was a dead end. The
+        <!-- GROUP 3: WHERE THIS BID GOES. Five controls that move the card to another tab or stop
+             the chasing for months, and which used to look exactly like logging a phone call. They
+             get the one tonal fill on the tab, and every consequence sits BESIDE its control on one
+             line: what it does to the board, and whether anything is sent.
+             THE SENTENCE THAT WAS SAID THREE TIMES IS NOW SAID ONCE, in full ink, above the group
+             it governs: the customer is not emailed. It was inside three separate paragraphs in
+             three wordings, which is how a promise stops being read.
+             NO INLINE SVG IN ANY BUTTON HERE. Every one of them goes through act() or wireWon,
+             which overwrite textContent for a busy state, and assigning textContent deletes every
+             child element. An icon in one of these survives until the first click.
+             THREE STATES, not two, since 2026-08-21, and the missing third one was a dead end. The
              close-out dialog tells the estimator, in these words, that a held bid "stays on the
              Active board and the reminder emails pause for about 4 months ... You can bring it back
-             sooner" - and until today there was no control on this panel that brought it back. The
+             sooner" - and until then there was no control on this panel that brought it back. The
              bring-back rendered on isLost only, a held bid is not lost, so pressing Hold on a sent
              bid left the delay picker, Mark delayed and Mark closed lost and no way out of the four
              months. The unsent drawer had this right from the day holds shipped (#ns-reopen renders
@@ -2772,31 +3074,49 @@
              another GC would put an automated chase in front of a customer in between. Mark delayed
              stays for the same kind of reason: a customer who rings mid-hold and asks for one month
              is a newer, shorter answer about the same date, and sentHold reads it as theirs. -->
-        <div class="fu-line">
+        <div class="sec">
+        <div class="lbl">Where this bid goes</div>
+        <p class="acts-warn">The customer is not emailed by any of these.</p>
+        <div class="acts">
           ${isLost(p)
-            ? '<button class="btn btn-s" id="fu-reopen">Reactivate this proposal</button>'
-            : `${hold ? '<button class="btn btn-s" id="fu-reopen">Bring this bid back</button>' : ""}
-               <select id="fu-months" class="tw-select" aria-label="Delay by">
-                 <option value="1">1 month</option><option value="2">2 months</option>
-                 <option value="3">3 months</option><option value="4">4+ months</option>
-               </select>
-               <button class="btn btn-s" id="fu-delay">Mark delayed</button>
-               <button class="btn btn-s" id="fu-lost">Mark closed lost</button>`}
+            ? `<div class="act">
+                 <div class="fu-line"><button class="btn btn-s" id="fu-reopen">Reactivate this proposal</button></div>
+                 <span class="acts-say">Puts the card back on the Active board and starts the chasing again.</span>
+               </div>`
+            : `${hold ? `<div class="act">
+                 <div class="fu-line"><button class="btn btn-s" id="fu-reopen">Bring this bid back</button></div>
+                 <span class="acts-say">Lifts the hold, so the reminders start again from today.</span>
+               </div>` : ""}
+               <div class="act">
+                 <div class="fu-line">
+                   <select id="fu-months" class="tw-select" aria-label="Delay by">
+                     <option value="1">1 month</option><option value="2">2 months</option>
+                     <option value="3">3 months</option><option value="4">4+ months</option>
+                   </select>
+                   <button class="btn btn-s" id="fu-delay">Mark delayed</button>
+                 </div>
+                 <span class="acts-say">Pauses the chasing. The card stays on the board.</span>
+               </div>
+               ${wonControlHtml(p, "lbl fu-lbl", true)}
+               <div class="act">
+                 <div class="fu-line"><button class="btn btn-s btn-dang" id="fu-lost">Mark closed lost</button></div>
+                 <span class="acts-say">Asks why, then takes the card off the Active board and stops the chasing.</span>
+               </div>`}
+          <details class="why">
+            <summary>${CHEV}When to use these</summary>
+            <p class="note">Use them when a customer tells you by phone instead of clicking the link
+            in their email. Marking it won does not wait for them to click Approve or for the
+            deposit to land.</p>
+          </details>
+        </div>
         </div>
 
-        <!-- Won, by hand: the SENT drawer's copy of the same control the not-sent panel carries.
-             Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the
-             deposit has been received". This is the drawer that needed it most, because a verbal yes
-             almost always arrives on a proposal the customer already has, days before they click
-             Approve. It sits in this section because the line above already exists for exactly this
-             case: "when a customer tells you by phone instead of clicking the link in their email".
-             (No em dash in this comment: it ships inside the panel, where that is a house rule.) -->
-        ${wonControlHtml(p, "lbl fu-lbl")}
-
-        ${followupContactsHtml(data.recipient_activity)}
-
-        <div class="lbl fu-lbl">History</div>
+        <div class="sec">
+        <div class="lbl">History</div>
         <div class="fu-log">${log}</div>
+        </div>
+
+       </div>
       </div>`;
   }
 
@@ -2822,17 +3142,24 @@
         <input type="checkbox" data-fu-contact="${esc(r.email)}"${r.followups ? " checked" : ""}>
         <span>${esc(r.name || r.email)}</span>
       </label>`).join("");
+    // The sentence is not deleted, it is moved: it explains a MECHANISM (what un-ticking does and
+    // does not do), which is read once and then skipped forever, and it was sitting between the
+    // heading and the list of people it is about. Behind a summary that names it, the person who
+    // needs it can still get it and everybody else gets to see the list.
     return `
-      <div class="lbl fu-lbl">Automated follow-ups go to</div>
-      <p class="note">Un-tick somebody and they still get the proposal, the invoice and every
-        reply. They just stop being chased.</p>
+      <div class="lbl fu-lbl">Who gets chased</div>
       <div class="fu-clist">${chips}</div>
       <div class="fu-line">
         <input id="fu-add-contact" class="tw-input" type="email" autocomplete="off"
                placeholder="Add a contact: name@company.com">
         <button class="btn btn-s" id="fu-add-contact-btn">Add</button>
       </div>
-      <p class="note" id="fu-c-alert"></p>`;
+      <p class="note" id="fu-c-alert"></p>
+      <details class="why">
+        <summary>${CHEV}What un-ticking somebody does</summary>
+        <p class="note">Un-tick somebody and they still get the proposal, the invoice and every
+        reply. They just stop being chased.</p>
+      </details>`;
   }
 
   /** Wire the follow-up panel. Called from renderDetail, so every handler is bound
@@ -3226,13 +3553,27 @@
     // has to be in SEC_TABS) while the not-sent panel hides whole PANELS and keeps its dsec-ns-*
     // ids deliberately outside that machinery.
     return `
-        <div class="sec" id="${sent ? "dsec-delete" : "dsec-ns-delete"}">
-          <div class="lbl">Delete this project</div>
+        <div class="sec sec-dang" id="${sent ? "dsec-delete" : "dsec-ns-delete"}">
+          <!-- The destructive rank: a red heading, a red left rule from .sec-dang, an outlined
+               button, and one line of copy where there were 34 words. Four quiet signals rather
+               than one loud one, which is the same argument .btn-dang already makes about not
+               filling this button until hover.
+               THE ICON IS WRITTEN OUT HERE rather than taken from the CHEV-style const two hundred
+               lines up, and that is deliberate: THREE harnesses lift this function by name
+               (drawer-render, not-sent-assign, not-sent-lost) and a new module-level identifier
+               inside it is a ReferenceError in the two that have not heard of it. Adding a name a
+               lifted function calls has broken this suite six times. -->
+          <div class="lbl">${'<svg viewBox="0 0 24 24" width="15" height="15" fill="none"'
+            + ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+            + ' stroke-linejoin="round" aria-hidden="true">'
+            + '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2'
+            + ' 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/>'
+            + '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>'}Delete this project</div>
           <p class="note">${sent
-            ? "Takes the card off the board and stops the follow-up emails. The link the customer "
-              + "already has keeps working, and you can restore the project from Trash."
-            : "Takes the card off the board and files the project in Trash. Nothing reaches the "
-              + "customer, and you can restore it from there."}</p>
+            ? "Off the board, follow-ups stop, restorable from Trash. The link the customer "
+              + "already has keeps working."
+            : "Off the board and into Trash, restorable from there. Nothing reaches the "
+              + "customer."}</p>
           <div class="fu-line">
             <button type="button" class="btn btn-s btn-dang" id="del-project">Delete project</button>
           </div>
@@ -3351,6 +3692,18 @@
 
     const depAmt = p.deposit_amount != null ? p.deposit_amount : (a ? a.total * 0.25 : null);
 
+    // The two answer lines for the tabs that already read the way the redesign wants: the fact
+    // leads and there is no prose to move. All either of them takes is the question the tab gets
+    // opened for, answered on the heading before anything else is read. Derived here rather than
+    // in a helper, because both are one expression over booleans this function already computed.
+    const depAns = depositNotRequired ? "Not required"
+      : depositDone ? "Received"
+      : depositSubmitted ? "Submitted, waiting on you"
+      : p.deposit_requested_at ? "Requested " + TW.fmtBizDate(p.deposit_requested_at)
+      : "Not requested yet";
+    const ctN = (data.contacts || []).length;
+    const ctAns = !ctN ? "Not sent yet" : ctN + (ctN === 1 ? " contact" : " contacts");
+
     const unread = unreadCount(pid, msgs);
 
     // The board row: the only place several draft-side facts exist for a SENT project, and the
@@ -3384,6 +3737,39 @@
     // are still in the signature, so a re-read by a named contact can still cost a repaint. That
     // one is older than this drawer and wants the portal's payload pinned down first.)
     const lastViewed = (row && row.last_viewed_at) || p.last_viewed_at || "";
+
+    // WHAT THE CUSTOMER CARD ANSWERS NOW: have they even opened it, how often, and when last.
+    // Same three sources the view bubble reads, gathered once here rather than twice.
+    //
+    // The COUNT is summed off recipient_activity, which is the only place a count exists: the
+    // portal keeps view_count per contact (the Recipients card already shows it in a title) and
+    // keeps no total anywhere. Summing is the honest reading of "how many times has this been
+    // opened" on a proposal that went to three people. A payload with no per-contact rows still
+    // has viewed_at, and the card says "Opened <date>" rather than inventing a number.
+    //
+    // `sent_at` comes off the BOARD row for the same reason the view stamps do: the portal's staff
+    // detail payload has no such field, and the board list serves it. It is what makes "not opened
+    // yet" mean something, because nine days is a phone call and nine minutes is not.
+    //
+    // BOTH STAMPS FALL BACK TO THE PER-CONTACT ROWS, which is not belt-and-braces: the two sets of
+    // fields are written by different code paths in the portal, and a proposal sent to three people
+    // can carry per-contact opens with nothing at the proposal level (which is exactly what the
+    // multi-recipient fixture looks like). Earliest for the first open, latest for the last, so a
+    // card that says "opened 3 times" cannot then date it from one contact only.
+    const acts = data.recipient_activity || [];
+    const pick = (fn, keys) => acts
+      .map((r) => keys.map((k) => r && r[k]).filter(Boolean)[0] || "")
+      .filter(Boolean)
+      .reduce((best, v) => (!best || fn(Date.parse(v), Date.parse(best)) ? v : best), "");
+    const seen = {
+      first: p.viewed_at || pick((a, b) => a < b, ["viewed_at"]),
+      last: lastViewed || pick((a, b) => a > b, ["last_viewed_at", "viewed_at"]),
+      count: acts.reduce((n, r) => n + (Number(r && r.view_count) || 0), 0),
+      sentAt: (row && row.sent_at) || p.sent_at || "",
+      by: p.assigned_estimator || (row && row.assigned_estimator) || "",
+      // Why "Not opened yet" is not printed on a job somebody has already signed. See customerHtml.
+      approved: !!a,
+    };
 
     // Nothing changed? Leave the DOM alone. This is the guard that makes the 12s drawer poll
     // invisible: without it every tick destroyed the thread, the tab strip and every card, and
@@ -3420,8 +3806,10 @@
     // asks whether the thread has anything in it before deciding that Chat is worth landing on, and
     // "as rendered" has to mean the same list the panel below shows, view card included.
     const threadMsgs = withViewCard(msgs, { viewed_at: p.viewed_at, last_viewed_at: lastViewed });
-    const thread = threadMsgs.map(msgHtml).join("")
-      || '<p class="note">No messages yet.</p>';
+    // threadHtml rather than a map, since 2026-08-27: the day markers and the fold over replaced
+    // documents are facts about the thread as a whole, which a per-row renderer cannot see. It
+    // owns the empty case too, because "no messages yet" is now one of the answers it gives.
+    const thread = threadHtml(threadMsgs);
 
     // Where the chat was, before the innerHTML below detaches it. Must happen here rather than
     // in the caller: renderDetail is the only place that destroys #thread, and every path
@@ -3458,16 +3846,24 @@
                         fuVal: followupState(p, sentHold(p, data)).val })}
       <div class="dbody">
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
-        ${customerHtml(p)}
+        ${customerHtml(p, seen)}
         ${recipientsHtml(data.recipient_activity)}
         ${approvalHtml(a)}
 
+        <!-- The count moves ONTO the heading and the explanation moves BEHIND a disclosure, and
+             the count is the whole point: nine chips of which some are green is a thing you have
+             to count, and the derived answer was printed THIRD, underneath 42 words nobody reads
+             twice. #nt-count keeps its id and its node - paintNtChips owns #nt-chips outright and
+             rewrites it on every toggle, so anything that has to survive a toggle needs somewhere
+             else to live - it just lives on the heading line now. -->
         <div class="sec" id="dsec-notify">
-          <div class="lbl">Notifications for this project</div>
-          <p class="note" id="nt-help">Who gets an email when this customer replies, approves, or pays. Green means they are on. This overrides the global roster for this project only, and toggling somebody never sends them anything.</p>
-          <p class="note" id="nt-count"></p>
+          <div class="lbl">Notifications<span class="sec-ans" id="nt-count"></span></div>
           <div id="nt-alert" class="note"></div>
           <div id="nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
+          <details class="why">
+            <summary>${CHEV}What green means</summary>
+            <p class="note" id="nt-help">Who gets an email when this customer replies, approves, or pays. Green means they are on. This overrides the global roster for this project only, and toggling somebody never sends them anything.</p>
+          </details>
         </div>
 
         <!-- The files and the hand-off sheet, ON A SENT PROJECT TOO. Hanz, 2026-08-20: "Move the
@@ -3484,19 +3880,24 @@
              two buttons further down the panel every time somebody re-sent a bid.
              NB no em dash in this comment: test_drawer_renders.py greps the whole panel, comments
              included. -->
-        <div class="sec row3" id="dsec-files">
-          <button type="button" class="btn btn-s" id="go-files">Open the files</button>
-          <button type="button" class="btn btn-s" id="go-info">Info sheet</button>
+        <div class="sec" id="dsec-files">
+          <div class="lbl">Paperwork</div>
+          <div class="row3">
+            <button type="button" class="btn btn-s" id="go-files">Open the files</button>
+            <button type="button" class="btn btn-s" id="go-info">Info sheet</button>
+          </div>
         </div>
 
         <!-- Every send snapshots the estimate, so the versions are a real record of what each
              customer was quoted and when. Hanz, 2026-08-19: "Make sure to also put the revisions
              here." They were only on the Files screen, which meant answering "what did we send them
-             in July?" required leaving the project you were looking at. -->
+             in July?" required leaving the project you were looking at.
+             THE INTRO SENTENCE IS NOT DELETED, it MOVED: paintRevisions renders it inside the fold,
+             where the only person who needs to be told what a snapshot is is the person opening the
+             history. The count on the heading is painted by the same function, because it is the
+             only thing that knows how many sends there were. -->
         <div class="sec" id="dsec-revisions">
-          <div class="lbl">Sent versions</div>
-          <p class="note">Each send pins the estimate as it was, so an old version stays readable
-          even after the draft moves on.</p>
+          <div class="lbl">Sent versions<span class="sec-ans" id="rev-count"></span></div>
           <div id="rev-list"><span class="note">Loading…</span></div>
         </div>
 
@@ -3511,7 +3912,7 @@
 
        <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
         <div class="sec" id="dsec-deposit">
-          <div class="lbl">Deposit</div>
+          <div class="lbl">Deposit<span class="sec-ans">${esc(depAns)}</span></div>
           ${depositNotRequired
             ? `<p class="note">This proposal went out without a deposit, so nothing was invoiced and the customer sees no Deposit step. You can still send a request below if the terms change.${depAmt != null ? ` A 25% deposit would be ${money(depAmt)}.` : ""}</p>`
             : `<div class="facts">
@@ -3531,7 +3932,7 @@
 
        <div class="dpanel" id="dpanel-contacts" role="tabpanel" aria-labelledby="dtab-contacts" tabindex="-1">
         <div class="sec" id="dsec-contacts">
-          <div class="lbl">Project contacts</div>
+          <div class="lbl">Project contacts<span class="sec-ans">${esc(ctAns)}</span></div>
           ${contacts}
         </div>
        </div>
