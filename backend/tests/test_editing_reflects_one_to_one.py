@@ -94,17 +94,22 @@ def test_the_base_bid_line_still_works_too():
 def test_no_price_write_path_trims_the_stored_value():
     """The browser half, asserted against the shipped source rather than a copy of it.
 
-    Three sites write a stored override (two island handlers and the whole-line one). All
-    three must collapse newlines only. A `.trim()` on any of them silently re-creates
+    FOUR sites write a stored override now: the two island handlers, the whole-line one, and
+    the box-wide PRICE sweep added when each text box became a single editing host (a Delete
+    across three price rows arrives as ONE input event, so a handler that only read the caret's
+    own row would leave the other two edited on screen and unedited in the draft).
+
+    All four must collapse newlines only. A `.trim()` on any of them silently re-creates
     Kyle's bug on that channel alone, which is exactly how it hid: one channel was right
-    and nothing compared them.
+    and nothing compared them. The count is asserted so a FIFTH channel cannot appear
+    without somebody reading this rule first.
     """
     import pathlib
     js = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "js"
           / "proposal-review.js").read_text(encoding="utf-8")
     writes = [ln.strip() for ln in js.split("\n")
               if "serializeBlock(sp)" in ln or "serializeBlock(lineNode)" in ln]
-    assert len(writes) == 3, "the set of price write paths changed: %r" % writes
+    assert len(writes) == 4, "the set of price write paths changed: %r" % writes
     for w in writes:
         assert ".trim()" not in w, "a price write path trims again: %s" % w
 

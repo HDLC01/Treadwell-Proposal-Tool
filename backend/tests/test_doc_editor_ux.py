@@ -329,11 +329,35 @@ def test_enter_is_only_intercepted_when_it_means_a_line_break(ran, case):
     assert ran["enterGuards"][case] is True, "%s+Enter inserted a line break" % case
 
 
-def test_enter_outside_a_block_and_enter_with_no_caret_stay_the_browsers(ran):
-    """A price line and a notes bullet handle their own Enter, and a caret the page cannot read
-    is a caret it must not guess at — eating the key there would make Enter do nothing."""
-    assert ran["enterGuards"]["notABlock"] is True
-    assert ran["enterNoCaret"]["defaultPrevented"] is False
+def test_enter_is_the_editors_on_every_line_and_refused_when_the_caret_is_unreadable(ran):
+    """REVERSED on both counts, 2026-08-26, by the same structural change.
+
+    It used to read: a price line and a notes bullet handle their own Enter, and a caret the page
+    cannot read is a caret it must not guess at. Both halves rested on each line being its own
+    contenteditable, where the worst a browser Enter could do was leave a stray wrapper element
+    inside one line.
+
+    With one editing host per text box, the browser's Enter SPLITS the paragraph into two
+    elements. On a computed line that means a second `<p data-sys-line="area">` — a row the writer
+    has no channel for, so half of what the estimator typed reaches the customer and half of it
+    disappears. On a template paragraph it means a `.tw-block` whose id nothing owns. One break
+    inside one element is the only shape this editor can send, so:
+
+      * A computed line's Enter is taken, becomes one break, and the line's own save channel is
+        told about it (its channels are delegated `input` listeners — being told is how it saves).
+      * A caret the page cannot read means the page will not let ANYTHING happen. Handing the key
+        to the browser as a fallback is the one thing that could split the paragraph, so
+        "I don't know where the caret is" has to be a refusal, not a delegation. The paragraph is
+        left exactly as it was, which is what the estimator sees either way.
+
+    A node that is not an editable line at all — the box's own tools layer, the page behind it —
+    still belongs to the browser. That is the guard that stayed."""
+    g = ran["enterGuards"]
+    assert g["computedLineTaken"] is True, "a computed line's Enter fell through and split its <p>"
+    assert g["computedLineText"] == "\n", "the break did not land in the line"
+    assert g["computedLineTold"] == 1, "the line's own save channel was never told"
+    assert g["notALine"] is True, "Enter on chrome was hijacked"
+    assert ran["enterNoCaret"]["defaultPrevented"] is True
     assert ran["enterNoCaret"]["text"] == "Scope:  Grind and coat."
 
 

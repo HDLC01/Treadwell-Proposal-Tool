@@ -412,7 +412,8 @@
     const ov = String(shown) !== String(computed);
     const style = (opts && opts.style) || "margin:0 0 2pt;";
     const bold = (opts && opts.bold) ? "font-weight:bold;" : "";
-    return `<p class="tw-priceline tw-line-edit${ov ? " tw-overridden" : ""}" contenteditable="true" spellcheck="false"` +
+    // No contenteditable of its own -- see renderBlock. The box is the host; this inherits.
+    return `<p class="tw-priceline tw-line-edit${ov ? " tw-overridden" : ""}" spellcheck="false"` +
            ` data-po-kind="line" data-po-linekey="${e(key)}" data-computed="${e(computed)}"` +
            (ov ? ` title="${_OVERRIDE_TITLE}"` : "") +
            ` style="${style}${bold}">${e(shown)}</p>`;
@@ -1371,11 +1372,24 @@
   // works). Cached so switching work-types doesn't re-scan the same PNG.
   const _termsBandCache = new Map();   // work_type:media name -> reserved top band (pt)
 
-  // True when the keyboard focus is inside `el` — used to skip any re-render
-  // that would rebuild `el`'s innerHTML (and destroy the caret) while the
-  // estimator is typing in one of its editable islands. Skipped repaints
-  // self-heal on the next focusout re-render / refreshDocumentFills.
-  const focusInside = (el) => !!(el && document.activeElement && el.contains(document.activeElement));
+  // True when the estimator is typing inside `el` — used to skip any re-render that would rebuild
+  // `el`'s innerHTML (and destroy the caret) mid-word. Skipped repaints self-heal on the next
+  // focusout re-render / refreshDocumentFills.
+  //
+  // TWO QUESTIONS, because one of them stopped being enough. `document.activeElement` was the
+  // right answer while every editable line carried its own contenteditable: focus landed on the
+  // line, so a container holding the caret contained the focus. Now the BOX is the editing host,
+  // focus lands on it once and stays there while the caret moves between the paragraphs inside
+  // it — so activeElement is an ANCESTOR of the line being typed in, and
+  // `el.contains(activeElement)` is false exactly when this guard matters most. The caret's own
+  // line answers it directly, and nothing about it depends on where focus happens to sit.
+  const focusInside = (el) => {
+    if (!el) return false;
+    const a = document.activeElement;
+    if (a && el.contains && el.contains(a)) return true;
+    const line = lineAtSelection();
+    return !!(line && el.contains && el.contains(line));
+  };
 
   const escHtml = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -2033,13 +2047,57 @@
    *  Inline styles, and only ever on a paragraph the estimator changed: an untouched block keeps
    *  the class-driven look it has always had, and this surface is a to-scale preview registered
    *  against baked page artwork, so a stray pixel of reflow is a worse bug than a plain toolbar. */
+  /** Put one paragraph where the FILE says it goes, not where a class guessed.
+   *
+   *  Hanz, 2026-08-25: "is this really the spacing format for the epoxy? Because it doesnt follow
+   *  the exact font size and spacing on the editor in which it should."
+   *
+   *  He was right, and the generated document was the honest one. In the epoxy template every WORK
+   *  row — System, Area, Scope, Schedule, Exclusions, Notes — is the same list level
+   *  (`left=288 hanging=288`), all 8pt, with NO before/after spacing at all. The editor showed an
+   *  indented sub-group that exists nowhere in the file, because geometry came from hand-picked
+   *  class values (`.tw-li { margin-left: 14pt; padding-left: 9pt }`) rather than from the record.
+   *
+   *  THE HANGING INDENT IS THE WHOLE TRICK. Word puts the TEXT at `left` and the marker at
+   *  `left - hanging`. Reading only `left` — which is all the editor had — draws the bullet where
+   *  the text belongs and pushes the row in by the hanging distance. So: margin-left carries
+   *  `left - hanging` and padding-left carries `hanging`, which is the gap `.tw-li::before` sits
+   *  in at `left: 0`. For the WORK rows that is margin 0 / padding 14.4pt: text at 14.4pt, bullet
+   *  hard against the margin, exactly as it prints.
+   *
+   *  `line` is 240ths of a line under `lineRule="auto"` (240 single, 276 = 1.15, 300 = 1.25) and
+   *  twips under `exact`/`atLeast`, so the rule decides the unit. Absent stays absent — the
+   *  stylesheet's own default then applies, rather than this asserting a number the file never
+   *  gave.
+   *
+   *  `st` is the LIVE state (what the estimator has set); `tpl` is the template's record, which is
+   *  where hanging, first-line and spacing come from since the toolbar cannot change them. */
+  function applyParaGeom(el, st, tpl) {
+    const leftTw = Math.max(0, Number((st && st.indent) || 0));
+    const hangTw = Math.max(0, Number((tpl && tpl.hanging) || 0));
+    const pt = (tw) => (tw / TWIPS_PER_PT) + "pt";
+    // Never negative: a paragraph whose hanging exceeds its left indent would pull the marker off
+    // the page. Word clamps at the margin and so does this.
+    el.style.marginLeft = pt(Math.max(0, leftTw - hangTw));
+    el.style.paddingLeft = hangTw ? pt(hangTw) : "0";
+    const firstTw = Number((tpl && tpl.first_line) || 0);
+    el.style.textIndent = firstTw ? pt(firstTw) : "";
+    const sp = (tpl && tpl.spacing) || {};
+    el.style.marginTop = sp.before ? pt(Number(sp.before)) : "0";
+    el.style.marginBottom = sp.after ? pt(Number(sp.after)) : "0";
+    if (sp.line && sp.line_rule === "auto") el.style.lineHeight = String(Number(sp.line) / 240);
+    else if (sp.line) el.style.lineHeight = pt(Number(sp.line));
+    else el.style.lineHeight = "";
+  }
+
   function applyParaToEl(el, st) {
     if (!el || !st) return;
     const bullet = !!st.bullet;
     el.classList.toggle("tw-li", bullet);
-    el.style.marginLeft = (Math.max(0, Number(st.indent) || 0) / TWIPS_PER_PT) + "pt";
-    // .tw-li's own padding is the gap the red square sits in; with no square there is no gap.
-    el.style.paddingLeft = bullet ? "" : "0";
+    // The template's own record, for the measurements the toolbar cannot change. Without it an
+    // indent press would rebuild the geometry from `left` alone and undo the hanging indent.
+    const rec = blockById.get(Number(el.dataset.id));
+    applyParaGeom(el, st, (rec && rec.para) || null);
   }
 
   /** Record a paragraph's new properties and repaint it. Refuses a locked paragraph. */
@@ -2121,10 +2179,23 @@
       '<button type="button" data-fmt="italic" aria-label="Italic" title="Italic (Ctrl+I)"><i>I</i></button>' +
       '<button type="button" data-fmt="underline" aria-label="Underline" title="Underline (Ctrl+U)"><u>U</u></button>' +
       '<span class="tw-fmtsep" aria-hidden="true"></span>' +
-      '<select data-fmt="size" aria-label="Text size" title="Text size">' +
-      '<option value="">Template size</option>' +
+      // A COMBOBOX, not a dropdown. Hanz, 2026-08-25: "Make this dropdown menu smaller please.
+      // ALso make it so that we could type in it."
+      //
+      // It was a <select> whose width was set by its widest option -- "Template size" -- which is
+      // why it dwarfed the buttons beside it. As an input it is 54px and takes any size the
+      // document can actually carry, including the half-points the writer supports (10.5pt is a
+      // real Word size and there was no way to ask for it).
+      //
+      // The empty value still means "whatever the template says" -- the placeholder carries that
+      // now, and clearing the box restores it. The datalist keeps every size that used to be in
+      // the list, so nothing became harder to reach by becoming typeable.
+      '<input data-fmt="size" list="tw-size-list" class="tw-fmtsize" type="text"' +
+      ' inputmode="decimal" autocomplete="off" placeholder="Size" size="4"' +
+      ' aria-label="Text size in points" title="Text size in points — type one or pick from the list">' +
+      '<datalist id="tw-size-list">' +
       SIZE_CHOICES.map(n => `<option value="${n}">${n} pt</option>`).join("") +
-      '</select>' +
+      '</datalist>' +
       '<span class="tw-fmtsep" data-para="sep" aria-hidden="true"></span>' +
       '<button type="button" data-para="bullet" aria-label="Bullet point"' +
       ' title="Bullet point on or off">▪</button>' +
@@ -2146,7 +2217,12 @@
     // would be no caret left to format. The size `select` cannot be covered this way
     // (preventDefault on its mousedown stops it opening at all), which is what `fmtRange` is for.
     fmtBar.addEventListener("mousedown", (e) => {
-      if (!e.target.closest("select")) e.preventDefault();
+      // The size box is exempt for the same reason the <select> was: a control you have to put a
+      // caret in cannot have its mousedown cancelled, or it can never be focused at all. Focus
+      // therefore genuinely leaves the paragraph when it is used, which is precisely what the
+      // remembered range (`fmtRange`) exists to survive -- and it does, because the focusin
+      // listener that clears the ribbon's target is scoped to docSurface and this row is not in it.
+      if (!e.target.closest("select, input")) e.preventDefault();
     });
     fmtBar.addEventListener("click", (e) => {
       // The REMEMBERED block, re-checked against the live document — not whatever had focus,
@@ -2170,6 +2246,28 @@
       const btn = e.target.closest("button[data-fmt]");
       if (!btn) return;
       e.preventDefault();
+      // A box selection means the press is about every line in it, not just the caret's own. Each
+      // block is formatted over its whole length -- there is no per-block range to remember,
+      // because the estimator selected lines rather than characters.
+      if (boxSel && boxSel.length > 1) {
+        // TEMPLATE PARAGRAPHS ONLY, for now. A computed line's channel stores its TEXT and
+        // nothing else, so a bold applied here would show on screen and reach the customer's
+        // document as plain text -- the formatting silently dropped somewhere between the two.
+        // Better to leave those rows visibly untouched than to lie about them; carrying runs
+        // through the three computed-line channels is the next piece of work.
+        const els = boxSel.filter(one => one.classList.contains("tw-block"));
+        els.forEach(one => {
+          const total = runsLength(editRuns(one));
+          if (!total) return;
+          if (btn.dataset.fmt === "reset") {
+            applyFormat(one, { bold: null, italic: null, underline: null, size_pt: null }, [0, total]);
+          } else {
+            toggleFormat(one, btn.dataset.fmt, [0, total]);
+          }
+        });
+        showFmtBar(el);
+        return;
+      }
       if (btn.dataset.fmt === "reset") {
         const f = selectionFormat(el, fmtRangeFor(el));
         applyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
@@ -2178,22 +2276,366 @@
       }
       toggleFormat(el, btn.dataset.fmt, fmtRangeFor(el));
     });
-    fmtBar.addEventListener("change", (e) => {
-      const sel = e.target.closest("select[data-fmt='size']");
+    /** The typed size, or undefined when the box does not hold a usable one.
+     *
+     *  A <select> could only ever offer valid values; an input cannot, so the validation the
+     *  client never needed is needed now. `Number("abc")` is NaN, and NaN is the one value that
+     *  defeats `runsEqual` -- NaN !== NaN, so every press would look like a change, mark the
+     *  paragraph edited and persist an override for a no-op. It also serialises as null and is
+     *  dropped by the server, so the estimator would see a dirty document and no effect.
+     *
+     *  Bounds and granularity mirror the backend deliberately (main.py's sanitizer and
+     *  proposal_writer's own copy both take 1..200, and the writer stores half-points), so the box
+     *  cannot ask for something the document will silently refuse. */
+    function typedSize(raw) {
+      const t = String(raw == null ? "" : raw).trim().replace(/\s*pt$/i, "");
+      if (t === "") return null;                        // empty = back to the template's own size
+      const n = Number(t);
+      if (!Number.isFinite(n)) return undefined;
+      const half = Math.round(n * 2) / 2;               // the writer's real granularity
+      if (half < 1 || half > 200) return undefined;
+      return half;
+    }
+
+    /** Apply whatever the size box holds to the remembered range.
+     *
+     *  A named function rather than a listener both paths reach: Enter has to commit without
+     *  waiting for a blur, and synthesizing a change event to reuse the listener would work in a
+     *  browser while making the behaviour unreachable to anything that drives the code directly.
+     */
+    function commitSize(box) {
       const el = fmtTargetBlock();
-      if (!sel) return;
       if (!el) { renderFmtBar(); return; }
-      const v = sel.value ? Number(sel.value) : null;
-      // `fmtRange` and not just whatever the selection is NOW: opening this dropdown is the one
-      // press the mousedown guard above cannot cover, so by the time `change` fires the caret has
-      // usually left the paragraph. Without the remembered range the chosen size landed on the
-      // WHOLE paragraph instead of the highlighted words — true of the floating bar too, and
-      // fixed here rather than left for the ribbon to make routine.
+      const v = typedSize(box.value);
+      // `fmtRange` and not whatever the selection is NOW: the size box is one of the two controls
+      // the mousedown guard cannot cover, so focus has genuinely left the paragraph by the time
+      // this runs. Without the remembered range the size would land on the whole paragraph
+      // instead of the highlighted words.
       const f = selectionFormat(el, fmtRangeFor(el));
+      if (v === undefined) {
+        // REFUSED, and the refusal has to be visible. renderFmtBar's write-back deliberately
+        // skips a focused box (or it would eat half-typed text) and Enter commits without
+        // blurring -- so the rejected text would otherwise just sit there looking accepted.
+        // Putting the paragraph's real size back is the whole signal the estimator gets.
+        box.value = f.size_pt ? String(f.size_pt) : "";
+        return;
+      }
       applyFormat(el, { size_pt: v }, f.range);
       showFmtBar(el);
+    }
+
+    fmtBar.addEventListener("change", (e) => {
+      const box = e.target.closest && e.target.closest("input[data-fmt='size']");
+      if (!box) return;
+      commitSize(box);
+    });
+    // Enter commits without leaving the box, Escape puts back what the paragraph says. Both stop
+    // propagating: the window-level Escape handler collapses an expanded text box, which is not
+    // what somebody abandoning a typed size is asking for.
+    fmtBar.addEventListener("keydown", (e) => {
+      const box = e.target.closest && e.target.closest("input[data-fmt='size']");
+      if (!box) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitSize(box);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        renderFmtBar();
+      }
     });
     return fmtBar;
+  }
+
+  // ── selecting a whole text box ─────────────────────────────────────────────
+  //
+  // Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still sub
+  // boxes."
+  //
+  // He is describing the editing-host boundary. Every paragraph is its own contenteditable, so the
+  // browser's own select-all cannot reach past the line the caret is in -- the "sub boxes" are the
+  // paragraphs. There is no browser selection that spans them, and there is no making one: a
+  // native Range across two editing hosts is not something a document can hold.
+  //
+  // So the second press is an EDITOR-level selection instead: a set of blocks the ribbon and the
+  // delete key both understand, painted so it reads as selected. It is not a DOM selection and
+  // deliberately does not pretend to be one -- `selectionRange` still refuses anything spanning
+  // two blocks, which is what keeps a stale range from being formatted (see `selectionLeftBlock`).
+  //
+  // Scope is one text box, per his answer when asked: first press takes the line, pressing again
+  // takes every line in that box. The box is a real container -- `.tw-txbx[data-box-id]`, the
+  // absolutely-positioned div registered against the baked page artwork -- so this is a
+  // `closest()` call rather than a guess about which paragraphs look grouped. On the terms pages
+  // there is no box, so the page is the unit.
+  //
+  // The computed lines (`.tw-line-edit`, `.tw-note-edit`) are NOT included. They are re-rendered
+  // from the estimate whenever focus leaves them, so "selected" and "cleared" have no meaning
+  // there yet -- that is what E6's channel work is for.
+  let boxSel = null;
+  // The line the last Ctrl+A landed on. The widen used to depend on reading the selection back and
+  // finding it covered the whole line -- which is a round trip through the browser's Range, and a
+  // block ending in a <br> reports a length the selection cannot actually reach. When that check
+  // said "not the whole line" the second press just re-selected the line and the feature looked
+  // dead. Remembering the target is what makes press-again reliable.
+  let lastSelectAll = null;
+
+  /** Every editable LINE inside `el`'s box, in document order.
+   *
+   *  Two families, and they are not interchangeable. `.tw-block` is a real template paragraph with
+   *  an id and a para record. `.tw-line-edit` is a COMPUTED line -- the PRICE rows, the
+   *  {{#system}} rows, the NOTES bullets -- which the page rebuilds from the estimate and which
+   *  persists through its own channel keyed by `data-po-linekey` / `data-sys-line` rather than by
+   *  block id.
+   *
+   *  Both are collected, because "highlight everything in this box" is a claim about what the
+   *  estimator can see, not about which save channel a row happens to use. What differs is what a
+   *  press can then DO to each -- see clearBoxLine and the format handler. */
+  function boxLines(el) {
+    const box = editingBox(el);
+    if (!box) return [];
+    return Array.from(box.querySelectorAll(LINE_SEL));
+  }
+
+  /** Every editable line family, in one place so no selector can drift from another.
+   *
+   *  .tw-note-edit used to be missing from these lists, which is why a NOTES bullet answered none
+   *  of the box-wide gestures: it is the one family that does not also carry .tw-line-edit. */
+  const LINE_SEL = ".tw-block, .tw-line-edit, .tw-note-edit";
+
+  /** The editable line the caret is in, whichever family it belongs to. */
+  function lineAt(node) {
+    if (!node || !node.closest) return null;
+    return node.closest(LINE_SEL);
+  }
+
+  /** The line the SELECTION is in. This is the one that matters now.
+   *
+   *  With the box as the editing host, an input or focusin event's target is the BOX -- the
+   *  browser fires editing events at the host, not at the node the caret happens to sit in -- so
+   *  asking the target for its .tw-block resolves to nothing. The caret's own position is the
+   *  only thing left that says which line was edited. */
+  function lineAtSelection() {
+    const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return null;
+    let n = sel.getRangeAt(0).startContainer;
+    if (n && n.nodeType !== 1) n = n.parentNode;
+    return lineAt(n);
+  }
+
+  /** The line an editing event is about: its own target when it has one, else the caret's.
+   *
+   *  Both paths are kept deliberately. A synthesized event that names a line still resolves to
+   *  that line, which is how every scenario in the harnesses reads -- and how clearBoxLine's own
+   *  dispatch reaches the right channel. A real browser event names the box, and falls through to
+   *  the selection. */
+  function lineTarget(e) {
+    const t = e && e.target && e.target.closest ? lineAt(e.target) : null;
+    return t || lineAtSelection();
+  }
+
+  /** The editing host a node sits in: its text box, or the terms page when there is no box.
+   *
+   *  Order matters. Page 1 CONTAINS every box, so .tw-txbx has to be asked first or every box
+   *  edit would resolve to the page and sweep the whole sheet. */
+  function editingBox(node) {
+    let n = node;
+    if (n && n.nodeType != null && n.nodeType !== 1) n = n.parentNode;
+    if (!n || !n.closest) n = lineAtSelection();
+    if (!n || !n.closest) return null;
+    const host = n.closest(".tw-txbx") || n.closest(".tw-terms-page") || n.closest(".tw-page");
+    if (host) return host;
+    // Nothing above it claims to be a host, but it IS in the document: the surface is the unit.
+    // Reached by the geometry-less fallback layout and by any future path that mounts a paragraph
+    // without a page around it -- and returning null there would mean an edit that saves nothing,
+    // silently, which is the failure this whole change exists to avoid.
+    return docSurface && docSurface.contains && docSurface.contains(n) ? docSurface : null;
+  }
+
+  /** The selection, broken down per line: [{el, start, end}] in document order.
+   *
+   *  The same trick selectionRange has used in production since the ribbon shipped -- drop two
+   *  control-character markers at the range's boundaries and read the offsets back out of the
+   *  serialised text -- generalised from one block to every line the range touches. Deriving
+   *  offsets from container/offset pairs across nested .tw-fill spans and half-selected runs is
+   *  the thing that trick exists to avoid, and it does not get easier with more elements in play.
+   *
+   *  A line the range covers ENTIRELY holds neither marker and reports its whole length. That is
+   *  the case that matters: it is how "these four lines are selected" becomes four splices.
+   *
+   *  WHICH lines are covered is decided by the markers too, not by `Range.intersectsNode`. That
+   *  predicate answers "yes" for a node the range merely TOUCHES, and the two cases are
+   *  indistinguishable once you have the offsets: a fully covered empty line reports start == end
+   *  == 0, and so does a line the range only abutted. The marker positions say it exactly -- the
+   *  line holding MARK_A, the line holding MARK_B, and everything between them in document
+   *  order -- and a marker that lands outside any line at all (directly between two paragraphs)
+   *  falls back to that end of the box, which is where the selection visibly reaches. */
+  /** What one line reports, given its serialised text with the two markers still in it.
+   *
+   *  Pure arithmetic, split out on purpose. selectionLines can only run against a live browser
+   *  Range, so nothing executes it -- and this is the half where the off-by-ones live, so it is
+   *  the half that has to be executable on its own. Four arrangements, and every one of them
+   *  happens in practice:
+   *
+   *    both markers   a selection that starts and ends inside this line
+   *    MARK_A only    the selection starts here and runs on into the next line
+   *    MARK_B only    the selection started above and ends here
+   *    neither        this line is covered end to end
+   *
+   *  The -1 is the whole subtlety: MARK_A is inserted after MARK_B (the range's end is filled in
+   *  first), so within a line that holds BOTH, A has pushed B one character along. Across lines it
+   *  has pushed nothing, which is why the correction is conditional on A being in this line and
+   *  before B. */
+  function markedRange(raw) {
+    const text = String(raw == null ? "" : raw);
+    const iA = text.indexOf(MARK_A), iB = text.indexOf(MARK_B);
+    const clean = text.split(MARK_A).join("").split(MARK_B).join("");
+    let start = 0, end = clean.length;
+    if (iA >= 0) start = iA;
+    if (iB >= 0) end = iA >= 0 && iB > iA ? iB - 1 : iB;
+    start = Math.max(0, Math.min(start, clean.length));
+    end = Math.max(0, Math.min(end, clean.length));
+    return [Math.min(start, end), Math.max(start, end)];
+  }
+
+  function selectionLines() {
+    const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return [];
+    const r = sel.getRangeAt(0);
+    const box = editingBox(r.commonAncestorContainer);
+    if (!box) return [];
+    // A CARET IS ALWAYS ONE LINE. Asking a range predicate about a collapsed caret sitting at the
+    // end of a paragraph gets "both of them", because it touches the start of the next -- which
+    // would turn a single Enter at the end of a line into a two-line splice that empties the line
+    // below it. Answered here, before any of the arithmetic can see it.
+    if (r.collapsed) {
+      const el = lineAtSelection();
+      if (!el) return [];
+      const one = selectionRange(el);
+      return one ? [{ el: el, start: one[0], end: one[1] }] : [];
+    }
+    const lines = boxLines(box);
+    if (!lines.length) return [];
+    const prev = _fmtBusy;
+    _fmtBusy = true;
+    try {
+      const a = document.createTextNode(MARK_A), b = document.createTextNode(MARK_B);
+      const rb = r.cloneRange(); rb.collapse(false); rb.insertNode(b);
+      const ra = r.cloneRange(); ra.collapse(true); ra.insertNode(a);
+      const raws = lines.map(el => segmentsOf(el).map(seg => seg.text).join(""));
+      let first = raws.findIndex(t => t.indexOf(MARK_A) >= 0);
+      let last = raws.findIndex(t => t.indexOf(MARK_B) >= 0);
+      if (first < 0) first = 0;                     // the selection began above the first line
+      if (last < 0) last = lines.length - 1;        // ...or ran past the last
+      if (last < first) { const t = first; first = last; last = t; }
+      const out = [];
+      for (let k = first; k <= last; k++) {
+        const span = markedRange(raws[k]);
+        out.push({ el: lines[k], start: span[0], end: span[1] });
+      }
+      a.remove(); b.remove();
+      lines.forEach(el => { try { el.normalize(); } catch {} });
+      // Put back what the markers disturbed, across the whole span rather than one line.
+      const head = out[0], tail = out[out.length - 1];
+      try {
+        const pa = pointAt(head.el, head.start), pb = pointAt(tail.el, tail.end);
+        if (pa && pb) {
+          const back = document.createRange();
+          back.setStart(pa.node, Math.max(0, Math.min(pa.offset, pa.node.length)));
+          back.setEnd(pb.node, Math.max(0, Math.min(pb.offset, pb.node.length)));
+          sel.removeAllRanges();
+          sel.addRange(back);
+        }
+      } catch {}
+      return out.length ? out : [];
+    } catch {
+      return [];
+    } finally {
+      _fmtBusy = prev;
+    }
+  }
+
+  /** One native selection spanning several lines: the first character of the first to the last of
+   *  the last. What Ctrl+A's widen produces now that a range is allowed to cross a paragraph. */
+  function selectRangeAcross(lines) {
+    if (!lines || !lines.length) return;
+    const first = lines[0], last = lines[lines.length - 1];
+    const a = pointAt(first, 0), b = pointAt(last, runsLength(editRuns(last)));
+    if (!a || !b) return;
+    try {
+      const r = document.createRange();
+      r.setStart(a.node, Math.max(0, Math.min(a.offset, a.node.length)));
+      r.setEnd(b.node, Math.max(0, Math.min(b.offset, b.node.length)));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    } catch {}
+  }
+
+  /** Apply one structural edit across N lines WITHOUT losing a paragraph.
+   *
+   *  This is the whole reason the box can be one editing host safely. The browser's own answer to
+   *  "type over these three selected lines" is to merge them into one element, and a .tw-block
+   *  that stops existing takes its id with it -- the backend applies overrides to a pristine
+   *  template BY id, so the next Generate would put the estimator's words in the wrong paragraph
+   *  of the customer's document. Here every element survives: the covered text goes, the typed
+   *  text lands in the first line, and the lines that were emptied stay as empty paragraphs,
+   *  which is exactly what an emptied override already means everywhere else in this editor. */
+  function spliceLines(lines, ins) {
+    if (!lines.length) return;
+    lines.forEach((part, k) => {
+      const put = k === 0 ? ins : [];
+      if (part.start === part.end && !put.length) return;       // nothing to do on this line
+      renderRuns(part.el, F.spliceRuns(editRuns(part.el), part.start, part.end, put));
+    });
+    const first = lines[0];
+    const caret = first.start + runsLength(ins);
+    placeSelection(first.el, caret, caret);
+    // ONE dispatch. Every persistence sweep below is box-wide, so a single event carries all N
+    // lines -- and N events would each re-do the same sweep.
+    first.el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  /** Empty one selected line through ITS OWN channel.
+   *
+   *  A template paragraph is cleared through the run algebra and then dispatches the page's own
+   *  `input`, so the dirty flag, the override and the emptied-clause protection all run exactly as
+   *  they would for a hand-delete.
+   *
+   *  A COMPUTED line cannot be "emptied" in the same sense: its channel reads an empty value as
+   *  "no override", which restores the figure the estimate computed. That is the honest behaviour
+   *  for a line the page derives -- blanking a price permanently would need the channel to carry
+   *  an explicit empty, which it does not yet -- so clearing one resets it rather than voiding it.
+   *  Reported by the caller so nobody has to guess which happened. */
+  function clearBoxLine(el) {
+    if (el.classList.contains("tw-block")) {
+      if (!runsLength(editRuns(el))) return "already-empty";
+      renderRuns(el, [{ text: "", tok: null }]);
+      markEdited(el, false);
+      return "cleared";
+    }
+    el.textContent = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return "reset-to-computed";
+  }
+
+  function paintBoxSel() {
+    docSurface.querySelectorAll(".tw-boxsel").forEach(n => n.classList.remove("tw-boxsel"));
+    (boxSel || []).forEach(n => n.classList.add("tw-boxsel"));
+  }
+
+  /** Drop the box selection. Called by anything that means "I am doing something else now". */
+  function clearBoxSel() {
+    if (!boxSel) return false;
+    boxSel = null;
+    paintBoxSel();
+    return true;
+  }
+
+  /** Is the whole of `el` already selected? That is what turns a second Ctrl+A into a widen. */
+  function wholeLineSelected(el) {
+    const sel = selectionRange(el);
+    if (!sel) return false;
+    return sel[0] === 0 && sel[1] === runsLength(editRuns(el)) && sel[1] > 0;
   }
 
   /** The block the ribbon acts on, or null.
@@ -2322,13 +2764,16 @@
     // refusals below — outdent at the margin, indent at the clamp, a locked contract clause —
     // are what the estimator is actually left looking at.
     bar.classList.toggle("tw-fmtbar-idle", !el);
-    bar.querySelectorAll("button,select").forEach(n => { n.disabled = !el; });
+    // `input` included: an input matches neither `button` nor `select`, so without it the size box
+    // would stay live on an inert ribbon -- and this repo has already shipped a control that was
+    // invisible and still took the click.
+    bar.querySelectorAll("button,select,input").forEach(n => { n.disabled = !el; });
     if (!el) {
       bar.querySelectorAll("button[data-fmt]").forEach(b => {
         b.classList.remove("on");
         b.setAttribute("aria-pressed", "false");
       });
-      const idleSize = bar.querySelector("select[data-fmt='size']");
+      const idleSize = bar.querySelector("input[data-fmt='size']");
       if (idleSize) idleSize.value = "";
       // THE PARAGRAPH HALF TOO, and this `return` used to be above it. The ribbon is one memoized
       // element that now lives for the whole session, so whatever is not cleared here is the LAST
@@ -2354,8 +2799,14 @@
       if (k !== "reset") b.classList.toggle("on", f[k] === true);
       b.setAttribute("aria-pressed", k === "reset" ? "false" : String(f[k] === true));
     });
-    const sizeSel = bar.querySelector("select[data-fmt='size']");
-    if (sizeSel) sizeSel.value = f.size_pt ? String(f.size_pt) : "";
+    const sizeSel = bar.querySelector("input[data-fmt='size']");
+    // NOT while it has focus. renderFmtBar runs on every focusin, every selectionchange and after
+    // every press; with a <select> writing the value back was invisible, but an input being typed
+    // into would have half-typed text overwritten mid-keystroke. The `fmtRange` capture above this
+    // line still happens either way -- that is the reason renderFmtBar is on the hot path at all.
+    if (sizeSel && document.activeElement !== sizeSel) {
+      sizeSel.value = f.size_pt ? String(f.size_pt) : "";
+    }
     // The paragraph controls, reflecting THIS paragraph. A locked one (a numbered TERMS AND
     // CONDITIONS clause) is offered nothing at all: un-bulleting it renumbers every clause below
     // it, in legal boilerplate, and a disabled-looking button still invites the click.
@@ -2555,7 +3006,10 @@
     const el = document.createElement("div");
     el.className = "tw-block";
     el.dataset.id = String(b.id);
-    el.contentEditable = "true";
+    // NO contentEditable HERE ANY MORE. A paragraph with its own contenteditable is its own
+    // editing host, and a selection cannot cross a host boundary -- which is what made Ctrl+A
+    // stop at one line and drew a little outline round whichever line had the caret. The box
+    // (or, for the terms flow, the page) carries it now, and this inherits editability from it.
     el.spellcheck = false;
     // PRICE-list rows (numId=3) are flattened to flush, bullet-less lines in the
     // generated .docx (_flatten_price_bullets) — mirror that here so the on-screen
@@ -2578,6 +3032,12 @@
     if (b.style && b.style.bold && !(Array.isArray(b.runs) && b.runs.length)) {
       el.classList.add("tw-bold");                               // run-less fallback only
     }
+    // GEOMETRY FROM THE RECORD, on the first paint rather than only after a toolbar press. This is
+    // what made the editor disagree with the document until somebody happened to press indent:
+    // `renderBlock` set classes and nothing else, so `.tw-li`'s hand-picked 14pt/9pt stood in for
+    // the file's real numbers. Blocks with no `para` (a pre-v5 cached response) keep the class
+    // fallback, which is what it was always for.
+    if (b.para) applyParaGeom(el, b.para, b.para);
     if (flowMode) {
       // The positioned view's letterhead artwork carries the real DATE:/JOB
       // NAME: labels; only the flow fallback needs synthetic captions.
@@ -2911,9 +3371,14 @@
     if (_fillsTimer) clearTimeout(_fillsTimer);
     _fillsTimer = setTimeout(() => {
       const tokens = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
+      const caretLine = lineAtSelection();
       docSurface.querySelectorAll(".tw-block").forEach(el => {
         // Don't re-fill the block the caret is currently in (a sidebar edit
         // landing within the 150ms window would otherwise clobber it).
+        // BOTH TESTS. activeElement is the BOX now, an ancestor of this paragraph, so the
+        // containment test below can no longer see the caret — see the note on focusInside.
+        // `caretLine` is the paragraph the caret is actually in, which is what was meant.
+        if (el === caretLine) return;
         if (el.contains(document.activeElement)) return;
         const b = blockById.get(Number(el.dataset.id));
         if (!b) return;
@@ -3024,6 +3489,63 @@
   // keeps its template run weight, which for the System and Area rows is bold and for the
   // Texture row is not (the writer rewrites the line into the row's first run). Without
   // this the page would show a plain line and the customer would receive a bold one.
+  /** The template paragraph a synthesized {{#system}} row stands in for.
+   *
+   *  Matched on the token that paragraph carries, which is how the writer finds them too
+   *  (proposal_writer._SYSTEM_ROW_LINES). Without this the rows were styled by hand-written inline
+   *  margins with no relationship to the paragraphs they represent -- and those margins are where
+   *  the phantom "sub group" came from: `margin:0 0 1pt` zeroes margin-left, so it silently
+   *  overrode .tw-li's own indent and left these three rows sitting further left than every real
+   *  block beside them.
+   */
+  function sysRowTemplate(field) {
+    const token = { name_line: "system.name", texture_line: "system.texture",
+                    area_line: "system.sqft" }[field];
+    if (!token) return null;
+    for (const b of (templateBlocks || [])) {
+      if (String(b.text || "").indexOf(token) !== -1) return b;
+    }
+    return null;
+  }
+
+  /** Put a synthesized row exactly where its template paragraph goes, at its real size.
+   *
+   *  Same arithmetic as applyParaGeom -- text at `left`, marker at `left - hanging` -- expressed as
+   *  an inline style because these rows are built as an HTML string. The explicit font-size is the
+   *  other half of the fidelity fix: without it the row inherits `.tw-page { font-size: 9pt }`
+   *  while every real block beside it carries 8pt from its runs, so System, Texture and Area
+   *  rendered 12.5% larger than the rows underneath them.
+   */
+  function sysRowStyle(field) {
+    const b = sysRowTemplate(field);
+    if (!b || !b.para) return "margin:0;";
+    const p = b.para, sp = p.spacing || {};
+    const tw = (n) => (Math.max(0, Number(n) || 0) / TWIPS_PER_PT);
+    const left = tw(p.indent), hang = tw(p.hanging), first = tw(p.first_line);
+    const out = ["margin:" + tw(sp.before) + "pt 0 " + tw(sp.after) + "pt "
+                 + Math.max(0, left - hang) + "pt",
+                 "padding-left:" + hang + "pt"];
+    if (first) out.push("text-indent:" + first + "pt");
+    if (sp.line && sp.line_rule === "auto") out.push("line-height:" + (Number(sp.line) / 240));
+    const size = sysRowSizePt(b.id);
+    if (size) out.push("font-size:" + size + "pt");
+    return out.join(";") + ";";
+  }
+
+  /** The explicit run size for a synthesized row, from the template block it stands in for.
+   *
+   *  Without this the row inherits `.tw-page { font-size: 9pt }` while every real block beside it
+   *  carries an explicit 8pt from its runs — so System, Texture and Area rendered 12.5% larger
+   *  than the rows underneath them, which is half of what Hanz saw as a "sub group". It is also
+   *  what `fitTxbx`'s percentage shrink was silently singling out: a % only scales INHERITED
+   *  sizes, so the box-overflow shrink hit these three rows and left the rest alone. */
+  function sysRowSizePt(id) {
+    const rec = blockById.get(Number(id));
+    const runs = (rec && rec.runs) || [];
+    for (const r of runs) if (r && r.size_pt) return Number(r.size_pt);
+    return null;
+  }
+
   function workLabelHtml(text, boldFallback) {
     const s = String(text == null ? "" : text);
     const colon = s.indexOf(":");
@@ -3118,7 +3640,7 @@
       const titleAttr = overridden
         ? ` title="${numMoved ? _OVERRIDE_TITLE : _SYS_LINE_TITLE}"` : "";
       return `<p class="${cls} tw-line-edit${overridden ? " tw-overridden" : ""}"${titleAttr}` +
-             ` contenteditable="true" spellcheck="false"` +
+             ` spellcheck="false"` +
              ` data-sys-index="${i}" data-sys-line="${field}"` +
              ` data-computed="${escHtml(computed)}" style="${style}">` +
              `${workLabelHtml(shown, boldFallback)}</p>`;
@@ -3148,11 +3670,11 @@
       // Bullet shape mirrors the template's rows: System + Area are real
       // Word bullets; Texture is an indented (bullet-less) List Paragraph.
       return lineRow(i, "name_line", `${prefix}   ${legacy(i, "name", s.name)}`,
-                     "tw-li", "margin:0 0 1pt;", true)
+                     "tw-li", sysRowStyle("name_line"), true)
            + lineRow(i, "texture_line",
                      `${legacy(i, "texture_label", "Texture:")}  ${legacy(i, "texture", texture)}`,
-                     "tw-list", "margin:0 0 1pt;padding-left:9pt;", false)
-           + lineRow(i, "area_line", areaLine, "tw-li", "margin:0 0 4pt;", true);
+                     "tw-list", sysRowStyle("texture_line"), false)
+           + lineRow(i, "area_line", areaLine, "tw-li", sysRowStyle("area_line"), true);
     }).join("");
   }
 
@@ -3183,9 +3705,9 @@
     // still derives from it).
     notesPreviewEl.innerHTML = lines.map((l, i) => {
       if (l.trim() === "")
-        return `<p class="tw-note-edit tw-note-blank" contenteditable="true" spellcheck="false"` +
+        return `<p class="tw-note-edit tw-note-blank" spellcheck="false"` +
                ` data-note-index="${i}" style="margin:0 0 1pt;"></p>`;
-      return `<p class="tw-li tw-note-edit" contenteditable="true" spellcheck="false"` +
+      return `<p class="tw-li tw-note-edit" spellcheck="false"` +
              ` data-note-index="${i}" style="margin:0 0 1pt;">${noteLineHtml(l.trim())}</p>`;
     }).join("");
     try { fitNotesBox(); } catch {}
@@ -3342,8 +3864,12 @@
         setOpen(box, false);
         return;
       }
-      // Don't fight the paragraph editor: a click meant for a block should edit it.
-      if (e.target.closest(".tw-block, .tw-line-edit, [contenteditable=true]")) return;
+      // Don't fight the paragraph editor: a click meant for a LINE should edit it, not expand the
+      // box. `lineAt` rather than a hand-written selector list, because the list used to end in
+      // `[contenteditable=true]` -- and the box itself now carries that attribute, so every click
+      // inside a truncated NOTES box found it on the way up and returned. The box would never have
+      // expanded again. (Using lineAt also picks up `.tw-note-edit`, which that list was missing.)
+      if (lineAt(e.target)) return;
       // Nor the drag handles: releasing a resize grip fires a click on the box, and peeking at
       // the hidden text is the opposite of what somebody who just made the box bigger wanted.
       if (e.target.closest(".tw-box-tools")) return;
@@ -3590,6 +4116,10 @@
   function addBoxTools(el) {
     const tools = document.createElement("div");
     tools.className = "tw-box-tools";
+    // NOT EDITABLE. The box is a contenteditable host now, so anything appended to it would
+    // otherwise be typed into, dragged through and selected by Ctrl+A along with the text -- and
+    // the grips and buttons in here are chrome, not content.
+    tools.contentEditable = "false";
     tools.innerHTML =
       '<span class="tw-grip tw-grip-move" data-grip="move" title="Drag to move this box"></span>' +
       '<span class="tw-box-size"></span>' +
@@ -4153,6 +4683,11 @@
       const el = document.createElement("div");
       el.className = "tw-txbx";
       el.dataset.boxId = String(box.id);
+      // THE EDITING HOST. One box, one editable region, the way a Word text box behaves: click in
+      // and drag through every paragraph it holds. Everything inside inherits this, so nothing
+      // else on the page needs a contenteditable of its own.
+      el.contentEditable = "true";
+      el.spellcheck = false;
       // The template's own geometry, kept so Reset has somewhere to go back TO and so an
       // override can be stored as a difference from it rather than as an absolute rect.
       boxDesign.set(box.id, { x_pt: Number(box.x_pt) || 0, y_pt: Number(box.y_pt) || 0,
@@ -4301,6 +4836,10 @@
     const newPage = () => {
       page = document.createElement("div");
       page.className = "tw-page tw-terms-page";
+      // The terms flow has no text box, so the PAGE is the host -- the same unit boxLines and the
+      // box-wide gestures already treat it as.
+      page.contentEditable = "true";
+      page.spellcheck = false;
       page.style.width = pageWpt + "pt";
       page.style.height = pageH + "pt";     // border-box: padding lives inside the page
       page.style.overflow = "hidden";
@@ -4342,9 +4881,27 @@
       repaginateTerms();
     }, delay);
   }
+  /** The computed previews normalise themselves when the caret leaves: an emptied line goes back
+   *  to its computed value, an Enter'd notes bullet is re-split into real bullets. They used to
+   *  hear that on their own containers, which no longer receive focus events at all -- the box
+   *  does -- so the surface hands it down.
+   *
+   *  Guarded on the caret really having left the BOX the preview lives in. Each of these rebuilds
+   *  its children, and rebuilding while the caret is still in a sibling line of the same box would
+   *  drop it mid-edit. */
   docSurface.addEventListener("focusout", (e) => {
-    if (!_repagPending) return;
+    const from = editingBox(e.target);
     const to = e.relatedTarget;
+    if (from) {
+      const left = (node) => node && node.isConnected !== false && from.contains(node)
+                             && !(to && from.contains(to));
+      if (left(systemPreviewEl)) renderSystemPreview();
+      if (left(notesPreviewEl)) renderNotesPreview();
+      const pl = document.getElementById("price-lines-block");
+      const bb = document.getElementById("base-bid-row");
+      if (left(pl) || left(bb)) { try { refreshPriceDisplay(); } catch {} }
+    }
+    if (!_repagPending) return;
     if (to && to.closest && to.closest(".tw-terms-page")) return;   // still in terms — wait
     _repagPending = false;
     repaginateTerms();
@@ -4360,6 +4917,11 @@
     clearDocSurface();
     const pg = document.createElement("div");
     pg.className = "tw-page tw-flow";
+    // The fallback layout has no floating boxes, so the PAGE is the editing host -- the same role
+    // a .tw-txbx plays on a template that has them. Without this the flow renders as plain text
+    // nobody can type in, because the paragraphs stopped carrying contenteditable of their own.
+    pg.contentEditable = "true";
+    pg.spellcheck = false;
     pg.style.width = pageWpt + "pt";
     docSurface.appendChild(pg);
     renderBlockList(pg, templateBlocks.filter(b => b.txbx != null), tokens);
@@ -4466,9 +5028,8 @@
   }
 
   // Mark blocks dirty as they're edited (delegated — blocks re-render freely).
-  docSurface.addEventListener("input", (e) => {
-    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
-    if (!el) return;
+  /** One paragraph's dirty / empty / warning state, recomputed from what is in the DOM now. */
+  function syncBlock(el) {
     // A NUMBERED TERMS CLAUSE CANNOT BE EMPTIED. Refused right here, so the estimator sees the
     // refusal instead of discovering it as a bare "1." in a signed contract. Everything below
     // then runs against the restored paragraph, which is why this is not an early return.
@@ -4483,10 +5044,41 @@
     // ⚠ reminder when an edited free paragraph carries a price ($) or an SF/LF
     // area measure (covers the gyp/GC price rows, which edit as plain paragraphs).
     el.classList.toggle("tw-dirty-warn", changed && /\$\s?\d|\bSF\b|\bLF\b/i.test(cur));
+  }
+
+  /** ONE EDIT, THE WHOLE BOX. Because the box is the editing host, a single keystroke can change
+   *  more than one line -- a Delete over a three-line selection is one `input` event -- and a
+   *  handler that only looked at the caret's own line would leave the other two edited on screen
+   *  and unedited in the draft.
+   *
+   *  The caret's line is always synced. The box's OTHER paragraphs are synced too, but only where
+   *  a pristine text was recorded for them: without one, the `cur !== pristine` test compares
+   *  against `undefined` and would paint every untouched paragraph in the box as dirty. That
+   *  guard is what keeps the sweep from inventing edits. */
+  docSurface.addEventListener("input", (e) => {
+    const box = editingBox(e.target);
+    if (!box) return;
+    const el = lineTarget(e);
+    const caretBlock = el && el.classList.contains("tw-block") ? el : null;
+    if (caretBlock) syncBlock(caretBlock);
+    box.querySelectorAll(".tw-block").forEach(b => {
+      if (b !== caretBlock && pristineById.has(Number(b.dataset.id))) syncBlock(b);
+    });
+    // The three computed families, each through its own channel, and only when this box actually
+    // holds one of them -- a WORK-box edit has no business rewriting the price overrides.
+    if (systemPreviewEl.isConnected && box.contains(systemPreviewEl)) syncSystemRows();
+    if (notesPreviewEl.isConnected && box.contains(notesPreviewEl)) syncNotesFromDom();
+    // BY ID, not by selector. `querySelectorAll("#price-lines-block")` reads naturally but ties
+    // the sweep to id-selector support in every DOM this code runs under, harnesses included;
+    // getElementById plus a containment test says the same thing and cannot be over-matched.
+    [document.getElementById("price-lines-block"),
+     document.getElementById("base-bid-row")].forEach(root => {
+      if (root && box.contains(root)) syncPriceLinesIn(root);
+    });
     schedulePersistOverrides();
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
-    if (el.closest(".tw-terms-page")) scheduleRepaginate();
+    if (box.classList.contains("tw-terms-page")) scheduleRepaginate();
   });
 
   // ── Wire the formatting ribbon to the focused block ───────────────────────
@@ -4495,8 +5087,25 @@
   // one appear out of nowhere and vanish again.
   idleFmtBar();
 
+  // Typing, clicking or moving the caret means the box selection is over. Registered before the
+  // focusin handler below so the class is gone by the time the ribbon re-renders.
+  docSurface.addEventListener("mousedown", () => { clearBoxSel(); lastSelectAll = null; });
+  docSurface.addEventListener("input", () => { clearBoxSel(); lastSelectAll = null; });
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !boxSel) return;
+    // Stop here: the window handler below this one collapses an expanded text box, and somebody
+    // dismissing a selection is not asking for the box they are reading to fold shut.
+    e.stopPropagation();
+    clearBoxSel();
+  }, true);
+
   docSurface.addEventListener("focusin", (e) => {
-    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    // From the CARET, not the focused element. Focus now lands on the box, once, and then stays
+    // there while the estimator moves between its paragraphs -- so the focused element says
+    // nothing about which paragraph the ribbon should act on. (selectionchange, below, is what
+    // keeps it aimed as the caret moves within a box that already has focus.)
+    const line = lineTarget(e);
+    const el = line && line.classList.contains("tw-block") ? line : null;
     // A non-block editable inside the document — a `.tw-line-edit` price line, a box tool — is a
     // channel the run formatting cannot reach, so the ribbon lets go of its target rather than
     // staying aimed at whichever paragraph came before it.
@@ -4516,6 +5125,15 @@
   // a ribbon at the top of the page land on the words highlighted down in the document.
   document.addEventListener("selectionchange", () => {
     if (_fmtBusy) return;
+    // MOVING THE CARET BETWEEN PARAGRAPHS IS NOW A SELECTION CHANGE AND NOTHING ELSE. It used to
+    // be a focusin per paragraph, because each one was its own editing host; with one host per box
+    // no focus event fires at all, so this is the only place that can re-aim the ribbon. It aims
+    // at the caret's own paragraph rather than re-checking the remembered one.
+    const line = lineAtSelection();
+    if (line && line.classList.contains("tw-block") && docSurface.contains(line)) {
+      showFmtBar(line);
+      return;
+    }
     const el = fmtTargetBlock();
     if (!el) return;
     const sel = window.getSelection();
@@ -4526,9 +5144,40 @@
 
   docSurface.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (String(e.key).toLowerCase() === "a") {
+      // EITHER FAMILY. This used to look for `.tw-block` only, so pressing Ctrl+A anywhere in the
+      // PRICE box found nothing and looked broken -- which is exactly what Hanz reported.
+      const el = lineTarget(e);
+      if (!el) return;
+      e.preventDefault();
+      // Already got the line? Widen to the box. Otherwise take the line first -- which is what
+      // the browser would have done anyway, done explicitly so the SECOND press has a state to
+      // recognise rather than depending on what the browser left behind.
+      // Second press on the SAME line -- or any press while a box is already held -- widens.
+      if (boxSel || lastSelectAll === el || wholeLineSelected(el)) {
+        boxSel = boxLines(el);
+        lastSelectAll = null;
+        paintBoxSel();
+        // A REAL BROWSER SELECTION over the whole box, not just a painted class. This is what the
+        // one-host change buys: the range can span every paragraph, so Delete, a paste, a typed
+        // character and a ribbon press all act on the box through the ordinary paths instead of
+        // each needing to know about `boxSel`. The class stays as the cue that survives the caret
+        // moving on.
+        selectRangeAcross(boxSel);
+        if (el.classList.contains("tw-block")) showFmtBar(el);
+      } else {
+        clearBoxSel();
+        lastSelectAll = el;
+        const total = runsLength(editRuns(el));
+        if (total) placeSelection(el, 0, total);
+        if (el.classList.contains("tw-block")) showFmtBar(el);
+      }
+      return;
+    }
     const key = { b: "bold", i: "italic", u: "underline" }[String(e.key).toLowerCase()];
     if (!key) return;
-    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    const line = lineTarget(e);
+    const el = line && line.classList.contains("tw-block") ? line : null;
     if (!el) return;
     // Stop the browser's own handler: it runs execCommand, which emits <b>/<i>/<u> tags that
     // `fmtAt` cannot read — the formatting would show on screen and reach the .docx as nothing.
@@ -4546,18 +5195,107 @@
   // thing. Ctrl/Cmd/Alt+Enter belong to other people and are left alone.
   docSurface.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
-    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    // EVERY FAMILY NOW, not just template paragraphs. The computed lines used to let the browser
+    // handle Enter, which was survivable while each of them was its own editing host: the worst it
+    // could do was leave a stray <div> inside one line. Inside a box-wide host the browser's Enter
+    // SPLITS the paragraph into two elements instead -- and a second `<p data-sys-line="area">` is
+    // a row the writer has no channel for, so half the estimator's line would reach the customer
+    // and half would vanish. One break inside one element is the only shape this editor can send.
+    const el = lineTarget(e);
     if (!el) return;
+    const lines = selectionLines();
+    if (lines.length > 1) {                 // a break replacing a multi-line selection
+      e.preventDefault();
+      spliceLines(lines, [{ text: "\n", tok: null }]);
+      return;
+    }
     const sel = selectionRange(el);
-    if (!sel) return;                       // caret not readable — leave Enter to the browser
+    if (!sel) { e.preventDefault(); return; }   // caret unreadable: refuse rather than let the
+                                                // browser split the paragraph
     e.preventDefault();
     const caret = insertBreakAt(el, sel[0], sel[1]);
     placeSelection(el, caret, caret);
-    markEdited(el, false);                  // a break is text, not formatting
+    if (el.classList.contains("tw-block")) markEdited(el, false);   // a break is text, not format
+    else el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  /** Backspace at the very start of a line takes the LIST FORMATTING off, one rung at a time.
+   *
+   *  Hanz, 2026-08-25: "When I back space, it doesnt remove the bullet point."
+   *
+   *  It did nothing at all, and the reason is structural rather than a missing branch. Every
+   *  `.tw-block` is its own editing host (`renderBlock` sets contentEditable per block;
+   *  #doc-surface has none), so a browser cannot merge or delete across the boundary — Backspace
+   *  at offset 0 has nowhere to go and is silently dropped. That same structure is what stops two
+   *  paragraphs ever merging into one, which is worth keeping: a `.tw-block` IS one Word
+   *  paragraph, identified by an id from the backend's walk, and the editor cannot invent a
+   *  second one.
+   *
+   *  So Backspace at offset 0 does what Word does with the space it has: removes the bullet
+   *  first, then walks the indent back to the margin, and only then gives up. The ladder is
+   *  deliberate — in Word, Backspace on a bulleted line un-bullets it before it starts eating the
+   *  indent, and an estimator pressing Backspace on a bullet is asking for the bullet to go.
+   *
+   *  Everything here is `paraAction`, the same call the ribbon's Bullet and Outdent buttons make,
+   *  so this route cannot drift from them: it inherits the locked-clause refusal (un-bulleting a
+   *  numbered TERMS clause renumbers the contract), the override persistence, and the terms
+   *  repagination. The only thing it adds is the keystroke.
+   *
+   *  NOT handled, on purpose: the synthesized `{{#system}}` rows and the notes/price lines have no
+   *  paragraph record at all (no `dataset.id`, no `paraNow` state), so there is no bullet state to
+   *  turn off — `paraNow` misses and this returns without preventing the default, leaving them
+   *  exactly as they were. */
+  /** Delete or Backspace with a box selected: empty every line in it, in one go.
+   *
+   *  Each block is cleared through the same run algebra a hand-delete uses and then dispatches the
+   *  page's own `input` event, so the dirty flags, the override persistence and the emptied-clause
+   *  protection all run per block exactly as they would if somebody had cleared them one at a
+   *  time. `collectOverrides` already handles N emptied blocks -- it emits one entry each -- and
+   *  `blanksANumberedClause` still filters a numbered TERMS clause out of the payload, so a
+   *  box-wide delete cannot renumber the contract. */
+  docSurface.addEventListener("keydown", (e) => {
+    if (!boxSel || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    if (e.key !== "Backspace" && e.key !== "Delete") return;
+    e.preventDefault();
+    const els = boxSel.slice();
+    clearBoxSel();
+    els.forEach(clearBoxLine);
+    if (els.length) scheduleRepaginate();
+  });
+
+  docSurface.addEventListener("keydown", (e) => {
+    const back = e.key === "Backspace", fwd = e.key === "Delete";
+    if ((!back && !fwd) || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    const el = lineTarget(e);
+    if (!el) return;
+    const sel = selectionRange(el);
+    if (!sel) return;
+    // A selection means "delete these characters" and mid-line is the browser's job; both fall
+    // through. What must NOT fall through is a collapsed caret at a line BOUNDARY, which is where
+    // the browser would merge this paragraph into its neighbour.
+    if (sel[0] !== sel[1]) return;
+    const atStart = sel[0] === 0;
+    const atEnd = sel[1] >= runsLength(editRuns(el));
+    if (back && atStart && el.classList.contains("tw-block")) {
+      const now = paraNow(Number(el.dataset.id));
+      // The ladder: bullet first, then the indent, then stop. `paraAction` decides whether the
+      // change is allowed and reports it; only a change consumes the keystroke.
+      const rung = now && !now.locked ? (now.bullet ? "bullet" : (now.indent > 0 ? "outdent" : null)) : null;
+      if (rung && paraAction(el, rung)) { e.preventDefault(); return; }
+    }
+    // NO MERGE, EVER, and this is the load-bearing line of the whole change. A .tw-block IS one
+    // Word paragraph, identified by an id the backend's walk produced and applied by POSITION to a
+    // pristine template at generate time. Merging two of them destroys an id, and every override
+    // after it in the box lands on the wrong paragraph of the document the customer signs. While
+    // each paragraph was its own editing host the browser could not do it; now that the box is the
+    // host it can, so the keystroke is refused instead. (Refusing is also what the estimator
+    // already sees today, so nothing he relies on changes.)
+    if ((back && atStart) || (fwd && atEnd)) e.preventDefault();
   });
 
   docSurface.addEventListener("paste", (e) => {
-    const el = e.target && e.target.closest ? e.target.closest(".tw-block") : null;
+    const line = lineTarget(e);
+    const el = line && line.classList.contains("tw-block") ? line : null;
     if (!el) return;
     e.preventDefault();
     const dt = e.clipboardData;
@@ -4571,6 +5309,14 @@
     if (!ins.length) return;
     const sel = selectionRange(el);
     if (!sel) return;
+    const across = selectionLines();
+    if (across.length > 1) {
+      // Pasted over several paragraphs at once: the content lands in the first and the rest are
+      // emptied, every element intact. See spliceLines for why a merge is not an option.
+      spliceLines(across, ins);
+      showFmtBar(el);
+      return;
+    }
     const merged = F.spliceRuns(editRuns(el), sel[0], sel[1], ins);
     renderRuns(el, merged);
     const caret = sel[0] + runsLength(ins);
@@ -4581,6 +5327,60 @@
     showFmtBar(el);
   });
 
+  /** THE MERGE GUARD, for every edit that does not arrive as a keystroke.
+   *
+   *  Typing a character over a three-line selection, an IME commit, a drag-and-drop inside the
+   *  box, a spell-check replacement, a context-menu Delete: none of those are visible to a keydown
+   *  handler, and all of them would have the browser collapse the selected paragraphs into one
+   *  element. See spliceLines for why that corrupts the customer's document. So the browser's own
+   *  version is refused and the same edit is applied by hand, every paragraph left standing.
+   *
+   *  A COLLAPSED caret short-circuits immediately, which is the common case -- ordinary typing
+   *  pays nothing for this. The only collapsed edits examined are the two that would merge a
+   *  paragraph into its neighbour, and those are already refused on keydown; this is the same
+   *  refusal for the routes that never touch the keyboard. */
+  docSurface.addEventListener("beforeinput", (e) => {
+    if (!editingBox(e.target)) return;
+    const type = String(e.inputType || "");
+    // An IME owns its range while composing; the commit lands as a separate event and is handled
+    // there like any other insert.
+    if (type === "insertCompositionText") return;
+    const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    if (r.collapsed) {
+      if (type !== "deleteContentBackward" && type !== "deleteContentForward") return;
+      const el = lineAtSelection();
+      if (!el) return;
+      const one = selectionRange(el);
+      if (!one) return;
+      const total = runsLength(editRuns(el));
+      if ((type === "deleteContentBackward" && one[0] === 0)
+          || (type === "deleteContentForward" && one[1] >= total)) e.preventDefault();
+      return;
+    }
+    // BOTH ENDS IN THE SAME LINE means the browser's own edit cannot cross a paragraph, so it is
+    // left alone -- and, more importantly, left alone WITHOUT reading the selection first. Reading
+    // it means inserting and removing the two markers and then re-placing the range, and doing
+    // that inside `beforeinput` -- before the browser has applied the edit it is asking about --
+    // moves the very range that edit is about to use. Two `closest()` calls answer the question
+    // without touching anything.
+    const startEl = r.startContainer && r.startContainer.nodeType === 1
+      ? r.startContainer : (r.startContainer && r.startContainer.parentNode);
+    const endEl = r.endContainer && r.endContainer.nodeType === 1
+      ? r.endContainer : (r.endContainer && r.endContainer.parentNode);
+    const oneLine = lineAt(startEl);
+    if (oneLine && oneLine === lineAt(endEl)) return;
+    let lines;
+    try { lines = selectionLines(); } catch { lines = []; }
+    if (lines.length <= 1) return;
+    e.preventDefault();
+    const data = e.data != null ? String(e.data)
+                 : (e.dataTransfer ? String(e.dataTransfer.getData("text/plain") || "") : "");
+    const ins = type.indexOf("delete") === 0 || !data ? [] : [{ text: data, tok: null }];
+    spliceLines(lines, ins);
+  });
+
   // ── Editable estimate-sourced fills: WORK systems ──────────────────────
   // systemPreviewEl is a stable element (its children are rewritten, but it
   // itself is never replaced), so one delegated listener survives every
@@ -4588,9 +5388,25 @@
   // that whole line as a display-only override into state.system_overrides
   // (dense, by option index). It never touches cell_values or pricing.
   let _sysOvTimer = null;
-  systemPreviewEl.addEventListener("input", (e) => {
-    const sp = e.target && e.target.closest ? e.target.closest("[data-sys-line]") : null;
-    if (!sp) return;
+  /** Every {{#system}} row in the WORK box -> its display-only override.
+   *
+   *  Whole-container, because the box is one editing host: a Delete across three rows is a single
+   *  `input` event, and a handler that only read the caret's own row would leave the other two
+   *  edited on screen and unedited in the draft. Reading the DOM makes it idempotent, so running
+   *  it twice for one keystroke -- once from the surface, once from the container listener a
+   *  harness scenario drives -- costs nothing and changes nothing. */
+  function syncSystemRows() {
+    if (!systemPreviewEl || !systemPreviewEl.querySelectorAll) return;
+    systemPreviewEl.querySelectorAll("[data-sys-line]").forEach(syncSystemRow);
+    queueSysOvSave();
+  }
+
+  function queueSysOvSave() {
+    if (_sysOvTimer) clearTimeout(_sysOvTimer);
+    _sysOvTimer = setTimeout(() => { try { TW.setState({ system_overrides: state.system_overrides }); } catch {} }, 500);
+  }
+
+  function syncSystemRow(sp) {
     const i = Number(sp.dataset.sysIndex);
     const field = sp.dataset.sysLine;
     // The field whitelist, mirroring the backend's. An unrecognized key would be
@@ -4608,11 +5424,12 @@
     const v = serializeBlock(sp);
     if (!v.trim() || v === (sp.dataset.computed || "")) delete ovs[i][field];   // empty / back-to-computed -> revert
     else ovs[i][field] = v;
-    if (_sysOvTimer) clearTimeout(_sysOvTimer);
-    _sysOvTimer = setTimeout(() => { try { TW.setState({ system_overrides: state.system_overrides }); } catch {} }, 500);
-  });
-  systemPreviewEl.addEventListener("focusout", (e) => {
-    if (!systemPreviewEl.contains(e.relatedTarget)) renderSystemPreview();   // normalize + apply reverts
+  }
+
+  systemPreviewEl.addEventListener("input", (e) => {
+    const sp = e.target && e.target.closest ? e.target.closest("[data-sys-line]") : null;
+    if (sp) { syncSystemRow(sp); queueSysOvSave(); return; }
+    syncSystemRows();
   });
 
   // ── Editable estimate-sourced fills: NOTES bullets ─────────────────────
@@ -4620,7 +5437,11 @@
   // truth). Writing textarea.value programmatically fires NO form 'input'
   // event, so this never loops back through refreshDocumentFills.
   let _notesOvTimer = null;
-  notesPreviewEl.addEventListener("input", () => {
+  /** The NOTES bullets -> the sidebar textarea, which is their single source of truth.
+   *
+   *  Already whole-container (it re-reads every bullet), which is exactly the shape the other two
+   *  families needed; named so the surface-level handler can call it. */
+  function syncNotesFromDom() {
     const ta = document.getElementById("notes-text");
     if (!ta) return;
     const lines = [];
@@ -4639,10 +5460,8 @@
     try { fitNotesBox(); } catch {}
     if (_notesOvTimer) clearTimeout(_notesOvTimer);
     _notesOvTimer = setTimeout(() => { try { TW.setState({ notes_text: ta.value }); } catch {} }, 300);
-  });
-  notesPreviewEl.addEventListener("focusout", (e) => {
-    if (!notesPreviewEl.contains(e.relatedTarget)) renderNotesPreview();   // re-split Enter'd lines
-  });
+  }
+  notesPreviewEl.addEventListener("input", syncNotesFromDom);
 
   // ── Editable PRICE-line DISPLAY overrides (state.price_overrides) ───────
   // Delegated on the STABLE containers: #price-lines-block (option + manual
@@ -4663,6 +5482,30 @@
     if (!pov.lines || typeof pov.lines !== "object" || Array.isArray(pov.lines)) pov.lines = {};
     return pov;
   }
+  /** Every whole-line PRICE row in a container -> state.price_overrides.lines.
+   *
+   *  The legacy per-field islands are deliberately not swept: the current UI does not emit them,
+   *  and they key off the event target rather than the DOM, so there is nothing to re-read. */
+  function syncPriceLinesIn(root) {
+    if (!root || !root.querySelectorAll) return;
+    let touched = false;
+    root.querySelectorAll("[data-po-kind=\"line\"][data-po-linekey]").forEach(lineNode => {
+      const key = lineNode.dataset.poLinekey;
+      if (!key) return;
+      const v = serializeBlock(lineNode);
+      const pov = _ensurePov();
+      if (v.trim() === "" || v === (lineNode.dataset.computed || "")) delete pov.lines[key];
+      else pov.lines[key] = v;
+      touched = true;
+    });
+    if (touched) queuePovSave();
+  }
+
+  function queuePovSave() {
+    if (_povTimer) clearTimeout(_povTimer);
+    _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
+  }
+
   function _handlePoInput(e) {
     // WHOLE-LINE edit: the whole <p> is contenteditable (base / tax / total /
     // combo / option / manual / alternate / headings). Store the full line text
@@ -4687,8 +5530,7 @@
       const pov = _ensurePov();
       if (v.trim() === "" || v === (lineNode.dataset.computed || "")) delete pov.lines[key];
       else pov.lines[key] = v;
-      if (_povTimer) clearTimeout(_povTimer);
-      _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
+      queuePovSave();
       return;
     }
     // Legacy per-field islands (retained for back-compat; not emitted by the

@@ -301,7 +301,11 @@ class Ev {
 }
 
 function makeDoc() {
-  const doc = { activeElement: null, querySelectorAll: () => [] };
+  // getElementById returns null, which is the truthful answer for a harness that mounts no pricing
+  // rail and no notes textarea: the box-wide input sweep asks for #price-lines-block, #base-bid-row
+  // and #notes-text by id and skips whichever are absent. Without the method at all the sweep
+  // throws mid-format, which is exactly how this was found.
+  const doc = { activeElement: null, querySelectorAll: () => [], getElementById: () => null };
   doc.createElement = (t) => new El(t, doc);
   doc.body = new El("body", doc);
   return doc;
@@ -341,6 +345,10 @@ const LIFTED = [
   fn("runsArePlain"), fn("markEdited"),
   fn("selectionFormat"), fn("applyFormat"), fn("toggleFormat"),
   fn("paraBase"), fn("paraNow"), fn("paraPatch"), fn("sanitizeParaPatch"),
+  // applyParaGeom is where the paragraph's real geometry now lands -- left/hanging/first-line
+  // and the file's own line spacing. Lifted rather than stubbed: applyParaToEl delegates to it,
+  // so a stub would leave the indent arithmetic (bullet at left-hanging) untested.
+  fn("applyParaGeom"),
   fn("applyParaToEl"), fn("setParaState"),
   topConst("overrideKey"), fn("mergeOverrideEntry"), topConst("liveKey"),
   fn("savedOverridesFor"), fn("restoreSavedOverrides"),
@@ -349,6 +357,12 @@ const LIFTED = [
   // harness that imitated it would be testing the imitation.
   fn("schedulePersistOverrides"),
   fn("refreshFillsInPlace"), fn("refreshDocumentFills"),
+  // The input handler became a BOX SWEEP when the box became the editing host: one keystroke can
+  // change several paragraphs, so it syncs the caret's own line and then every other line in the
+  // box that has a pristine text recorded. syncBlock is the per-paragraph half, lifted; the four
+  // resolvers are how it finds the caret's line now that the event target is the box.
+  topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
+  fn("syncBlock"),
 ].join("\n\n");
 
 const INPUT_HANDLER = delegated("  // Mark blocks dirty as they're edited (delegated");
@@ -409,6 +423,14 @@ function makePage(label) {
     const renderSystemPreview = () => {};
     const renderNotesPreview = () => {};
     const scheduleRepaginate = () => {};
+    // The computed families live in doc-editor-labels-harness.js, which builds that world. These
+    // two are DETACHED elements on purpose: the sweep only runs a family's channel when the edited
+    // box contains its container, so an unmounted container is the truthful "this box holds none".
+    const systemPreviewEl = new El("div", document);
+    const notesPreviewEl = new El("div", document);
+    const syncSystemRows = () => {};
+    const syncNotesFromDom = () => {};
+    const syncPriceLinesIn = () => {};
     const form = null;
     // The token values the sidebar currently resolves to. Settable, because "the estimator
     // changed the square footage" is one of the things under test.

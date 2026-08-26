@@ -779,8 +779,13 @@ button {
 #base-bid-row .tw-fill, #price-lines-block .tw-fill { white-space: pre; }
 /* Editable NOTES bullet — a real bullet that also takes the caret. */
 .tw-note-edit { outline: none; cursor: text; }
-.tw-note-edit:hover { background: rgba(200, 16, 46, 0.05); }
-.tw-note-edit:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.4); }
+/* THE PER-LINE FOCUS RING IS GONE, and so is the per-line hover tint. Hanz, 2026-08-26: "just
+   make every Major section of the proposal textbox just one BIG TEXT BOX not One big and some
+   smaller textboxes." These two rules were what drew the smaller boxes -- a 1px ring around
+   whichever line had the caret and a tint around whichever one the mouse was over. With one
+   editing host per box there is also nothing left for `:focus` to match: focus lands on the box,
+   never on a line inside it, so the rule would be dead even if it were wanted. The cue moved to
+   `.tw-txbx:focus-within` below, where the editing region actually is. */
 /* A blank NOTES line = Word-style vertical spacing: no bullet, but keep enough
    height that it stays visible + clickable so the estimator can edit it. */
 .tw-note-blank { list-style: none; min-height: 0.95em; }
@@ -796,8 +801,7 @@ button {
   cursor: text;
   border-radius: 2px;
 }
-.tw-line-edit:hover { background: rgba(200, 16, 46, 0.05); }
-.tw-line-edit:focus { background: #fffdf0; box-shadow: 0 0 0 1px rgba(158, 0, 31, 0.4); }
+/* Same removal, same reason as `.tw-note-edit` above: these drew the "sub boxes". */
 .tw-line-edit:empty { min-height: 1.1em; }
 /* Edited whole-line: subtle amber wash + ⚠ reminder that it differs from the estimate. */
 .tw-line-edit.tw-overridden { background: rgba(255, 207, 63, 0.28); }
@@ -811,6 +815,43 @@ button {
 
 /* Same reminder on an edited free paragraph that carries a price ($) or an SF/LF
    area measure (e.g. the gyp/GC tax rows, which edit as plain paragraphs). */
+/* A whole-box selection. BACKGROUND ONLY, for the reason .tw-fmt-target gives: this surface is a
+   to-scale preview of a printed page registered against baked artwork, so a cue that reflowed the
+   text by a pixel would be a worse bug than the one it is reporting. Deliberately stronger than
+   the hover tint and weaker than focus -- it has to read as "these lines are selected" while the
+   caret is still visibly in one of them. */
+/* STRONG ENOUGH TO SEE. The first version was a 14% red wash, which is invisible on this page:
+   every overridden value already carries a yellow .tw-fill / .tw-overridden highlight, and a faint
+   tint underneath it reads as nothing at all -- so a selection that HAD happened looked like a
+   feature that had not. Still background-and-outline only, never geometry: this surface is a
+   to-scale preview registered against baked artwork, so a cue that reflowed the text by a pixel
+   would be the worse bug. */
+/* ── attachment chips (Files send card) ──────────────────────────────────────
+   Shared shape with the CRM drawer's chips deliberately: it is the same gesture in both places,
+   and two different-looking answers to "what have I attached?" is worse than one plain one. */
+.att-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.att-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 4px; border-radius: 8px; background: rgba(0, 0, 0, .06);
+  font-size: 12px; max-width: 260px;
+}
+.att-chip img { width: 26px; height: 26px; object-fit: cover; border-radius: 5px; display: block; }
+.att-chip .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-chip .att-size { opacity: .65; flex: none; }
+.att-x {
+  border: 0; background: none; cursor: pointer; font-size: 15px; line-height: 1;
+  padding: 0 2px; opacity: .55; color: inherit;
+}
+.att-x:hover { opacity: 1; }
+
+.tw-block.tw-boxsel, .tw-line-edit.tw-boxsel {
+  background: rgba(158, 0, 31, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(158, 0, 31, 0.45);
+}
+/* The computed lines get the same cue: a selection is about what the estimator can see, not
+   about which save channel a row uses. Same background-only rule, for the same reason.
+   `.tw-line-edit` already carries its own hover and focus tints, and this has to outrank the
+   hover one -- two classes to its one. */
 .tw-block.tw-dirty-warn::after {
   content: " \26A0";
   font-size: 0.75em;
@@ -844,6 +885,17 @@ button {
 }
 /* A floating text box placed at its Word anchor position. */
 .tw-txbx { position: absolute; z-index: 1; }
+/* THE EDITING REGION, and the only thing that now shows one. The box carries the contenteditable,
+   so this is where the "you are typing in here" cue belongs -- one region per major section of the
+   proposal, the way a Word text box reads.
+   `outline: none` first: a contenteditable host draws the browser's own focus ring, which on this
+   surface would be a fat blue rectangle over baked page artwork. The replacement is an outline
+   rather than a border or a background, for the reason `.tw-fmt-target` gives: this page is a
+   to-scale preview of a printed sheet, and a cue that reflowed the text by a pixel would be a
+   worse bug than any it reported. `.tw-txbx.tw-box-moved` further down scores the same and comes
+   later, so a moved box keeps its dashed outline while it has focus. */
+.tw-txbx { outline: none; }
+.tw-txbx:focus-within { outline: 1px solid rgba(158, 0, 31, 0.30); outline-offset: 2px; }
 /* THE BOX YOU ARE TYPING IN WINS ITS OWN PIXELS.
    Kyle, 2026-08-20: "There is a problem when the texboxes overlap, its hard to edit".
    Kyle's shapes genuinely overlap — Direct epoxy's WORK ends at 323.65pt and PRICE
@@ -1373,6 +1425,40 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .tw-fmtbar button[data-para="bullet"].on { color: var(--treadwell-red-dark); }
 /* Outdent at the margin, indent at the clamp: still visible, plainly not pressable. */
 .tw-fmtbar button[data-para]:disabled { opacity: 0.38; cursor: default; }
+/* The size combobox. Narrow on purpose -- it holds at most five characters ("10.5") and it used
+   to be as wide as the words "Template size". The list arrow a datalist input shows is the
+   browser's own, so the width is all we control. */
+/* The size combobox. `min-width: 0` is the load-bearing declaration, not the width.
+   Hanz, 2026-08-26: "can we make this smaller and one row only?"
+
+   A flex item's automatic minimum size is its INTRINSIC width, and an <input>'s intrinsic width
+   comes from its `size` attribute -- about twenty characters. That minimum beat `width: 54px`, so
+   the box grew to ~170px+, which with flex-wrap pushed the ribbon onto three rows. `min-width: 0`
+   lets the declared width actually apply; `flex: 0 0 auto` stops it being stretched either way. */
+/* SPECIFICITY, not the width, is what this rule is fighting.
+   Hanz, twice: "make this smaller", then "The size texbox is still too biug fix this first".
+
+   styles.css carries a global form rule -- `input[type="text"], input[type="email"], ... { width:
+   100%; display: block; margin-top: 4px }` -- and `input[type="text"]` scores (0,1,1) against a
+   lone class's (0,1,0). So it OUTRANKED `.tw-fmtsize` and `width: 100%` won; the 52px was never
+   applied, no matter how many times it was declared. `min-width: 0` was a real fix for a real
+   second problem (a flex item's automatic minimum is its intrinsic width) but it could not save a
+   width that was already losing.
+   `.tw-fmtbar input.tw-fmtsize` scores (0,2,1) and wins on specificity rather than on source
+   order, so moving the rule cannot silently un-fix it. The three declarations that global rule
+   forces are each undone explicitly: width, display and margin-top. */
+.tw-fmtbar input.tw-fmtsize {
+  flex: 0 0 auto; width: 52px; min-width: 0; max-width: 52px;
+  display: inline-block; margin: 0; height: 24px; padding: 0 4px;
+  text-align: center; border: 1px solid var(--surface-dim); border-radius: 5px;
+  background: var(--surface-lowest); color: var(--ink); font: inherit; font-size: 12px;
+  box-sizing: border-box;
+}
+.tw-fmtbar input.tw-fmtsize:disabled { opacity: .55; cursor: default; }
+/* ONE ROW. The ribbon is page chrome above a document; a row that reflows as controls come and go
+   is the thing Kyle asked to be rid of when he asked for it to stay put. Nothing here needs to
+   wrap -- there are eight controls -- so it does not. */
+.tw-fmtbar { flex-wrap: nowrap; overflow-x: auto; }
 .tw-fmtbar select {
   height: 26px;
   border: 1px solid var(--surface-dim);

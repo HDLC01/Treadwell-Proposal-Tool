@@ -2487,7 +2487,7 @@
       return `<div class="chat-card proposal ${sideOf(m)}${dead ? " is-superseded" : ""}">
         <div class="cc-title">${title}${dead ? ' <span class="cc-tag">Superseded</span>' : ""}</div>
         ${dead && meta.superseded_by ? `<div class="cc-meta">Replaced by revision ${esc(meta.superseded_by)}</div>` : ""}
-        <div class="cc-body">${esc(m.body)}</div></div>`;
+        <div class="cc-body">${esc(m.body)}</div>${attHtml(m)}</div>`;
     }
     if (m.msg_type === "deposit_request") {
       const meta = m.meta || {};
@@ -2517,9 +2517,78 @@
     // that isn't inferable, so that is what stays, next to the date.
     return `<div class="msg ${staff ? "staff" : "customer"}">
       ${who ? `<div class="who" title="${esc(m.author_email)}">${esc(who)}</div>` : ""}
-      <div class="mbody">${esc(m.body)}</div>
+      ${m.body ? `<div class="mbody">${esc(m.body)}</div>` : ""}
+      ${attHtml(m)}
       <div class="when">${t}${viaEmail ? ' <span class="via-email">via email</span>' : ""}</div>
     </div>`;
+  }
+
+  /** Human file size. Two significant figures is all anybody reads on a chip. */
+  function fileSize(n) {
+    const b = Number(n) || 0;
+    if (b < 1024) return b + " B";
+    if (b < 1024 * 1024) return Math.round(b / 1024) + " KB";
+    return (b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+  }
+
+  // file id -> object URL, so the thread's poll does not re-download every photo in the
+  // conversation on every tick. Entries outlive one render on purpose; they are cheap, bounded by
+  // how many files this estimator has actually looked at, and the alternative is a drawer that
+  // re-fetches a 4 MB slab photo every few seconds.
+  const ATT_URLS = new Map();
+
+  /** The attachments on one message.
+   *
+   *  A PICTURE IS SHOWN, not listed. The commonest attachment on a bid is a photo of a slab, and
+   *  a column of "IMG_4831.jpg" chips makes the estimator open every one to find the crack the
+   *  customer was asking about.
+   *
+   *  Rendered as PLACEHOLDERS with the id on them; hydrateAtts fills them in afterwards. A src
+   *  cannot be written straight in, because this tool authenticates with a bearer token and an
+   *  <img> tag has no way to send one -- the request would come back 401 and the thread would be
+   *  full of broken-image icons. */
+  function attHtml(m) {
+    const list = ((m.meta || {}).attachments) || [];
+    if (!list.length) return "";
+    return `<div class="att-list">` + list.map((a) => (a.image
+      ? `<a class="att-img" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#"
+            title="${esc(a.name)}"><img alt="${esc(a.name)}"></a>`
+      : `<a class="att-file" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#">
+           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+             <polyline points="14 2 14 8 20 8"/></svg>
+           <span class="att-name">${esc(a.name)}</span>
+           <span class="att-size">${fileSize(a.size)}</span></a>`)).join("") + `</div>`;
+  }
+
+  /** Fill the placeholders in, once per file, through the authenticated helper.
+   *
+   *  Failures are left alone rather than retried or announced: a picture that will not load is
+   *  visible as a picture that will not load, and a red banner over the whole thread because one
+   *  thumbnail 404'd would be the louder mistake. */
+  async function hydrateAtts(root, pid) {
+    for (const el of root.querySelectorAll("[data-att]")) {
+      const id = el.dataset.att;
+      if (!id || el.dataset.attDone) continue;
+      el.dataset.attDone = "1";
+      let url = ATT_URLS.get(id);
+      if (!url) {
+        try {
+          const r = await api(`/api/portal/proposal/${encodeURIComponent(pid)}/file/${encodeURIComponent(id)}`);
+          if (!r.ok) continue;
+          url = URL.createObjectURL(await r.blob());
+          ATT_URLS.set(id, url);
+        } catch { continue; }
+      }
+      const img = el.querySelector("img");
+      if (img) img.src = url;
+      el.href = url;
+      // An image opens in a tab; anything else downloads under its real name. Set here rather
+      // than in the markup because the object URL is what both of them point at.
+      if (img) el.target = "_blank";
+      else el.download = el.dataset.attName || "attachment";
+    }
   }
 
   // ── follow-up section ──────────────────────────────────────────────────────
@@ -3525,7 +3594,20 @@
           <div id="chat-compose">
             <div id="reply-alert" class="note"></div>
             <textarea id="reply-body" placeholder="Reply to the customer…">${esc(REPLY_DRAFT[pid] || "")}</textarea>
-            <div class="row3"><button class="btn btn-p" id="reply-btn">Send reply</button></div>
+            <div id="reply-atts" class="att-strip" hidden></div>
+            <input type="file" id="reply-file" multiple hidden
+                   accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt">
+            <div class="row3">
+              <button type="button" class="btn btn-s icon-btn" id="reply-attach"
+                      title="Attach a photo or file">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                </svg>
+                Attach
+              </button>
+              <button class="btn btn-p" id="reply-btn">Send reply</button>
+            </div>
           </div>
         </div>
        </div>
@@ -3638,16 +3720,105 @@
 
     $("reply-body").addEventListener("input", (e) => { REPLY_DRAFT[pid] = e.target.value; });
 
+    // Files picked but not yet sent, for THIS project. Uploaded on pick rather than on send, so a
+    // 15 MB photo travels while the estimator is still typing instead of turning "Send reply"
+    // into a long silent wait. An upload nobody sends is inert: the fetch route serves only ids
+    // that appear on a message in this proposal's thread.
+    let pendingAtt = [];
+
+    function drawPendingAtt() {
+      const strip = $("reply-atts");
+      if (!strip) return;
+      strip.innerHTML = pendingAtt.map((a, i) => `
+        <span class="att-chip${a.pending ? " is-uploading" : ""}${a.error ? " is-error" : ""}">
+          ${a.image && a.preview ? `<img src="${a.preview}" alt="">` : ""}
+          <span class="att-name">${esc(a.name)}</span>
+          <span class="att-size">${a.error ? esc(a.error) : (a.pending ? "uploading…" : fileSize(a.size))}</span>
+          <button type="button" class="att-x" data-att-remove="${i}" aria-label="Remove">&times;</button>
+        </span>`).join("");
+      strip.hidden = !pendingAtt.length;
+    }
+
+    $("reply-atts").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-att-remove]");
+      if (!b) return;
+      const i = Number(b.dataset.attRemove);
+      if (pendingAtt[i] && pendingAtt[i].preview) URL.revokeObjectURL(pendingAtt[i].preview);
+      pendingAtt.splice(i, 1);
+      drawPendingAtt();
+    });
+
+    async function uploadAtt(entry, file) {
+      try {
+        // Through `api`, not a bare fetch: it is what carries the bearer token, and it merges
+        // headers rather than replacing them, so setting Content-Type here does not drop it.
+        const r = await api(
+          `/api/portal/proposal/${encodeURIComponent(pid)}/upload?name=${encodeURIComponent(file.name || "attachment")}`,
+          { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false || !j.file) throw new Error(j.error || "could not upload");
+        Object.assign(entry, j.file, { pending: false });
+      } catch (err) {
+        // The chip STAYS and says what went wrong, on the file it went wrong for. A banner could
+        // not say which of three photos was the problem, which is the only thing worth knowing.
+        entry.pending = false;
+        entry.error = String(err.message || "could not upload").slice(0, 60);
+      }
+      drawPendingAtt();
+    }
+
+    function addAtt(files) {
+      for (const f of Array.from(files || [])) {
+        if (pendingAtt.length >= 10) break;
+        const image = /^image\//.test(f.type || "");
+        const entry = { name: f.name || "attachment", size: f.size, mime: f.type, image,
+                        pending: true,
+                        // The LOCAL file for the thumbnail, so it appears at once rather than
+                        // waiting on the round trip it is there to reassure you about.
+                        preview: image ? URL.createObjectURL(f) : "" };
+        pendingAtt.push(entry);
+        uploadAtt(entry, f);
+      }
+      drawPendingAtt();
+    }
+
+    $("reply-attach").addEventListener("click", () => $("reply-file").click());
+    $("reply-file").addEventListener("change", (e) => { addAtt(e.target.files); e.target.value = ""; });
+    // Drag a photo onto the composer, or paste a screenshot straight in. Both are how people
+    // actually move a picture into a chat; neither is discoverable, so the button stays.
+    const comp = $("chat-compose");
+    ["dragenter", "dragover"].forEach((k) => comp.addEventListener(k, (e) => {
+      if (!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files"))) return;
+      e.preventDefault(); comp.classList.add("drop-on");
+    }));
+    ["dragleave", "drop"].forEach((k) => comp.addEventListener(k, (e) => {
+      if (k === "drop") { e.preventDefault(); addAtt(e.dataTransfer && e.dataTransfer.files); }
+      comp.classList.remove("drop-on");
+    }));
+    $("reply-body").addEventListener("paste", (e) => {
+      const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+      if (files.length) { e.preventDefault(); addAtt(files); }
+    });
+
     $("reply-btn").addEventListener("click", async () => {
       const body = $("reply-body").value.trim();
-      if (!body) return;
+      const ready = pendingAtt.filter((a) => a.id && !a.pending && !a.error);
+      // A PHOTO ON ITS OWN IS A MESSAGE — the same rule the customer's side follows.
+      if (!body && !ready.length) return;
+      if (pendingAtt.some((a) => a.pending)) {
+        $("reply-alert").textContent = "One moment — still uploading.";
+        return;
+      }
       const btn = $("reply-btn"); btn.disabled = true; btn.textContent = "Sending…";
       try {
         const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/reply",
-          { method: "POST", body: JSON.stringify({ body }) });
+          { method: "POST", body: JSON.stringify({ body, attachments:
+            ready.map((a) => ({ id: a.id, name: a.name, mime: a.mime, size: a.size })) }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
         delete REPLY_DRAFT[pid];
+        pendingAtt.forEach((a) => { if (a.preview) URL.revokeObjectURL(a.preview); });
+        pendingAtt = [];
         // Sending is a deliberate "take me to the newest message". Pin the thread to the bottom
         // BEFORE the repaint so renderDetail's capture records atBottom, and your own reply is
         // followed down instead of the view holding wherever you were reading.
@@ -3660,6 +3831,11 @@
       }
     });
 
+    // The pictures, after the markup exists. Deliberately NOT awaited: a thread with six photos
+    // in it would otherwise hold the whole drawer closed until the last one arrived, and each
+    // placeholder fills itself in as it lands. Cached by file id, so the poll's re-render costs
+    // nothing after the first pass.
+    hydrateAtts($("thread") || document, pid);
     applySecPanel();   // after EVERY render — see the note on SEC_ELIGIBLE
   }
 

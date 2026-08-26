@@ -147,8 +147,22 @@ def test_the_work_rows_are_bulleted_by_a_numbering_level_that_owns_their_indent(
         assert _ind(p_elem) is None, (label, _ind(p_elem))
         # `marker` is empty on a bullet row: the two fields are the two halves of "what shows in
         # front of the text" and are never both set.
-        assert pw.para_props(d, p_elem) == {"bullet": True, "indent": 288, "locked": False,
-                                            "marker": ""}
+        # THE SUBJECT OF THIS TEST IS THE INDENT, and `hanging` is the half that was missing.
+        # This row is bulleted by a NUMBERING LEVEL that owns both halves (left=288 hanging=288),
+        # so the text sits at 288tw and the marker at 0. The editor used to read `left` alone and
+        # put the bullet where the text belongs, which is what made the WORK rows look nested.
+        got = pw.para_props(d, p_elem)
+        # Spacing is checked for SHAPE, not for one value: these rows genuinely differ in the
+        # file (1.15 on System/Texture/Scope, 1.25 on the rest), and pinning a single number
+        # here would make the test about the wrong thing while breaking on the next row.
+        sp = got.pop("spacing")
+        assert got == {
+            "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
+            "locked": False, "marker": "",
+        }
+        assert sp["line_rule"] == "auto" and sp["line"] in (276, 300), sp
+        assert sp["before"] is None and sp["after"] is None, (
+            "the WORK box has no paragraph spacing at all; exporting one invents a gap")
 
 
 def test_the_terms_clauses_are_a_decimal_list_the_override_channel_can_reach():
@@ -220,8 +234,22 @@ def test_switching_the_bullet_back_on_hands_the_indent_back_to_the_list_level():
     assert _ind(p_elem) is None, (
         "the paragraph is stating its own left indent again, so it has no hanging indent and "
         "the red square prints in the middle of the line: %r" % (_ind(p_elem),))
-    assert pw.para_props(d, p_elem) == {"bullet": True, "indent": 288, "locked": False,
-                                        "marker": ""}
+    # THE SUBJECT OF THIS TEST IS THE INDENT, and `hanging` is the half that was missing.
+    # This row is bulleted by a NUMBERING LEVEL that owns both halves (left=288 hanging=288),
+    # so the text sits at 288tw and the marker at 0. The editor used to read `left` alone and
+    # put the bullet where the text belongs, which is what made the WORK rows look nested.
+    got = pw.para_props(d, p_elem)
+    # Spacing is checked for SHAPE, not for one value: these rows genuinely differ in the
+    # file (1.15 on System/Texture/Scope, 1.25 on the rest), and pinning a single number
+    # here would make the test about the wrong thing while breaking on the next row.
+    sp = got.pop("spacing")
+    assert got == {
+        "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
+        "locked": False, "marker": "",
+    }
+    assert sp["line_rule"] == "auto" and sp["line"] in (276, 300), sp
+    assert sp["before"] is None and sp["after"] is None, (
+        "the WORK box has no paragraph spacing at all; exporting one invents a gap")
 
 
 def test_an_unchanged_paragraph_state_changes_nothing_at_all():
@@ -403,7 +431,7 @@ def test_generate_survives_malformed_para_values():
 # ══ seam 2: the browser has to be able to READ the state ═════════════════════
 # The keys the frontend's paraBase() reads. Grown without the version bump, a browser replaying
 # a cached response has no `locked` and would happily offer to un-bullet a contract clause.
-_BLOCK_KEYS_AT_V6 = {
+_BLOCK_KEYS_AT_V7 = {
     "id", "kind", "text", "style", "in_block", "in_txbx", "txbx",
     "align", "list", "price_flat", "para", "runs",
 }
@@ -411,7 +439,13 @@ _BLOCK_KEYS_AT_V6 = {
 # when a nested one grows, and v6 grew a nested one: `marker`. A browser holding a v5 response has
 # every block's `para` without it, and the renderer's fallback for a marker-less list paragraph is
 # the red square that was the bug.
-_PARA_KEYS_AT_V6 = {"bullet", "indent", "locked", "marker"}
+# v7 grew four more, all geometry the editor had been guessing at: `hanging` and `first_line`
+# (the other two `w:ind` measurements -- `left` alone cannot place a bulleted line, because Word
+# puts the text at `left` and the marker at `left - hanging`), and `spacing`, which carries the
+# paragraph's own before/after and its `line` with the `lineRule` that says what unit that
+# number is in. Without them the editor rendered one flat line-height over a box whose rows are
+# genuinely 1.15 and 1.25, and invented gaps between paragraphs the file spaces at zero.
+_PARA_KEYS_AT_V7 = {"bullet", "indent", "hanging", "first_line", "spacing", "locked", "marker"}
 
 
 @pytest.fixture
@@ -438,7 +472,14 @@ def test_the_endpoint_marks_the_work_rows_editable_and_the_terms_locked(epoxy_bl
     """The two answers the toolbar cannot function without."""
     by_id = {b["id"]: b for b in epoxy_blocks}
     sched = by_id[_free_row_id("Schedule:")]
-    assert sched["para"] == {"bullet": True, "indent": 288, "locked": False, "marker": ""}
+    # The editable half of the contract: a WORK row the estimator may re-bullet and re-indent.
+    # Geometry compared exactly; the file gives this row 1.25 line spacing and no gaps.
+    assert sched["para"] == {
+        "bullet": True, "indent": 288, "hanging": 288, "first_line": None,
+        "locked": False, "marker": "",
+        "spacing": {"before": None, "after": None, "line": 300,
+                    "line_rule": "auto", "contextual": False},
+    }
     clause = by_id[_numbered_terms_id()]
     assert clause["para"]["locked"] is True
     # `list` is True for the contract clauses too, so it could never have been the guard.
@@ -454,12 +495,12 @@ def test_block_schema_version_was_bumped_for_the_new_field(epoxy_blocks):
     replays the old shape against the new frontend."""
     keys = set(epoxy_blocks[0])
     assert "para" in keys
-    assert keys == _BLOCK_KEYS_AT_V6, (
+    assert keys == _BLOCK_KEYS_AT_V7, (
         "the block dict shape changed — bump main._BLOCK_SCHEMA_VERSION and update "
-        "_BLOCK_KEYS_AT_V6 in the same commit")
+        "_BLOCK_KEYS_AT_V7 in the same commit")
     for b in epoxy_blocks:
-        assert set(b["para"]) == _PARA_KEYS_AT_V6, (b["id"], b["para"])
-    assert main._BLOCK_SCHEMA_VERSION == "6", (
+        assert set(b["para"]) == _PARA_KEYS_AT_V7, (b["id"], b["para"])
+    assert main._BLOCK_SCHEMA_VERSION == "7", (
         "`para` includes `marker` but _BLOCK_SCHEMA_VERSION is %r; a browser holding a v5 "
         "response has no marker for any block, so it paints a red square in front of all 27 "
         "numbered contract clauses" % (main._BLOCK_SCHEMA_VERSION,))

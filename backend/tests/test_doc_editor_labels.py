@@ -254,8 +254,15 @@ def test_a_line_with_no_colon_keeps_the_row_weight_the_page_shows():
     assert weight["Finish matte"] == [None], "Texture's template run is not bold"
     assert weight["Coverage 5000"] == [True]
     js = (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
-    assert 'lineRow(i, "name_line"' in js and 'lineRow(i, "area_line", areaLine, "tw-li", "margin:0 0 4pt;", true)' in js, (
-        "renderSystemPreview's boldFallback arguments moved — re-derive them from the runs above")
+    # The subject is the boldFallback flag -- the LAST argument -- so that is what is matched.
+    # It used to be pinned by quoting the whole call including a hardcoded inline margin
+    # ("margin:0 0 4pt;"), which broke the moment those rows started taking their geometry from
+    # the template instead of from hand-written numbers. The margin was never what this test
+    # was about; matching it made an unrelated fidelity fix look like a regression here.
+    calls = re.findall(r'lineRow\(i, "(\w+)"[^;]*?(true|false)\)', js)
+    assert dict(calls) == {"name_line": "true", "texture_line": "false", "area_line": "true"}, (
+        "renderSystemPreview's boldFallback arguments moved — re-derive them from the runs "
+        "above: %r" % (calls,))
 
 
 def test_a_rewritten_cove_only_row_is_not_re_edited_by_the_zero_sf_regex():
@@ -526,14 +533,31 @@ def _fields(rows):
     return [(r["i"], r["field"]) for r in rows]
 
 
-def test_every_work_row_is_one_editable_line_with_nothing_editable_inside_it(ran):
-    """THE ANSWER TO THE COMPLAINT, executed. Three rows, three editable elements, and ZERO
-    editable descendants — that last number is the whole point. A nested contenteditable span is
-    the island model, and an island model is what makes " SF of epoxy flooring" untypeable: the
-    words between the islands belong to no editable element."""
-    got = ran["oneSystem"]["rows"]
+def test_every_work_row_is_editable_through_the_box_and_declares_no_host_of_its_own(ran):
+    """THE ANSWER TO THE COMPLAINT, executed — and rewritten, because the complaint moved on.
+
+    It used to assert that each row declared `contenteditable` ITSELF. That was the right shape
+    while the argument was about islands: the words between two editable spans belonged to no
+    editable element, so " SF of epoxy flooring" could not be typed in, and one editable element
+    per row fixed it.
+
+    Hanz, 2026-08-26: "just make every Major section of the proposal textbox just one BIG TEXT
+    BOX not One big and some smaller textboxes. That is not how the Word DOc textboxes work."
+    An element with its own `contenteditable` is its own EDITING HOST, and a browser selection
+    cannot cross a host boundary — so three editable rows meant three places a drag could stop.
+    The host moved up to the box, and these rows now inherit from it.
+
+    So the assertion inverts, and what it protects does not: every row still takes a caret
+    anywhere in it, and nothing inside a row is separately editable. `islands` is unchanged and
+    still zero — a nested editable span would re-create both the island model AND a host boundary
+    in the middle of a line."""
+    got = ran["workGeometry"]["rows"]
     assert _fields(got) == [(0, "name_line"), (0, "texture_line"), (0, "area_line")]
-    assert all(r["editable"] for r in got), got
+    assert all(r["host"] == "tw-txbx" for r in got), (
+        "a WORK row is not editable through its text box: %r" % [r["host"] for r in got])
+    assert not any(r["ownHost"] for r in got), (
+        "a WORK row declared contenteditable itself — that is a second editing host inside the "
+        "box, and a drag through the section will stop at it again")
     assert all(r["wholeLine"] for r in got), (
         "a WORK row stopped using the same whole-line model as the base bid")
     assert [r["islands"] for r in got] == [0, 0, 0], (
@@ -543,7 +567,7 @@ def test_every_work_row_is_one_editable_line_with_nothing_editable_inside_it(ran
 def test_the_whole_line_the_estimator_edits_carries_every_static_word(ran):
     """The static words are IN the editable element's own text, not beside it. Nothing else has
     to be true for him to be able to delete them."""
-    area = next(r for r in ran["oneSystem"]["rows"] if r["field"] == "area_line")
+    area = next(r for r in ran["workGeometry"]["rows"] if r["field"] == "area_line")
     assert area["text"] == (
         'Area: ~5,000 SF of epoxy flooring and 240 LF of 6" epoxy cove base')
     for phrase in ("Area:", "~", " SF of epoxy flooring", 'LF of 6" epoxy cove base'):
@@ -563,7 +587,7 @@ def test_the_bold_lead_in_matches_what_the_writer_will_print(ran):
     """One <strong> per row, ending at the first colon — the same split
     `_normalize_work_label_formatting` applies to the .docx. If these two ever disagree the
     estimator approves one weight and the customer receives another."""
-    assert [r["bold"] for r in ran["oneSystem"]["rows"]] == [
+    assert [r["bold"] for r in ran["workGeometry"]["rows"]] == [
         ["System:"], ["Texture:"], ["Area:"]]
 
 
@@ -819,3 +843,114 @@ def test_reset_box_stays_reset(ran):
     assert got["afterRefit"]["fontSize"] == "95%", (
         "reset to a size its text does not fit, and neither shrank the type nor warned")
     assert got["payload"] == {}
+
+# ══ the editor's geometry against the template's own numbers ══════════════════
+# Hanz, 2026-08-25, over a side-by-side of the editor and the generated PDF: "is this really the
+# spacing format for the epoxy? Because it doesnt follow the exact font size and spacing on the
+# editor in which it should." He was right, and the PDF was the honest one.
+
+
+def _work_paras():
+    """The epoxy WORK box's paragraphs, straight out of the template, keyed by the token they
+    carry. This is the ground truth both the editor and the generated document answer to."""
+    import glob
+    from docx.oxml.ns import qn
+    import docx as _docx
+    tpl = pathlib.Path(__file__).resolve().parents[1] / "templates" / "Direct"
+    path = [p for p in glob.glob(str(tpl / "*.docx")) if "EPOXY" in p.upper()][0]
+    d = _docx.Document(path)
+    seen = 0
+    for tx in d.element.body.iter(qn("w:txbxContent")):
+        seen += 1
+        if seen != 5:
+            continue
+        out = {}
+        for p in tx.iter(qn("w:p")):
+            txt = "".join(x.text or "" for x in p.iter(qn("w:t")))
+            for tok in ("system.name", "system.texture", "system.sqft"):
+                if tok in txt:
+                    out[tok] = pw.para_props(d, p)
+        return d, out
+    return d, {}
+
+
+def test_the_editor_places_the_work_rows_where_the_template_does(ran):
+    """The fake nesting, pinned shut.
+
+    Every bulleted WORK row in the file is `left=288 hanging=288` — text at 14.4pt, marker hard
+    against the margin. Word puts the TEXT at `left` and the MARKER at `left - hanging`, so an
+    editor reading `left` alone draws the bullet where the text belongs and pushes the whole row in
+    by the hanging distance. That is what produced two different indents for rows that are
+    identical in the document.
+
+    Asserted as margin-left = left − hanging and padding-left = hanging, because that is the pair
+    that reproduces Word's own arithmetic. `.tw-li::before` sits at `left: 0` inside the padding,
+    which is what puts the red square exactly where it prints."""
+    _, paras = _work_paras()
+    assert paras, "the epoxy WORK box was not found in the template"
+    name, area = paras["system.name"], paras["system.sqft"]
+    for label, p in (("System", name), ("Area", area)):
+        assert p["bullet"] is True, label
+        assert p["indent"] == 288 and p["hanging"] == 288, (label, p)
+    got = {r["field"]: r["style"] for r in ran["workGeometry"]["rows"]}
+    for field in ("name_line", "area_line"):
+        st = got[field]
+        assert "padding-left:14.4pt" in st.replace(" ", ""), (field, st)
+        # left − hanging = 0: the marker belongs AT the margin, not 14pt inside it.
+        assert "0pt" in st, (field, st)
+
+
+def test_the_texture_row_carries_the_deep_indent_the_file_gives_it(ran):
+    """The outlier, and the one the editor was hiding rather than inventing.
+
+    Texture is the only WORK row with a real indent of its own — `left=1008 firstLine=72`, so its
+    text sits at 54pt with NO bullet. The editor rendered it at the same shallow offset as the
+    rows above it, so the one row that IS indented in the document was the one row not indented on
+    screen."""
+    _, paras = _work_paras()
+    tex = paras["system.texture"]
+    assert tex["bullet"] is False, "Texture is not a bulleted row in the template"
+    assert tex["indent"] == 1008 and tex["first_line"] == 72, tex
+    st = {r["field"]: r["style"] for r in ran["workGeometry"]["rows"]}["texture_line"]
+    flat = st.replace(" ", "")
+    assert "margin:0pt00pt50.4pt" in flat, st          # 1008tw = 50.4pt, no hanging
+    assert "text-indent:3.6pt" in flat, st             # firstLine 72tw
+    assert "padding-left:0pt" in flat, st              # no marker, so no gap for one
+
+
+def test_the_synthesized_rows_carry_the_templates_own_font_size(ran):
+    """The other half of what Hanz saw. `workLabelHtml` emitted no font-size, so these three rows
+    inherited `.tw-page { font-size: 9pt }` while every real block beside them carried an explicit
+    8pt from its runs — 12.5% larger, on the rows at the top of the box.
+
+    It is also what the box-overflow shrink was silently singling out: `fitTxbx` sets a PERCENTAGE
+    font-size, and a percentage only scales INHERITED sizes, so the shrink hit exactly these three
+    rows and left the rest alone. Giving them an explicit size closes both."""
+    for r in ran["workGeometry"]["rows"]:
+        assert "font-size:8pt" in r["style"].replace(" ", ""), (r["field"], r["style"])
+
+
+def test_the_editor_invents_no_gaps_between_the_work_rows(ran):
+    """The file has no `before` or `after` spacing anywhere in the WORK box — the rows sit flush,
+    and `contextualSpacing` from ListParagraph is why. The editor was adding 1pt, 1pt and 4pt of
+    its own, which is the "tighter spacing" half of the sub-group illusion."""
+    _, paras = _work_paras()
+    for tok, p in paras.items():
+        assert p["spacing"]["before"] is None and p["spacing"]["after"] is None, (tok, p["spacing"])
+    for r in ran["workGeometry"]["rows"]:
+        flat = r["style"].replace(" ", "")
+        assert "margin:0pt0" in flat, (
+            "the editor invents a gap the document does not have: %r" % (r["style"],))
+
+
+def test_the_line_spacing_comes_from_the_file_not_a_constant(ran):
+    """The editor used one flat `line-height: 1.32` for a box whose rows are genuinely 1.15 and
+    1.25 — looser than both, and erasing the distinction between them. `line` is 240ths of a line
+    under `lineRule="auto"`, so 276 is 1.15 and 300 is 1.25; the RULE has to travel with the number
+    because the same field is twips under `exact`."""
+    _, paras = _work_paras()
+    assert paras["system.name"]["spacing"]["line"] == 276, paras["system.name"]["spacing"]
+    assert paras["system.sqft"]["spacing"]["line"] == 300, paras["system.sqft"]["spacing"]
+    got = {r["field"]: r["style"].replace(" ", "") for r in ran["workGeometry"]["rows"]}
+    assert "line-height:1.15" in got["name_line"], got["name_line"]
+    assert "line-height:1.25" in got["area_line"], got["area_line"]
