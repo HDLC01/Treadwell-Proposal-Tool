@@ -74,8 +74,18 @@ JS = (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
 # The page's CODE, with comments removed. The comments in this codebase quote the history that made
 # each change necessary, so `bar.style.display` and `hideFmtBar` are still written in prose on
 # purpose — a probe that could not tell prose from code would report both as still shipping.
-JS_CODE = re.sub(r"(^|[^:\"'`\\])//[^\n]*", r"\1",
-                 re.sub(r"/\*.*?\*/", "", JS, flags=re.S))
+# LINE comments first, THEN block comments -- and the order is load-bearing, not tidiness.
+#
+# Done the other way round, a /* sitting inside a // comment reads as a block-comment OPENER
+# and pairs with the next real terminator further down the file, deleting everything between
+# them. This file has exactly that: proposal-review.js explains that an <img> "can't carry the
+# bearer token through the /api/* gate" -- and that path contains the opener. The moment a new
+# block comment was added below it, the stray found a partner and 590 lines of real code
+# vanished from JS_CODE, which made an unrelated test claim the zoom transform had been
+# deleted. Stripping the line comments first removes the stray before it can pair with
+# anything.
+JS_CODE = re.sub(r"/\*.*?\*/", "",
+                 re.sub(r"(^|[^:\"'`\\])//[^\n]*", r"\1", JS), flags=re.S)
 
 
 # ══ the ribbon, executed ══════════════════════════════════════════════════════
@@ -111,6 +121,9 @@ def test_with_nothing_selected_the_ribbon_is_inert_rather_than_absent(ran):
     assert load["bar"]["idle"] is True, "the idle class is missing, so nothing looks greyed out"
     for name in ("bold", "italic", "reset", "size", "bullet", "outdent", "indent"):
         assert load["bar"]["controls"][name]["disabled"] is True, name
+    # `size` is in that list for a reason that changed on 2026-08-25: it became an <input>, and an
+    # input matches neither `button` nor `select`. The sweep that disables the ribbon had to grow
+    # `input` or the one control you can type into would have stayed live on a dead ribbon.
 
 
 def test_focusing_a_paragraph_wakes_the_ribbon_and_marks_that_paragraph(ran):
@@ -174,6 +187,10 @@ def test_the_mousedown_guard_keeps_the_selection_alive(ran):
     matters MORE from a ribbon than from a bar beside the caret, because the ribbon is page chrome
     outside the document and an allowed focus move would take the caret clean out of the editor.
     The `select` is exempt because preventDefault on its mousedown stops it opening at all."""
+    # The size box joins the <select> in being exempt. Both are controls you have to put a caret
+    # in, and preventDefault on their mousedown stops that happening at all -- for the select it
+    # stopped the list opening, for the input it would stop focus outright. Focus therefore really
+    # does leave the paragraph when either is used, which is what the remembered range exists for.
     assert ran["mousedownGuard"] == {"button": True, "select": False}
     assert ran["blurThenBold"]["pressed"]["prevented"] is True
 
@@ -491,6 +508,228 @@ def test_a_press_from_the_sidebar_does_not_paint_a_selection_in_the_document(ran
         "a selection was written into the document while the caret was in the sidebar")
 
 
+def test_backspace_at_the_start_of_a_bulleted_line_removes_the_bullet(ran):
+    """Hanz, 2026-08-25: "When I back space, it doesnt remove the bullet point."
+
+    It did nothing whatsoever, and not because a branch was missing. Every `.tw-block` is its own
+    editing host — `renderBlock` sets contentEditable per block and `#doc-surface` has none — so a
+    browser cannot merge or delete across the boundary and Backspace at offset 0 is silently
+    dropped. That same structure is what stops two paragraphs ever merging, which is worth
+    keeping: a block IS one Word paragraph carrying an id from the backend's walk, and the editor
+    cannot invent a second one.
+
+    So the keystroke does what Word does with the room it has — takes the list formatting off,
+    one rung at a time — rather than trying to delete backwards into the previous paragraph.
+
+    Routed through `paraAction`, the same call the ribbon's Bullet button makes, so the two cannot
+    drift: the persistence, the repagination and the locked-clause refusal are all inherited
+    rather than reimplemented."""
+    g = ran["backspaceOnBullet"]
+    assert g["before"]["bullet"] is True, "the fixture row was not bulleted to begin with"
+    assert g["after"]["bullet"] is False, "Backspace left the bullet on"
+    assert g["after"]["indent"] == g["before"]["indent"], (
+        "removing the bullet also moved the indent; that is the second press, not the first")
+    assert g["prevented"], "the keystroke was not consumed, so the browser also acted on it"
+    assert g["persisted"], "the change was never scheduled to save"
+
+
+def test_backspace_again_walks_the_indent_back_to_the_margin(ran):
+    """Word's ladder, and the order matters: an estimator pressing Backspace on a bulleted line is
+    asking for the bullet, not the indent. Only once the bullet is gone does the indent start to
+    give way."""
+    g = ran["backspaceAgainOutdents"]
+    assert g["after"]["indent"] == 0, "the second press did not outdent to the margin"
+    assert g["after"]["bullet"] is False
+    assert g["prevented"]
+
+
+def test_backspace_at_the_margin_changes_nothing_and_merges_nothing(ran):
+    """REVERSED, 2026-08-26, and the reason it reversed is the whole point of the one-host change.
+
+    This used to assert the keystroke fell through to the browser: with no bullet and no indent
+    left there is nothing to undo, and swallowing a key that does nothing reads as a frozen
+    editor. That was safe only because of the second half of the old reasoning — every paragraph
+    was its own contenteditable, so the browser could not reach past it and "fall through" meant
+    "harmless no-op".
+
+    The box is the editing host now (Hanz: "just make every Major section of the proposal textbox
+    just one BIG TEXT BOX"), so falling through no longer means nothing happens. It means the
+    browser MERGES this paragraph into the one above it. A .tw-block is one Word paragraph carrying
+    an id from the backend's walk, and overrides are applied to a pristine template by that id — a
+    merge destroys one and every override after it lands on the wrong paragraph of a signed
+    document. Refusing the key is the lesser of the two, and it is also indistinguishable from the
+    old behaviour on screen: nothing moved either way.
+
+    What must still hold is that the paragraph is untouched — the refusal is a refusal, not a
+    silent edit."""
+    g = ran["backspaceAtTheMargin"]
+    assert g["after"] == {"bullet": False, "indent": 0, "locked": False}
+    assert g["prevented"], "the keystroke fell through, and the browser would have merged"
+
+
+def test_backspace_anywhere_but_the_start_is_left_alone(ran):
+    """A selection means "delete these characters"; a caret mid-line means "delete the character
+    before me". Both are the browser's job, and hijacking either would make the bullet vanish
+    while somebody was editing a word."""
+    g = ran["backspaceElsewhere"]
+    assert not g["onSelectionPrevented"], "Backspace over a selection was hijacked"
+    assert g["afterSelection"]["bullet"] is True, "a selection delete removed the bullet"
+    assert not g["midLinePrevented"], "mid-line Backspace was hijacked"
+    assert g["afterMidLine"]["bullet"] is True, "mid-line Backspace removed the bullet"
+
+
+def test_backspace_cannot_un_number_a_contract_clause(ran):
+    """The refusal that has to survive every new route into paragraph formatting: un-bulleting a
+    numbered TERMS AND CONDITIONS clause renumbers every clause below it, in the signed contract.
+    `paraAction` refuses on `locked`, and this keystroke inherits that instead of checking for
+    itself — one guard, not two that can disagree.
+
+    The KEY is now consumed as well, which is a change and an improvement. It used to fall through
+    to the browser on the reasoning that a locked clause is not this handler's business; on the
+    terms pages that browser fallback now merges clause 14 into clause 13, which renumbers the
+    contract far more thoroughly than un-bulleting one line ever could. The clause itself is still
+    untouched — that is what the assertions below are about — and the keystroke stops here."""
+    g = ran["backspaceOnLockedClause"]
+    assert g["after"]["locked"] is True
+    assert g["prevented"], "the keystroke fell through, and the browser would have merged clauses"
+    assert g["after"]["bullet"] == ran["backspaceOnLockedClause"]["after"]["bullet"]
+
+
+def test_a_typed_size_the_old_dropdown_could_not_offer(ran):
+    """Hanz, 2026-08-25: "Make this dropdown menu smaller please. ALso make it so that we could
+    type in it."
+
+    The size was a <select>, so the only sizes that existed were the ten in SIZE_CHOICES. The
+    writer stores half-points and Word uses them, so 10.5pt was a size the document could carry
+    and the editor could not ask for. Typing reaches it.
+
+    The dropdown was also as wide as its widest option, "Template size", which is why it dwarfed
+    the buttons beside it. The placeholder carries that meaning now and the box is 54px."""
+    g = ran["typedHalfPoint"]
+    assert g["runs"] == [{"text": "Schedule", "size_pt": 10.5},
+                         {"text": ":  4 days on site"}], g["runs"]
+    assert g["mousedownPrevented"] is False, (
+        "the ribbon's mousedown guard cancelled the size box, so it can never be focused")
+
+
+def test_a_size_that_is_not_a_size_changes_nothing_and_dirties_nothing(ran):
+    """THE FAILURE A DROPDOWN MADE IMPOSSIBLE, and the reason typing needed validation the client
+    never had before.
+
+    `Number("abc")` is NaN, and NaN is the single value that defeats `runsEqual` — NaN !== NaN, so
+    every press would read as a change: the paragraph would be marked edited, an override
+    persisted, and `JSON.stringify(NaN)` is `null` so the server would drop the size anyway. The
+    estimator would be left with a dirty document and no visible effect.
+
+    The bounds mirror the backend deliberately (1..200, half-point granularity, checked in
+    main.py's sanitizer AND again in the writer), so the box cannot ask for something the document
+    will silently refuse."""
+    g = ran["junkSize"]
+    assert g["runsUnchanged"], "junk in the size box changed the runs"
+    assert g["dirtiedDelta"] == 0, "junk marked the paragraph edited"
+    assert g["persistedDelta"] == 0, "junk persisted an override"
+    assert g["boxShows"] != "500", (
+        "the box kept the rejected text instead of showing what the paragraph says")
+
+
+def test_clearing_the_size_box_goes_back_to_the_templates_own_size(ran):
+    """Empty means "whatever the template says" — the meaning the old `<option value="">Template
+    size</option>` carried, now carried by the placeholder. `patchRuns` deletes the key rather than
+    storing a zero, which is what keeps an untouched paragraph shipping no size at all."""
+    g = ran["clearedSize"]
+    assert any(r.get("size_pt") == 14 for r in g["at14"]), g["at14"]
+    assert not any("size_pt" in r for r in g["cleared"]), (
+        "clearing the box left a size behind: %r" % (g["cleared"],))
+
+
+def test_the_ribbon_does_not_overwrite_a_size_being_typed(ran):
+    """`renderFmtBar` runs on every focusin, every selectionchange and after every press — it is
+    the only place the remembered range is captured, so it cannot simply be skipped. With a
+    <select> writing the value back each time was invisible. With an input it would overwrite
+    half-typed text mid-keystroke, so the write-back is guarded on focus while the range capture
+    above it still happens."""
+    g = ran["readbackRespectsTyping"]
+    assert g["whileTyping"] == "1", (
+        "the ribbon overwrote a size that was still being typed: %r" % g["whileTyping"])
+
+
+def test_escape_abandons_a_typed_size(ran):
+    """Escape has to reach the box before the window-level handler that collapses an expanded text
+    box — somebody abandoning a half-typed size is not asking for the box they are editing to
+    fold. So it stops propagating, and puts back what the paragraph says."""
+    assert ran["escapeAbandons"]["runsUnchanged"], "Escape applied the typed size anyway"
+
+
+def test_ctrl_a_takes_the_line_then_the_whole_box(ran):
+    """Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still
+    sub boxes."
+
+    The "sub boxes" are the paragraphs. Each `.tw-block` is its own editing host, so a native
+    select-all physically cannot reach past the line the caret is in — and no browser selection can
+    span two editing hosts, so there is nothing to widen a Range into. The second press is
+    therefore an EDITOR-level selection: a set of blocks the ribbon and the delete key both
+    understand, painted so it reads as selected.
+
+    It deliberately does not pretend to be a DOM selection. `selectionRange` still refuses
+    anything spanning two blocks, which is what stops a stale cross-block range being formatted —
+    the bug `selectionLeftBlock` exists for."""
+    g = ran["selectAllWidens"]
+    assert g["afterFirst"]["prevented"], "Ctrl+A was left to the browser"
+    assert g["afterFirst"]["range"] == [0, 25], (
+        "the first press did not take the whole line: %r" % (g["afterFirst"]["range"],))
+    assert g["afterFirst"]["boxSel"] is None, "the first press already widened to the box"
+    assert sorted(g["afterSecondIds"]) == sorted(["115", "116", "52", "117"]), (
+        "the second press did not select every line in the box: %r" % (g["afterSecondIds"],))
+    assert g["painted"], "the selected lines are not marked, so nothing on screen shows it"
+
+
+def test_the_box_selection_stops_at_the_box_it_was_pressed_in(ran):
+    """The scope Hanz picked when asked: everything in THAT box. A page holds several — WORK,
+    PRICE, NOTES — and dragging a neighbour in would mean one press reformatted the pricing
+    because the caret happened to be in the scope text.
+
+    Scoped by `closest(".tw-txbx")`, which is a real container: the absolutely-positioned div
+    registered against the baked page artwork. Not a guess about which paragraphs look grouped."""
+    g = ran["selectAllStopsAtTheBox"]
+    assert "115" not in (g["ids"] or []), (
+        "a block from another box was selected: %r" % (g["ids"],))
+    assert g["otherBoxUntouched"], "the other box's line was painted as selected"
+
+
+def test_one_press_formats_every_selected_line(ran):
+    """The point of selecting a box: one press, not one per line. Each block is formatted over its
+    whole length — there is no per-block character range to remember, because the estimator
+    selected LINES rather than characters."""
+    g = ran["boxFormat"]
+    assert all(g["allBold"]), "some selected lines were left unformatted: %r" % (g["allBold"],)
+    assert g["dirtiedCount"] >= len(g["ids"]), (
+        "fewer edits were recorded than lines formatted, so some will not persist")
+
+
+def test_delete_empties_every_selected_line(ran):
+    """Each block is cleared through the same run algebra a hand-delete uses and then dispatches
+    the page's own input event, so the dirty flags, the override persistence and the
+    emptied-clause protection all run per block exactly as if they had been cleared one at a time.
+
+    `collectOverrides` already handles N emptied blocks — one entry each — and
+    `blanksANumberedClause` still filters a numbered TERMS clause out of the payload, so a
+    box-wide delete cannot renumber the contract."""
+    g = ran["boxDelete"]
+    assert g["trimmedLengths"] == [0] * len(g["ids"]), (
+        "some selected lines still have text: %r" % (g["trimmedLengths"],))
+    assert g["clearedAfter"] is None, "the selection outlived the delete that consumed it"
+
+
+def test_the_box_selection_lets_go_when_the_estimator_does_something_else(ran):
+    """A selection that outlived a click would make the next format press hit lines the estimator
+    had visibly moved away from — the same class of bug as the stale remembered range, at box
+    scale. Clicking and typing both drop it."""
+    g = ran["boxSelLetsGo"]
+    assert g["held"] > 1, "the fixture never held a box selection"
+    assert g["afterClick"] is None, "a click left the box selection standing"
+    assert g["afterTyping"] is None, "typing left the box selection standing"
+
+
 # ══ where the ribbon sits, and which CSS rules have to win ════════════════════
 def _css_rule(selector):
     """The declarations of EVERY top-level rule with exactly this selector, concatenated.
@@ -585,13 +824,41 @@ def _page_style(selector):
 
 def test_the_canvas_is_the_scroller_so_the_ribbon_needs_no_sticky():
     """The reason there is no `position: sticky` on the ribbon row: the page body does not scroll.
-    If `.word-canvas` ever stops being the scroll container, the ribbon scrolls away with the
-    document and this decision has to be revisited — so it is pinned here rather than assumed."""
+
+    THIS WAS REVISITED ON 2026-08-25, exactly as the old version of this docstring said it would
+    have to be. Hanz: "Make the ribbon sticky when I scroll down." It was scrolling away — and
+    sticky was the wrong fix, because the ribbon is not inside the canvas's scrollport, so sticky
+    would have done nothing whenever the canvas WAS the scroller and only masked the real fault
+    when it was not.
+
+    The real fault was that nothing bounded the column. `.word-app` was `min-height: 100vh` with
+    no `height`, so the canvas could grow to the full height of nine-plus paper pages and let the
+    PAGE scroll, carrying the ribbon out of view. Two declarations fix it and both are pinned
+    here, because either one alone leaves the bound escapable: `height` bounds the column, and
+    `min-height: 0` on the canvas lets a flex item shrink below its own content height, which is
+    what actually stops the pages pushing the column taller than the viewport."""
     canvas = _page_style(".word-canvas")
     assert re.search(r"flex\s*:\s*1", canvas)
     assert re.search(r"overflow-y\s*:\s*auto", canvas)
+    assert re.search(r"min-height\s*:\s*0", canvas), (
+        "the canvas can be floored at its content height, so the page scrolls instead of the "
+        "canvas and the ribbon goes with it")
     app = _page_style(".word-app")
     assert "flex-direction: column" in app
+    assert re.search(r"height\s*:\s*100(dvh|vh)", app), (
+        "the flex column has no upper bound, so nothing keeps the ribbon on screen")
+    # The one normal-flow element between the ribbon and the canvas. Unbounded, a long options
+    # list grows the body past the viewport and the page scrolls — the same failure by a
+    # different route, and the reason `max-height: none` is not acceptable here.
+    # `_page_style` catches BOTH the floating base rule and the @media one that drops the panel
+    # inline below 1400px -- its leading-whitespace match reaches inside the media block.
+    # Comments stripped first. This file explains its own rules in prose, and the phrase being
+    # searched for ("max-height: none") is exactly what that prose has to quote to say why it is
+    # wrong -- so a raw scan reads the explanation as the offence.
+    opts = re.sub(r"/\*.*?\*/", "", _page_style(".options-panel"), flags=re.S)
+    assert "max-height" in opts, "no rule bounds the options panel"
+    assert not re.search(r"max-height\s*:\s*none", opts), (
+        "the inline options panel is unbounded and can push the ribbon off screen")
     assert "flex: 0 0 auto" in _css_rule(".fmt-ribbon"), (
         "the ribbon row can be squeezed by the canvas below it")
     for sel, decls in _rules_matching(".fmt-ribbon") + _rules_matching(".tw-fmtbar"):

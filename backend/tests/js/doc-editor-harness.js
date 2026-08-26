@@ -257,6 +257,21 @@ class El {
   }
   normalize() { /* the markers selectionRange inserts are not used here */ }
   addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  /** A COMPUTED line's own channel is how it saves, and the Enter handler now tells it so: a
+   *  template paragraph goes through markEdited, a price / system / notes line dispatches its own
+   *  input event. Bubbling, because every one of those channels is a delegated listener. */
+  dispatchEvent(e) {
+    let cur = this;
+    // Not `e.target = this`. Node's own global Event has a getter-only `target`, and the page
+    // constructs a real one -- so the sandbox is handed the Ev class below instead, whose target
+    // is writable. This guard keeps a plain-object event working too.
+    try { e.target = this; } catch { /* getter-only: listeners here read .type anyway */ }
+    while (cur) {
+      for (const f of (cur._listeners[e.type] || []).slice()) f(e);
+      cur = cur.parentNode;
+    }
+    return true;
+  }
   blur() { if (document.activeElement === this) document.activeElement = null; }
   focus() { document.activeElement = this; }
   getBoundingClientRect() { return { width: 0, height: 0, left: 0, top: 0 }; }
@@ -327,12 +342,28 @@ const LIFTED = [
   fn("fmtAt"), fn("segmentsOf"), fn("mergeSegs"), fn("serializeRuns"), fn("editRuns"),
   fn("runEditCss"), fn("renderRuns"), fn("serializeBlock"), fn("insertBreakAt"), fn("pointAt"),
   fn("addBoxTools"), fn("fitTxbx"), fn("wireOverflowExpand"),
+  // The Enter handler no longer trusts the event target: the box is the editing host now, so the
+  // browser fires the keystroke at the box and the caret is the only thing that says which
+  // paragraph it belongs to. These four are that resolution, lifted rather than stubbed so the
+  // handler's own "is this even a line" guard is the real one.
+  topConst("LINE_SEL"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
 ].join("\n\n");
 
 const ENTER_HANDLER = delegated("  // Enter inside a template paragraph = ONE line break");
 
+/** `new Event("input", {bubbles:true})` is what markEdited and the Enter handler construct.
+ *  Node's own global Event exists but its `target` is getter-only, so the sandbox gets this one
+ *  instead -- the page's line stays verbatim, which is the point. */
+class Ev {
+  constructor(type, opts) {
+    this.type = String(type);
+    this.bubbles = !!(opts && opts.bubbles);
+    this.target = null;
+  }
+}
+
 const api = new Function(
-  "document", "window", "docSurface", "F", "Node", "dirtied",
+  "document", "window", "docSurface", "F", "Node", "dirtied", "Event",
   `const RUN_KEYS = F.RUN_KEYS;
   // Empty on purpose — see the note above LIFTED. fitOffer looks a box up here and returns ""
   // when it is absent, so no box in this harness is ever offered growth, which is the truthful
@@ -349,6 +380,16 @@ const api = new Function(
   const placed = [];
   const placeSelection = (el, a, b) => { placed.push([a, b]); };
   const markEdited = (el, formatted) => { dirtied.push([el.dataset.id, !!formatted]); };
+  // ONE CARET IN ONE PARAGRAPH is the whole world this harness models -- CARET is a pair of
+  // character offsets inside a single block, which is what selectionRange returns. A selection
+  // spanning several paragraphs cannot be expressed in it, so the honest answer is "not a
+  // multi-line selection", and the Enter handler's single-line path is what gets exercised here.
+  // The cross-paragraph paths live in fmt-ribbon-harness.js, which models a box selection.
+  const selectionLines = () => [];
+  const spliceLines = () => {
+    throw new Error("spliceLines reached: this harness models one caret in one paragraph, so a "
+                    + "multi-line splice here means selectionLines started lying");
+  };
   const onEnter = (e) => ${ENTER_HANDLER};
   docSurface.addEventListener("keydown", onEnter);
 
@@ -367,7 +408,7 @@ const api = new Function(
            },
            setCaret: (r) => { CARET = r; }, placed: () => placed };
   `
-)(document, window, docSurface, F, Node, dirtied);
+)(document, window, docSurface, F, Node, dirtied, Ev);
 
 const out = {};
 
@@ -627,15 +668,38 @@ function mountBlock() {
     fire(el, "keydown", Object.assign({ key: "Enter" }, props));
     results[name] = api.serializeBlock(el) === base;
   }
-  const outside = new El("div");
-  outside.className = "tw-line-edit";
-  docSurface.appendChild(outside);
-  const e = fire(outside, "keydown", { key: "Enter" });
-  results.notABlock = !e.defaulted;
+  // A COMPUTED LINE IS HANDLED NOW, and this is the reversal that matters. It used to be left to
+  // the browser -- survivable while each line was its own editing host, where the worst a browser
+  // Enter could do was leave a stray wrapper inside one line. With the box as the host the
+  // browser's Enter SPLITS the paragraph into two elements instead, and a second
+  // <p data-sys-line="area"> is a row the writer has no channel for: half the estimator's line
+  // would reach the customer and half would vanish. One break inside one element is the only
+  // shape this editor can send, so the keystroke is taken and the line's own channel is told.
+  const priceLine = new El("div");
+  priceLine.className = "tw-line-edit";
+  docSurface.appendChild(priceLine);
+  const heard = [];
+  priceLine.addEventListener("input", () => { heard.push(1); });
+  const eLine = fire(priceLine, "keydown", { key: "Enter" });
+  results.computedLineTaken = !!eLine.defaulted;
+  results.computedLineText = api.serializeBlock(priceLine);
+  results.computedLineTold = heard.length;
+  // A node that is not an editable line AT ALL still belongs to the browser: the box's own tools
+  // layer, the page behind it, anything the estimator cannot type into.
+  const chrome = new El("div");
+  chrome.className = "tw-box-tools";
+  docSurface.appendChild(chrome);
+  results.notALine = !fire(chrome, "keydown", { key: "Enter" }).defaulted;
   out.enterGuards = results;
 }
 
-// 13. Enter with no readable caret leaves Enter to the browser rather than eating the key.
+// 13. Enter with an UNREADABLE caret is refused outright -- it no longer falls back to the
+// browser. Handing the key over used to be the conservative choice: each paragraph was its own
+// editing host, so the browser could not reach past it and the worst outcome was a stray wrapper
+// element inside one line. Now that the box is the host, the browser's fallback would split the
+// paragraph in two -- destroying the block id every override is keyed to -- so "I cannot read
+// where the caret is" has to mean "then I will not let anything happen", not "you do it".
+// The paragraph is left exactly as it was, which is what the estimator sees either way.
 {
   const el = mountBlock();
   api.setCaret(null);
