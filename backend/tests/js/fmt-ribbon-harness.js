@@ -1369,4 +1369,79 @@ out.finalBar = barSnapshot();
 out.sameNodeThroughout = bar() === BAR_NODE;
 out.placement = placement();
 
+/** Tab, the way a keyboard sends it. */
+function tab(el, shift) {
+  return fire(el, "keydown", { key: "Tab", shiftKey: !!shift });
+}
+
+// ═══ 30. TAB INDENTS THE LINE ═════════════════════════════════
+// Hanz, 2026-08-26: "is it possible when I click tab it indents the line? instead of scrolling
+// down?" Nothing handled Tab, so the browser moved focus onward and the page scrolled to follow it.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);                       // bulleted WORK row, indent 288
+  focusBlock(el);
+  SEL = { block: el, range: [4, 4] };            // MID-LINE, not at the start
+  const before = api.paraNow(116);
+  const ev = tab(el);
+  out.tabIndents = {
+    before: before,
+    after: api.paraNow(116),
+    prevented: !!ev.defaulted,
+    persisted: persisted.length > 0,
+  };
+  const ev2 = tab(el, true);                     // Shift+Tab puts it back
+  out.shiftTabOutdents = { after: api.paraNow(116), prevented: !!ev2.defaulted };
+}
+
+// ═══ 31. …and at the margin Tab is given back to the browser ══
+// Shift+Tab with nothing left to take off must NOT be swallowed: if the editor is not going to
+// move the line, moving the focus is better than the key doing nothing at all.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(116);
+  focusBlock(el);
+  SEL = { block: el, range: [0, 0] };
+  // Walk it to the margin with the key itself rather than reaching into the state: doing it
+  // through the handler is what proves the handler can actually reach zero.
+  for (let i = 0; i < 6; i++) tab(el, true);
+  const atMargin = api.paraNow(116);
+  const ev = tab(el, true);
+  out.shiftTabAtTheMargin = { atMargin: atMargin, after: api.paraNow(116),
+                              prevented: !!ev.defaulted };
+}
+
+// ═══ 32. a numbered contract clause refuses, and keeps its Tab ═
+// A locked clause cannot be indented, and swallowing the keystroke would leave Tab looking dead
+// on the terms pages.
+{
+  const els = api.mountBlocks(RECORDS);
+  const el = els.get(52);
+  focusBlock(el);
+  SEL = { block: el, range: [0, 0] };
+  const before = api.paraNow(52);
+  const ev = tab(el);
+  out.tabOnLockedClause = {
+    before: before, after: api.paraNow(52), prevented: !!ev.defaulted,
+  };
+}
+
+// ═══ 33. one Tab moves every selected line ════════════════════
+// The same rule the ribbon already follows for a box selection: one press, one visible result.
+{
+  const els = api.mountBlocks(RECORDS);
+  const first = els.get(116);
+  focusBlock(first);
+  SEL = { block: first, range: [0, 3] };
+  fire(first, "keydown", { ctrlKey: true, key: "a" });   // line…
+  fire(first, "keydown", { ctrlKey: true, key: "a" });   // …then the whole box
+  const ids = (api.boxSelIds ? api.boxSelIds() : []).slice();
+  const ev = tab(first);
+  out.tabOverABoxSelection = {
+    ids: ids,
+    prevented: !!ev.defaulted,
+    indents: ids.map((id) => (api.paraNow(id) || {}).indent),
+  };
+}
+
 console.log(JSON.stringify(out));
