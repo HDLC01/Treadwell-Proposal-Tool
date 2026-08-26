@@ -86,5 +86,7 @@ def test_price_endpoint_full_bid():
     }
     body = client.post("/api/price", json=payload).json()
     assert abs(body["material_total"] - 28811) <= 2
-    assert abs(body["full_bid"]["total_base_bid"] - 72369) <= 1
+    # $33.00/hr from 2026-08-26 (Kyle). Same figure as test_pricing's accurate-county case —
+    # deliberately duplicated, because this asserts the ENDPOINT returns what the engine computes.
+    assert abs(body["full_bid"]["total_base_bid"] - 72562) <= 1
     assert body["extras_total"] == 825

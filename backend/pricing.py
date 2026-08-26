@@ -250,7 +250,7 @@ def _gp_pct(subtotal: float) -> float:
 
 
 def compute_full_bid(material_total: float, sf: float, *,
-                     crews=None, labor_rate: float = 32.2, day_hours: int = 8,
+                     crews=None, labor_rate: float = 33.0, day_hours: int = 8,
                      travel_hours: float = 0, prevailing_wage: bool = False,
                      burden_pct: float = 0.12, demo_sf: float = 0, plastic: float = 0,
                      local: bool = True, lodging_rate: float = 70, food_rate: float = 45,
