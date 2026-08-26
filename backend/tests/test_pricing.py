@@ -86,18 +86,28 @@ def _full_bid(remodel_rate):
 
 
 def test_full_bid_accurate_county_rate():
+    """Figures moved on 2026-08-26 with Kyle's labour rate: $32.20 -> $33.00/hr for
+    epoxy/polish/sealed. Every number here is downstream of that hour, so all three shifted
+    together — and the sales tax did NOT, which is the check that the rate moved and the tax
+    treatment did not."""
     fb = _full_bid(0.07975)   # Johnson County: KS 6.5% + county 1.475%
-    assert approx(fb["total_base_bid"], 72369, 1)
-    assert approx(fb["remodel_tax"], 3016, 1)
+    assert approx(fb["total_base_bid"], 72562, 1)
+    assert approx(fb["remodel_tax"], 3030, 1)
     assert approx(fb["sales_tax"], 2730, 1)
     assert fb["gp_pct"] == 0.30
 
 
 def test_full_bid_matches_sheet_flat_10pct():
-    # The sheet hardcodes 10% remodel; engine must reproduce it to the dollar.
+    """The sheet hardcodes 10% remodel; engine must reproduce it to the dollar.
+
+    Re-pinned on 2026-08-26 for Kyle's $33.00/hr. What makes this test meaningful is that BOTH
+    sides moved and by the same amount: the workbook's own rate cells (Epoxy!C47/C52 and the rest)
+    and `pricing.compute_labor`'s default were changed in one commit. If only one had moved, the
+    engine and the sheet would disagree — which is exactly what this test exists to catch, and why
+    the number could not simply be relaxed to a wider tolerance."""
     fb = _full_bid(0.10)
-    assert approx(fb["total_base_bid"], 73135, 1)
-    assert approx(fb["remodel_tax"], 3782, 1)
+    assert approx(fb["total_base_bid"], 73332, 1)
+    assert approx(fb["remodel_tax"], 3800, 1)
 
 
 def test_remodel_off_means_no_remodel_tax():
