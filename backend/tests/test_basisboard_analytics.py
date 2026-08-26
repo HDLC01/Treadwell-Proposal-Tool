@@ -99,6 +99,15 @@ def _clear():
         bb._ANALYTICS_REFRESH_LOCK.release()
     except RuntimeError:
         pass
+    # AND THE SNAPSHOT ON DISK. The build path writes one (basisboard_client._SNAPSHOT_FILE), and
+    # a later "cold read" test then finds a warm cache and reports no `building` at all. In CI every
+    # run gets a fresh container so it never showed up there; on a dev box the file persists, so the
+    # suite passed once and failed on every run after. Clearing memory without clearing disk is
+    # only half of _clear.
+    try:
+        bb._SNAPSHOT_FILE.unlink()
+    except OSError:
+        pass
     bb._PACER._interval = bb._PACER._floor
     bb._PACER._next_at = 0.0
 
