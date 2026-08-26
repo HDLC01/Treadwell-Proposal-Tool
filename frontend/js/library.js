@@ -62,6 +62,34 @@
     });
   };
 
+  /** One inline SVG glyph, Lucide-shaped: 24x24 box, no fill, currentColor stroke, width 2,
+   *  round caps and joins.
+   *
+   *  NEVER AN EMOJI. This page shipped with a trash can and a stacked-squares character standing
+   *  in for its delete and duplicate controls, and the house rule against that is not taste: an
+   *  emoji is drawn by whatever the machine has installed, so the control Kyle presses on Windows
+   *  is a different picture from the one on a phone, it cannot take the row's own colour on hover,
+   *  and it ignores every stroke and size token on the page.
+   *
+   *  ONE FUNCTION RATHER THAN A PATHS TABLE, because library-ui-harness.js lifts named functions
+   *  out of this file by regex and executes them. A separate lookup object would have to be lifted
+   *  too, and every renderer that reaches for a glyph would die on the missing identifier.
+   *
+   *  The glyph is not a click target: see the pointer-events rule on `.icon svg` in library.html,
+   *  and the closest() lookups in the click handler, which are the two halves of the same answer. */
+  function icon(name) {
+    var d = name === "trash"
+        ? '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"></path>'
+      : name === "copy"
+        ? '<rect x="9" y="9" width="12" height="12" rx="2"></rect>' +
+          '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>'
+      : name === "plus" ? '<path d="M12 5v14M5 12h14"></path>'
+      : "";
+    return '<svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" ' +
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+      'aria-hidden="true" focusable="false">' + d + "</svg>";
+  }
+
   var alertEl = $("alert");
   function say(msg) { alertEl.textContent = msg || ""; }
   function saving(msg) { $("asm-saving").textContent = msg || ""; }
@@ -595,17 +623,16 @@
     for (var i = 0; i < shown.length; i++) {
       var it = shown[i];
       out += '<tr data-item="' + esc(it.id) + '">' +
-        '<td><input data-f="name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials" style="width:100%;min-width:150px;">' +
+        '<td><input data-f="name" class="cell-name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials">' +
           dupeHtml(similarNames(it.name, it.id)) + "</td>" +
         "<td>" + divisionPick(it) + "</td>" +
-        '<td class="n"><input data-f="buy_qty" class="num" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase" style="width:64px;"></td>' +
-        "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' style="width:100%;min-width:96px;"') + "</td>" +
-        '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase" style="width:92px;"></span></td>' +
-        "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor",
-                      ' style="width:100%;min-width:130px;"') + "</td>" +
+        '<td class="n"><input data-f="buy_qty" class="num cell-qty" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase"></td>' +
+        "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' class="cell-unit"') + "</td>" +
+        '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span></td>' +
+        "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
-        '<td><button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">⧉</button>' +
-          '<button class="icon" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">🗑</button></td>' +
+        '<td class="rowact"><button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
+          '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
       "</tr>";
     }
     $("items-body").innerHTML = out;
@@ -617,6 +644,11 @@
     if ($("items-nomatch")) {
       $("items-nomatch").hidden = !(filtering && ITEMS.length > 0 && shown.length === 0);
     }
+    // THE ADD ROW IS THE NEXT ROW OF THE TABLE, so it belongs to the table having rows. Under
+    // "No materials yet" it would be the second Add button in one card, and under "Nothing
+    // matches that" it would answer a typo with an invitation to create the duplicate the search
+    // just failed to find — the same trap the two empty states were split apart to avoid.
+    if ($("items-addrow")) $("items-addrow").hidden = shown.length === 0;
     if ($("item-hits")) {
       $("item-hits").hidden = !filtering;
       $("item-hits").textContent = filtering
@@ -653,14 +685,14 @@
       var used = usageFor(kind, v.name);
       out += '<tr data-ref-kind="' + kind + '" data-ref-id="' + esc(v.id) + '">' +
         "<td>" + (ADMIN
-          ? '<input data-rf="name" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200" style="width:100%;min-width:170px;">'
+          ? '<input data-rf="name" class="cell-ref" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200">'
           : "<b>" + esc(v.name) + "</b>") + "</td>" +
         "<td>" + (ADMIN
-          ? '<input data-rf="notes" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000" style="width:100%;min-width:190px;">'
+          ? '<input data-rf="notes" class="cell-note" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000">'
           : esc(v.notes)) + "</td>" +
         '<td class="n">' + used + "</td>" +
-        "<td>" + (ADMIN
-          ? '<button class="icon" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">🗑</button>'
+        '<td class="rowact">' + (ADMIN
+          ? '<button class="icon danger" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">' + icon("trash") + "</button>"
           : "") + "</td>" +
       "</tr>";
     }
@@ -694,8 +726,11 @@
         "</span></button>";
     }
     $("asm-list").innerHTML = out;
-    $("asm-list").hidden = ASMS.length === 0;
-    $("asm-newrow").hidden = ASMS.length === 0;
+    // THE CARD, not the list inside it. "+ New assembly" is the rail's last row now — Hanz asked
+    // for it out of the page header, and the list it appends to is the only honest home for it —
+    // so hiding just the inner list would leave a create button alone in an empty box while the
+    // "No assemblies yet" panel offered a second one beside it.
+    $("asm-rail").hidden = ASMS.length === 0;
     $("n-asm").textContent = ASMS.length;
   }
 
@@ -824,8 +859,8 @@
         costCell = '<div class="line-primary"><span class="qty">' + L.money(r.cost) + '</span></div><div class="calc mono">' +
                    esc(L.costWorking(r)) + "</div>";
       } else if (r.ok) {
-        qtyCell = '<span style="color:var(--ink-v)">—</span>';       // no area typed yet
-        costCell = '<span style="color:var(--ink-v)">—</span>';
+        qtyCell = '<span class="dash">—</span>';                     // no area typed yet
+        costCell = '<span class="dash">—</span>';
       } else if (r.reason === "no_item") {
         // The instruction, not a fault. Grey, and the row is NOT tinted below.
         qtyCell = '<span class="unpicked">Pick a material</span>';
@@ -863,13 +898,16 @@
         '<td class="ru"><div class="line-primary"><input type="checkbox" data-lf="roundup"' +
           (ln.roundup === false ? "" : " checked") +
           ' aria-label="Round up to whole purchases"></div></td>' +
-        '<td class="n">' + qtyCell + "</td>" +
-        '<td class="n">' + costCell + "</td>" +
-        '<td><button class="icon" type="button" data-del-line="' + i + '" title="Remove this line" aria-label="Remove line">🗑</button></td>' +
+        // `derived` tints the two columns nobody types into, so the cells this page WORKS OUT
+        // read as a band apart from the ones that feed them. Tone only — the class carries a
+        // background and nothing else, because these are the numbers a bid is priced from.
+        '<td class="n derived">' + qtyCell + "</td>" +
+        '<td class="n derived">' + costCell + "</td>" +
+        '<td class="rowact"><button class="icon danger" type="button" data-del-line="' + i + '" title="Remove this line" aria-label="Remove line">' + icon("trash") + "</button></td>" +
       "</tr>";
     }
     if (!asm.lines.length) {
-      out = '<tr><td colspan="8" style="color:var(--ink-v);padding:22px;text-align:center;">' +
+      out = '<tr><td colspan="8" class="lines-empty">' +
             "No lines yet. Add one and search for an item.</td></tr>";
     }
     $("lines-body").innerHTML = out;
@@ -1124,7 +1162,7 @@
         rows[i].classList.remove("broken");
       } else {
         tds[QTY_TD].innerHTML = r.ok
-          ? '<span style="color:var(--ink-v)">—</span>'
+          ? '<span class="dash">—</span>'
           : '<span class="' + (neverPicked ? "unpicked" : "gone") + '">'
             + (neverPicked ? "Pick a material"
               : r.reason === "missing_item" ? "Item removed"
@@ -1178,7 +1216,13 @@
       return;
     }
 
-    var dup = t.getAttribute && t.getAttribute("data-dupe-item");
+    // THROUGH closest(), NOT off the clicked element. These controls hold an inline SVG now, so
+    // a press can land on the <svg> or one of its <path>s — none of which carry the attribute.
+    // Reading it off e.target would make the button dead over most of its own area. The
+    // pointer-events rule on `.icon svg` also prevents it; this is the half that survives
+    // somebody tidying the stylesheet.
+    var dupBtn = t.closest && t.closest("[data-dupe-item]");
+    var dup = dupBtn && dupBtn.getAttribute("data-dupe-item");
     if (dup) {
       var src = itemOf(dup);
       if (!src) return;
@@ -1205,7 +1249,8 @@
       return;
     }
 
-    var di = t.getAttribute && t.getAttribute("data-del-item");
+    var delBtn = t.closest && t.closest("[data-del-item]");
+    var di = delBtn && delBtn.getAttribute("data-del-item");
     if (di) {
       var it = itemOf(di);
       var used = ASMS.filter(function (a) {
@@ -1234,7 +1279,10 @@
       return;
     }
 
-    if (t.id === "asm-new" || t.id === "asm-new-2" || t.id === "asm-new-top") {
+    // asm-new-top is gone: the create control that used to sit in the page header now lives at
+    // the foot of the assembly rail, which is the list it appends to.
+    var newAsm = t.closest && t.closest("#asm-new, #asm-new-2");
+    if (newAsm) {
       try {
         var a = await post("assemblies", { name: "New assembly", unit: "SF" });
         ASMS.push(a.assembly);
@@ -1245,7 +1293,7 @@
       return;
     }
 
-    if (t.id === "add-line") {
+    if (t.closest && t.closest("#add-line")) {
       var asm = current();
       if (!asm) return;
       // BLANK, not pre-filled with ITEMS[0]. That was whichever material sorts first
@@ -1264,7 +1312,8 @@
       return;
     }
 
-    var addRef = t.getAttribute && t.getAttribute("data-add-ref");
+    var addRefBtn = t.closest && t.closest("[data-add-ref]");
+    var addRef = addRefBtn && addRefBtn.getAttribute("data-add-ref");
     if (addRef) {
       try {
         var one = singular(addRef);
@@ -1284,9 +1333,10 @@
       return;
     }
 
-    var delRef = t.getAttribute && t.getAttribute("data-del-ref");
+    var delRefBtn = t.closest && t.closest("[data-del-ref]");
+    var delRef = delRefBtn && delRefBtn.getAttribute("data-del-ref");
     if (delRef) {
-      var rid = t.getAttribute("data-ref-id");
+      var rid = delRefBtn.getAttribute("data-ref-id");
       var listRef = adminList(delRef);
       var refRow = null;
       for (var ri = 0; ri < listRef.length; ri++) if (listRef[ri].id === rid) refRow = listRef[ri];
@@ -1336,7 +1386,8 @@
       return;
     }
 
-    var dv = t.getAttribute && t.getAttribute("data-del-vendor");
+    var delVenBtn = t.closest && t.closest("[data-del-vendor]");
+    var dv = delVenBtn && delVenBtn.getAttribute("data-del-vendor");
     if (dv) {
       var ven = null;
       for (var vi = 0; vi < VENDORS.length; vi++) if (VENDORS[vi].id === dv) ven = VENDORS[vi];
@@ -1361,7 +1412,7 @@
       return;
     }
 
-    if (t.id === "asm-del") {
+    if (t.closest && t.closest("#asm-del")) {
       var cur = current();
       if (!cur) return;
       var yes = await TW.confirmDanger({
@@ -1381,10 +1432,11 @@
       return;
     }
 
-    if (t.hasAttribute && t.hasAttribute("data-del-line")) {
+    var delLineBtn = t.closest && t.closest("[data-del-line]");
+    if (delLineBtn) {
       var owner = current();
       if (!owner) return;
-      owner.lines.splice(Number(t.getAttribute("data-del-line")), 1);
+      owner.lines.splice(Number(delLineBtn.getAttribute("data-del-line")), 1);
       paint();
       patchSoon("assemblies", owner.id, { lines: owner.lines });
     }

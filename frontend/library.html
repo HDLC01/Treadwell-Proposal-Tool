@@ -10,51 +10,93 @@
        removed" warning into the ordinary row background. There is no dark theme here. -->
   <meta name="color-scheme" content="only light" />
   <style>
+    /* ── TOKENS ─────────────────────────────────────────────────────────────
+       THE APP'S OWN, read out of frontend/styles.css rather than invented. This page used to
+       carry a cool set of its own — --surf:#f4f4f5, --red:#c8102e — and next to any other
+       Treadwell screen it read as somebody else's product. The warm neutral cast is the thing
+       that makes a screen look like this one's, so the greys are warm and the red is the
+       brand's #9e001f, not a brighter substitute.
+
+       The variable NAMES are unchanged. Every rule below already referred to --red, --surf and
+       the rest, so re-pointing them re-skins the whole page without touching a selector. */
     :root { color-scheme: only light;
-      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec;
-      --ink:#1b1c1c; --ink-v:#5c403f;
-      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea;
-      --line:rgba(27,28,28,.1); --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3; }
+      --red:#9e001f; --red-dark:#6c0015; --red-tint:#ffdad8;
+      --ink:#1a1a1a; --ink-v:#5c403f;
+      --surf:#fbf9f8; --card:#ffffff; --surf-low:#f3eeed; --surf-dim:#dbdad9;
+      /* Hairlines tinted with the ink rather than neutral black: a cool rule across a warm
+         surface is the detail that gave the old page its borrowed feel. */
+      --line:rgba(92,64,63,.16); --line-soft:rgba(92,64,63,.11);
+      --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3;
+      /* ONE type stack, not two. The old page set headings, buttons and totals in system-ui and
+         body text in Inter, so a total and the sentence explaining it were different faces. */
+      --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+      --mono:Consolas,'SF Mono',ui-monospace,SFMono-Regular,Menlo,'Roboto Mono',monospace;
+      /* ONE radius scale. There were five: 12, 10, 9, 8 and 7 px, assigned by whichever value
+         the last person typed. Containers, controls, small controls, pills. */
+      --r-lg:12px; --r-md:8px; --r-sm:6px; }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
-      font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-    .mono { font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+      font:400 14px/1.55 var(--ui); }
+    .mono { font-family:var(--mono); }
     .top { display:flex; align-items:center; gap:14px; max-width:1320px; margin:0 auto 4px; }
     .logo { width:54px; height:34px; display:block; flex:none; }
-    h1 { font-size:20px; margin:0; flex:1; }
+    h1 { font-size:20px; letter-spacing:-.01em; margin:0; flex:1; }
     .wrap { max-width:1320px; margin:0 auto; }
     /* Beta marker. Deliberately beside the title rather than a dismissible banner: this page
        is being trialled, and somebody arriving from the sidebar in three weeks should still be
        told before they rely on a number it produced. */
-    .beta { font:700 10px system-ui; letter-spacing:.07em; text-transform:uppercase;
-      background:var(--red-tint); color:var(--red-dark); border:1px solid rgba(200,16,46,.28);
+    .beta { font:700 10px var(--ui); letter-spacing:.07em; text-transform:uppercase;
+      background:var(--red-tint); color:var(--red-dark); border:1px solid rgba(158,0,31,.24);
       border-radius:999px; padding:4px 10px; white-space:nowrap; cursor:help; }
     .hint { color:var(--ink-v); font-size:13px; margin:0 0 16px; max-width:74ch; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
     .alert:empty { display:none; }
 
     /* Items | Assemblies */
-    .views { display:flex; gap:2px; background:#efeeec; border-radius:10px; padding:2px;
-      margin:0 0 16px; width:max-content; }
-    .views button { border:0; background:none; padding:7px 16px; border-radius:8px;
-      cursor:pointer; font:600 13px system-ui; color:var(--ink-v); }
+    .views { display:flex; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
+      padding:3px; margin:0 0 16px; width:max-content; }
+    .views button { border:0; background:none; padding:7px 16px; border-radius:var(--r-md);
+      cursor:pointer; font:600 13px var(--ui); color:var(--ink-v);
+      transition:background .15s ease, color .15s ease; }
+    .views button:hover { color:var(--red-dark); }
     .views button[aria-selected="true"] { background:var(--card); color:var(--red-dark);
-      box-shadow:0 1px 2px rgba(27,28,28,.12); }
+      box-shadow:0 1px 2px rgba(92,64,63,.14); }
     .views .n { opacity:.6; margin-left:6px; font-weight:500; font-variant-numeric:tabular-nums; }
 
-    .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
-      box-shadow:0 1px 3px rgba(0,0,0,.05); }
-    .btn { background:var(--red); color:#fff; border:0; border-radius:8px; padding:8px 14px;
-      font:600 13px system-ui; cursor:pointer; }
+    /* DEPTH IS A BORDER AND A TONAL STEP, not a drop shadow. The card used to carry one and the
+       page read as a scattering of floating tiles; the only thing here that genuinely floats is
+       the picker's results list, which keeps its shadow because it overlaps the rows below. */
+    .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
+      overflow:hidden; }
+    /* …EXCEPT the assembly panel, and this is the same trap the .tw-nolimit note below describes.
+       The card clips so a full-bleed table head and the add row keep the rounded corners, but any
+       overflow other than `visible` is a clipping context, and the one thing on this page that
+       deliberately escapes its box is the item picker's results list. Clipping the panel cuts that
+       list off at the card edge, which is a bug this page has already shipped once. */
+    .card.apanel { overflow:visible; }
+    .btn { background:var(--red); color:#fff; border:0; border-radius:var(--r-md);
+      padding:8px 14px; font:600 13px var(--ui); cursor:pointer;
+      transition:background .15s ease, transform .06s ease; }
     .btn:hover { background:var(--red-dark); }
+    .btn:active { transform:translateY(1px); }
     .btn.ghost { background:transparent; color:var(--ink-v); border:1px solid var(--line); }
-    .btn.ghost:hover { color:var(--red); border-color:var(--red); }
+    .btn.ghost:hover { color:var(--red); border-color:var(--red); background:var(--surf-low); }
     .btn.sm { padding:5px 10px; font-size:12px; }
-    .icon { background:none; border:0; cursor:pointer; color:var(--ink-v); padding:4px 6px;
-      border-radius:6px; font-size:13px; line-height:1; }
+    .addline { display:inline-flex; align-items:center; gap:6px; }
+    .addline svg { pointer-events:none; flex:none; }
+    .icon { background:none; border:0; cursor:pointer; color:var(--ink-v); padding:5px;
+      border-radius:var(--r-sm); line-height:1; display:inline-flex; align-items:center;
+      justify-content:center; transition:background .12s ease, color .12s ease; }
     .icon:hover { color:var(--red); background:var(--surf-low); }
+    .icon.danger:hover { color:var(--red-dark); background:var(--red-tint); }
+    /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
+       attribute off the element that was clicked, and an <svg> child would answer null and
+       swallow the press. The handlers now resolve through closest() as well, so this rule is
+       the second of two answers rather than the only one. */
+    .icon svg, .addbtn svg { pointer-events:none; flex:none; }
     input, select, textarea { font:inherit; color:var(--ink); background:var(--card);
-      border:1px solid var(--line); border-radius:7px; padding:6px 9px; }
+      border:1px solid var(--line); border-radius:var(--r-md); padding:6px 9px;
+      transition:border-color .12s ease; }
     input:hover, select:hover { border-color:var(--red); }
     :where(a,button,input,select,textarea,[tabindex]):focus-visible { outline:2px solid var(--red);
       outline-offset:2px; }
@@ -65,21 +107,68 @@
     /* Same table, no scroller — see the comment on the assemblies lines table. An overflow value
        other than `visible` would clip the item picker's floating results. */
     .tw-nolimit { overflow:visible; }
-    table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
-    th, td { text-align:left; padding:9px 11px; border-bottom:1px solid rgba(27,28,28,.08); }
-    thead th { background:var(--surf-low); font:700 10px system-ui; letter-spacing:.06em;
-      text-transform:uppercase; color:var(--ink-v); white-space:nowrap; }
+    table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px;
+      font-variant-numeric:tabular-nums; }
+    /* 32px rows. The old 9px padding on 13px/1.55 text made a 38px row, so a 40-material library
+       ran a screen and a half longer than it needed to for no gain in legibility. */
+    th, td { text-align:left; padding:7px 11px; border-bottom:1px solid var(--line-soft); }
+    thead th { background:var(--surf-low); font:700 10px var(--ui); letter-spacing:.06em;
+      text-transform:uppercase; color:var(--ink-v); white-space:nowrap;
+      border-bottom-color:var(--line); }
     tbody tr:last-child td { border-bottom:0; }
+    /* THE ROW UNDER THE CURSOR. Eight columns wide with the dates at the far right, the eye
+       loses its line somewhere around the vendor; this is the cheapest fix there is. */
+    tbody tr:hover td { background:rgba(243,238,237,.55); }
+    tbody tr.broken:hover td { background:var(--warn-bg); }
     td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
     .items-table thead th { text-align:center; }
     .items-table thead th:first-child { text-align:left; }
+    .th-sub { font-weight:400; text-transform:none; letter-spacing:0; }
+    /* Widths as classes. They were eight inline style attributes on the <th> row. */
+    .w-order { width:112px; } .w-cov { width:116px; } .w-waste { width:104px; }
+    .w-ru { width:78px; text-align:center; } .w-qty { width:132px; } .w-act { width:34px; }
+    .cell-name { width:100%; min-width:150px; }
+    .cell-unit { width:100%; min-width:96px; }
+    .cell-vendor { width:100%; min-width:130px; }
+    .cell-ref { width:100%; min-width:170px; }
+    .cell-note { width:100%; min-width:190px; }
+    .cell-qty { width:64px; }
+    .cell-cost { width:92px; }
+    .rowact { white-space:nowrap; }
+
+    /* WHICH CELLS THE PAGE WORKS OUT FOR YOU. Quantity and Cost are the only two columns nobody
+       types into — they are the arithmetic this page exists to show — so they carry a faint band
+       that runs the height of the table and separates them from the fields that feed them. Tone
+       only: no rule, no weight change, and not one pixel of geometry, because the numbers under
+       it are what a bid is priced from. */
+    td.derived, th.derived { background:rgba(243,238,237,.6); }
+    tbody tr:hover td.derived { background:rgba(243,238,237,.9); }
+
+    /* THE CREATE CONTROL SITS AT THE FOOT OF THE LIST IT ADDS TO.
+       Hanz, 2026-08-27: "I dont like the New assembly button up top." It was parked at the far
+       right of the tab strip, beside Administration and about thirteen hundred pixels from the
+       rail it appends a row to, so the thing you pressed and the thing that appeared had no
+       relationship on screen.
+
+       ONE RULE, FOUR PLACES: materials, assemblies, and the three administration lists all end
+       with a full-width row in the same container, drawn like the rows above it and reading as
+       the next one. Press it and the new row appears exactly where the control was. That is also
+       why it is not a fifth card idiom — it is a table row that happens to be a button. */
+    .addrow { border-top:1px solid var(--line-soft); background:var(--card); }
+    .addbtn { width:100%; display:flex; align-items:center; gap:8px; text-align:left;
+      background:none; border:0; cursor:pointer; padding:10px 11px; color:var(--ink-v);
+      font:600 12.5px var(--ui); border-radius:0;
+      transition:background .12s ease, color .12s ease; }
+    .addbtn:hover { background:var(--surf-low); color:var(--red-dark); }
+    .addbtn:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
 
     /* assemblies workspace */
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
     @media (max-width:1080px){ .work { grid-template-columns:1fr; } }
     .alist { padding:8px; display:flex; flex-direction:column; gap:3px; }
     .arow { text-align:left; background:none; border:0; cursor:pointer; width:100%;
-      padding:9px 10px; border-radius:8px; font:inherit; color:var(--ink); display:grid; gap:2px; }
+      padding:9px 10px; border-radius:var(--r-md); font:inherit; color:var(--ink);
+      display:grid; gap:2px; transition:background .12s ease; }
     .arow:hover { background:var(--surf-low); }
     .arow[aria-current="true"] { background:var(--red-tint); }
     .arow[aria-current="true"] .an { color:var(--red-dark); }
@@ -87,7 +176,7 @@
     .am { font-size:11.5px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
     .apanel { padding:18px 20px 20px; display:grid; gap:16px; }
     .atitle { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .atitle input { font:700 16px system-ui; padding:5px 8px; flex:1; min-width:180px; }
+    .atitle input { font:700 16px var(--ui); padding:5px 8px; flex:1; min-width:180px; }
 
     /* The measured area is the one input every number below depends on, so it gets its own
        band rather than becoming another column in the line table. */
@@ -97,8 +186,9 @@
     .areaband.quiet { background:none; border:0; border-top:1px solid var(--line);
       border-radius:0; margin-top:10px; padding:10px 0 0; }
     .areaband.quiet label { font-weight:400; color:var(--ink-v); }
-    .areaband { background:var(--surf-low); border:1px solid var(--line); border-radius:10px;
-      padding:12px 14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    .areaband { background:var(--surf-low); border:1px solid var(--line);
+      border-radius:var(--r-md); padding:12px 14px; display:flex; align-items:center; gap:12px;
+      flex-wrap:wrap; }
     .areaband label { font-weight:600; font-size:13px; }
     .areaband input { width:116px; font-weight:600; }
     .areaband .why { color:var(--ink-v); font-size:12px; }
@@ -115,6 +205,7 @@
        working, not inferred from a total that looks slightly off. */
     .calc { font-size:11px; color:var(--ink-v); margin-top:3px; }
     .qty { font-weight:700; font-variant-numeric:tabular-nums; }
+    .dash { color:var(--ink-v); }
     .gone { color:var(--warn); font-size:11.5px; margin-top:3px; font-weight:600; }
     /* "Pick a material" on a line that has never been filled in. Deliberately NOT .gone: amber is
        this page's colour for something that broke, and a line the estimator added ten seconds ago
@@ -122,14 +213,16 @@
        the pick turns it into a real quantity. */
     .unpicked { color:var(--ink-v); font-size:11.5px; margin-top:3px; font-weight:600; }
     tr.broken { background:var(--warn-bg); }
+    tr.broken td.derived { background:var(--warn-bg); }
+    .lines-empty { color:var(--ink-v); padding:22px; text-align:center; }
 
     .totals { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-    .tot { border:1px solid var(--line); border-radius:10px; padding:10px 14px;
+    .tot { border:1px solid var(--line); border-radius:var(--r-md); padding:10px 14px;
       background:var(--card); min-width:150px; }
-    .tot .k { font:700 9.5px system-ui; letter-spacing:.07em; text-transform:uppercase;
+    .tot .k { font:700 9.5px var(--ui); letter-spacing:.07em; text-transform:uppercase;
       color:var(--ink-v); }
-    .tot .v { font:700 20px/1.25 system-ui; font-variant-numeric:tabular-nums; margin-top:3px; }
-    .tot.head { border-color:var(--ok); }
+    .tot .v { font:700 20px/1.25 var(--ui); font-variant-numeric:tabular-nums; margin-top:3px; }
+    .tot.head { border-color:var(--ok); background:rgba(15,123,52,.04); }
     .tot.head .v { color:var(--ok); }
 
     /* One sentence under each tab saying what belongs in it. Hanz asked for these by name: the
@@ -141,10 +234,11 @@
     /* A cost is money, so it wears the sign. The prefix sits inside the field's box rather than
        beside it, or the column stops lining up the moment a number gets wider. */
     .money { display:inline-flex; align-items:center; gap:0; border:1px solid var(--line);
-      border-radius:7px; background:var(--card); padding-left:8px; }
+      border-radius:var(--r-md); background:var(--card); padding-left:8px; }
     .money:hover { border-color:var(--red); }
     .money span { color:var(--ink-v); font-size:12.5px; }
-    .money input { border:0; border-radius:0 7px 7px 0; padding-left:4px; background:none; }
+    .money input { border:0; border-radius:0 var(--r-md) var(--r-md) 0; padding-left:4px;
+      background:none; }
     .money input:hover { border-color:transparent; }
     .money:focus-within { outline:2px solid var(--red); outline-offset:2px; }
 
@@ -194,10 +288,10 @@
       clip-path:inset(50%); overflow:hidden; white-space:nowrap; }
     .dchip-f { display:inline-flex; align-items:center; gap:3px; max-width:100%;
       border:1px solid var(--line); border-radius:999px; padding:3px 9px 3px 7px;
-      background:var(--surf-low); color:var(--ink-v); font:600 11.5px/1.55 system-ui;
+      background:var(--surf-low); color:var(--ink-v); font:600 11.5px/1.55 var(--ui);
       white-space:nowrap; }
     .dchip:hover .dchip-f { border-color:var(--red); color:var(--red-dark); }
-    .dchip > input:checked + .dchip-f { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
+    .dchip > input:checked + .dchip-f { background:#e9f5ec; color:var(--ok); border-color:#bfe3c8; }
     /* COLOUR IS NOT THE ONLY SIGNAL. The mark changes shape, not just hue: a tick when the
        material is in that division and a plus when it is not, so somebody who cannot separate the
        green from the grey can still count the ones that are on. CSS content rather than markup,
@@ -220,34 +314,43 @@
     .item-picker > input { width:100%; }
     .item-results { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:30;
       display:grid; gap:4px; max-height:230px; overflow:auto; background:var(--card);
-      border:1px solid var(--line); border-radius:9px; padding:6px;
-      box-shadow:0 8px 22px rgba(27,28,28,.16); }
-    .item-result { text-align:left; background:var(--card); border:1px solid var(--line); border-radius:7px;
-      padding:6px 8px; cursor:pointer; color:var(--ink); }
+      border:1px solid var(--line); border-radius:var(--r-md); padding:6px;
+      box-shadow:0 8px 22px rgba(92,64,63,.18); }
+    .item-result { text-align:left; background:var(--card); border:1px solid var(--line);
+      border-radius:var(--r-sm); padding:6px 8px; cursor:pointer; color:var(--ink); }
     .item-result[aria-pressed="true"] { border-color:var(--red); background:var(--red-tint); }
     .item-result:hover { border-color:var(--red); }
     .item-result b { display:block; font-size:12.5px; }
     .item-result span { display:block; color:var(--ink-v); font-size:11px; line-height:1.35; }
     .th-help { cursor:help; border-bottom:1px dotted rgba(92,64,63,.55); }
+    /* The search box wears the glyph rather than sitting beside a label. */
     .itemsearch { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
-    .itemsearch input { width:100%; max-width:360px; }
-    .itemsearch .hits { color:var(--ink-v); font-size:12px; }
-    /* Pushes the action to the far end of the tab row without joining the tab set. */
-    .tabaction { margin-left:auto; display:inline-flex; align-items:center; }
+    .searchbox { position:relative; flex:1; max-width:360px; display:flex; align-items:center; }
+    .searchbox svg { position:absolute; left:9px; color:var(--ink-v); pointer-events:none; }
+    .itemsearch input { width:100%; padding-left:31px; }
+    .itemsearch .hits { color:var(--ink-v); font-size:12px; font-variant-numeric:tabular-nums; }
     .admin-grid { display:grid; gap:18px; }
-    .admin-section h2 { margin:0 0 8px; font:700 14px system-ui; }
+    .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
 
     /* Vendors: readable by everyone, editable by admins. The read-only state is a real state, not
        a disabled table — it says who to ask. */
     .ronote { background:var(--warn-bg); border:1px solid rgba(122,92,0,.25); color:var(--warn);
-      border-radius:9px; padding:9px 12px; font-size:12.5px; margin:0 0 12px; font-weight:600; }
+      border-radius:var(--r-md); padding:9px 12px; font-size:12.5px; margin:0 0 12px;
+      font-weight:600; }
 
     .empty { padding:46px 24px; text-align:center; color:var(--ink-v); }
+    .span-all { grid-column:1/-1; }
     .empty h3 { color:var(--ink); font-size:15px; margin:0 0 6px; }
     .empty p { margin:0 auto 14px; max-width:48ch; font-size:13px; }
     .foot { color:var(--ink-v); font-size:12px; margin-top:20px; max-width:76ch; }
     [hidden] { display:none !important; }
     .saving { color:var(--ink-v); font-size:11.5px; }
+
+    /* Nothing here needs to move to be understood, so the transitions above are all colour and
+       they all go away when the machine is asked to stop animating. */
+    @media (prefers-reduced-motion: reduce) {
+      * { transition-duration:0.01ms !important; animation-duration:0.01ms !important; }
+    }
   </style>
 </head>
 <body>
@@ -269,13 +372,10 @@
               aria-controls="pane-asm">Assemblies<span class="n" id="n-asm"></span></button>
       <button type="button" role="tab" id="tab-vendors" aria-selected="false"
               aria-controls="pane-vendors">Administration</button>
-      <!-- OUTSIDE the tablist, in its own wrapper. Hanz asked for New assembly to sit beside
-           Administration, and the obvious way to do that — dropping the button in among the tabs —
-           puts a control that is not a tab inside role="tablist". A screen reader then announces
-           it as "tab 4 of 4", arrow-key navigation lands on it, and activating it does not change
-           panels. The wrapper keeps it visually in the row and honestly out of the tab set. -->
-      <span class="tabaction"><button class="btn sm" type="button" id="asm-new-top">+ New
-        assembly</button></span>
+      <!-- "+ New assembly" USED TO SIT HERE, in a .tabaction wrapper pinned to the right-hand end
+           of this strip. Hanz, 2026-08-27: "I dont like the New assembly button up top." It now
+           lives at the foot of the assembly rail, which is the list it actually appends to — see
+           the .addrow note in the stylesheet. -->
     </div>
 
     <!-- ── Items ──────────────────────────────────────────────────────── -->
@@ -289,21 +389,28 @@
            their state lived on the line object so it was being PERSISTED to the server on every
            save. This box's query is a plain variable that nothing serialises. -->
       <div class="itemsearch">
-        <input id="item-q" type="search" placeholder="Search materials, divisions or vendors"
-               aria-label="Search materials" autocomplete="off" />
+        <span class="searchbox">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+          <input id="item-q" type="search" placeholder="Search materials, divisions or vendors"
+                 aria-label="Search materials" autocomplete="off" />
+        </span>
         <span class="hits" id="item-hits" hidden></span>
       </div>
-      <div class="card tw">
-        <table class="items-table">
-          <thead>
-            <tr>
-              <th>Materials <span style="font-weight:400;text-transform:none;letter-spacing:0;">(how the manufacturer names it)</span></th>
-              <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
-              <th class="n">Cost</th><th>Vendor</th><th>Dates</th><th></th>
-            </tr>
-          </thead>
-          <tbody id="items-body"></tbody>
-        </table>
+      <div class="card">
+        <div class="tw">
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
+                <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
+                <th class="n">Cost</th><th>Vendor</th><th>Dates</th><th class="w-act"></th>
+              </tr>
+            </thead>
+            <tbody id="items-body"></tbody>
+          </table>
+        </div>
         <div id="items-nomatch" class="empty" hidden>
           <h3>Nothing matches that</h3>
           <p>Every word has to appear somewhere in the material's name, its divisions or its
@@ -313,11 +420,17 @@
           <h3>No materials yet</h3>
           <p>Add the products you buy, named the way the manufacturer names them — how much comes
             in a purchase, and what that purchase costs.</p>
-          <button class="btn" type="button" data-add-item>+ Add your first material</button>
+          <button class="btn" type="button" data-add-item>Add your first material</button>
         </div>
-      </div>
-      <div style="margin-top:12px;">
-        <button class="btn ghost" type="button" data-add-item>+ Add material</button>
+        <!-- The next row, drawn like the rows above it. Pressing it puts a material exactly
+             where the control is, instead of below a table you had to scroll past. -->
+        <div class="addrow" id="items-addrow">
+          <button class="addbtn" type="button" data-add-item>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                 focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+            Add material</button>
+        </div>
       </div>
       <!-- The material names feed the assemblies' picker AND this tab's duplicate hint. One list,
            so a name typed here is searchable there the moment it saves. -->
@@ -336,53 +449,71 @@
       <div class="admin-grid">
         <div class="admin-section" id="admin-divisions">
           <h2>Divisions</h2>
-          <div class="card tw">
-            <table>
-              <thead><tr><th>Division</th><th>Notes</th><th class="n">Items</th><th></th></tr></thead>
-              <tbody id="divisions-body"></tbody>
-            </table>
+          <div class="card">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Division</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
+                <tbody id="divisions-body"></tbody>
+              </table>
+            </div>
             <div id="divisions-empty" class="empty" hidden>
               <h3>No divisions yet</h3>
               <p>Add divisions and they become chips on every item.</p>
-              <button class="btn" type="button" data-add-ref="divisions">+ Add your first division</button>
+              <button class="btn" type="button" data-add-ref="divisions">Add your first division</button>
             </div>
-          </div>
-          <div style="margin-top:12px;" data-addrow-ref="divisions">
-            <button class="btn ghost" type="button" data-add-ref="divisions">+ Add division</button>
+            <div class="addrow" data-addrow-ref="divisions">
+              <button class="addbtn" type="button" data-add-ref="divisions">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add division</button>
+            </div>
           </div>
         </div>
         <div class="admin-section" id="admin-units">
           <h2>Units</h2>
-          <div class="card tw">
-            <table>
-              <thead><tr><th>Unit</th><th>Notes</th><th class="n">Items</th><th></th></tr></thead>
-              <tbody id="units-body"></tbody>
-            </table>
+          <div class="card">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Unit</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
+                <tbody id="units-body"></tbody>
+              </table>
+            </div>
             <div id="units-empty" class="empty" hidden>
               <h3>No units yet</h3>
               <p>Add purchase units and they become options on every item.</p>
-              <button class="btn" type="button" data-add-ref="units">+ Add your first unit</button>
+              <button class="btn" type="button" data-add-ref="units">Add your first unit</button>
             </div>
-          </div>
-          <div style="margin-top:12px;" data-addrow-ref="units">
-            <button class="btn ghost" type="button" data-add-ref="units">+ Add unit</button>
+            <div class="addrow" data-addrow-ref="units">
+              <button class="addbtn" type="button" data-add-ref="units">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add unit</button>
+            </div>
           </div>
         </div>
         <div class="admin-section" id="admin-vendors">
           <h2>Vendors</h2>
-          <div class="card tw">
-            <table>
-              <thead><tr><th>Vendor</th><th>Notes</th><th class="n">Items</th><th></th></tr></thead>
-              <tbody id="vendors-body"></tbody>
-            </table>
+          <div class="card">
+            <div class="tw">
+              <table>
+                <thead><tr><th>Vendor</th><th>Notes</th><th class="n">Items</th><th class="w-act"></th></tr></thead>
+                <tbody id="vendors-body"></tbody>
+              </table>
+            </div>
             <div id="vendors-empty" class="empty" hidden>
               <h3>No vendors yet</h3>
               <p>Add the suppliers you buy from and they become options on every item.</p>
-              <button class="btn" type="button" data-add-ref="vendors">+ Add your first vendor</button>
+              <button class="btn" type="button" data-add-ref="vendors">Add your first vendor</button>
             </div>
-          </div>
-          <div style="margin-top:12px;" data-addrow-ref="vendors">
-            <button class="btn ghost" type="button" data-add-ref="vendors">+ Add vendor</button>
+            <div class="addrow" data-addrow-ref="vendors">
+              <button class="addbtn" type="button" data-add-ref="vendors">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+                Add vendor</button>
+            </div>
           </div>
         </div>
       </div>
@@ -396,13 +527,29 @@
         items - a primer, a body coat, a top coat - and see what it costs per square foot at a
         test area.</p>
       <div class="work">
-        <div class="card alist" id="asm-list" hidden></div>
+        <!-- The rail is the CARD, and the New assembly control is its last row. renderList fills
+             the list above it and hides this whole card when there is nothing to list — hiding
+             only the inner list would leave the button sitting in an empty box. -->
+        <div class="card" id="asm-rail" hidden>
+          <div class="alist" id="asm-list"></div>
+          <div class="addrow">
+            <button class="addbtn" type="button" id="asm-new-2">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+              New assembly</button>
+          </div>
+        </div>
 
         <div class="card apanel" id="asm-panel" hidden>
           <div class="atitle">
             <input id="asm-name" aria-label="Assembly name" maxlength="200" />
-            <button class="icon" type="button" id="asm-del" title="Delete this assembly"
-                    aria-label="Delete this assembly">🗑</button>
+            <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
+                    aria-label="Delete this assembly">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"></path></svg>
+            </button>
             <span class="saving" id="asm-saving"></span>
           </div>
 
@@ -414,20 +561,28 @@
               <thead>
                 <tr>
                   <th><span class="th-help" tabindex="0" title="The material this line uses. Pick one from the library; its cost and pack size come with it." aria-label="Items. The material this line uses. Pick one from the library; its cost and pack size come with it.">Items</span></th>
-                  <th class="n" style="width:112px;"><span class="th-help" tabindex="0" title="How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon." aria-label="Order Amount. How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon.">Order Amount</span></th>
-                  <th class="n" style="width:116px;"><span class="th-help" tabindex="0" title="How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF." aria-label="Coverage per Unit. How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF.">Coverage per Unit</span></th>
-                  <th class="n" style="width:104px;"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor</span></th>
-                  <th style="width:78px;text-align:center;"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
-                  <th class="n" style="width:132px;"><span class="th-help" tabindex="0" title="How much of this material the test area needs, after waste and rounding. The working is shown underneath." aria-label="Quantity. How much of this material the test area needs, after waste and rounding. The working is shown underneath.">Quantity</span></th>
-                  <th class="n" style="width:132px;"><span class="th-help" tabindex="0" title="What that quantity costs at this material's purchase price. The working is shown underneath." aria-label="Cost. What that quantity costs at this material's purchase price. The working is shown underneath.">Cost</span></th>
-                  <th style="width:34px;"></th>
+                  <th class="n w-order"><span class="th-help" tabindex="0" title="How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon." aria-label="Order Amount. How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon.">Order Amount</span></th>
+                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF." aria-label="Coverage per Unit. How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF.">Coverage per Unit</span></th>
+                  <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor</span></th>
+                  <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
+                  <th class="n w-qty derived"><span class="th-help" tabindex="0" title="How much of this material the test area needs, after waste and rounding. The working is shown underneath." aria-label="Quantity. How much of this material the test area needs, after waste and rounding. The working is shown underneath.">Quantity</span></th>
+                  <th class="n w-qty derived"><span class="th-help" tabindex="0" title="What that quantity costs at this material's purchase price. The working is shown underneath." aria-label="Cost. What that quantity costs at this material's purchase price. The working is shown underneath.">Cost</span></th>
+                  <th class="w-act"></th>
                 </tr>
               </thead>
               <tbody id="lines-body"></tbody>
             </table>
           </div>
 
-          <div><button class="btn ghost sm" type="button" id="add-line">+ Add item line</button></div>
+          <!-- Not an .addrow, and deliberately: the lines table sits inside the assembly panel
+               rather than in a card of its own, so there is no container edge for a full-width
+               row to belong to. It keeps the ghost-button shape and takes the same drawn plus,
+               so the page has one glyph for "add another" even where it has two shapes. -->
+          <div><button class="btn ghost sm addline" type="button" id="add-line">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                 focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+            Add item line</button></div>
 
           <div class="totals">
             <div class="tot">
@@ -452,14 +607,11 @@
           </div>
         </div>
 
-        <div class="card empty" id="asm-empty" style="grid-column:1/-1;" hidden>
+        <div class="card empty span-all" id="asm-empty" hidden>
           <h3 id="asm-empty-h">No assemblies yet</h3>
           <p id="asm-empty-why"></p>
-          <button class="btn" type="button" id="asm-new">+ Build your first assembly</button>
+          <button class="btn" type="button" id="asm-new">Build your first assembly</button>
         </div>
-      </div>
-      <div id="asm-newrow" style="margin-top:12px;" hidden>
-        <button class="btn ghost" type="button" id="asm-new-2">+ New assembly</button>
       </div>
     </section>
   </div>
