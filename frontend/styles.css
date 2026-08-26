@@ -320,6 +320,11 @@ button {
   color: var(--treadwell-red-dark);
   border: 1px solid var(--treadwell-red);
 }
+/* The outline variant had NO working hover. `.download-link:hover` and `.download-link.secondary`
+   are both (0,2,0), and the variant is declared second, so it won the tie and painted the button
+   back to white the moment the pointer arrived — a button that looks dead on contact. (0,3,0)
+   settles it on specificity rather than on which rule happens to be lower in the file. */
+.download-link.secondary:hover { background: var(--treadwell-red-light); }
 
 /* ═══ Mobile responsive ═══════════════════════════════════════════════ */
 @media (max-width: 768px) {
@@ -830,6 +835,10 @@ button {
    Shared shape with the CRM drawer's chips deliberately: it is the same gesture in both places,
    and two different-looking answers to "what have I attached?" is worse than one plain one. */
 .att-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+/* Both users of this strip hide it with the `hidden` attribute (`strip.hidden = !items.length`),
+   and a class `display` rule silently beats `hidden` — the trap with four live instances in this
+   app. Empty, the strip rendered nothing but still held its 6px margin. (0,1,1) over (0,1,0). */
+.att-strip[hidden] { display: none; }
 .att-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 6px 4px 4px; border-radius: 8px; background: rgba(0, 0, 0, .06);
