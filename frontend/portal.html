@@ -141,15 +141,49 @@
   #drawer.open { display:flex; }
   /* per-project notification chips (in the detail drawer) */
   .nt-chips { display:flex; flex-wrap:wrap; gap:6px; margin:0; }
-  /* Sent versions. One row per snapshot, the money right-aligned so a revised price is scannable
-     down the column, and the download buttons trailing it. */
-  .rev-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:7px 0;
-    border-top:1px solid var(--line); font-size:12.5px; }
-  .rev-row:first-child { border-top:0; }
-  .rev-row .rev-amt { margin-left:auto; font-variant-numeric:tabular-nums; }
+  /* ── Sent versions ─────────────────────────────────────────────────────────
+     One row per snapshot, the money right-aligned so a revised price is scannable down the
+     column, and the download buttons trailing it.
+
+     THE 57px ROW WAS NEVER A DESIGN DECISION, and this is the fix. Each download control is
+     `class="btn btn-s rev-dl"`, and the rule below overrides its padding and its font-size but
+     NOT `.btn { min-height:42px }` — so an 11.5px inline download inherited a primary button's
+     floor, and 42 plus 7 top and 7 bottom made a 57px row, eight times over. `min-height` is
+     added at the SAME selector, which is where the other two overrides already live and
+     therefore already outranks `.btn` on specificity. That alone takes eight rows from 456px to
+     240px, before a single one is folded away. */
+  .rev-list { border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .rev-row { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; min-height:28px;
+    padding:5px 10px; font-size:12.5px; }
+  /* A hairline BETWEEN rows rather than above every one of them: the .rev-list border is
+     already the top edge, and a border on the first row doubled it. */
+  .rev-row + .rev-row { border-top:1px solid var(--line); }
+  /* The one row anybody reads in a meeting, at full weight and given the room for it. */
+  .rev-row.is-current { background:var(--surf-low); padding:8px 10px; }
+  .rev-n { font-weight:700; min-width:44px; }
+  .rev-row .rev-when { color:var(--ink-v); font-variant-numeric:tabular-nums; min-width:52px; }
+  .rev-who { color:var(--ink-v); display:inline-flex; align-items:center; gap:5px; }
+  .rev-row .rev-amt { margin-left:auto; font-weight:700; font-variant-numeric:tabular-nums; }
+  /* AN UNCHANGED PRICE LOSES ITS WEIGHT, so the column reads as a change log. Seven of eight
+     rows normally carry the same figure. Nothing is hidden: a repeated amount is still printed,
+     at the same size, in the muted ink, so the rows where the price actually moved are the rows
+     that read. */
+  .rev-row.same .rev-amt { font-weight:400; color:var(--ink-v); }
   .rev-cur { font:700 9.5px system-ui; letter-spacing:.06em; text-transform:uppercase;
     color:#0f7b34; background:#dcf5e3; border-radius:999px; padding:2px 7px; }
-  .rev-row .rev-dl { padding:3px 9px; font-size:11.5px; }
+  .rev-row .rev-dl { min-height:26px; padding:3px 9px; font-size:11.5px; }
+  /* The fold. NO INNER SCROLLER: the drawer body already scrolls and the chat thread owns a
+     second, and a third nested scroll region inside a card is worse than the wall of rows it
+     would be hiding. The earlier sends collapse instead, and the fold says how many there are
+     and whether the price ever moved, which is the only reason anybody opens it. */
+  .rev-fold { padding:0 10px; border-top:1px solid var(--line); background:#fff; }
+  .rev-fold > summary { padding:7px 0; }
+  /* No box of its own for the rows it hides: .rev-list IS the box, and a second border inside
+     it would be a fifth way to draw a card. The negative margin undoes .rev-fold's padding so
+     the folded rows line up with the current one exactly. */
+  .rev-folded { margin:0 -10px; border-top:1px solid var(--line); }
+  .rev-folded .rev-row:first-child { border-top:0; }
+  .rev-fold .note { padding:2px 0 9px; }
   .nt-chip { border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700;
     cursor:pointer; background:var(--surf-high); color:var(--ink-v); }
   .nt-chip.on { background:#e3f3e6; color:var(--ok); border-color:#bfe3c8; }
@@ -254,9 +288,35 @@
   /* ── follow-up section ────────────────────────────────────────────────────
      Each control row is one line that wraps rather than squeezing: the drawer is
      780px at most and the note input has to stay wide enough to type a sentence in. */
+  /* The Follow-up tab is FOUR groups inside ONE registered section, and this is the column that
+     spaces them. It cannot be .sec's own 7px gap, which holds a heading off its content, and it
+     must not be .dpanel: that class carries a focus rule and a paragraph rule that belong to a tab
+     panel, and reusing it on something that is not one is a lie the next reader has to unpick.
+     Same 18px the panel puts between cards, because these read as cards. See followupPanelHtml for
+     why the groups do not each take a dsec-* id of their own. */
+  .fu-groups { display:flex; flex-direction:column; gap:18px; }
   /* margin:0 — the panel is a flex column with a gap, and a margin here would add to it. */
   .fu-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0; }
   .fu-line .tw-select { min-height:38px; }
+  /* ── WHERE THIS BID GOES ───────────────────────────────────────────────────
+     The five controls that move the card to another tab or stop the chasing for months, and
+     which used to look exactly like logging a phone call: same heading rank, same button, same
+     grey paragraph above them. So they get the one tonal group on the tab, and every consequence
+     sits BESIDE its control on one line instead of above the whole group as a paragraph.
+     Rows rather than a two-column grid, which is the one place this differs from the mockup: one
+     of the five states renders NO control at all (a job won by the deposit landing has nothing to
+     undo), and in a grid that sentence lands in the control column unless a spacer cell is
+     invented for it. A wrapping row needs no spacer and degrades on a narrow drawer by wrapping,
+     which is what it should do. */
+  .acts { display:flex; flex-direction:column; gap:9px; background:var(--surf-low);
+    border:1px solid var(--line); border-radius:9px; padding:11px 13px; }
+  .act { display:flex; gap:6px 14px; align-items:center; flex-wrap:wrap; }
+  .acts-say { font-size:11.5px; color:var(--ink-v); }
+  /* THE ONE SENTENCE THAT MUST NEVER BE BEHIND A DISCLOSURE. It was said three times, inside
+     three paragraphs, in three different wordings; now it is said once, in full ink, above the
+     controls it governs, always visible. It is what stops somebody believing Mark delayed sends
+     the customer something. */
+  .acts-warn { font-size:12px; color:var(--ink); font-weight:600; }
   .fu-note { flex:1 1 220px; min-height:38px; padding:8px 10px; border:1px solid var(--line);
     border-radius:7px; font:inherit; }
   .fu-note:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
@@ -288,17 +348,73 @@
      gap does the spacing. Auto-margins can't centre a system note. */
   .dbody[data-sec="chat"] #thread { flex:1 1 auto; min-height:0; overflow-y:auto;
     display:flex; flex-direction:column; gap:10px; }
+  /* A SHORT THREAD SITS ON THE COMPOSER, not at the far end of a tall empty panel. #thread is a
+     flex column with room to spare on a two-message conversation, so the messages painted at the
+     top and 400px of white sat between them and the box you reply in. One `margin-top:auto` on the
+     first child pushes the whole run down; a long thread has no spare room, so it does nothing
+     there. Not `justify-content:flex-end`, which would fight the scroll position applySecPanel
+     restores. */
+  .dbody[data-sec="chat"] #thread > :first-child { margin-top:auto; }
   /* The composer spaces itself too, so the alert can be empty without leaving a gap above
      the box somebody is typing in. :empty hides it outright rather than reserving a line. */
   .dbody[data-sec="chat"] #chat-compose { flex:0 0 auto; padding:10px 0 16px; background:#fff;
     border-top:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
-  #reply-alert:empty, #nt-alert:empty, #nt-count:empty { display:none; }
+  /* #won-note joined these on 2026-08-27 with the Won control's move into the .acts group. It is
+     empty except after a failed save, and inside a flex ROW an empty child still earns the row's
+     gap: 14px of nothing between the button and the sentence beside it. Same treatment the four
+     alerts either side of it already get. */
+  #reply-alert:empty, #nt-alert:empty, #nt-count:empty, #won-note:empty { display:none; }
   .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); }
-  /* A section heading outranks the fact keys underneath it. Both are 700 uppercase, so at
-     ink-v against ink-v "APPROVED" and "AMOUNT" read as the same level and the card loses its
-     top. Scoped with > so the tab strip's own .lbl keeps its quieter colour, which is what the
-     selected state then brightens. */
-  .sec > .lbl { color:var(--ink); }
+  /* ── THREE HEADING RANKS ───────────────────────────────────────────────────
+     The drawer had ONE, which is why nine headings flattened into one another. A section
+     heading outranked the fact keys underneath it by colour alone: both are 700 uppercase,
+     so at ink against ink-v "APPROVED" and "AMOUNT" still read as the same level and the
+     card lost its top. Sentence case at 13px is what makes a heading a heading; the same
+     words at 11px uppercase read as a field label.
+
+     RANK 1 — .sec > .lbl, at (0,2,0). Names a CARD. It already beats bare .lbl (0,1,0) and
+     the `>` keeps it off the tab strip's own .lbl, whose quieter colour is what the selected
+     state then brightens. */
+  .sec > .lbl { display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+    font-size:13px; font-weight:700; text-transform:none; letter-spacing:-.005em; color:var(--ink); }
+  /* The ANSWER LINE, on the heading's own baseline. Every count in this drawer used to be
+     printed third, underneath a paragraph nobody read — "4 of 9 people", "8 sends", "opened
+     6 times" was always the only part of it anybody wanted. tabular-nums so two drawers
+     opened in turn line their figures up, nowrap so a count never breaks mid-phrase. */
+  .sec > .lbl .sec-ans { font-size:11.5px; font-weight:600; letter-spacing:0; text-transform:none;
+    color:var(--ink-v); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  /* RANK 2 — a heading INSIDE a card, so it takes .fact-k's spec rather than naming a card.
+     WRITTEN AT (0,3,0) ON PURPOSE. Rank 1 above is (0,2,0) and would otherwise win whatever
+     order these two are written in, and "make it smaller" has already been spent twice in this
+     repo on a value that could never apply. The class carries the weight, not the line number.
+     Both of these were direct children of .sec and therefore identical to their tab's own
+     title: six of them on the Follow-up tab, and the Deposit tab's "What the customer
+     submitted", which is what made that tab read as two cards of equal weight. */
+  .sec > .lbl.fu-lbl, .sec > .lbl.dep-lbl { display:block; font-size:10px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.05em; color:var(--ink-v); }
+  /* RANK 3 — the destructive rank. A red heading, a red left rule, and nothing else. The rule
+     is .dep's own device (see below) rather than a new one, and it is a rule rather than a
+     banner because a banner would shout louder than "Send deposit request" two tabs away. */
+  .sec.sec-dang { border-left:3px solid var(--red-dark); padding-left:11px; }
+  .sec.sec-dang > .lbl { color:var(--red-dark); justify-content:flex-start; align-items:center;
+    gap:6px; }
+  .sec.sec-dang > .lbl svg { flex:none; }
+  /* ── the disclosure that replaces an explanatory paragraph ─────────────────
+     Every one of these was a paragraph of 30-45 words above the control it described, which
+     is read once and skipped forever after. The sentence is not deleted: it moves behind a
+     summary that says what is in it, so the person who needs it can still get it. Shared by
+     the Proposal tab's two cards, the Follow-up tab's three groups and the chat thread's fold,
+     which is why it is declared once here rather than three times scoped. */
+  .why { margin:0; }
+  .why > summary { list-style:none; cursor:pointer; display:inline-flex; align-items:center;
+    gap:5px; font-size:11.5px; font-weight:600; color:var(--ink-v); padding:2px 0; }
+  .why > summary::-webkit-details-marker { display:none; }
+  .why > summary:hover { color:var(--ink); }
+  .why > summary:focus-visible { outline:2px solid var(--red); outline-offset:1px; border-radius:4px; }
+  .why > summary svg { flex:none; transition:transform .15s; }
+  .why[open] > summary svg { transform:rotate(90deg); }
+  .why .note { margin:5px 0 0; max-width:62ch; }
+  @media (prefers-reduced-motion:reduce) { .why > summary svg { transition:none; } }
   /* No bottom margin any more: a section is its own flex column, so the gap holds the label
      off its content and a section can be hidden without leaving the space behind. */
   .sec { display:flex; flex-direction:column; gap:7px; margin:0; }
@@ -355,11 +471,14 @@
      gets the size because it is the number the whole drawer is about. */
   .amt { font-variant-numeric:tabular-nums; }
   .amt-lg { font-size:20px; font-weight:800; letter-spacing:-.01em; line-height:1.15; }
-  /* Who the proposal is for, first-class: the name reads at a glance and the address sits
-     under it. This is the line the removed portal URL used to push out of the way. */
-  .idn { display:flex; flex-direction:column; gap:1px; }
-  .idn-n { font-size:15.5px; font-weight:700; letter-spacing:-.005em; overflow-wrap:anywhere; }
-  .idn-e { font-size:12.5px; color:var(--ink-v); overflow-wrap:anywhere; }
+  /* .idn, .idn-n and .idn-e were removed on 2026-08-27 with the only element they styled: the
+     Customer card's big repeated name. The head carries that name 40px above every tab (see
+     .dh-who), so a card whose whole content restates the head is a card with no job — and one
+     test pins the head's copy of it, for a good reason. What the card answers now is "have they
+     even opened it", off viewed_at / last_viewed_at, in the same .facts cells every other card
+     uses. Left behind, these three rules would read as an identity block this page supports and
+     the next person would style a fourth one against them. Same reasoning as a.link, .btn-sm and
+     .btn.is-link, which all went the same way as the controls they were written for. */
   /* Project contacts: the ROLE leads, because "who do I call about access" is the question
      this card gets opened for. A row each, so two contacts cannot run together. */
   .ct-list { display:flex; flex-direction:column; gap:6px; }
@@ -408,10 +527,34 @@
   /* ── attachments ────────────────────────────────────────────────────────────
      A picture is SHOWN, not listed: the commonest attachment on a bid is a photo of a slab, and
      a column of filename chips makes the estimator open every one to find it. Capped so a tall
-     phone photo cannot push the rest of the thread off the drawer. */
+     phone photo cannot push the rest of the thread off the drawer.
+
+     A RESERVED BOX, not a box the size of whatever arrives. attHtml renders the anchor with an
+     empty img tag and hydrateAtts fills the src in afterwards, through the authenticated helper,
+     which is unavoidable: an img tag cannot send a bearer token. So for one round trip
+     per photo the box has no content, and while it was sized off the image (`width:auto` under a
+     200px cap) the whole thread reflowed under the estimator's eye as each thumbnail landed. A
+     fixed 160x120 tinted box holds the space from the first paint, and the picture is CROPPED
+     into it on arrival rather than resizing it.
+     The `.is-loading` / `.is-broken` states below are the same box's other two answers, and the
+     JS that adds those classes lands with fix/attachment-thumbnails-ui rather than here. Written
+     now so that branch lands on a stylesheet that is already the right shape: a quiet ring is
+     what a reserved box needs while it is empty, and a picture that will not load has to SAY so
+     rather than being a grey rectangle forever. */
   .att-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
-  .att-img { display:block; line-height:0; border-radius:8px; overflow:hidden; }
-  .att-img img { max-width:200px; max-height:200px; width:auto; height:auto; display:block; }
+  .att-img { display:block; position:relative; width:160px; height:120px; line-height:0;
+    border-radius:8px; overflow:hidden; background:var(--surf-high); }
+  /* On our own red bubbles a neutral wash disappears, so the empty box lifts off the bubble. */
+  .msg.staff .att-img { background:rgba(255,255,255,.18); }
+  .att-img img { width:100%; height:100%; object-fit:cover; display:block; }
+  .att-img.is-loading::after { content:""; position:absolute; left:50%; top:50%; width:18px;
+    height:18px; margin:-9px 0 0 -9px; border-radius:50%; border:2px solid var(--ink-v);
+    border-top-color:transparent; opacity:.45; animation:att-spin .9s linear infinite; }
+  @keyframes att-spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce) { .att-img.is-loading::after { animation:none; } }
+  .att-img.is-broken { display:inline-flex; align-items:center; justify-content:center;
+    width:auto; height:auto; min-height:0; padding:6px 9px; line-height:1.4; font-size:12px;
+    color:inherit; text-decoration:none; }
   .att-file { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:8px;
     text-decoration:none; background:rgba(0,0,0,.06); color:inherit; font-size:12px; max-width:240px; }
   .att-file:hover { background:rgba(0,0,0,.11); }
@@ -472,10 +615,23 @@
      token needs to be broken mid-word. Hanz, 2026-08-13: "remove the URL for active projects."
      The link is now two controls in the Customer card, so the rule has nothing left to style. */
   .note { color:var(--ink-v); font-size:12px; }
-  /* margin:0 so the thread's gap is the only spacing — a <p>'s default 1em
+  /* ── THE THIRD REGISTER: EVERYTHING THE SYSTEM SAYS ────────────────────────
+     Speech is a bubble. The one LIVE document is a card. Everything else in this thread is a
+     line: opened, approved, contacts received, the day markers, and the fold that stands in for
+     the replaced revisions. All of it centred, all of it .note.sys, which the drawer already had
+     for two of those cases. So nothing the system says is a block any more, and the conversation
+     is the only thing in the thread with weight.
+     margin:0 so the thread's gap is the only spacing — a <p>'s default 1em
      would otherwise stack on top of it and float the note away from its event. */
   .note.sys { align-self:center; margin:0; text-align:center; background:var(--surf-low);
-    border-radius:6px; padding:5px 10px; }
+    border-radius:6px; padding:5px 10px; max-width:88%; }
+  /* The day marker. Same shape, no fill: it divides the thread rather than reporting an event,
+     and a filled pill every second message would read as more events. */
+  .note.sys.is-day { font-weight:700; font-size:11px; text-transform:uppercase;
+    letter-spacing:.05em; background:none; padding:9px 0 3px; }
+  /* The replaced documents, expanded. Left-aligned inside a centred line, because a column of
+     dates centred under its own summary is unreadable. No box: .note.sys is the box. */
+  .sup-list { text-align:left; display:flex; flex-direction:column; gap:3px; padding:4px 0 2px; }
   /* Chat cards — same shape/classes the CUSTOMER portal uses, so staff read the
      thread exactly as the customer sees it. The accent bar colour keys the type.
      An event is not speech, but it still belongs to whoever caused it, so it takes

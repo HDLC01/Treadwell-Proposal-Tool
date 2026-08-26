@@ -115,6 +115,11 @@ const CONST_NAMES = [
   // attHtml reads nothing from it, but hydrateAtts owns it and the two are declared together --
   // lifting one name out of a pair is how a rename goes unnoticed.
   "ATT_URLS",
+  // The drawer's one icon (2026-08-27), read by every disclosure in it: renderDetail's notify
+  // card, paintRevisions' fold, followupPanelHtml, followupContactsHtml and threadHtml. SEVENTH
+  // addition to these lists for the same reason as the six below, and it would be the widest of
+  // them: a missing CHEV is a ReferenceError inside renderDetail itself, so the whole drawer.
+  "CHEV",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -134,6 +139,12 @@ const FN_NAMES = [
   // request goes through the harness's own `api` stub, and a failure `continue`s, so a
   // renderer test neither waits for it nor is broken by it.
   "attHtml", "fileSize", "hydrateAtts",
+  // The thread as a whole (2026-08-27): the day markers and the fold over replaced documents are
+  // facts a per-row renderer cannot see, so renderDetail builds the thread through this instead of
+  // mapping msgHtml. SEVENTH addition for the same reason as the six below: renderDetail calls it
+  // on every payload, so leaving it out is a ReferenceError for the whole drawer rather than a
+  // missing separator.
+  "threadHtml",
   "followupPanelHtml", "followupContactsHtml", "followupRow", "followupState",
   // The hold on a SENT bid (2026-08-21), read out of the follow-up log because portal_proposals
   // stores only the pause DATE. FIFTH addition to this list for the same reason as the four below,
@@ -406,6 +417,19 @@ const BOARD_ROWS = [
   { proposal_id: "held", project_name: "Nearman Creek", proposal_status: "sent",
     sent_at: "2026-08-10T12:00:00Z", assigned_estimator: "kyle@wetreadwell.com", unread: 0,
     followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-21" } },
+  // ── the redesign's two lists (2026-08-27) ──
+  // Eight sends where the price moved once, one send, and a project sent before revisions existed:
+  // the three shapes the Sent versions card has to answer for. And a thread carrying seven replaced
+  // revisions plus a replaced invoice, which is the case the fold exists for.
+  { proposal_id: "manyrevs", project_name: "Olathe Fire Station 4", proposal_status: "sent",
+    sent_at: "2026-07-02T14:00:00Z", assigned_estimator: "kyle@wetreadwell.com", unread: 0,
+    viewed_at: "2026-07-03T15:00:00Z", last_viewed_at: "2026-08-22T16:00:00Z" },
+  { proposal_id: "onerev", project_name: "Gardner Transfer Station", proposal_status: "sent",
+    sent_at: "2026-08-19T14:00:00Z", unread: 0 },
+  { proposal_id: "norevs", project_name: "Shawnee Mission Annex", proposal_status: "sent",
+    sent_at: "2026-05-01T14:00:00Z", unread: 0 },
+  { proposal_id: "foldable", project_name: "Lenexa Cold Line", proposal_status: "sent",
+    sent_at: "2026-07-02T14:00:00Z", unread: 0 },
   { proposal_id: "heldlost", project_name: "Cherrydale Annex", proposal_status: "closed_lost",
     sent_at: "2026-08-10T12:00:00Z", unread: 0,
     followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-21",
@@ -592,6 +616,39 @@ const NOTIFY = {
 // because the portal has no column for the mark — and `fails` lets one scenario prove that a refused
 // write does not leave the rep looking at a panel claiming it saved.
 const net = { requests: [], fails: false };
+// THE SENT VERSIONS, per project, as /api/draft/<id>/revisions serves them: newest first, which is
+// the order the real route returns and the order paintRevisions' "same price as the one before"
+// test depends on. Shaped after the bid this redesign was measured against: eight sends where the
+// price moved exactly once, which is the case the old card spent 456px on and the fold spends one
+// line on. `norevs` is the project sent before revisions existed, and every other pid falls through
+// to the same empty answer it always gave.
+const REVISIONS = {
+  manyrevs: [
+    { revision_no: 8, created_at: "2026-08-19T14:00:00Z", created_by: "kyle@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 7, created_at: "2026-08-14T14:00:00Z", created_by: "kyle@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 6, created_at: "2026-08-04T14:00:00Z", created_by: "kyle@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 5, created_at: "2026-07-28T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 4, created_at: "2026-07-21T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+    { revision_no: 3, created_at: "2026-07-15T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+    { revision_no: 2, created_at: "2026-07-09T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+    { revision_no: 1, created_at: "2026-07-02T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+  ],
+  onerev: [{ revision_no: 1, created_at: "2026-08-19T14:00:00Z",
+             created_by: "kyle@wetreadwell.com", total: 41250, has_documents: true }],
+  norevs: [],
+};
+const revisionsFor = (path) => {
+  const m = /^\/api\/draft\/([^/]+)\/revisions$/.exec(path);
+  return m ? { revisions: REVISIONS[m[1]] || [] } : null;
+};
 // The drawer payload the lifted openDetail is served, set by the deep-link scenario. Only the
 // bare detail GET reads it — every other path keeps the generic {ok:true} below, or a deposit
 // request would answer with a whole proposal.
@@ -609,10 +666,12 @@ const api = (p, init) => {
     return Promise.resolve({ ok: false, status: 500,
                              json: () => Promise.resolve({ error: "postgrest down" }) });
   }
+  const revs = revisionsFor(p);
   return Promise.resolve({
     ok: true,
     json: () => Promise.resolve(p.includes("notify-overrides") ? NOTIFY
       : p.includes("estimators") ? { estimators: [{ email: "kyle@wetreadwell.com", name: "Kyle" }] }
+      : revs ? revs
       : { ok: true }),
   });
 };
@@ -925,17 +984,29 @@ async function runScenario(name, s) {
   // the panel it repaints into offers the undo, that the mark survives on the board row the next
   // poll will render from, and that a refused write claims nothing.
   try {
-    /** Press one of the two won buttons and report what the drawer did about it. */
-    async function pressWon(id) {
+    /** Press one of the two won buttons and report what the drawer did about it.
+     *
+     *  BOTH buttons ask now (2026-08-27: the mark moves the card to another tab, and it was the one
+     *  control in that group without a prompt). `danger.answer` is the answer given, and the calls
+     *  are recorded on `danger.calls` so what the dialog SAID is assertable as well as that it was
+     *  asked. Every scenario below that presses through the mark says yes explicitly rather than
+     *  leaning on the module default, which is `false` on purpose so a scenario written before a
+     *  prompt existed cannot silently start pressing through one. */
+    async function pressWon(id, answer) {
       net.requests.length = 0;
+      danger.calls.length = 0;
+      danger.answer = answer === undefined ? true : answer;
       const b = dom.getElementById(id);
       if (!b) return { pressed: false };
       b.textContent = id === "won-mark" ? "Mark won" : "Undo — not won yet";
       await b.fire("click");
-      for (let i = 0; i < 6; i++) await tick();          // api() + .json() + the repaint
-      return { pressed: true, requests: net.requests.slice(), html: dom.html,
-               note: (dom.els.get("#won-note") || {}).textContent || "",
-               label: b.textContent, disabled: b.disabled };
+      for (let i = 0; i < 6; i++) await tick();          // the dialog + api() + .json() + the repaint
+      const r = { pressed: true, requests: net.requests.slice(), html: dom.html,
+                  asked: danger.calls.slice(),
+                  note: (dom.els.get("#won-note") || {}).textContent || "",
+                  label: b.textContent, disabled: b.disabled };
+      danger.answer = false;
+      return r;
     }
 
     // ── the not-sent drawer ──
@@ -943,6 +1014,14 @@ async function runScenario(name, s) {
     const nsRow = page.row("marknotsent");
     page.renderNotSent("marknotsent", nsRow);
     out.won.notSentOffered = { html: dom.html };
+    // CANCELLED FIRST, on a row nothing has touched yet, which is the only order that can prove
+    // "Cancel sends nothing": run after a successful mark, the board row already carries a stamp
+    // and an assertion about it would pass whatever the handler did.
+    // `|| ""` because JSON.stringify DROPS an undefined value, and a fresh row has no won_at at
+    // all: the python side would get a KeyError instead of a falsy answer, which reads as a broken
+    // harness rather than as the claim it is making.
+    out.won.markCancelled = Object.assign({}, await pressWon("won-mark", false),
+      { rowWonAt: (page.row("marknotsent") || {}).won_at || "" });
     const nsMark = await pressWon("won-mark");
     out.won.notSentMarked = Object.assign({}, nsMark, { rowWonAt: (page.row("marknotsent") || {}).won_at,
                                                         sig: page.sig() });
@@ -1526,6 +1605,116 @@ async function runScenario(name, s) {
   } catch (e) {
     out.errors.del = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
     me.role = "admin";
+  }
+
+  // ── THE REDESIGN'S TWO LISTS (2026-08-27) ─────────────────────────────────
+  // Both of these are collapses, and a collapse is the one kind of change that cannot be read off
+  // the source: what matters is how many rows and cards a real payload produces, which is a fact
+  // about the loop and not about the template inside it.
+  try {
+    /** Render a sent project's drawer, open the Proposal tab, and report the Sent versions card.
+     *
+     *  The card is painted asynchronously (loadRevisions is a fetch) into #rev-list, which is NOT
+     *  the drawer's own innerHTML, so it has to be read out of the DOM stub's side table rather
+     *  than out of dom.html. And it only paints on the PROPOSAL tab, because that is where
+     *  applySecPanel calls loadRevisions from, so a project that opens on Chat has to be walked
+     *  there first. */
+    async function revisionCard(pid) {
+      const data = payload({ proposal: { project_name: "Olathe Fire Station 4",
+                                         customer_name: "Marcus Ellery",
+                                         customer_email: "m.ellery@ellerycon.com", url: PORTAL_URL,
+                                         proposal_status: "sent", deposit_status: "pending",
+                                         contacts_status: "pending",
+                                         followup_state: { enrolled: true, enabled: true } },
+                             approval: null, contacts: [], deposits: [], recipient_activity: [],
+                             followups: [] });
+      page.open(pid);
+      page.cache(pid, data);
+      page.renderDetail(pid, data);
+      page.focusSection("proposal");
+      for (let i = 0; i < 4; i++) await tick();
+      const box = dom.els.get("#rev-list");
+      return { html: (box && box.innerHTML) || "",
+               answer: (dom.els.get("#rev-count") || {}).textContent || "" };
+    }
+    out.revisions = {
+      many: await revisionCard("manyrevs"),
+      one: await revisionCard("onerev"),
+      none: await revisionCard("norevs"),
+    };
+
+    // AN APPROVED PROPOSAL WITH NO VIEW STAMP ANYWHERE. Its own fixture rather than a tweak to the
+    // `approved` scenario, and it has to be: that one carries a per-contact viewed_at, which the
+    // Customer card falls back to, so its answer line never reaches this branch. A row like this is
+    // real - it is any proposal approved before the portal started recording views - and it is the
+    // one place "Not opened yet" would flatly contradict the Approved card two rows down.
+    const unseen = payload({ proposal: { project_name: "Bonner Springs Depot",
+                                         customer_name: "Ruth Alvarado",
+                                         customer_email: "r.alvarado@bsdepot.com", url: PORTAL_URL,
+                                         proposal_status: "approved", deposit_status: "pending",
+                                         contacts_status: "pending",
+                                         followup_state: { enrolled: true, enabled: true } },
+                             contacts: [], deposits: [], recipient_activity: [], followups: [] });
+    page.open("unseenapproved");
+    page.cache("unseenapproved", unseen);
+    page.renderDetail("unseenapproved", unseen);
+    out.unseenApproved = { html: dom.html };
+  } catch (e) {
+    out.errors.revisions = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  try {
+    // A thread carrying the live revision, seven replaced ones, a replaced invoice, the live
+    // invoice, and two ordinary messages either side. Dates chosen so two different days are in
+    // play, because the day markers are counted as well as the cards.
+    const rev = (n, at, dead) => ({
+      msg_type: "proposal_card", author_kind: "staff", created_at: at,
+      body: "Revision " + n + " of your proposal is ready to review.",
+      meta: dead ? { revision_no: n, superseded: true, superseded_by: n + 1 } : { revision_no: n },
+    });
+    const foldData = payload({
+      proposal: { project_name: "Lenexa Cold Line", customer_email: "ap@lenexa.com",
+                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "requested",
+                  contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
+      messages: [
+        { msg_type: "text", body: "Here is the bid for the cold line.", author_kind: "staff",
+          created_at: "2026-07-02T13:00:00Z" },
+        rev(1, "2026-07-02T14:00:00Z", true),
+        rev(2, "2026-07-09T14:00:00Z", true),
+        rev(3, "2026-07-15T14:00:00Z", true),
+        rev(4, "2026-07-21T14:00:00Z", true),
+        rev(5, "2026-07-28T14:00:00Z", true),
+        rev(6, "2026-08-04T14:00:00Z", true),
+        rev(7, "2026-08-14T14:00:00Z", true),
+        { msg_type: "deposit_request", body: "Your deposit invoice is attached.",
+          author_kind: "staff", created_at: "2026-08-14T15:00:00Z",
+          meta: { amount: 21050, invoice_no: "23.150-01", superseded: true,
+                  superseded_by: "23.150-02" } },
+        rev(8, "2026-08-19T14:00:00Z", false),
+        { msg_type: "system", body: "Approved by Marcus Ellery — Polish, Epoxy",
+          author_kind: "staff", created_at: "2026-08-22T15:00:00Z" },
+        { msg_type: "text", body: "Signed copy attached.", author_kind: "customer",
+          author_email: "ap@lenexa.com", created_at: "2026-08-22T16:26:00Z" },
+      ],
+    });
+    page.open("foldable");
+    page.cache("foldable", foldData);
+    page.renderDetail("foldable", foldData);
+    const html = dom.html;
+    const count = (re) => (html.match(re) || []).length;
+    out.fold = {
+      html: html,
+      cards: count(/class="chat-card /g),
+      folds: count(/class="sup-list"/g),
+      folded: count(/<div class="sup-list">[\s\S]*?<\/div>\s*<\/details>/g)
+        ? (html.match(/<div class="sup-list">([\s\S]*?)<\/details>/) || ["", ""])[1]
+        : "",
+      days: count(/class="note sys is-day"/g),
+      sysLines: count(/class="note sys"/g),
+    };
+  } catch (e) {
+    out.errors.fold = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
   console.log(JSON.stringify(out));
