@@ -2744,17 +2744,51 @@
    *  a column of "IMG_4831.jpg" chips makes the estimator open every one to find the crack the
    *  customer was asking about.
    *
+   *  AND THE NAME IS SHOWN TOO. Hanz, 2026-08-26: "I cant see the name of the file well." It used
+   *  to live only on the anchor's `title`, which is no use to somebody reading the thread out in a
+   *  meeting rather than hovering each tile. So a picture is a tile now -- well on top, caption
+   *  underneath -- carrying the same `.att-name` / `.att-size` pair the chip already had.
+   *
    *  Rendered as PLACEHOLDERS with the id on them; hydrateAtts fills them in afterwards. A src
    *  cannot be written straight in, because this tool authenticates with a bearer token and an
    *  <img> tag has no way to send one -- the request would come back 401 and the thread would be
-   *  full of broken-image icons. */
+   *  full of broken-image icons.
+   *
+   *  No `aria-label` on the tile any more, deliberately: the filename is VISIBLE text inside the
+   *  anchor now, and an aria-label would override it -- announcing the name and swallowing the
+   *  size, to say the same thing the eye can already read. */
   function attHtml(m) {
     const list = ((m.meta || {}).attachments) || [];
     if (!list.length) return "";
     return `<div class="att-list">` + list.map((a) => (a.image
-      ? `<a class="att-img" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#"
-            title="${esc(a.name)}"><img alt="${esc(a.name)}"></a>`
-      : `<a class="att-file" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#">
+      // NO src-less <img> HERE. A src-less img is precisely how a browser draws a BROKEN image --
+      // torn-page icon plus the alt text, inline -- so the placeholder looked like a failure and
+      // spilled the filename over the message above it. The well is sized in CSS and the <img> is
+      // created by hydrateAtts once it has bytes to show, so nothing moves when it lands.
+      // The image-off glyph ships with the markup and is revealed by a class, rather than being
+      // built on the error path: the tile must not change size when a fetch fails either.
+      // Whitespace between these spans is free: .att-well, .att-cap and the two caption lines are
+      // all display:block, so there is no inline gap to close and the markup can stay readable.
+      ? `<a class="att-img is-loading" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}"
+            data-att-image="1" href="#" title="${esc(a.name)}">
+           <span class="att-well">
+             <span class="att-spin" aria-hidden="true"></span>
+             <svg class="att-broke" viewBox="0 0 24 24" width="24" height="24" fill="none"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" aria-hidden="true">
+               <line x1="2" x2="22" y1="2" y2="22" />
+               <path d="M10.41 10.41a2 2 0 1 1-2.83-2.83" />
+               <line x1="13.5" x2="6" y1="13.5" y2="21" />
+               <line x1="18" x2="21" y1="12" y2="15" />
+               <path d="M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.05-.22 1.41-.59" />
+               <path d="M21 15V5a2 2 0 0 0-2-2H9" /></svg>
+           </span>
+           <span class="att-cap">
+             <span class="att-name">${esc(a.name)}</span>
+             <span class="att-size">${fileSize(a.size)}</span>
+           </span></a>`
+      : `<a class="att-file" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#"
+            title="${esc(a.name)}">
            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -2777,19 +2811,51 @@
       if (!url) {
         try {
           const r = await api(`/api/portal/proposal/${encodeURIComponent(pid)}/file/${encodeURIComponent(id)}`);
-          if (!r.ok) continue;
+          if (!r.ok) throw new Error("HTTP " + r.status);
           url = URL.createObjectURL(await r.blob());
           ATT_URLS.set(id, url);
-        } catch { continue; }
+        } catch {
+          // SAY SO, rather than leaving a box that spins for ever or a torn-page icon. An
+          // estimator can act on "this did not load"; they cannot act on a broken image.
+          attFailed(el);
+          continue;
+        }
       }
-      const img = el.querySelector("img");
-      if (img) img.src = url;
+      el.classList.remove("is-loading");
       el.href = url;
-      // An image opens in a tab; anything else downloads under its real name. Set here rather
-      // than in the markup because the object URL is what both of them point at.
-      if (img) el.target = "_blank";
-      else el.download = el.dataset.attName || "attachment";
+      if (el.dataset.attImage) {
+        // Built now, with a src in hand, so it can never render as a broken image. It goes into
+        // the WELL, not into the anchor: the anchor also holds the caption, and emptying it the
+        // way this used to would take the filename out with the spinner.
+        const img = document.createElement("img");
+        img.alt = "";                      // the name is visible in the caption below; repeating
+        img.src = url;                     // it as alt would announce it twice
+        const well = el.querySelector(".att-well");
+        if (well) {
+          const spin = well.querySelector(".att-spin");
+          if (spin && spin.remove) spin.remove();
+          well.appendChild(img);
+        }
+        el.target = "_blank";
+      } else {
+        el.download = el.dataset.attName || "attachment";
+      }
     }
+  }
+
+  /** Say, on the attachment it happened to, that it did not load.
+   *
+   *  NOTHING IS REBUILT and nothing changes size. The previous version turned the tile into a
+   *  small chip, which shrank the bubble -- a reflow on the error path, the one path nobody is
+   *  watching, in the feature whose whole point was not reflowing. Now the tile keeps its box, a
+   *  CSS class reveals the image-off glyph that shipped with the markup, and the caption's second
+   *  line stops being a file size and starts being the reason. */
+  function attFailed(el) {
+    el.classList.remove("is-loading");
+    el.classList.add("is-failed");
+    el.removeAttribute("href");
+    const note = el.querySelector(".att-size");
+    if (note) note.textContent = "did not load";
   }
 
   // ── follow-up section ──────────────────────────────────────────────────────
