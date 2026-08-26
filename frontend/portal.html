@@ -13,7 +13,11 @@
 <style>
   :root { color-scheme: only light;
     --red:#c8102e; --red-dark:#9e001f; --ink:#1b1c1c; --ink-v:#5c403f;
-    --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34; }
+    --surf:#fbf9f8; --surf-low:#f5f3f3; --surf-high:#e9e8e7; --line:#e4e2e2; --ok:#1f7a34;
+    /* styles.css's --treadwell-red-light, mirrored here like the rest of this block. It is the
+       one warm tint in the palette that is legible ON the red bubble, which is what a failure
+       note inside a staff message needs. */
+    --red-light:#ffdad8; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--surf); color:var(--ink);
     font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
@@ -526,43 +530,111 @@
   .msg .mbody { white-space:pre-wrap; overflow-wrap:anywhere; }
   /* ── attachments ────────────────────────────────────────────────────────────
      A picture is SHOWN, not listed: the commonest attachment on a bid is a photo of a slab, and
-     a column of filename chips makes the estimator open every one to find it. Capped so a tall
-     phone photo cannot push the rest of the thread off the drawer.
-
-     A RESERVED BOX, not a box the size of whatever arrives. attHtml renders the anchor with an
-     empty img tag and hydrateAtts fills the src in afterwards, through the authenticated helper,
-     which is unavoidable: an img tag cannot send a bearer token. So for one round trip
-     per photo the box has no content, and while it was sized off the image (`width:auto` under a
-     200px cap) the whole thread reflowed under the estimator's eye as each thumbnail landed. A
-     fixed 160x120 tinted box holds the space from the first paint, and the picture is CROPPED
-     into it on arrival rather than resizing it.
-     The `.is-loading` / `.is-broken` states below are the same box's other two answers, and the
-     JS that adds those classes lands with fix/attachment-thumbnails-ui rather than here. Written
-     now so that branch lands on a stylesheet that is already the right shape: a quiet ring is
-     what a reserved box needs while it is empty, and a picture that will not load has to SAY so
-     rather than being a grey rectangle forever. */
+     a column of filename chips makes the estimator open every one to find it.
+     But the NAME HAS TO BE READABLE WITHOUT HOVERING. Hanz, 2026-08-26: "I cant see the name of
+     the file well." He reads this thread out in the sales meeting; a tooltip is no use to
+     somebody who is not holding a mouse over each tile in turn. So every attachment carries a
+     visible caption now, photo or not, and both kinds use the same .att-name/.att-size pair so
+     a JPEG and a .docx in one bubble read as two of the same thing. */
   .att-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
-  .att-img { display:block; position:relative; width:160px; height:120px; line-height:0;
-    border-radius:8px; overflow:hidden; background:var(--surf-high); }
-  /* On our own red bubbles a neutral wash disappears, so the empty box lifts off the bubble. */
-  .msg.staff .att-img { background:rgba(255,255,255,.18); }
-  .att-img img { width:100%; height:100%; object-fit:cover; display:block; }
-  .att-img.is-loading::after { content:""; position:absolute; left:50%; top:50%; width:18px;
-    height:18px; margin:-9px 0 0 -9px; border-radius:50%; border:2px solid var(--ink-v);
-    border-top-color:transparent; opacity:.45; animation:att-spin .9s linear infinite; }
-  @keyframes att-spin { to { transform:rotate(360deg); } }
-  @media (prefers-reduced-motion:reduce) { .att-img.is-loading::after { animation:none; } }
-  .att-img.is-broken { display:inline-flex; align-items:center; justify-content:center;
-    width:auto; height:auto; min-height:0; padding:6px 9px; line-height:1.4; font-size:12px;
+
+  /* THE TILE: ONE SURFACE, with a fixed-height well for the picture and the caption on the rest
+     of it. Every dimension is known at FIRST PAINT, before any bytes arrive — which is the whole
+     point. The thread auto-scrolls to the newest message, so a photo landing late into a box that
+     grows yanks the view out from under whoever is reading. Same 176x132 well as the customer
+     portal, because this is one conversation seen from two ends and the two have drifted before.
+     `color:inherit` and `text-decoration:none` are LOAD-BEARING, not tidiness: the old tile's
+     only content was a src-less <img>'s alt text, and a browser draws alt text in the UA link
+     colour with the UA underline — blue and underlined, on a dark red bubble. That was half of
+     what made the screenshot unreadable.
+     The surface itself is set PER BUBBLE further down, for the reason the chip discovered first:
+     a neutral wash vanishes on our red. Measured in a browser, rgba(0,0,0,.06) over #9e001f is
+     1.08:1 against the bubble — the same colour, to the eye — so the caption floated with nothing
+     holding it to its picture while the identical rule read correctly on the grey. */
+  .att-img { display:block; width:176px; border-radius:8px; overflow:hidden;
     color:inherit; text-decoration:none; }
+  .att-well { display:block; position:relative; height:132px; line-height:0; }
+  .att-well img { width:100%; height:100%; object-fit:cover; display:block; }
+
+  /* THE CAPTION, UNDER the picture rather than over it. An overlay's legibility is a property of
+     the photograph underneath it, and the commonest attachment here is a near-white concrete
+     slab; guaranteeing 4.5:1 over arbitrary pixels needs a scrim thick enough to hide a fifth of
+     the thumbnail we are showing. Under the picture it sits on the tile's own surface, which is a
+     colour WE chose, so the contrast is a measurement instead of a hope.
+     No background of its own: the tile is one surface and the caption is the part of it the photo
+     does not cover. One value to get right per bubble instead of two. */
+  .att-cap { display:block; padding:5px 8px 6px; font-size:12px; line-height:1.25; }
+  .att-cap .att-name { display:block; font-weight:600; }
+  /* min-height so the second line's box exists even when the size is unknown — otherwise tiles
+     in the same row end up different heights. */
+  .att-cap .att-size { display:block; flex:none; font-size:11px; min-height:14px; }
+
+  /* Loading. Quiet on purpose: it is the common case and it resolves in a moment. One
+     `:not(.is-loading)` rule retires the spinner for BOTH of the states that follow it.
+     The moving arc is `currentColor` — white on our bubble, near-black on theirs — over a neutral
+     grey ring that reads on either. The first version used a fixed dark red on a near-black ring,
+     which on the red bubble was a dark red arc on a dark red tile. */
+  .att-img.is-loading { cursor:default; }
+  .att-spin { position:absolute; inset:0; margin:auto; width:18px; height:18px; border-radius:50%;
+    border:2px solid rgba(128,128,128,.38); border-top-color:currentColor;
+    animation:att-spin .7s linear infinite; }
+  .att-img:not(.is-loading) .att-spin { display:none; }
+  @keyframes att-spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .att-spin { animation:none; } }
+
+  /* Failed. THE TILE KEEPS ITS SHAPE: turning a 176x132 tile into a small chip shrinks the
+     bubble, which is a reflow on the error path — the one path nobody is watching. The well
+     shows an image-off glyph and the caption's second line says what happened.
+     A CLASS toggles it, never the `hidden` attribute: a class `display` rule beats `hidden`, and
+     this repo has shipped that bug four times. `display:none` rather than `opacity:0` for the
+     same family of reason — an invisible element still takes the click. */
+  .att-broke { display:none; position:absolute; inset:0; margin:auto; opacity:.55; }
+  .att-img.is-failed .att-broke { display:block; }
+  .att-img.is-failed, .att-file.is-failed { cursor:default; }
+
+  /* The chip, for anything without a useful preview. Its surface is set with the tile's, below —
+     ONE place owns "what colour is an attachment on this bubble". */
   .att-file { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:8px;
-    text-decoration:none; background:rgba(0,0,0,.06); color:inherit; font-size:12px; max-width:240px; }
-  .att-file:hover { background:rgba(0,0,0,.11); }
-  .att-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    text-decoration:none; color:inherit; font-size:12px; max-width:240px; }
+  /* TRUNCATE, never wrap. Three lines of filename inside a chat bubble is worse than an
+     ellipsis, and the untruncated name is on the anchor's title either way. */
+  .att-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .att-size { opacity:.65; flex:none; }
-  /* On our own red bubbles a neutral wash disappears — lift it off the bubble instead. */
-  .msg.staff .att-file { background:rgba(255,255,255,.2); }
-  .msg.staff .att-file:hover { background:rgba(255,255,255,.32); }
+
+  /* ── legible on BOTH bubbles ────────────────────────────────────────────────
+     MEASURED, not eyeballed. `opacity` was the actual defect: .att-size at opacity .65 inside a
+     staff bubble is white at 65% over the red, which measures 3.4:1 — under the 4.5:1 floor for
+     12px text. And the old failure note was #9e001f on that same red: 1.4:1, i.e. invisible.
+     So the secondary line takes a real colour per context. Contrast against the surface each one
+     actually lands on (the per-bubble surfaces below, not the bubble itself):
+                     staff (red) bubble          customer (grey) bubble
+       name          #fff            6.6:1       --ink     12.2:1
+       size          rgba(#fff,.86)  5.3:1       --ink-v    6.7:1
+       did not load  --red-light     5.1:1       --red-dark 6.1:1
+     opacity:1 alongside every colour, because the bare .att-size rule above still applies here
+     and opacity MULTIPLIES — it would take 6.7:1 back down to 4.4:1 on its own. */
+  .att-cap .att-size, .att-file .att-size { opacity:1; color:var(--ink-v); }
+  .att-cap .att-name, .att-file .att-name { color:inherit; }
+  .att-img.is-failed .att-size, .att-file.is-failed .att-size { color:var(--red-dark); }
+  .msg.staff .att-cap .att-size, .msg.staff .att-file .att-size { color:rgba(255,255,255,.86); }
+  /* Four classes, so this outranks the two three-class rules above it whichever order they end
+     up in. Specificity beats source order, and relying on the latter is how "make it smaller"
+     twice changed a value that could never apply. */
+  .msg.staff .att-img.is-failed .att-size,
+  .msg.staff .att-file.is-failed .att-size { color:var(--red-light); }
+
+  /* ── the surface, per bubble ─────────────────────────────────────────────────
+     A NEUTRAL WASH DISAPPEARS ON OUR RED, so it is recessed on theirs and lifted on ours. The
+     chip has always done this; the tile now does it too, because it turned out to need it for
+     exactly the same reason. Visibility of the surface against the bubble it sits on, and the
+     text on top of it:
+                  surface           vs bubble   name   size(.86)   did-not-load
+       theirs     rgba(0,0,0,.06)     1.14:1    12.2      6.7          6.1
+       ours       rgba(255,255,255,.16) 1.29:1   6.6      5.3          5.1  */
+  .att-img, .att-file { background:rgba(0,0,0,.06); }
+  .att-img:hover, .att-file:hover { background:rgba(0,0,0,.11); }
+  .msg.staff .att-img, .msg.staff .att-file { background:rgba(255,255,255,.16); }
+  .msg.staff .att-img:hover, .msg.staff .att-file:hover { background:rgba(255,255,255,.28); }
   /* The queue above the composer, before anything is sent. */
   .att-strip { display:flex; flex-wrap:wrap; gap:6px; }
   .att-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 6px 4px 4px;
