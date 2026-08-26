@@ -2551,8 +2551,13 @@
     const list = ((m.meta || {}).attachments) || [];
     if (!list.length) return "";
     return `<div class="att-list">` + list.map((a) => (a.image
-      ? `<a class="att-img" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#"
-            title="${esc(a.name)}"><img alt="${esc(a.name)}"></a>`
+      // NO src-less <img> HERE. A src-less img is precisely how a browser draws a BROKEN image --
+      // torn-page icon plus the alt text, inline -- so the placeholder looked like a failure and
+      // spilled the filename over the message above it. The box is sized in CSS and the <img> is
+      // created by hydrateAtts once it has bytes to show, so nothing moves when it lands.
+      ? `<a class="att-img is-loading" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}"
+            data-att-image="1" href="#" title="${esc(a.name)}"
+            aria-label="${esc(a.name)}"><span class="att-spin" aria-hidden="true"></span></a>`
       : `<a class="att-file" data-att="${esc(a.id)}" data-att-name="${esc(a.name)}" href="#">
            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2576,19 +2581,47 @@
       if (!url) {
         try {
           const r = await api(`/api/portal/proposal/${encodeURIComponent(pid)}/file/${encodeURIComponent(id)}`);
-          if (!r.ok) continue;
+          if (!r.ok) throw new Error("HTTP " + r.status);
           url = URL.createObjectURL(await r.blob());
           ATT_URLS.set(id, url);
-        } catch { continue; }
+        } catch {
+          // SAY SO, rather than leaving a box that spins for ever or a torn-page icon. An
+          // estimator can act on "this did not load"; they cannot act on a broken image.
+          attFailed(el);
+          continue;
+        }
       }
-      const img = el.querySelector("img");
-      if (img) img.src = url;
+      el.classList.remove("is-loading");
       el.href = url;
-      // An image opens in a tab; anything else downloads under its real name. Set here rather
-      // than in the markup because the object URL is what both of them point at.
-      if (img) el.target = "_blank";
-      else el.download = el.dataset.attName || "attachment";
+      if (el.dataset.attImage) {
+        // Built now, with a src in hand, so it can never render as a broken image.
+        const img = document.createElement("img");
+        img.alt = "";                      // the name is on the anchor's title and aria-label;
+        img.src = url;                     // as alt it spilled over the message above
+        el.textContent = "";
+        el.appendChild(img);
+        el.target = "_blank";
+      } else {
+        el.download = el.dataset.attName || "attachment";
+      }
     }
+  }
+
+  /** Turn a pending attachment into a chip that says it did not load. */
+  function attFailed(el) {
+    el.classList.remove("is-loading");
+    el.classList.add("att-file", "is-failed");
+    el.classList.remove("att-img");
+    el.removeAttribute("href");
+    el.textContent = "";
+    const name = document.createElement("span");
+    name.className = "att-name";
+    name.textContent = el.dataset.attName || "attachment";
+    const note = document.createElement("span");
+    note.className = "att-size";
+    note.textContent = "did not load";
+    el.appendChild(name);
+    el.appendChild(note);
   }
 
   // ── follow-up section ──────────────────────────────────────────────────────

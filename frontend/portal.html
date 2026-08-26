@@ -413,8 +413,23 @@
      a column of filename chips makes the estimator open every one to find it. Capped so a tall
      phone photo cannot push the rest of the thread off the drawer. */
   .att-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
-  .att-img { display:block; line-height:0; border-radius:8px; overflow:hidden; }
-  .att-img img { max-width:200px; max-height:200px; width:auto; height:auto; display:block; }
+  /* A FIXED BOX, whatever state it is in. The thumbnail lands inside the box the placeholder
+     already occupied, so the bubble does not change height -- which matters because the thread
+     auto-scrolls to the bottom, and a photo arriving late would otherwise yank the view while
+     somebody is reading. */
+  .att-img { display:block; line-height:0; border-radius:8px; overflow:hidden;
+    width:160px; height:120px; background:rgba(0,0,0,.05); position:relative; }
+  .att-img img { width:100%; height:100%; object-fit:cover; display:block; }
+  /* The loading state. Quiet on purpose: it is the common case and it resolves in a moment. */
+  .att-img.is-loading { cursor:default; }
+  .att-spin { position:absolute; inset:0; margin:auto; width:18px; height:18px; border-radius:50%;
+    border:2px solid rgba(0,0,0,.14); border-top-color:rgba(158,0,31,.55);
+    animation:att-spin .7s linear infinite; }
+  @keyframes att-spin { to { transform:rotate(360deg); } }
+  /* A failure reads as a file that did not load, never as a torn page. */
+  .att-file.is-failed { background:rgba(0,0,0,.05); cursor:default; }
+  .att-file.is-failed .att-size { color:#9e001f; opacity:1; }
+  @media (prefers-reduced-motion: reduce) { .att-spin { animation:none; } }
   .att-file { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:8px;
     text-decoration:none; background:rgba(0,0,0,.06); color:inherit; font-size:12px; max-width:240px; }
   .att-file:hover { background:rgba(0,0,0,.11); }

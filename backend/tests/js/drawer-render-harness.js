@@ -129,7 +129,10 @@ const FN_NAMES = [
   // ReferenceError for another. It is safe to run here: it is async and unawaited, every
   // request goes through the harness's own `api` stub, and a failure `continue`s, so a
   // renderer test neither waits for it nor is broken by it.
-  "attHtml", "fileSize", "hydrateAtts",
+  // attFailed joins them for the same reason (2026-08-26): hydrateAtts calls it when a fetch
+  // fails, and a lifted caller with an unlifted callee is a ReferenceError that only fires on
+  // the error path -- the one nobody exercises by hand.
+  "attHtml", "fileSize", "hydrateAtts", "attFailed",
   "followupPanelHtml", "followupContactsHtml", "followupRow", "followupState",
   // The hold on a SENT bid (2026-08-21), read out of the follow-up log because portal_proposals
   // stores only the pause DATE. FIFTH addition to this list for the same reason as the four below,
