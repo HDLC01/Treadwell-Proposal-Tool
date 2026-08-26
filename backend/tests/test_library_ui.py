@@ -776,3 +776,174 @@ def test_a_line_whose_material_really_went_still_says_so(ran):
     g = ran["removedLine"]
     assert g["saysRemoved"], "a deleted material no longer reports itself"
     assert g["flaggedBroken"], "a genuinely broken line stopped being flagged"
+
+
+# ── the redesign, 2026-08-27 ──────────────────────────────────────────
+@needs_node
+def test_new_assembly_left_the_page_header(ran):
+    """Hanz, 2026-08-27: "I dont like the New assembly button up top."
+
+    It sat in a .tabaction wrapper at the right-hand end of the tab strip, beside Administration
+    and about thirteen hundred pixels from the rail it appends a row to, so the control you
+    pressed and the row that appeared had no relationship on screen. Nothing is left in the strip
+    now except the three tabs.
+
+    Mutation: put any non-tab button back inside the tablist."""
+    c = ran["createAction"]
+    assert c["goneFromTheTabStrip"], "a control that is not a tab is still in the tab strip"
+    assert c["oldNewRowWrapperGone"], (
+        "#asm-newrow is still there - the second wrong home, below the whole two-column grid")
+
+
+@needs_node
+def test_the_create_control_sits_at_the_foot_of_the_list_it_adds_to(ran):
+    """The rule that replaced it, in four places: materials, assemblies, and the three
+    administration lists all end with a full-width row inside the same container, drawn like the
+    rows above it. Press it and the new row appears where the control was.
+
+    AFTER the list, not before: it has to read as the next row rather than as a header over the
+    ones that already exist.
+
+    Mutation: move #asm-new-2 above #asm-list."""
+    c = ran["createAction"]
+    assert c["inTheRail"], "New assembly is not at the foot of the assembly rail"
+    assert c["materialsAddRowInTheCard"], "Add material is not inside the materials table's card"
+    assert c["adminAddRows"], "an administration list has no add row of its own"
+    # One shape, five uses (materials, assemblies, and three lists) - not a fifth way to draw a
+    # card, which is the failure this page has form for.
+    assert c["addRowCount"] == c["addBtnCount"] == 5, (
+        "the add rows disagree in number: %s wrappers, %s buttons"
+        % (c["addRowCount"], c["addBtnCount"]))
+
+
+@needs_node
+def test_the_rail_hides_as_a_whole_rather_than_just_its_list(ran):
+    """EXECUTED through the real renderList. The create control is a child of the rail card now,
+    so hiding only #asm-list - which is what the previous line did - would leave a New assembly
+    button sitting alone in an empty box while the "No assemblies yet" panel offered a second one
+    right beside it.
+
+    Mutation: hide #asm-list instead of #asm-rail."""
+    c = ran["createAction"]
+    assert c["railShownWithAssemblies"] and c["railHiddenWithNone"]
+    assert c["countStillPainted"] == 1, "renderList stopped painting the tab badge"
+
+
+@needs_node
+def test_the_materials_add_row_follows_its_table(ran):
+    """Three states, and the add row belongs to only one of them. Under "No materials yet" it is
+    the second Add button in a single card; under "Nothing matches that" it answers a typo with an
+    invitation to create the duplicate the search just failed to find - which is the exact trap
+    the two empty states were split apart to avoid.
+
+    Mutation: leave #items-addrow visible unconditionally."""
+    c = ran["createAction"]
+    assert c["itemsAddRowWithRows"], "the add row is hidden when there are materials to add to"
+    assert c["itemsAddRowWhenEmpty"], "the empty state offers two Add buttons at once"
+    assert c["itemsAddRowOnNoMatch"], (
+        "a search with no hits still offers to add one, which is how the duplicate gets created")
+
+
+@needs_node
+def test_the_controls_are_drawn_glyphs_not_typed_emoji(ran):
+    """The house rule, and it is not taste. An emoji is rendered by whatever font the machine has
+    installed, so the delete control is a different picture on Kyle's Windows box than on a phone,
+    it cannot take the row's colour on hover, and it ignores every size and stroke token on the
+    page. This one shipped with a trash can in three renderers and a stacked-squares character in
+    a fourth.
+
+    Read off the REAL rendered rows, so a glyph left behind in any one renderer fails."""
+    ic = ran["icons"]
+    assert ic["oldGlyphsGone"] and ic["noEmojiInRenderedRows"]
+    assert ic["glyphCount"] == 4, (
+        "expected duplicate, delete, list-delete and line-delete; found %s" % ic["glyphCount"])
+    assert ic["allAreLucideShaped"], (
+        "a glyph does not match the house geometry: 24 box, no fill, currentColor, width 2, round")
+    assert ic["allHiddenFromTheTree"], (
+        "the glyph is announced as well as the button, so the name gets read out twice")
+    assert ic["deleteStillNamed"] and ic["duplicateStillNamed"] and ic["contractUnchanged"]
+
+
+@needs_node
+def test_the_glyph_cannot_swallow_the_press(ran):
+    """THE HALF THAT IS EASY TO MISS, and it would ship looking perfect.
+
+    Every one of these handlers reads its data- attribute off the element that was clicked. An
+    <svg> inside the button IS that element over most of the button's area, and it carries no
+    attribute - so the control would go dead everywhere except its padding, silently, with the
+    hover state still working.
+
+    Two independent answers, because either one alone is a tidy-up away from a control that looks
+    right and does nothing: the stylesheet takes the glyph out of hit-testing, and the handlers
+    resolve through closest() so they no longer care what was pressed.
+
+    Mutation: drop either the pointer-events rule or any one closest() lookup."""
+    ic = ran["icons"]
+    assert ic["glyphIsNotAClickTarget"], "the SVG is still hit-testable inside its own button"
+    assert ic["handlersResolveByClosest"], (
+        "a delete or duplicate handler still reads its attribute off e.target")
+
+
+@needs_node
+def test_the_page_wears_the_apps_own_warm_palette(ran):
+    """Settled 2026-08-25 after three rejected attempts, and this page was the screen still
+    disagreeing with it. --surf:#f4f4f5 is a cool grey and --red:#c8102e is brighter than the
+    brand red used anywhere else, so beside any other Treadwell screen this one read as somebody
+    else's product. The tokens are now the ones in frontend/styles.css, read rather than invented.
+
+    Mutation: put a cool grey back in --surf."""
+    p = ran["palette"]
+    assert p["red"] == "#9e001f" and p["redDark"] == "#6c0015" and p["redTint"] == "#ffdad8"
+    assert p["surf"] == "#fbf9f8" and p["surfLow"] == "#f3eeed"
+    assert p["ink"] == "#1a1a1a" and p["inkV"] == "#5c403f", (
+        "--ink-v is the warm brown-grey, not a blue-grey")
+
+
+@needs_node
+def test_there_is_one_type_stack_and_one_radius_scale(ran):
+    """Headings, buttons and the totals were set in system-ui while the prose explaining them was
+    Inter, so a number and its own caption were different faces. And five corner radii were in use
+    - 12, 10, 9, 8 and 7px - assigned by whichever value the last person happened to type.
+
+    Mutation: add a font shorthand ending in system-ui, or a bare border-radius in px."""
+    p = ran["palette"]
+    assert p["uiStack"].startswith("'Inter'"), "the interface face is no longer the app's Inter"
+    assert not p["systemUiLeftInAFontShorthand"], (
+        "a font shorthand still names system-ui directly instead of going through --ui")
+    assert p["radiiDeclared"] == ["12px", "8px", "6px"], p["radiiDeclared"]
+    assert p["hardcodedRadii"] == [], (
+        "a radius bypasses the scale: %s" % p["hardcodedRadii"])
+
+
+@needs_node
+def test_rounding_the_cards_does_not_clip_the_item_picker(ran):
+    """CAUGHT WHILE BUILDING THIS, and it is the bug this page has already shipped once.
+
+    The card clips its overflow so a full-bleed table head and the add row keep the rounded
+    corners. But any overflow value other than `visible` is a clipping context, and the one thing
+    on this page that deliberately escapes its box is the material picker's floating results - the
+    whole reason the lines table is wrapped in .tw-nolimit rather than .tw. A clipped panel cuts
+    that list off at the card edge, so the estimator sees two results out of twelve and the rest
+    of the library looks missing.
+
+    Mutation: drop the .card.apanel overflow:visible opt-out."""
+    p = ran["palette"]
+    assert p["cardClips"], "the card no longer clips, so the table head breaks its own corners"
+    assert p["panelOptsOutOfClipping"], (
+        "the assembly panel inherits the card's clipping and cuts off the picker's results")
+    assert p["pickerIsInsideThePanel"], (
+        "the picker moved out of the panel, so the opt-out is guarding the wrong box")
+
+
+@needs_node
+def test_no_renderer_emits_a_style_attribute(ran):
+    """"Prefer classes to inline styles" - and the three renderers here were the worst offenders
+    in the app, putting a width on every field they produced. They still size those fields; the
+    sizes are classes now, so the stylesheet is where you go to change one.
+
+    Mutation: put any style="..." back into renderItems, renderRefSection or renderPanel."""
+    s = ran["inlineStyles"]
+    assert s["inRenderedMarkup"] == [], s["inRenderedMarkup"]
+    assert s["inThePage"] == [], s["inThePage"]
+    assert s["nameFieldStillSized"] and s["costFieldStillSized"], (
+        "the widths were deleted rather than moved to a class")

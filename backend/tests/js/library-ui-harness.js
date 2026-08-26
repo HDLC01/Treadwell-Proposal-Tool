@@ -209,6 +209,10 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("similarNames")}
   ${fn("dupeHtml")}
   ${fn("datesHtml")}
+  // LIFTED, not stubbed, and it has to be lifted BEFORE the three renderers that call it.
+  // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
+  // out is a ReferenceError that kills every scenario in this file at once.
+  ${fn("icon")}
   ${fn("renderItems")}
   ${fn("adminList")}
   ${fn("usageFor")}
@@ -1167,6 +1171,188 @@ async function conflictChecks() {
 
 // ── the numeric coercion list ────────────────────────────────────────────────
 out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
+
+// ── EXECUTED: where the create controls live ────────────────────────────────
+// Hanz, 2026-08-27: "I dont like the New assembly button up top." It sat in a .tabaction wrapper
+// at the right-hand end of the tab strip, beside Administration and about 1300px from the rail it
+// appends a row to. The rule now is one rule in four places: a create control sits at the foot of
+// the list it adds to, inside the same container.
+//
+// Read off the real markup and driven through the real renderList, because "it moved" is a
+// structural fact a source grep for the id would answer identically before and after.
+{
+  const between = (open, close, from) => {
+    const i = html.indexOf(open, from || 0);
+    if (i === -1) return "";
+    const j = html.indexOf(close, i);
+    return html.slice(i, j === -1 ? html.length : j);
+  };
+  const tabStrip = between('<div class="views"', "</div>");
+  const rail = between('id="asm-rail"', "</section>");
+
+  out.createAction = {
+    // GONE FROM THE HEADER. The id itself is retired, so a later edit cannot quietly put it back
+    // by re-using the wrapper.
+    // Every button left in the strip is a tab. A create control here is exactly what was
+    // removed, so anything that is not role="tab" fails this.
+    // The class and its rule, not the word: the comment left where the button used to sit names
+    // the old wrapper on purpose, so the next reader knows what moved and why.
+    goneFromTheTabStrip: !/asm-new-top/.test(html) && !/class="tabaction"/.test(html) &&
+      !/\.tabaction\s*\{/.test(html) &&
+      (tabStrip.match(/<button/g) || []).length ===
+      (tabStrip.match(/role="tab"/g) || []).length,
+    // AT THE FOOT OF THE RAIL, and after the list rather than before it: the control has to read
+    // as the next row, not as a header above the ones that exist.
+    inTheRail: /id="asm-new-2"/.test(rail) &&
+      rail.indexOf('id="asm-list"') < rail.indexOf('id="asm-new-2"'),
+    // The same shape in all four places, so the page has ONE way of saying "add another".
+    addRowCount: (html.match(/class="addrow"/g) || []).length,
+    addBtnCount: (html.match(/class="addbtn"/g) || []).length,
+    // Materials and each of the three administration lists put theirs inside the table's own card.
+    materialsAddRowInTheCard: /id="items-addrow"/.test(html) &&
+      html.indexOf('<tbody id="items-body">') < html.indexOf('id="items-addrow"'),
+    adminAddRows: ["divisions", "units", "vendors"].every((k) =>
+      new RegExp('class="addrow" data-addrow-ref="' + k + '"').test(html)),
+    // renderRefSection hides those three for a non-admin by that same attribute, so moving the
+    // wrapper must not have dropped the hook the permission check hangs on.
+    adminAddRowsStillHideable: ["divisions", "units", "vendors"].every((k) =>
+      new RegExp('data-addrow-ref="' + k + '"').test(html)),
+    // The old below-the-grid wrapper is gone rather than left hidden.
+    oldNewRowWrapperGone: !/asm-newrow/.test(html),
+  };
+
+  // THE RAIL IS WHAT HIDES, not the list inside it. Hiding only #asm-list would leave the create
+  // button alone in an empty card while the "No assemblies yet" panel offered a second one.
+  const some = build();
+  some.api.renderList();
+  const none = build({ ASMS: [] });
+  none.api.renderList();
+  out.createAction.railShownWithAssemblies = some.dom.nodes["asm-rail"].hidden === false;
+  out.createAction.railHiddenWithNone = none.dom.nodes["asm-rail"].hidden === true;
+  out.createAction.countStillPainted = some.dom.nodes["n-asm"].textContent;
+
+  // AND THE MATERIALS ADD ROW follows its table. Under "No materials yet" it would be the second
+  // Add button in one card; under "Nothing matches that" it would answer a typo with an
+  // invitation to create the duplicate the search just failed to find.
+  const rows = build();
+  rows.api.renderItems();
+  const bare = build({ ITEMS: [] });
+  bare.api.renderItems();
+  const nohits = build({ itemQuery: "nothing like this" });
+  nohits.api.renderItems();
+  out.createAction.itemsAddRowWithRows = rows.dom.nodes["items-addrow"].hidden === false;
+  out.createAction.itemsAddRowWhenEmpty = bare.dom.nodes["items-addrow"].hidden === true;
+  out.createAction.itemsAddRowOnNoMatch = nohits.dom.nodes["items-addrow"].hidden === true;
+}
+
+// ── EXECUTED: the glyphs are drawn, not typed ───────────────────────────────
+// House rule, and not a matter of taste: an emoji is rendered by whatever font the machine has, so
+// the delete control is a different picture on Kyle's Windows box than on a phone, it cannot take
+// the row's colour on hover, and it ignores every size and stroke token on the page. This page
+// shipped with 🗑 in three renderers and ⧉ in a fourth.
+//
+// The SECOND half is the part a grep would miss. An <svg> inside a <button> becomes the click
+// target, and every one of these handlers reads its data- attribute off the element that was
+// pressed — so the button goes dead over most of its own area unless something stops that.
+{
+  const b = build({ ADMIN: true });
+  b.api.renderItems();
+  b.api.renderVendors();
+  b.api.renderPanel();
+  const itemRow = b.dom.nodes["items-body"].innerHTML.split("</tr>")[0];
+  const refRow = b.dom.nodes["divisions-body"].innerHTML.split("</tr>")[0];
+  const lineRow = b.dom.nodes["lines-body"].innerHTML.split("</tr>")[0];
+  const everywhere = itemRow + refRow + lineRow + html;
+  const glyphs = (itemRow + refRow + lineRow).match(/<svg[^>]*class="ic"[^>]*>/g) || [];
+
+  const rule = (sel) => (new RegExp(sel.replace(/[.>*+?^${}()|[\]\\]/g, "\\$&") +
+    "\\s*\\{[^}]*\\}").exec(html) || [""])[0];
+
+  out.icons = {
+    // No emoji left anywhere the estimator looks: the three renderers, and the page's own markup.
+    // Ranges are the pictographs and the dingbats; the tick inside a division chip is CSS content
+    // keyed off :checked and is a typographic mark, not a picture, so it is excluded by range.
+    noEmojiInRenderedRows: !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]/u
+      .test(itemRow + refRow + lineRow),
+    // The two specific characters this page used.
+    oldGlyphsGone: !/🗑/.test(everywhere) && !/⧉/.test(everywhere),
+    // Every control that had one now has a real vector in its place.
+    glyphCount: glyphs.length,
+    // Lucide's geometry, so these sit beside the sidebar's and the drawer's without arguing.
+    allAreLucideShaped: glyphs.length > 0 && glyphs.every((g) =>
+      /viewBox="0 0 24 24"/.test(g) && /fill="none"/.test(g) &&
+      /stroke="currentColor"/.test(g) && /stroke-width="2"/.test(g) &&
+      /stroke-linecap="round"/.test(g)),
+    // Decorative: the button already carries the accessible name, so the glyph must not add a
+    // second one for a screen reader to read out after it.
+    allHiddenFromTheTree: glyphs.length > 0 && glyphs.every((g) => /aria-hidden="true"/.test(g)),
+    // The buttons kept their names and their save contract.
+    deleteStillNamed: /aria-label="Remove OPF"/.test(itemRow),
+    duplicateStillNamed: /aria-label="Duplicate OPF"/.test(itemRow),
+    contractUnchanged: /data-dupe-item="i1"/.test(itemRow) && /data-del-item="i1"/.test(itemRow) &&
+      /data-del-ref="divisions"/.test(refRow) && /data-del-line="0"/.test(lineRow),
+    // THE PRESS STILL LANDS ON THE BUTTON. Two independent answers, because either alone is one
+    // tidy-up away from a control that looks fine and does nothing.
+    glyphIsNotAClickTarget: /pointer-events:none/.test(rule(".icon svg, .addbtn svg")),
+    handlersResolveByClosest: ["data-dupe-item", "data-del-item", "data-del-ref", "data-del-line"]
+      .every((a) => src.indexOf('t.closest("[' + a + ']")') !== -1),
+  };
+}
+
+// ── the page wears the app's own warm palette ───────────────────────────────
+// Settled 2026-08-25 after three rejected attempts, and this page was the one screen still
+// disagreeing: --surf:#f4f4f5 and --red:#c8102e are a cool grey and a brighter red than the brand
+// uses anywhere else, so beside any other Treadwell screen it read as somebody else's product.
+{
+  const root = (/:root \{ color-scheme: only light;[\s\S]*?\n\s*--r-lg[^}]*\}/.exec(html) ||
+                /:root \{ color-scheme: only light;[^}]*\}/.exec(html) || [""])[0];
+  const val = (name) => ((new RegExp("--" + name + ":\\s*([^;]+);").exec(root)) || ["", ""])[1].trim();
+  out.palette = {
+    red: val("red"), redDark: val("red-dark"), redTint: val("red-tint"),
+    surf: val("surf"), surfLow: val("surf-low"), ink: val("ink"), inkV: val("ink-v"),
+    // ONE type stack. Headings, buttons and totals were set in system-ui while the prose beside
+    // them was Inter, so a number and the sentence explaining it were different faces.
+    uiStack: val("ui"),
+    systemUiLeftInAFontShorthand: /font:[^;]*system-ui/.test(html.replace(/--ui:[^;]+;/, "")),
+    // ONE radius scale. There were five, assigned by whichever value the last person typed.
+    radiiDeclared: ["r-lg", "r-md", "r-sm"].map(val),
+    hardcodedRadii: (html.match(/border-radius:\s*\d+px/g) || [])
+      .filter((r) => !/999px/.test(r)),
+  };
+
+  // THE CLIPPING TRAP, guarded. The card clips so a full-bleed table head and the add row keep
+  // the rounded corners — and any overflow other than `visible` is a clipping context, so the
+  // panel holding the item picker has to opt back out or the results list is cut off at the card
+  // edge. That bug shipped once already; .tw-nolimit exists because of it.
+  const rule2 = (sel) => (new RegExp(sel.replace(/[.>*+?^${}()|[\]\\]/g, "\\$&") +
+    "\\s*\\{[^}]*\\}").exec(html) || [""])[0];
+  const cardRule = rule2(".card");
+  out.palette.cardClips = /overflow:hidden/.test(cardRule);
+  out.palette.panelOptsOutOfClipping = /overflow:visible/.test(rule2(".card.apanel"));
+  // …and the picker still lives inside that panel, so the opt-out is protecting the right box.
+  out.palette.pickerIsInsideThePanel =
+    html.indexOf('id="asm-panel"') < html.indexOf('class="tw-nolimit"');
+}
+
+// ── the inline style attributes the renderers used to emit ──────────────────
+// The house rule is classes, not style attributes, and this page was the worst offender: eight on
+// the assembly header row alone, plus a width on every field the three renderers produced.
+{
+  const b = build({ ADMIN: true });
+  b.api.renderItems();
+  b.api.renderVendors();
+  b.api.renderPanel();
+  const rendered = b.dom.nodes["items-body"].innerHTML + b.dom.nodes["divisions-body"].innerHTML +
+    b.dom.nodes["units-body"].innerHTML + b.dom.nodes["vendors-body"].innerHTML +
+    b.dom.nodes["lines-body"].innerHTML;
+  out.inlineStyles = {
+    inRenderedMarkup: (rendered.match(/style="[^"]*"/g) || []),
+    inThePage: (html.match(/style="[^"]*"/g) || []),
+    // The fields still have their widths, they are just wearing them as classes now.
+    nameFieldStillSized: /class="cell-name"/.test(rendered),
+    costFieldStillSized: /cell-cost/.test(rendered),
+  };
+}
 
 // ── the page's own copy ──────────────────────────────────────────────────────
 out.page = {
