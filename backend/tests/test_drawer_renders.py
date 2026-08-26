@@ -69,7 +69,12 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is no
 
 # The token in the harness's fixture URL. Kept here so the assertions can name the exact string
 # that must not appear, rather than looking for "http" and hoping.
-TOKEN = "gZ3liSuON-bK-jR37bxIb0psjkXmAKp8"
+# SYNTHETIC, and it says so. This was a token that really existed in portal_proposals until
+# 2026-08-27 -- one of Hanz's own proposals, but a live bearer credential nonetheless, sitting in
+# a PUBLIC repository next to the real host. Anyone reading these tests could have opened that
+# proposal's pricing and its approval button without logging in. A fixture that looks real is one
+# nobody questions, so this one cannot be mistaken for one.
+TOKEN = "NOT-A-REAL-TOKEN-0000000000000000"
 PORTAL_URL = "https://portal.wetreadwell.com/p/" + TOKEN
 
 SCENARIOS = ["approved", "submitted", "sent", "bare"]

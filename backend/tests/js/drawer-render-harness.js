@@ -353,7 +353,12 @@ function makeDom() {
 }
 
 // ── fixtures: the shapes production actually serves ──────────────────────────
-const URL_TOKEN = "gZ3liSuON-bK-jR37bxIb0psjkXmAKp8";
+// SYNTHETIC, and it has to be. The value here used to be a token that really existed in
+// portal_proposals -- one of Hanz's own proposals, but a working bearer credential all the same,
+// committed to a PUBLIC repository where anyone reading these tests could open that proposal,
+// its pricing and its approval button with no login at all. It survived because it looked like a
+// plausible fixture and nothing said otherwise. This one announces itself.
+const URL_TOKEN = "NOT-A-REAL-TOKEN-0000000000000000";
 const PORTAL_URL = "https://portal.wetreadwell.com/p/" + URL_TOKEN;
 
 const BOARD_ROWS = [
@@ -415,7 +420,7 @@ function payload(over) {
       project_name: "Combo Test",
       customer_name: "HANZ URIEL A DE LA CRUZ",
       customer_email: "hdlcruz03@gmail.com",
-      url: PORTAL_URL,
+      url: PORTAL_URL, token: URL_TOKEN,
       proposal_status: "approved",
       deposit_status: "requested",
       deposit_required: true,
@@ -482,7 +487,7 @@ const SCENARIOS = {
     pid: "sent",
     data: payload({
       proposal: { project_name: "Maple Street Warehouse", customer_name: "", customer_email: "dave@x.com",
-                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: false } },
       approval: null, deposit_ref: null, contacts: [], deposits: [], recipient_activity: [],
       followups: [],
@@ -503,7 +508,7 @@ const SCENARIOS = {
     pid: "viewed",
     data: payload({
       proposal: { project_name: "Elmwood Cold Storage", customer_name: "Dave Nunn",
-                  customer_email: "dave@elmwood.com", url: PORTAL_URL,
+                  customer_email: "dave@elmwood.com", url: PORTAL_URL, token: URL_TOKEN,
                   proposal_status: "viewed", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
@@ -521,7 +526,7 @@ const SCENARIOS = {
     pid: "viewedonce",
     data: payload({
       proposal: { project_name: "Brookfield Bakery", customer_email: "ops@brookfield.com",
-                  url: PORTAL_URL, proposal_status: "viewed", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "viewed", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
       messages: [{ msg_type: "text", body: "Proposal attached.", author_kind: "staff",
@@ -534,7 +539,7 @@ const SCENARIOS = {
     pid: "viewedcard",
     data: payload({
       proposal: { project_name: "Ashford Plant", customer_email: "dave@ashford.com",
-                  url: PORTAL_URL, proposal_status: "viewed", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "viewed", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
       messages: [
@@ -550,7 +555,7 @@ const SCENARIOS = {
     pid: "unviewed",
     data: payload({
       proposal: { project_name: "Larkspur Depot", customer_email: "ap@larkspur.com",
-                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
       messages: [{ msg_type: "text", body: "Proposal attached.", author_kind: "staff",
@@ -950,7 +955,7 @@ async function runScenario(name, s) {
     const wonRow = page.row("wonsent");
     wonRow.won_at = "2026-08-19T15:00:00+00:00";
     const wonData = payload({ proposal: { project_name: "Fairview Clinic", customer_email: "d@x.com",
-                                          url: PORTAL_URL, proposal_status: "sent",
+                                          url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent",
                                           deposit_status: "pending", contacts_status: "pending",
                                           followup_state: { enrolled: true, enabled: true } },
                               approval: null, contacts: [], deposits: [], recipient_activity: [],
@@ -962,7 +967,7 @@ async function runScenario(name, s) {
 
     // ── the sent drawer: marking one from scratch ──
     const markData = payload({ proposal: { project_name: "Northgate Fulfilment",
-                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
                                            proposal_status: "sent", deposit_status: "pending",
                                            contacts_status: "pending",
                                            followup_state: { enrolled: true, enabled: true } },
@@ -997,7 +1002,7 @@ async function runScenario(name, s) {
 
     // ── a project won the DERIVED way says so, and offers no button ──
     const paidData = payload({ proposal: { project_name: "Westport Retail Center",
-                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
                                            proposal_status: "approved",
                                            approved_at: "2026-07-20T10:00:00Z",
                                            deposit_status: "received", contacts_status: "pending",
@@ -1021,7 +1026,7 @@ async function runScenario(name, s) {
     /** Render a sent project's drawer, press one of the Follow-up tab's buttons, and report. */
     async function pressFu(pid, proposal, id) {
       const data = payload({ proposal: Object.assign(
-        { project_name: "Nearman Creek", customer_email: "d@x.com", url: PORTAL_URL,
+        { project_name: "Nearman Creek", customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
           deposit_status: "pending", contacts_status: "pending",
           followup_state: { enrolled: true, enabled: true } }, proposal),
         approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [] });
@@ -1127,7 +1132,7 @@ async function runScenario(name, s) {
       const data = payload(Object.assign({
         proposal: Object.assign(
           { project_name: (page.row(pid) || {}).project_name || "Nearman Creek",
-            customer_email: "d@x.com", url: PORTAL_URL, proposal_status: "sent",
+            customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent",
             deposit_status: "pending", contacts_status: "pending",
             followup_state: fuState }, over || {}),
         approval: null, contacts: [], deposits: [], recipient_activity: [],
@@ -1469,7 +1474,7 @@ async function runScenario(name, s) {
       danger.answer = answer;
       if (kind === "sent") {
         const data = payload({ proposal: { project_name: "Nearman Creek",
-                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
                                            proposal_status: "sent", deposit_status: "pending",
                                            contacts_status: "pending",
                                            followup_state: { enrolled: true, enabled: true } },
