@@ -5092,6 +5092,17 @@
   docSurface.addEventListener("mousedown", () => { clearBoxSel(); lastSelectAll = null; });
   docSurface.addEventListener("input", () => { clearBoxSel(); lastSelectAll = null; });
   window.addEventListener("keydown", (e) => {
+    // ESCAPE IS THE WAY OUT, and it has to be, because Tab now indents instead of moving focus.
+    // Taking the keyboard's only exit from the text box away would be a real regression for
+    // anybody not using a mouse, so once Escape's first job below has nothing to do, its second
+    // is to let go of the editing host.
+    if (e.key === "Escape" && !boxSel) {
+      const host = document.activeElement;
+      if (host && host.classList && host.classList.contains("tw-txbx") && host.blur) {
+        host.blur();
+        return;
+      }
+    }
     if (e.key !== "Escape" || !boxSel) return;
     // Stop here: the window handler below this one collapses an expanded text box, and somebody
     // dismissing a selection is not asking for the box they are reading to fold shut.
@@ -5261,6 +5272,64 @@
     clearBoxSel();
     els.forEach(clearBoxLine);
     if (els.length) scheduleRepaginate();
+  });
+
+  /** TAB INDENTS THE PARAGRAPH. Shift+Tab takes the indent back.
+   *
+   *  Hanz, 2026-08-26: "is it possible when I click tab it indents the line? instead of scrolling
+   *  down?" Nothing handled Tab before, so the browser moved focus to the next focusable thing and
+   *  the page scrolled to reveal it.
+   *
+   *  Straight through `paraAction`, which is what the ribbon's indent buttons call -- so the
+   *  locked-clause refusal, the override persistence and the terms repagination are the same ones,
+   *  reached by a different key. A numbered contract clause still refuses, silently, and the
+   *  keystroke is then NOT consumed: if the editor is not going to indent the line, moving the
+   *  focus is better than doing nothing at all.
+   *
+   *  A tab CHARACTER is deliberately not an option. The paragraph's indent is a `w:ind` property
+   *  on the whole paragraph and there is no tab-stop model underneath it, so a literal tab would
+   *  travel into the customer's document as whitespace that no ribbon indent could ever line up
+   *  with. Indenting the paragraph is what this document can represent.
+   *
+   *  Over a multi-line selection every template paragraph in it moves together, which is what the
+   *  ribbon already does for a box selection -- one press, one visible result. */
+  docSurface.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    const rung = e.shiftKey ? "outdent" : "indent";
+    // WOULD THIS ACTUALLY MOVE THE LINE? `paraAction` reports that it wrote a state, not that the
+    // state differs -- so at the margin it returned true having changed nothing, and Tab was
+    // swallowed while appearing to do nothing at all. Asked here instead, for the same reason
+    // Backspace hands the keystroke back at the margin: a key the editor will not act on belongs
+    // to the browser. (A test caught this; the handler shipped it.)
+    const canMove = (one) => {
+      const now = paraNow(Number(one.dataset.id));
+      if (!now || now.locked) return false;
+      const want = rung === "indent"
+        ? Math.min(INDENT_MAX_TW, now.indent + INDENT_STEP_TW)
+        : Math.max(0, now.indent - INDENT_STEP_TW);
+      return want !== now.indent;
+    };
+    // A box selection, or a native drag across paragraphs: move all of them.
+    const many = (boxSel && boxSel.length > 1)
+      ? boxSel.slice()
+      : selectionLines().length > 1 ? selectionLines().map(p => p.el) : null;
+    if (many) {
+      // Computed lines (the PRICE rows, the {{#system}} rows, the NOTES bullets) have no para
+      // record to move, and a locked contract clause refuses -- both are passed over rather than
+      // pretended at, so a selection that mixes them indents what it can.
+      const blocks = many.filter(one => one.classList.contains("tw-block") && canMove(one));
+      const moved = blocks.filter(one => paraAction(one, rung));
+      if (!moved.length) return;                 // nothing could move: let Tab do its normal job
+      e.preventDefault();
+      scheduleRepaginate();
+      return;
+    }
+    const el = lineTarget(e);
+    if (!el || !el.classList.contains("tw-block")) return;
+    if (!canMove(el)) return;                    // locked, at the margin, or already at the max
+    if (!paraAction(el, rung)) return;
+    e.preventDefault();
+    showFmtBar(el);                              // the indent buttons reflect where the line now is
   });
 
   docSurface.addEventListener("keydown", (e) => {
