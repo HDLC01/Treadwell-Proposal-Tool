@@ -15,12 +15,13 @@
  *
  * WHAT IT ASSERTS THROUGH THE PYTHON SIDE (test_drawer_renders.py):
  *   - the panel renders at all, on every shape of proposal, without throwing;
- *   - the customer's portal token appears NOWHERE in the markup as text — the whole point of
- *     the 2026-08-13 redesign — while the link still works as an href;
+ *   - the customer's portal token appears NOWHERE in the drawer at all — not as text, not in an
+ *     href, not in a title. The 2026-08-13 redesign stopped printing it; 2026-08-26 removed the
+ *     two controls that carried it, so the count is now zero rather than one;
  *   - every id the wiring looks up was rendered by the paint it is wiring (the "handler bound
  *     to an id nobody renders" bug this file's siblings have caught twice by grep);
  *   - the signature guard genuinely skips an unchanged repaint, executed rather than read;
- *   - copy-to-clipboard survives a missing clipboard and a rejected promise.
+ *   - the Proposal tab's cards are read in the order Hanz asked for, files before versions.
  *
  * THE DOM STUB IS A BAG OF MARKUP, NOT A TREE. It answers `querySelector`/`getElementById` out
  * of the html the code just wrote, so "does this element exist" is answered by the renderer's
@@ -120,7 +121,10 @@ const CONST_NAMES = [
 const LET_NAMES = ["ALL", "ACTIVE_SEC", "CUR_PID", "RENDER_GEN", "DEEPLINK_USED", "DRAWER_SIG",
                    "DETAIL_RECIPIENTS", "DETAIL_GEN", "THREAD_SCROLL", "NS_MODE"];
 const FN_NAMES = [
-  "drawerHead", "customerHtml", "copyPortalLink", "wirePortalLink", "approvalHtml",
+  // copyPortalLink and wirePortalLink came OFF this list on 2026-08-26 with the two controls they
+  // served. Nothing in the drawer touches the customer's portal URL any more, so there is no
+  // clipboard path left to lift and no navigator stub to give it.
+  "drawerHead", "customerHtml", "approvalHtml",
   "contactsHtml", "recipientsHtml", "msgHtml", "splitSystem", "depositHtml", "mask4",
   // The attachment renderer and its size formatter (2026-08-26). SIXTH addition to this list for
   // the same reason as the five below: msgHtml is lifted and now calls attHtml, so leaving it out
@@ -349,7 +353,12 @@ function makeDom() {
 }
 
 // ── fixtures: the shapes production actually serves ──────────────────────────
-const URL_TOKEN = "gZ3liSuON-bK-jR37bxIb0psjkXmAKp8";
+// SYNTHETIC, and it has to be. The value here used to be a token that really existed in
+// portal_proposals -- one of Hanz's own proposals, but a working bearer credential all the same,
+// committed to a PUBLIC repository where anyone reading these tests could open that proposal,
+// its pricing and its approval button with no login at all. It survived because it looked like a
+// plausible fixture and nothing said otherwise. This one announces itself.
+const URL_TOKEN = "NOT-A-REAL-TOKEN-0000000000000000";
 const PORTAL_URL = "https://portal.wetreadwell.com/p/" + URL_TOKEN;
 
 const BOARD_ROWS = [
@@ -411,7 +420,7 @@ function payload(over) {
       project_name: "Combo Test",
       customer_name: "HANZ URIEL A DE LA CRUZ",
       customer_email: "hdlcruz03@gmail.com",
-      url: PORTAL_URL,
+      url: PORTAL_URL, token: URL_TOKEN,
       proposal_status: "approved",
       deposit_status: "requested",
       deposit_required: true,
@@ -478,7 +487,7 @@ const SCENARIOS = {
     pid: "sent",
     data: payload({
       proposal: { project_name: "Maple Street Warehouse", customer_name: "", customer_email: "dave@x.com",
-                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: false } },
       approval: null, deposit_ref: null, contacts: [], deposits: [], recipient_activity: [],
       followups: [],
@@ -499,7 +508,7 @@ const SCENARIOS = {
     pid: "viewed",
     data: payload({
       proposal: { project_name: "Elmwood Cold Storage", customer_name: "Dave Nunn",
-                  customer_email: "dave@elmwood.com", url: PORTAL_URL,
+                  customer_email: "dave@elmwood.com", url: PORTAL_URL, token: URL_TOKEN,
                   proposal_status: "viewed", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
@@ -517,7 +526,7 @@ const SCENARIOS = {
     pid: "viewedonce",
     data: payload({
       proposal: { project_name: "Brookfield Bakery", customer_email: "ops@brookfield.com",
-                  url: PORTAL_URL, proposal_status: "viewed", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "viewed", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
       messages: [{ msg_type: "text", body: "Proposal attached.", author_kind: "staff",
@@ -530,7 +539,7 @@ const SCENARIOS = {
     pid: "viewedcard",
     data: payload({
       proposal: { project_name: "Ashford Plant", customer_email: "dave@ashford.com",
-                  url: PORTAL_URL, proposal_status: "viewed", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "viewed", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
       messages: [
@@ -546,7 +555,7 @@ const SCENARIOS = {
     pid: "unviewed",
     data: payload({
       proposal: { project_name: "Larkspur Depot", customer_email: "ap@larkspur.com",
-                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "pending",
+                  url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent", deposit_status: "pending",
                   contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
       messages: [{ msg_type: "text", body: "Proposal attached.", author_kind: "staff",
@@ -564,8 +573,6 @@ const SCENARIOS = {
 
 // ── the page's collaborators, stubbed at the edges only ──────────────────────
 const dom = makeDom();
-const clipboard = { impl: null };                 // swapped per clipboard scenario
-const navigatorStub = { get clipboard() { return clipboard.impl; } };
 const timers = [];                                // setTimeout, captured rather than scheduled
 // The nine-person roster with only some of them on, which Hanz confirmed is deliberate, plus one
 // override of each kind: `add` turns somebody on for this project alone and `mute` turns somebody
@@ -646,7 +653,8 @@ const injected = [
   ["window", windowStub],
   ["location", locationStub],
   ["TW", TW],
-  ["navigator", navigatorStub],
+  // No `navigator`. The only reader was copyPortalLink, and binding a stub for a global nothing
+  // touches is how a harness starts testing its own furniture.
   ["api", api],
   ["setTimeout", (f, ms) => { timers.push({ f, ms }); return timers.length; }],
   ["requestAnimationFrame", (f) => f()],            // synchronous, so the scroll logic runs
@@ -686,7 +694,7 @@ const body = `"use strict";
   ${FN_NAMES.map(fnSrc).join("\n")}
   ${openDetailRealSrc}
   return {
-    renderDetail, renderNotSent, focusSection, copyPortalLink,
+    renderDetail, renderNotSent, focusSection,
     // The real entry point, under its lifted name: the ?sec= deep link and the per-project
     // ACTIVE_SEC reset live in it.
     openDetail: openDetailReal,
@@ -745,7 +753,7 @@ const out = { imported: destructured.map(([n]) => n), tabs: Object.keys(page.sec
   // "wiring an id it never rendered" — the not-sent test subtracts these.
   allSecCards: page.allSecCards(),
               secMap: page.secTabs(),
-              scenarios: {}, clipboard: {}, notSent: {}, won: {}, closeOut: {}, hold: {},
+              scenarios: {}, notSent: {}, won: {}, closeOut: {}, hold: {},
               errors: {} };
 
 /** What one tab looks like once focusSection has switched to it: which cards are on screen,
@@ -903,47 +911,13 @@ async function runScenario(name, s) {
     out.errors.notSent = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
-  // ── copy to clipboard, every way it can go ─────────────────────────────────
-  // The button replaced a URL a rep used to be able to select by hand, so a dead button here
-  // means the customer's link is unreachable. Every branch has to end with a usable control.
-  const btn = () => ({ textContent: "Copy the link" });
-  const say = () => ({ textContent: "" });
-  async function copyCase(impl) {
-    clipboard.impl = impl;
-    timers.length = 0;
-    const b = btn(), s = say();
-    const ok = await page.copyPortalLink(PORTAL_URL, b, s);
-    // The label in TWO states, which is the whole behaviour: what it says the moment the copy
-    // lands, and what it says once the reset timer has run. Reading it only after firing the
-    // timers (the first version of this) made the confirmation invisible to the test — success and
-    // failure both reported "Copy the link" and looked identical.
-    const label = b.textContent;
-    timers.forEach((t) => t.f());
-    return { ok, label, said: s.textContent, timers: timers.length, afterTimers: b.textContent };
-  }
-  let copied = null;
-  try {
-    // FIRST, end to end: render, then fire the click the page itself wired. This is what proves
-    // the button reaches the clipboard at all — copyPortalLink can be perfect while nothing calls
-    // it — and that the URL it sends is the one off the anchor's href rather than a copy of the
-    // token kept somewhere else in the markup.
-    clipboard.impl = { writeText: (v) => { copied = v; return Promise.resolve(); } };
-    page.open("combo");
-    page.renderDetail("combo", SCENARIOS.approved.data);
-    const wired = dom.query("[data-copy-portal]");
-    await wired.fire("click");
-    out.clipboard.wiredClick = { fired: !!wired, sent: copied,
-                                 label: wired.textContent, said: (dom.els.get("#cust-copy-say") || {}).textContent };
-    copied = null;
-    out.clipboard.works = await copyCase({ writeText: (v) => { copied = v; return Promise.resolve(); } });
-    out.clipboard.copiedValue = copied;
-    out.clipboard.absent = await copyCase(null);
-    out.clipboard.noWriteText = await copyCase({});
-    out.clipboard.rejects = await copyCase({ writeText: () => Promise.reject(new Error("NotAllowedError")) });
-    out.clipboard.throwsSync = await copyCase({ writeText: () => { throw new Error("boom"); } });
-  } catch (e) {
-    out.errors.clipboard = e.constructor.name + ": " + e.message;
-  }
+  // ── the customer's link, and the fact that there no longer is one ──────────
+  // The clipboard scenarios that used to live here went with the controls on 2026-08-26: no
+  // anchor, no copy button, no navigator. What replaced them is the strongest claim this harness
+  // makes about the token, and it is asserted on the RENDERED markup rather than by driving a
+  // handler, because the whole point is that no handler exists. See
+  // test_drawer_renders.py::test_the_customer_token_reaches_the_drawer_nowhere_at_all, which
+  // counts the token across every scenario's html and requires zero.
 
   // ── marking a project won, by hand, in BOTH drawers ────────────────────────
   // Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit has
@@ -981,7 +955,7 @@ async function runScenario(name, s) {
     const wonRow = page.row("wonsent");
     wonRow.won_at = "2026-08-19T15:00:00+00:00";
     const wonData = payload({ proposal: { project_name: "Fairview Clinic", customer_email: "d@x.com",
-                                          url: PORTAL_URL, proposal_status: "sent",
+                                          url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent",
                                           deposit_status: "pending", contacts_status: "pending",
                                           followup_state: { enrolled: true, enabled: true } },
                               approval: null, contacts: [], deposits: [], recipient_activity: [],
@@ -993,7 +967,7 @@ async function runScenario(name, s) {
 
     // ── the sent drawer: marking one from scratch ──
     const markData = payload({ proposal: { project_name: "Northgate Fulfilment",
-                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
                                            proposal_status: "sent", deposit_status: "pending",
                                            contacts_status: "pending",
                                            followup_state: { enrolled: true, enabled: true } },
@@ -1028,7 +1002,7 @@ async function runScenario(name, s) {
 
     // ── a project won the DERIVED way says so, and offers no button ──
     const paidData = payload({ proposal: { project_name: "Westport Retail Center",
-                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
                                            proposal_status: "approved",
                                            approved_at: "2026-07-20T10:00:00Z",
                                            deposit_status: "received", contacts_status: "pending",
@@ -1052,7 +1026,7 @@ async function runScenario(name, s) {
     /** Render a sent project's drawer, press one of the Follow-up tab's buttons, and report. */
     async function pressFu(pid, proposal, id) {
       const data = payload({ proposal: Object.assign(
-        { project_name: "Nearman Creek", customer_email: "d@x.com", url: PORTAL_URL,
+        { project_name: "Nearman Creek", customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
           deposit_status: "pending", contacts_status: "pending",
           followup_state: { enrolled: true, enabled: true } }, proposal),
         approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [] });
@@ -1158,7 +1132,7 @@ async function runScenario(name, s) {
       const data = payload(Object.assign({
         proposal: Object.assign(
           { project_name: (page.row(pid) || {}).project_name || "Nearman Creek",
-            customer_email: "d@x.com", url: PORTAL_URL, proposal_status: "sent",
+            customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN, proposal_status: "sent",
             deposit_status: "pending", contacts_status: "pending",
             followup_state: fuState }, over || {}),
         approval: null, contacts: [], deposits: [], recipient_activity: [],
@@ -1500,7 +1474,7 @@ async function runScenario(name, s) {
       danger.answer = answer;
       if (kind === "sent") {
         const data = payload({ proposal: { project_name: "Nearman Creek",
-                                           customer_email: "d@x.com", url: PORTAL_URL,
+                                           customer_email: "d@x.com", url: PORTAL_URL, token: URL_TOKEN,
                                            proposal_status: "sent", deposit_status: "pending",
                                            contacts_status: "pending",
                                            followup_state: { enrolled: true, enabled: true } },

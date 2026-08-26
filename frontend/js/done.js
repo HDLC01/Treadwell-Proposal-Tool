@@ -168,19 +168,25 @@
       : new Date(s).toLocaleDateString("en-US");
     const money = (n) => n == null ? "—"
       : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Classes, not inline styles: this row lives in the send screen's right-hand rail now, where
+    // it is ~380px wide, and the three download buttons have to WRAP onto their own line rather
+    // than crush the price. `.rev-acts` carries the flex-basis that does it — a rule an inline
+    // style could never hold, because an inline style has no media query and no container.
     list.innerHTML = revs.map((rv, i) => `
-      <div class="rev-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--surface-dim,#eee);">
-        <strong style="min-width:64px;">Rev ${rv.revision_no}</strong>
-        ${i === 0 ? '<span class="hint" style="color:var(--success,#137333);font-weight:600;">current</span>' : ""}
+      <div class="rev-row">
+        <span class="rev-no">Rev ${rv.revision_no}</span>
+        ${i === 0 ? '<span class="rev-cur">current</span>' : ""}
         <span class="hint">${fmtDate(rv.created_at)}</span>
         <span class="hint">${rv.created_by
           ? window.TWCrm.avatarHtml(rv.created_by) + esc(window.TWCrm.nameOf(rv.created_by))
           : "—"}</span>
-        <strong style="margin-left:auto;">${money(rv.total)}</strong>
+        <strong class="rev-money">${money(rv.total)}</strong>
         ${rv.has_documents ? `
-          <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="xlsx" style="padding:4px 10px;">.xlsx</button>
-          <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="docx" style="padding:4px 10px;">.docx</button>
-          <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="pdf" style="padding:4px 10px;">PDF</button>`
+          <span class="rev-acts">
+            <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="xlsx">.xlsx</button>
+            <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="docx">.docx</button>
+            <button class="btn-secondary rev-dl" type="button" data-rev="${rv.revision_no}" data-kind="pdf">PDF</button>
+          </span>`
         : '<span class="hint">no documents</span>'}
       </div>`).join("");
     box.style.display = "";
