@@ -577,13 +577,18 @@ def test_a_photo_gets_a_reserved_box_rather_than_reflowing_the_thread_when_it_la
     (`width:auto` under a 200px cap) the whole thread reflowed under the estimator's eye as each
     thumbnail landed.
 
-    The JS half of this fix lives on fix/attachment-thumbnails-ui and is deliberately not touched
-    here. What this asserts is that the box it lands in is the right shape: a fixed 160x120 that
-    holds the space from the first paint, with the picture cropped into it rather than resizing it.
+    Written when the JS half of this fix still lived only on fix/attachment-thumbnails-ui, against
+    a 160x120 placeholder this file's own comment block asked that branch to build on top of. That
+    branch landed with a wider tile (176px) and a caption under the well -- Hanz, 2026-08-26: "I
+    cant see the name of the file well" -- so the well's HEIGHT moved off the anchor and onto
+    `.att-well`, the block the caption sits below rather than inside. The numbers below are the
+    shipped ones; the shape they guard -- reserved space at first paint, the picture cropped into
+    it rather than resizing it -- is unchanged.
     """
-    assert _resolved("width", "a", {"att-img"}, [{"att-list"}]) == "160px"
-    assert _resolved("height", "a", {"att-img"}, [{"att-list"}]) == "120px"
-    assert _resolved("object-fit", "img", set(), [{"att-img"}]) == "cover", (
-        "the picture is not cropped into the reserved box, so it will resize it on arrival")
-    assert _resolved("background", "a", {"att-img"}, [{"att-list"}]) == "var(--surf-high)", (
+    assert _resolved("width", "a", {"att-img"}, [{"att-list"}]) == "176px"
+    assert _resolved("height", "div", {"att-well"}, [{"att-img"}, {"att-list"}]) == "132px"
+    assert _resolved("object-fit", "img", set(),
+                      [{"att-well"}, {"att-img"}, {"att-list"}]) == "cover", (
+        "the picture is not cropped into the reserved well, so it will resize it on arrival")
+    assert _resolved("background", "a", {"att-img"}, [{"att-list"}]) == "rgba(0,0,0,.06)", (
         "an empty box with no tint reads as a rendering failure rather than as a photo loading")
