@@ -921,3 +921,61 @@ def test_the_target_mark_wins_its_cascade_without_moving_the_text():
         assert not offenders, (
             "the target mark changes the layout (%s), shifting the text off the artwork"
             % ", ".join(offenders))
+
+
+# ── Tab indents the line ─────────────────────────────────────────────────────
+# Hanz, 2026-08-26: "is it possible when I click tab it indents the line? instead of scrolling
+# down?" Nothing handled Tab, so the browser moved focus to the next focusable element and the page
+# scrolled to reveal it — which reads as "Tab scrolls the document".
+
+def test_tab_indents_the_line_from_anywhere_in_it(ran):
+    """MID-LINE, not only at the start. Word inserts a tab stop there instead, and this editor
+    cannot: the indent is a `w:ind` property on the whole paragraph with no tab-stop model behind
+    it, so a literal tab would reach the customer's document as whitespace no ribbon indent could
+    line up with. Indenting the paragraph is what the document can actually represent, so that is
+    what the key does wherever the caret sits."""
+    got = ran["tabIndents"]
+    assert got["before"]["indent"] == 288
+    assert got["after"]["indent"] == 288 + 288, (
+        "Tab did not move the line: %r" % (got,))
+    assert got["prevented"], "the browser still got the keystroke — focus will move and the page scroll"
+    assert got["persisted"], "the indent never reached the draft"
+
+
+def test_shift_tab_takes_it_back(ran):
+    assert ran["shiftTabOutdents"]["after"]["indent"] == 288
+    assert ran["shiftTabOutdents"]["prevented"]
+
+
+def test_at_the_margin_tab_is_given_back_to_the_browser(ran):
+    """Nothing left to outdent, so the keystroke is NOT swallowed. If the editor is not going to
+    move the line, moving the focus is better than the key appearing dead — and the margin is
+    reached here by pressing the key itself, which is also what proves the handler can get to
+    zero."""
+    got = ran["shiftTabAtTheMargin"]
+    assert got["atMargin"]["indent"] == 0, "Shift+Tab could not walk the line back to the margin"
+    assert got["after"]["indent"] == 0
+    assert not got["prevented"], (
+        "Shift+Tab at the margin was swallowed — Tab now does nothing at all at the left edge")
+
+
+def test_a_numbered_contract_clause_refuses_and_keeps_its_tab(ran):
+    """A locked clause cannot be indented — the numbers in a signed contract are not ours to
+    reflow — and swallowing the keystroke would leave Tab looking broken on the terms pages."""
+    got = ran["tabOnLockedClause"]
+    assert got["after"] == got["before"], "a locked clause was indented"
+    assert not got["prevented"]
+
+
+def test_one_tab_moves_every_selected_line(ran):
+    """The rule the ribbon already follows for a box selection: one press, one visible result.
+    Otherwise indenting four selected lines means four presses and three of them look ignored."""
+    got = ran["tabOverABoxSelection"]
+    assert len(got["ids"]) >= 2, "the box selection did not hold more than one line: %r" % (got,)
+    assert got["prevented"]
+    # The two WORK rows move from 288 to 576. The third block in that box is the LOCKED
+    # contract clause at 540, and it must NOT move -- a mixed selection indents what it can
+    # rather than refusing everything or reflowing a clause in a signed contract.
+    assert got["indents"] == [576, 576, 540], (
+        "a mixed selection did not indent what it could and leave the locked clause alone: "
+        "%r" % (got["indents"],))
