@@ -292,7 +292,7 @@
      the box somebody is typing in. :empty hides it outright rather than reserving a line. */
   .dbody[data-sec="chat"] #chat-compose { flex:0 0 auto; padding:10px 0 16px; background:#fff;
     border-top:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
-  #reply-alert:empty, #nt-alert:empty, #nt-count:empty, #cust-copy-say:empty { display:none; }
+  #reply-alert:empty, #nt-alert:empty, #nt-count:empty { display:none; }
   .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--ink-v); }
   /* A section heading outranks the fact keys underneath it. Both are 700 uppercase, so at
      ink-v against ink-v "APPROVED" and "AMOUNT" read as the same level and the card loses its
@@ -328,14 +328,11 @@
   .btn-dang:hover { background:var(--red-dark); color:#fff; }
   .del-note:empty { display:none; }
   .del-note { margin:0; color:var(--red-dark); font-weight:600; }
-  /* A utility action beside a fact, rather than the action a panel is FOR — the 42px primary
-     height would make "Copy the link" shout as loud as "Send deposit request". */
-  .btn-sm { min-height:34px; padding:0 12px; font-size:12.5px; }
-  /* .btn is written for <button>: an <a class="btn"> has no display and keeps its underline.
-     "Open the customer's view" has to be a real link (middle-click, open-in-new-tab, and the
-     href is the only place the customer's token exists), so the anchor gets the geometry. */
-  .btn.is-link { display:inline-flex; align-items:center; justify-content:center; gap:5px;
-    text-decoration:none; }
+  /* .btn-sm and .btn.is-link were removed on 2026-08-26 with the only two controls that used
+     them: the customer card's "Copy the link" button and the "Open the customer's view" anchor.
+     Left behind they would read as a small-button size and an anchor-as-button variant this
+     page supports, and the next person would style a third control against a dead rule. Same
+     reasoning as a.link, which went the same way when the printed URL did. */
   .btn:focus-visible, .nt-chip:focus-visible, .dep-show:focus-visible, .dclose:focus-visible {
     outline:2px solid var(--red); outline-offset:1px; }
   /* ── labelled facts ───────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-"""The CRM project drawer RENDERS, and it no longer prints the customer's portal token.
+"""The CRM project drawer RENDERS, and the customer's portal token is not in it anywhere.
 
 WHAT HANZ ASKED FOR, 2026-08-13, with a screenshot of the drawer on a sent project:
 
@@ -9,6 +9,12 @@ The URL is the named part, and it was the worst part: `dsec-customer` printed
 `https://portal.wetreadwell.com/p/<60-character token>` in full, underlined, wrapped over two
 lines, directly under the customer's email address. Nobody reads a token. It pushed the identity
 it belongs to out of the way, and `a.link { word-break:break-all }` existed for that one element.
+
+AND THEN, 2026-08-26: "Remove the Copy the link and oipen custo9mers view". The two controls that
+replaced the printed URL are gone as well, so the token no longer exists in this drawer in any
+form — not as text, not as an href, not on the clipboard. Several assertions below were written
+against those controls and now assert their absence instead; each one says which. The token count
+went from "exactly one, in the href" to zero, which is the strongest form of the original ask.
 
 WHY THIS FILE EXECUTES THE PANEL INSTEAD OF GREPPING IT.
 
@@ -67,7 +73,10 @@ TOKEN = "gZ3liSuON-bK-jR37bxIb0psjkXmAKp8"
 PORTAL_URL = "https://portal.wetreadwell.com/p/" + TOKEN
 
 SCENARIOS = ["approved", "submitted", "sent", "bare"]
-WITH_LINK = ["approved", "submitted", "sent"]          # `bare` has no customer url at all
+# The fixtures whose PAYLOAD carries a real portal url. The drawer no longer renders a control for
+# it on any of them (2026-08-26); the split still matters because these are the three that could
+# leak the token if one ever came back, and `bare`'s url is a javascript: string instead.
+WITH_LINK = ["approved", "submitted", "sent"]
 
 
 @pytest.fixture(scope="module")
@@ -158,12 +167,12 @@ def test_the_word_undefined_never_reaches_the_panel(out, name):
 @needs_node
 @pytest.mark.parametrize("name", WITH_LINK)
 def test_the_customer_token_is_never_printed_as_text(out, name):
-    """THE ask, asserted the strict way: strip every tag and the token must not survive anywhere
-    in what a human reads.
+    """The 2026-08-13 ask, asserted the strict way: strip every tag and the token must not
+    survive anywhere in what a human reads.
 
-    Mutations this kills: putting the URL back as the anchor's own label; "shortening" it to
-    `…/p/gZ3liSu…`, which is still a token and still unreadable; printing it inside the note that
-    explains the link."""
+    Kept as its own assertion after the controls went, because it fails with a different sentence
+    than the count below and names a different mutation: printing the URL as a LABEL somewhere in
+    the card, or "shortening" it to `…/p/gZ3liSu…`, which is still a token and still unreadable."""
     html = out["scenarios"][name]["html"]
     body = text_of(html)
     assert TOKEN not in body, "the customer's portal token is printed as text in the %s drawer" % name
@@ -172,109 +181,93 @@ def test_the_customer_token_is_never_printed_as_text(out, name):
 
 
 @needs_node
-@pytest.mark.parametrize("name", WITH_LINK)
-def test_the_token_lives_in_exactly_one_place_in_the_markup(out, name):
-    """The href, and nothing else. A second copy — a data attribute holding the same string, a
-    title, an aria-label — is a second thing to leak and a second thing to keep in step, and the
-    copy button reads the href precisely so there is only one."""
+@pytest.mark.parametrize("name", SCENARIOS)
+def test_the_customer_token_reaches_the_drawer_nowhere_at_all(out, name):
+    """ZERO occurrences. Not one in an href, which is what this asserted until 2026-08-26.
+
+    That URL is a bearer credential with a friendly face: it opens the customer's proposal, their
+    pricing and their approval button to anybody holding it, with no further sign-in. So the safe
+    number of copies of it in a staff page is not "one, in the right place" — it is none, and the
+    same link came off the Files page earlier the same day for exactly this reason.
+
+    Every scenario, not just the three with a portal url, because "which fixtures have one" is a
+    fact about the fixtures and this is a claim about the renderer.
+
+    Mutations this kills, all of which the old one-copy version allowed: an anchor whose href is
+    the link; a data attribute stashing it for a copy button; a title or aria-label that a browser
+    prints on hover or reads aloud to a screen reader; an aria-describedby pointing at a node
+    holding it; an alt text. The attribute sweep is kept as its own loop rather than trusted to
+    the count, so a failure names WHICH attribute leaked."""
     html = out["scenarios"][name]["html"]
-    assert html.count(TOKEN) == 1, (
-        "the token appears %d times in the %s drawer; it belongs in the anchor's href alone"
-        % (html.count(TOKEN), name))
-    for attr in ("title", "aria-label", "aria-describedby", "alt"):
-        assert not any(TOKEN in v for v in attrs_named(html, attr)), (
-            "the token is in a %s, which a browser prints on hover or reads aloud" % attr)
+    assert html.count(TOKEN) == 0, (
+        "the token appears %d times in the %s drawer; it must not be there at all, in any "
+        "attribute or any text node" % (html.count(TOKEN), name))
+    # Not a fragment of it either. Eight characters is enough to prove one leaked.
+    assert TOKEN[:8] not in html, "a fragment of the customer's token is in the %s drawer" % name
+    for attr in ("title", "aria-label", "aria-describedby", "alt", "href", "data-url"):
+        assert not any(TOKEN[:8] in v for v in attrs_named(html, attr)), (
+            "the token is in a %s in the %s drawer" % (attr, name))
 
 
 @needs_node
 @pytest.mark.parametrize("name", WITH_LINK)
-def test_the_customer_view_is_still_reachable(out, name):
-    """Removing the URL must not remove the link. A real <a> so middle-click and open-in-new-tab
-    behave, `target=_blank` because the rep is mid-task in the drawer, and `rel=noopener` because
-    that tab is the customer's own view of our proposal."""
+def test_the_customer_view_is_not_reachable_from_the_drawer_at_all(out, name):
+    """This used to assert the opposite, and the thing it protected no longer exists.
+
+    Until 2026-08-26 the card carried a real <a data-portal-link target=_blank rel=noopener> so a
+    rep could open the customer's own view, and this test pinned all three attributes. Hanz asked
+    for both that anchor and the copy button to go, so what is worth pinning now is that neither
+    grew back: the customer's view is reached by asking the customer, and the drawer holds no
+    credential for it.
+
+    Asserted on the three fixtures that DO carry a portal url, because a fixture without one
+    cannot render a link whatever the code says, and would pass this for the wrong reason."""
     html = out["scenarios"][name]["html"]
-    m = re.search(r"<a[^>]*data-portal-link[^>]*>", html)
-    assert m, "there is no link to the customer's view in the %s drawer" % name
-    tag = m.group(0)
-    assert 'href="%s"' % PORTAL_URL in tag, tag
-    assert 'target="_blank"' in tag and "noopener" in tag, tag
-    label = text_of(html[m.end():html.index("</a>", m.end())])
-    assert "Open the customer" in label, (
-        "the link's label is %r — it has to read as an action, which is the whole trade for "
-        "dropping the URL" % label)
-    assert "data-copy-portal" in html, "there is no way to copy the link"
+    assert "data-portal-link" not in html, (
+        "the anchor to the customer's view is back in the %s drawer" % name)
+    assert "data-copy-portal" not in html and 'id="cust-copy"' not in html, (
+        "the copy-the-link button is back in the %s drawer" % name)
+    assert "Open the customer" not in text_of(html), (
+        "the %s drawer offers to open the customer's view again" % name)
+    assert PORTAL_URL not in html
 
 
 @needs_node
-def test_a_proposal_with_no_usable_customer_link_says_so_rather_than_offering_a_dead_control(out):
-    """Rendering the two controls anyway would give a button that copies an empty string and a link
-    to nowhere, which is worse than saying there isn't one yet."""
+def test_a_proposal_with_no_usable_customer_link_says_so(out):
+    """The dead-control half of this is now moot — there are no controls — but the sentence still
+    earns its place, and it is the reason the card still looks at p.url at all.
+
+    A project the portal has no link for is a project the customer cannot open, and that is worth
+    telling the rep who is looking at the card wondering why the customer has gone quiet. `bare`'s
+    url is `javascript:alert(document.cookie)`, which is not a link a customer has, so it takes
+    this branch too."""
     html = out["scenarios"]["bare"]["html"]
-    assert "data-portal-link" not in html and "data-copy-portal" not in html
     assert "no customer link yet" in html
+    for name in WITH_LINK:
+        assert "no customer link yet" not in out["scenarios"][name]["html"], (
+            "the %s drawer claims there is no customer link, and its fixture has one" % name)
 
 
 @needs_node
-def test_only_an_http_url_is_ever_put_in_the_href(out):
-    """`bare`'s fixture url is `javascript:alert(document.cookie)`.
+def test_a_javascript_url_never_reaches_the_markup(out):
+    """`bare`'s fixture url is `javascript:alert(document.cookie)`, and this test is why the scheme
+    check outlived the href it was written for.
 
-    esc() makes a value safe INSIDE an attribute and says nothing about the scheme, so without the
-    scheme test that string becomes an href, and a staff click runs it against a page holding a
-    bearer token. The payload comes from our own portal over a service token, so this is a belt on
-    top of braces rather than a live hole — but it is one condition, and the alternative is trusting
-    an upstream absolutely."""
+    It used to guard an attribute: esc() makes a value safe INSIDE an attribute and says nothing
+    about the scheme, so without the check that string became an href and a staff click ran it
+    against a page holding a bearer token. Nothing writes an href from p.url any more, so the check
+    now only decides whether the card says "no customer link yet". The assertion stays because the
+    failure it names is unchanged — a url out of the payload appearing anywhere in staff markup —
+    and a future card that starts printing p.url again would land here first."""
     for name in SCENARIOS:
         html = out["scenarios"][name]["html"]
         assert "javascript:" not in html, (
             "the %s drawer put a javascript: URL in the markup" % name)
-    for name in WITH_LINK:
+    # And no href in the drawer comes out of a payload at all now: every one is a route this app
+    # owns, so a bare path is correct and an absolute portal URL would be the regression.
+    for name in SCENARIOS:
         for href in attrs_named(out["scenarios"][name]["html"], "href"):
-            assert href.startswith("http://") or href.startswith("https://"), href
-
-
-# ── copy to clipboard ────────────────────────────────────────────────────────
-@needs_node
-def test_the_copy_button_is_wired_and_sends_the_href(out):
-    """End to end: render, then fire the click the page itself bound. copyPortalLink can be
-    perfect while nothing calls it, and the value it sends has to come off the anchor rather than
-    from a second copy of the token kept somewhere in the markup."""
-    c = out["clipboard"]["wiredClick"]
-    assert c["fired"], "the copy button was never rendered"
-    assert c["sent"] == PORTAL_URL, "the clipboard got %r" % (c["sent"],)
-    assert c["label"] == "Link copied", c["label"]
-    assert c["said"], "nothing told the rep it worked"
-
-
-@needs_node
-def test_a_successful_copy_puts_its_label_back(out):
-    """The confirmation is temporary on purpose: a button permanently reading "Link copied" is a
-    button that looks disabled. So both states are asserted — what it says when the copy lands,
-    and what it says after the one timer runs."""
-    c = out["clipboard"]["works"]
-    assert c["ok"] is True
-    assert c["label"] == "Link copied", (
-        "the button says %r on success, so nothing on screen confirms the copy" % c["label"])
-    assert c["timers"] == 1
-    assert c["afterTimers"] == "Copy the link", c["afterTimers"]
-
-
-@needs_node
-@pytest.mark.parametrize("case", ["absent", "noWriteText", "rejects", "throwsSync"])
-def test_a_blocked_clipboard_never_leaves_a_dead_button(out, case):
-    """navigator.clipboard is absent on an insecure origin, `{}` in a browser that exposes the
-    object without the method, and rejects outright on a denied permission. All three used to be
-    reachable ways to strand the one control that replaced the URL.
-
-    What this pins: the promise is caught, the label goes back to something clickable, and the
-    message names the way out that always works. Mutation it kills: dropping the try/catch, or
-    setting a "Copying…" label that the failure path never clears."""
-    c = out["clipboard"][case]
-    assert c["ok"] is False
-    assert c["label"] == "Copy the link", (
-        "the button is left reading %r after a failed copy" % c["label"])
-    assert "Open the customer" in c["said"], (
-        "the failure says %r, which does not tell the rep what to do instead" % c["said"])
-    assert c["timers"] == 0, "a failure scheduled a label reset it does not need"
+            assert "portal.wetreadwell.com" not in href, href
 
 
 # ── the wiring, and the cards ────────────────────────────────────────────────
@@ -324,9 +317,10 @@ def test_every_id_the_wiring_reaches_for_was_rendered_by_that_paint(out, name):
     versions of that bug have shipped from this file, and both were found by grep — which cannot
     see a lookup inside a conditional branch. This sees the real lookups from the real render.
 
-    The allowlist is the point: anything else missing is a genuine mismatch. `cust-copy-say`
-    joining it would mean the copy status line stopped rendering while the code still writes into
-    it, which is how a message goes silently nowhere."""
+    The allowlist is the point: anything else missing is a genuine mismatch. `rev-list` joining it
+    would mean the Sent versions list stopped rendering while loadRevisions still paints into it,
+    which is how a whole card goes silently nowhere. (It used to say `cust-copy-say` here; that
+    element and the handler that wrote to it were removed on 2026-08-26.)"""
     missing = set(out["scenarios"][name]["missing"])
     unexpected = missing - set(CONDITIONAL_IDS)
     assert not unexpected, (
@@ -356,6 +350,37 @@ def test_the_two_conditional_cards_appear_exactly_when_they_should(out):
     assert "dsec-approved" in out["scenarios"]["approved"]["eligible"]
     for none in ("sent", "bare"):
         assert "dsec-approved" not in out["scenarios"][none]["eligible"]
+
+
+@needs_node
+@pytest.mark.parametrize("name", SCENARIOS)
+def test_open_the_files_is_read_before_sent_versions(out, name):
+    """Hanz, 2026-08-26: "Move 'Open Files' above the revisions please".
+
+    The first positional assertion this file has ever made about the Proposal panel, and it is
+    here because every other card assertion in it is set-based: `test_every_card_marked_eligible`
+    and the SEC_TABS coverage test both compare sets, so the two cards could swap back tomorrow
+    and the whole suite would stay green. Order is a decision somebody made out loud, which makes
+    it a claim, not a detail.
+
+    Both halves, because a card is registered in two places and only one of them is what a rep
+    sees: the panel MARKUP is the order on screen, and the SEC_TABS array documents itself as "the
+    order the cards are read in". Letting those disagree is how this file's own comments say the
+    drawer has broken twice."""
+    body = panel(out["scenarios"][name]["html"], "proposal")
+    files, revs = body.index('id="dsec-files"'), body.index('id="dsec-revisions"')
+    assert files < revs, (
+        "Sent versions is above Open the files in the %s drawer; the paperwork goes first" % name)
+    order = out["secMap"]["proposal"]
+    assert order.index("dsec-files") < order.index("dsec-revisions"), order
+    # Delete stays last in both, which is the other placement decision recorded in that array.
+    assert order[-1] == "dsec-delete", order
+    # The harness signs in as an admin, so every scenario renders it. Asserted rather than
+    # assumed: for a non-admin the card is absent by design, and a silent -1 from find() would
+    # read as "it is above Sent versions" instead of "it was never rendered".
+    delete = body.find('id="dsec-delete"')
+    assert delete != -1, "the %s drawer rendered no delete section to place" % name
+    assert delete > revs, "the delete section is no longer the last card on the Proposal tab"
 
 
 # ── the tab strip ────────────────────────────────────────────────────────────
@@ -819,12 +844,18 @@ def test_every_class_the_drawer_emits_has_a_rule_somewhere(out, name):
     assert not missing, "the %s drawer uses classes nothing styles: %s" % (name, missing)
 
 
-def test_the_customer_cards_link_button_is_styled_for_an_anchor():
-    """`.btn` is written for <button>: no display, no text-decoration reset. An <a class="btn">
-    renders as underlined inline text, which is why the toolbar's own link carries three inline
-    style properties to compensate. The rule exists so this one does not have to."""
-    assert re.search(r"\.btn\.is-link\s*\{[^}]*text-decoration:\s*none", CSS), (
-        "an anchor styled as a button has no rule, so it renders underlined and inline")
+def test_the_removed_customer_controls_took_their_styling_with_them():
+    """The reverse of what this asserted until 2026-08-26.
+
+    `.btn.is-link` existed for one element, the <a> to the customer's view, and `.btn-sm` for the
+    two buttons in that row. Both controls are gone, and a rule with no element is worse than no
+    rule: the next person reads `.btn-sm` as a supported small-button size and styles a third
+    control against something nothing else uses. Same reasoning as a.link below, which went the
+    same way when the printed URL did."""
+    assert not re.search(r"\.btn\.is-link\s*\{", CSS), (
+        "the anchor-as-button rule is still in the stylesheet, and no anchor uses it")
+    assert not re.search(r"\.btn-sm\s*\{", CSS), (
+        "the small-button rule is still in the stylesheet, and nothing emits .btn-sm")
 
 
 def test_the_money_class_actually_asks_for_tabular_figures():

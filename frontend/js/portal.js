@@ -1523,9 +1523,11 @@
     // tab list from the product both read, so it is changed HERE rather than only in the markup.
     chat:     ["dsec-chat"],
     // dsec-delete is LAST on this tab on purpose: the order here is the order the cards are read
-    // in, and the way to remove a project belongs after everything that describes it.
+    // in, and the way to remove a project belongs after everything that describes it. dsec-files
+    // sits ABOVE dsec-revisions for the same reason, since 2026-08-26 — Hanz: "Move 'Open Files'
+    // above the revisions please" — and the panel markup in renderDetail carries the same order.
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
-               "dsec-revisions", "dsec-files", "dsec-delete"],
+               "dsec-files", "dsec-revisions", "dsec-delete"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -2269,28 +2271,26 @@
     return "";
   };
 
-  /** Who the customer is, and the two ways to reach their view.
+  /** Who the customer is. Nothing else.
    *
-   *  THE TOKEN IS NEVER PRINTED. It lives in the anchor's href and nowhere else: not as
-   *  text, not in a title, not in an aria-label. A browser already reveals a link's target
-   *  in the status bar on hover, which covers the one person who genuinely wants to see
-   *  where they are going, and costs the other ninety-nine nothing.
+   *  THE TOKEN NEVER REACHES THE MARKUP AT ALL. Hanz, 2026-08-26: "Remove the Copy the link
+   *  and oipen custo9mers view". Both controls are gone and the href went with them, which is
+   *  the stronger version of the 2026-08-13 rule rather than a retreat from it: that URL opens
+   *  the customer's proposal, their pricing and their approval button with no further sign-in,
+   *  so the only safe number of copies of it in a staff page is zero. The same link came off
+   *  the Files page earlier the same day for the same reason.
    *
-   *  Two controls rather than one, because a link and a link you can send are different
-   *  jobs: "Open the customer's view" is a real <a> so middle-click and open-in-new-tab
-   *  behave, and "Copy the link" is what a rep needs when they are pasting it into an
-   *  email or a text.
+   *  The scheme test survives the controls it used to guard. It no longer decides what goes in
+   *  an href — nothing does — but it is still the only thing that answers "could the customer
+   *  open this at all", and `javascript:alert(1)` is not a link a customer has. That answer is
+   *  the sentence at the bottom of the card, and nothing else in here reads p.url.
    */
   function customerHtml(p) {
     const name = String(p.customer_name || "").trim();
     const email = String(p.customer_email || "").trim();
-    // http(s) only. esc() makes the value safe to put INSIDE an attribute, but it says nothing
-    // about the scheme, and `href="javascript:…"` is a script that runs on a staff click. The
-    // value comes from our own portal over a service token, so this is not a live hole — it is one
-    // condition standing between a compromised or misconfigured upstream and code execution in the
-    // CRM. Anything else falls through to the no-link branch rather than rendering a control that
-    // cannot be trusted. Matches http too: a local portal is http://localhost:8899/p/….
-    const url = /^https?:\/\//i.test(String(p.url || "")) ? String(p.url) : "";
+    // http(s), because a local portal is http://localhost:8899/p/…. A value that fails this is
+    // not a link the customer can use, whatever else it may be.
+    const reachable = /^https?:\/\//i.test(String(p.url || ""));
     // The name leads when we have one, otherwise the address is the identity — never an
     // empty strong line with the email demoted underneath it.
     const lead = name || email;
@@ -2300,64 +2300,9 @@
         <div class="idn-n">${esc(lead || "No customer on this proposal")}</div>
         ${name && email ? `<div class="idn-e">${esc(email)}</div>` : ""}
       </div>
-      ${url ? `<div class="row3">
-        <a class="btn btn-s btn-sm is-link" data-portal-link href="${esc(url)}"
-           target="_blank" rel="noopener">Open the customer's view<span aria-hidden="true">↗</span></a>
-        <button type="button" class="btn btn-s btn-sm" id="cust-copy" data-copy-portal>Copy the link</button>
-      </div>
-      <p class="note">Anyone with this link can open the proposal, so send it to the customer and nobody else.</p>
-      <p class="note" id="cust-copy-say" role="status" aria-live="polite"></p>`
-      : '<p class="note">This proposal has no customer link yet.</p>'}
+      ${reachable ? ""
+        : '<p class="note">This proposal has no customer link yet, so there is nothing for the customer to open.</p>'}
     </div>`;
-  }
-
-  /** Put the customer's link on the clipboard, and SAY what happened.
-   *
-   *  Every branch has to leave a working button. `navigator.clipboard` is absent on an
-   *  insecure origin and can reject outright — a denied permission, or a browser that
-   *  decides this click did not count as a gesture — and an uncaught rejection here would
-   *  strand the one affordance that replaced the URL we removed. So the button label never
-   *  enters a pending state it could be stuck in, and the failure path names the way out
-   *  that always works: the Open control sitting next to it.
-   *
-   *  Deliberately NOT a document.execCommand fallback with a hidden textarea. That would
-   *  put the token back into the DOM to work around a browser that already said no, for a
-   *  case that cannot arise on https://proposals.wetreadwell.com.
-   *
-   *  Returns true/false so a test can assert every outcome: copied, no clipboard object, no
-   *  writeText on it, a rejected promise, and a synchronous throw.
-   */
-  async function copyPortalLink(url, btn, say) {
-    const tell = (m) => { if (say) say.textContent = m; };
-    const orig = btn.textContent;
-    tell("");
-    try {
-      const cb = (typeof navigator !== "undefined" && navigator.clipboard) || null;
-      if (!cb || !cb.writeText) throw new Error("no clipboard in this browser");
-      await cb.writeText(url);
-    } catch {
-      btn.textContent = orig;
-      tell("This browser blocked the copy. Open the customer's view and copy the address from there.");
-      return false;
-    }
-    btn.textContent = "Link copied";
-    tell("The link is on your clipboard.");
-    setTimeout(() => { btn.textContent = orig; }, 2200);
-    return true;
-  }
-
-  /** Wire the copy button to the anchor beside it.
-   *
-   *  The URL is read off the anchor's href rather than stored in a data attribute, so the
-   *  customer's token exists in exactly one place in the DOM. Both nodes are resolved HERE,
-   *  at bind time, rather than inside the handler: a lookup that only runs on click is a
-   *  lookup no test can see failing. */
-  function wirePortalLink(d) {
-    const btn = d.querySelector("[data-copy-portal]");
-    const link = d.querySelector("[data-portal-link]");
-    if (!btn || !link) return;
-    const say = $("cust-copy-say");
-    btn.addEventListener("click", () => copyPortalLink(link.href, btn, say));
   }
 
   /** The approval, as facts rather than a sentence.
@@ -3525,6 +3470,25 @@
           <div id="nt-chips" class="nt-chips"><span class="note">Loading…</span></div>
         </div>
 
+        <!-- The files and the hand-off sheet, ON A SENT PROJECT TOO. Hanz, 2026-08-20: "Move the
+             info sheet button inside proposals tab."
+             This panel had NEITHER control. The not-sent drawer has had "Open the files" since it
+             shipped, and a sent project reached its files only from the board card, so moving the
+             card's buttons into the drawer without adding them here would have left every project
+             the customer has actually seen with no route to its estimate, its proposal or its Info
+             Sheet at all. Same two URLs as the card and the Proposals Database, character for
+             character.
+             ABOVE Sent versions since 2026-08-26. Hanz: "Move 'Open Files' above the revisions
+             please". The paperwork is what a rep opens the drawer for; the version history is
+             what they consult, and it grows a row on every send, so leaving it first pushed the
+             two buttons further down the panel every time somebody re-sent a bid.
+             NB no em dash in this comment: test_drawer_renders.py greps the whole panel, comments
+             included. -->
+        <div class="sec row3" id="dsec-files">
+          <button type="button" class="btn btn-s" id="go-files">Open the files</button>
+          <button type="button" class="btn btn-s" id="go-info">Info sheet</button>
+        </div>
+
         <!-- Every send snapshots the estimate, so the versions are a real record of what each
              customer was quoted and when. Hanz, 2026-08-19: "Make sure to also put the revisions
              here." They were only on the Files screen, which meant answering "what did we send them
@@ -3536,23 +3500,8 @@
           <div id="rev-list"><span class="note">Loading…</span></div>
         </div>
 
-        <!-- The files and the hand-off sheet, ON A SENT PROJECT TOO. Hanz, 2026-08-20: "Move the
-             info sheet button inside proposals tab."
-             This panel had NEITHER control. The not-sent drawer has had "Open the files" since it
-             shipped, and a sent project reached its files only from the board card, so moving the
-             card's buttons into the drawer without adding them here would have left every project
-             the customer has actually seen with no route to its estimate, its proposal or its Info
-             Sheet at all. Same two URLs as the card and the Proposals Database, character for
-             character.
-             NB no em dash in this comment: test_drawer_renders.py greps the whole panel, comments
-             included. -->
-        <div class="sec row3" id="dsec-files">
-          <button type="button" class="btn btn-s" id="go-files">Open the files</button>
-          <button type="button" class="btn btn-s" id="go-info">Info sheet</button>
-        </div>
-
         <!-- Delete, on a SENT project too. Hanz, 2026-08-24: a sent bid keeps its card otherwise,
-             which is the bug he hit. Its own section below the files row for the reason the
+             which is the bug he hit. Its own section, outside the files row, for the reason the
              not-sent panel gives: that row is the ways out of the drawer, not a place to put a
              delete. The dialog this button opens carries the heavier of the two bodies, because
              this one stops the follow-up emails.
@@ -3647,7 +3596,6 @@
 
     const d = $("drawer");
     d.querySelector(".dclose").addEventListener("click", closeDrawer);
-    wirePortalLink(d);
 
     // The two ways out of this drawer to the paperwork. The same URLs the board card, the
     // Proposals Database and the not-sent drawer use, character-for-character.
