@@ -322,8 +322,18 @@
         <div id="notify-pick-chips" class="nt-chips"></div>
       </div>
       <button id="portal-btn" class="btn-primary" type="button" style="padding:12px 20px;margin-top:10px;">↗ Send to customer portal</button>
+      <!-- #portal-result now carries ONLY the drift warning. The "Customer link: <url> / Emailed
+           to <address>" lines were removed on Hanz's ask (2026-08-26): the link is a secret token
+           that opens the customer's proposal, and printing it on a screen anyone walking past can
+           read is not what it is for. The estimator can still copy it from the CRM drawer, where
+           it sits behind a deliberate button press.
+
+           The confirmation that anything happened is the button, which reads "Sent to customer
+           portal" — so removing these lines costs no feedback.
+
+           The "Each recipient gets a secure link…" sentence went with them: it explained the link
+           that is no longer shown. -->
       <p id="portal-result" class="hint" style="display:none;margin-top:12px;"></p>
-      <p class="hint" style="margin-top:8px;">Each recipient gets a secure link to view, ask questions, and approve online.</p>
 
       <!-- Every send snapshots the estimate, so a revised price reuses this project
            instead of needing a new one — and the earlier versions stay downloadable

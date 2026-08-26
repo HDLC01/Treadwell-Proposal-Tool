@@ -985,19 +985,14 @@
           if (r) {
             r.style.display = "";
             r.textContent = "";
-            const recips = (j.recipients && j.recipients.length) ? j.recipients
-                          : [j.customer_email || "the customer"];
-            const a = document.createElement("a");
-            a.href = j.url || "#"; a.target = "_blank"; a.rel = "noopener";
-            a.textContent = j.url || "(link)";
-            r.appendChild(document.createTextNode("Customer link: "));
-            r.appendChild(a);
-            r.appendChild(document.createElement("br"));
-            r.appendChild(document.createTextNode("Emailed to "));
-            const strong = document.createElement("strong");
-            strong.textContent = recips.join(", ");
-            r.appendChild(strong);
-            r.appendChild(document.createTextNode("."));
+            // NO LINK AND NO RECIPIENT LIST. Removed on Hanz's ask (2026-08-26). The URL is a
+            // secret token that opens the customer's proposal, and there is no reason for it to
+            // sit on screen after a send — the CRM drawer copies it on demand when somebody
+            // actually wants it. "Sent to customer portal" on the button is the confirmation.
+            //
+            // The element stays, because the DRIFT WARNING below still needs somewhere to land,
+            // and that one must never be dropped: it is the only thing that says the customer
+            // received different numbers from the ones on this screen.
             const drift = publishDrift(j.sent_snapshot);
             if (drift) {
               const w = document.createElement("p");
