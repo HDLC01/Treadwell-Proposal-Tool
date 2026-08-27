@@ -1794,6 +1794,18 @@ def api_portal_followups() -> Dict[str, Any]:
     written-out sentence stays in the digest, where it is worth the spend."""
     data = _portal("/api/admin/pipeline", "GET") or {}
     rows = data.get("proposals") or []
+    # Same stamp as api_portal_pipeline: the portal has no notion of a test project, `is_test`
+    # lives in this app's `drafts` blob. Without it the Follow-ups page has no way to keep a
+    # scratch project out of In play / Paused / Approved / Closed lost / All.
+    try:
+        summaries = drafts.list_drafts()
+        flags = {s["id"]: s.get("is_test") for s in summaries}
+        for row in rows:
+            pid = row.get("proposal_id")
+            if pid in flags:
+                row["is_test"] = flags[pid]
+    except Exception as exc:  # noqa: BLE001 (the follow-up list matters more than the split)
+        log.warning("followups test flags unavailable: %s", exc)
     now = digest_worker.now_utc()
     out = []
     for p in rows:

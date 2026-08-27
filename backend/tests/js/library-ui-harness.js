@@ -1940,9 +1940,12 @@ out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
     // The same shape in all four places, so the page has ONE way of saying "add another".
     addRowCount: (html.match(/class="addrow"/g) || []).length,
     addBtnCount: (html.match(/class="addbtn"/g) || []).length,
-    // Materials and each of the three administration lists put theirs inside the table's own card.
+    // Materials moved to the TOP of its card (Hanz, 2026-08-28) — it was getting lost below the
+    // horizontal scrollbar and a full table of rows. Still inside the same card as the table;
+    // just above it instead of after it. The three administration lists are unchanged, at the
+    // foot of theirs.
     materialsAddRowInTheCard: /id="items-addrow"/.test(html) &&
-      html.indexOf('<tbody id="items-body">') < html.indexOf('id="items-addrow"'),
+      html.indexOf('id="items-addrow"') < html.indexOf('<tbody id="items-body">'),
     adminAddRows: ["divisions", "units", "vendors"].every((k) =>
       new RegExp('class="addrow" data-addrow-ref="' + k + '"').test(html)),
     // renderRefSection hides those three for a non-admin by that same attribute, so moving the

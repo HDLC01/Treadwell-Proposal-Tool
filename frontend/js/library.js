@@ -1743,8 +1743,10 @@
       try {
         var j = await post("items",
           { name: newMaterialName("New material"), unit: "Gallon", buy_qty: 1 });
-        ITEMS.push(j.item);
-        ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        // Unshift, not push+sort: the add control moved to the TOP of the list (Hanz,
+        // 2026-08-28) precisely so pressing it and seeing the result stay the same spot on
+        // screen — sorting it back into alphabetical order would undo that.
+        ITEMS.unshift(j.item);
         showView("items"); paint();
         var f = $("items-body").querySelector('[data-item="' + j.item.id + '"] input[data-f="name"]');
         if (f) { f.focus(); f.select(); }
@@ -1774,8 +1776,8 @@
           vendor: src.vendor || "",
           divisions: itemDivisions(src),
         });
-        ITEMS.push(copy.item);
-        ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        // Same reasoning as the Add button above: land at the top, don't re-sort it away.
+        ITEMS.unshift(copy.item);
         showView("items"); paint();
         // Focused and selected, like the Add button does: the name is the one field a copy always
         // needs changing, and "(2)" is a placeholder rather than an answer.
