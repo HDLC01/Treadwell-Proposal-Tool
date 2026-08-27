@@ -233,11 +233,23 @@
   // this a PRICING-INTEGRITY control rather than a politeness — an item's unit_cost reprices
   // every assembly built on it, live, and nothing else on this page asks before doing that.
   //
-  // ONE DIALOG PER ROW PER PAUSE, NOT ONE PER KEYSTROKE. onItemEdit is bound to both `input` and
-  // `change`, so asking on the raw event would ask once per character typed, and twice over for a
-  // <select> that fires both. patchSoon already coalesces a row's edits into a single payload
-  // after 600ms of quiet, which is exactly the grain this question belongs at: one dialog, per
-  // row, per pause, listing every field that actually moved.
+  // ONE DIALOG PER ROW PER VISIT, NOT ONE PER KEYSTROKE AND NOT ONE PER PAUSE.
+  //
+  // The first version asked at flush time — 600ms after the last keystroke — which put the
+  // question in front of somebody who was still working in the row: one field in, mid-edit, over
+  // a change they had not finished making. Hanz, 2026-08-27: ask when focus LEAVES THE ROW. While
+  // the row holds the focus, edits accumulate and the flush re-defers; the moment focus lands
+  // outside it, everything that moved goes into one question.
+  //
+  // AND THAT IS ALSO THE FIX FOR A REAL DEFECT, not just an improvement in timing.
+  // The dialog could be answered "no" while the rejected value still reached the database:
+  // shared.js focused its Cancel button, that BLURRED the input being typed in, a blurred input
+  // with an uncommitted value fires `change`, `change` is bound to #items-body — so the page
+  // re-entered onItemEdit while its own dialog was open, snapshotted the ALREADY-EDITED model,
+  // and queued a second patch. That one compared before against after, found them equal, asked
+  // nothing, and sent the number the estimator had just refused. Waiting for the row to be left
+  // kills it at the root: when the dialog opens there is no row input left to blur, so no
+  // `change` can fire and no re-entry is possible. `itemConfirmOpen` below is the belt.
   //
   // AND IT CANNOT LIVE IN onItemEdit FOR A MECHANICAL REASON WORTH WRITING DOWN.
   // library-ui-harness.js lifts that function and runs it against a stub `document` that has only
@@ -250,9 +262,25 @@
     coverage: "Coverage per unit", vendor: "Vendor", divisions: "Division",
   };
 
+  // THE SERVER'S FIELDS, NOT OURS. `updated_at` moves on every write and `cost_updated_at` moves
+  // only when the cost really changed — both are decided server-side and adopted off the reply
+  // (see adoptSaved). A snapshot taken before that reply landed holds the old values, so
+  // restoring the WHOLE snapshot on a Cancel would throw away what the server just told us: the
+  // Dates cell would go back to quoting a price date the database has already moved past, with
+  // nothing on screen marking it. Cancel restores what the estimator typed, and nothing else.
+  var SERVER_OWNED_ITEM_FIELDS = ["updated_at", "cost_updated_at"];
+
   // The item as it stood before this round of edits, captured on the first keystroke after each
   // flush. Two jobs: the dialog quotes before → after, and Cancel has something to put back.
   var itemBefore = {};
+  // Which item's confirmation is on screen right now, by id, or null. Read by onItemEdit (any
+  // event arriving while this is set is the dialog's own doing — the modal overlay traps every
+  // real one) and by the flush, so a second row waits its turn instead of stacking a second modal.
+  var itemConfirmOpen = null;
+  // The field the estimator last changed in this round, per item, so a Cancel can put the caret
+  // back where they were working. Recorded here rather than read off document.activeElement at
+  // dialog time because by then focus has deliberately left the row.
+  var itemLastField = {};
 
   function snapshotItem(it) {
     var out = {};
@@ -275,6 +303,37 @@
     return t === "" ? "(blank)" : t;
   }
 
+  /** Is the estimator still working inside this item's row?
+   *
+   *  The one question the row-leave rule turns on. `contains` covers the whole <tr> deliberately:
+   *  tabbing from the cost box to the vendor dropdown, or reaching for that row's own Duplicate
+   *  button, is not leaving the row and must not raise the question. */
+  function rowHasFocus(id) {
+    var row = document.querySelector('[data-item="' + id + '"]');
+    var here = document.activeElement;
+    return !!(row && here && row.contains && row.contains(here));
+  }
+
+  /** Put the caret back in the field a cancelled edit was typed into.
+   *
+   *  Re-queried rather than held as a node, because the Cancel path calls renderItems() first and
+   *  the input the estimator was in no longer exists by the time this runs. No .select(): they
+   *  just said "leave it as it was", so the value they get back should not be sitting there
+   *  highlighted and one keystroke from being wiped again. */
+  function refocusItemField(id, f) {
+    if (!f) return;
+    var el = document.querySelector('[data-item="' + id + '"] [data-f="' + f + '"]');
+    if (el && el.focus) el.focus();
+  }
+
+  // The round is over: the next keystroke on this row starts a new snapshot. Every exit from
+  // confirmItemPatch goes through here, so a path that returns early cannot leave a stale
+  // "before" for the next round to compare against — which is the shape the bypass had.
+  function endItemRound(id) {
+    delete itemBefore[id];
+    delete itemLastField[id];
+  }
+
   /** Ask before an item's edits go to the server, and put them back if the answer is no.
    *
    *  Returns true to let the save proceed.
@@ -287,33 +346,79 @@
    *  Compares against the snapshot rather than trusting the payload to be a change: patchSoon
    *  MERGES fields across a quiet period, so a value typed and then typed back lands in the
    *  payload identical to where it started. Asking about that would train the estimator to dismiss
-   *  the dialog, which is the failure mode that makes a confirmation worthless. */
+   *  the dialog, which is the failure mode that makes a confirmation worthless.
+   *
+   *  THE SNAPSHOT IS CONSUMED AFTER THE AWAIT, NOT BEFORE IT. Deleting it first is what let the
+   *  bypass through: anything that re-entered onItemEdit while the dialog was open found no
+   *  snapshot, took a fresh one off the already-edited model, and the next flush then compared
+   *  the rejected value against itself and sent it without asking. */
   async function confirmItemPatch(id, payload) {
     var before = itemBefore[id];
-    delete itemBefore[id];
     var it = itemOf(id);
-    if (!before || !it) return true;
+    if (!before || !it) { endItemRound(id); return true; }
     var fields = Object.keys(payload).filter(function (f) {
       return f !== "expected_updated_at" && shownValue(payload[f]) !== shownValue(before[f]);
     });
-    if (!fields.length) return true;
+    // A no-op payload is still SENT — harmless, and an existing test pins it — but the snapshot
+    // has done its job and must not be left behind for the next round to compare against.
+    if (!fields.length) { endItemRound(id); return true; }
     var lines = fields.map(function (f) {
       return (ITEM_FIELD_LABELS[f] || f) + ":  " + shownValue(before[f]) + "  →  "
         + shownValue(payload[f]);
     });
-    var ok = await TW.confirmDanger({
-      tone: "warn",
-      icon: "✎",
-      title: fields.length === 1 ? "Save this change?" : "Save these changes?",
-      name: before.name || it.name || "this item",
-      after: " is priced into every assembly that uses it, so this changes what those cost.",
-      detail: lines.join("\n"),
-      confirmText: "Save change",
-      cancelText: "Leave it as it was",
-    });
+    var focusField = itemLastField[id] || fields[0];
+    // SET SYNCHRONOUSLY, BEFORE THE AWAIT. Everything that reads it — onItemEdit's guard and the
+    // flush's defer — runs on events that fire during the await, so setting it afterwards would
+    // set it too late to be worth having.
+    itemConfirmOpen = id;
+    var ok = false;
+    try {
+      ok = await TW.confirmDanger({
+        tone: "warn",
+        // Inline SVG, through the slot that takes markup: the shared default for the warn tone is
+        // a WASTEBASKET, which is the wrong thing to draw over "Save this change?". Sized for the
+        // 54px badge rather than the 16px row buttons, which is why it is written here instead of
+        // through icon().
+        iconSvg: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" ' +
+          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+          'aria-hidden="true" focusable="false"><path d="M12 20h9"></path>' +
+          '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
+        title: fields.length === 1 ? "Save this change?" : "Save these changes?",
+        name: before.name || it.name || "this item",
+        after: " is priced into every assembly that uses it, so this changes what those cost.",
+        detail: lines.join("\n"),
+        confirmText: "Save change",
+        cancelText: "Leave it as it was",
+        // A DIALOG THAT CANNOT BE ANSWERED BY ACCIDENT. See the block comment above
+        // ITEM_FIELD_LABELS: focusing a button is what fired the re-entrant `change`, and a
+        // backdrop click is how the next cell somebody reaches for would revert a deliberate edit.
+        focus: "container",
+        dismiss: "explicit",
+      });
+    } catch (err) {
+      // A DIALOG THAT BLEW UP IS A CANCEL, NOT A DROPPED WRITE. Letting this escape would leave
+      // itemConfirmOpen set for the rest of the session, and onItemEdit's guard would then
+      // swallow every keystroke on the page in silence.
+      ok = false;
+      say("Couldn't ask about that change, so it wasn't saved.");
+    } finally {
+      itemConfirmOpen = null;
+    }
+    endItemRound(id);
     if (ok) return true;
-    Object.keys(before).forEach(function (k) { it[k] = before[k]; });
+    Object.keys(before).forEach(function (k) {
+      if (SERVER_OWNED_ITEM_FIELDS.indexOf(k) === -1) it[k] = before[k];
+    });
+    // Purge this row's queue the way adoptConflict does, timer included. Nothing should be able to
+    // queue behind an open dialog any more — that is what the guard in onItemEdit is for — but a
+    // payload left here would go out on the next flush as an unasked-for save of the value that
+    // was just refused, which is the exact bug this function exists to prevent.
+    var key = "items:" + id;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    delete pendingPatch[key];
     renderItems(); renderList(); renderPanel();
+    refocusItemField(id, focusField);
     saving("");
     return false;
   }
@@ -324,57 +429,134 @@
       body = Object.assign({}, body, { lines: body.lines.map(lineForSave) });
     }
     pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
+    arm(kind, id, key);
+  }
+
+  // The debounce, on its own so the flush can re-arm itself when it decides to wait.
+  //
+  // The callback RETURNS the flush's promise. setTimeout throws it away, as it always has, but a
+  // driver that can await it then does — which is how the harness sequences a PATCH in flight
+  // against the next keystroke. The alternative was an async callback whose promise nothing could
+  // reach, which is what made a 409 scenario there pass while the second write went out anyway.
+  function arm(kind, id, key) {
     if (timers[key]) clearTimeout(timers[key]);
-    timers[key] = setTimeout(async function () {
-      var payload = pendingPatch[key];
-      delete pendingPatch[key];
-      // Nothing to send is not an error — a conflict repaint empties the buffer, and this used to
-      // throw on the missing payload BEFORE the try block, which turned a dropped write into an
-      // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
-      if (!payload) return;
-      // Declare the version being edited. A line change rewrites the WHOLE lines array, so
-      // without this two people with the same assembly open overwrite each other in silence:
-      // the second save replaces the first person's lines with a snapshot taken before they
-      // existed, and neither screen shows anything wrong.
-      if (kind === "assemblies") {
-        var known = byId(kind, id);
-        if (known && known.updated_at) payload.expected_updated_at = known.updated_at;
-      }
-      // Items only. An assembly's lines are a takeoff somebody is actively building and a dialog
-      // per pause would be unusable; an item is reference data that other records are priced from,
-      // which is the whole distinction Hanz drew.
-      if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
-      saving("Saving…");
-      try {
-        var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
-          { method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload) });
-        if (r.status === 409) {
-          var conflict = await r.json().catch(function () { return {}; });
-          adoptConflict(id, conflict.assembly);
-          say(conflict.error || "Somebody else changed this while you had it open.");
-          saving("Not saved");
-          return;
-        }
-        if (!r.ok) {
-          var j = await r.json().catch(function () { return {}; });
-          // Deliberately does NOT revert the field. Overwriting what somebody just typed while
-          // they are looking at it loses their work and hides the reason.
-          say(j.detail || j.error || "That change didn't save.");
-          saving("Not saved");
-          return;
-        }
-        // Adopt the new version stamp, or the NEXT save conflicts with our own write.
-        var saved = await r.json().catch(function () { return {}; });
-        var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit;
-        if (fresh && fresh.id) adoptSaved(kind, fresh);
-        say(""); saving("Saved");
-        setTimeout(function () { saving(""); }, 1200);
-      } catch (err) {
-        say("Couldn't reach the server. " + (err.message || ""));
+    timers[key] = setTimeout(function () { return flush(kind, id, key); }, 600);
+  }
+
+  /** Send one record's coalesced edits, or decide not to yet.
+   *
+   *  `now` is set by the focusout path, which knows focus has left the row and must not ask this
+   *  function to check for itself: during a `focusout` the browser has already blurred the old
+   *  element and has not yet focused the new one, so `document.activeElement` is the body and
+   *  reading it would answer the wrong question either way. */
+  async function flush(kind, id, key, now) {
+    var payload = pendingPatch[key];
+    // Nothing to send is not an error — a conflict repaint empties the buffer, and this used to
+    // throw on the missing payload BEFORE the try block, which turned a dropped write into an
+    // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
+    if (!payload) { delete timers[key]; return; }
+    if (kind === "items") {
+      // ONE DIALOG AT A TIME, ACROSS ALL ROWS — and across all QUESTIONS, not just this one.
+      //
+      // Two of these modals is one trapping the focus the other one needs, over a question that
+      // names neither row clearly. The second check catches what the first cannot: clicking a
+      // row's own Remove button leaves the focus INSIDE the row, so nothing flushes — and then
+      // THAT dialog focuses its Cancel button, which blurs the button and fires the focusout this
+      // page saves on. Without asking shared.js whether a modal is up, "Remove this material?"
+      // would get "Save this change?" stacked on top of it.
+      //
+      // Re-arm rather than drop: the edit is still on screen and still unsaved.
+      if (itemConfirmOpen) { arm(kind, id, key); return; }
+      if (TW.modalOpen && TW.modalOpen()) { arm(kind, id, key); return; }
+      // …and while the estimator is still working in the row, keep waiting. This is the timing
+      // Hanz asked for and the reason no `change` can re-enter the handler while the dialog is up.
+      if (!now && rowHasFocus(id)) { arm(kind, id, key); return; }
+    }
+    delete pendingPatch[key];
+    // Declare the version being edited. A line change rewrites the WHOLE lines array, so
+    // without this two people with the same assembly open overwrite each other in silence:
+    // the second save replaces the first person's lines with a snapshot taken before they
+    // existed, and neither screen shows anything wrong.
+    if (kind === "assemblies") {
+      var known = byId(kind, id);
+      if (known && known.updated_at) payload.expected_updated_at = known.updated_at;
+    }
+    // Items only. An assembly's lines are a takeoff somebody is actively building and a dialog
+    // per pause would be unusable; an item is reference data that other records are priced from,
+    // which is the whole distinction Hanz drew.
+    if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
+    saving("Saving…");
+    try {
+      var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
+        { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload) });
+      if (r.status === 409) {
+        var conflict = await r.json().catch(function () { return {}; });
+        adoptConflict(id, conflict.assembly);
+        say(conflict.error || "Somebody else changed this while you had it open.");
         saving("Not saved");
+        return;
       }
-    }, 600);
+      if (!r.ok) {
+        var j = await r.json().catch(function () { return {}; });
+        // Deliberately does NOT revert the field. Overwriting what somebody just typed while
+        // they are looking at it loses their work and hides the reason.
+        say(j.detail || j.error || "That change didn't save.");
+        saving("Not saved");
+        return;
+      }
+      // Adopt the new version stamp, or the NEXT save conflicts with our own write.
+      var saved = await r.json().catch(function () { return {}; });
+      var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit;
+      if (fresh && fresh.id) adoptSaved(kind, fresh);
+      say(""); saving("Saved");
+      setTimeout(function () { saving(""); }, 1200);
+    } catch (err) {
+      say("Couldn't reach the server. " + (err.message || ""));
+      saving("Not saved");
+    }
+  }
+
+  /** Drop everything this page is still holding for an item that no longer exists.
+   *
+   *  A deleted row can have an edit queued and a timer armed, which is far more likely now the
+   *  save waits for the row to be left: typing a cost and then reaching for that row's Remove
+   *  button never leaves the row at all. Left alone, the timer fires after the delete and PATCHes
+   *  a dead id — a 404 and "That change didn't save." about a material the estimator has just
+   *  watched disappear. */
+  function forgetItem(id) {
+    var key = "items:" + id;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    delete pendingPatch[key];
+    endItemRound(id);
+  }
+
+  /** Send one item row's pending edits NOW, because focus has left it.
+   *
+   *  Disarms the debounce first. Leaving it armed would let it fire behind the dialog this flush
+   *  is about to open, which is a second flush of a payload that has already been taken — the
+   *  no-op it lands on is harmless, but the timer handle it leaves in `timers` is not, because the
+   *  Cancel path clears that handle to purge the row and would clear the wrong one. */
+  function flushItemRow(id) {
+    var key = "items:" + id;
+    if (!pendingPatch[key]) return;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    return flush("items", id, key, true);
+  }
+
+  /** Focus left an item row → that row's edits go in, and get their one question.
+   *
+   *  `relatedTarget` is where the focus is GOING. Inside the same row it is still the same visit —
+   *  the cost box to the vendor dropdown, or that row's own Duplicate button — so nothing fires.
+   *  A null relatedTarget is a click on something unfocusable, which IS leaving. */
+  function onItemRowFocusOut(e) {
+    var row = e.target.closest && e.target.closest("[data-item]");
+    if (!row) return;
+    var to = e.relatedTarget;
+    if (to && row.contains && row.contains(to)) return;
+    return flushItemRow(row.getAttribute("data-item"));
   }
 
   async function post(kind, body) {
@@ -615,6 +797,44 @@
       if (!taken[nameKey(candidate)]) return candidate;
     }
     return stem + " (copy)";
+  }
+
+  /** Does anything on `list` already answer to this name, in the server's comparison form? */
+  function nameTaken(name, list) {
+    var k = nameKey(name);
+    return (list || []).some(function (x) { return nameKey(x && x.name) === k; });
+  }
+
+  /** The name "+ Add material" creates a row under.
+   *
+   *  It used to post the literal "New material" every time. `create_item` refuses a duplicate name
+   *  with a 400, so the SECOND press of that button was simply dead — "Couldn't add that material.
+   *  "New material" is already in the library." — with nothing on screen to suggest that the fix
+   *  was to go and rename the row from last time.
+   *
+   *  BARE STEM FIRST, and that is the whole reason this is not just a call to duplicateName:
+   *  that function counts from 2 and never offers the stem, which is right for a COPY (a copy of
+   *  "Densifier" must not also be called "Densifier") and wrong here, where the plain name is the
+   *  one the row wants. Once it is taken, the numbering is the same one the Duplicate button
+   *  uses, so the two never disagree about what a free name looks like. */
+  function newMaterialName(stem) {
+    var base = String(stem == null ? "" : stem).trim() || "New material";
+    return nameTaken(base, ITEMS) ? duplicateName(base) : base;
+  }
+
+  /** The same thing for the Administration tab, which carries the identical literal default
+   *  ("New vendor", "New division", "New unit") against the identical duplicate block.
+   *
+   *  Checked against that tab's OWN list: uniqueness is per table, so a material called
+   *  "New vendor" must not stop the Vendors tab from adding one. */
+  function newRefName(kind) {
+    var base = "New " + singular(kind);
+    var list = adminList(kind);
+    if (!nameTaken(base, list)) return base;
+    for (var n = 2; n <= 999; n++) {
+      if (!nameTaken(base + " (" + n + ")", list)) return base + " (" + n + ")";
+    }
+    return base + " (copy)";
   }
 
   function renderItems() {
@@ -1172,6 +1392,19 @@
   // the thing needing defending.
   var NUMERIC_ITEM_FIELDS = ["unit_cost", "coverage", "buy_qty"];
   function onItemEdit(e) {
+    // NOTHING GETS IN WHILE A CONFIRMATION IS ON SCREEN. The modal overlay traps every real
+    // keystroke and click, so the only event that can arrive here in that window is one the dialog
+    // provoked itself: focusing anything blurs whatever the estimator was typing in, and a blurred
+    // input with an uncommitted value fires `change` — which is bound to this handler. That
+    // re-entry is how a cancelled edit used to reach the database. See the block comment above
+    // ITEM_FIELD_LABELS for the full sequence.
+    //
+    // AND IT CANNOT LOSE AN EDIT, because `input` fires first and has already put the value in the
+    // model and the queue: the `change` this discards is the same value a second time. The one
+    // theoretical exception is a <select> in a DIFFERENT row being committed in the instant a
+    // deferred dialog goes up, in a browser that reports `change` without `input` — narrow enough
+    // to name here rather than to complicate this guard for.
+    if (itemConfirmOpen) return;
     var f = e.target.getAttribute && e.target.getAttribute("data-f");
     if (!f) return;
     var row = e.target.closest("[data-item]");
@@ -1182,6 +1415,9 @@
     // what Cancel puts back and what the dialog quotes. No-op after the first keystroke of a
     // round, so a row typed into for ten seconds still remembers where it started.
     rememberItem(it);
+    // Where the caret was, so a Cancel can put it back. Overwritten on every edit: the field they
+    // were last in is the one they will want to correct.
+    itemLastField[it.id] = f;
     if (f === "divisions") {
       var vals = Array.from(row.querySelectorAll('input[data-f="divisions"]:checked'))
         .map(function (x) { return x.getAttribute("data-div"); })
@@ -1295,6 +1531,9 @@
 
   $("items-body").addEventListener("input", onItemEdit);
   $("items-body").addEventListener("change", onItemEdit);
+  // …and the event that actually triggers the save. `focusout` and not `blur`, because blur does
+  // not bubble and this is one listener on a tbody whose rows are replaced on every render.
+  $("items-body").addEventListener("focusout", onItemRowFocusOut);
 
   // ── administration ────────────────────────────────────────────────────────
   // Writes are admin-only on the server too (`_require_admin`). The read-only render is what keeps
@@ -1502,7 +1741,8 @@
 
     if (t.closest && t.closest("[data-add-item]")) {
       try {
-        var j = await post("items", { name: "New material", unit: "Gallon", buy_qty: 1 });
+        var j = await post("items",
+          { name: newMaterialName("New material"), unit: "Gallon", buy_qty: 1 });
         ITEMS.push(j.item);
         ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
         showView("items"); paint();
@@ -1569,6 +1809,8 @@
       if (!ok) return;
       try {
         await del("items", di);
+        // Before the model loses the row, so a queued edit cannot fire a PATCH at a dead id.
+        forgetItem(di);
         ITEMS = ITEMS.filter(function (x) { return x.id !== di; });
         paint();
       } catch (err) { say("Couldn't remove that material. " + err.message); }
@@ -1613,7 +1855,7 @@
     if (addRef) {
       try {
         var one = singular(addRef);
-        var made = await post(addRef, { name: "New " + one });
+        var made = await post(addRef, { name: newRefName(addRef) });
         var row = made[one];
         adminList(addRef).push(row);
         adminList(addRef).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
@@ -1667,7 +1909,7 @@
 
     if (t.id === "vendor-add" || t.id === "vendor-add-first") {
       try {
-        var nv = await post("vendors", { name: "New vendor" });
+        var nv = await post("vendors", { name: newRefName("vendors") });
         VENDORS.push(nv.vendor);
         VENDORS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
         showView("vendors"); paint();
