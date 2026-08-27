@@ -35,6 +35,12 @@ def ran():
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, (
         "the harness itself failed — read this before assuming a product bug:\n" + proc.stderr)
+    # Exit 0 with nothing printed is its own failure: node empties its event loop and leaves when a
+    # scenario is still awaiting a dialog or a request that never came, so the JSON line is never
+    # written. Saying so beats an IndexError on splitlines()[-1].
+    assert proc.stdout.strip(), (
+        "the harness exited cleanly and printed nothing — a scenario never settled:\n"
+        + proc.stderr)
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
@@ -705,6 +711,315 @@ def test_an_assembly_save_is_never_confirmed(ran):
     would have fired somewhere in it."""
     assert ran["conflict"]["neverAskedAboutAnAssembly"], (
         "the confirmation escaped the items branch and is now in front of assembly saves")
+
+
+# ══ the Cancel bypass ════════════════════════════════════════════════════════
+# The dialog could be answered "no" and the rejected value still reached the database.
+#
+# `noBtn.focus()` in shared.js blurred the input the estimator was typing in; a blurred input
+# with an uncommitted value fires `change`; `change` is bound to #items-body — so the page
+# re-entered onItemEdit WHILE ITS OWN DIALOG WAS OPEN, snapshotted the already-edited model, and
+# queued a second patch. 600ms later that one compared before against after, found them equal,
+# and PATCHed with no dialog at all. The screen said 42. The row said 58.
+#
+# The fix is not a guard bolted onto that sequence: the dialog now fires WHEN FOCUS LEAVES THE
+# ROW, so by the time it opens there is no row input left to blur.
+
+
+@needs_node
+def test_cancelling_an_item_change_does_not_let_the_value_through(ran):
+    """THE BYPASS, executed. Everything here runs through the real onItemEdit on the real
+    patchSoon, and the re-entrant blur-change is fired from inside the dialog-open hook — which is
+    the only ordering that can reach it, and the reason the harness's dialog stub had to stop
+    resolving on a microtask before this could be written."""
+    g = ran["itemBypass"]
+    assert g["errors"] == []
+    assert g["modelMidEdit"] == 58, "the edit never reached the model; the probe proves nothing"
+    assert g["asked"] == 1, (
+        "asked %s times — a second dialog means the re-entry got through" % g["asked"])
+    # The claim, stated the way it matters: the number the estimator rejected was never sent.
+    assert all("58" not in str(b) for b in g["sent"]), (
+        "the cancelled value reached the wire: %r" % (g["sent"],))
+    assert g["requests"] == [], "Cancel still sent a request"
+    assert g["costAfter"] == 42, "the model kept the cancelled edit: %r" % g["costAfter"]
+    assert g["confirmOpenAfter"] is None, (
+        "itemConfirmOpen was left set, so every later keystroke on the page is now discarded")
+    assert g["pendingAfter"] == 0, (
+        "the cancelled edit is still queued and will go out on the next flush")
+
+
+@needs_node
+def test_the_dialogs_own_focus_move_cannot_retake_the_snapshot(ran):
+    """The MECHANISM, separately from the outcome — because a fix that only stopped the second
+    PATCH would leave the same trap one call site away.
+
+    While the dialog is open, the tbody's `change` listener is a synthetic event nobody produced.
+    The modal overlay traps every real input, so discarding it costs nothing, and NOT discarding
+    it costs the snapshot: rememberItem runs against the already-edited model, and from then on
+    "before" and "after" agree about a change that was refused."""
+    g = ran["itemBypass"]
+    assert len(g["reentries"]) == 1, "the probe did not re-fire the blur-change"
+    r = g["reentries"][0]
+    assert r["open"] == "i1", (
+        "itemConfirmOpen was not set before the await, so onItemEdit has nothing to check")
+    assert r["snapshotCost"] == 42, (
+        "the snapshot was retaken off the already-edited model, which is what made before == "
+        "after on the next flush and sent the rejected value with no dialog: %r"
+        % (r["snapshotCost"],))
+    assert r["pending"] == 0, "the re-entry queued a second payload behind the open dialog"
+    assert r["armed"] == 0, "the re-entry re-armed the debounce timer behind the open dialog"
+
+
+@needs_node
+def test_a_second_rows_save_waits_for_the_open_dialog(ran):
+    """Two of these modals at once is one dialog trapping the focus the other one needs, over a
+    question that names neither row clearly. So a flush defers while any item dialog is open — and
+    it DEFERS rather than dropping, because the second row's edit is still on screen and still
+    unsaved.
+
+    The state is built through patchSoon rather than by typing, because typing into a second row
+    while a dialog is up is unreachable: the overlay traps the input and the guard discards
+    anything that gets past it. What IS reachable is a timer left armed by an earlier deferral,
+    which is what this constructs."""
+    g = ran["itemDialogQueue"]
+    assert g["errors"] == []
+    assert g["whileOpen"]["asked"] == 1 and g["whileOpen"]["forRow"] == "Densifier"
+    assert g["askedWhileOpen"] == 1, (
+        "a second dialog stacked on top of the first: %s were open" % g["askedWhileOpen"])
+    assert g["secondStillQueued"], "the second row's edit was dropped instead of deferred"
+    assert g["secondRearmed"], "it deferred without re-arming, so that edit would never be sent"
+    assert g["askedInTheEnd"] == 2, "the second row was never asked about at all"
+    assert g["secondAskedAbout"] == "Hardener", g["secondAskedAbout"]
+
+
+@needs_node
+def test_a_dialog_that_throws_is_a_cancel_not_a_dropped_write(ran):
+    """If the await escapes the flush, the damage is not one lost edit. The payload has already
+    left pendingPatch, the snapshot has already been consumed, and itemConfirmOpen is left SET —
+    so onItemEdit's guard then swallows every keystroke on the page for the rest of the session,
+    silently, with nothing on screen to explain it."""
+    g = ran["itemDialogThrew"]
+    assert g["errors"] == [], "the rejection escaped as an unhandled error: %r" % (g["errors"],)
+    assert g["requests"] == [], "a dialog that never answered was treated as a Yes"
+    assert all("58" not in str(b) for b in g["sent"]), g["sent"]
+    assert g["costAfter"] == 42, "a broken dialog left the unconfirmed edit on the row"
+    assert g["confirmOpenAfter"] is None, (
+        "itemConfirmOpen survived the throw, so the page now discards every edit")
+
+
+@needs_node
+def test_cancel_does_not_restore_the_servers_own_timestamps(ran):
+    """`updated_at` and `cost_updated_at` are the SERVER's to set — adoptSaved copies them off a
+    successful write, and `cost_updated_at` only moves when the cost really changed.
+
+    A snapshot taken before that reply landed holds the old stamps, so restoring the whole
+    snapshot on Cancel throws away what the server just told us: the Dates cell goes back to
+    quoting a price date the database has already moved past, and nothing marks it."""
+    g = ran["itemCancelStamps"]
+    assert g["errors"] == []
+    assert g["asked"] == 1
+    assert g["costAfter"] == 42, "the cancelled cost was not put back"
+    assert g["stampsAfter"] == g["stampsBefore"], (
+        "Cancel rolled a server-owned stamp back to the snapshot: %r, was %r"
+        % (g["stampsAfter"], g["stampsBefore"]))
+
+
+@needs_node
+def test_cancel_puts_the_caret_back_in_the_field_it_was_typed_in(ran):
+    """Cancel repaints the whole table, so the input the estimator was in stops existing. Without
+    putting the focus back they are left on nothing, on a page whose only save trigger is leaving
+    a row — so the next thing they type goes nowhere and the row they were correcting is two Tabs
+    away."""
+    g = ran["itemCancelStamps"]
+    assert g["refocused"] == 1, (
+        "the cancelled field was not refocused after the repaint (%r focus calls)" % g["refocused"])
+    assert g["focusedElsewhere"] == [], (
+        "the focus landed on a different field of the row: %r" % (g["focusedElsewhere"],))
+
+
+@needs_node
+def test_the_dialog_fires_on_leaving_the_row_not_on_a_typing_pause(ran):
+    """Hanz, 2026-08-27. Two things at once, and they are the same change.
+
+    The interruption: a dialog on a 600ms pause fires while the estimator is still in the row —
+    mid-row, one field in, over an edit they have not finished making. Waiting for the row to be
+    left means the question is asked once, about everything that moved.
+
+    The bypass: when the dialog opens, focus has ALREADY left the row. There is no row input to
+    blur, so nothing can fire a `change` and no re-entry is possible. That is why this is a fix
+    at the root rather than a guard on the symptom."""
+    g = ran["itemRowLeave"]
+    assert g["errors"] == []
+    assert g["duringTyping"]["asked"] == 0, "it asked while the estimator was still in the row"
+    assert g["duringTyping"]["requests"] == 0, "it saved without asking while the row held focus"
+    assert g["duringTyping"]["stillQueued"] == 1, "the edit was dropped rather than deferred"
+    assert g["duringTyping"]["rearmed"] >= 1, (
+        "the flush deferred without re-arming, so nothing will ever send this edit")
+    assert g["afterASecondPause"]["asked"] == 0, "a second pause fired the dialog anyway"
+    assert g["insideTheRow"]["asked"] == 0, (
+        "tabbing between two cells of the SAME row counted as leaving it")
+    assert g["askedOnLeaving"] == 1, (
+        "leaving the row did not ask: %s dialogs" % g["askedOnLeaving"])
+    assert g["detail"] == "Cost:  42  →  58\nVendor:  Sika  →  Euclid", g["detail"]
+
+
+@needs_node
+def test_a_dialog_somebody_else_put_up_holds_the_save_back(ran):
+    """The route in is the row's own Remove button, and it only exists because of the row-leave
+    timing. Clicking Remove leaves the focus INSIDE the row, so nothing flushes — and then the
+    delete confirmation focuses its own Cancel button, which blurs that button and fires the
+    focusout this page saves on. Two modals, one on top of the other, one of them asking about a
+    material the other one is about to delete."""
+    g = ran["itemOtherModal"]
+    assert g["errors"] == []
+    assert g["whileTheOtherIsOpen"]["asked"] == 0, (
+        "a save question was stacked on top of the delete confirmation")
+    assert g["whileTheOtherIsOpen"]["queued"] == 1, "the edit was dropped rather than held"
+    assert g["whileTheOtherIsOpen"]["rearmed"] >= 1, "held without re-arming, so it is lost"
+    assert g["askedAfterItClosed"] == 1, (
+        "the held edit was never asked about once the other dialog closed")
+
+
+@needs_node
+def test_deleting_a_material_drops_the_edit_still_queued_for_it(ran):
+    """Typing a cost and then reaching for that row's own Remove button never leaves the row, so
+    under the row-leave rule the edit is still queued when the material stops existing. Left
+    armed, that timer PATCHes a dead id — a 404 and "That change didn't save." about a row the
+    estimator has just watched disappear."""
+    g = ran["itemForgotten"]
+    assert g["errors"] == []
+    assert g["queuedBefore"] == 1, "the probe never queued anything, so it proves nothing"
+    assert g["queuedAfter"] == 0, "the deleted row's edit is still queued"
+    assert g["snapshotDropped"], "the deleted row's snapshot is still held"
+    assert g["asked"] == 0 and g["requests"] == [], (
+        "it still tried to save a material that no longer exists: %r" % (g["requests"],))
+    assert g["calledOnDelete"], "the delete handler does not forget the row it just removed"
+
+
+@needs_node
+def test_the_item_dialog_asks_for_the_two_opt_ins(ran):
+    """Both are about the bypass, not about looks.
+
+    `focus:"container"` puts the focus on the dialog rather than on Cancel, so a stray SPACE — the
+    key somebody hits to tick the checkbox they were aiming at — cannot press a button.
+    `dismiss:"explicit"` drops the backdrop-cancels listener, so clicking the next cell cannot
+    silently revert an edit the estimator meant to make. A save is not a deletion; the safe
+    default for one is not the safe default for the other."""
+    g = ran["itemAskedOpts"]
+    assert g.get("focus") == "container", (
+        "the item dialog still focuses the Cancel button: %r" % g.get("focus"))
+    assert g.get("dismiss") == "explicit", (
+        "a click outside still answers the question: %r" % g.get("dismiss"))
+
+
+# ══ the shared dialog, EXECUTED out of shared.js ═════════════════════════════
+# Nothing in this repo had ever executed confirmDanger, which is the second half of why the bypass
+# survived review: `noBtn.focus()` reads as an accessibility nicety, not as the line that fires a
+# `change` event on whatever the estimator was typing in.
+
+
+@needs_node
+def test_the_new_dialog_options_change_nothing_for_the_other_callers(ran):
+    """Twenty-odd call sites across the frontend, four of them on this page. Both opt-ins default
+    OFF and the assertion is made by running the SAME function with no options — not by reading
+    the code and agreeing with it."""
+    g = ran["confirmFocus"]
+    assert g["defaultFocusesCancel"], "the default no longer focuses Cancel"
+    assert g["defaultHasBackdropCancel"], "clicking the backdrop stopped cancelling"
+    assert g["defaultBackdropCancels"], (
+        "the backdrop listener is there but no longer resolves false")
+    assert g["defaultTabindexAbsent"], "the dialog became focusable for callers that did not ask"
+    assert g["defaultRestoresTheFocus"], "the default stopped putting the focus back"
+
+
+@needs_node
+def test_the_opted_in_dialog_focuses_itself_and_needs_an_explicit_answer(ran):
+    """Focusing the dialog element instead of a button is the half that survives somebody moving
+    the row-leave logic: even if a row input were still focused, nothing in the dialog reaches for
+    a control inside the table.
+
+    And it must stay closable. An inert backdrop with no keyboard route out is a trapped
+    estimator, so Escape is asserted by what the promise resolves to."""
+    g = ran["confirmFocus"]
+    assert g["optedInFocusesTheDialog"], "it still focuses a button inside the dialog"
+    assert g["optedInDialogIsFocusable"], (
+        'the dialog was focused without tabindex="-1", so the browser will refuse it')
+    assert g["optedInHasNoBackdropCancel"], "a click outside can still answer the question"
+    assert g["bothTrapTheKeyboard"], "the focus trap was lost"
+    assert g["escapeStillCancels"], "Escape stopped closing the dialog"
+    assert g["optedInLeavesTheFocusAlone"], (
+        "the dialog handed the focus back to whatever was active mid-focusout, which yanks the "
+        "caret out of the field confirmItemPatch just restored")
+
+
+@needs_node
+def test_the_dialog_counts_how_many_of_itself_are_on_screen(ran):
+    """TW.modalOpen() is what the Items page asks before putting a save question up, and it has to
+    be a COUNT. Two dialogs can overlap — the delete confirmation's own focus move is what fires
+    the focusout the Items page saves on — and with a boolean, the first of the two closing would
+    report the second one gone and let a modal be stacked on top of it."""
+    g = ran["confirmModalCount"]
+    assert g["afterOne"] is True, "one open dialog did not register at all"
+    assert g["afterTwo"] is True
+    assert g["firstAnswered"], "Escape did not close the first dialog, so this measured nothing"
+    assert g["secondStillWaiting"], "closing the first dialog answered the second one as well"
+    assert g["afterClosingOne"] is True, (
+        "closing one of two dialogs reported the screen clear — a boolean, not a count")
+    assert g["afterClosingBoth"] is False, (
+        "the count never came back down, so the Items page would defer every save from now on "
+        "against a dialog that is not on screen")
+
+
+@needs_node
+def test_the_save_question_is_not_drawn_with_a_wastebasket(ran):
+    """The icon slot is filled with textContent, so an SVG could not go through `icon` — and the
+    warn tone's own default glyph is a wastebasket, over a dialog that says "Save this change?".
+
+    `iconSvg` takes markup this page writes itself. It is never a project name, a vendor, or
+    anything else a customer can type: the textContent path stays the only route for those."""
+    g = ran["confirmIcon"]
+    assert g["svgReachesTheSlot"], "the SVG did not reach the icon slot"
+    assert g["svgNotWrittenAsText"], "the markup was also written as text and will render literally"
+    assert g["warnDefaultUnchanged"], "a warn caller that passed no icon lost its glyph"
+    assert g["dangerDefaultUnchanged"], "a danger caller that passed no icon lost its glyph"
+    assert g["plainIconStillText"], "a caller passing `icon` no longer gets it as text"
+    assert g["plainIconNotInjected"], (
+        "`icon` is now injected as markup — that slot carries customer-typed names")
+
+
+# ══ the name a new row is created under ══════════════════════════════════════
+
+
+@needs_node
+def test_add_material_picks_a_name_that_is_free(ran):
+    """The button posted the literal "New material" every time. `create_item` refuses a duplicate
+    name with a 400, so the SECOND press was dead — "Couldn't add that material. "New material" is
+    already in the library." — and the only way out was to guess that renaming the first row would
+    unstick it.
+
+    Bare stem first: "New material (2)" as somebody's first material would be absurd."""
+    g = ran["newMaterialName"]
+    assert g["whenFree"] == "New material", g["whenFree"]
+    assert g["whenTaken"] == "New material (2)", g["whenTaken"]
+    assert g["whenTwoTaken"] == "New material (3)", (
+        "the counter reused a name taken in another spelling — the server normalises punctuation "
+        "and spacing the same way, so that name comes straight back as a 400: %r"
+        % g["whenTwoTaken"])
+    assert g["blank"] == "New material", g["blank"]
+
+
+@needs_node
+def test_the_administration_tab_picks_a_free_name_too(ran):
+    """Identical literal default ("New vendor", "New division", "New unit") against the identical
+    duplicate block. Uniqueness is per LIST, so a material called "New vendor" must not stop the
+    Vendors tab adding one."""
+    g = ran["newMaterialName"]
+    assert g["refWhenFree"] == "New vendor", g["refWhenFree"]
+    assert g["refWhenTaken"] == "New vendor (2)", g["refWhenTaken"]
+    assert g["refDivision"] == "New division (2)", g["refDivision"]
+    assert g["refIgnoresItems"] == "New vendor", (
+        "the Vendors tab checked its default against the MATERIALS list: %r" % g["refIgnoresItems"])
+
 
 # ══ searching, copying, and a line nobody has filled in yet ══════════════════
 
