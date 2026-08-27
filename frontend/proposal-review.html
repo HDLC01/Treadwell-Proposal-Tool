@@ -83,6 +83,18 @@
     color: #2b579a;
   }
   .word-ribbon button:disabled { opacity: 0.55; cursor: wait; }
+  /* WHAT CTRL+S REPORTED, and nothing else. Plain text in a row of plain text -- the same 12px
+     the row already uses, the app's own ink and danger tokens, no pill and no border, because a
+     new chip shape here would be a new component for one sentence. It is a flex item of
+     .word-ribbon, which is page chrome OUTSIDE #doc-zoom's transform, so it cannot move the
+     to-scale preview by a pixel and it is not in the surface the generate payload is read from.
+
+     NO `display` DECLARATION, deliberately. The element is hidden with the `hidden` attribute, and
+     an author rule setting display would outrank the UA stylesheet's `[hidden] { display: none }`
+     -- this repo has shipped four elements that were "hidden" and still on screen for exactly that
+     reason. A flex child is blockified anyway, so the padding behaves without one. */
+  .save-state { font-size: 12px; color: var(--ink-variant, #5c403f); padding: 0 4px; }
+  .save-state[data-state="failed"] { color: var(--danger, #ba1a1a); font-weight: 600; }
 
   .word-canvas {
     flex: 1;
@@ -423,6 +435,11 @@
     <a class="step" href="/done.html">4 · Files</a>
   </div>
   <div class="ribbon-spacer"></div>
+  <!-- Ctrl+S reports here. `role="status"` + `aria-live="polite"` is the standard idiom for a
+       readout that changes on its own; it costs nothing and it is what a screen reader needs to
+       hear "Saved" without the focus having to move. Empty and `hidden` until a key is pressed --
+       a permanent save badge would be a standing claim about a page that has already moved on. -->
+  <span id="save-state" class="save-state" role="status" aria-live="polite" hidden></span>
   <!-- Compact tax-treatment control. The full "Proposal fields" sidebar is
        hidden (redundant with inline editing), but tax treatment has no inline
        equivalent and drives the PRICE line + {{base_tax_phrase}}, so it stays

@@ -271,6 +271,33 @@
     }
   }
 
+  /** Why a server save would be REFUSED for this draft right now, or null when one would go
+   *  through. Read-only: it writes nothing, schedules nothing, and changes nothing about what
+   *  flushState does for the callers that gate on it.
+   *
+   *  IT EXISTS BECAUSE flushState CANNOT ANSWER THIS. flushState resolves TRUE when there was
+   *  nothing to do, which is the honest answer for a page already in sync -- but it resolves true
+   *  after DROPPING a pending save too: it clears the debounce timer, one of the three gates below
+   *  refuses the PUT, and it then awaits `_inFlight`, which is a promise belonging to an older and
+   *  possibly successful write. Anything that reports a save to the estimator has to be able to
+   *  tell "already in sync" from "refused before it left the browser", and this is the only way to
+   *  ask. Ctrl+S on the proposal editor asks it first, and says the honest thing when the answer is
+   *  not null: the work is here, it is not there.
+   *
+   *  The three gates are scheduleServerSave's own, in its own order. Kept as a mirror rather than
+   *  folded into it because the two have opposite jobs -- that one decides, this one only reports,
+   *  and a reporter that could refuse a save would be a second place for the rule to drift.
+   *
+   *  Returns "no-draft", "unverified", "foreign-blob", or null. */
+  function saveBlocked() {
+    const id = getDraftId();
+    if (!id) return "no-draft";
+    if (isUnverified(id)) return "unverified";
+    const stamp = getState()[STAMP];
+    if (stamp && stamp !== id) return "foreign-blob";
+    return null;
+  }
+
   /** Wait until this draft's edits are on the server. Resolves true when the server holds
    *  what this page shows, false if the write failed or was refused.
    *
@@ -810,6 +837,7 @@
     getState,
     setState,
     flushState,
+    saveBlocked,
     refreshServerOwned,
     clearState,
     readForm,

@@ -158,3 +158,44 @@ def test_the_other_drafts_edits_are_flushed_under_their_own_id_first():
             session={}, server=dict(REAL_BID))
     assert any(p.get("project_name") == "Somebody else's bid" for p in r["puts"]), (
         "the other draft's state was discarded instead of saved under its own id")
+
+
+# ── what Ctrl+S is allowed to claim ──────────────────────────────────────────
+# Hanz, 2026-08-27, on Ctrl+S in the proposal editor: "DO you mean to implement? then yes."
+#
+# The key finishes the pending autosave and reports the outcome, so it needs to be able to tell
+# "already in sync" from "refused before it left the browser". flushState() cannot: it answers
+# `true` both when there was nothing to do AND after dropping a save one of the gates refused,
+# because it then awaits an `_inFlight` promise belonging to an older, successful write. saveBlocked
+# is the narrow read-only question that can be asked instead, and these pin its three answers.
+def test_a_healthy_draft_reports_nothing_blocking_a_save():
+    r = run(urlId=PID, local={}, session={}, server=dict(REAL_BID))
+    assert r["saveBlocked"] is None
+
+
+def test_an_unread_draft_reports_that_a_save_would_be_refused():
+    """The case that matters. Two failed GETs, shared.js adopts empty and marks the draft
+    unverified — server saves are held back from then on, and the estimator's edits live only in
+    this browser. A Ctrl+S that answered "Saved" here would be telling them the opposite of the
+    truth about a bid they may be about to close the tab on."""
+    r = run(urlId=PID, local={}, session={}, server=dict(REAL_BID), serverStatus=500,
+            type={"project_name": "typed into a blank form"})
+    assert r["puts"] == [], "the premise changed: an unread draft is being saved again"
+    assert r["saveBlocked"] == "unverified"
+
+
+def test_a_blob_stamped_for_another_project_reports_the_same_refusal():
+    """The other gate scheduleServerSave carries. Here the local blob belongs to a different draft
+    than the URL, which is the case that hydrates — so the answer is read before that lands."""
+    r = run(urlId=PID, local={}, session={}, server=dict(REAL_BID), serverStatus=500)
+    assert r["saveBlocked"] in ("unverified", "foreign-blob"), r["saveBlocked"]
+
+
+def test_asked_before_there_is_a_project_it_says_so():
+    """The third answer, and the only moment it is reachable: a page with no ?d= and nothing in
+    localStorage, asked before initDraftSync has minted an id. Every page that asks in practice
+    does so after its own init, by which point there is an id — but a reporter whose fallback was
+    "nothing is blocking a save" would be guessing, and guessing is the thing it exists not to do."""
+    r = run(url="https://proposals.example.com/proposal-review.html", local={}, session={})
+    assert r["saveBlockedAtLoad"] == "no-draft"
+    assert r["saveBlocked"] is None, "an id was never minted; the premise of this test moved"
