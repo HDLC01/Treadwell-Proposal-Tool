@@ -223,6 +223,23 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   // filtered view; on the page it is a plain variable that nothing serialises, which is the whole
   // point of it (the dropdown filters deleted on 2026-08-19 were being saved to the server).
   var itemQuery = state.itemQuery === undefined ? "" : state.itemQuery;
+  // The facets. The DECLARATION is lifted out of library.js rather than restated, so a fourth
+  // facet added there without a default here cannot pass as an empty object.
+  ${grab(/^  var FILTERS = \{[^}]*\};$/m, "the FILTERS declaration")}
+  if (state.FILTERS) FILTERS = Object.assign(FILTERS, state.FILTERS);
+  var filterBarSig = "";
+  // EVERY ONE OF THESE IS CALLED BY SOMETHING ALREADY LIFTED. renderItems asks anyFilterActive
+  // and filterSummary; visibleItems asks matchesFilters; itemMatches asks parseQuery and
+  // termHits. Miss one and the whole file dies on a ReferenceError rather than failing a test.
+  ${fn("anyFilterActive")}
+  ${fn("parseQuery")}
+  ${fn("termHits")}
+  ${fn("numberHits")}
+  ${fn("conditionHits")}
+  ${fn("conditionPhrase")}
+  ${fn("matchesFilters")}
+  ${fn("filterSummary")}
+  ${fn("renderFilterBar")}
   ${fn("visibleItems")}
   ${fn("nameKey")}
   ${fn("duplicateName")}
@@ -248,7 +265,12 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("snapshotItem")}
   ${fn("rememberItem")}
   ${fn("onItemEdit")}
-  return { renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
+  // Test glue, and the only piece in this file: load() replaces DIVISIONS with the Administration
+  // tab list, and a test of "an added division reaches the filter chips" has to be able to do the
+  // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
+  return { setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
+           numberHits, FILTERS,
+           renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
            onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
@@ -1351,6 +1373,304 @@ out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
     // The fields still have their widths, they are just wearing them as classes now.
     nameFieldStillSized: /class="cell-name"/.test(rendered),
     costFieldStillSized: /cell-cost/.test(rendered),
+  };
+}
+
+// ── EXECUTED: the advanced search grammar ───────────────────────────────────
+// Hanz, 2026-08-27: "For the Items and Assemblies under the Items Tab, we must have filters and an
+// advanced search." The matcher was a substring test over one haystack; a bare word still behaves
+// exactly that way, which is what keeps the assembly picker working, and everything below is new
+// on top of it.
+//
+// EXECUTED against the REAL parser and the REAL fixture materials, because every interesting
+// failure is a parsing fact. A grep for "vendor:" would match the regex that reads it.
+{
+  const { api } = build();
+  const names = (q) => api.ITEMS.filter((it) => api.itemMatches(it, q)).map((it) => it.name);
+
+  out.advSearch = {
+    // The old behaviour, unchanged. i1 is OPF / Epoxy / Sherwin-Williams, i2 is OPF Primer /
+    // Polished Concrete / Gone Supply Co, so a matcher reading only `name` answers these the same.
+    bareWordStillSearchesEverything: names("sherwin"),
+    bareWordsStillNarrow: names("polished primer"),
+
+    // FIELD SCOPING. "opf" is in both names, so scoping is the only way to tell these apart by
+    // vendor, and a scoped term must NOT fall back to the whole haystack when it misses.
+    scopedToVendor: names("vendor:sherwin"),
+    scopedToName: names("name:primer"),
+    scopedToDivision: names("division:epoxy"),
+    scopedToUnit: names("unit:gal"),
+    // The scope really is a scope: "epoxy" is a DIVISION on i1, so asking for it as a NAME finds
+    // nothing. This is the assertion that fails if a scoped term quietly searches everything.
+    scopeIsNotAFallback: names("name:epoxy"),
+    aliasesAgree: [names("div:epoxy"), names("supplier:sherwin"), names("material:primer")],
+
+    // NUMBERS. i1 costs 85.3827, i2 costs 426.91; packs are 1 and 5.
+    costGreaterThan: names("cost:>100"),
+    costLessThan: names("cost:<100"),
+    costAtLeast: names("cost:>=426.91"),
+    costExactly: names("cost:426.91"),
+    packExactly: names("pack:5"),
+    priceIsAnAliasOfCost: names("price:>100"),
+    // Written the way it is written on the invoice.
+    toleratesDollarAndComma: names("cost:<$1,000"),
+
+    // NEGATION.
+    negatedBareWord: names("-sherwin"),
+    negatedScoped: names("-division:epoxy"),
+    negationCombinesWithTheRest: names("opf -epoxy"),
+
+    // PHRASES. Two bare words narrow independently, so "opf primer" as separate terms matches a
+    // material called "Primer OPF" too; quoted, it is one string in one order.
+    phraseIsOneString: names('"opf primer"'),
+    phraseInAScope: names('vendor:"gone supply"'),
+
+    // HONEST ABOUT NOTHING. A term the parser cannot make sense of must match NOTHING, never
+    // everything: a dropped term hands the full list back and reads as the search being ignored,
+    // which is worse than a blank table because it looks like it worked.
+    nonsenseNumberFindsNothing: names("cost:abc"),
+    unknownFieldIsSearchedLiterally: names("colour:red"),
+    // …and a material with NO cost is not a material costing nothing, so it fails every
+    // comparison rather than sorting under cost:<1.
+    absentCostIsNotZero: api.numberHits(null, "<1"),
+    absentCostFailsGreaterThan: api.numberHits(null, ">1"),
+    blankIsNotZero: api.numberHits("", "=0"),
+
+    // Still kind while somebody is typing: a scope with nothing after the colon is not yet a term.
+    halfTypedScopeShowsEverything: names("vendor:").length,
+    blankStillFindsEverything: names("").length,
+    // The parse itself, so a change of shape is visible rather than inferred from a match count.
+    parsed: api.parseQuery('vendor:"gone supply" cost:>100 -epoxy loose'),
+  };
+}
+
+// ── EXECUTED: the facets ────────────────────────────────────────────────────
+// Three, and each earns its place off a column that already exists. Division and vendor narrow
+// what somebody could already find by typing; CONDITION answers the question no search can, which
+// is what in this list is not safe to price a bid from.
+//
+// There is no waste-factor or Roundup? facet because neither is a property of a material: both
+// live on an assembly LINE (_clean_lines in backend/library.py). This block proves the fixture
+// items carry no such field, so a later reader does not spend an afternoon looking for one.
+{
+  const FIXTURES = [
+    { id: "p1", name: "Priced", divisions: ["Epoxy"], unit: "Gallon", buy_qty: 5,
+      unit_cost: 100, coverage: 275, vendor: "Sika", created_at: null,
+      cost_updated_at: "2026-08-14T21:15:00Z" },
+    { id: "p2", name: "No cost", divisions: ["Epoxy"], unit: "Gallon", buy_qty: 1,
+      unit_cost: null, coverage: 275, vendor: "Sika", created_at: null, cost_updated_at: null },
+    { id: "p3", name: "Unfiled", divisions: [], unit: "Gallon", buy_qty: 1, unit_cost: 12,
+      coverage: 275, vendor: "", created_at: null, cost_updated_at: null },
+    { id: "p4", name: "Gyp bag", divisions: ["Gypsum Underlayment"], unit: "Bag", buy_qty: 1,
+      unit_cost: 30, coverage: 100, vendor: "Sherwin-Williams", created_at: null,
+      cost_updated_at: "2026-08-01T00:00:00Z" },
+  ];
+  const shown = (filters, q) => {
+    const b = build(Object.assign({ ITEMS: JSON.parse(JSON.stringify(FIXTURES)) },
+      { FILTERS: Object.assign({ divisions: [], vendor: "", condition: "" }, filters || {}) },
+      q === undefined ? {} : { itemQuery: q }));
+    return b.api.visibleItems().map((x) => x.name);
+  };
+
+  out.facets = {
+    // No facet, no query: the list is handed back untouched, not a copy through the filter.
+    nothingOnShowsEverything: shown({}).length,
+
+    // DIVISION: ORs within itself, because "epoxy or gypsum" is the question actually asked.
+    oneDivision: shown({ divisions: ["Epoxy"] }),
+    twoDivisionsOr: shown({ divisions: ["Epoxy", "Gypsum Underlayment"] }),
+    divisionIsCaseInsensitive: shown({ divisions: ["ePoXy"] }),
+
+    // VENDOR: an exact match on the value the dropdown offered, not a substring, or picking
+    // "Sika" would also pull in a "Sika Distribution Co" that is a different account.
+    oneVendor: shown({ vendor: "Sika" }),
+    vendorIsCaseInsensitive: shown({ vendor: "sika" }),
+
+    // CONDITION.
+    missingACost: shown({ condition: "no_cost" }),
+    notInAnyDivision: shown({ condition: "no_division" }),
+    noVendor: shown({ condition: "no_vendor" }),
+    priceNeverRecorded: shown({ condition: "no_price_date" }),
+
+    // ACROSS facets it is AND, so two of them narrow rather than widen.
+    facetsAnd: shown({ divisions: ["Epoxy"], condition: "no_cost" }),
+    // …and the text box ANDs with them too.
+    textAndsWithFacets: shown({ divisions: ["Epoxy"] }, "cost:>50"),
+    // A combination nothing satisfies gives nothing, rather than falling back to a wider answer.
+    impossibleCombination: shown({ divisions: ["Gypsum Underlayment"], vendor: "Sika" }),
+  };
+
+  // The facets are the ITEMS TAB'S, not the matcher's. The assembly line picker searches with
+  // itemMatches and must NOT inherit a bar it cannot see — a line quietly unable to find a
+  // material because of a filter set on another tab would be unexplainable from where it happens.
+  const filtered = build({
+    ITEMS: JSON.parse(JSON.stringify(FIXTURES)),
+    FILTERS: { divisions: ["Epoxy"], vendor: "", condition: "" },
+  });
+  out.facets.pickerIgnoresTheFacets =
+    /data-pick-item="p4"/.test(filtered.api.itemResultsHtml({ _item_search: "gyp" }));
+  out.facets.tabStillObeysThem = filtered.api.visibleItems().map((x) => x.name);
+
+  // No item carries a waste factor or a roundup flag, so neither could be a facet here.
+  out.facets.itemsHaveNoWasteOrRoundup = FIXTURES.every(
+    (f) => f.waste_pct === undefined && f.roundup === undefined);
+}
+
+// ── EXECUTED: the filter survives what re-renders the list ──────────────────
+// "The filter state must survive the things that re-render the list - an edit, a save, a tab
+// switch back - or it will read as the filter randomly clearing itself."
+//
+// Two mechanisms, and both are tested because either alone is not enough. The STATE lives in
+// plain variables rather than in the DOM, and the CONTROLS live outside the tbody renderItems
+// replaces. The third hazard is renderFilterBar itself, which paint() calls on every edit: if it
+// rewrote its markup each time it would drop the focus of anybody tabbing the chips, so it only
+// writes when the offered values have actually changed.
+{
+  const b = build({ FILTERS: { divisions: ["Epoxy"], vendor: "Sika", condition: "no_cost" } });
+
+  b.api.renderFilterBar();
+  const firstChips = b.dom.nodes["f-divisions"].innerHTML;
+
+  /** Count WRITES to innerHTML, not the value that ends up there.
+   *
+   *  The first version of this compared the markup before and after and passed against a
+   *  renderFilterBar that rebuilt unconditionally - because rebuilding from the same FILTERS
+   *  produces a byte-identical string. In a browser that write still destroys every node in the
+   *  strip and takes the focus with it, which is the entire bug being guarded against. So the
+   *  question is whether the assignment happened, and only a spy can answer it. */
+  function countWrites(node) {
+    var held = node.innerHTML, n = 0;
+    Object.defineProperty(node, "innerHTML", {
+      configurable: true,
+      get: function () { return held; },
+      set: function (v) { n++; held = v; },
+    });
+    return function () { return n; };
+  }
+  const chipWrites = countWrites(b.dom.nodes["f-divisions"]);
+  const vendorWrites = countWrites(b.dom.nodes["f-vendor"]);
+
+  // An edit and a save both go through renderItems, and paint() calls renderFilterBar after it.
+  b.api.renderItems();
+  b.api.renderFilterBar();
+  b.api.renderItems();
+  b.api.renderFilterBar();
+
+  out.filterState = {
+    // The chips came back with the active division still on.
+    rebuiltFromTheModel: /data-fdiv="Epoxy"[^>]*checked/.test(firstChips),
+    // …and were NOT written again on the repeat passes, which is what would cost the focus.
+    chipWritesOnRepaint: chipWrites(),
+    vendorWritesOnRepaint: vendorWrites(),
+    // The selects still say what the model says.
+    vendorHeld: b.dom.nodes["f-vendor"].value,
+    conditionHeld: b.dom.nodes["f-condition"].value,
+    clearOffered: b.dom.nodes["f-clear"].hidden === false,
+    // The state is not read back off the DOM at all, so nothing renderItems does can lose it.
+    modelHeld: JSON.stringify(b.api.FILTERS),
+  };
+
+  // …but an admin ADDING a division must rebuild the strip, or the new value is unfilterable
+  // until somebody reloads. Same spy, and here it has to fire exactly once.
+  const grown = build({ FILTERS: { divisions: ["Epoxy"], vendor: "", condition: "" } });
+  grown.api.renderFilterBar();
+  const grownWrites = countWrites(grown.dom.nodes["f-divisions"]);
+  grown.api.renderFilterBar();
+  out.filterState.quietWhenNothingChanged = grownWrites();
+  grown.api.setDivisions(["Polished Concrete", "Epoxy", "Gypsum Underlayment",
+                          "Sealer & Traffic Coatings"]);
+  grown.api.renderFilterBar();
+  const after = grown.dom.nodes["f-divisions"].innerHTML;
+  out.filterState.writesAfterANewDivision = grownWrites();
+  out.filterState.newDivisionAppears = /data-fdiv="Sealer &amp; Traffic Coatings"/.test(after);
+  out.filterState.rebuildKeptTheActiveOne = /data-fdiv="Epoxy"[^>]*checked/.test(after);
+  // Free text somebody typed on the Administration tab, escaped rather than injected.
+  out.filterState.customIsEscaped = !/data-fdiv="Sealer & Traffic/.test(after);
+
+  // With nothing on, the Clear button is not offered.
+  const idle = build();
+  idle.api.renderFilterBar();
+  out.filterState.clearHiddenWhenIdle = idle.dom.nodes["f-clear"].hidden === true;
+}
+
+// ── EXECUTED: the empty state says what it left out ─────────────────────────
+// "Empty state: say what was filtered out and offer the way back, do not show a blank rail."
+{
+  const gone = build({
+    FILTERS: { divisions: ["Gypsum Underlayment"], vendor: "Sika", condition: "no_cost" },
+    itemQuery: "primer",
+  });
+  gone.api.renderItems();
+  const hit = build({ itemQuery: "primer" });
+  hit.api.renderItems();
+  // A FACET with an empty search box still counts as filtering. The line this replaced read only
+  // itemQuery, so narrowing to a division nothing is filed under produced a blank table with the
+  // add row gone and no panel at all.
+  const facetOnly = build({ FILTERS: { divisions: ["Nothing Is In Here"], vendor: "", condition: "" } });
+  facetOnly.api.renderItems();
+
+  out.filterEmpty = {
+    panelShown: gone.dom.nodes["items-nomatch"].hidden === false,
+    why: gone.dom.nodes["items-nomatch-why"].textContent,
+    // Every active constraint is named, not just the text.
+    namesTheQuery: /"primer"/.test(gone.dom.nodes["items-nomatch-why"].textContent),
+    namesTheDivision: /Gypsum Underlayment/.test(gone.dom.nodes["items-nomatch-why"].textContent),
+    namesTheVendor: /Sika/.test(gone.dom.nodes["items-nomatch-why"].textContent),
+    namesTheCondition: /no cost recorded/.test(gone.dom.nodes["items-nomatch-why"].textContent),
+    // The way back is offered in the panel as well as the bar, and both press the same handler.
+    clearOfferedInThePanel:
+      (html.match(/data-clear-filters/g) || []).length === 2 &&
+      /id="items-nomatch"[\s\S]*?data-clear-filters/.test(html),
+    // A facet alone opens the panel.
+    facetAloneOpensThePanel: facetOnly.dom.nodes["items-nomatch"].hidden === false,
+    facetAloneExplainsItself: facetOnly.dom.nodes["items-nomatch-why"].textContent,
+    // A hit shows the count, not the panel.
+    hitHidesThePanel: hit.dom.nodes["items-nomatch"].hidden === true,
+    hits: hit.dom.nodes["item-hits"].textContent,
+    // The blank rail this replaces: no rows AND no add row, so the panel is the only thing left
+    // to explain the screen.
+    addRowGoneWhenNothingMatches: gone.dom.nodes["items-addrow"].hidden === true,
+    // The tab badge still counts what Treadwell HAS.
+    badgeIsStillTheTotal: gone.dom.nodes["n-items"].textContent,
+  };
+}
+
+// ── the keyboard, and where the controls sit in the markup ──────────────────
+{
+  const between = (open, close) => {
+    const i = html.indexOf(open);
+    const j = html.indexOf(close, i);
+    return i === -1 ? "" : html.slice(i, j === -1 ? html.length : j);
+  };
+  out.filterKeyboard = {
+    // Escape clears the box. type="search" has a native clear affordance in Chromium but it is a
+    // mouse target, and Escape is not wired to it the same way everywhere.
+    escapeClears: /if \(e\.key !== "Escape" \|\| !String\(itemQuery\)\.trim\(\)\) return;/.test(src),
+    // Every facet control is a real focusable control rather than a div with a click handler.
+    divisionsAreCheckboxes: /<input type="checkbox" data-fdiv=/.test(
+      (() => { const b = build(); b.api.renderFilterBar(); return b.dom.nodes["f-divisions"].innerHTML; })()),
+    vendorIsASelect: /<select id="f-vendor">/.test(html),
+    conditionIsASelect: /<select id="f-condition">/.test(html),
+    // Named for a screen reader: the chip strip is a group with a label, and the two selects have
+    // real <label for> rather than a placeholder standing in for one.
+    chipStripIsALabelledGroup:
+      /<span class="fchips" id="f-divisions" role="group"\s+aria-labelledby="f-div-label">/
+        .test(html.replace(/\r\n/g, "\n")),
+    selectsHaveLabels: /<label class="flabel" for="f-vendor">/.test(html) &&
+      /<label class="flabel" for="f-condition">/.test(html),
+    // The syntax is written down where somebody will find it, and tied to the box.
+    tipsExist: /id="search-tips"/.test(html) &&
+      /aria-describedby="search-tips"/.test(html),
+    tipsShowRealSyntax: ["vendor:sherwin", "cost:&gt;200", "pack:5", "-epoxy"]
+      .every((t) => html.indexOf(t) !== -1),
+    // THE CONTROLS ARE OUTSIDE THE TBODY renderItems replaces. This is the structural half of the
+    // survives-a-re-render answer, and it is a fact about the markup rather than about a variable.
+    controlsOutsideTheRenderedBody:
+      html.indexOf('id="f-divisions"') < html.indexOf('<tbody id="items-body">') &&
+      html.indexOf('id="item-q"') < html.indexOf('<tbody id="items-body">'),
+    // And the bar is not a fifth card.
+    barIsNotACard: !/class="card[^"]*"[^>]*>\s*<div class="filterbar"/.test(html) &&
+      !/class="filterbar card"/.test(html),
   };
 }
 

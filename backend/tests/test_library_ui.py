@@ -947,3 +947,305 @@ def test_no_renderer_emits_a_style_attribute(ran):
     assert s["inThePage"] == [], s["inThePage"]
     assert s["nameFieldStillSized"] and s["costFieldStillSized"], (
         "the widths were deleted rather than moved to a class")
+
+
+# ── filters and advanced search, 2026-08-27 ───────────────────────────
+# Hanz: "For the Items and Assemblies under the Items Tab, we must have filters and an advanced
+# search."
+@needs_node
+def test_a_bare_word_searches_exactly_what_it_used_to(ran):
+    """THE COMPATIBILITY FLOOR, and it is load-bearing rather than polite. itemMatches is shared
+    with the assembly line picker, so a grammar that changed what a plain word means would quietly
+    change what an estimator finds when picking a material into a priced line.
+
+    A bare word still means "appears somewhere in the name, the divisions or the vendor", and
+    several bare words still narrow.
+
+    Mutation: make an unscoped term search only the name."""
+    a = ran["advSearch"]
+    assert a["bareWordStillSearchesEverything"] == ["OPF"], (
+        "a bare word stopped reaching the vendor field")
+    assert a["bareWordsStillNarrow"] == ["OPF Primer"]
+    assert a["blankStillFindsEverything"] == 2
+
+
+@needs_node
+def test_a_term_can_be_scoped_to_one_field(ran):
+    """Both fixture materials are called OPF-something, so scoping is the only way to separate
+    them by vendor - which is the whole point of the feature.
+
+    THE ASSERTION THAT MATTERS IS scopeIsNotAFallback. "epoxy" is a DIVISION on the first
+    material, so `name:epoxy` must find nothing. A scoped term that quietly falls back to the
+    whole haystack when it misses looks like it works on every query anyone tries first.
+
+    Mutation: have termHits ignore term.field."""
+    a = ran["advSearch"]
+    assert a["scopedToVendor"] == ["OPF"]
+    assert a["scopedToName"] == ["OPF Primer"]
+    assert a["scopedToDivision"] == ["OPF"]
+    assert a["scopedToUnit"] == ["OPF", "OPF Primer"]
+    assert a["scopeIsNotAFallback"] == [], (
+        "name:epoxy matched a material whose NAME does not contain it - the scope is decorative")
+    assert a["aliasesAgree"] == [["OPF"], ["OPF"], ["OPF Primer"]], (
+        "div:, supplier: and material: do not agree with their long forms")
+
+
+@needs_node
+def test_a_cost_or_a_pack_can_be_compared(ran):
+    """A price list is mostly numbers, and "what do we buy that costs over two hundred a pail" is
+    not a question substring matching can answer at all.
+
+    Mutation: drop the comparator branch and treat cost: as text."""
+    a = ran["advSearch"]
+    assert a["costGreaterThan"] == ["OPF Primer"] and a["costLessThan"] == ["OPF"]
+    assert a["costAtLeast"] == ["OPF Primer"] and a["costExactly"] == ["OPF Primer"]
+    assert a["packExactly"] == ["OPF Primer"], "pack: does not read buy_qty"
+    assert a["priceIsAnAliasOfCost"] == ["OPF Primer"]
+    assert a["toleratesDollarAndComma"] == ["OPF", "OPF Primer"], (
+        "a figure copied off an invoice with its dollar sign and comma is rejected")
+
+
+@needs_node
+def test_a_term_can_be_negated_and_a_phrase_kept_whole(ran):
+    """Two bare words narrow independently, so "opf primer" also matches a material called
+    "Primer OPF". Quoted, it is one string in one order. And a price list is searched as often for
+    what something is NOT - everything that is not epoxy - as for what it is."""
+    a = ran["advSearch"]
+    assert a["negatedBareWord"] == ["OPF Primer"]
+    assert a["negatedScoped"] == ["OPF Primer"]
+    assert a["negationCombinesWithTheRest"] == ["OPF Primer"], (
+        "a negated term does not AND with the positive ones")
+    assert a["phraseIsOneString"] == ["OPF Primer"]
+    assert a["phraseInAScope"] == ["OPF Primer"], 'vendor:"gone supply" does not survive parsing'
+    assert a["parsed"] == [
+        {"neg": False, "field": "vendor", "value": "gone supply"},
+        {"neg": False, "field": "unit_cost", "value": ">100"},
+        {"neg": True, "field": "", "value": "epoxy"},
+        {"neg": False, "field": "", "value": "loose"},
+    ], a["parsed"]
+
+
+@needs_node
+def test_a_query_it_cannot_parse_matches_nothing_rather_than_everything(ran):
+    """THE HONESTY RULE, and the one that is easiest to get backwards.
+
+    The tempting implementation of an unparseable term is to discard it. That hands the whole list
+    back, which does not look like an error - it looks like the search ran and everything matched.
+    The estimator then scrolls a full price list believing they filtered it.
+
+    So `cost:abc` matches nothing, and an unknown field name is searched as literal text rather
+    than dropped. A material with NO cost recorded also fails every comparison, because absent is
+    not zero and treating it as zero would file it under cost:<1 as though somebody had priced it
+    at nothing.
+
+    Mutation: `return true` for an unparseable number, or skip the term."""
+    a = ran["advSearch"]
+    assert a["nonsenseNumberFindsNothing"] == [], (
+        "cost:abc handed back the full list, which reads as the filter being ignored")
+    assert a["unknownFieldIsSearchedLiterally"] == []
+    assert a["absentCostIsNotZero"] is False, "a material with no cost sorts as costing nothing"
+    assert a["absentCostFailsGreaterThan"] is False
+    assert a["blankIsNotZero"] is False
+    # …but a scope somebody is still typing is not an error, it is a keystroke.
+    assert a["halfTypedScopeShowsEverything"] == 2, (
+        "typing vendor: blanks the table on the way to vendor:s")
+
+
+@needs_node
+def test_the_three_facets_narrow_the_way_a_faceted_list_should(ran):
+    """OR within a facet, AND across them. Division is a list because "epoxy or gypsum" is the
+    question actually asked; vendor is an exact match on a value the dropdown offered, not a
+    substring, or picking Sika would also pull in a differently-named account that contains it.
+
+    Mutation: AND the divisions together, or make the vendor a substring test."""
+    f = ran["facets"]
+    assert f["nothingOnShowsEverything"] == 4
+    assert f["oneDivision"] == ["Priced", "No cost"]
+    assert f["twoDivisionsOr"] == ["Priced", "No cost", "Gyp bag"], (
+        "two divisions narrowed instead of widening - the facet ANDs with itself")
+    assert f["divisionIsCaseInsensitive"] == ["Priced", "No cost"]
+    assert f["oneVendor"] == ["Priced", "No cost"]
+    assert f["vendorIsCaseInsensitive"] == ["Priced", "No cost"]
+    assert f["facetsAnd"] == ["No cost"], "two different facets widened instead of narrowing"
+    assert f["textAndsWithFacets"] == ["Priced"], "the search box does not combine with a facet"
+    assert f["impossibleCombination"] == []
+
+
+@needs_node
+def test_the_condition_facet_finds_what_is_not_safe_to_price_from(ran):
+    """THE FACET THAT EARNS THE BAR. Division and vendor only narrow what somebody could already
+    find by typing a word. These answer the question no search can: what in this list will quietly
+    produce a wrong bid.
+
+    A material with no cost prices every assembly built on it at nothing, silently, and before
+    this there was no way to go looking for one. The other three are the same shape of question -
+    unfiled, unsourced, and never actually priced.
+
+    Mutation: make no_cost accept a zero cost as priced."""
+    f = ran["facets"]
+    assert f["missingACost"] == ["No cost"]
+    assert f["notInAnyDivision"] == ["Unfiled"]
+    assert f["noVendor"] == ["Unfiled"]
+    assert f["priceNeverRecorded"] == ["No cost", "Unfiled"]
+
+
+@needs_node
+def test_there_is_no_waste_or_roundup_facet_because_an_item_has_neither(ran):
+    """Both were floated as candidates. Neither is a property of a MATERIAL: waste_pct and roundup
+    are written by _clean_lines in backend/library.py and live on an assembly LINE, so the same
+    material carries a different waste factor in every assembly that uses it.
+
+    A facet for them on this tab would have to invent a value, which is the one thing a filter
+    over real data must not do. Written down as a test so the next person to have the idea finds
+    the answer instead of the shape of it."""
+    f = ran["facets"]
+    assert f["itemsHaveNoWasteOrRoundup"], (
+        "an item now carries waste_pct or roundup - if that is real, this facet becomes possible")
+
+
+@needs_node
+def test_the_facets_belong_to_the_items_tab_and_not_to_the_matcher(ran):
+    """The assembly line picker searches with the same itemMatches, deliberately, so the two boxes
+    cannot disagree. It must NOT inherit the facets: a line unable to find a material because of a
+    bar set on a different tab is unexplainable from where it happens, and the estimator would
+    conclude the material had been deleted.
+
+    Mutation: apply matchesFilters inside itemResultsHtml."""
+    f = ran["facets"]
+    assert f["pickerIgnoresTheFacets"], (
+        "the line picker is being narrowed by the Items tab's filter bar")
+    assert f["tabStillObeysThem"] == ["Priced", "No cost"]
+
+
+@needs_node
+def test_the_filter_survives_the_things_that_re_render_the_list(ran):
+    """"The filter state must survive the things that re-render the list - an edit, a save, a tab
+    switch back - or it will read as the filter randomly clearing itself."
+
+    THREE MECHANISMS, and the third is the one that is easy to miss. The state lives in plain
+    variables, not in the DOM. The controls live outside the tbody renderItems replaces. And
+    renderFilterBar, which paint() calls on every edit and every save, compares the offered values
+    before writing any markup - because rebuilding the chip strip on each pass would throw away
+    the focus of anybody tabbing through it, which is a bug this project has shipped twice.
+
+    Mutation: rebuild the chips unconditionally in renderFilterBar."""
+    s = ran["filterState"]
+    assert s["rebuiltFromTheModel"], "an active division did not come back ticked"
+    assert s["chipWritesOnRepaint"] == 0 and s["vendorWritesOnRepaint"] == 0, (
+        "renderFilterBar wrote its markup again on a repaint (%s chip writes) - in a browser that"
+        " destroys every node in the strip and takes the focus with it"
+        % s["chipWritesOnRepaint"])
+    assert s["vendorHeld"] == "Sika" and s["conditionHeld"] == "no_cost"
+    assert s["clearOffered"], "Clear filters is hidden while three facets are on"
+    assert s["modelHeld"] == (
+        '{"divisions":["Epoxy"],"vendor":"Sika","condition":"no_cost"}'), s["modelHeld"]
+
+
+@needs_node
+def test_the_clear_button_appears_only_when_something_is_on(ran):
+    """It is the only thing on the bar that says a filter is active without being read carefully,
+    so it must not be furniture that is always there."""
+    s = ran["filterState"]
+    assert s["clearHiddenWhenIdle"], "Clear filters is offered when nothing is filtered"
+    assert s["clearOffered"], "Clear filters is missing while three facets are on"
+
+
+@needs_node
+def test_a_division_added_by_an_admin_becomes_filterable(ran):
+    """The guard that stops renderFilterBar rewriting its markup must not stop it rewriting when
+    the offered values genuinely changed, or a division added on the Administration tab cannot be
+    filtered on until somebody reloads the page.
+
+    And the rebuild has to keep whatever was already on, or adding a division silently drops the
+    estimator's current filter.
+
+    Mutation: return early from renderFilterBar before the signature comparison."""
+    s = ran["filterState"]
+    assert s["quietWhenNothingChanged"] == 0, "the strip is rewritten when nothing changed"
+    assert s["writesAfterANewDivision"] == 1, (
+        "adding a division did not rebuild the strip exactly once (%s writes)"
+        % s["writesAfterANewDivision"])
+    assert s["newDivisionAppears"], "a newly added division never reaches the filter chips"
+    assert s["rebuildKeptTheActiveOne"], (
+        "rebuilding the strip dropped the division that was already switched on")
+    assert s["customIsEscaped"], "a division name is free text and is not being escaped"
+
+
+@needs_node
+def test_the_empty_state_says_what_it_left_out_and_offers_the_way_back(ran):
+    """A blank table is the worst outcome a filter can produce, because the estimator cannot tell
+    a filter that went too far from a library that is missing something.
+
+    So the panel names every active constraint - the query, the divisions, the vendor and the
+    condition - and carries a Clear filters button of its own, because somebody staring at no rows
+    looks for the way out next to the nothing, not back up in the bar.
+
+    Mutation: drop a constraint from filterSummary, or the panel's own clear button."""
+    e = ran["filterEmpty"]
+    assert e["panelShown"]
+    assert e["namesTheQuery"] and e["namesTheDivision"] and e["namesTheVendor"] \
+        and e["namesTheCondition"], e["why"]
+    assert e["why"] == (
+        'No materials matching "primer", in Gypsum Underlayment, from Sika, '
+        "with no cost recorded."), e["why"]
+    assert e["clearOfferedInThePanel"], (
+        "the way back is only in the bar, above a table that has nothing in it")
+    assert e["hitHidesThePanel"] and e["hits"] == "1 of 2 shown"
+    assert e["badgeIsStillTheTotal"] == 2, (
+        "the tab badge follows the filter, so materials read as having been deleted")
+
+
+@needs_node
+def test_a_facet_alone_counts_as_filtering(ran):
+    """FOUND WHILE WIRING THIS UP. The line deciding whether to show the no-match panel read only
+    the search box, which was right when the search box was the only filter. With a facet on and
+    the box empty, narrowing to a division nothing is filed under produced a table with no rows,
+    no add row (it hides with the rows), and no panel - a blank card with nothing anywhere saying
+    why.
+
+    Mutation: put `!!String(itemQuery).trim()` back in place of anyFilterActive()."""
+    e = ran["filterEmpty"]
+    assert e["facetAloneOpensThePanel"], "a facet with an empty search box shows a blank card"
+    assert e["facetAloneExplainsItself"] == "No materials in Nothing Is In Here."
+    assert e["addRowGoneWhenNothingMatches"]
+
+
+@needs_node
+def test_the_filter_controls_are_reachable_and_clearable_from_the_keyboard(ran):
+    """Every facet is a real control - checkboxes and two selects - so Tab and Space and the
+    announced state come for free, and the chip strip is a labelled group rather than a row of
+    unnamed boxes.
+
+    Escape clears the search box. type="search" grows a native clear affordance in Chromium, but
+    it is a mouse target and Escape is not wired to it the same way everywhere; this is also the
+    key that closes the item picker two tables over, so the page answers Escape consistently."""
+    k = ran["filterKeyboard"]
+    assert k["escapeClears"], "the search box cannot be cleared without a mouse"
+    assert k["divisionsAreCheckboxes"] and k["vendorIsASelect"] and k["conditionIsASelect"]
+    assert k["chipStripIsALabelledGroup"], "the chip strip is an unnamed group"
+    assert k["selectsHaveLabels"], "a facet select has no label, only a first option standing in"
+
+
+@needs_node
+def test_the_syntax_is_written_down_where_somebody_will_find_it(ran):
+    """An advanced search nobody is told the grammar of is a secret, and a tooltip on a search box
+    is not where anybody looks. The syntax sits under the box in the same muted prose the rest of
+    the page explains itself in, and is tied to the input with aria-describedby."""
+    k = ran["filterKeyboard"]
+    assert k["tipsExist"], "the search grammar is not described anywhere on the page"
+    assert k["tipsShowRealSyntax"], "the examples shown are not the syntax the parser accepts"
+
+
+@needs_node
+def test_the_filter_bar_is_not_a_sixth_card(ran):
+    """This page draws four boxes with a fill and a border and does not need a fifth. The bar is a
+    spacing container over the table it narrows; the table's own card gives the edge below it, and
+    everything inside is vocabulary that was already here - the search box, .btn.ghost.sm, the
+    muted prose, and the chip shape from the Division cell.
+
+    Also the structural half of the survives-a-re-render answer: the controls sit ahead of the
+    tbody renderItems replaces, so that function cannot reach them."""
+    k = ran["filterKeyboard"]
+    assert k["barIsNotACard"], "the filter bar grew a card of its own"
+    assert k["controlsOutsideTheRenderedBody"], (
+        "a filter control is inside the tbody renderItems rebuilds, so it will lose its state")
