@@ -62,6 +62,34 @@
     });
   };
 
+  /** One inline SVG glyph, Lucide-shaped: 24x24 box, no fill, currentColor stroke, width 2,
+   *  round caps and joins.
+   *
+   *  NEVER AN EMOJI. This page shipped with a trash can and a stacked-squares character standing
+   *  in for its delete and duplicate controls, and the house rule against that is not taste: an
+   *  emoji is drawn by whatever the machine has installed, so the control Kyle presses on Windows
+   *  is a different picture from the one on a phone, it cannot take the row's own colour on hover,
+   *  and it ignores every stroke and size token on the page.
+   *
+   *  ONE FUNCTION RATHER THAN A PATHS TABLE, because library-ui-harness.js lifts named functions
+   *  out of this file by regex and executes them. A separate lookup object would have to be lifted
+   *  too, and every renderer that reaches for a glyph would die on the missing identifier.
+   *
+   *  The glyph is not a click target: see the pointer-events rule on `.icon svg` in library.html,
+   *  and the closest() lookups in the click handler, which are the two halves of the same answer. */
+  function icon(name) {
+    var d = name === "trash"
+        ? '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"></path>'
+      : name === "copy"
+        ? '<rect x="9" y="9" width="12" height="12" rx="2"></rect>' +
+          '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>'
+      : name === "plus" ? '<path d="M12 5v14M5 12h14"></path>'
+      : "";
+    return '<svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" ' +
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+      'aria-hidden="true" focusable="false">' + d + "</svg>";
+  }
+
   var alertEl = $("alert");
   function say(msg) { alertEl.textContent = msg || ""; }
   function saving(msg) { $("asm-saving").textContent = msg || ""; }
@@ -199,59 +227,336 @@
     return out;
   }
 
+  // ── confirming an Item change ─────────────────────────────────────────────
+  // Hanz, 2026-08-25: every Item field change is confirmed first, because items "will be
+  // connected to many assemblies and an accidental change could alter the pricing." That makes
+  // this a PRICING-INTEGRITY control rather than a politeness — an item's unit_cost reprices
+  // every assembly built on it, live, and nothing else on this page asks before doing that.
+  //
+  // ONE DIALOG PER ROW PER VISIT, NOT ONE PER KEYSTROKE AND NOT ONE PER PAUSE.
+  //
+  // The first version asked at flush time — 600ms after the last keystroke — which put the
+  // question in front of somebody who was still working in the row: one field in, mid-edit, over
+  // a change they had not finished making. Hanz, 2026-08-27: ask when focus LEAVES THE ROW. While
+  // the row holds the focus, edits accumulate and the flush re-defers; the moment focus lands
+  // outside it, everything that moved goes into one question.
+  //
+  // AND THAT IS ALSO THE FIX FOR A REAL DEFECT, not just an improvement in timing.
+  // The dialog could be answered "no" while the rejected value still reached the database:
+  // shared.js focused its Cancel button, that BLURRED the input being typed in, a blurred input
+  // with an uncommitted value fires `change`, `change` is bound to #items-body — so the page
+  // re-entered onItemEdit while its own dialog was open, snapshotted the ALREADY-EDITED model,
+  // and queued a second patch. That one compared before against after, found them equal, asked
+  // nothing, and sent the number the estimator had just refused. Waiting for the row to be left
+  // kills it at the root: when the dialog opens there is no row input left to blur, so no
+  // `change` can fire and no re-entry is possible. `itemConfirmOpen` below is the belt.
+  //
+  // AND IT CANNOT LIVE IN onItemEdit FOR A MECHANICAL REASON WORTH WRITING DOWN.
+  // library-ui-harness.js lifts that function and runs it against a stub `document` that has only
+  // querySelector; TW.confirmDanger calls document.createElement and reads document.activeElement.
+  // A dialog inside onItemEdit would fail all 38 of that harness's tests in one go, which is a
+  // loud failure — but it would also have to be un-picked afterwards, and this is the better
+  // shape regardless.
+  var ITEM_FIELD_LABELS = {
+    name: "Name", unit: "Unit", unit_cost: "Cost", buy_qty: "Order amount",
+    coverage: "Coverage per unit", vendor: "Vendor", divisions: "Division",
+  };
+
+  // THE SERVER'S FIELDS, NOT OURS. `updated_at` moves on every write and `cost_updated_at` moves
+  // only when the cost really changed — both are decided server-side and adopted off the reply
+  // (see adoptSaved). A snapshot taken before that reply landed holds the old values, so
+  // restoring the WHOLE snapshot on a Cancel would throw away what the server just told us: the
+  // Dates cell would go back to quoting a price date the database has already moved past, with
+  // nothing on screen marking it. Cancel restores what the estimator typed, and nothing else.
+  var SERVER_OWNED_ITEM_FIELDS = ["updated_at", "cost_updated_at"];
+
+  // The item as it stood before this round of edits, captured on the first keystroke after each
+  // flush. Two jobs: the dialog quotes before → after, and Cancel has something to put back.
+  var itemBefore = {};
+  // Which item's confirmation is on screen right now, by id, or null. Read by onItemEdit (any
+  // event arriving while this is set is the dialog's own doing — the modal overlay traps every
+  // real one) and by the flush, so a second row waits its turn instead of stacking a second modal.
+  var itemConfirmOpen = null;
+  // The field the estimator last changed in this round, per item, so a Cancel can put the caret
+  // back where they were working. Recorded here rather than read off document.activeElement at
+  // dialog time because by then focus has deliberately left the row.
+  var itemLastField = {};
+
+  function snapshotItem(it) {
+    var out = {};
+    // Arrays are COPIED, not referenced: `divisions` is the one array field on an item, and a
+    // shared reference would make the snapshot mutate along with the edit it is meant to remember,
+    // so Cancel would restore the value it was supposed to undo.
+    Object.keys(it).forEach(function (k) {
+      out[k] = Array.isArray(it[k]) ? it[k].slice() : it[k];
+    });
+    return out;
+  }
+
+  function rememberItem(it) {
+    if (!itemBefore[it.id]) itemBefore[it.id] = snapshotItem(it);
+  }
+
+  function shownValue(v) {
+    if (Array.isArray(v)) return v.length ? v.join(", ") : "(none)";
+    var t = String(v === undefined || v === null ? "" : v).trim();
+    return t === "" ? "(blank)" : t;
+  }
+
+  /** Is the estimator still working inside this item's row?
+   *
+   *  The one question the row-leave rule turns on. `contains` covers the whole <tr> deliberately:
+   *  tabbing from the cost box to the vendor dropdown, or reaching for that row's own Duplicate
+   *  button, is not leaving the row and must not raise the question. */
+  function rowHasFocus(id) {
+    var row = document.querySelector('[data-item="' + id + '"]');
+    var here = document.activeElement;
+    return !!(row && here && row.contains && row.contains(here));
+  }
+
+  /** Put the caret back in the field a cancelled edit was typed into.
+   *
+   *  Re-queried rather than held as a node, because the Cancel path calls renderItems() first and
+   *  the input the estimator was in no longer exists by the time this runs. No .select(): they
+   *  just said "leave it as it was", so the value they get back should not be sitting there
+   *  highlighted and one keystroke from being wiped again. */
+  function refocusItemField(id, f) {
+    if (!f) return;
+    var el = document.querySelector('[data-item="' + id + '"] [data-f="' + f + '"]');
+    if (el && el.focus) el.focus();
+  }
+
+  // The round is over: the next keystroke on this row starts a new snapshot. Every exit from
+  // confirmItemPatch goes through here, so a path that returns early cannot leave a stale
+  // "before" for the next round to compare against — which is the shape the bypass had.
+  function endItemRound(id) {
+    delete itemBefore[id];
+    delete itemLastField[id];
+  }
+
+  /** Ask before an item's edits go to the server, and put them back if the answer is no.
+   *
+   *  Returns true to let the save proceed.
+   *
+   *  ON A NO, THE MODEL IS RESTORED AND THE PAGE REDRAWN. Without that the screen would keep
+   *  showing a value the server was never told about — a lie that outlives the dialog and is worse
+   *  than the accidental edit this exists to catch, because the next person to open the row reads
+   *  the wrong number with nothing marking it.
+   *
+   *  Compares against the snapshot rather than trusting the payload to be a change: patchSoon
+   *  MERGES fields across a quiet period, so a value typed and then typed back lands in the
+   *  payload identical to where it started. Asking about that would train the estimator to dismiss
+   *  the dialog, which is the failure mode that makes a confirmation worthless.
+   *
+   *  THE SNAPSHOT IS CONSUMED AFTER THE AWAIT, NOT BEFORE IT. Deleting it first is what let the
+   *  bypass through: anything that re-entered onItemEdit while the dialog was open found no
+   *  snapshot, took a fresh one off the already-edited model, and the next flush then compared
+   *  the rejected value against itself and sent it without asking. */
+  async function confirmItemPatch(id, payload) {
+    var before = itemBefore[id];
+    var it = itemOf(id);
+    if (!before || !it) { endItemRound(id); return true; }
+    var fields = Object.keys(payload).filter(function (f) {
+      return f !== "expected_updated_at" && shownValue(payload[f]) !== shownValue(before[f]);
+    });
+    // A no-op payload is still SENT — harmless, and an existing test pins it — but the snapshot
+    // has done its job and must not be left behind for the next round to compare against.
+    if (!fields.length) { endItemRound(id); return true; }
+    var lines = fields.map(function (f) {
+      return (ITEM_FIELD_LABELS[f] || f) + ":  " + shownValue(before[f]) + "  →  "
+        + shownValue(payload[f]);
+    });
+    var focusField = itemLastField[id] || fields[0];
+    // SET SYNCHRONOUSLY, BEFORE THE AWAIT. Everything that reads it — onItemEdit's guard and the
+    // flush's defer — runs on events that fire during the await, so setting it afterwards would
+    // set it too late to be worth having.
+    itemConfirmOpen = id;
+    var ok = false;
+    try {
+      ok = await TW.confirmDanger({
+        tone: "warn",
+        // Inline SVG, through the slot that takes markup: the shared default for the warn tone is
+        // a WASTEBASKET, which is the wrong thing to draw over "Save this change?". Sized for the
+        // 54px badge rather than the 16px row buttons, which is why it is written here instead of
+        // through icon().
+        iconSvg: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" ' +
+          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+          'aria-hidden="true" focusable="false"><path d="M12 20h9"></path>' +
+          '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
+        title: fields.length === 1 ? "Save this change?" : "Save these changes?",
+        name: before.name || it.name || "this item",
+        after: " is priced into every assembly that uses it, so this changes what those cost.",
+        detail: lines.join("\n"),
+        confirmText: "Save change",
+        cancelText: "Leave it as it was",
+        // A DIALOG THAT CANNOT BE ANSWERED BY ACCIDENT. See the block comment above
+        // ITEM_FIELD_LABELS: focusing a button is what fired the re-entrant `change`, and a
+        // backdrop click is how the next cell somebody reaches for would revert a deliberate edit.
+        focus: "container",
+        dismiss: "explicit",
+      });
+    } catch (err) {
+      // A DIALOG THAT BLEW UP IS A CANCEL, NOT A DROPPED WRITE. Letting this escape would leave
+      // itemConfirmOpen set for the rest of the session, and onItemEdit's guard would then
+      // swallow every keystroke on the page in silence.
+      ok = false;
+      say("Couldn't ask about that change, so it wasn't saved.");
+    } finally {
+      itemConfirmOpen = null;
+    }
+    endItemRound(id);
+    if (ok) return true;
+    Object.keys(before).forEach(function (k) {
+      if (SERVER_OWNED_ITEM_FIELDS.indexOf(k) === -1) it[k] = before[k];
+    });
+    // Purge this row's queue the way adoptConflict does, timer included. Nothing should be able to
+    // queue behind an open dialog any more — that is what the guard in onItemEdit is for — but a
+    // payload left here would go out on the next flush as an unasked-for save of the value that
+    // was just refused, which is the exact bug this function exists to prevent.
+    var key = "items:" + id;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    delete pendingPatch[key];
+    renderItems(); renderList(); renderPanel();
+    refocusItemField(id, focusField);
+    saving("");
+    return false;
+  }
+
   function patchSoon(kind, id, body) {
     var key = kind + ":" + id;
     if (body && Array.isArray(body.lines)) {
       body = Object.assign({}, body, { lines: body.lines.map(lineForSave) });
     }
     pendingPatch[key] = Object.assign(pendingPatch[key] || {}, body);
+    arm(kind, id, key);
+  }
+
+  // The debounce, on its own so the flush can re-arm itself when it decides to wait.
+  //
+  // The callback RETURNS the flush's promise. setTimeout throws it away, as it always has, but a
+  // driver that can await it then does — which is how the harness sequences a PATCH in flight
+  // against the next keystroke. The alternative was an async callback whose promise nothing could
+  // reach, which is what made a 409 scenario there pass while the second write went out anyway.
+  function arm(kind, id, key) {
     if (timers[key]) clearTimeout(timers[key]);
-    timers[key] = setTimeout(async function () {
-      var payload = pendingPatch[key];
-      delete pendingPatch[key];
-      // Nothing to send is not an error — a conflict repaint empties the buffer, and this used to
-      // throw on the missing payload BEFORE the try block, which turned a dropped write into an
-      // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
-      if (!payload) return;
-      // Declare the version being edited. A line change rewrites the WHOLE lines array, so
-      // without this two people with the same assembly open overwrite each other in silence:
-      // the second save replaces the first person's lines with a snapshot taken before they
-      // existed, and neither screen shows anything wrong.
-      if (kind === "assemblies") {
-        var known = byId(kind, id);
-        if (known && known.updated_at) payload.expected_updated_at = known.updated_at;
-      }
-      saving("Saving…");
-      try {
-        var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
-          { method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload) });
-        if (r.status === 409) {
-          var conflict = await r.json().catch(function () { return {}; });
-          adoptConflict(id, conflict.assembly);
-          say(conflict.error || "Somebody else changed this while you had it open.");
-          saving("Not saved");
-          return;
-        }
-        if (!r.ok) {
-          var j = await r.json().catch(function () { return {}; });
-          // Deliberately does NOT revert the field. Overwriting what somebody just typed while
-          // they are looking at it loses their work and hides the reason.
-          say(j.detail || j.error || "That change didn't save.");
-          saving("Not saved");
-          return;
-        }
-        // Adopt the new version stamp, or the NEXT save conflicts with our own write.
-        var saved = await r.json().catch(function () { return {}; });
-        var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit;
-        if (fresh && fresh.id) adoptSaved(kind, fresh);
-        say(""); saving("Saved");
-        setTimeout(function () { saving(""); }, 1200);
-      } catch (err) {
-        say("Couldn't reach the server. " + (err.message || ""));
+    timers[key] = setTimeout(function () { return flush(kind, id, key); }, 600);
+  }
+
+  /** Send one record's coalesced edits, or decide not to yet.
+   *
+   *  `now` is set by the focusout path, which knows focus has left the row and must not ask this
+   *  function to check for itself: during a `focusout` the browser has already blurred the old
+   *  element and has not yet focused the new one, so `document.activeElement` is the body and
+   *  reading it would answer the wrong question either way. */
+  async function flush(kind, id, key, now) {
+    var payload = pendingPatch[key];
+    // Nothing to send is not an error — a conflict repaint empties the buffer, and this used to
+    // throw on the missing payload BEFORE the try block, which turned a dropped write into an
+    // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
+    if (!payload) { delete timers[key]; return; }
+    if (kind === "items") {
+      // ONE DIALOG AT A TIME, ACROSS ALL ROWS — and across all QUESTIONS, not just this one.
+      //
+      // Two of these modals is one trapping the focus the other one needs, over a question that
+      // names neither row clearly. The second check catches what the first cannot: clicking a
+      // row's own Remove button leaves the focus INSIDE the row, so nothing flushes — and then
+      // THAT dialog focuses its Cancel button, which blurs the button and fires the focusout this
+      // page saves on. Without asking shared.js whether a modal is up, "Remove this material?"
+      // would get "Save this change?" stacked on top of it.
+      //
+      // Re-arm rather than drop: the edit is still on screen and still unsaved.
+      if (itemConfirmOpen) { arm(kind, id, key); return; }
+      if (TW.modalOpen && TW.modalOpen()) { arm(kind, id, key); return; }
+      // …and while the estimator is still working in the row, keep waiting. This is the timing
+      // Hanz asked for and the reason no `change` can re-enter the handler while the dialog is up.
+      if (!now && rowHasFocus(id)) { arm(kind, id, key); return; }
+    }
+    delete pendingPatch[key];
+    // Declare the version being edited. A line change rewrites the WHOLE lines array, so
+    // without this two people with the same assembly open overwrite each other in silence:
+    // the second save replaces the first person's lines with a snapshot taken before they
+    // existed, and neither screen shows anything wrong.
+    if (kind === "assemblies") {
+      var known = byId(kind, id);
+      if (known && known.updated_at) payload.expected_updated_at = known.updated_at;
+    }
+    // Items only. An assembly's lines are a takeoff somebody is actively building and a dialog
+    // per pause would be unusable; an item is reference data that other records are priced from,
+    // which is the whole distinction Hanz drew.
+    if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
+    saving("Saving…");
+    try {
+      var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
+        { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload) });
+      if (r.status === 409) {
+        var conflict = await r.json().catch(function () { return {}; });
+        adoptConflict(id, conflict.assembly);
+        say(conflict.error || "Somebody else changed this while you had it open.");
         saving("Not saved");
+        return;
       }
-    }, 600);
+      if (!r.ok) {
+        var j = await r.json().catch(function () { return {}; });
+        // Deliberately does NOT revert the field. Overwriting what somebody just typed while
+        // they are looking at it loses their work and hides the reason.
+        say(j.detail || j.error || "That change didn't save.");
+        saving("Not saved");
+        return;
+      }
+      // Adopt the new version stamp, or the NEXT save conflicts with our own write.
+      var saved = await r.json().catch(function () { return {}; });
+      var fresh = saved.assembly || saved.item || saved.vendor || saved.division || saved.unit;
+      if (fresh && fresh.id) adoptSaved(kind, fresh);
+      say(""); saving("Saved");
+      setTimeout(function () { saving(""); }, 1200);
+    } catch (err) {
+      say("Couldn't reach the server. " + (err.message || ""));
+      saving("Not saved");
+    }
+  }
+
+  /** Drop everything this page is still holding for an item that no longer exists.
+   *
+   *  A deleted row can have an edit queued and a timer armed, which is far more likely now the
+   *  save waits for the row to be left: typing a cost and then reaching for that row's Remove
+   *  button never leaves the row at all. Left alone, the timer fires after the delete and PATCHes
+   *  a dead id — a 404 and "That change didn't save." about a material the estimator has just
+   *  watched disappear. */
+  function forgetItem(id) {
+    var key = "items:" + id;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    delete pendingPatch[key];
+    endItemRound(id);
+  }
+
+  /** Send one item row's pending edits NOW, because focus has left it.
+   *
+   *  Disarms the debounce first. Leaving it armed would let it fire behind the dialog this flush
+   *  is about to open, which is a second flush of a payload that has already been taken — the
+   *  no-op it lands on is harmless, but the timer handle it leaves in `timers` is not, because the
+   *  Cancel path clears that handle to purge the row and would clear the wrong one. */
+  function flushItemRow(id) {
+    var key = "items:" + id;
+    if (!pendingPatch[key]) return;
+    clearTimeout(timers[key]);
+    delete timers[key];
+    return flush("items", id, key, true);
+  }
+
+  /** Focus left an item row → that row's edits go in, and get their one question.
+   *
+   *  `relatedTarget` is where the focus is GOING. Inside the same row it is still the same visit —
+   *  the cost box to the vendor dropdown, or that row's own Duplicate button — so nothing fires.
+   *  A null relatedTarget is a click on something unfocusable, which IS leaving. */
+  function onItemRowFocusOut(e) {
+    var row = e.target.closest && e.target.closest("[data-item]");
+    if (!row) return;
+    var to = e.relatedTarget;
+    if (to && row.contains && row.contains(to)) return;
+    return flushItemRow(row.getAttribute("data-item"));
   }
 
   async function post(kind, body) {
@@ -457,25 +762,131 @@
            "<div>Price " + priced + "</div></div>";
   }
 
+  /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
+   *
+   *  Mirrors `_item_key` in backend/library.py, which is what actually REFUSES a duplicate. It is
+   *  a mirror rather than the authority, and the two differ on one point worth knowing: Python's
+   *  str.isalnum() keeps accented letters, this drops them. That only ever makes the client more
+   *  cautious about a name than the server is, so the worst case is a copy numbered (3) when (2)
+   *  was free — never a name the client offers and the server then rejects. */
+  function nameKey(s) {
+    return String(s == null ? "" : s).toLowerCase().replace(/[\s\W_]+/g, "");
+  }
+
+  /** "Densifier" → "Densifier (2)", and a copy of that → "Densifier (3)".
+   *
+   *  HANZ'S FORMAT, 2026-08-25, and it diverges from the house one deliberately: `uniqueLabel` in
+   *  estimate-review.js produces "Densifier copy 2". He asked for the parenthesised form on this
+   *  page, the two lists never appear together, and following the wording he gave costs nothing.
+   *
+   *  Counts from 2, as uniqueLabel does — "(1)" reads as the first of a set and implies the
+   *  original was renamed too. The trailing "(n)" is stripped off the stem first, so duplicating a
+   *  copy gives "Densifier (3)" rather than "Densifier (2) (2)".
+   *
+   *  Collisions are checked through nameKey and not by exact string, because the server's block
+   *  strips punctuation: "Densifier(2)" and "Densifier (2)" are one name to it. A counter that
+   *  only avoided exact matches would hand back a name the save then refuses, which reads as the
+   *  Duplicate button being broken. */
+  function duplicateName(base) {
+    var stem = String(base == null ? "" : base).trim().replace(/\s*\(\d+\)$/, "").trim();
+    if (!stem) stem = "New material";
+    var taken = {};
+    ITEMS.forEach(function (x) { taken[nameKey(x.name)] = true; });
+    for (var n = 2; n <= 999; n++) {
+      var candidate = stem + " (" + n + ")";
+      if (!taken[nameKey(candidate)]) return candidate;
+    }
+    return stem + " (copy)";
+  }
+
+  /** Does anything on `list` already answer to this name, in the server's comparison form? */
+  function nameTaken(name, list) {
+    var k = nameKey(name);
+    return (list || []).some(function (x) { return nameKey(x && x.name) === k; });
+  }
+
+  /** The name "+ Add material" creates a row under.
+   *
+   *  It used to post the literal "New material" every time. `create_item` refuses a duplicate name
+   *  with a 400, so the SECOND press of that button was simply dead — "Couldn't add that material.
+   *  "New material" is already in the library." — with nothing on screen to suggest that the fix
+   *  was to go and rename the row from last time.
+   *
+   *  BARE STEM FIRST, and that is the whole reason this is not just a call to duplicateName:
+   *  that function counts from 2 and never offers the stem, which is right for a COPY (a copy of
+   *  "Densifier" must not also be called "Densifier") and wrong here, where the plain name is the
+   *  one the row wants. Once it is taken, the numbering is the same one the Duplicate button
+   *  uses, so the two never disagree about what a free name looks like. */
+  function newMaterialName(stem) {
+    var base = String(stem == null ? "" : stem).trim() || "New material";
+    return nameTaken(base, ITEMS) ? duplicateName(base) : base;
+  }
+
+  /** The same thing for the Administration tab, which carries the identical literal default
+   *  ("New vendor", "New division", "New unit") against the identical duplicate block.
+   *
+   *  Checked against that tab's OWN list: uniqueness is per table, so a material called
+   *  "New vendor" must not stop the Vendors tab from adding one. */
+  function newRefName(kind) {
+    var base = "New " + singular(kind);
+    var list = adminList(kind);
+    if (!nameTaken(base, list)) return base;
+    for (var n = 2; n <= 999; n++) {
+      if (!nameTaken(base + " (" + n + ")", list)) return base + " (" + n + ")";
+    }
+    return base + " (copy)";
+  }
+
   function renderItems() {
     var out = "";
-    for (var i = 0; i < ITEMS.length; i++) {
-      var it = ITEMS[i];
+    var shown = visibleItems();
+    for (var i = 0; i < shown.length; i++) {
+      var it = shown[i];
       out += '<tr data-item="' + esc(it.id) + '">' +
-        '<td><input data-f="name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials" style="width:100%;min-width:150px;">' +
+        '<td><input data-f="name" class="cell-name" value="' + esc(it.name) + '" aria-label="Material name, as the manufacturer names it" maxlength="200" list="dl-materials">' +
           dupeHtml(similarNames(it.name, it.id)) + "</td>" +
         "<td>" + divisionPick(it) + "</td>" +
-        '<td class="n"><input data-f="buy_qty" class="num" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase" style="width:64px;"></td>' +
-        "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' style="width:100%;min-width:96px;"') + "</td>" +
-        '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase" style="width:92px;"></span></td>' +
-        "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor",
-                      ' style="width:100%;min-width:130px;"') + "</td>" +
+        '<td class="n"><input data-f="buy_qty" class="num cell-qty" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase"></td>' +
+        "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' class="cell-unit"') + "</td>" +
+        '<td class="n"><span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span></td>' +
+        "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
-        '<td><button class="icon" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">🗑</button></td>' +
+        '<td class="rowact"><button class="icon" type="button" data-dupe-item="' + esc(it.id) + '" title="Make a copy of this material" aria-label="Duplicate ' + esc(it.name) + '">' + icon("copy") + "</button>" +
+          '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button></td>" +
       "</tr>";
     }
     $("items-body").innerHTML = out;
+    // Three states, not two: nothing in the library, nothing matching the search, and rows. The
+    // "No materials yet" panel offers an Add button, which is the wrong thing to offer somebody
+    // who has 40 materials and a typo in the search box.
+    // A FACET COUNTS AS FILTERING, not just the text box. The version of this line that read
+    // only itemQuery left the no-match panel hidden whenever the search box was empty, so
+    // narrowing to a division that nothing is filed under produced a blank table with the add
+    // row gone and nothing on screen saying why.
+    var filtering = anyFilterActive();
     $("items-empty").hidden = ITEMS.length > 0;
+    if ($("items-nomatch")) {
+      $("items-nomatch").hidden = !(filtering && ITEMS.length > 0 && shown.length === 0);
+    }
+    // The empty state names what it left out. "Nothing matches that" on its own makes the
+    // estimator reconstruct the query from three controls and a text box to find the one that
+    // went too far.
+    if ($("items-nomatch-why")) {
+      $("items-nomatch-why").textContent = filtering
+        ? "No materials " + filterSummary() + "." : "";
+    }
+    // THE ADD ROW IS THE NEXT ROW OF THE TABLE, so it belongs to the table having rows. Under
+    // "No materials yet" it would be the second Add button in one card, and under "Nothing
+    // matches that" it would answer a typo with an invitation to create the duplicate the search
+    // just failed to find — the same trap the two empty states were split apart to avoid.
+    if ($("items-addrow")) $("items-addrow").hidden = shown.length === 0;
+    if ($("item-hits")) {
+      $("item-hits").hidden = !filtering;
+      $("item-hits").textContent = filtering
+        ? shown.length + " of " + ITEMS.length + " shown" : "";
+    }
+    // The tab badge stays the TOTAL. It is how many materials Treadwell has, not how many are on
+    // screen right now, and a badge that moved as somebody typed would read as rows disappearing.
     $("n-items").textContent = ITEMS.length;
     // Feeds both the name field's own autosuggest and the assemblies' searchable picker.
     $("dl-materials").innerHTML = ITEMS.map(function (it) {
@@ -505,14 +916,14 @@
       var used = usageFor(kind, v.name);
       out += '<tr data-ref-kind="' + kind + '" data-ref-id="' + esc(v.id) + '">' +
         "<td>" + (ADMIN
-          ? '<input data-rf="name" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200" style="width:100%;min-width:170px;">'
+          ? '<input data-rf="name" class="cell-ref" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200">'
           : "<b>" + esc(v.name) + "</b>") + "</td>" +
         "<td>" + (ADMIN
-          ? '<input data-rf="notes" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000" style="width:100%;min-width:190px;">'
+          ? '<input data-rf="notes" class="cell-note" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000">'
           : esc(v.notes)) + "</td>" +
         '<td class="n">' + used + "</td>" +
-        "<td>" + (ADMIN
-          ? '<button class="icon" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">🗑</button>'
+        '<td class="rowact">' + (ADMIN
+          ? '<button class="icon danger" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">' + icon("trash") + "</button>"
           : "") + "</td>" +
       "</tr>";
     }
@@ -546,8 +957,11 @@
         "</span></button>";
     }
     $("asm-list").innerHTML = out;
-    $("asm-list").hidden = ASMS.length === 0;
-    $("asm-newrow").hidden = ASMS.length === 0;
+    // THE CARD, not the list inside it. "+ New assembly" is the rail's last row now — Hanz asked
+    // for it out of the page header, and the list it appends to is the only honest home for it —
+    // so hiding just the inner list would leave a create button alone in an empty box while the
+    // "No assemblies yet" panel offered a second one beside it.
+    $("asm-rail").hidden = ASMS.length === 0;
     $("n-asm").textContent = ASMS.length;
   }
 
@@ -561,15 +975,236 @@
    *
    *  Every word has to land somewhere, so "polished glaze" narrows instead of finding nothing:
    *  the fields are searched as one haystack, which is what "combination of those" asks for. */
+  /** What the Items tab is currently showing.
+   *
+   *  A PLAIN VARIABLE, never a field on an item, an assembly or anything else that gets
+   *  serialised. The dropdown filters deleted on 2026-08-19 kept their state on the line object,
+   *  so every debounced save shipped the estimator's filter to the server and `lineForSave` had to
+   *  strip `_`-prefixed keys to undo it. A filter is a view of the data, not part of it. */
+  var itemQuery = "";
+
+  /** The facets, and the same rule: A PLAIN VARIABLE, never a field on a record.
+   *
+   *  Kept on one line so library-ui-harness.js can lift the declaration verbatim rather than
+   *  restating a default shape that could drift from this one.
+   *
+   *  divisions is an array because a facet with one value is a dropdown; the question an
+   *  estimator actually asks is "epoxy OR gypsum", so it ORs within itself and ANDs against the
+   *  other two, which is what every faceted list does and what nobody has to be told. */
+  var FILTERS = { divisions: [], vendor: "", condition: "" };
+
+  /** Is the tab showing a subset? Text, facets, or both.
+   *
+   *  One predicate rather than four checks at four call sites: the hits count, the no-match
+   *  panel, the Clear button and visibleItems must agree about whether a filter is on, and the
+   *  version of this that only looked at the search box left the no-match panel hidden behind an
+   *  active facet, which is a blank table with nothing on screen saying why. */
+  function anyFilterActive() {
+    return !!String(itemQuery).trim() || FILTERS.divisions.length > 0 ||
+      !!FILTERS.vendor || !!FILTERS.condition;
+  }
+
+  /** Break a query into terms.
+   *
+   *  THE GRAMMAR, and it is deliberately small enough to guess at:
+   *
+   *      sherwin              a bare word: name, division or vendor
+   *      "opf primer"         a phrase, matched as one string
+   *      vendor:sherwin       scoped to one field
+   *      cost:>200            a number, with > < >= <= or plain equals
+   *      -epoxy               everything that does NOT match
+   *
+   *  Every term narrows. That is the rule the old matcher already followed and the one Hanz asked
+   *  for in the first place ("could be from name, divison or vendor or comibation of those"), so a
+   *  bare word behaves exactly as it did before this and the assembly picker inherits the rest.
+   *
+   *  A SCOPED TERM WITH NOTHING AFTER THE COLON IS NOT YET A TERM. Somebody typing vendor:s goes
+   *  through vendor: on the way, and blanking the table for one keystroke reads as the search
+   *  breaking. An unknown field name is NOT dropped, though: sku:x is searched as the literal
+   *  text "sku:x", which finds nothing and says so, rather than being quietly ignored and handing
+   *  back every row. */
+  function parseQuery(q) {
+    var out = [];
+    var toks = String(q == null ? "" : q).match(/-?(?:[a-z]+:)?"[^"]*"|\S+/gi) || [];
+    for (var i = 0; i < toks.length; i++) {
+      var tok = toks[i];
+      var neg = tok.charAt(0) === "-";
+      if (neg) tok = tok.slice(1);
+      var field = "", value = tok;
+      var colon = tok.indexOf(":");
+      if (colon > 0) {
+        var key = tok.slice(0, colon).toLowerCase();
+        var mapped =
+            (key === "name" || key === "material") ? "name"
+          : (key === "division" || key === "div") ? "divisions"
+          : (key === "vendor" || key === "supplier") ? "vendor"
+          : (key === "unit") ? "unit"
+          : (key === "cost" || key === "price") ? "unit_cost"
+          : (key === "pack" || key === "qty" || key === "buy") ? "buy_qty"
+          : "";
+        if (mapped) { field = mapped; value = tok.slice(colon + 1); }
+      }
+      value = value.replace(/^"/, "").replace(/"$/, "").trim();
+      if (!value) continue;
+      out.push({ neg: neg, field: field, value: value });
+    }
+    return out;
+  }
+
+  /** Does one term hit this material?
+   *
+   *  An unscoped term searches name, division and vendor as one string, which is the haystack the
+   *  previous matcher used and the reason "polished primer" narrows instead of finding nothing. */
+  function termHits(it, term) {
+    if (term.field === "unit_cost" || term.field === "buy_qty") {
+      return numberHits(it[term.field], term.value);
+    }
+    var hay = term.field === "name" ? String(it.name || "")
+      : term.field === "divisions" ? itemDivisions(it).join(" ")
+      : term.field === "vendor" ? String(it.vendor || "")
+      : term.field === "unit" ? String(it.unit || "")
+      : [String(it.name || ""), itemDivisions(it).join(" "), String(it.vendor || "")].join(" ");
+    return hay.toLowerCase().indexOf(term.value.toLowerCase()) !== -1;
+  }
+
+  /** cost:>200, pack:5, cost:<=99.99. A comma and a dollar sign are tolerated, because that is
+   *  how the number is written on the invoice being read from.
+   *
+   *  NONSENSE MATCHES NOTHING, NOT EVERYTHING. cost:abc cannot be true of any material, so it
+   *  returns false rather than being discarded: a discarded term hands back the whole list and
+   *  reads as the filter being ignored, which is the one behaviour a search must never have.
+   *  A material with no cost recorded fails every cost comparison for the same reason. Absent is
+   *  not zero, and treating it as zero would file it under cost:<1 as though somebody had priced
+   *  it at nothing. */
+  function numberHits(actual, expr) {
+    var m = /^(>=|<=|>|<|=)?\s*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)$/.exec(String(expr).trim());
+    if (!m) return false;
+    var want = Number(String(m[2]).replace(/,/g, ""));
+    var have = Number(actual);
+    if (!isFinite(want) || actual === null || actual === undefined || actual === "" ||
+        !isFinite(have)) return false;
+    var op = m[1] || "=";
+    return op === ">" ? have > want
+      : op === "<" ? have < want
+      : op === ">=" ? have >= want
+      : op === "<=" ? have <= want
+      : have === want;
+  }
+
+  /** The condition facet. Four states a material can be in that a price list cares about, every
+   *  one of them read off a column that already exists.
+   *
+   *  THIS IS THE FACET THAT EARNS THE BAR. Division and vendor only narrow what somebody could
+   *  already find by typing; these answer the question no search can, which is what in here is
+   *  not safe to price a bid from. A material with no cost prices every assembly built on it at
+   *  nothing, silently, and until now there was no way to go looking for one. */
+  function conditionHits(it, c) {
+    if (c === "no_cost") return !(Number(it.unit_cost) > 0);
+    if (c === "no_division") return itemDivisions(it).length === 0;
+    if (c === "no_vendor") return !String(it.vendor || "").trim();
+    if (c === "no_price_date") return !it.cost_updated_at;
+    return true;
+  }
+
+  function conditionPhrase(c) {
+    return c === "no_cost" ? "with no cost recorded"
+      : c === "no_division" ? "not filed under a division"
+      : c === "no_vendor" ? "with no vendor"
+      : c === "no_price_date" ? "whose price has never been recorded"
+      : "";
+  }
+
+  /** The facets, ANDed with each other and ORed within the division list. */
+  function matchesFilters(it) {
+    if (FILTERS.divisions.length) {
+      var mine = {};
+      itemDivisions(it).forEach(function (d) { mine[String(d).toLowerCase()] = true; });
+      var any = false;
+      for (var i = 0; i < FILTERS.divisions.length; i++) {
+        if (mine[String(FILTERS.divisions[i]).toLowerCase()]) { any = true; break; }
+      }
+      if (!any) return false;
+    }
+    if (FILTERS.vendor &&
+        String(it.vendor || "").toLowerCase() !== String(FILTERS.vendor).toLowerCase()) {
+      return false;
+    }
+    if (FILTERS.condition && !conditionHits(it, FILTERS.condition)) return false;
+    return true;
+  }
+
+  /** What is being filtered out, in a sentence, so the empty state can say it instead of leaving
+   *  the estimator to reconstruct it from three controls and a text box. */
+  function filterSummary() {
+    var bits = [];
+    var q = String(itemQuery).trim();
+    if (q) bits.push("matching " + JSON.stringify(q));
+    if (FILTERS.divisions.length) bits.push("in " + FILTERS.divisions.join(" or "));
+    if (FILTERS.vendor) bits.push("from " + FILTERS.vendor);
+    if (FILTERS.condition) bits.push(conditionPhrase(FILTERS.condition));
+    return bits.join(", ");
+  }
+
+  /** The materials the query and the facets leave, in the order they already had.
+   *
+   *  Reuses itemMatches, the same matcher the assembly picker searches with, so the two boxes on
+   *  this page cannot disagree about what "Sika primer" finds. The FACETS are this tab's alone: a
+   *  line picker silently narrowed by a bar on another tab would be a trap. */
+  function visibleItems() {
+    if (!anyFilterActive()) return ITEMS;
+    return ITEMS.filter(function (it) {
+      return matchesFilters(it) && itemMatches(it, itemQuery);
+    });
+  }
+
   function itemMatches(it, query) {
-    var words = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return true;
-    var hay = [String(it.name || ""), itemDivisions(it).join(" "), String(it.vendor || "")]
-      .join(" ").toLowerCase();
-    for (var i = 0; i < words.length; i++) {
-      if (hay.indexOf(words[i]) === -1) return false;
+    var terms = parseQuery(query);
+    for (var i = 0; i < terms.length; i++) {
+      var hit = termHits(it, terms[i]);
+      if (terms[i].neg ? hit : !hit) return false;
     }
     return true;
+  }
+
+  /** Fill the facet controls, and DO NOT REBUILD THEM UNLESS THE OFFERED VALUES CHANGED.
+   *
+   *  This is the whole answer to "the filter must survive a re-render". The controls live outside
+   *  #items-body, so renderItems, which replaces only that tbody, cannot reach them; and the
+   *  state itself lives in FILTERS and itemQuery rather than in the DOM, so nothing is read back
+   *  off a control that might have been rebuilt. What is left is this function, which paint()
+   *  calls on every edit and every save: rebuilding the chip strip there would throw away the
+   *  focus of anybody tabbing through it, so it compares the offered lists first and writes
+   *  markup only when an admin has actually added or renamed something.
+   *
+   *  When it does rebuild, it rebuilds FROM FILTERS, so a division that is switched on comes
+   *  back switched on. */
+  var filterBarSig = "";
+  function renderFilterBar() {
+    var names = divisionNames();
+    var vendors = vendorNames();
+    var sig = JSON.stringify([names, vendors]);
+    if (sig !== filterBarSig) {
+      filterBarSig = sig;
+      var on = {};
+      FILTERS.divisions.forEach(function (d) { on[String(d).toLowerCase()] = true; });
+      $("f-divisions").innerHTML = names.map(function (d) {
+        return '<label class="fchip" title="' + esc(d) + '">' +
+          '<input type="checkbox" data-fdiv="' + esc(d) + '" aria-label="' + esc(d) + '"' +
+          (on[String(d).toLowerCase()] ? " checked" : "") + ">" +
+          '<span class="fchip-f">' + esc(d) + "</span></label>";
+      }).join("");
+      $("f-vendor").innerHTML = '<option value="">Any vendor</option>' +
+        vendors.map(function (v) {
+          return '<option value="' + esc(v) + '"' +
+            (String(v).toLowerCase() === String(FILTERS.vendor).toLowerCase() ? " selected" : "") +
+            ">" + esc(v) + "</option>";
+        }).join("");
+    }
+    // Cheap every time, and safe on a control somebody has focused: setting a value it already
+    // holds is a no-op, where re-writing its markup would not be.
+    $("f-vendor").value = FILTERS.vendor;
+    $("f-condition").value = FILTERS.condition;
+    $("f-clear").hidden = !anyFilterActive();
   }
 
   function itemResultsHtml(line) {
@@ -659,8 +1294,12 @@
         costCell = '<div class="line-primary"><span class="qty">' + L.money(r.cost) + '</span></div><div class="calc mono">' +
                    esc(L.costWorking(r)) + "</div>";
       } else if (r.ok) {
-        qtyCell = '<span style="color:var(--ink-v)">—</span>';       // no area typed yet
-        costCell = '<span style="color:var(--ink-v)">—</span>';
+        qtyCell = '<span class="dash">—</span>';                     // no area typed yet
+        costCell = '<span class="dash">—</span>';
+      } else if (r.reason === "no_item") {
+        // The instruction, not a fault. Grey, and the row is NOT tinted below.
+        qtyCell = '<span class="unpicked">Pick a material</span>';
+        costCell = "—";
       } else if (r.reason === "missing_item") {
         qtyCell = '<span class="gone">Item removed</span>';
         costCell = "—";
@@ -678,7 +1317,11 @@
         costCell = '<div class="line-primary">' + costCell + "</div>";
       }
       var lineItem = itemOf(ln.item_id);
-      out += '<tr data-line="' + i + '"' + (r.ok ? "" : ' class="broken"') + ">" +
+      // An unfilled line is not tinted. This is the amber row refreshNumbers could clear only
+      // after an unrelated keystroke -- and `paint()` (which is what + line calls) never runs
+      // refreshNumbers at all, so it was the first thing the estimator saw.
+      out += '<tr data-line="' + i + '"' +
+        (r.ok || r.reason === "no_item" ? "" : ' class="broken"') + ">" +
         "<td>" + pickerFor(ln, i) +
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
@@ -690,13 +1333,16 @@
         '<td class="ru"><div class="line-primary"><input type="checkbox" data-lf="roundup"' +
           (ln.roundup === false ? "" : " checked") +
           ' aria-label="Round up to whole purchases"></div></td>' +
-        '<td class="n">' + qtyCell + "</td>" +
-        '<td class="n">' + costCell + "</td>" +
-        '<td><button class="icon" type="button" data-del-line="' + i + '" title="Remove this line" aria-label="Remove line">🗑</button></td>' +
+        // `derived` tints the two columns nobody types into, so the cells this page WORKS OUT
+        // read as a band apart from the ones that feed them. Tone only — the class carries a
+        // background and nothing else, because these are the numbers a bid is priced from.
+        '<td class="n derived">' + qtyCell + "</td>" +
+        '<td class="n derived">' + costCell + "</td>" +
+        '<td class="rowact"><button class="icon danger" type="button" data-del-line="' + i + '" title="Remove this line" aria-label="Remove line">' + icon("trash") + "</button></td>" +
       "</tr>";
     }
     if (!asm.lines.length) {
-      out = '<tr><td colspan="8" style="color:var(--ink-v);padding:22px;text-align:center;">' +
+      out = '<tr><td colspan="8" class="lines-empty">' +
             "No lines yet. Add one and search for an item.</td></tr>";
     }
     $("lines-body").innerHTML = out;
@@ -706,7 +1352,12 @@
     $("t-unit").textContent = p.per_unit == null ? "—" : L.perUnit(p.per_unit);
   }
 
-  function paint() { renderItems(); renderVendors(); renderList(); renderPanel(); }
+  // renderFilterBar is in here rather than inside renderItems on purpose: it must run when the
+  // OFFERED values change (an admin adds a division, a new vendor appears on a material) and it
+  // must not run on every keystroke of a search. It is cheap and self-guarding either way.
+  function paint() {
+    renderItems(); renderFilterBar(); renderVendors(); renderList(); renderPanel();
+  }
 
   // ── view switch ────────────────────────────────────────────────────────────
   var PANES = ["items", "asm", "vendors"];
@@ -741,12 +1392,32 @@
   // the thing needing defending.
   var NUMERIC_ITEM_FIELDS = ["unit_cost", "coverage", "buy_qty"];
   function onItemEdit(e) {
+    // NOTHING GETS IN WHILE A CONFIRMATION IS ON SCREEN. The modal overlay traps every real
+    // keystroke and click, so the only event that can arrive here in that window is one the dialog
+    // provoked itself: focusing anything blurs whatever the estimator was typing in, and a blurred
+    // input with an uncommitted value fires `change` — which is bound to this handler. That
+    // re-entry is how a cancelled edit used to reach the database. See the block comment above
+    // ITEM_FIELD_LABELS for the full sequence.
+    //
+    // AND IT CANNOT LOSE AN EDIT, because `input` fires first and has already put the value in the
+    // model and the queue: the `change` this discards is the same value a second time. The one
+    // theoretical exception is a <select> in a DIFFERENT row being committed in the instant a
+    // deferred dialog goes up, in a browser that reports `change` without `input` — narrow enough
+    // to name here rather than to complicate this guard for.
+    if (itemConfirmOpen) return;
     var f = e.target.getAttribute && e.target.getAttribute("data-f");
     if (!f) return;
     var row = e.target.closest("[data-item]");
     if (!row) return;
     var it = itemOf(row.getAttribute("data-item"));
     if (!it) return;
+    // BEFORE the model is touched, and before the divisions branch below returns early — this is
+    // what Cancel puts back and what the dialog quotes. No-op after the first keystroke of a
+    // round, so a row typed into for ten seconds still remembers where it started.
+    rememberItem(it);
+    // Where the caret was, so a Cancel can put it back. Overwritten on every edit: the field they
+    // were last in is the one they will want to correct.
+    itemLastField[it.id] = f;
     if (f === "divisions") {
       var vals = Array.from(row.querySelectorAll('input[data-f="divisions"]:checked'))
         .map(function (x) { return x.getAttribute("data-div"); })
@@ -774,8 +1445,95 @@
   // Both events: a text input reports `input`, and a <select> is only guaranteed to report
   // `change`. The handler is idempotent and the PATCH is debounced, so a browser firing both
   // costs one write either way.
+  // The search box lives OUTSIDE #items-body, so it needs its own listener — and it must not go
+  // through onItemEdit, which would look for a data-f attribute, find none, and return anyway.
+  // Re-rendering on every keystroke is safe here in a way it is not inside the table: the query
+  // input is not one of the rows being replaced, so it keeps its focus and its caret.
+  if ($("item-q")) {
+    $("item-q").addEventListener("input", function (e) {
+      itemQuery = e.target.value;
+      renderItems();
+      // Only the Clear button's visibility depends on the text, and it lives outside the tbody,
+      // so this is a two-property sync rather than a rebuild. renderFilterBar guards its own
+      // markup write, so calling it per keystroke cannot cost the caret.
+      renderFilterBar();
+    });
+    // CLEARABLE WITHOUT A MOUSE. type="search" gets a native clear affordance in Chromium but it
+    // is a mouse target, and Escape is not wired to it consistently across browsers. This is one
+    // line and it is the same key that closes the item picker two tables over, so the page
+    // answers Escape the same way twice.
+    $("item-q").addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !String(itemQuery).trim()) return;
+      e.preventDefault();
+      itemQuery = "";
+      e.target.value = "";
+      renderItems();
+      renderFilterBar();
+    });
+  }
+
+  // ── the facets ────────────────────────────────────────────────────────────
+  // Bound to the CONTAINERS, which are never re-rendered by renderItems, rather than to the
+  // controls, which renderFilterBar can replace when an admin adds a division. A listener on a
+  // replaced element goes with it, silently, and the facet stops working with nothing on screen
+  // to show for it.
+  if ($("f-divisions")) {
+    $("f-divisions").addEventListener("change", function (e) {
+      if (!e.target.getAttribute || !e.target.getAttribute("data-fdiv")) return;
+      // Read back off the DOM rather than pushing and splicing, so the model cannot drift from
+      // the boxes: whatever is ticked IS the filter.
+      FILTERS.divisions = Array.prototype.slice
+        .call(this.querySelectorAll("input[data-fdiv]:checked"))
+        .map(function (x) { return x.getAttribute("data-fdiv"); })
+        .filter(Boolean);
+      renderItems();
+      renderFilterBar();
+    });
+  }
+  if ($("f-vendor")) {
+    $("f-vendor").addEventListener("change", function (e) {
+      FILTERS.vendor = e.target.value;
+      renderItems();
+      renderFilterBar();
+    });
+  }
+  if ($("f-condition")) {
+    $("f-condition").addEventListener("change", function (e) {
+      FILTERS.condition = e.target.value;
+      renderItems();
+      renderFilterBar();
+    });
+  }
+
+  /** Put the tab back to showing everything.
+   *
+   *  Reachable from two places on purpose: the bar, where somebody who can see the controls looks
+   *  for it, and the empty state, where somebody staring at no rows looks for it. Both carry
+   *  data-clear-filters so one handler serves them and neither can drift.
+   *
+   *  The chips are unticked in the DOM as well as in FILTERS. renderFilterBar only rewrites that
+   *  markup when the offered list changes, which this is not, so clearing the model alone would
+   *  leave three ticked chips over an unfiltered table. */
+  function clearFilters() {
+    itemQuery = "";
+    FILTERS.divisions = [];
+    FILTERS.vendor = "";
+    FILTERS.condition = "";
+    if ($("item-q")) $("item-q").value = "";
+    var boxes = $("f-divisions") ? $("f-divisions").querySelectorAll("input[data-fdiv]") : [];
+    for (var i = 0; i < boxes.length; i++) boxes[i].checked = false;
+    renderItems();
+    renderFilterBar();
+    // Focus goes to the search box, which is where the next thing they type belongs, and it means
+    // clearing from the empty state does not leave focus on a button that just vanished.
+    if ($("item-q")) $("item-q").focus();
+  }
+
   $("items-body").addEventListener("input", onItemEdit);
   $("items-body").addEventListener("change", onItemEdit);
+  // …and the event that actually triggers the save. `focusout` and not `blur`, because blur does
+  // not bubble and this is one listener on a tbody whose rows are replaced on every render.
+  $("items-body").addEventListener("focusout", onItemRowFocusOut);
 
   // ── administration ────────────────────────────────────────────────────────
   // Writes are admin-only on the server too (`_require_admin`). The read-only render is what keeps
@@ -924,6 +1682,10 @@
       if (!r) continue;
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
+      // The pricing core tells them apart now (reason "no_item" vs "missing_item"), so this no
+      // longer re-derives it from the line. One source of truth: renderPanel, renderList and the
+      // Polish page all read the same distinction.
+      var neverPicked = r.reason === "no_item";
       if (r.ok && r.priced) {
         tds[QTY_TD].innerHTML = '<div class="line-primary"><span class="qty">' + esc(L.qtyLabel(r)) +
                            '</span></div><div class="calc mono">' + esc(L.explain(r, area)) + "</div>";
@@ -932,8 +1694,10 @@
         rows[i].classList.remove("broken");
       } else {
         tds[QTY_TD].innerHTML = r.ok
-          ? '<span style="color:var(--ink-v)">—</span>'
-          : '<span class="gone">' + (r.reason === "missing_item" ? "Item removed"
+          ? '<span class="dash">—</span>'
+          : '<span class="' + (neverPicked ? "unpicked" : "gone") + '">'
+            + (neverPicked ? "Pick a material"
+              : r.reason === "missing_item" ? "Item removed"
               : r.reason === "no_coverage" ? "Needs a coverage" : "Needs a cost") + "</span>";
         tds[COST_TD].innerHTML = "—";
         if (tds[QTY_TD].innerHTML.indexOf("line-primary") === -1) {
@@ -942,7 +1706,7 @@
         if (tds[COST_TD].innerHTML.indexOf("line-primary") === -1) {
           tds[COST_TD].innerHTML = '<div class="line-primary">' + tds[COST_TD].innerHTML + "</div>";
         }
-        rows[i].classList.toggle("broken", !r.ok);
+        rows[i].classList.toggle("broken", !r.ok && !neverPicked);
       }
     }
     $("t-total").textContent = p.priced_lines > 0 ? L.money(p.total) : "—";
@@ -951,6 +1715,9 @@
 
   document.addEventListener("click", async function (e) {
     var t = e.target;
+
+    // Both the bar's button and the empty state's, one handler.
+    if (t.closest && t.closest("[data-clear-filters]")) { clearFilters(); return; }
 
     var open = t.closest && t.closest("[data-open]");
     if (open) { openId = open.getAttribute("data-open"); paint(); return; }
@@ -974,7 +1741,8 @@
 
     if (t.closest && t.closest("[data-add-item]")) {
       try {
-        var j = await post("items", { name: "New material", unit: "Gallon", buy_qty: 1 });
+        var j = await post("items",
+          { name: newMaterialName("New material"), unit: "Gallon", buy_qty: 1 });
         ITEMS.push(j.item);
         ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
         showView("items"); paint();
@@ -984,7 +1752,41 @@
       return;
     }
 
-    var di = t.getAttribute && t.getAttribute("data-del-item");
+    // THROUGH closest(), NOT off the clicked element. These controls hold an inline SVG now, so
+    // a press can land on the <svg> or one of its <path>s — none of which carry the attribute.
+    // Reading it off e.target would make the button dead over most of its own area. The
+    // pointer-events rule on `.icon svg` also prevents it; this is the half that survives
+    // somebody tidying the stylesheet.
+    var dupBtn = t.closest && t.closest("[data-dupe-item]");
+    var dup = dupBtn && dupBtn.getAttribute("data-dupe-item");
+    if (dup) {
+      var src = itemOf(dup);
+      if (!src) return;
+      try {
+        // Every priced field comes across. A copy that dropped the cost or the pack size would be
+        // a row that looks finished and prices at nothing, which is the failure this button is
+        // meant to save people from by hand-typing.
+        var copy = await post("items", {
+          name: duplicateName(src.name),
+          unit: src.unit || "",
+          buy_qty: src.buy_qty,
+          unit_cost: src.unit_cost,
+          vendor: src.vendor || "",
+          divisions: itemDivisions(src),
+        });
+        ITEMS.push(copy.item);
+        ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        showView("items"); paint();
+        // Focused and selected, like the Add button does: the name is the one field a copy always
+        // needs changing, and "(2)" is a placeholder rather than an answer.
+        var nf = $("items-body").querySelector('[data-item="' + copy.item.id + '"] input[data-f="name"]');
+        if (nf) { nf.focus(); nf.select(); }
+      } catch (err) { say("Couldn't copy that material. " + err.message); }
+      return;
+    }
+
+    var delBtn = t.closest && t.closest("[data-del-item]");
+    var di = delBtn && delBtn.getAttribute("data-del-item");
     if (di) {
       var it = itemOf(di);
       var used = ASMS.filter(function (a) {
@@ -1007,13 +1809,18 @@
       if (!ok) return;
       try {
         await del("items", di);
+        // Before the model loses the row, so a queued edit cannot fire a PATCH at a dead id.
+        forgetItem(di);
         ITEMS = ITEMS.filter(function (x) { return x.id !== di; });
         paint();
       } catch (err) { say("Couldn't remove that material. " + err.message); }
       return;
     }
 
-    if (t.id === "asm-new" || t.id === "asm-new-2") {
+    // asm-new-top is gone: the create control that used to sit in the page header now lives at
+    // the foot of the assembly rail, which is the list it appends to.
+    var newAsm = t.closest && t.closest("#asm-new, #asm-new-2");
+    if (newAsm) {
       try {
         var a = await post("assemblies", { name: "New assembly", unit: "SF" });
         ASMS.push(a.assembly);
@@ -1024,25 +1831,31 @@
       return;
     }
 
-    if (t.id === "add-line") {
+    if (t.closest && t.closest("#add-line")) {
       var asm = current();
       if (!asm) return;
-      var first = ITEMS[0];
-      // 5% and rounding up are the defaults Hanz asked for, and they are set HERE as well as
-      // read-shaped server-side, so the row shows the same numbers it will be saved with.
-      asm.lines.push({ role: "", item_id: first ? first.id : "",
-                       coverage: first ? first.coverage : null,
+      // BLANK, not pre-filled with ITEMS[0]. That was whichever material sorts first
+      // alphabetically, carried in with its coverage — a real material, on a line nobody chose,
+      // pricing real money if it was left there. Hanz, 2026-08-25: the line should start empty.
+      asm.lines.push({ role: "", item_id: "", coverage: null,
+                       // 5% and rounding up are the defaults he asked for, set HERE as well as
+                       // read-shaped server-side so the row shows the numbers it will save with.
                        waste_pct: 5, roundup: true, note: "" });
+      // NOT SAVED YET, and that is the second half of the answer. `_clean_lines` on the server
+      // DROPS a line with no item_id, so a PATCH here would report success and the line would be
+      // gone on the next load, with nothing to explain it. The line becomes data on the first
+      // pick, which is also the moment it becomes worth saving.
+      pickerOpen = asm.lines.length - 1;
       paint();
-      patchSoon("assemblies", asm.id, { lines: asm.lines });
       return;
     }
 
-    var addRef = t.getAttribute && t.getAttribute("data-add-ref");
+    var addRefBtn = t.closest && t.closest("[data-add-ref]");
+    var addRef = addRefBtn && addRefBtn.getAttribute("data-add-ref");
     if (addRef) {
       try {
         var one = singular(addRef);
-        var made = await post(addRef, { name: "New " + one });
+        var made = await post(addRef, { name: newRefName(addRef) });
         var row = made[one];
         adminList(addRef).push(row);
         adminList(addRef).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
@@ -1058,9 +1871,10 @@
       return;
     }
 
-    var delRef = t.getAttribute && t.getAttribute("data-del-ref");
+    var delRefBtn = t.closest && t.closest("[data-del-ref]");
+    var delRef = delRefBtn && delRefBtn.getAttribute("data-del-ref");
     if (delRef) {
-      var rid = t.getAttribute("data-ref-id");
+      var rid = delRefBtn.getAttribute("data-ref-id");
       var listRef = adminList(delRef);
       var refRow = null;
       for (var ri = 0; ri < listRef.length; ri++) if (listRef[ri].id === rid) refRow = listRef[ri];
@@ -1095,7 +1909,7 @@
 
     if (t.id === "vendor-add" || t.id === "vendor-add-first") {
       try {
-        var nv = await post("vendors", { name: "New vendor" });
+        var nv = await post("vendors", { name: newRefName("vendors") });
         VENDORS.push(nv.vendor);
         VENDORS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
         showView("vendors"); paint();
@@ -1110,7 +1924,8 @@
       return;
     }
 
-    var dv = t.getAttribute && t.getAttribute("data-del-vendor");
+    var delVenBtn = t.closest && t.closest("[data-del-vendor]");
+    var dv = delVenBtn && delVenBtn.getAttribute("data-del-vendor");
     if (dv) {
       var ven = null;
       for (var vi = 0; vi < VENDORS.length; vi++) if (VENDORS[vi].id === dv) ven = VENDORS[vi];
@@ -1135,7 +1950,7 @@
       return;
     }
 
-    if (t.id === "asm-del") {
+    if (t.closest && t.closest("#asm-del")) {
       var cur = current();
       if (!cur) return;
       var yes = await TW.confirmDanger({
@@ -1155,10 +1970,11 @@
       return;
     }
 
-    if (t.hasAttribute && t.hasAttribute("data-del-line")) {
+    var delLineBtn = t.closest && t.closest("[data-del-line]");
+    if (delLineBtn) {
       var owner = current();
       if (!owner) return;
-      owner.lines.splice(Number(t.getAttribute("data-del-line")), 1);
+      owner.lines.splice(Number(delLineBtn.getAttribute("data-del-line")), 1);
       paint();
       patchSoon("assemblies", owner.id, { lines: owner.lines });
     }
