@@ -329,6 +329,53 @@
     .searchbox svg { position:absolute; left:9px; color:var(--ink-v); pointer-events:none; }
     .itemsearch input { width:100%; padding-left:31px; }
     .itemsearch .hits { color:var(--ink-v); font-size:12px; font-variant-numeric:tabular-nums; }
+
+    /* ── THE FILTER BAR ───────────────────────────────────────────────────
+       NOT A CARD, and deliberately. This page already draws four boxes with a fill and a border
+       and it does not need a fifth; the bar is a spacing container over the table it narrows, and
+       the table's own card provides the edge below it. Everything in here is vocabulary that was
+       already on the page: the search box, .btn.ghost.sm, the muted prose of .paneintro and
+       .foot, and the chip shape from the Division cell. */
+    .filterbar { margin:0 0 12px; display:grid; gap:8px; }
+    /* The search row carried its own bottom margin from when it stood alone above the
+       table. Inside the bar the grid gap already separates it, and the two together read
+       as the tips line drifting away from the box it describes. */
+    .filterbar .itemsearch { margin:0; }
+    .searchtips { margin:0; color:var(--ink-v); font-size:11.5px; max-width:86ch; }
+    .searchtips code { font:600 11px var(--mono); background:var(--surf-low);
+      border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:1px 5px;
+      color:var(--ink); white-space:nowrap; }
+    .facets { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+    .facet { display:inline-flex; align-items:center; gap:8px; }
+    .flabel { font:700 10px var(--ui); letter-spacing:.06em; text-transform:uppercase;
+      color:var(--ink-v); white-space:nowrap; }
+    .facets select { font-size:12.5px; padding:5px 8px; }
+    .fchips { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
+
+    /* THE SAME SHAPE AS THE DIVISION CELL'S CHIPS, IN A DIFFERENT COLOUR, and the colour is the
+       whole point. A .dchip in the table is green and claims that a material IS in that division.
+       An .fchip here asks to be shown only that division. Same interaction, so it wants the same
+       affordance; a different claim, so it must not wear the same green. It takes the page's red
+       tint instead, which is what everything else selected here uses - .arow[aria-current] and
+       .item-result[aria-pressed] both already do.
+
+       No tick or plus mark on this one. The .dchip carries a shape-changing mark because colour
+       alone cannot be the only signal for a value stored on a record. Here the chip is not
+       carrying that weight on its own either: the hits count and the Clear button appear beside
+       it the moment anything is on, and both of those are words. */
+    .fchip { position:relative; display:inline-flex; max-width:100%; cursor:pointer; }
+    .fchip > input { position:absolute; width:1px; height:1px; margin:0; padding:0; border:0;
+      clip-path:inset(50%); overflow:hidden; white-space:nowrap; }
+    .fchip-f { display:inline-flex; align-items:center; max-width:24ch;
+      border:1px solid var(--line); border-radius:999px; padding:3px 10px;
+      background:var(--card); color:var(--ink-v); font:600 11.5px/1.55 var(--ui);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      transition:background .12s ease, color .12s ease, border-color .12s ease; }
+    .fchip:hover .fchip-f { border-color:var(--red); color:var(--red-dark); }
+    .fchip > input:checked + .fchip-f { background:var(--red-tint); color:var(--red-dark);
+      border-color:rgba(158,0,31,.35); }
+    .fchip > input:focus-visible + .fchip-f { outline:2px solid var(--red); outline-offset:2px; }
+
     .admin-grid { display:grid; gap:18px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
 
@@ -342,6 +389,10 @@
     .span-all { grid-column:1/-1; }
     .empty h3 { color:var(--ink); font-size:15px; margin:0 0 6px; }
     .empty p { margin:0 auto 14px; max-width:48ch; font-size:13px; }
+    /* The no-match panel's first paragraph is written by renderItems and is empty until
+       something is actually filtered, so it must not hold 14px open while it says
+       nothing. */
+    .empty p:empty { display:none; }
     .foot { color:var(--ink-v); font-size:12px; margin-top:20px; max-width:76ch; }
     [hidden] { display:none !important; }
     .saving { color:var(--ink-v); font-size:11.5px; }
@@ -385,18 +436,57 @@
         <b>5</b> · <b>Gallon</b>, priced as the pail.</p>
       <!-- ONE search box, and no dropdowns beside it. Division and vendor dropdown filters existed
            in the assembly picker and were deleted on 2026-08-19 for three reasons that all still
-           hold here: they made every row tall, Hanz asked for one matcher "not two dropdowns", and
-           their state lived on the line object so it was being PERSISTED to the server on every
-           save. This box's query is a plain variable that nothing serialises. -->
-      <div class="itemsearch">
-        <span class="searchbox">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
-               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
-          <input id="item-q" type="search" placeholder="Search materials, divisions or vendors"
-                 aria-label="Search materials" autocomplete="off" />
-        </span>
-        <span class="hits" id="item-hits" hidden></span>
+           hold there: they made every row tall, Hanz asked for one matcher "not two dropdowns",
+           and their state lived on the line object so it was being PERSISTED to the server on
+           every save.
+
+           THE FACETS BELOW ARE NOT THAT. They sit on the TAB, not in a row, so they cost no row
+           height; their state is a plain variable that nothing serialises; and they answer
+           questions the matcher cannot, which is the test the deleted dropdowns failed. -->
+      <div class="filterbar">
+        <div class="itemsearch">
+          <span class="searchbox">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                 focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+            <input id="item-q" type="search" placeholder="Search materials, divisions or vendors"
+                   aria-label="Search materials" aria-describedby="search-tips"
+                   autocomplete="off" />
+          </span>
+          <span class="hits" id="item-hits" hidden></span>
+        </div>
+        <!-- The syntax, said once, in the muted prose voice the rest of the page explains itself
+             in. An advanced search nobody is told the grammar of is a secret, and a tooltip on a
+             search box is not where anybody looks for one. -->
+        <p class="searchtips" id="search-tips">Narrow it: <code>vendor:sherwin</code>,
+          <code>cost:&gt;200</code>, <code>pack:5</code>, <code>"opf primer"</code> for the whole
+          phrase, or <code>-epoxy</code> to leave something out. Terms stack.</p>
+        <div class="facets">
+          <span class="facet">
+            <span class="flabel" id="f-div-label">Division</span>
+            <span class="fchips" id="f-divisions" role="group"
+                  aria-labelledby="f-div-label"></span>
+          </span>
+          <span class="facet">
+            <label class="flabel" for="f-vendor">Vendor</label>
+            <select id="f-vendor"><option value="">Any vendor</option></select>
+          </span>
+          <span class="facet">
+            <label class="flabel" for="f-condition">Condition</label>
+            <!-- Read off columns that already exist. There is no waste factor or Roundup? here
+                 because neither is a property of a material: they belong to an assembly LINE
+                 (_clean_lines in backend/library.py), so this tab has no such value to filter on. -->
+            <select id="f-condition">
+              <option value="">Any condition</option>
+              <option value="no_cost">Missing a cost</option>
+              <option value="no_division">Not in any division</option>
+              <option value="no_vendor">No vendor</option>
+              <option value="no_price_date">Price never recorded</option>
+            </select>
+          </span>
+          <button class="btn ghost sm" type="button" id="f-clear" data-clear-filters hidden>
+            Clear filters</button>
+        </div>
       </div>
       <div class="card">
         <div class="tw">
@@ -413,8 +503,9 @@
         </div>
         <div id="items-nomatch" class="empty" hidden>
           <h3>Nothing matches that</h3>
-          <p>Every word has to appear somewhere in the material's name, its divisions or its
-            vendor. Try fewer words.</p>
+          <p id="items-nomatch-why"></p>
+          <p>Every term has to land somewhere. Try fewer of them, or drop a facet.</p>
+          <button class="btn ghost" type="button" data-clear-filters>Clear filters</button>
         </div>
         <div id="items-empty" class="empty" hidden>
           <h3>No materials yet</h3>
