@@ -1486,8 +1486,232 @@
     $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
   });
 
+  // ── add from library: the modal ────────────────────────────────────────────
+  // The DECISIONS are the four pure functions above; this is wiring, and it is kept apart from them
+  // on purpose. The test harness's DOM stub cannot open a dialog, move focus or tick a checkbox, so
+  // anything that lives only here is verified in a browser instead — the same split this file
+  // already accepts for confirmDanger.
+  var BULK = { open: false, q: "", picked: {}, shown: [], against: null,
+               F: { divisions: [], vendor: "", condition: "" } };
+
+  function bulkShow(on) {
+    BULK.open = !!on;
+    $("bulk-ov").hidden = !on;
+    // The class the shared stylesheet fades in with. Set after `hidden` clears so the transition
+    // has a frame to run in.
+    if (on) $("bulk-ov").classList.add("tw-in");
+    else $("bulk-ov").classList.remove("tw-in");
+  }
+
+  function bulkClose() {
+    bulkShow(false);
+    BULK.picked = {}; BULK.q = ""; BULK.against = null;
+    BULK.F = { divisions: [], vendor: "", condition: "" };
+    // Back to the control that opened it, which is where the keyboard expects to be.
+    var back = $("bulk-open");
+    if (back) back.focus();
+  }
+
+  function bulkOpen() {
+    // A confirm dialog can stack on top of this one — `flush`'s modal gate only covers item saves,
+    // and shared.js's counter cannot see an overlay it did not create. Refusing to open on top of a
+    // question is cheaper than fighting over the focus trap.
+    if (TW.modalOpen && TW.modalOpen()) { say("Answer the question on screen first."); return; }
+    var asm = current();
+    if (!asm) return;
+    // HELD AS AN IDENTITY TOKEN AND NOTHING ELSE. `adoptConflict` replaces ASMS[i] wholesale on a
+    // 409, so comparing identity at Add time is what catches "the assembly moved underneath you".
+    // Mutating through this reference would push pre-conflict lines back and undo the very thing
+    // the conflict machinery protected.
+    BULK.against = asm;
+    BULK.picked = {}; BULK.q = "";
+    BULK.F = { divisions: [], vendor: "", condition: "" };
+    $("bulk-q").value = "";
+    $("bulk-sub").textContent = 'Tick what this assembly uses. Added to "' + asm.name + '".';
+    bulkFilters();
+    bulkPaint();
+    bulkShow(true);
+    $("bulk-q").focus();
+  }
+
+  /** The modal's own facet controls, built from the same offered lists the Items tab uses. */
+  function bulkFilters() {
+    $("bulk-divisions").innerHTML = divisionNames().map(function (d) {
+      return '<label class="fchip" title="' + esc(d) + '">' +
+        '<input type="checkbox" data-bdiv="' + esc(d) + '" aria-label="' + esc(d) + '">' +
+        '<span class="fchip-f">' + esc(d) + "</span></label>";
+    }).join("");
+    $("bulk-vendor").innerHTML = '<option value="">Any vendor</option>' +
+      vendorNames().map(function (v) {
+        return '<option value="' + esc(v) + '">' + esc(v) + "</option>";
+      }).join("");
+  }
+
+  function bulkPaint() {
+    var asm = current();
+    // Materials already on this assembly are shown but not tickable: hiding them would make the
+    // list a puzzle about which materials went missing, and a second line for the same material is
+    // a second charge for it.
+    var already = {};
+    ((asm && asm.lines) || []).forEach(function (ln) { if (ln.item_id) already[ln.item_id] = true; });
+
+    var list = bulkCandidates(ITEMS, BULK.q, BULK.F);
+    BULK.shown = list.map(function (it) { return it.id; });
+
+    $("bulk-list").innerHTML = list.map(function (it) {
+      var on = !!already[it.id];
+      var divs = itemDivisions(it).join(", ") || "No division";
+      var vendor = it.vendor || "No vendor";
+      return '<label class="bulk-row' + (on ? " on" : "") + '">' +
+        '<input type="checkbox" data-bpick="' + esc(it.id) + '"' +
+          (on ? " disabled" : (BULK.picked[it.id] ? " checked" : "")) + ">" +
+        '<span class="bulk-box"></span>' +
+        '<span class="bulk-nm"><b>' + esc(it.name) + "</b><span>" +
+          esc(divs) + " &middot; " + esc(vendor) + "</span></span>" +
+        (on ? '<span class="bulk-in">On this assembly</span>'
+            : '<span class="bulk-cost">' + esc(orderAmount(it)) + "</span>") +
+        "</label>";
+    }).join("");
+
+    var none = !list.length;
+    $("bulk-none").hidden = !none;
+    if (none) {
+      $("bulk-none").textContent = ITEMS.length
+        ? "Nothing in the library matches that. Try fewer words, or clear a facet."
+        : "The library has no materials yet. Add some on the Items tab first.";
+    }
+
+    // Tickable ids only, so "select all" cannot claim to have ticked a disabled row.
+    var pickable = BULK.shown.filter(function (id) { return !already[id]; });
+    var state = bulkSelectAllState(pickable, BULK.picked);
+    var master = $("bulk-master");
+    master.checked = state === "all";
+    master.indeterminate = state === "some";
+    master.disabled = !pickable.length;
+    $("bulk-master-l").textContent = state === "all" && pickable.length ? "Clear all" : "Select all";
+
+    var n = bulkPickedIds().length;
+    var room = bulkAddRoom(asm, n);
+    var count = $("bulk-count");
+    count.classList.toggle("over", !room.fits);
+    if (!room.fits) {
+      // Names the number, because "too many" leaves the estimator counting rows.
+      count.textContent = "Untick " + room.over + " — this assembly holds " + room.max +
+                          " lines and " + room.used + " are used.";
+    } else {
+      count.textContent = n ? n + " selected · " + room.used + " of " + room.max + " lines used"
+                            : room.used + " of " + room.max + " lines used";
+    }
+    var add = $("bulk-add");
+    add.disabled = !n || !room.fits;
+    add.textContent = n ? "Add " + n + " material" + (n === 1 ? "" : "s") : "Add";
+  }
+
+  /** The ticked ids, in the order the library holds them — so the lines land in a predictable
+   *  order rather than in whatever order the boxes happened to be clicked. */
+  function bulkPickedIds() {
+    return ITEMS.filter(function (it) { return BULK.picked[it.id]; })
+                .map(function (it) { return it.id; });
+  }
+
+  function bulkCommit() {
+    var picked = bulkPickedIds();
+    if (!picked.length) return;
+    var asm = current();
+    // THE CONFLICT CHECK. Identity, not id: a 409 handled while the picker was open replaced the
+    // object, and appending to the detached one would resurrect the lines the server rejected.
+    if (!asm || asm !== BULK.against) {
+      bulkClose();
+      say("This assembly changed while the picker was open — reopen it and pick again.");
+      return;
+    }
+    var room = bulkAddRoom(asm, picked.length);
+    if (!room.fits) { bulkPaint(); return; }         // the footer already says what to do
+
+    asm.lines = asm.lines.concat(bulkLinesFor(picked, ITEMS));
+    bulkClose();
+    paint();
+    // ONE PATCH for the whole batch. patchSoon debounces per record and merges by field, so this
+    // replaces any pending lines snapshot with the newer one rather than racing it.
+    patchSoon("assemblies", asm.id, { lines: asm.lines });
+    say("");
+  }
+
   // ── events ─────────────────────────────────────────────────────────────────
   $("area").addEventListener("input", function () { renderList(); renderPanel(); });
+
+  // ── add-from-library listeners ─────────────────────────────────────────────
+  // The stylesheet for .tw-ov lives in shared.js and is injected on demand. Called once here
+  // rather than on open, so the first press does not paint an unstyled overlay for a frame.
+  if (TW.injectModalCss) TW.injectModalCss();
+
+  $("bulk-open").addEventListener("click", bulkOpen);
+  $("bulk-x").addEventListener("click", bulkClose);
+  $("bulk-cancel").addEventListener("click", bulkClose);
+  $("bulk-add").addEventListener("click", bulkCommit);
+
+  $("bulk-q").addEventListener("input", function () { BULK.q = this.value; bulkPaint(); });
+  // Escape in the search box clears it before it closes the dialog — the same two-stage behaviour
+  // the Items tab's box has, so a typo does not cost you the whole selection.
+  $("bulk-q").addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && this.value) { e.stopPropagation(); this.value = ""; BULK.q = ""; bulkPaint(); }
+  });
+
+  $("bulk-vendor").addEventListener("change", function () {
+    BULK.F.vendor = this.value; bulkPaint();
+  });
+  // Bound to the CONTAINER, not the chips: bulkFilters replaces that markup, and a listener on a
+  // replaced element dies with it. Same rule renderFilterBar's note gives for the Items tab.
+  $("bulk-divisions").addEventListener("change", function () {
+    BULK.F.divisions = Array.prototype.map.call(
+      this.querySelectorAll("input[data-bdiv]:checked"),
+      function (el) { return el.getAttribute("data-bdiv"); });
+    bulkPaint();
+  });
+
+  // ONE delegated listener for the rows, because bulkPaint replaces all of them on every keystroke.
+  $("bulk-list").addEventListener("change", function (e) {
+    var box = e.target && e.target.closest && e.target.closest("[data-bpick]");
+    if (!box) return;
+    var id = box.getAttribute("data-bpick");
+    if (box.checked) BULK.picked[id] = true; else delete BULK.picked[id];
+    bulkPaint();
+  });
+
+  $("bulk-master").addEventListener("change", function () {
+    var asm = current();
+    var already = {};
+    ((asm && asm.lines) || []).forEach(function (ln) { if (ln.item_id) already[ln.item_id] = true; });
+    var pickable = BULK.shown.filter(function (id) { return !already[id]; });
+    // Over the SHOWN rows only. Ticking "all" while a search is narrowing the list must not reach
+    // materials the estimator cannot see, and clearing must not drop ticks made before the search.
+    if (this.checked) pickable.forEach(function (id) { BULK.picked[id] = true; });
+    else pickable.forEach(function (id) { delete BULK.picked[id]; });
+    bulkPaint();
+  });
+
+  // Escape closes, and a press on the scrim itself closes — but a press that started inside the box
+  // does not, or dragging to select text in the search field would dismiss the dialog.
+  $("bulk-ov").addEventListener("mousedown", function (e) {
+    if (e.target === this) bulkClose();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (!BULK.open) return;
+    if (e.key === "Escape") { e.preventDefault(); bulkClose(); return; }
+    if (e.key !== "Tab") return;
+    // FOCUS STAYS IN THE DIALOG. Without this, Tab walks into the page behind — which is both a
+    // keyboard trap in reverse and a way to edit the assembly under an open picker.
+    var ov = $("bulk-ov");
+    var f = ov.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    var real = Array.prototype.filter.call(f, function (el) {
+      return el.offsetParent !== null || el.type === "checkbox";   // the visually-hidden boxes count
+    });
+    if (!real.length) return;
+    var first = real[0], last = real[real.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
 
   $("asm-name").addEventListener("input", function () {
     var a = current(); if (!a) return;

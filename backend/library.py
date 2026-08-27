@@ -567,11 +567,25 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
 
     A half-built line is the normal state of this screen: somebody adds a row, then picks the
     material. Refusing the whole save because one line has no material yet would make the
-    editor unusable, so an empty line is simply not stored."""
+    editor unusable, so an empty line is simply not stored.
+
+    THE CAP IS THE EXCEPTION, and it changed on 2026-08-28. This used to take `raw[:_MAX_LINES]`
+    silently, which is the right posture for a hostile or buggy 500-line payload and the wrong one
+    for the bulk picker Will asked for: a deliberate add of 40 onto an assembly holding 30 lost ten
+    materials under a 200 OK, with nothing anywhere to say so. A count is not a malformed line — the
+    caller knows exactly how many it sent — so an over-cap array is refused and named.
+
+    The truncation stays as the shape defence behind it. The browser guards first
+    (`bulkAddRoom` in library.js) so the button can explain itself while there is still something to
+    change; this is what makes the rule true rather than merely displayed."""
     if raw in (None, ""):
         return []
     if not isinstance(raw, list):
         raise ValidationError("Those lines aren't in a shape we can read.")
+    if len(raw) > _MAX_LINES:
+        raise ValidationError(
+            "An assembly holds at most %d lines; that save had %d. Remove some and try again."
+            % (_MAX_LINES, len(raw)))
     out: List[Dict[str, Any]] = []
     for entry in raw[:_MAX_LINES]:
         if not isinstance(entry, dict):
