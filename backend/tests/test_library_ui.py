@@ -46,11 +46,30 @@ def test_the_page_is_called_items_and_assemblies(ran):
 
 
 @needs_node
-def test_each_tab_says_what_belongs_in_it(ran):
-    """Hanz asked for these two sentences by name. The tabs hold the same materials seen two ways,
-    and which way is not self-evident from a table of numbers."""
-    assert ran["page"]["itemsIntro"], "the Items tab doesn't say items are entered as we buy them"
-    assert ran["page"]["assembliesIntro"]
+def test_the_items_tab_no_longer_explains_itself(ran):
+    """WAS test_each_tab_says_what_belongs_in_it, and it asserted the opposite. REWRITTEN RATHER
+    THAN DELETED so the next reader finds a decision instead of a gap.
+
+    Hanz, 2026-08-27, screenshotting it: "Remove these notes." The sentence was "Items are entered
+    as we buy them. One row per thing on the invoice - the pack you order, and what that pack
+    costs. A five-gallon pail is 5 - Gallon, priced as the pail." He is the person who uses this
+    tab every day and does not need the pack convention explained above it every time he opens it.
+
+    The other two panes keep theirs. They were not what he screenshotted, and neither Administration
+    nor Assemblies is a tab anybody lives in - Assemblies in particular holds the same materials
+    seen a second way, which is genuinely not self-evident from a table of numbers.
+
+    Mutation: put the Items sentence back."""
+    page = ran["page"]
+    assert not page["itemsIntro"], (
+        "the Items explainer is back - Hanz asked for it gone on 2026-08-27")
+    assert page["assembliesIntro"], "the Assemblies pane lost its intro, which was not asked for"
+    assert page["adminIntro"], "the Administration pane lost its intro, which was not asked for"
+    # The CLASS stays, because two panes still use it. A rule with no caller is what to delete;
+    # this is not one.
+    assert page["paneintroStillUsed"] == 2, (
+        "expected Assemblies and Administration to still carry .paneintro, found %s"
+        % page["paneintroStillUsed"])
 
 
 @needs_node
@@ -1227,13 +1246,58 @@ def test_the_filter_controls_are_reachable_and_clearable_from_the_keyboard(ran):
 
 
 @needs_node
-def test_the_syntax_is_written_down_where_somebody_will_find_it(ran):
-    """An advanced search nobody is told the grammar of is a secret, and a tooltip on a search box
-    is not where anybody looks. The syntax sits under the box in the same muted prose the rest of
-    the page explains itself in, and is tied to the input with aria-describedby."""
+def test_the_search_hint_is_gone_and_nothing_is_left_pointing_at_it(ran):
+    """WAS test_the_syntax_is_written_down_where_somebody_will_find_it, which asserted this line
+    existed. REWRITTEN RATHER THAN DELETED, because a quietly vanished test reads as an accident.
+
+    Hanz, 2026-08-27: "Remove these notes." The line said: Narrow it: vendor:sherwin, cost:>200,
+    pack:5, "opf primer" for the whole phrase, or -epoxy to leave something out. Terms stack.
+
+    THE GRAMMAR IS UNTOUCHED. Only the on-screen sentence went; every form it advertised is still
+    parsed and is still covered by the five tests above this one. What was removed is the help,
+    not the feature.
+
+    THE ORPHAN THIS WOULD HAVE LEFT. The search input carried aria-describedby="search-tips",
+    pointing at that paragraph's id. Deleting the paragraph and keeping the attribute leaves a
+    reference to an element that does not exist, and the failure mode is silent: a screen reader
+    announces no description at all rather than reporting a fault. The field keeps its aria-label,
+    so it is still named.
+
+    Mutation: leave the aria-describedby behind, or leave the .searchtips rules in the
+    stylesheet."""
     k = ran["filterKeyboard"]
-    assert k["tipsExist"], "the search grammar is not described anywhere on the page"
-    assert k["tipsShowRealSyntax"], "the examples shown are not the syntax the parser accepts"
+    assert k["tipsGone"], "the search-syntax hint is still on the page"
+    assert k["noOrphanedDescribedBy"], (
+        "aria-describedby survived the paragraph it pointed at - a dangling reference no screen "
+        "reader will report")
+    assert k["searchFieldStillNamed"], (
+        "the search field lost its accessible name along with the hint")
+    assert k["searchtipsCssGone"], (
+        "the .searchtips rules are dead stylesheet now, and the only <code> they styled is gone")
+    assert k["barClosedUp"], (
+        "the bar still holds a row open where the sentence was - it spaces itself with gap, so "
+        "deleting the child should have closed the space with it")
+
+
+@needs_node
+def test_the_filter_bar_still_reads_as_two_groups_without_the_sentence(ran):
+    """A redesign that reads worse after a deletion is not finished.
+
+    The syntax line was doing structural work nobody asked it to: it sat between the search box
+    and the facets and separated them. With it gone the bar's row gap was 8px, the same distance
+    as a facet's own label-to-control gap, so the query and the facets read as one undifferentiated
+    block of controls.
+
+    Retuned to 8px inside a facet, 12px between the bar's rows, 16px from the bar to the table.
+    THE ORDERING is what is asserted, not the three numbers: each step has to be larger than the
+    one it contains or the grouping stops being legible, and that relationship is what silently
+    regresses when somebody nudges one value.
+
+    Mutation: set the bar's row gap back to 8px, or make it wider than its own bottom margin."""
+    h = ran["filterKeyboard"]["spacingHierarchy"]
+    assert h["ordered"], (
+        "spacing no longer nests: %spx inside a facet, %spx between rows, %spx to the table"
+        % (h["inFacet"], h["betweenRows"], h["toTheTable"]))
 
 
 @needs_node

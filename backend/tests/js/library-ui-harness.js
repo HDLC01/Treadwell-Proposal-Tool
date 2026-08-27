@@ -1658,11 +1658,38 @@ out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
         .test(html.replace(/\r\n/g, "\n")),
     selectsHaveLabels: /<label class="flabel" for="f-vendor">/.test(html) &&
       /<label class="flabel" for="f-condition">/.test(html),
-    // The syntax is written down where somebody will find it, and tied to the box.
-    tipsExist: /id="search-tips"/.test(html) &&
-      /aria-describedby="search-tips"/.test(html),
-    tipsShowRealSyntax: ["vendor:sherwin", "cost:&gt;200", "pack:5", "-epoxy"]
-      .every((t) => html.indexOf(t) !== -1),
+    // THE SYNTAX HINT IS GONE, at Hanz's request on 2026-08-27, and these probes now guard its
+    // ABSENCE rather than its presence. He is the person who uses this page every day; a line of
+    // grammar help under the box was explaining his own tool to him.
+    //
+    // The GRAMMAR is untouched - see out.advSearch, which parses all five forms the deleted line
+    // used to advertise. Only the on-screen sentence went.
+    tipsGone: !/id="search-tips"/.test(html) && !/class="searchtips"/.test(html) &&
+      !/Narrow it:/.test(html),
+    // NOTHING ORPHANED. The input pointed aria-describedby at that paragraph's id; left behind it
+    // is a reference to an element that does not exist, which a screen reader reads as nothing at
+    // all rather than as a fault anybody would notice.
+    noOrphanedDescribedBy: !/aria-describedby/.test(html),
+    searchFieldStillNamed: /<input id="item-q"[\s\S]{0,240}?aria-label="Search materials"/.test(html),
+    // The rules and the only <code> on the page went with it, rather than being left as dead
+    // stylesheet for the next reader to wonder about.
+    searchtipsCssGone: !/\.searchtips/.test(html) && !/<code/.test(html),
+    // …and the row closed up. The bar spaces itself with `gap` on the grid, so deleting a child
+    // removes its space too - there is no empty container left holding a margin open.
+    barClosedUp: /\.filterbar \{[^}]*display:grid[^}]*\}/.test(html) &&
+      !/<p class="searchtips"/.test(html) && !/class="filterbar"[^>]*>\s*<\/div>/.test(html),
+    // THE COMPOSITION AFTER THE DELETION. The sentence was doing the separating between the search
+    // box and the facets; without it the bar's row gap equalled a facet's own label-to-control
+    // gap and the two rows read as one block. Each step has to be bigger than the one it
+    // contains, so the ORDERING is what is asserted rather than three magic numbers.
+    spacingHierarchy: (() => {
+      const px = (re) => Number((re.exec(html) || [0, 0])[1]);
+      const inFacet = px(/\.facet \{[^}]*gap:(\d+)px/);
+      const betweenRows = px(/\.filterbar \{[^}]*gap:(\d+)px/);
+      const toTheTable = px(/\.filterbar \{ margin:0 0 (\d+)px/);
+      return { inFacet, betweenRows, toTheTable,
+               ordered: inFacet > 0 && inFacet < betweenRows && betweenRows < toTheTable };
+    })(),
     // THE CONTROLS ARE OUTSIDE THE TBODY renderItems replaces. This is the structural half of the
     // survives-a-re-render answer, and it is a fact about the markup rather than about a variable.
     controlsOutsideTheRenderedBody:
@@ -1680,8 +1707,17 @@ out.page = {
   h1: /<h1>([^<]*)</.exec(html)[1],
   materialHeaderNamesTheManufacturer:
     /Materials <span[^>]*>\(how the manufacturer names it\)<\/span>/.test(html),
+  // REMOVED 2026-08-27 at Hanz's request, and this probe is kept pointing at the deleted
+  // sentence on purpose: it must stay false. He uses this tab daily and did not need the pack
+  // convention explained to him in a paragraph above it.
   itemsIntro: /Items are entered as we buy them/.test(html),
+  // The other two panes keep theirs. They were asked for by name, they were not what he
+  // screenshotted, and neither is a tab anybody lives in.
   assembliesIntro: /Assemblies are how we estimate them/.test(html),
+  adminIntro: /Administration lists\./.test(html),
+  // The class survives the deletion because two panes still use it. A stylesheet rule with no
+  // remaining caller is the thing to delete; this is not one.
+  paneintroStillUsed: (html.match(/class="paneintro"/g) || []).length,
   coveragePerUnitHeader: /Coverage per Unit/.test(html),
   wasteHeader: /Waste Factor/.test(html),
   roundupHeader: /Roundup\?/.test(html),
