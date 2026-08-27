@@ -1357,6 +1357,39 @@ def api_portal_publish(draft_id: str, request: Request,
     # but still BEFORE the snapshot below — a 400 must never mint a revision.
     body["assigned_estimator"] = _clean_estimator(payload.assigned_estimator if payload else "")
 
+    # THE LAST VALIDATION, and the only one about the SNAPSHOT rather than the request — so it
+    # runs after the recipient/permission errors (they are more specific and they predate this)
+    # and before the first byte is written.
+    #
+    # WHY THIS IS A REFUSAL AND NOT A WARNING. Until 2026-08-27 this exact disagreement was
+    # detected here, reported in `sent_snapshot`, and the publish went through anyway: the
+    # revision was minted, the portal row written, the email sent, and the page printed an
+    # apology afterwards. A teammate, 23:47: "I revised a proposal and am getting the error
+    # message in yellow below. I think it's sending an outdated proposal." He was right. The
+    # customer's PDF said $29,104 where his screen said $27,721, and offered two options where
+    # his screen offered none. The estimator read "Sent" and the customer had the wrong price.
+    #
+    # That is the shape of the attachment bug: the system knows, commits, and reports success.
+    # Validate BEFORE anything the estimator will read as success. `_publish_digest` already
+    # knows both halves, so the only thing that was ever missing was the nerve to say no.
+    digest = _publish_digest(row.get("data") or {})
+    refusal = _stale_document_refusal(digest)
+    if refusal:
+        # Both figures, on one line, with the reason. A "refused" that does not say why costs
+        # an SSH session and a container probe to answer "refused WHAT?".
+        log.warning(
+            "publish refused for draft %s: %s — page base=%r lump=%r options=%r / "
+            "document base=%r lump=%r options=%r",
+            draft_id, "; ".join(refusal["differences"]),
+            digest.get("base_label"), digest.get("lump_sum"), digest.get("option_count"),
+            digest.get("doc_base_label"), digest.get("doc_lump_sum"),
+            digest.get("doc_option_count"))
+        # Flat body, not HTTPException's `{"detail": ...}` nesting, and `error` carries the whole
+        # sentence: the CURRENTLY DEPLOYED Files page pulls `"error":"…"` out of the raw response
+        # text with a regex, so an estimator on a stale page still reads the real reason instead
+        # of a JSON dump. `code` + `page` + `document` are for the new page to act on.
+        return JSONResponse(status_code=409, content=refusal)
+
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
@@ -1385,8 +1418,10 @@ def api_portal_publish(draft_id: str, request: Request,
         #
         # A stale send is invisible and expensive: on 2026-08-13 a resend pinned the portal
         # to a base bid the estimator had already changed, and nothing on any screen said so.
-        # Cheap to compute, and it only ever produces a warning.
-        out.setdefault("sent_snapshot", _publish_digest(row.get("data") or {}))
+        #
+        # THE SAME `digest` the refusal above was decided from, not a fresh computation — so what
+        # the page cross-checks is provably the thing that passed the gate.
+        out.setdefault("sent_snapshot", digest)
     return out
 
 
@@ -1462,6 +1497,105 @@ def _publish_digest(data: Dict[str, Any]) -> Dict[str, Any]:
         "doc_base_label": pbase.get("name") or None,
         "doc_lump_sum": doc_lump,
         "doc_option_count": _options(prooms) if prooms else (0 if pvalues else None),
+    }
+
+
+# The machine-readable name of this refusal. One constant, referenced by the route, the tests and
+# the Files page, so nobody has to keep three spellings of a magic string in step.
+STALE_DOCUMENT_CODE = "stale_document"
+
+
+def _usd(v: Any) -> str:
+    """Whole dollars with thousands separators — the same shape as the page's `TW.fmtUsd`.
+
+    The refusal sentence is shown to an estimator verbatim, so it has to read like the figures
+    on the screen it contradicts ("$29,104"), not like a float ("29104.0")."""
+    try:
+        return "${:,.0f}".format(float(v))
+    except (TypeError, ValueError):
+        return "$—"
+
+
+def _comparable_num(v: Any) -> Optional[float]:
+    """A value we are willing to REFUSE A SEND over, or None.
+
+    Deliberately strict. A refusal blocks a customer's proposal, so anything we cannot read as a
+    plain finite number — a string, a dict, a bool, a NaN out of some browser's JSON — means
+    "we don't know", and not knowing must never block a send. The digest's `lump_sum` is the raw
+    blob value, so this is the only thing standing between a malformed draft and an estimator who
+    cannot send at all."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _stale_document_refusal(digest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Refuse a publish whose DOCUMENT half disagrees with its PORTAL half. None means send it.
+
+    One revision carries two descriptions of the same pricing — the top-level fields the portal
+    PAGE renders, and `proposal_payload`, which the customer's PDF is rebuilt from. Only the
+    Proposal step's Continue writes the second one, so an estimator who re-prices and then sends
+    straight from the Files page ships a page and a PDF that quote different money.
+
+    THE COMPARISON IS SERVER TRUTH AGAINST SERVER TRUTH — both halves of one snapshot — so it
+    fires whichever tab, device or colleague caused the drift, and no local state can talk it out
+    of firing. It is also EXACTLY the rule `publishDrift` uses in the browser, on purpose: two
+    rules would mean a screen that says fine while the server says no, or worse.
+
+    Every branch below is a reason to STAY SILENT unless we are sure:
+
+      * no document at all (`has_document` false) — nothing has been generated, so nothing can be
+        stale. Refusing here would block every project that has never seen the Proposal step;
+      * a null label on either side — a base-only proposal has no base ROOM, so `doc_base_label`
+        is None. Comparing that against a real name would refuse the most common shape this tool
+        produces;
+      * money we cannot read as a number, or a difference under a cent — floating point must
+        never block a send: 15801.004 and 15801 are the same money;
+      * an option count missing on either side (a pre-2026-08-13 snapshot has none).
+
+    A re-send of a revision that has not drifted therefore passes untouched, which is the whole
+    ordinary case."""
+    if not digest.get("has_document"):
+        return None
+
+    page_base, doc_base = digest.get("base_label"), digest.get("doc_base_label")
+    page_lump, doc_lump = digest.get("lump_sum"), digest.get("doc_lump_sum")
+    page_opts, doc_opts = digest.get("option_count"), digest.get("doc_option_count")
+
+    # Phrased FROM THE DOCUMENT'S POINT OF VIEW ("its price is X, not Y") — the same substance,
+    # and the same word order, as the warning this replaces. The estimator who saw the yellow
+    # apology should recognise the sentence that now stops the send.
+    diffs = []
+    if doc_base and page_base and doc_base != page_base:
+        diffs.append("its base bid is %s, not %s" % (doc_base, page_base))
+    d_lump, p_lump = _comparable_num(doc_lump), _comparable_num(page_lump)
+    if d_lump is not None and p_lump is not None and abs(d_lump - p_lump) >= 0.01:
+        diffs.append("its price is %s, not %s" % (_usd(d_lump), _usd(p_lump)))
+    if (isinstance(doc_opts, int) and not isinstance(doc_opts, bool)
+            and isinstance(page_opts, int) and not isinstance(page_opts, bool)
+            and doc_opts != page_opts):
+        diffs.append("it shows %d option%s, not %d"
+                    % (doc_opts, "" if doc_opts == 1 else "s", page_opts))
+    if not diffs:
+        return None
+
+    # No quotes and no newlines anywhere in this sentence: the deployed Files page recovers it
+    # from the raw response body with /"error"\s*:\s*"([^"]+)"/, and a quote would truncate it.
+    message = ("Not sent — the proposal document is out of date: " + " and ".join(diffs)
+               + ". Open the Proposal step and press Continue to rebuild the document, "
+                 "then send again.")
+    return {
+        "ok": False,
+        "error": message,
+        "code": STALE_DOCUMENT_CODE,
+        # The pieces, so the page can offer a one-click way out instead of parsing the prose.
+        "differences": diffs,
+        "page": {"base_label": page_base, "lump_sum": page_lump, "option_count": page_opts},
+        "document": {"base_label": doc_base, "lump_sum": doc_lump, "option_count": doc_opts},
+        # The whole digest, same shape as a successful send's `sent_snapshot`, so a caller that
+        # already understands one understands the other.
+        "snapshot": digest,
     }
 
 
