@@ -1131,17 +1131,23 @@ def test_new_assembly_left_the_page_header(ran):
 
 @needs_node
 def test_the_create_control_sits_at_the_foot_of_the_list_it_adds_to(ran):
-    """The rule that replaced it, in four places: materials, assemblies, and the three
-    administration lists all end with a full-width row inside the same container, drawn like the
-    rows above it. Press it and the new row appears where the control was.
+    """The rule that replaced it, in four places: assemblies and the three administration lists
+    all end with a full-width row inside the same container, drawn like the rows above it. Press
+    it and the new row appears where the control was.
 
     AFTER the list, not before: it has to read as the next row rather than as a header over the
     ones that already exist.
 
+    Materials is the exception (Hanz, 2026-08-28): its add row moved to the TOP of the card,
+    because at the foot it was getting lost below the horizontal scrollbar and a full table of
+    rows. New materials are unshifted to the front of the list to match, so pressing the button
+    and seeing the result are still the same spot on screen — see
+    test_the_materials_add_row_follows_its_table for the rest of that behaviour.
+
     Mutation: move #asm-new-2 above #asm-list."""
     c = ran["createAction"]
     assert c["inTheRail"], "New assembly is not at the foot of the assembly rail"
-    assert c["materialsAddRowInTheCard"], "Add material is not inside the materials table's card"
+    assert c["materialsAddRowInTheCard"], "Add material is not above the materials table"
     assert c["adminAddRows"], "an administration list has no add row of its own"
     # One shape, five uses (materials, assemblies, and three lists) - not a fifth way to draw a
     # card, which is the failure this page has form for.

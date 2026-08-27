@@ -38,10 +38,10 @@
     body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
       font:400 14px/1.55 var(--ui); }
     .mono { font-family:var(--mono); }
-    .top { display:flex; align-items:center; gap:14px; max-width:1320px; margin:0 auto 4px; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1660px; margin:0 auto 4px; }
     .logo { width:54px; height:34px; display:block; flex:none; }
     h1 { font-size:20px; letter-spacing:-.01em; margin:0; flex:1; }
-    .wrap { max-width:1320px; margin:0 auto; }
+    .wrap { max-width:1660px; margin:0 auto; }
     /* Beta marker. Deliberately beside the title rather than a dismissible banner: this page
        is being trialled, and somebody arriving from the sidebar in three weeks should still be
        told before they rely on a number it produced. */
@@ -155,9 +155,13 @@
        the next one. Press it and the new row appears exactly where the control was. That is also
        why it is not a fifth card idiom — it is a table row that happens to be a button. */
     .addrow { border-top:1px solid var(--line-soft); background:var(--card); }
+    /* Hanz, 2026-08-28: "the buttons are easier to see" — these read as muted body text next
+       to the rows they add to. Red by default, not just on hover, is the smallest change that
+       fixes all four (materials, assemblies, divisions, units, vendors) at once since they
+       share this one class. */
     .addbtn { width:100%; display:flex; align-items:center; gap:8px; text-align:left;
-      background:none; border:0; cursor:pointer; padding:10px 11px; color:var(--ink-v);
-      font:600 12.5px var(--ui); border-radius:0;
+      background:none; border:0; cursor:pointer; padding:10px 11px; color:var(--red);
+      font:700 12.5px var(--ui); border-radius:0;
       transition:background .12s ease, color .12s ease; }
     .addbtn:hover { background:var(--surf-low); color:var(--red-dark); }
     .addbtn:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
@@ -485,6 +489,18 @@
         </div>
       </div>
       <div class="card">
+        <!-- Hanz, 2026-08-28: the foot-of-list placement (2026-08-27) got lost below the
+             horizontal scrollbar and a table full of rows — nobody was finding it. Moved above
+             the table, drawn like the row it would otherwise sit below, with the new material
+             landing as the FIRST row of the list (library.js's insertion point moved to match)
+             so pressing it and seeing the result are still the same place on screen. -->
+        <div class="addrow" id="items-addrow">
+          <button class="addbtn" type="button" data-add-item>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                 focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+            Add material</button>
+        </div>
         <div class="tw">
           <table class="items-table">
             <thead>
@@ -508,15 +524,6 @@
           <p>Add the products you buy, named the way the manufacturer names them — how much comes
             in a purchase, and what that purchase costs.</p>
           <button class="btn" type="button" data-add-item>Add your first material</button>
-        </div>
-        <!-- The next row, drawn like the rows above it. Pressing it puts a material exactly
-             where the control is, instead of below a table you had to scroll past. -->
-        <div class="addrow" id="items-addrow">
-          <button class="addbtn" type="button" data-add-item>
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
-                 focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
-            Add material</button>
         </div>
       </div>
       <!-- The material names feed the assemblies' picker AND this tab's duplicate hint. One list,
