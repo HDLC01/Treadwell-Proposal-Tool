@@ -413,6 +413,15 @@
   }
   .fields-panel .doc-input.short { width: 70px; display: inline-block; }
   .fields-panel select.doc-input { width: 100%; }
+  /* The line that says why the estimator is on this page, in the same amber the Files panel
+     uses: one warning colour across the tool, so a stop sign reads as a stop sign wherever it
+     appears. `[hidden]` after the class, because a class `display` outranks the attribute. */
+  .resync-note { display:flex; gap:10px; align-items:flex-start; padding:9px 14px;
+    color:#7a5c00; background:#fdf6e3; border-bottom:1px solid #e8d9a8; }
+  .resync-note[hidden] { display:none; }
+  .resync-note > svg { flex:0 0 auto; margin-top:1px; color:#a07c00; }
+  .rn-text { margin:0; font-size:13px; line-height:1.45; }
+  .rn-text strong { color:#5f4700; }
 </style>
 </head>
 <body class="word-app">
@@ -470,6 +479,29 @@
          document surface sits under a `scale()` transform and the ribbon must not be scaled with
          it. A normal-flow sibling of `.word-canvas` never enters that transform. -->
 <div id="fmt-ribbon" class="fmt-ribbon"></div>
+
+<!-- WHY YOU ARE ON THIS PAGE. Shown only when the Files page sent the estimator here with
+     `?resync=1` because the customer's PDF was older than the pricing, AND the two halves still
+     disagree. It names the same figures the Files panel named, because somebody who followed a
+     button between two pages should not have to remember what the last one said.
+
+     IT DOES NOT AUTO-SUBMIT ANYTHING. Continue is focused, not pressed: the whole point of
+     landing here rather than regenerating behind the estimator's back is that the document is on
+     screen, and the rule this defect taught us is that nobody sends a document nobody looked at.
+
+     A sibling of #fmt-ribbon, so it is part of the permanently-visible chrome above the
+     scrolling canvas rather than something that scrolls away while it is being read. -->
+<div id="resync-note" class="resync-note" role="status" hidden>
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+    <path d="M12 9v4"/><path d="M12 17h.01"/>
+  </svg>
+  <p class="rn-text"><strong>The PDF has the old numbers.</strong>
+    <span id="resync-note-what"></span>
+    Look over the document below, then press Continue to Done. That rebuilds it and takes you
+    back to Files to send.</p>
+</div>
 
 <!-- LEFT rail: the structured "Proposal fields" that feed the document's
      highlighted values. Same form + field names as before (state round-trips

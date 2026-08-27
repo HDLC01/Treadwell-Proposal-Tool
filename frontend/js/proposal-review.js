@@ -20,6 +20,51 @@
   const earlyGenerateBtn = document.getElementById("generate-btn");
   if (earlyGenerateBtn) earlyGenerateBtn.onclick = continueToDone;
 
+  /** Why the estimator is standing on this page.
+   *
+   *  The Files page refuses a send whose PDF is older than the pricing and offers one button,
+   *  "Update the PDF", which lands here with `?resync=1`. This says what that button was about,
+   *  in the same words and with the same figures, because somebody who followed a control across
+   *  a page boundary should not have to remember what the last page told them.
+   *
+   *  IT DOES NOT PRESS CONTINUE FOR THEM, and that is the design, not a shortcut not yet taken.
+   *  Auto-submitting and bouncing them back to Files would hand the customer a document nobody
+   *  had looked at, which is the same failure this whole fix exists to stop, wearing better
+   *  clothes. Landing here is CORRECT precisely because the document is on the screen. So:
+   *  Continue is focused and named, never fired.
+   *
+   *  The comparison itself is TW.docDrift, the same function the Files page gates the send on.
+   *  A second copy here would be exactly the two-halves-of-one-truth mistake that caused the
+   *  bug in the first place. */
+  (function explainWhyYouAreHere() {
+    let armed = false;
+    try { armed = new URLSearchParams(location.search).get("resync") === "1"; } catch { return; }
+    if (!armed) return;
+    const note = document.getElementById("resync-note");
+    const what = document.getElementById("resync-note-what");
+    if (!note || !what) return;
+
+    const paint = () => {
+      // Fresh, never the module's one-shot `state` snapshot: this runs during init and again
+      // after the draft settles, and the whole point is to read what is true NOW.
+      const rows = TW.docDrift(TW.publishDigest(TW.getState()));
+      if (!rows.length) { note.hidden = true; return; }   // already fixed, or nothing to fix
+      what.textContent = "It shows " + rows.map(r => r.say).join(", and ") + ".";
+      note.hidden = false;
+      // Named in the copy AND focused, so a keyboard user is already on it. Belt and braces:
+      // the doc-template init below can take the focus back, and if it does the sentence still
+      // says which button to press.
+      const go = document.getElementById("generate-btn");
+      if (go) { try { go.scrollIntoView({ block: "nearest" }); go.focus(); } catch {} }
+    };
+
+    paint();
+    // Init reads localStorage synchronously, but a draft arriving from the server a moment later
+    // can change both halves. Repaint rather than leave a figure on screen that has moved.
+    try { if (TW.draftReady && TW.draftReady.then) TW.draftReady.then(paint).catch(() => {}); }
+    catch {}
+  })();
+
   // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
   // tax treatment has no inline equivalent and drives the price line, so a
   // compact selector lives in the ribbon. Mirror it into the hidden form's
