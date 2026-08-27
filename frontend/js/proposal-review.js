@@ -1480,6 +1480,13 @@
       stagingHome.appendChild(stagingPanel);
     }
     docSurface.innerHTML = "";
+    // AND THE UNDO HISTORY, which described those same paragraphs. Every entry names its lines by
+    // the backend walk's paragraph id, and those ids belong to the template that was on screen — a
+    // work-type switch or an audience switch loads a DIFFERENT one, where the same number is a
+    // different paragraph. Replaying an entry across that boundary would write the estimator's
+    // words into the wrong clause of a document a customer signs, so the history goes with the
+    // document it described.
+    undoForget();
     // The formatting ribbon's remembered block was one of the paragraphs just destroyed. Since
     // 2026-08-24 that target deliberately outlives focus ("keep it static like a ribbon in a word
     // document"), so nothing else takes it away: `fmtTargetBlock` would notice, but not until the
@@ -5145,6 +5152,440 @@
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
     if (box.classList.contains("tw-terms-page")) scheduleRepaginate();
   });
+
+
+  // ══ UNDO AND REDO, over the editor's OWN model ═══════════════════════════════════════════
+  /** Hanz, 2026-08-27, on the Proposal Editor: "I cant use Keyboard shortcuts. I wanted to
+   *  control z but didnt work. when I deleted all in the textbox."
+   *
+   *  CTRL+Z WAS NEVER SWALLOWED. The Ctrl handler below returns for anything that is not a/b/i/u,
+   *  so the browser's native undo really did run -- it had nothing to undo. Every edit this editor
+   *  makes is a PROGRAMMATIC DOM mutation, and programmatic mutation does not go on a
+   *  contenteditable's native undo stack: the box-wide delete is els.forEach(clearBoxLine), Enter
+   *  is insertBreakAt, Tab is paraAction, B/I/U is toggleFormat, and each one preventDefault()s
+   *  the browser's own version for a reason written above it (execCommand emits b/i/u TAGS that
+   *  fmtAt cannot read; a browser Enter merges two paragraphs and destroys an id the customer's
+   *  document is filled BY POSITION with). On top of that, any repaint or repagination moves the
+   *  nodes, and moving a node throws the native stack away outright -- so even ordinary typing
+   *  stopped being undoable the moment a repagination ran.
+   *
+   *  So the editor keeps its own stack. AN ENTRY IS A PRE-IMAGE OF ONE EDITING HOST -- the box, or
+   *  the terms page, the same unit boxLines and every box-wide gesture already work in. Per box
+   *  rather than per document because that is what bounds it: a box is tens of lines, the sheet is
+   *  hundreds, and a stack of whole-document snapshots on a long editing session is the memory
+   *  growth the depth limit exists to prevent.
+   *
+   *  EVERY LINE IS STORED THROUGH ITS OWN CHANNEL, never as innerHTML. A .tw-block is stored as
+   *  RUNS (editRuns) and restored with renderRuns, which is the same round trip a format press
+   *  makes, so the formatting and the .tw-fill spans come back intact. The three computed families
+   *  store TEXT and are restored by writing textContent and dispatching the page's own input
+   *  event -- character for character what clearBoxLine already does to them, so the dirty flags,
+   *  the override persistence and the emptied-clause protection all run on the way back exactly as
+   *  they ran on the way out.
+   *
+   *  WHAT IS DELIBERATELY NOT ON THE STACK:
+   *
+   *   * BOX GEOMETRY -- drag-resize, Fit to text, Reset box. It has its own affordance already
+   *     ("Reset box" in the box tools), and this surface is a to-scale preview of a printed page
+   *     registered against baked artwork: a Ctrl+Z aimed at a word that silently moved a text box
+   *     by a few points would be a worse bug than the one it fixed.
+   *   * THE SIDEBAR. This is bound to docSurface, so a Ctrl+Z with the caret in the notes textarea
+   *     or a pricing field is the browser's own undo, which is the right one for a plain input.
+   *   * ANYTHING ACROSS A TEMPLATE RELOAD. clearDocSurface() drops both stacks: the ids an entry
+   *     names belong to the template that was on screen, and replaying them into a different one
+   *     would write the estimator's words into the wrong paragraph of a document a customer signs.
+   *   * A LOCKED NUMBERED TERMS CLAUSE's paragraph properties. The para half of a restore goes
+   *     through setParaState, which refuses a locked paragraph, so no undo can renumber the
+   *     contract. Its TEXT is restorable, because editing that text was allowed in the first
+   *     place and the payload filter (blanksANumberedClause) is the same in both directions. */
+  const UNDO_DEPTH = 60;
+  /** How long a burst of typing stays ONE undo. Long enough that an ordinary sentence is not
+   *  chopped into keystrokes, short enough that a pause reads as "I finished that thought". */
+  const UNDO_COALESCE_MS = 700;
+  let _undoStack = [];
+  let _redoStack = [];
+  let _undoUnit = null;         // the gesture the open unit belongs to
+  let _undoUnitAt = 0;
+  let _undoBusy = false;        // a restore is running: nothing it does may open a new unit
+
+  /** A stable name for one editable line, so an entry survives its nodes being replaced.
+   *
+   *  Element identity is not enough. repaginateTerms moves blocks between pages, renderSystemPreview
+   *  and renderNotesPreview rebuild their children outright, and a restore that held references
+   *  would write into detached orphans and report success. Each family already has an identity the
+   *  rest of the page persists it by, and this is that identity and nothing new. */
+  function undoLineKey(el) {
+    if (!el || !el.classList) return null;
+    const d = el.dataset || {};
+    if (el.classList.contains("tw-block"))
+      return d.id == null || d.id === "" ? null : "b:" + d.id;
+    if (d.poLinekey != null && d.poLinekey !== "") return "p:" + d.poLinekey;
+    if (d.sysLine != null && d.sysLine !== "") return "s:" + d.sysIndex + ":" + d.sysLine;
+    if (d.noteIndex != null && d.noteIndex !== "") return "n:" + d.noteIndex;
+    return null;
+  }
+
+  /** Every editable line on the surface, by key. Rebuilt at each restore rather than cached: a
+   *  repagination between the push and the pop is the normal case, not the exception. */
+  function undoLiveLines() {
+    const map = new Map();
+    if (!docSurface || !docSurface.querySelectorAll) return map;
+    docSurface.querySelectorAll(LINE_SEL).forEach((el) => {
+      const k = undoLineKey(el);
+      if (k && !map.has(k)) map.set(k, el);
+    });
+    return map;
+  }
+
+  /** One line as an entry records it. */
+  function undoLineRec(el, key) {
+    if (el.classList.contains("tw-block")) {
+      const set = paraById.get(Number(el.dataset.id));
+      return { key: key, runs: editRuns(el), fmt: el.classList.contains("tw-fmt"),
+               para: set ? { bullet: !!set.bullet, indent: Number(set.indent) || 0 } : null };
+    }
+    return { key: key, text: serializeBlock(el) };
+  }
+
+  /** The line the caret is in, by key. Cheap -- one closest() off the range's start container, no
+   *  offsets and no markers -- which is what lets every keystroke ask for it. */
+  function undoCaretLine() {
+    const el = lineAtSelection();
+    return (el && docSurface.contains(el) && undoLineKey(el)) || "?";
+  }
+
+  /** Where the caret is, as an entry records it, or null when it cannot be read safely.
+   *
+   *  READ LIVE, and only when a unit is actually opening -- at most once per word typed. The
+   *  obvious alternative, keeping it current on a selectionchange listener, costs a marker round
+   *  trip through selectionRange on every caret movement in the document, including on the notes
+   *  bullets and the price rows, which have never had one taken on them.
+   *
+   *  `safe` is false on the beforeinput path and only there. selectionRange drops two control
+   *  characters into the text and takes them out again, and doing that inside beforeinput moves the
+   *  very range the browser is about to edit with. An entry from that path carries no caret, and
+   *  the restore puts one on the first line it touched instead -- which for a single-line edit is
+   *  the same line, at its start. */
+  function undoCaretRec(safe) {
+    if (!safe) return null;
+    const el = lineAtSelection();
+    if (!el || !docSurface.contains(el)) return null;
+    const key = undoLineKey(el);
+    if (!key) return null;
+    const r = selectionRange(el);
+    return r ? { key: key, start: r[0], end: r[1] } : null;
+  }
+
+  /** The current caret and box selection, as an entry records them.
+   *
+   *  An undo that restores the text and drops the caret somewhere else reads as a bug even when
+   *  every character is right, so both go on the stack. */
+  function undoSelectionRec(safe) {
+    return {
+      caret: undoCaretRec(safe),
+      boxSel: boxSel && boxSel.length ? boxSel.map(undoLineKey).filter(Boolean) : null,
+    };
+  }
+
+  /** The pre-image of one editing host. */
+  function undoSnapshot(box, safe) {
+    if (!box || !box.querySelectorAll) return null;
+    const lines = [];
+    box.querySelectorAll(LINE_SEL).forEach((el) => {
+      const key = undoLineKey(el);
+      if (key) lines.push(undoLineRec(el, key));
+    });
+    if (!lines.length) return null;
+    const ta = document.getElementById("notes-text");
+    // THE NOTES TEXTAREA IS THE BULLETS' SINGLE SOURCE OF TRUTH, so a notes box carries it too.
+    // The bullets are rebuilt from it and their count changes with the text, which makes restoring
+    // a deleted bullet by key alone impossible once its element is gone.
+    const holdsNotes = !!(ta && notesPreviewEl && box.contains && box.contains(notesPreviewEl));
+    const snap = undoSelectionRec(safe);
+    snap.lines = lines;
+    snap.notes = holdsNotes ? String(ta.value || "") : null;
+    snap.sig = JSON.stringify([lines, snap.notes]);
+    return snap;
+  }
+
+  /** The document as an existing entry describes it, read LIVE.
+   *
+   *  Two jobs, and both matter. It is the redo entry an undo leaves behind, and its signature is
+   *  how a unit that turned out to change nothing is recognised -- a Backspace refused at the start
+   *  of a paragraph, a ribbon press on a locked clause, a mousedown that never became a click.
+   *  Those are skipped at the pop rather than filtered at the push, because at push time the edit
+   *  has not happened yet and nobody can know. */
+  function undoMirror(snap) {
+    const live = undoLiveLines();
+    const lines = [];
+    for (const rec of snap.lines) {
+      const el = live.get(rec.key);
+      if (el) lines.push(undoLineRec(el, rec.key));
+    }
+    const ta = document.getElementById("notes-text");
+    // SAFE: a mirror is only ever taken from undoStep, which runs on the Ctrl+Z keydown -- never
+    // from inside a beforeinput.
+    const out = undoSelectionRec(true);
+    out.lines = lines;
+    out.notes = snap.notes == null ? null : String((ta && ta.value) || "");
+    out.sig = JSON.stringify([lines, out.notes]);
+    return out;
+  }
+
+  /** Open a new undo unit, unless this gesture belongs to the one already open.
+   *
+   *  WHAT ONE UNDO UNIT IS: a gesture, not a mutation. Enter, Tab, a box-wide delete, a paste and
+   *  a ribbon press are each named uniquely and are therefore always their own unit. Typing and
+   *  deleting coalesce, and the run is closed by any of four boundaries -- an idle gap of
+   *  UNDO_COALESCE_MS, the caret moving to a different line, the direction changing (typing then
+   *  deleting is two units, not one), and a typed SPACE, which is what makes an undo give back the
+   *  word just typed rather than the paragraph. An idle gap alone would make undo depend on how
+   *  fast somebody types; boundaries alone would make one uninterrupted sentence a single,
+   *  unusable unit. */
+  function undoPush(unit, node, safe) {
+    if (_undoBusy) return false;
+    const now = Date.now();
+    if (typeof unit === "string" && unit.indexOf("type:") === 0
+        && unit === _undoUnit && now - _undoUnitAt < UNDO_COALESCE_MS) {
+      _undoUnitAt = now;
+      return false;                     // still the same burst -- the open unit already covers it
+    }
+    const box = editingBox(node) || editingBox(lineAtSelection());
+    const snap = box ? undoSnapshot(box, safe !== false) : null;
+    _undoUnit = unit;
+    _undoUnitAt = now;
+    if (!snap) return false;
+    const top = _undoStack[_undoStack.length - 1];
+    // A KEYSTROKE REACHES HERE TWICE -- once on keydown, once on the beforeinput the browser
+    // raises for the same key -- and the second arrival finds the document byte for byte as the
+    // first left it. One signature comparison de-duplicates that, and every other harmless
+    // double-push with it, without a single timer.
+    if (top && top.sig === snap.sig) return false;
+    _undoStack.push(snap);
+    if (_undoStack.length > UNDO_DEPTH) _undoStack.shift();
+    _redoStack.length = 0;              // a new edit forks the history
+    return true;
+  }
+
+  /** The bullet and the indent, back to what they were -- through setParaState, which refuses a
+   *  locked paragraph, so this route cannot renumber a contract clause any more than Tab or the
+   *  ribbon can. A null para means the estimator had set nothing and the template's own properties
+   *  applied, which is a delete rather than a write. */
+  function undoRestorePara(el, para) {
+    const id = Number(el.dataset.id);
+    const now = paraNow(id);
+    if (!now) return false;
+    if (!para) {
+      if (!paraById.has(id) || now.locked) return false;
+      paraById.delete(id);
+      applyParaToEl(el, paraNow(id));
+      return true;
+    }
+    const indent = Number(para.indent) || 0;
+    if (now.bullet === !!para.bullet && now.indent === indent) return false;
+    return setParaState(id, { bullet: !!para.bullet, indent: indent }, el);
+  }
+
+  /** Put one entry back on the page. */
+  function undoRestore(snap) {
+    const prevBusy = _undoBusy;
+    _undoBusy = true;
+    try {
+      // THE CARET GOES FIRST, out of the way. renderNotesPreview refuses to rebuild the bullets
+      // while the selection is inside them (focusInside reads the caret, not just activeElement),
+      // and an undo of a deleted bullet is exactly the case that has to rebuild them. It is put
+      // back at the end of this function, from the entry, which is where it was before the edit.
+      try { const s = window.getSelection(); if (s && s.removeAllRanges) s.removeAllRanges(); } catch {}
+      const ta = document.getElementById("notes-text");
+      if (snap.notes != null && ta && String(ta.value || "") !== snap.notes) {
+        ta.value = snap.notes;
+        try { renderNotesPreview(); } catch {}
+        try { TW.setState({ notes_text: ta.value }); } catch {}
+      }
+      const live = undoLiveLines();
+      const fire = new Map();             // one editing host -> one line in it to dispatch from
+      for (const rec of snap.lines) {
+        const el = live.get(rec.key);
+        if (!el) continue;                // that line is not on the page any more; skip it
+        let touched = false;
+        if (rec.runs) {
+          if (!runsEqual(editRuns(el), rec.runs)) { renderRuns(el, rec.runs); touched = true; }
+          if (el.classList.contains("tw-fmt") !== !!rec.fmt) {
+            el.classList.toggle("tw-fmt", !!rec.fmt);
+            touched = true;
+          }
+          if (undoRestorePara(el, rec.para)) touched = true;
+        } else if (serializeBlock(el) !== rec.text) {
+          el.textContent = rec.text;      // the computed families' own channel: see clearBoxLine
+          touched = true;
+        }
+        if (!touched) continue;
+        const host = editingBox(el) || docSurface;
+        if (!fire.has(host)) fire.set(host, el);
+      }
+      // ONE dispatch per host, because every persistence sweep hanging off input is box-wide: N
+      // events would each re-do the same sweep. This is what carries the restored text back into
+      // the draft -- the dirty flags, the paragraph overrides, the three computed channels.
+      fire.forEach((el) => { el.dispatchEvent(new Event("input", { bubbles: true })); });
+      schedulePersistOverrides();
+      // AND THE SELECTION, from the same entry. A box-wide selection is put back as a selection,
+      // so undoing a Ctrl+A delete leaves the estimator looking at exactly what they were looking
+      // at when they pressed Delete.
+      const after = undoLiveLines();
+      const selEls = (snap.boxSel || []).map((k) => after.get(k)).filter(Boolean);
+      if (selEls.length) {
+        boxSel = selEls;
+        paintBoxSel();
+        selectRangeAcross(selEls);
+      } else {
+        // AND A CARET EVEN WHEN THE ENTRY DOES NOT NAME ONE. The selection was dropped at the top
+        // of this function so the previews could rebuild, so leaving here without placing one
+        // takes the estimator's caret away entirely -- an undo they then have to click to recover
+        // from. The first line the restore touched is where they were, near enough.
+        const el = (snap.caret && after.get(snap.caret.key))
+                   || (fire.size ? fire.values().next().value : null);
+        if (el) {
+          const host = editingBox(el);
+          if (host && host.focus) { try { host.focus(); } catch {} }
+          const total = el.classList.contains("tw-block")
+            ? runsLength(editRuns(el)) : serializeBlock(el).length;
+          const named = snap.caret && after.get(snap.caret.key) === el;
+          const a = Math.max(0, Math.min(named ? (Number(snap.caret.start) || 0) : 0, total));
+          const b = Math.max(a, Math.min(named ? (Number(snap.caret.end) || 0) : 0, total));
+          placeSelection(el, a, b);
+        }
+      }
+      return true;
+    } finally {
+      _undoBusy = prevBusy;
+    }
+  }
+
+  /** One step in either direction. An entry that changes nothing is discarded rather than spent:
+   *  a Ctrl+Z that visibly does nothing is the same complaint this whole section exists to fix. */
+  function undoStep(from, to) {
+    let guard = UNDO_DEPTH + 2;
+    while (from.length && guard-- > 0) {
+      const snap = from.pop();
+      const mirror = undoMirror(snap);
+      if (mirror.sig === snap.sig) continue;
+      to.push(mirror);
+      if (to.length > UNDO_DEPTH) to.shift();
+      undoRestore(snap);
+      _undoUnit = null;                   // whatever is typed next opens a fresh unit
+      _undoUnitAt = 0;
+      return true;
+    }
+    return false;
+  }
+  function undoOnce() { return undoStep(_undoStack, _redoStack); }
+  function redoOnce() { return undoStep(_redoStack, _undoStack); }
+
+  /** A template reload, a work-type switch, a rebuild: the history described paragraphs that no
+   *  longer exist. Called from clearDocSurface, which cannot run before this module has been
+   *  evaluated -- initDocumentEditor is invoked at the very bottom of this file. */
+  function undoForget() {
+    _undoStack.length = 0;
+    _redoStack.length = 0;
+    _undoUnit = null;
+    _undoUnitAt = 0;
+  }
+
+  /** Which undo unit a keystroke belongs to, or null when it cannot change anything.
+   *
+   *  Ctrl+A, Ctrl+C, the arrows, Home/End, the function keys and the modifiers themselves all
+   *  return null: an entry for a keystroke that moves nothing is a dead press of Ctrl+Z later. */
+  function undoUnitForKey(e) {
+    const k = String(e.key || "");
+    const line = undoCaretLine();
+    if (e.ctrlKey || e.metaKey) {
+      const low = k.toLowerCase();
+      if (low === "b" || low === "i" || low === "u") return "fmt:" + low;
+      if (low === "v") return "paste";
+      if (low === "x") return "cut";
+      return null;
+    }
+    if (e.altKey) return null;
+    if (k === "Enter") return "enter";
+    if (k === "Tab") return "indent";
+    if (k === "Backspace" || k === "Delete")
+      return boxSel && boxSel.length ? "boxclear" : "type:delete:" + line;
+    if (k.length !== 1) return null;
+    return "type:insert:" + line;
+  }
+
+  // CAPTURE PHASE, so the pre-image is taken before any of the handlers below have run and before
+  // the browser has applied its own default. Every one of them mutates.
+  docSurface.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;            // an IME owns the keystroke; its commit lands on beforeinput
+    const low = String(e.key || "").toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (low === "z" || low === "y")) {
+      // BOTH SPELLINGS OF REDO. Ctrl+Y is Word's and Ctrl+Shift+Z is everything else's, and the
+      // people using this come from both; honouring one of them is refusing half the office.
+      e.preventDefault();
+      if (low === "y" || e.shiftKey) redoOnce(); else undoOnce();
+      return;
+    }
+    const unit = undoUnitForKey(e);
+    if (unit) undoPush(unit, e.target);
+  }, true);
+
+  /** THE EDITS THAT ARRIVE WITHOUT A KEYSTROKE: a context-menu Delete, a drag-and-drop inside the
+   *  box, an IME commit, a spell-check replacement. Each of them mutates the document and none of
+   *  them is visible to a keydown handler. A keyboard-driven edit reaches here too, one beat after
+   *  the keydown above already pushed -- and finds the document unchanged, so the signature check
+   *  in undoPush drops it. */
+  docSurface.addEventListener("beforeinput", (e) => {
+    const type = String(e.inputType || "");
+    if (type === "insertCompositionText") return;
+    // NOT SAFE TO READ THE CARET HERE -- see undoCaretRec. A keyboard-driven edit has already been
+    // pushed by the keydown above, caret and all, so the only entries this leaves without one are
+    // the mouse-driven and IME edits, which no keydown ever sees.
+    undoPush("type:" + (type.indexOf("delete") === 0 ? "delete" : "insert") + ":" + undoCaretLine(),
+             e.target, false);
+    // A SPACE CLOSES THE WORD -- not by pushing anything, since the space belongs to the unit that
+    // is open, but by making whatever comes next open a new one. That is what turns Ctrl+Z into
+    // "give me back the word I just typed" rather than "give me back the paragraph".
+    //
+    // Read off the TEXT BEING INSERTED rather than off the key, and read here rather than on the
+    // keydown above, for the same two reasons. The keydown fires BEFORE this event, so closing the
+    // unit there would leave this very space opening the next one -- the pre-image would be taken
+    // from before the space, and an undo would take the space away with the word after it. And a
+    // space arrives by more routes than the spacebar: an IME commit, a pasted phrase, a
+    // spell-check replacement all end a word just as squarely.
+    if (type.indexOf("delete") !== 0 && /\s/.test(String(e.data == null ? "" : e.data))) {
+      _undoUnit = null;
+      _undoUnitAt = 0;
+    }
+  }, true);
+
+  /** A paste is its own unit and needs its own listener: the page's paste handler cancels the
+   *  event, so the browser never raises the beforeinput that would otherwise cover it. */
+  docSurface.addEventListener("paste", (e) => { undoPush("paste", e.target); }, true);
+
+  /** THE RIBBON'S PRESSES, captured from the ribbon's container rather than from inside
+   *  ensureFmtBar -- the bar is built lazily and this row is in the page from the start, and a
+   *  capture listener here runs before the bar's own mousedown handler.
+   *
+   *  On mousedown, not click: by the time a click fires the ribbon has already preventDefault()ed
+   *  its way around the selection, and the pre-image wants the document as it was when the
+   *  estimator reached for the button. A mousedown that never becomes a click leaves an entry that
+   *  changes nothing, which undoStep discards on the way past. */
+  (function wireRibbonUndo() {
+    const host = document.getElementById("fmt-ribbon");
+    if (!host || !host.addEventListener) return;
+    const mark = (name) => undoPush("ribbon:" + name + ":" + Date.now(),
+                                    lineAtSelection() || fmtTargetBlock());
+    host.addEventListener("mousedown", (e) => {
+      const btn = e.target && e.target.closest
+        ? e.target.closest("button[data-fmt], button[data-para]") : null;
+      if (btn) mark(String(btn.dataset.fmt || btn.dataset.para || "press"));
+    }, true);
+    host.addEventListener("change", (e) => {
+      const sizeBox = e.target && e.target.closest ? e.target.closest("[data-fmt]") : null;
+      if (sizeBox) mark("size");
+    }, true);
+  })();
 
   // ── Wire the formatting ribbon to the focused block ───────────────────────
   // On screen before anything is focused, in its inert state. That IS the "static like a ribbon
