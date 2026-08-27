@@ -17,19 +17,31 @@ const ROOT = process.argv[2];
 const SRC = fs.readFileSync(path.join(ROOT, "js", "done.js"), "utf8");
 const out = {};
 
-// ── lift the real functions out of done.js ───────────────────────────────────
-// Injected by CONCATENATION, never into a template literal: done.js is full of backticks and a
-// template-literal harness terminates on the first one.
-function grab(sig) {
-  const re = new RegExp("function " + sig + " \\{[\\s\\S]*?\\n  \\}");
-  const m = re.exec(SRC);
-  if (!m) throw new Error("function " + sig + " is gone from done.js - rewrite this harness");
+// ── lift the real functions, from the files that own them ────────────────────
+// The digest and the comparison live in shared.js: TWO pages need the same answer, the Files
+// page to gate the send and the Proposal step to say why an estimator was sent there. The panel
+// stays in done.js because it is DOM. Injected by CONCATENATION, never into a template literal:
+// these files are full of backticks and a template-literal harness terminates on the first one.
+const SHARED = fs.readFileSync(path.join(ROOT, "shared.js"), "utf8");
+const PROPOSAL = fs.readFileSync(path.join(ROOT, "js", "proposal-review.js"), "utf8");
+
+// REGEX LITERALS, not new RegExp(string). A string pattern needs every backslash doubled, and a
+// pattern that loses one silently stops matching and reports the function as "gone" - which is
+// a harness failure dressed as a product failure.
+function grabFrom(src, where, re, name) {
+  const m = re.exec(src);
+  if (!m) throw new Error("function " + name + " is gone from " + where + " - rewrite this harness");
   return m[0];
 }
 
-const LIFTED = [grab("localPublishDigest\\(s\\)"),
-                grab("docDriftRows\\(d\\)"),
-                grab("showStaleDoc\\(rows, mode\\)")].join("\n");
+const LIFTED = [
+  grabFrom(SHARED, "shared.js", /function publishDigest\(s\) \{[\s\S]*?\n  \}/, "publishDigest"),
+  grabFrom(SHARED, "shared.js", /function docDrift\(d\) \{[\s\S]*?\n  \}/, "docDrift"),
+  // fmtUsd is what docDrift formats money with, and a sibling of it in shared.js. Lift the real
+  // one: a stub would let these tests pass on figures in a format no estimator ever sees.
+  grabFrom(SHARED, "shared.js", /function fmtUsd\(n\) \{[\s\S]*?\n  \}/, "fmtUsd"),
+  grabFrom(SRC, "done.js", /function showStaleDoc\(rows, mode\) \{[\s\S]*?\n  \}/, "showStaleDoc"),
+].join("\n");
 
 // ── the smallest DOM the panel touches ───────────────────────────────────────
 function makeEl(id) {
@@ -54,10 +66,8 @@ function load() {
     getElementById: (id) => nodes[id] || null,
     createElement: () => makeEl(""),
   };
-  const TW = { fmtUsd: (n) => "$" + Number(n).toLocaleString("en-US") };
-  const fns = new Function("document", "window", "TW",
-    LIFTED + "; return { localPublishDigest, docDriftRows, showStaleDoc };")(
-      doc, { TW: TW }, TW);
+  const fns = new Function("document", "window",
+    LIFTED + "; return { publishDigest, docDrift, showStaleDoc };")(doc, {});
   return Object.assign({ nodes: nodes }, fns);
 }
 
@@ -84,7 +94,7 @@ const AGREED = (() => {
 // ── the verdict, on real blobs ───────────────────────────────────────────────
 out.verdict = (() => {
   const h = load();
-  const rows = (s) => h.docDriftRows(h.localPublishDigest(s));
+  const rows = (s) => h.docDrift(h.publishDigest(s));
   const flat = (s) => rows(s).map((r) => r.k + ":" + r.pdf + ">" + r.now);
   return {
     // The report: revised to Epoxy at $18,670, the document still Polish at $13,265.
@@ -139,7 +149,7 @@ out.verdict = (() => {
 })();
 
 // ── the mirror ───────────────────────────────────────────────────────────────
-// localPublishDigest is a copy of the server's _publish_digest, and a copy that disagrees with
+// TW.publishDigest is a copy of the server's _publish_digest, and a copy that disagrees with
 // the original is worse than no copy: it would clear a send the server refuses (a dead Send
 // button with no explanation) or refuse one the server would have taken (a proposal that cannot
 // be sent at all). Each blob goes out WITH the digest so the python side can feed the identical
@@ -170,13 +180,13 @@ out.mirror = (() => {
                        proposal_payload: { rooms: [{ name: "Polish", is_base: true }] } },
   };
   return Object.keys(blobs).map((name) => ({
-    name: name, blob: blobs[name], digest: h.localPublishDigest(blobs[name]) }));
+    name: name, blob: blobs[name], digest: h.publishDigest(blobs[name]) }));
 })();
 
 // ── the panel ────────────────────────────────────────────────────────────────
 out.panel = (() => {
   const h = load();
-  const rows = h.docDriftRows(h.localPublishDigest(DRIFTED));
+  const rows = h.docDrift(h.publishDigest(DRIFTED));
   const box = h.nodes["stale-doc"], lede = h.nodes["stale-doc-lede"];
 
   h.showStaleDoc(rows, "blocked");
@@ -196,7 +206,7 @@ out.panel = (() => {
 
   // A base bid's name is a worksheet label the estimator typed. It has to arrive as text.
   const h2 = load();
-  h2.showStaleDoc(h2.docDriftRows(h2.localPublishDigest({
+  h2.showStaleDoc(h2.docDrift(h2.publishDigest({
     proposal_lump_sum: 1, rooms: [{ name: "<img src=x>", is_base: true }],
     proposal_payload: { rooms: [{ name: "<b>Polish</b>", is_base: true, bid: { total: 1 } }],
                         values: { proposal_lump_sum: 1 } },
@@ -204,7 +214,9 @@ out.panel = (() => {
 
   return { blocked, mount, sent, cleared,
            rawName: h2.nodes["stale-doc-rows"].read(),
-           usesInnerHtml: /innerHTML/.test(grab("showStaleDoc\\(rows, mode\\)")) };
+           usesInnerHtml: /innerHTML/.test(
+             grabFrom(SRC, "done.js", /function showStaleDoc\(rows, mode\) \{[\s\S]*?\n  \}/,
+                      "showStaleDoc")) };
 })();
 
 // ── the wiring: where the gate sits in the send handler ──────────────────────
@@ -215,7 +227,7 @@ out.wiring = (() => {
   const iFlush = SRC.indexOf("TW.flushState()");
   // By its own line, not by the shared expression: the same call is made on mount, EARLIER in
   // the file, and matching that one would report the ordering of the wrong check.
-  const iGate = SRC.indexOf("const stale = docDriftRows(localPublishDigest(TW.getState()))");
+  const iGate = SRC.indexOf("const stale = TW.docDrift(TW.publishDigest(TW.getState()))");
   const iPublish = SRC.indexOf("/api/portal/publish");
   const between = (iGate > 0 && iPublish > iGate) ? SRC.slice(iGate, iPublish) : "";
   return {
@@ -228,13 +240,41 @@ out.wiring = (() => {
     // and the estimator reloads the page to escape it.
     gateRestoresButton: /portalBtn\.disabled = false/.test(between),
     // Checked on mount too, so the news does not arrive at the last click.
-    checkedOnMount: /showStaleDoc\(docDriftRows\(localPublishDigest\(TW\.getState\(\)\)\)/.test(SRC),
+    checkedOnMount: /showStaleDoc\(TW\.docDrift\(TW\.publishDigest\(TW\.getState\(\)\)\)/.test(SRC),
     // The post-send warning is NOT replaced by the gate. Both exist: the gate cannot see drift
     // that arrives from another tab between the flush and the write.
     keepsPostSendWarning: /function publishDrift/.test(SRC)
       && /publishDrift\(j\.sent_snapshot\)/.test(SRC),
     fixButtonGoesToTheProposalStep:
       /stale-doc-fix[\s\S]{0,1200}?proposal-review\.html/.test(SRC),
+  };
+})();
+
+// ── the Proposal step's arrival line ─────────────────────────────────────────
+// Executed where it can be: the SENTENCE is built from the same rows, so the figures the
+// estimator reads on arrival are the figures the Files page refused the send over. Whether it
+// auto-submits is a claim about a handler that needs the whole editor to run, so that one is
+// read off the source and said out loud below.
+out.arrival = (() => {
+  const h = load();
+  const rows = h.docDrift(h.publishDigest(DRIFTED));
+  const block = /function explainWhyYouAreHere\(\) \{[\s\S]*?\n  \}/.exec(PROPOSAL);
+  return {
+    sentence: "It shows " + rows.map((r) => r.say).join(", and ") + ".",
+    present: !!block,
+    // The flag the Files page sends, and nothing else opening this door.
+    readsTheFlag: !!block && /resync/.test(block[0]) && /=== "1"/.test(block[0]),
+    // Nothing may press Continue for them: the document has to be looked at. `continueToDone`,
+    // `.click(`, `submit(` and `.onclick =` are the four ways this could go wrong.
+    autoSubmits: !!block && /continueToDone|\.click\(|submit\(|onclick\s*=/.test(block[0]),
+    // Focused and scrolled, so it is unmissable without anything being disabled.
+    focusesContinue: !!block && /generate-btn[\s\S]*?\.focus\(\)/.test(block[0]),
+    // Silent when the halves already agree: arriving on a fixed project must not be told off.
+    silentWhenClean: !!block && /if \(!rows\.length\) \{ note\.hidden = true; return; \}/.test(block[0]),
+    // Fresh state, not the module's one-shot snapshot.
+    readsFreshState: !!block && /TW\.getState\(\)/.test(block[0]),
+    // One comparison, shared with the gate. A local copy here is the original sin.
+    usesTheSharedComparison: !!block && /TW\.docDrift\(TW\.publishDigest\(/.test(block[0]),
   };
 })();
 

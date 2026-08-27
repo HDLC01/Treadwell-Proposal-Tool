@@ -167,21 +167,26 @@ out.donePage = (() => {
 
 // publishDrift executed against real shapes.
 //
-// LIFT ITS CALLEES TOO. publishDrift delegates the document comparison to docDriftRows, which
-// the pre-send gate and the warning panel also use, so injecting publishDrift alone gives every
-// scenario below a ReferenceError. This is the sixth time in this repo that adding a function an
-// already-lifted function calls has killed a harness; the fix is to keep this list current, not
-// to inline the helper back into the caller.
+// GIVE IT ITS CALLEES. publishDrift delegates the document comparison to TW.docDrift, which the
+// pre-send gate and the Proposal step's arrival line also use, so injecting publishDrift with a
+// bare TW stub gives every scenario below a TypeError. Adding a function an already-lifted
+// function calls is the ReferenceError that has killed a harness six times in this repo.
+//
+// The dependency comes out of the REAL shared.js, via the same loader the flushState cases use,
+// rather than being restated in this stub. A second copy of that comparison living in test code
+// would be the same two-descriptions-of-one-truth mistake the product just fixed, and it would
+// agree with itself forever while the product drifted underneath it.
 out.drift = (() => {
   const src = fs.readFileSync(path.join(ROOT, "js", "done.js"), "utf8");
   const m = /function publishDrift\(sent\) \{[\s\S]*?\n  \}/.exec(src);
-  const dep = /function docDriftRows\(d\) \{[\s\S]*?\n  \}/.exec(src);
   if (!m) return { missing: true };
-  if (!dep) return { missingDep: "docDriftRows" };
+  const real = loadTW({}).TW;
+  if (typeof real.docDrift !== "function") return { missingDep: "TW.docDrift" };
   let STATE = {};
-  const fn = new Function("TW", "window", dep[0] + "\n" + m[0] + "; return publishDrift;")(
-    { getState: () => STATE, fmtUsd: (n) => "$" + Number(n).toFixed(2) },
-    { TW: { fmtUsd: (n) => "$" + Number(n).toFixed(2) } });
+  const usd = (n) => "$" + Number(n).toFixed(2);
+  const fn = new Function("TW", "window", m[0] + "; return publishDrift;")(
+    { getState: () => STATE, fmtUsd: usd, docDrift: real.docDrift },
+    { TW: { fmtUsd: usd } });
   const set = (s) => { STATE = s; };
 
   // Exactly the 2026-08-13 incident: sent base Epoxy @29942, page showing Room 1 @15801.

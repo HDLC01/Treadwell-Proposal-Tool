@@ -32,7 +32,7 @@ another device, or a colleague editing between the flush and the write. The post
 (test_publish_race.py) reads the snapshot the server actually took, so it still speaks up in
 those cases. Belt and braces: a send that lands drifted must never land silently.
 
-EXECUTED, NOT GREPPED. `localPublishDigest` mirrors the server's `_publish_digest`, and a
+EXECUTED, NOT GREPPED. `TW.publishDigest` mirrors the server's `_publish_digest`, and a
 mirror that disagrees with the original is worse than no mirror: it would clear a send the
 server refuses, or refuse one the server would take. The mirror is run against the real blob
 shapes from the incident. The 2026-08-12 outage settled what source-text assertions are worth:
@@ -172,7 +172,7 @@ _SHARED = ("base_label", "lump_sum", "option_count",
     "emptyDraft", "junkRooms", "junkPayload", "payloadNoValues",
 ])
 def test_the_browser_reaches_the_same_verdict_as_the_server(ran, case):
-    """THE invariant that makes a client-side gate safe. `localPublishDigest` is a copy of
+    """THE invariant that makes a client-side gate safe. `TW.publishDigest` is a copy of
     `_publish_digest`, and the two must read every field the same way: the same `show !== false`
     option rule, the same base-only fallback to the payload's own lump sum, the same "we cannot
     read this" answer on a malformed blob.
@@ -334,3 +334,97 @@ def test_the_fix_control_says_what_it_does():
     assert 'id="stale-doc-fix"' in done
     i = done.index('id="stale-doc-fix"')
     assert "Update the PDF" in done[i:i + 120]
+
+
+# ── the Proposal step: why the estimator is standing there ───────────────────
+# The Files page refuses the send and offers one button. That button lands on this step, and the
+# coordinator's ruling on 2026-08-27 was explicit about what must NOT happen next: no auto-firing
+# Continue. "Auto-firing Continue and bouncing the estimator back to Files gives them a
+# regenerated document they never saw, which is the same failure wearing better clothes. The
+# reason landing on the Proposal step is correct is that the document is on screen there."
+@needs_node
+def test_the_arrival_line_names_the_same_figures_as_the_refusal(ran):
+    """Somebody who followed a control across a page boundary must not have to remember what the
+    previous page told them. Same rows, same words, same numbers, from the same function."""
+    sentence = ran["arrival"]["sentence"]
+    assert "$13,265" in sentence and "$18,670" in sentence, sentence
+    assert "Polish as the base bid, not Epoxy" in sentence, sentence
+
+
+@needs_node
+def test_the_arrival_line_NEVER_presses_continue(ran):
+    """THE test on this half, and the one rule this whole defect exists to teach: never send a
+    document nobody has looked at. Regenerating behind the estimator and returning them to Files
+    would produce a correct PDF that no human had seen, which is the same bug with better
+    numbers. Continue is focused and named. It is not fired."""
+    assert ran["arrival"]["present"], "the arrival explanation is gone"
+    assert ran["arrival"]["autoSubmits"] is False, (
+        "something on arrival submits, clicks or rebinds Continue — the estimator never sees "
+        "the document they are about to send")
+
+
+@needs_node
+def test_continue_is_made_unmissable_without_disabling_anything(ran):
+    """Focused, so a keyboard user is already on it, and scrolled into view. The page is not
+    hijacked: nothing else is disabled and no other control is moved."""
+    assert ran["arrival"]["focusesContinue"]
+
+
+@needs_node
+def test_the_arrival_line_only_appears_when_the_files_page_sent_them(ran):
+    """`resync=1` is the signal. An estimator who opened this step to edit the scope wording has
+    no reason to be told about a document they were not warned about."""
+    assert ran["arrival"]["readsTheFlag"]
+
+
+@needs_node
+def test_the_arrival_line_stays_quiet_on_a_project_already_fixed(ran):
+    """Arriving with the flag on a project whose halves now agree (a second visit, a Back
+    button) must say nothing. Telling somebody off for a problem they already fixed is how a
+    warning gets ignored the next time it is real."""
+    assert ran["arrival"]["silentWhenClean"]
+
+
+@needs_node
+def test_the_arrival_line_reads_fresh_state(ran):
+    """`const state = TW.getState()` at the top of proposal-review.js is a ONE-SHOT snapshot,
+    and a draft arriving from the server a moment later changes both halves. A figure painted
+    from the snapshot could be a figure that is no longer true."""
+    assert ran["arrival"]["readsFreshState"]
+
+
+@needs_node
+def test_both_pages_use_ONE_comparison(ran):
+    """The Files page gates the send on it; the Proposal step explains it. A second copy on the
+    second page is precisely the two-descriptions-of-one-truth mistake that produced this bug —
+    the portal page and the PDF each describing the same pricing, drifting apart in silence."""
+    assert ran["arrival"]["usesTheSharedComparison"]
+
+
+def test_the_comparison_lives_in_shared_js_not_on_a_page():
+    """It moved out of done.js the moment a second page needed the same answer. Two callers, one
+    definition; and shared.js is where the draft blob already lives."""
+    shared = (FRONTEND / "shared.js").read_text(encoding="utf-8")
+    assert "function publishDigest(s)" in shared and "function docDrift(d)" in shared
+    assert "publishDigest," in shared and "docDrift," in shared, (
+        "the functions exist but are not exported on TW")
+    done = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
+    assert "function docDriftRows" not in done and "function localPublishDigest" not in done, (
+        "a second copy is still sitting on the Files page")
+
+
+def test_the_arrival_note_is_pinned_chrome_and_announced():
+    """A sibling of the formatting ribbon, so it sits in the permanently-visible chrome above the
+    scrolling canvas instead of scrolling away while it is being read. `role="status"` so a
+    screen reader hears it without the focus having to move."""
+    html = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
+    i_ribbon = html.index('id="fmt-ribbon"')
+    i_note = html.index('id="resync-note"')
+    i_canvas = html.index('id="fields-panel"')
+    assert i_ribbon < i_note < i_canvas, "the note is not in the chrome above the canvas"
+    assert 'role="status"' in html[i_note - 120:i_note + 120]
+    # Same trap as the Files panel: a class `display` outranks the `hidden` attribute.
+    assert ".resync-note { display:flex" in html
+    assert ".resync-note[hidden] { display:none; }" in html
+    # One warning colour across the tool.
+    assert "#fdf6e3" in html and "#7a5c00" in html
