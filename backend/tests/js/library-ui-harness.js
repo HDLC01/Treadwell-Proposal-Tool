@@ -937,6 +937,10 @@ async function conflictChecks() {
     "use strict";
     var timers = {};
     var pendingPatch = {};
+    // Declared here rather than grab()bed, exactly like its two siblings above: this scope owns
+    // the save machinery's state so a scenario can drive it. flush() reads it to refuse a second
+    // PATCH while one is on the wire.
+    var inFlight = {};
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
     function saving(m) { hooks.saving.push(m); }
@@ -1181,6 +1185,70 @@ async function conflictChecks() {
     screenRepainted: c.hooks.renders.join(",") === "list,panel",
     toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
   };
+
+  // ── EXECUTED: a second save cannot go out while the first is on the wire ────
+  // THE RACE THIS PREVENTS IS AGAINST OURSELVES, not another person.
+  //
+  // Every successful PATCH bumps `updated_at`, and an assembly save declares the version it edited.
+  // So before the in-flight guard: save #1 leaves, save #2's timer fires 600ms later and reads the
+  // SAME `updated_at` (adoptSaved has not run yet), goes out, and the server correctly calls it
+  // stale. `adoptConflict` then replaced the model, dropped the buffer and blamed a person who does
+  // not exist. With the bulk picker that could discard a whole batch of lines.
+  //
+  // NOTE WHY THE SCENARIO ABOVE DID NOT CATCH IT: it calls fire() a second time only AFTER release,
+  // so a second flush never begins mid-flight and the guard is never reached. This one fires while
+  // the first request is still awaiting, which is the only shape that exercises it.
+  {
+    const c = run409();
+    c.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = c.fire();                     // #1 leaves and awaits api()
+    await new Promise((r) => setTimeout(r, 0));
+    c.s.patchSoon("assemblies", "a1", { name: "AB" });
+    await c.fire();                              // #2 tries WHILE #1 is on the wire
+    const midFlight = { requests: c.hooks.requests.length, pending: c.s.pending(),
+                        armed: c.s.armed() };
+    // #1 succeeds and hands back a NEW version stamp.
+    c.release({ status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", name: "A", unit: "SF", lines: [], updated_at: "T2" } }) });
+    await firing;
+    await c.fire();                              // now #2 gets its turn
+    out.inFlight = {
+      // Only ONE request while the first was open — the second waited instead of racing.
+      onlyOneWhileOpen: midFlight.requests === 1,
+      // …and it WAITED rather than being dropped: the edit was still on screen and unsaved.
+      editStillQueued: midFlight.pending > 0,
+      stillArmed: midFlight.armed,
+      // Both saves eventually reach the server.
+      bothEventuallySent: c.hooks.requests.length === 2,
+      // AND THE POINT OF ALL OF IT: the second save carries the version the first one produced,
+      // so it cannot 409 against our own write.
+      secondCarriedTheNewVersion: (function () {
+        var bodies = c.sentValues();
+        var last = bodies[bodies.length - 1] || {};
+        return last.expected_updated_at;
+      })(),
+      firstCarriedTheOldVersion: (function () {
+        var bodies = c.sentValues();
+        return (bodies[0] || {}).expected_updated_at;
+      })(),
+      noUnhandledError: c.hooks.errors.length === 0,
+    };
+  }
+
+  // A LOCK THAT IS NEVER RELEASED WOULD BE WORSE THAN THE BUG. flush returns early on a 409 and on
+  // any non-ok status, so the release lives in a `finally` — this proves a record still saves after
+  // one of those early returns rather than being silenced for the rest of the session.
+  {
+    const c = run409();
+    c.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = c.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    c.release({ status: 500, ok: false, json: async () => ({ error: "boom" }) });
+    await firing;
+    c.s.patchSoon("assemblies", "a1", { name: "B" });
+    await c.fire();
+    out.inFlight.savesAgainAfterAFailure = c.hooks.requests.length === 2;
+  }
 
   // And the belt to that brace: a timer that fires with nothing queued must be a quiet no-op,
   // not a TypeError thrown outside the try.
