@@ -275,9 +275,20 @@ def test_releasing_a_grip_does_not_open_the_overflow_peek(ran):
     assert ran["peek"]["resetClickOpened"] is False
 
 
-def test_the_overflow_peek_still_works(ran):
-    """The guard above must skip the grips, not disable the feature."""
-    assert ran["peek"]["bodyClickOpened"] is True
+def test_the_overflow_peek_still_works_but_only_from_its_own_button(ran):
+    """The guard above must skip the grips, not disable the feature — and since 2026-08-26 the
+    feature is a labelled control rather than a click on the box.
+
+    A click on the box body opened it until then, guarded by "unless the click landed on a line",
+    which meant the padding, the gaps between paragraphs and the strip under the last one all
+    expanded the box. Those are the pixels a Word user clicks to start typing (Hanz: "Editing from
+    one text box to another is a bit clunky"), so they now land a caret and the peek is "Show
+    all", beside Collapse in the tools layer."""
+    assert ran["peek"]["bodyClickOpened"] is False, (
+        "a click on the box body expands it again, so a click meant for the text does something "
+        "else instead")
+    assert ran["peek"]["peekButtonOpened"] is True, (
+        "the Show all button does not open the box, so the hidden text cannot be read at all")
 
 
 def _css_rule(selector):

@@ -805,10 +805,18 @@ def test_the_chips_are_still_every_person_with_only_some_on(out):
 def test_the_chips_say_how_many_are_on_before_you_count_them(out):
     """New on 2026-08-13, and derived: nine chips of which some are green is a thing you have to
     count. It names you when you are one of them, because "am I on this one?" is the question
-    people ask about their own name."""
+    people ask about their own name.
+
+    SHORTER, AND ON THE HEADING LINE, since 2026-08-27. It read "4 of 9 people get this project's
+    emails, including you." and lived under the chips, third in the card after a 42-word paragraph.
+    The middle of that sentence was the card's own title said again: the heading two words to its
+    left says Notifications and the disclosure beneath the chips explains what green means. So the
+    node moved onto the heading and the sentence lost the part that was already on screen. Both
+    halves are still pinned here, because both are the claim: the derived count, and that it names
+    you when you are in it."""
     n = out["scenarios"]["approved"]["notify"]
-    assert n["summary"].startswith("4 of 9 people get"), n["summary"]
-    assert n["summary"].endswith("including you."), n["summary"]
+    assert n["summary"].startswith("4 of 9 people"), n["summary"]
+    assert n["summary"].endswith("including you"), n["summary"]
 
 
 @needs_node

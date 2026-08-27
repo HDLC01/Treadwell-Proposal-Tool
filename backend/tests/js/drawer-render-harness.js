@@ -115,6 +115,11 @@ const CONST_NAMES = [
   // attHtml reads nothing from it, but hydrateAtts owns it and the two are declared together --
   // lifting one name out of a pair is how a rename goes unnoticed.
   "ATT_URLS",
+  // The drawer's one icon (2026-08-27), read by every disclosure in it: renderDetail's notify
+  // card, paintRevisions' fold, followupPanelHtml, followupContactsHtml and threadHtml. SEVENTH
+  // addition to these lists for the same reason as the six below, and it would be the widest of
+  // them: a missing CHEV is a ReferenceError inside renderDetail itself, so the whole drawer.
+  "CHEV",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -133,7 +138,16 @@ const FN_NAMES = [
   // ReferenceError for another. It is safe to run here: it is async and unawaited, every
   // request goes through the harness's own `api` stub, and a failure `continue`s, so a
   // renderer test neither waits for it nor is broken by it.
-  "attHtml", "fileSize", "hydrateAtts",
+  // attFailed joins them for the same reason (2026-08-26): hydrateAtts calls it when a fetch
+  // fails, and a lifted caller with an unlifted callee is a ReferenceError that only fires on
+  // the error path -- the one nobody exercises by hand.
+  "attHtml", "fileSize", "hydrateAtts", "attFailed",
+  // The thread as a whole (2026-08-27): the day markers and the fold over replaced documents are
+  // facts a per-row renderer cannot see, so renderDetail builds the thread through this instead of
+  // mapping msgHtml. SEVENTH addition for the same reason as the six below: renderDetail calls it
+  // on every payload, so leaving it out is a ReferenceError for the whole drawer rather than a
+  // missing separator.
+  "threadHtml",
   "followupPanelHtml", "followupContactsHtml", "followupRow", "followupState",
   // The hold on a SENT bid (2026-08-21), read out of the follow-up log because portal_proposals
   // stores only the pause DATE. FIFTH addition to this list for the same reason as the four below,
@@ -298,10 +312,18 @@ function makeDom() {
         toggle: (c, on) => { const v = on === undefined ? !classes.has(c) : !!on; v ? classes.add(c) : classes.delete(c); return v; },
       },
       cls: () => Array.from(classes),
+      children: [],
+      removed: false,
+      appendChild(n) { this.children.push(n); if (n) n.parent = this; return n; },
+      remove() { this.removed = true; },
       addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
       removeEventListener() {},
       setAttribute(k, v) { this.attrs[k] = String(v); },
       getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+      // Was missing until 2026-08-27, and attFailed's `removeAttribute("href")` had never run in
+      // this harness because no scenario payload carried an attachment. It is the difference
+      // between a failed tile that is dead and one that still navigates somewhere.
+      removeAttribute(k) { delete this.attrs[k]; if (k === "href") this.href = ""; },
       focus() { dom.focused = this.key; },
       querySelector(sel) { return dom.query(sel); },
       querySelectorAll(sel) { return dom.queryAll(sel); },
@@ -330,6 +352,17 @@ function makeDom() {
   dom.el = (key, attrs) => {
     if (!dom.els.has(key)) dom.els.set(key, seed(makeEl(key), attrs));
     return dom.els.get(key);
+  };
+  // A node the page BUILT rather than one it rendered as markup. It is deliberately not parsed
+  // back into the bag of markup: a created node is only ever reachable through the reference the
+  // page holds, so what a test can honestly ask about it is where it was appended and what was
+  // set on it — which is precisely the pair that regressed when the caption arrived.
+  dom.made = [];
+  dom.create = (tag) => {
+    const el = makeEl("made:" + tag + ":" + dom.made.length);
+    el.tagName = String(tag).toUpperCase();
+    dom.made.push(el);
+    return el;
   };
   dom.query = (sel) => {
     const p = parts(sel);
@@ -406,6 +439,19 @@ const BOARD_ROWS = [
   { proposal_id: "held", project_name: "Nearman Creek", proposal_status: "sent",
     sent_at: "2026-08-10T12:00:00Z", assigned_estimator: "kyle@wetreadwell.com", unread: 0,
     followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-21" } },
+  // ── the redesign's two lists (2026-08-27) ──
+  // Eight sends where the price moved once, one send, and a project sent before revisions existed:
+  // the three shapes the Sent versions card has to answer for. And a thread carrying seven replaced
+  // revisions plus a replaced invoice, which is the case the fold exists for.
+  { proposal_id: "manyrevs", project_name: "Olathe Fire Station 4", proposal_status: "sent",
+    sent_at: "2026-07-02T14:00:00Z", assigned_estimator: "kyle@wetreadwell.com", unread: 0,
+    viewed_at: "2026-07-03T15:00:00Z", last_viewed_at: "2026-08-22T16:00:00Z" },
+  { proposal_id: "onerev", project_name: "Gardner Transfer Station", proposal_status: "sent",
+    sent_at: "2026-08-19T14:00:00Z", unread: 0 },
+  { proposal_id: "norevs", project_name: "Shawnee Mission Annex", proposal_status: "sent",
+    sent_at: "2026-05-01T14:00:00Z", unread: 0 },
+  { proposal_id: "foldable", project_name: "Lenexa Cold Line", proposal_status: "sent",
+    sent_at: "2026-07-02T14:00:00Z", unread: 0 },
   { proposal_id: "heldlost", project_name: "Cherrydale Annex", proposal_status: "closed_lost",
     sent_at: "2026-08-10T12:00:00Z", unread: 0,
     followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-21",
@@ -592,12 +638,51 @@ const NOTIFY = {
 // because the portal has no column for the mark — and `fails` lets one scenario prove that a refused
 // write does not leave the rep looking at a panel claiming it saved.
 const net = { requests: [], fails: false };
+// THE SENT VERSIONS, per project, as /api/draft/<id>/revisions serves them: newest first, which is
+// the order the real route returns and the order paintRevisions' "same price as the one before"
+// test depends on. Shaped after the bid this redesign was measured against: eight sends where the
+// price moved exactly once, which is the case the old card spent 456px on and the fold spends one
+// line on. `norevs` is the project sent before revisions existed, and every other pid falls through
+// to the same empty answer it always gave.
+const REVISIONS = {
+  manyrevs: [
+    { revision_no: 8, created_at: "2026-08-19T14:00:00Z", created_by: "kyle@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 7, created_at: "2026-08-14T14:00:00Z", created_by: "kyle@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 6, created_at: "2026-08-04T14:00:00Z", created_by: "kyle@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 5, created_at: "2026-07-28T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 90885, has_documents: true },
+    { revision_no: 4, created_at: "2026-07-21T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+    { revision_no: 3, created_at: "2026-07-15T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+    { revision_no: 2, created_at: "2026-07-09T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+    { revision_no: 1, created_at: "2026-07-02T14:00:00Z", created_by: "will@wetreadwell.com",
+      total: 84200, has_documents: true },
+  ],
+  onerev: [{ revision_no: 1, created_at: "2026-08-19T14:00:00Z",
+             created_by: "kyle@wetreadwell.com", total: 41250, has_documents: true }],
+  norevs: [],
+};
+const revisionsFor = (path) => {
+  const m = /^\/api\/draft\/([^/]+)\/revisions$/.exec(path);
+  return m ? { revisions: REVISIONS[m[1]] || [] } : null;
+};
 // The drawer payload the lifted openDetail is served, set by the deep-link scenario. Only the
 // bare detail GET reads it — every other path keeps the generic {ok:true} below, or a deposit
 // request would answer with a whole proposal.
 const detailFetch = { pid: null, data: null };
 const isDetailGet = (p, init) =>
   !(init && init.method) && /^\/api\/portal\/proposal\/[^/]+$/.test(p);
+// An attachment fetch, which is the ONE request in this drawer that wants bytes back rather than
+// JSON. Answerable both ways: until this existed the generic {ok:true} below had no .blob(), so
+// `await r.blob()` threw and hydrateAtts took its FAILURE branch on every call — the success path
+// had never run in this harness while it reported the feature green.
+const isFileGet = (p) => /\/file\/[^/]+$/.test(p);
+const files = { fails: false };
 const api = (p, init) => {
   net.requests.push({ path: p, method: (init && init.method) || "GET",
                       body: init && init.body ? JSON.parse(init.body) : null });
@@ -605,14 +690,21 @@ const api = (p, init) => {
     return Promise.resolve({ ok: true, status: 200,
                              json: () => Promise.resolve(detailFetch.data) });
   }
+  if (isFileGet(p)) {
+    return Promise.resolve(files.fails
+      ? { ok: false, status: 404, json: () => Promise.resolve({ error: "gone" }) }
+      : { ok: true, status: 200, blob: () => Promise.resolve({ size: 4, type: "image/png" }) });
+  }
   if (net.fails) {
     return Promise.resolve({ ok: false, status: 500,
                              json: () => Promise.resolve({ error: "postgrest down" }) });
   }
+  const revs = revisionsFor(p);
   return Promise.resolve({
     ok: true,
     json: () => Promise.resolve(p.includes("notify-overrides") ? NOTIFY
       : p.includes("estimators") ? { estimators: [{ email: "kyle@wetreadwell.com", name: "Kyle" }] }
+      : revs ? revs
       : { ok: true }),
   });
 };
@@ -645,11 +737,25 @@ const windowStub = { TW, TWAuth: { user: () => Object.assign({}, me) },
 // The query string, for the lifted openDetail's ?sec= deep link. Mutated per scenario.
 const locationStub = { search: "", assign: (u) => nav.push(String(u)) };
 
+// Object URLs minted and revoked, so the per-id cache can be checked from outside ATT_URLS.
+const minted = [];
+const revoked = [];
+
 const injected = [
   ["C", C],
   ...destructured,
   ["document", { getElementById: dom.getElementById, querySelector: dom.query,
-                 querySelectorAll: dom.queryAll, addEventListener() {}, activeElement: null }],
+                 querySelectorAll: dom.queryAll, addEventListener() {}, activeElement: null,
+                 // hydrateAtts builds the <img> itself, once it has bytes — the whole reason the
+                 // markup ships without a src. A created node is NOT in dom.html (nothing parses
+                 // it back into the bag of markup), so what it proves is where the node was put
+                 // and what was set on it, which is exactly what regressed.
+                 createElement: (tag) => dom.create(tag) }],
+  // No createObjectURL in Node, and portal.js never calls `new URL(...)`, so a two-method stub is
+  // the whole surface. Recorded, because "was an object URL minted for this id" is how the
+  // per-id cache is checked without reaching into ATT_URLS.
+  ["URL", { createObjectURL: (b) => { minted.push(b); return "blob:att-" + minted.length; },
+            revokeObjectURL: (u) => { revoked.push(u); } }],
   ["window", windowStub],
   ["location", locationStub],
   ["TW", TW],
@@ -925,17 +1031,29 @@ async function runScenario(name, s) {
   // the panel it repaints into offers the undo, that the mark survives on the board row the next
   // poll will render from, and that a refused write claims nothing.
   try {
-    /** Press one of the two won buttons and report what the drawer did about it. */
-    async function pressWon(id) {
+    /** Press one of the two won buttons and report what the drawer did about it.
+     *
+     *  BOTH buttons ask now (2026-08-27: the mark moves the card to another tab, and it was the one
+     *  control in that group without a prompt). `danger.answer` is the answer given, and the calls
+     *  are recorded on `danger.calls` so what the dialog SAID is assertable as well as that it was
+     *  asked. Every scenario below that presses through the mark says yes explicitly rather than
+     *  leaning on the module default, which is `false` on purpose so a scenario written before a
+     *  prompt existed cannot silently start pressing through one. */
+    async function pressWon(id, answer) {
       net.requests.length = 0;
+      danger.calls.length = 0;
+      danger.answer = answer === undefined ? true : answer;
       const b = dom.getElementById(id);
       if (!b) return { pressed: false };
       b.textContent = id === "won-mark" ? "Mark won" : "Undo — not won yet";
       await b.fire("click");
-      for (let i = 0; i < 6; i++) await tick();          // api() + .json() + the repaint
-      return { pressed: true, requests: net.requests.slice(), html: dom.html,
-               note: (dom.els.get("#won-note") || {}).textContent || "",
-               label: b.textContent, disabled: b.disabled };
+      for (let i = 0; i < 6; i++) await tick();          // the dialog + api() + .json() + the repaint
+      const r = { pressed: true, requests: net.requests.slice(), html: dom.html,
+                  asked: danger.calls.slice(),
+                  note: (dom.els.get("#won-note") || {}).textContent || "",
+                  label: b.textContent, disabled: b.disabled };
+      danger.answer = false;
+      return r;
     }
 
     // ── the not-sent drawer ──
@@ -943,6 +1061,14 @@ async function runScenario(name, s) {
     const nsRow = page.row("marknotsent");
     page.renderNotSent("marknotsent", nsRow);
     out.won.notSentOffered = { html: dom.html };
+    // CANCELLED FIRST, on a row nothing has touched yet, which is the only order that can prove
+    // "Cancel sends nothing": run after a successful mark, the board row already carries a stamp
+    // and an assertion about it would pass whatever the handler did.
+    // `|| ""` because JSON.stringify DROPS an undefined value, and a fresh row has no won_at at
+    // all: the python side would get a KeyError instead of a falsy answer, which reads as a broken
+    // harness rather than as the claim it is making.
+    out.won.markCancelled = Object.assign({}, await pressWon("won-mark", false),
+      { rowWonAt: (page.row("marknotsent") || {}).won_at || "" });
     const nsMark = await pressWon("won-mark");
     out.won.notSentMarked = Object.assign({}, nsMark, { rowWonAt: (page.row("marknotsent") || {}).won_at,
                                                         sig: page.sig() });
@@ -1526,6 +1652,247 @@ async function runScenario(name, s) {
   } catch (e) {
     out.errors.del = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
     me.role = "admin";
+  }
+
+  // ── THE REDESIGN'S TWO LISTS (2026-08-27) ─────────────────────────────────
+  // Both of these are collapses, and a collapse is the one kind of change that cannot be read off
+  // the source: what matters is how many rows and cards a real payload produces, which is a fact
+  // about the loop and not about the template inside it.
+  try {
+    /** Render a sent project's drawer, open the Proposal tab, and report the Sent versions card.
+     *
+     *  The card is painted asynchronously (loadRevisions is a fetch) into #rev-list, which is NOT
+     *  the drawer's own innerHTML, so it has to be read out of the DOM stub's side table rather
+     *  than out of dom.html. And it only paints on the PROPOSAL tab, because that is where
+     *  applySecPanel calls loadRevisions from, so a project that opens on Chat has to be walked
+     *  there first. */
+    async function revisionCard(pid) {
+      const data = payload({ proposal: { project_name: "Olathe Fire Station 4",
+                                         customer_name: "Marcus Ellery",
+                                         customer_email: "m.ellery@ellerycon.com", url: PORTAL_URL,
+                                         proposal_status: "sent", deposit_status: "pending",
+                                         contacts_status: "pending",
+                                         followup_state: { enrolled: true, enabled: true } },
+                             approval: null, contacts: [], deposits: [], recipient_activity: [],
+                             followups: [] });
+      page.open(pid);
+      page.cache(pid, data);
+      page.renderDetail(pid, data);
+      page.focusSection("proposal");
+      for (let i = 0; i < 4; i++) await tick();
+      const box = dom.els.get("#rev-list");
+      return { html: (box && box.innerHTML) || "",
+               answer: (dom.els.get("#rev-count") || {}).textContent || "" };
+    }
+    out.revisions = {
+      many: await revisionCard("manyrevs"),
+      one: await revisionCard("onerev"),
+      none: await revisionCard("norevs"),
+    };
+
+    // AN APPROVED PROPOSAL WITH NO VIEW STAMP ANYWHERE. Its own fixture rather than a tweak to the
+    // `approved` scenario, and it has to be: that one carries a per-contact viewed_at, which the
+    // Customer card falls back to, so its answer line never reaches this branch. A row like this is
+    // real - it is any proposal approved before the portal started recording views - and it is the
+    // one place "Not opened yet" would flatly contradict the Approved card two rows down.
+    const unseen = payload({ proposal: { project_name: "Bonner Springs Depot",
+                                         customer_name: "Ruth Alvarado",
+                                         customer_email: "r.alvarado@bsdepot.com", url: PORTAL_URL,
+                                         proposal_status: "approved", deposit_status: "pending",
+                                         contacts_status: "pending",
+                                         followup_state: { enrolled: true, enabled: true } },
+                             contacts: [], deposits: [], recipient_activity: [], followups: [] });
+    page.open("unseenapproved");
+    page.cache("unseenapproved", unseen);
+    page.renderDetail("unseenapproved", unseen);
+    out.unseenApproved = { html: dom.html };
+  } catch (e) {
+    out.errors.revisions = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  try {
+    // A thread carrying the live revision, seven replaced ones, a replaced invoice, the live
+    // invoice, and two ordinary messages either side. Dates chosen so two different days are in
+    // play, because the day markers are counted as well as the cards.
+    const rev = (n, at, dead) => ({
+      msg_type: "proposal_card", author_kind: "staff", created_at: at,
+      body: "Revision " + n + " of your proposal is ready to review.",
+      meta: dead ? { revision_no: n, superseded: true, superseded_by: n + 1 } : { revision_no: n },
+    });
+    const foldData = payload({
+      proposal: { project_name: "Lenexa Cold Line", customer_email: "ap@lenexa.com",
+                  url: PORTAL_URL, proposal_status: "sent", deposit_status: "requested",
+                  contacts_status: "pending", followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], recipient_activity: [], followups: [],
+      messages: [
+        { msg_type: "text", body: "Here is the bid for the cold line.", author_kind: "staff",
+          created_at: "2026-07-02T13:00:00Z" },
+        rev(1, "2026-07-02T14:00:00Z", true),
+        rev(2, "2026-07-09T14:00:00Z", true),
+        rev(3, "2026-07-15T14:00:00Z", true),
+        rev(4, "2026-07-21T14:00:00Z", true),
+        rev(5, "2026-07-28T14:00:00Z", true),
+        rev(6, "2026-08-04T14:00:00Z", true),
+        rev(7, "2026-08-14T14:00:00Z", true),
+        { msg_type: "deposit_request", body: "Your deposit invoice is attached.",
+          author_kind: "staff", created_at: "2026-08-14T15:00:00Z",
+          meta: { amount: 21050, invoice_no: "23.150-01", superseded: true,
+                  superseded_by: "23.150-02" } },
+        rev(8, "2026-08-19T14:00:00Z", false),
+        { msg_type: "system", body: "Approved by Marcus Ellery — Polish, Epoxy",
+          author_kind: "staff", created_at: "2026-08-22T15:00:00Z" },
+        { msg_type: "text", body: "Signed copy attached.", author_kind: "customer",
+          author_email: "ap@lenexa.com", created_at: "2026-08-22T16:26:00Z" },
+      ],
+    });
+    page.open("foldable");
+    page.cache("foldable", foldData);
+    page.renderDetail("foldable", foldData);
+    const html = dom.html;
+    const count = (re) => (html.match(re) || []).length;
+    out.fold = {
+      html: html,
+      cards: count(/class="chat-card /g),
+      folds: count(/class="sup-list"/g),
+      folded: count(/<div class="sup-list">[\s\S]*?<\/div>\s*<\/details>/g)
+        ? (html.match(/<div class="sup-list">([\s\S]*?)<\/details>/) || ["", ""])[1]
+        : "",
+      days: count(/class="note sys is-day"/g),
+      sysLines: count(/class="note sys"/g),
+    };
+  } catch (e) {
+    out.errors.fold = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── attachments: the caption, and the three states ─────────────────────────
+  // Hanz, 2026-08-26, on the drawer thread: "when sending out files and images, also fix how this
+  // looks I cant see the name of the file well." So the filename has to be VISIBLE, on the tile
+  // as well as the chip, and it has to survive all three of the states an attachment passes
+  // through -- which are reached through the NETWORK, not the payload. No message shape says
+  // "and now the fetch fails", so the three passes below drive the fetch instead.
+  //
+  // The DOM stub is a bag of markup: an element-level querySelector answers out of the WHOLE
+  // markup, not that element's subtree. So each pass renders ONE attachment, which makes every
+  // ".att-size" lookup in it unambiguous. The multi-attachment case is asserted on the markup.
+  try {
+    const attMsg = (atts) => ({
+      msg_type: "text", body: "Photos of the slab.", author_kind: "staff",
+      created_at: "2026-08-26T10:00:00Z", meta: { attachments: atts },
+    });
+    // A DISTINCT ID PER PASS, because ATT_URLS caches the object URL by id for the life of the
+    // page -- which is the point of it, the drawer re-renders on every poll. Reusing one id would
+    // serve the failing pass out of the successful pass's cache and it would quietly assert
+    // nothing. The names are long on purpose: an ellipsis is the case that matters.
+    const IMG = (id) => ({ id, name: "Slab-north-bay-before-grinding-2026-08-26.jpg",
+                           size: 2411724, image: true });
+    const DOC = (id) => ({ id, name: "Ridgeline-Cold-Storage-schedule-rev-C.docx",
+                           size: 41231, image: false });
+    // Just the attachment list out of the whole drawer: `title=` and `aria-label=` appear on
+    // thirty other controls in this panel, so counting them page-wide would prove nothing.
+    const attList = (html) => (/<div class="att-list">[\s\S]*?<\/div>/.exec(html) || [""])[0];
+
+    /** Render one attachment list into the thread, through the real entry point.
+     *
+     *  renderDetail fires hydrateAtts itself, unawaited, which is exactly how the browser runs
+     *  it -- so this drives no hydrator of its own; it renders and then lets the microtasks the
+     *  render started run to the end. `settle: false` returns the markup as the renderer emitted
+     *  it, before any of that has landed. */
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    const paint = async (atts, settle) => {
+      const data = JSON.parse(JSON.stringify(SCENARIOS.viewed.data));
+      data.messages = [attMsg(atts)];
+      dom.made.length = 0;
+      minted.length = 0;
+      page.open("attach");
+      page.renderDetail("attach", data);
+      const html = dom.html;
+      if (settle) { await tick(); await tick(); }
+      return html;
+    };
+
+    // The anchor stubs hydrateAtts actually mutated. It reaches them through
+    // querySelectorAll("[data-att]"), so they are keyed by THAT selector and its index — reading
+    // them back as ".att-img" would mint a fresh stub seeded from the markup's original classes
+    // and report the state before hydration while looking like the state after.
+    const touched = (i) => {
+      const el = dom.els.get("[data-att]#" + i);
+      if (!el) return null;
+      return { classes: el.cls(), href: el.href || "", target: el.target || "",
+               download: el.download || "", hasHref: "href" in el.attrs };
+    };
+    const text = (sel) => {
+      const el = dom.els.get(sel);
+      return el ? el.textContent : null;
+    };
+    const names = (html) => (html.match(/<span class="att-name">([^<]*)<\/span>/g) || [])
+      .map((s) => s.replace(/<[^>]*>/g, ""));
+    const sizes = (html) => (html.match(/<span class="att-size">([^<]*)<\/span>/g) || [])
+      .map((s) => s.replace(/<[^>]*>/g, ""));
+
+    // 1. LOADING — the markup as the renderer emitted it, before the fetch it started has
+    //    landed. The one thing that must NOT be here is a src-less <img>: that is exactly how a
+    //    browser draws a BROKEN image, torn page plus the alt text, and it was the whole bug.
+    files.fails = false;
+    const loading = attList(await paint([IMG("load1")], true));
+    out.att = { loading: {
+      html: loading,
+      captionNames: names(loading),
+      captionSizes: sizes(loading),
+      srclessImgs: (loading.match(/<img(?![^>]*\ssrc=)[^>]*>/g) || []).length,
+      spins: (loading.match(/class="att-spin"/g) || []).length,
+      // The tile's own opening tag. No aria-label on it: the filename is VISIBLE text inside the
+      // anchor now, so an aria-label would override that text and swallow the size in order to
+      // announce the same thing the eye already reads.
+      tileTag: (/<a class="att-img[\s\S]*?>/.exec(loading) || [""])[0],
+      chipTag: (/<a class="att-file"[\s\S]*?>/.exec(loading) || [""])[0],
+    } };
+
+    // 2. LOADED — the <img> is BUILT, with a src, and it goes into the WELL. Into the well and
+    //    not into the anchor: the anchor holds the caption now, and the version of this that
+    //    emptied the anchor would take the filename out along with the spinner.
+    await paint([IMG("ok1")], true);
+    const img = dom.made.filter((n) => n.tagName === "IMG")[0] || null;
+    out.att.loaded = {
+      tile: touched(0),
+      imgsCreated: dom.made.filter((n) => n.tagName === "IMG").length,
+      imgSrc: img ? img.src : null,
+      imgAlt: img ? img.alt : null,
+      imgParentClasses: img && img.parent ? img.parent.cls() : [],
+      spinnerRemoved: dom.els.has(".att-spin") ? !!dom.els.get(".att-spin").removed : null,
+      minted: minted.length,
+      captionNames: names(attList(dom.html)),
+    };
+
+    // 3. FAILED — a 404. The tile must keep its SHAPE (a chip in its place shrinks the bubble,
+    //    which is a reflow on the error path, in the feature whose whole point is not reflowing)
+    //    and the caption's second line must say what happened.
+    files.fails = true;
+    await paint([IMG("bad1")], true);
+    out.att.failedImage = {
+      tile: touched(0),
+      note: text(".att-size"),
+      brokeGlyphs: (attList(dom.html).match(/class="att-broke"/g) || []).length,
+      imgsCreated: dom.made.filter((n) => n.tagName === "IMG").length,
+    };
+
+    // And a non-image, which fails as a chip and STAYS a chip — no shape change at all.
+    await paint([DOC("bad2")], true);
+    out.att.failedFile = { chip: touched(0), note: text(".att-size") };
+    files.fails = false;
+
+    // 4. TWO OF THEM, one of each kind: the shape a real bid message has. Both must carry a
+    //    caption, and a very long name must be handed over WHOLE rather than cut in JS — the
+    //    ellipsis is CSS's job, and a name truncated here could never be recovered from the title.
+    const both = attList(await paint([IMG("two1"), DOC("two2")], true));
+    out.att.both = { names: names(both), sizes: sizes(both),
+                     tiles: (both.match(/class="att-img/g) || []).length,
+                     chips: (both.match(/class="att-file"/g) || []).length,
+                     chipTag: (/<a class="att-file"[\s\S]*?>/.exec(both) || [""])[0],
+                     titles: (both.match(/title="([^"]*)"/g) || [])
+                       .map((s) => s.slice(7, -1)) };
+  } catch (e) {
+    out.errors.att = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+    files.fails = false;
   }
 
   console.log(JSON.stringify(out));

@@ -321,11 +321,22 @@ const ROOT = new El("div");
 // fallback would be testing the degraded path and calling it the shipped one.
 const FMT_HOST = new El("div");
 FMT_HOST.attrs.id = "fmt-ribbon";
+// The NOTES bullets, and the sidebar textarea that is their single source of truth. Declared here,
+// above `document`, because one keystroke in a bullet used to re-fit EVERY box on the page (see the
+// notes-refit scenario at the end of this file) and syncNotesFromDom reaches the textarea by id.
+const notesPreviewEl = new El("div");
+const NOTES_TEXTAREA = new El("textarea");
+NOTES_TEXTAREA.attrs.id = "notes-text";
+NOTES_TEXTAREA.value = "";
+
+// Everything the page looks up by id, in one place. Null for anything else, which is the truthful
+// answer for a harness that mounts no pricing rail.
+const BY_ID = { "fmt-ribbon": FMT_HOST, "notes-text": NOTES_TEXTAREA };
 const document = {
   createElement: (t) => new El(t),
   activeElement: null,
   body: new El("body"),
-  getElementById: (id) => (id === "fmt-ribbon" ? FMT_HOST : null),
+  getElementById: (id) => (Object.prototype.hasOwnProperty.call(BY_ID, id) ? BY_ID[id] : null),
   querySelectorAll: (sel) => ROOT.querySelectorAll(sel),
 };
 const window = {
@@ -509,14 +520,19 @@ const LIFTED = [
   // only read the caret's row would leave the other two edited on screen and unedited in the
   // draft. syncSystemRow is the per-row half the sweep and the per-row listener share.
   fn("syncSystemRows"), fn("queueSysOvSave"), fn("syncSystemRow"),
+  // The NOTES channel. Lifted for one line inside it: the re-fit after a keystroke, which used to
+  // be fitNotesBox() -- every box on the page -- and is now the notes box alone. Stubbing it would
+  // leave the claim "typing in notes leaves the other boxes alone" untestable, which is how it got
+  // shipped the other way round.
+  fn("syncNotesFromDom"),
 ].join("\n\n");
 
 const BOX_LOOP = renderBoxLoop();
 const SYS_INPUT = delegated("  // ── Editable estimate-sourced fills: WORK systems ──");
 
 const api = new Function(
-  "document", "window", "docSurface", "systemPreviewEl", "form", "boxDesign", "Node",
-  "schedulePersistOverrides", "TW", "F", "dirtied", "repaginated",
+  "document", "window", "docSurface", "systemPreviewEl", "notesPreviewEl", "form", "boxDesign",
+  "Node", "schedulePersistOverrides", "TW", "F", "dirtied", "repaginated",
   `const state = TW.getState();
   let boxOverrides = new Map(); let boxLimits = null; let docZoom = null;
   let templateBlocks = [{ id: 1, txbx: 0 }];
@@ -525,6 +541,7 @@ const api = new Function(
   const setTimeout = (f) => { f(); return 1; };
   const clearTimeout = () => {};
   let _sysOvTimer = null;
+  let _notesOvTimer = null;
   const renderNotesPreview = () => {};
   const RUN_KEYS = F.RUN_KEYS;
   const coalesce = F.coalesce, patchRuns = F.patchRuns, runsLength = F.runsLength;
@@ -553,7 +570,8 @@ const api = new Function(
     const renderBlockList = () => {};
 ${BOX_LOOP}
   }
-  return { mountBoxes, renderSystemPreview, fitTxbx, fitNotesBox, growBoxToFit, growRoomPt,
+  return { mountBoxes, renderSystemPreview, syncNotesFromDom, fitTxbx, fitNotesBox, growBoxToFit,
+           growRoomPt,
            effectiveBoxRect, collectBoxOverrides, dragBoxRect,
            setLimits: (l) => { boxLimits = l; },
            clearOverrides: () => { boxOverrides = new Map(); },
@@ -594,7 +612,7 @@ ${BOX_LOOP}
            forgetParaState: () => { paraById.clear(); },
            paraStore: () => Array.from(paraById.entries()) };
   `
-)(document, window, docSurface, systemPreviewEl, form, boxDesign, Node,
+)(document, window, docSurface, systemPreviewEl, notesPreviewEl, form, boxDesign, Node,
   schedulePersistOverrides, TWStub, F, dirtied, repaginated);
 API = api;
 
@@ -1142,6 +1160,94 @@ const elState = (el) => ({ li: el.classList.contains("tw-li"),
   el.textContent = "Exclusions:  striping";
   api.paraAction(el, "bullet");
   out.textAndPara = { payload: api.collectOverrides() };
+}
+
+// ═══ part 4 — the PRICE rows declare no editing host of their own ════════════
+// Hanz, 2026-08-26: "why do we still have subboxes for the main text box?" / "Also remove the sub
+// textboxes the subsections."
+//
+// The WORK rows had `test_every_work_row_is_editable_through_the_box_and_declares_no_host_of_its_own`
+// from the day the box became the single host. The PRICE rows had nothing of the kind, and six of
+// them went on carrying `contenteditable="true"` in proposal-review.html for two days without a
+// single test noticing — a browser selection cannot cross an editing host, so Ctrl+A stopped at a
+// row, a drag stopped at a row, and moving the caret between two lines of the SAME box fired a
+// focusout that re-rendered the rest of them.
+//
+// The rows are STATIC MARKUP, not rendered by any function, so they are read out of the page and
+// mounted the way mountRegionPreviews mounts them: moved into a real text box, which is the only
+// thing that then declares a host.
+{
+  const PAGE = fs.readFileSync(path.join(FRONTEND, "proposal-review.html"), "utf8")
+    .replace(/\r\n/g, "\n");
+  const i = PAGE.indexOf('<div id="price-preview-staging"');
+  if (i < 0) throw new Error("#price-preview-staging is gone from proposal-review.html");
+  const staging = PAGE.slice(PAGE.indexOf(">", i) + 1, PAGE.indexOf("</div>\n\n<script", i));
+  const box = new El("div");
+  box.className = "tw-txbx";
+  box.dataset.boxId = "4";
+  box.attrs.contenteditable = "true";       // renderPositioned: the box, and only the box
+  ROOT.appendChild(box);
+  const region = new El("div");
+  region.className = "tw-priced-region";    // where mountRegionPreviews puts them
+  box.appendChild(region);
+  // Comments first: the little parser below treats a comment body as text, and these rows are
+  // surrounded by long explanatory ones.
+  region.innerHTML = staging.replace(/<!--[\s\S]*?-->/g, "");
+  const rows = region.querySelectorAll("[data-po-kind]");
+  out.priceRows = {
+    keys: rows.map((p) => p.dataset.poLinekey),
+    // WHAT MAKES EACH ROW EDITABLE, by name — the same question, and the same `hostOf`, that the
+    // WORK rows answer in part 1.
+    ownHost: rows.map((p) => p.attrs.contenteditable === "true"),
+    host: rows.map((p) => (hostOf(p) || {}).className || null),
+    wholeLine: rows.map((p) => p.classList.contains("tw-line-edit")),
+    islands: rows.map((p) => p.querySelectorAll("[contenteditable]").length),
+    // And nothing else in the staging block smuggles one in either.
+    anyHostBelowTheBox: region.querySelectorAll("[contenteditable]").length,
+  };
+}
+
+// ═══ part 5 — typing in NOTES leaves the other boxes alone ═══════════════════
+// One character typed in a notes bullet used to call fitNotesBox(), which loops every .tw-txbx on
+// the page and hands each to fitTxbx — and fitTxbx resets fontSize, transform, maxHeight, overflow
+// and zIndex and removes tw-notes-open. So typing in NOTES re-ran the shrink ladder on WORK and
+// PRICE and folded shut any box the estimator had expanded to read.
+{
+  const boxes = mountPage({ 2: 400, 5: 40 });   // WORK over capacity, NOTES comfortable
+  api.fitNotesBox();
+  const work = boxes.get(2);
+  // Expand WORK the way the estimator does: the labelled button, not a click on the box.
+  fire(work.querySelector("[data-box-peek]"), "click", {});
+  const openBefore = {
+    open: work.classList.contains("tw-notes-open"),
+    maxHeight: work.style.maxHeight,
+    overflow: work.style.overflow,
+    zIndex: work.style.zIndex,
+    fontSize: work.style.fontSize || "",
+  };
+  // NOTES lives in box 5 on this template. Mount the bullets there and type in one.
+  const notesBox = boxes.get(5);
+  notesBox.appendChild(notesPreviewEl);
+  notesPreviewEl.innerHTML =
+    '<p class="tw-li tw-note-edit" data-note-index="0">Price includes one mobilization.</p>'
+    + '<p class="tw-li tw-note-edit" data-note-index="1">Anchor bolts by others.</p>';
+  const bullet = notesPreviewEl.querySelectorAll("[data-note-index]")[1];
+  bullet.textContent = "Anchor bolts by others, plus layout.";
+  api.syncNotesFromDom();
+  out.notesRefitScope = {
+    before: openBefore,
+    after: {
+      open: work.classList.contains("tw-notes-open"),
+      maxHeight: work.style.maxHeight,
+      overflow: work.style.overflow,
+      zIndex: work.style.zIndex,
+      fontSize: work.style.fontSize || "",
+    },
+    // The notes box itself IS re-measured — that is the point of the call, not a side effect.
+    notesFitted: notesBox.classList.contains("tw-notes-overflow") === false,
+    // …and the textarea, which is the bullets' single source of truth, really was written.
+    textarea: NOTES_TEXTAREA.value,
+  };
 }
 
 console.log(JSON.stringify(out));

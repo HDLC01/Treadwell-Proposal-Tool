@@ -1406,13 +1406,6 @@
     estimator_name: "Estimator",
   };
 
-  // Region badge wording by the region's leading block name.
-  const REGION_LABELS = {
-    system: "Systems — from the estimate & the fields sidebar; click any line to rewrite it",
-    notes:  "Notes — edit in the fields sidebar (one per line)",
-  };
-  const REGION_LABEL_DEFAULT = "Priced content — edit via the Pricing options & fields sidebars";
-
   // Live preview elements mounted into each region, by block name. Their content is
   // engine-generated but NOT read-only: every line inside them is one editable line
   // (see lineEl / renderSystemPreview / renderNotesPreview). The single_bid mount
@@ -1487,6 +1480,13 @@
       stagingHome.appendChild(stagingPanel);
     }
     docSurface.innerHTML = "";
+    // AND THE UNDO HISTORY, which described those same paragraphs. Every entry names its lines by
+    // the backend walk's paragraph id, and those ids belong to the template that was on screen — a
+    // work-type switch or an audience switch loads a DIFFERENT one, where the same number is a
+    // different paragraph. Replaying an entry across that boundary would write the estimator's
+    // words into the wrong clause of a document a customer signs, so the history goes with the
+    // document it described.
+    undoForget();
     // The formatting ribbon's remembered block was one of the paragraphs just destroyed. Since
     // 2026-08-24 that target deliberately outlives focus ("keep it static like a ribbon in a word
     // document"), so nothing else takes it away: `fmtTargetBlock` would notice, but not until the
@@ -2349,35 +2349,23 @@
 
   // ── selecting a whole text box ─────────────────────────────────────────────
   //
-  // Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still sub
-  // boxes."
+  // Hanz, 2026-08-26: "When I control A it doesnt select everything in Work."
   //
-  // He is describing the editing-host boundary. Every paragraph is its own contenteditable, so the
-  // browser's own select-all cannot reach past the line the caret is in -- the "sub boxes" are the
-  // paragraphs. There is no browser selection that spans them, and there is no making one: a
-  // native Range across two editing hosts is not something a document can hold.
+  // ONE PRESS, THE WHOLE BOX. The two-press ladder that shipped first (line, then box) is gone:
+  // its first rung cancelled the browser's own select-all -- which, with the box as the single
+  // editing host, would already have selected every line in it -- and replaced it with a
+  // one-line selection. So the feature's own first press was what made Ctrl+A look broken, and
+  // the widen that put the box back had nothing on screen to advertise it.
   //
-  // So the second press is an EDITOR-level selection instead: a set of blocks the ribbon and the
-  // delete key both understand, painted so it reads as selected. It is not a DOM selection and
-  // deliberately does not pretend to be one -- `selectionRange` still refuses anything spanning
-  // two blocks, which is what keeps a stale range from being formatted (see `selectionLeftBlock`).
-  //
-  // Scope is one text box, per his answer when asked: first press takes the line, pressing again
-  // takes every line in that box. The box is a real container -- `.tw-txbx[data-box-id]`, the
+  // Scope is one text box. The box is a real container -- `.tw-txbx[data-box-id]`, the
   // absolutely-positioned div registered against the baked page artwork -- so this is a
   // `closest()` call rather than a guess about which paragraphs look grouped. On the terms pages
   // there is no box, so the page is the unit.
   //
-  // The computed lines (`.tw-line-edit`, `.tw-note-edit`) are NOT included. They are re-rendered
-  // from the estimate whenever focus leaves them, so "selected" and "cleared" have no meaning
-  // there yet -- that is what E6's channel work is for.
+  // `boxSel` is the PAINTED cue, and it is kept alongside the native range rather than replaced by
+  // it: the range is gone the moment the caret moves, while the class is what the ribbon and the
+  // delete key read to know they are acting on a whole box.
   let boxSel = null;
-  // The line the last Ctrl+A landed on. The widen used to depend on reading the selection back and
-  // finding it covered the whole line -- which is a round trip through the browser's Range, and a
-  // block ending in a <br> reports a length the selection cannot actually reach. When that check
-  // said "not the whole line" the second press just re-selected the line and the feature looked
-  // dead. Remembering the target is what makes press-again reliable.
-  let lastSelectAll = null;
 
   /** Every editable LINE inside `el`'s box, in document order.
    *
@@ -2554,17 +2542,26 @@
     }
   }
 
-  /** One native selection spanning several lines: the first character of the first to the last of
-   *  the last. What Ctrl+A's widen produces now that a range is allowed to cross a paragraph. */
+  /** One native selection spanning several lines: from before the first to after the last. What
+   *  Ctrl+A produces now that a range is allowed to cross a paragraph.
+   *
+   *  ELEMENT BOUNDARIES, not text offsets, and that is the whole fix. This used to ask `pointAt`
+   *  for a caret position inside the first and last lines -- and `pointAt` can only land in a TEXT
+   *  node, while a BR is a synthetic newline it skips. So an EMPTY endpoint line returned null and
+   *  the function bailed with no range created at all: Ctrl+A painted the box and selected
+   *  nothing. Empty endpoints are ordinary here -- a Word anchor paragraph, a line the estimator
+   *  emptied (`renderRuns` writes `<br>`), a `.tw-note-blank` spacer between notes bullets.
+   *  `setStartBefore` / `setEndAfter` need no node inside the line at all.
+   *
+   *  NOT `selectNodeContents(box)`, which reads as the obvious one-liner: `.tw-box-tools` is the
+   *  box's LAST child (see addBoxTools), so its button labels -- "Collapse", "Reset box",
+   *  "Fit to text" -- would land inside the selection and inside anything copied out of it. */
   function selectRangeAcross(lines) {
     if (!lines || !lines.length) return;
-    const first = lines[0], last = lines[lines.length - 1];
-    const a = pointAt(first, 0), b = pointAt(last, runsLength(editRuns(last)));
-    if (!a || !b) return;
     try {
       const r = document.createRange();
-      r.setStart(a.node, Math.max(0, Math.min(a.offset, a.node.length)));
-      r.setEnd(b.node, Math.max(0, Math.min(b.offset, b.node.length)));
+      r.setStartBefore(lines[0]);
+      r.setEndAfter(lines[lines.length - 1]);
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(r);
@@ -2629,13 +2626,6 @@
     boxSel = null;
     paintBoxSel();
     return true;
-  }
-
-  /** Is the whole of `el` already selected? That is what turns a second Ctrl+A into a widen. */
-  function wholeLineSelected(el) {
-    const sel = selectionRange(el);
-    if (!sel) return false;
-    return sel[0] === 0 && sel[1] === runsLength(editRuns(el)) && sel[1] > 0;
   }
 
   /** The block the ribbon acts on, or null.
@@ -3065,10 +3055,12 @@
   }
 
   function mountRegionPreviews(wrap, names) {
-    // No card chrome — the region flows inline as part of the continuous
-    // document; the hover tooltip says where its content is edited.
-    const first = names.values().next().value;
-    wrap.title = REGION_LABELS[first] || REGION_LABEL_DEFAULT;
+    // NO CHROME OF ANY KIND: no card, no hover tint (see `.tw-priced-region` in styles.css) and no
+    // tooltip. The region flows inline as part of one continuous document, and the tooltip that
+    // used to name it ("Systems — from the estimate & the fields sidebar…") was the last thing
+    // announcing this group of lines as a thing of its own. Hanz, 2026-08-26: "why do we still
+    // have subboxes for the main text box?" Every line in here takes a caret and is rewritten
+    // whole, which is what that tooltip was explaining; the lines say it better by behaving.
     for (const name of names) {
       const mount = REGION_MOUNTS[name];
       if (mount) mount().forEach(el => { if (el) wrap.appendChild(el); });
@@ -3821,15 +3813,24 @@
    *  breaks the page layout on purpose — you are looking past the design to check content,
    *  and the marker stays so it is obvious this is not how it prints.
    *
-   *  THE TRAP THIS FIXES. Kyle, 2026-08-19: "He is confused on how to get out of that Textbox
-   *  view." Opening and closing were the same gesture — a click on the box — and the handler
-   *  deliberately ignores clicks that land on `.tw-block` / `.tw-line-edit` / a contenteditable,
-   *  because a click meant for a paragraph must put a caret in it. An OPEN box is nearly all
-   *  editable content, so in practice there was frequently no pixel left that would close it
-   *  again. So there are now three ways out, and none of them is a click on the text:
-   *    * the Collapse button in `.tw-box-tools` (checked BEFORE the tools exclusion below);
+   *  NEITHER GESTURE IS A CLICK ON THE BOX ANY MORE, and that is the change of 2026-08-26.
+   *
+   *  Kyle, 2026-08-19: "He is confused on how to get out of that Textbox view." That was answered
+   *  with a labelled Collapse button, Escape, and a click outside — three ways out, none of them a
+   *  click on the text. Opening, though, stayed a click on the box, guarded by "unless the click
+   *  landed on a line". Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky,
+   *  it doesnt automatically transfer to the next text box when I click to edit a section." The
+   *  guard was the fault: everything that is not a line — the box's padding, the gap between two
+   *  paragraphs, the strip under the last one, a priced region's padding — is exactly where a Word
+   *  user clicks to start typing, and there it expanded the box instead of placing a caret.
+   *
+   *  So the ways IN and OUT are now:
+   *    * the "Show all" button in `.tw-box-tools` opens a clipped box;
+   *    * the Collapse button in the same layer closes it;
    *    * Escape, from anywhere on the page;
    *    * a click on the page outside the box.
+   *  and any other click inside a box only has to land a caret (`caretIntoBox`).
+   *
    *  Escape and the outside click are bound on `window` rather than on `document` so this
    *  function stays reachable with the same collaborators the drag gestures already use. */
   function wireOverflowExpand() {
@@ -3847,6 +3848,58 @@
       box.style.overflow = open ? "visible" : "hidden";
       box.style.zIndex = open ? "30" : "";
     };
+    /** Make sure a click inside `box` leaves a caret in it. Nothing else: no geometry, no
+     *  expansion, no formatting, and no `preventDefault` -- where the browser is already right
+     *  this must not overrule it.
+     *
+     *  A click that lands ON a line needs nothing from us; the browser puts the caret under the
+     *  pointer, which is the whole reason this editor lets it. What needs answering is the click
+     *  that lands on the box's padding, on the gap between two paragraphs, on the strip under the
+     *  last one, or on a `.tw-priced-region`'s own padding -- the pixels a Word user aims at, and
+     *  the ones that used to expand the box instead. `caretRangeFromPoint` resolves the point the
+     *  way the browser would; when it resolves to nothing (or to something outside this box) the
+     *  nearest line by vertical distance takes the caret.
+     *
+     *  Declared INSIDE wireOverflowExpand deliberately: three harnesses lift this function whole,
+     *  and a helper declared beside it at the top level would be an unbound name in every one of
+     *  them until each lift list was updated -- the ReferenceError this repo has paid for six
+     *  times. Kept small enough to live here honestly. */
+    const caretIntoBox = (box, e) => {
+      if (e.target.closest && e.target.closest(".tw-box-tools")) return;   // a grip release is
+                                                    // not a click for text: it just resized this
+      const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+      if (!sel || !document.createRange) return;
+      // The ordinary case, and it must be cheap: the browser placed the caret on mousedown, before
+      // this ever ran.
+      if (sel.rangeCount && box.contains(sel.getRangeAt(0).startContainer)) return;
+      let r = null;
+      try {
+        if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(e.clientX, e.clientY);
+        else if (document.caretPositionFromPoint) {
+          const p = document.caretPositionFromPoint(e.clientX, e.clientY);
+          if (p && p.offsetNode) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); }
+        }
+      } catch { r = null; }
+      if (r && !box.contains(r.startContainer)) r = null;      // resolved outside: not ours to use
+      if (!r) {
+        const lines = box.querySelectorAll(LINE_SEL);
+        if (!lines.length) return;
+        let best = lines[0], bestGap = Infinity;
+        for (const line of lines) {
+          const rect = line.getBoundingClientRect ? line.getBoundingClientRect() : null;
+          const gap = rect ? Math.abs((rect.top + rect.bottom) / 2 - e.clientY) : 0;
+          if (gap < bestGap) { bestGap = gap; best = line; }
+        }
+        r = document.createRange();
+        // OFFSET 0 IN THE ELEMENT, not a text offset: an emptied line holds a lone `<br>` and no
+        // text node at all, and asking for a position inside one is what left Ctrl+A with no range
+        // (see selectRangeAcross). A collapsed range on the element needs nothing inside it.
+        r.setStart(best, 0);
+      }
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    };
     const openBoxes = () => docSurface.querySelectorAll(".tw-txbx.tw-notes-open");
     // Every open box, not just one: WORK and NOTES can both be expanded, and one left behind
     // keeps a deliberately broken layout on a page the estimator has stopped looking at.
@@ -3854,26 +3907,26 @@
       Array.prototype.forEach.call(openBoxes(), (box) => setOpen(box, false));
 
     docSurface.addEventListener("click", (e) => {
-      const box = e.target.closest(".tw-txbx.tw-notes-overflow, .tw-txbx.tw-notes-open");
+      const box = e.target.closest(".tw-txbx");
       if (!box) return;
-      // The explicit way out, tested BEFORE the .tw-box-tools exclusion below — the button
-      // lives in that layer, so the exclusion would otherwise swallow its own control.
-      if (e.target.closest("[data-box-collapse]")) {
+      // The two explicit gestures, tested BEFORE anything else -- both buttons live in the tools
+      // layer, so an exclusion for that layer would otherwise swallow its own controls.
+      const peek = e.target.closest("[data-box-peek]");
+      if (peek || e.target.closest("[data-box-collapse]")) {
         e.preventDefault();
         e.stopPropagation();
-        setOpen(box, false);
+        setOpen(box, !!peek);
         return;
       }
-      // Don't fight the paragraph editor: a click meant for a LINE should edit it, not expand the
-      // box. `lineAt` rather than a hand-written selector list, because the list used to end in
-      // `[contenteditable=true]` -- and the box itself now carries that attribute, so every click
-      // inside a truncated NOTES box found it on the way up and returned. The box would never have
-      // expanded again. (Using lineAt also picks up `.tw-note-edit`, which that list was missing.)
-      if (lineAt(e.target)) return;
-      // Nor the drag handles: releasing a resize grip fires a click on the box, and peeking at
-      // the hidden text is the opposite of what somebody who just made the box bigger wanted.
-      if (e.target.closest(".tw-box-tools")) return;
-      setOpen(box, !box.classList.contains("tw-notes-open"));
+      // EVERY OTHER CLICK INSIDE A BOX IS A CLICK FOR THE TEXT. Hanz, 2026-08-26: a click meant to
+      // start editing a section must not do something else instead.
+      //
+      // This used to toggle the box open whenever the click missed a line -- the padding, the gap
+      // between two paragraphs, the strip under the last one, a priced region's own padding -- and
+      // those are the pixels a Word user aims at. Expanding is now the "Show all" button above,
+      // Collapse/Esc/an outside click are the ways back, and this handler's only remaining job is
+      // to make sure the click lands a caret.
+      caretIntoBox(box, e);
     });
 
     window.addEventListener("keydown", (e) => {
@@ -4138,6 +4191,17 @@
       '<button type="button" class="tw-box-fit" data-box-fit="1" ' +
         'title="Make this box tall enough for all of its text. The generated document gets the ' +
         'same size; drag the bottom edge or press Reset box to undo.">Fit to text</button>' +
+      // THE WAY IN, and it is a labelled control for the same reason Collapse is one.
+      // Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky, it doesnt
+      // automatically transfer to the next text box when I click to edit a section." Opening a
+      // clipped box used to be a click on the box itself, and the exclusion that kept such a
+      // click for the paragraph editor had been narrowed to "did it land on a LINE" -- so a click
+      // on the box's padding, on the gap between two paragraphs, or on the strip under the last
+      // one expanded the box instead of putting a caret in it. That is exactly where a Word user
+      // clicks to start typing. A button in the tools layer cannot be confused with the text.
+      '<button type="button" class="tw-box-peek" data-box-peek="1" ' +
+        'title="Show the text this box is too small to fit. Nothing is changed: the box goes ' +
+        'back with Collapse, Esc, or a click outside it.">Show all</button>' +
       '<button type="button" class="tw-box-collapse" data-box-collapse="1" ' +
         'title="Put this box back to the size the template gives it. Esc does the same, and so ' +
         'does clicking the page outside the box.">Collapse</button>' +
@@ -4897,9 +4961,15 @@
                              && !(to && from.contains(to));
       if (left(systemPreviewEl)) renderSystemPreview();
       if (left(notesPreviewEl)) renderNotesPreview();
-      const pl = document.getElementById("price-lines-block");
-      const bb = document.getElementById("base-bid-row");
-      if (left(pl) || left(bb)) { try { refreshPriceDisplay(); } catch {} }
+      // EVERY PRICE ROW, not the two containers that used to be named here. The other eight rows
+      // normalised on their own `focusout` while each of them was its own editing host -- which is
+      // exactly what made moving the caret from one price line to the next re-render the rest of
+      // the box under the estimator. They have no host now, so this is where they are normalised:
+      // once, when the caret leaves the box they live in.
+      if (from.querySelector && from.querySelector("[data-po-kind=\"line\"][data-po-linekey]")
+          && !(to && from.contains(to))) {
+        try { refreshPriceDisplay(); } catch {}
+      }
     }
     if (!_repagPending) return;
     if (to && to.closest && to.closest(".tw-terms-page")) return;   // still in terms — wait
@@ -5068,18 +5138,454 @@
     // holds one of them -- a WORK-box edit has no business rewriting the price overrides.
     if (systemPreviewEl.isConnected && box.contains(systemPreviewEl)) syncSystemRows();
     if (notesPreviewEl.isConnected && box.contains(notesPreviewEl)) syncNotesFromDom();
-    // BY ID, not by selector. `querySelectorAll("#price-lines-block")` reads naturally but ties
-    // the sweep to id-selector support in every DOM this code runs under, harnesses included;
-    // getElementById plus a containment test says the same thing and cannot be over-matched.
-    [document.getElementById("price-lines-block"),
-     document.getElementById("base-bid-row")].forEach(root => {
-      if (root && box.contains(root)) syncPriceLinesIn(root);
-    });
+    // EVERY WHOLE-LINE PRICE ROW IN THIS BOX, which is what the sweep has to be now that the rows
+    // declare no editing host of their own. It used to name two containers by id, and that was
+    // survivable only because six rows carried `contenteditable` and therefore heard their own
+    // `input` events. They do not any more -- a keystroke arrives at the box -- so anything this
+    // sweep cannot see is an edit that reaches no channel and is silently lost on the next
+    // repaint. It also closes a gap that was already open: the combo breakout, the per-room lines
+    // and the ALTERNATE block are rendered into containers that NEVER had a host, so typing in
+    // one of those lines had nowhere to persist to.
+    if (box.querySelector("[data-po-kind=\"line\"][data-po-linekey]")) syncPriceLinesIn(box);
     schedulePersistOverrides();
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
     if (box.classList.contains("tw-terms-page")) scheduleRepaginate();
   });
+
+
+  // ══ UNDO AND REDO, over the editor's OWN model ═══════════════════════════════════════════
+  /** Hanz, 2026-08-27, on the Proposal Editor: "I cant use Keyboard shortcuts. I wanted to
+   *  control z but didnt work. when I deleted all in the textbox."
+   *
+   *  CTRL+Z WAS NEVER SWALLOWED. The Ctrl handler below returns for anything that is not a/b/i/u,
+   *  so the browser's native undo really did run -- it had nothing to undo. Every edit this editor
+   *  makes is a PROGRAMMATIC DOM mutation, and programmatic mutation does not go on a
+   *  contenteditable's native undo stack: the box-wide delete is els.forEach(clearBoxLine), Enter
+   *  is insertBreakAt, Tab is paraAction, B/I/U is toggleFormat, and each one preventDefault()s
+   *  the browser's own version for a reason written above it (execCommand emits b/i/u TAGS that
+   *  fmtAt cannot read; a browser Enter merges two paragraphs and destroys an id the customer's
+   *  document is filled BY POSITION with). On top of that, any repaint or repagination moves the
+   *  nodes, and moving a node throws the native stack away outright -- so even ordinary typing
+   *  stopped being undoable the moment a repagination ran.
+   *
+   *  So the editor keeps its own stack. AN ENTRY IS A PRE-IMAGE OF ONE EDITING HOST -- the box, or
+   *  the terms page, the same unit boxLines and every box-wide gesture already work in. Per box
+   *  rather than per document because that is what bounds it: a box is tens of lines, the sheet is
+   *  hundreds, and a stack of whole-document snapshots on a long editing session is the memory
+   *  growth the depth limit exists to prevent.
+   *
+   *  EVERY LINE IS STORED THROUGH ITS OWN CHANNEL, never as innerHTML. A .tw-block is stored as
+   *  RUNS (editRuns) and restored with renderRuns, which is the same round trip a format press
+   *  makes, so the formatting and the .tw-fill spans come back intact. The three computed families
+   *  store TEXT and are restored by writing textContent and dispatching the page's own input
+   *  event -- character for character what clearBoxLine already does to them, so the dirty flags,
+   *  the override persistence and the emptied-clause protection all run on the way back exactly as
+   *  they ran on the way out.
+   *
+   *  WHAT IS DELIBERATELY NOT ON THE STACK:
+   *
+   *   * BOX GEOMETRY -- drag-resize, Fit to text, Reset box. It has its own affordance already
+   *     ("Reset box" in the box tools), and this surface is a to-scale preview of a printed page
+   *     registered against baked artwork: a Ctrl+Z aimed at a word that silently moved a text box
+   *     by a few points would be a worse bug than the one it fixed.
+   *   * THE SIDEBAR. This is bound to docSurface, so a Ctrl+Z with the caret in the notes textarea
+   *     or a pricing field is the browser's own undo, which is the right one for a plain input.
+   *   * ANYTHING ACROSS A TEMPLATE RELOAD. clearDocSurface() drops both stacks: the ids an entry
+   *     names belong to the template that was on screen, and replaying them into a different one
+   *     would write the estimator's words into the wrong paragraph of a document a customer signs.
+   *   * A LOCKED NUMBERED TERMS CLAUSE's paragraph properties. The para half of a restore goes
+   *     through setParaState, which refuses a locked paragraph, so no undo can renumber the
+   *     contract. Its TEXT is restorable, because editing that text was allowed in the first
+   *     place and the payload filter (blanksANumberedClause) is the same in both directions. */
+  const UNDO_DEPTH = 60;
+  /** How long a burst of typing stays ONE undo. Long enough that an ordinary sentence is not
+   *  chopped into keystrokes, short enough that a pause reads as "I finished that thought". */
+  const UNDO_COALESCE_MS = 700;
+  let _undoStack = [];
+  let _redoStack = [];
+  let _undoUnit = null;         // the gesture the open unit belongs to
+  let _undoUnitAt = 0;
+  let _undoBusy = false;        // a restore is running: nothing it does may open a new unit
+
+  /** A stable name for one editable line, so an entry survives its nodes being replaced.
+   *
+   *  Element identity is not enough. repaginateTerms moves blocks between pages, renderSystemPreview
+   *  and renderNotesPreview rebuild their children outright, and a restore that held references
+   *  would write into detached orphans and report success. Each family already has an identity the
+   *  rest of the page persists it by, and this is that identity and nothing new. */
+  function undoLineKey(el) {
+    if (!el || !el.classList) return null;
+    const d = el.dataset || {};
+    if (el.classList.contains("tw-block"))
+      return d.id == null || d.id === "" ? null : "b:" + d.id;
+    if (d.poLinekey != null && d.poLinekey !== "") return "p:" + d.poLinekey;
+    if (d.sysLine != null && d.sysLine !== "") return "s:" + d.sysIndex + ":" + d.sysLine;
+    if (d.noteIndex != null && d.noteIndex !== "") return "n:" + d.noteIndex;
+    return null;
+  }
+
+  /** Every editable line on the surface, by key. Rebuilt at each restore rather than cached: a
+   *  repagination between the push and the pop is the normal case, not the exception. */
+  function undoLiveLines() {
+    const map = new Map();
+    if (!docSurface || !docSurface.querySelectorAll) return map;
+    docSurface.querySelectorAll(LINE_SEL).forEach((el) => {
+      const k = undoLineKey(el);
+      if (k && !map.has(k)) map.set(k, el);
+    });
+    return map;
+  }
+
+  /** One line as an entry records it. */
+  function undoLineRec(el, key) {
+    if (el.classList.contains("tw-block")) {
+      const set = paraById.get(Number(el.dataset.id));
+      return { key: key, runs: editRuns(el), fmt: el.classList.contains("tw-fmt"),
+               para: set ? { bullet: !!set.bullet, indent: Number(set.indent) || 0 } : null };
+    }
+    return { key: key, text: serializeBlock(el) };
+  }
+
+  /** The line the caret is in, by key. Cheap -- one closest() off the range's start container, no
+   *  offsets and no markers -- which is what lets every keystroke ask for it. */
+  function undoCaretLine() {
+    const el = lineAtSelection();
+    return (el && docSurface.contains(el) && undoLineKey(el)) || "?";
+  }
+
+  /** Where the caret is, as an entry records it, or null when it cannot be read safely.
+   *
+   *  READ LIVE, and only when a unit is actually opening -- at most once per word typed. The
+   *  obvious alternative, keeping it current on a selectionchange listener, costs a marker round
+   *  trip through selectionRange on every caret movement in the document, including on the notes
+   *  bullets and the price rows, which have never had one taken on them.
+   *
+   *  `safe` is false on the beforeinput path and only there. selectionRange drops two control
+   *  characters into the text and takes them out again, and doing that inside beforeinput moves the
+   *  very range the browser is about to edit with. An entry from that path carries no caret, and
+   *  the restore puts one on the first line it touched instead -- which for a single-line edit is
+   *  the same line, at its start. */
+  function undoCaretRec(safe) {
+    if (!safe) return null;
+    const el = lineAtSelection();
+    if (!el || !docSurface.contains(el)) return null;
+    const key = undoLineKey(el);
+    if (!key) return null;
+    const r = selectionRange(el);
+    return r ? { key: key, start: r[0], end: r[1] } : null;
+  }
+
+  /** The current caret and box selection, as an entry records them.
+   *
+   *  An undo that restores the text and drops the caret somewhere else reads as a bug even when
+   *  every character is right, so both go on the stack. */
+  function undoSelectionRec(safe) {
+    return {
+      caret: undoCaretRec(safe),
+      boxSel: boxSel && boxSel.length ? boxSel.map(undoLineKey).filter(Boolean) : null,
+    };
+  }
+
+  /** The pre-image of one editing host. */
+  function undoSnapshot(box, safe) {
+    if (!box || !box.querySelectorAll) return null;
+    const lines = [];
+    box.querySelectorAll(LINE_SEL).forEach((el) => {
+      const key = undoLineKey(el);
+      if (key) lines.push(undoLineRec(el, key));
+    });
+    if (!lines.length) return null;
+    const ta = document.getElementById("notes-text");
+    // THE NOTES TEXTAREA IS THE BULLETS' SINGLE SOURCE OF TRUTH, so a notes box carries it too.
+    // The bullets are rebuilt from it and their count changes with the text, which makes restoring
+    // a deleted bullet by key alone impossible once its element is gone.
+    const holdsNotes = !!(ta && notesPreviewEl && box.contains && box.contains(notesPreviewEl));
+    const snap = undoSelectionRec(safe);
+    snap.lines = lines;
+    snap.notes = holdsNotes ? String(ta.value || "") : null;
+    snap.sig = JSON.stringify([lines, snap.notes]);
+    return snap;
+  }
+
+  /** The document as an existing entry describes it, read LIVE.
+   *
+   *  Two jobs, and both matter. It is the redo entry an undo leaves behind, and its signature is
+   *  how a unit that turned out to change nothing is recognised -- a Backspace refused at the start
+   *  of a paragraph, a ribbon press on a locked clause, a mousedown that never became a click.
+   *  Those are skipped at the pop rather than filtered at the push, because at push time the edit
+   *  has not happened yet and nobody can know. */
+  function undoMirror(snap) {
+    const live = undoLiveLines();
+    const lines = [];
+    for (const rec of snap.lines) {
+      const el = live.get(rec.key);
+      if (el) lines.push(undoLineRec(el, rec.key));
+    }
+    const ta = document.getElementById("notes-text");
+    // SAFE: a mirror is only ever taken from undoStep, which runs on the Ctrl+Z keydown -- never
+    // from inside a beforeinput.
+    const out = undoSelectionRec(true);
+    out.lines = lines;
+    out.notes = snap.notes == null ? null : String((ta && ta.value) || "");
+    out.sig = JSON.stringify([lines, out.notes]);
+    return out;
+  }
+
+  /** Open a new undo unit, unless this gesture belongs to the one already open.
+   *
+   *  WHAT ONE UNDO UNIT IS: a gesture, not a mutation. Enter, Tab, a box-wide delete, a paste and
+   *  a ribbon press are each named uniquely and are therefore always their own unit. Typing and
+   *  deleting coalesce, and the run is closed by any of four boundaries -- an idle gap of
+   *  UNDO_COALESCE_MS, the caret moving to a different line, the direction changing (typing then
+   *  deleting is two units, not one), and a typed SPACE, which is what makes an undo give back the
+   *  word just typed rather than the paragraph. An idle gap alone would make undo depend on how
+   *  fast somebody types; boundaries alone would make one uninterrupted sentence a single,
+   *  unusable unit. */
+  function undoPush(unit, node, safe) {
+    if (_undoBusy) return false;
+    const now = Date.now();
+    if (typeof unit === "string" && unit.indexOf("type:") === 0
+        && unit === _undoUnit && now - _undoUnitAt < UNDO_COALESCE_MS) {
+      _undoUnitAt = now;
+      return false;                     // still the same burst -- the open unit already covers it
+    }
+    const box = editingBox(node) || editingBox(lineAtSelection());
+    const snap = box ? undoSnapshot(box, safe !== false) : null;
+    _undoUnit = unit;
+    _undoUnitAt = now;
+    if (!snap) return false;
+    const top = _undoStack[_undoStack.length - 1];
+    // A KEYSTROKE REACHES HERE TWICE -- once on keydown, once on the beforeinput the browser
+    // raises for the same key -- and the second arrival finds the document byte for byte as the
+    // first left it. One signature comparison de-duplicates that, and every other harmless
+    // double-push with it, without a single timer.
+    if (top && top.sig === snap.sig) return false;
+    _undoStack.push(snap);
+    if (_undoStack.length > UNDO_DEPTH) _undoStack.shift();
+    _redoStack.length = 0;              // a new edit forks the history
+    return true;
+  }
+
+  /** The bullet and the indent, back to what they were -- through setParaState, which refuses a
+   *  locked paragraph, so this route cannot renumber a contract clause any more than Tab or the
+   *  ribbon can. A null para means the estimator had set nothing and the template's own properties
+   *  applied, which is a delete rather than a write. */
+  function undoRestorePara(el, para) {
+    const id = Number(el.dataset.id);
+    const now = paraNow(id);
+    if (!now) return false;
+    if (!para) {
+      if (!paraById.has(id) || now.locked) return false;
+      paraById.delete(id);
+      applyParaToEl(el, paraNow(id));
+      return true;
+    }
+    const indent = Number(para.indent) || 0;
+    if (now.bullet === !!para.bullet && now.indent === indent) return false;
+    return setParaState(id, { bullet: !!para.bullet, indent: indent }, el);
+  }
+
+  /** Put one entry back on the page. */
+  function undoRestore(snap) {
+    const prevBusy = _undoBusy;
+    _undoBusy = true;
+    try {
+      // THE CARET GOES FIRST, out of the way. renderNotesPreview refuses to rebuild the bullets
+      // while the selection is inside them (focusInside reads the caret, not just activeElement),
+      // and an undo of a deleted bullet is exactly the case that has to rebuild them. It is put
+      // back at the end of this function, from the entry, which is where it was before the edit.
+      try { const s = window.getSelection(); if (s && s.removeAllRanges) s.removeAllRanges(); } catch {}
+      const ta = document.getElementById("notes-text");
+      if (snap.notes != null && ta && String(ta.value || "") !== snap.notes) {
+        ta.value = snap.notes;
+        try { renderNotesPreview(); } catch {}
+        try { TW.setState({ notes_text: ta.value }); } catch {}
+      }
+      const live = undoLiveLines();
+      const fire = new Map();             // one editing host -> one line in it to dispatch from
+      for (const rec of snap.lines) {
+        const el = live.get(rec.key);
+        if (!el) continue;                // that line is not on the page any more; skip it
+        let touched = false;
+        if (rec.runs) {
+          if (!runsEqual(editRuns(el), rec.runs)) { renderRuns(el, rec.runs); touched = true; }
+          if (el.classList.contains("tw-fmt") !== !!rec.fmt) {
+            el.classList.toggle("tw-fmt", !!rec.fmt);
+            touched = true;
+          }
+          if (undoRestorePara(el, rec.para)) touched = true;
+        } else if (serializeBlock(el) !== rec.text) {
+          el.textContent = rec.text;      // the computed families' own channel: see clearBoxLine
+          touched = true;
+        }
+        if (!touched) continue;
+        const host = editingBox(el) || docSurface;
+        if (!fire.has(host)) fire.set(host, el);
+      }
+      // ONE dispatch per host, because every persistence sweep hanging off input is box-wide: N
+      // events would each re-do the same sweep. This is what carries the restored text back into
+      // the draft -- the dirty flags, the paragraph overrides, the three computed channels.
+      fire.forEach((el) => { el.dispatchEvent(new Event("input", { bubbles: true })); });
+      schedulePersistOverrides();
+      // AND THE SELECTION, from the same entry. A box-wide selection is put back as a selection,
+      // so undoing a Ctrl+A delete leaves the estimator looking at exactly what they were looking
+      // at when they pressed Delete.
+      const after = undoLiveLines();
+      const selEls = (snap.boxSel || []).map((k) => after.get(k)).filter(Boolean);
+      if (selEls.length) {
+        boxSel = selEls;
+        paintBoxSel();
+        selectRangeAcross(selEls);
+      } else {
+        // AND A CARET EVEN WHEN THE ENTRY DOES NOT NAME ONE. The selection was dropped at the top
+        // of this function so the previews could rebuild, so leaving here without placing one
+        // takes the estimator's caret away entirely -- an undo they then have to click to recover
+        // from. The first line the restore touched is where they were, near enough.
+        const el = (snap.caret && after.get(snap.caret.key))
+                   || (fire.size ? fire.values().next().value : null);
+        if (el) {
+          const host = editingBox(el);
+          if (host && host.focus) { try { host.focus(); } catch {} }
+          const total = el.classList.contains("tw-block")
+            ? runsLength(editRuns(el)) : serializeBlock(el).length;
+          const named = snap.caret && after.get(snap.caret.key) === el;
+          const a = Math.max(0, Math.min(named ? (Number(snap.caret.start) || 0) : 0, total));
+          const b = Math.max(a, Math.min(named ? (Number(snap.caret.end) || 0) : 0, total));
+          placeSelection(el, a, b);
+        }
+      }
+      return true;
+    } finally {
+      _undoBusy = prevBusy;
+    }
+  }
+
+  /** One step in either direction. An entry that changes nothing is discarded rather than spent:
+   *  a Ctrl+Z that visibly does nothing is the same complaint this whole section exists to fix. */
+  function undoStep(from, to) {
+    let guard = UNDO_DEPTH + 2;
+    while (from.length && guard-- > 0) {
+      const snap = from.pop();
+      const mirror = undoMirror(snap);
+      if (mirror.sig === snap.sig) continue;
+      to.push(mirror);
+      if (to.length > UNDO_DEPTH) to.shift();
+      undoRestore(snap);
+      _undoUnit = null;                   // whatever is typed next opens a fresh unit
+      _undoUnitAt = 0;
+      return true;
+    }
+    return false;
+  }
+  function undoOnce() { return undoStep(_undoStack, _redoStack); }
+  function redoOnce() { return undoStep(_redoStack, _undoStack); }
+
+  /** A template reload, a work-type switch, a rebuild: the history described paragraphs that no
+   *  longer exist. Called from clearDocSurface, which cannot run before this module has been
+   *  evaluated -- initDocumentEditor is invoked at the very bottom of this file. */
+  function undoForget() {
+    _undoStack.length = 0;
+    _redoStack.length = 0;
+    _undoUnit = null;
+    _undoUnitAt = 0;
+  }
+
+  /** Which undo unit a keystroke belongs to, or null when it cannot change anything.
+   *
+   *  Ctrl+A, Ctrl+C, the arrows, Home/End, the function keys and the modifiers themselves all
+   *  return null: an entry for a keystroke that moves nothing is a dead press of Ctrl+Z later. */
+  function undoUnitForKey(e) {
+    const k = String(e.key || "");
+    const line = undoCaretLine();
+    if (e.ctrlKey || e.metaKey) {
+      const low = k.toLowerCase();
+      if (low === "b" || low === "i" || low === "u") return "fmt:" + low;
+      if (low === "v") return "paste";
+      if (low === "x") return "cut";
+      return null;
+    }
+    if (e.altKey) return null;
+    if (k === "Enter") return "enter";
+    if (k === "Tab") return "indent";
+    if (k === "Backspace" || k === "Delete")
+      return boxSel && boxSel.length ? "boxclear" : "type:delete:" + line;
+    if (k.length !== 1) return null;
+    return "type:insert:" + line;
+  }
+
+  // CAPTURE PHASE, so the pre-image is taken before any of the handlers below have run and before
+  // the browser has applied its own default. Every one of them mutates.
+  docSurface.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;            // an IME owns the keystroke; its commit lands on beforeinput
+    const low = String(e.key || "").toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (low === "z" || low === "y")) {
+      // BOTH SPELLINGS OF REDO. Ctrl+Y is Word's and Ctrl+Shift+Z is everything else's, and the
+      // people using this come from both; honouring one of them is refusing half the office.
+      e.preventDefault();
+      if (low === "y" || e.shiftKey) redoOnce(); else undoOnce();
+      return;
+    }
+    const unit = undoUnitForKey(e);
+    if (unit) undoPush(unit, e.target);
+  }, true);
+
+  /** THE EDITS THAT ARRIVE WITHOUT A KEYSTROKE: a context-menu Delete, a drag-and-drop inside the
+   *  box, an IME commit, a spell-check replacement. Each of them mutates the document and none of
+   *  them is visible to a keydown handler. A keyboard-driven edit reaches here too, one beat after
+   *  the keydown above already pushed -- and finds the document unchanged, so the signature check
+   *  in undoPush drops it. */
+  docSurface.addEventListener("beforeinput", (e) => {
+    const type = String(e.inputType || "");
+    if (type === "insertCompositionText") return;
+    // NOT SAFE TO READ THE CARET HERE -- see undoCaretRec. A keyboard-driven edit has already been
+    // pushed by the keydown above, caret and all, so the only entries this leaves without one are
+    // the mouse-driven and IME edits, which no keydown ever sees.
+    undoPush("type:" + (type.indexOf("delete") === 0 ? "delete" : "insert") + ":" + undoCaretLine(),
+             e.target, false);
+    // A SPACE CLOSES THE WORD -- not by pushing anything, since the space belongs to the unit that
+    // is open, but by making whatever comes next open a new one. That is what turns Ctrl+Z into
+    // "give me back the word I just typed" rather than "give me back the paragraph".
+    //
+    // Read off the TEXT BEING INSERTED rather than off the key, and read here rather than on the
+    // keydown above, for the same two reasons. The keydown fires BEFORE this event, so closing the
+    // unit there would leave this very space opening the next one -- the pre-image would be taken
+    // from before the space, and an undo would take the space away with the word after it. And a
+    // space arrives by more routes than the spacebar: an IME commit, a pasted phrase, a
+    // spell-check replacement all end a word just as squarely.
+    if (type.indexOf("delete") !== 0 && /\s/.test(String(e.data == null ? "" : e.data))) {
+      _undoUnit = null;
+      _undoUnitAt = 0;
+    }
+  }, true);
+
+  /** A paste is its own unit and needs its own listener: the page's paste handler cancels the
+   *  event, so the browser never raises the beforeinput that would otherwise cover it. */
+  docSurface.addEventListener("paste", (e) => { undoPush("paste", e.target); }, true);
+
+  /** THE RIBBON'S PRESSES, captured from the ribbon's container rather than from inside
+   *  ensureFmtBar -- the bar is built lazily and this row is in the page from the start, and a
+   *  capture listener here runs before the bar's own mousedown handler.
+   *
+   *  On mousedown, not click: by the time a click fires the ribbon has already preventDefault()ed
+   *  its way around the selection, and the pre-image wants the document as it was when the
+   *  estimator reached for the button. A mousedown that never becomes a click leaves an entry that
+   *  changes nothing, which undoStep discards on the way past. */
+  (function wireRibbonUndo() {
+    const host = document.getElementById("fmt-ribbon");
+    if (!host || !host.addEventListener) return;
+    const mark = (name) => undoPush("ribbon:" + name + ":" + Date.now(),
+                                    lineAtSelection() || fmtTargetBlock());
+    host.addEventListener("mousedown", (e) => {
+      const btn = e.target && e.target.closest
+        ? e.target.closest("button[data-fmt], button[data-para]") : null;
+      if (btn) mark(String(btn.dataset.fmt || btn.dataset.para || "press"));
+    }, true);
+    host.addEventListener("change", (e) => {
+      const sizeBox = e.target && e.target.closest ? e.target.closest("[data-fmt]") : null;
+      if (sizeBox) mark("size");
+    }, true);
+  })();
 
   // ── Wire the formatting ribbon to the focused block ───────────────────────
   // On screen before anything is focused, in its inert state. That IS the "static like a ribbon
@@ -5089,8 +5595,8 @@
 
   // Typing, clicking or moving the caret means the box selection is over. Registered before the
   // focusin handler below so the class is gone by the time the ribbon re-renders.
-  docSurface.addEventListener("mousedown", () => { clearBoxSel(); lastSelectAll = null; });
-  docSurface.addEventListener("input", () => { clearBoxSel(); lastSelectAll = null; });
+  docSurface.addEventListener("mousedown", () => { clearBoxSel(); });
+  docSurface.addEventListener("input", () => { clearBoxSel(); });
   window.addEventListener("keydown", (e) => {
     // ESCAPE IS THE WAY OUT, and it has to be, because Tab now indents instead of moving focus.
     // Taking the keyboard's only exit from the text box away would be a real regression for
@@ -5156,33 +5662,29 @@
   docSurface.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (String(e.key).toLowerCase() === "a") {
-      // EITHER FAMILY. This used to look for `.tw-block` only, so pressing Ctrl+A anywhere in the
-      // PRICE box found nothing and looked broken -- which is exactly what Hanz reported.
+      // ONE PRESS TAKES THE WHOLE BOX. Hanz, 2026-08-26: "When I control A it doesnt select
+      // everything in Work."
+      //
+      // It used to be a ladder -- press once for the line, again to widen -- and the first press
+      // was the problem, not the second: it preventDefault()ed the browser's own select-all and
+      // put a one-LINE selection there instead. Under one editing host per box the browser would
+      // already have selected the box, so the ladder's first rung actively took away the
+      // behaviour asked for, and the widen that put it back was undiscoverable.
+      //
+      // EITHER FAMILY, still: a `.tw-block`, a `.tw-line-edit` price/system row, a `.tw-note-edit`
+      // bullet. Ctrl+A anywhere in the PRICE box used to find nothing and look broken.
       const el = lineTarget(e);
       if (!el) return;
       e.preventDefault();
-      // Already got the line? Widen to the box. Otherwise take the line first -- which is what
-      // the browser would have done anyway, done explicitly so the SECOND press has a state to
-      // recognise rather than depending on what the browser left behind.
-      // Second press on the SAME line -- or any press while a box is already held -- widens.
-      if (boxSel || lastSelectAll === el || wholeLineSelected(el)) {
-        boxSel = boxLines(el);
-        lastSelectAll = null;
-        paintBoxSel();
-        // A REAL BROWSER SELECTION over the whole box, not just a painted class. This is what the
-        // one-host change buys: the range can span every paragraph, so Delete, a paste, a typed
-        // character and a ribbon press all act on the box through the ordinary paths instead of
-        // each needing to know about `boxSel`. The class stays as the cue that survives the caret
-        // moving on.
-        selectRangeAcross(boxSel);
-        if (el.classList.contains("tw-block")) showFmtBar(el);
-      } else {
-        clearBoxSel();
-        lastSelectAll = el;
-        const total = runsLength(editRuns(el));
-        if (total) placeSelection(el, 0, total);
-        if (el.classList.contains("tw-block")) showFmtBar(el);
-      }
+      boxSel = boxLines(el);
+      paintBoxSel();
+      // A REAL BROWSER SELECTION over the whole box, not just a painted class. This is what the
+      // one-host change buys: the range can span every paragraph, so Delete, a paste, a typed
+      // character and a ribbon press all act on the box through the ordinary paths instead of
+      // each needing to know about `boxSel`. The class stays as the cue that survives the caret
+      // moving on.
+      selectRangeAcross(boxSel);
+      if (el.classList.contains("tw-block")) showFmtBar(el);
       return;
     }
     const key = { b: "bold", i: "italic", u: "underline" }[String(e.key).toLowerCase()];
@@ -5524,9 +6026,17 @@
     let run = 0;
     for (const s of lines) { if (s === "") { if (++run > 2) continue; } else run = 0; kept.push(s); }
     ta.value = kept.join("\n");
-    // Re-fit the font as bullets are typed. This only changes the box's
-    // font-size (never rebuilds the bullets), so the caret is preserved.
-    try { fitNotesBox(); } catch {}
+    // Re-fit the font as bullets are typed -- THE NOTES BOX, and nothing else on the page.
+    //
+    // This used to call fitNotesBox(), which loops every `.tw-txbx` and hands each one to fitTxbx
+    // -- and fitTxbx resets fontSize, transform, maxHeight, overflow and zIndex and takes
+    // `tw-notes-open` off. So one character typed in a notes bullet re-ran the shrink ladder on
+    // WORK and PRICE and folded shut any box the estimator had expanded to read (Hanz,
+    // 2026-08-26, on the editor being clunky between sections). The notes box is the only one
+    // whose content just changed, so it is the only one re-measured. fitTxbx returns immediately
+    // when handed null, which is the honest answer before the preview is mounted into a box.
+    // Only the box's own font-size changes (the bullets are never rebuilt), so the caret survives.
+    try { fitTxbx(notesPreviewEl.closest(".tw-txbx")); } catch {}
     if (_notesOvTimer) clearTimeout(_notesOvTimer);
     _notesOvTimer = setTimeout(() => { try { TW.setState({ notes_text: ta.value }); } catch {} }, 300);
   }
@@ -5650,32 +6160,30 @@
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
   }
-  const _plBlockEl = document.getElementById("price-lines-block");
-  const _baseBidRowEl = document.getElementById("base-bid-row");
-  if (_plBlockEl) {
-    _plBlockEl.addEventListener("input", _handlePoInput);
-    _plBlockEl.addEventListener("focusout", (e) => {
-      if (!_plBlockEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
-    });
-  }
-  if (_baseBidRowEl) {
-    _baseBidRowEl.addEventListener("input", _handlePoInput);
-    _baseBidRowEl.addEventListener("focusout", (e) => {
-      if (!_baseBidRowEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
-    });
-  }
-  // Every whole-line PRICE element: the tax rows, the Base Bid / Options headings,
-  // the combo breakout, and the ALTERNATE SYSTEM block. Same delegated input +
-  // focusout-normalize pattern (base-bid-row + price-lines-block wired above).
-  ["sales-tax-row", "remodel-tax-row", "total-row", "base-bid-heading",
-   "options-heading", "combo-price-block", "alternate-block"].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("input", _handlePoInput);
-    el.addEventListener("focusout", (e) => {
-      if (!el.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }
-    });
-  });
+  // Every whole-line PRICE element: the base bid and its option/manual lines, the tax rows, the
+  // Base Bid / Options headings, the combo breakout, the per-room block and the ALTERNATE SYSTEM
+  // block. Named in one place so nothing can be wired half-way.
+  const PRICE_PREVIEW_IDS = ["price-lines-block", "base-bid-row", "sales-tax-row",
+    "remodel-tax-row", "total-row", "base-bid-heading", "options-heading",
+    "combo-price-block", "rooms-block", "alternate-block"];
+  const pricePreviewEls = () => PRICE_PREVIEW_IDS
+    .map(id => document.getElementById(id)).filter(el => el);
+  // INPUT ONLY. There is no per-element `focusout` here any more, and its absence is the fix.
+  //
+  // Three of these used to normalise on their OWN focusout -- and each of those handlers called
+  // refreshPriceDisplay(), whose paintLine rewrites `textContent` on every price row that is not
+  // holding the caret. While each row was its own editing host, clicking from one price line to
+  // the next really did move focus between two hosts, so moving the caret between two lines OF
+  // THE SAME BOX re-rendered the others under the estimator (Hanz, 2026-08-26: "Editing from one
+  // text box to another is a bit clunky"). The rows no longer declare a host, so focus stays on
+  // the box and there is nothing to hear -- the box-scoped `focusout` on #doc-surface normalises
+  // them when the caret leaves the BOX, which is the only moment a re-render is safe.
+  //
+  // The `input` listeners stay exactly as they were: these are the channels that put an edit in
+  // the right place in the customer's document. They now fire only for the synthesized events
+  // clearBoxLine / the Enter handler dispatch AT a line; a real keystroke arrives at the box and
+  // is swept by syncPriceLinesIn there.
+  pricePreviewEls().forEach(el => el.addEventListener("input", _handlePoInput));
 
   // Pricing options is a FLOATING, MOVABLE widget: drag its header to reposition
   // it (so it never has to sit over the document or the top controls). One-time

@@ -542,10 +542,19 @@ fire(grip(box, "se"), "click", {});
 const gripClickOpened = box.classList.contains("tw-notes-open");
 fire(box.querySelector("[data-box-reset]"), "click", {});
 const resetClickOpened = box.classList.contains("tw-notes-open");
-// …while a click on the box itself still peeks, so the guard did not disable the feature.
-fire(box, "click", {});
+// …while the "Show all" button still peeks, so the guard did not disable the feature.
+//
+// It used to be a click on the box itself, and that is the gesture that went on 2026-08-26: a
+// click inside a text box has to land a caret, so the peek moved to a labelled control in the
+// tools layer (Hanz: "Editing from one text box to another is a bit clunky"). Both halves are
+// reported, because "the box no longer opens on a body click" and "the button opens it" are two
+// separate ways for this to be broken.
+fire(box, "click", { clientX: 10, clientY: 10 });
+const bodyClickOpened = box.classList.contains("tw-notes-open");
+fire(box.querySelector("[data-box-peek]"), "click", {});
 out.peek = { gripClickOpened: gripClickOpened, resetClickOpened: resetClickOpened,
-             bodyClickOpened: box.classList.contains("tw-notes-open") };
+             bodyClickOpened: bodyClickOpened,
+             peekButtonOpened: box.classList.contains("tw-notes-open") };
 
 // 13. Persistence, the version guard, and the sibling-template store.
 api.setState({});
