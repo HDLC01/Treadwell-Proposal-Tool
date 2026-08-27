@@ -252,6 +252,50 @@ def test_coverage_left_the_items_tab(ran):
 
 
 @needs_node
+def test_the_assembly_says_whether_it_is_measured_in_SF_or_LF(ran):
+    """Hanz, 2026-08-28: "Coverage per Unit - is there a way we can change it from SF and LF?"
+
+    Three labels, all read off the assembly instead of a constant: the totals tile, the test-quantity
+    label, and its suffix. Before this the page said "Price per SF" and "Test area / SF" over a cove
+    assembly's linear feet.
+
+    The `unit` column is not new - it has been persisted since the table existed and
+    polish-estimate.js already reads it to stamp SF/LF onto a takeoff row. It had no editor, so every
+    assembly said SF because the create call hardcoded it.
+
+    Mutation: hardcode "SF" in any of the three writes."""
+    u = ran["assemblyUnit"]
+    assert (u["lfPerUnitLabel"], u["lfAreaLabel"], u["lfAreaSuffix"]) == (
+        "Price per LF", "Test length", "LF"), (
+        "an LF assembly is still being described in square feet: %s" % u)
+    assert (u["sfPerUnitLabel"], u["sfAreaLabel"], u["sfAreaSuffix"]) == (
+        "Price per SF", "Test area", "SF")
+    assert u["lfSelectSynced"] == "LF" and u["legacySelectSynced"] == "SF", (
+        "the select does not show the unit the assembly actually holds")
+
+
+@needs_node
+def test_choosing_LF_relabels_the_screen_and_changes_no_number(ran):
+    """THE GUARANTEE THAT MAKES THIS SAFE. `priceAssembly` divides by whatever is in the one area
+    input and has no notion of what it measures, so the same lines and the same quantity must cost
+    the same whether the assembly calls itself SF or LF. If these ever diverge, a relabel has
+    started moving money.
+
+    It is also why per-line units were NOT built: they would need a second denominator, and the
+    Polish bid page cannot express one (a takeoff row carries a single measurement), so the library
+    and the bid would disagree while the cross-check between them stayed green.
+
+    An off-list legacy value ("sqft") reads as SF rather than being echoed, so the words on screen
+    keep describing the arithmetic that ran."""
+    u = ran["assemblyUnit"]
+    assert u["lfTotal"] == u["sfTotal"], (
+        "the unit label changed the total: %s vs %s" % (u["lfTotal"], u["sfTotal"]))
+    assert u["lfPerUnit"] == u["sfPerUnit"], (
+        "the unit label changed the per-unit price: %s vs %s" % (u["lfPerUnit"], u["sfPerUnit"]))
+    assert u["legacyReadsAsSf"] == "SF"
+
+
+@needs_node
 def test_the_vendor_is_a_dropdown_that_keeps_an_off_list_value(ran):
     """A vendor removed from the list must still show on the material bought from it — an item
     records where it actually came from — and must not appear twice when it is also on the list."""
@@ -1634,3 +1678,116 @@ def test_the_filter_bar_is_not_a_sixth_card(ran):
     assert k["barIsNotACard"], "the filter bar grew a card of its own"
     assert k["controlsOutsideTheRenderedBody"], (
         "a filter control is inside the tbody renderItems rebuilds, so it will lose its state")
+
+
+# ── bulk add: a dozen materials in one go ────────────────────────────────────
+# Hanz, 2026-08-28: "Will wants to add items in bulk from the Items list, but still being able to
+# search and filter it out."
+#
+# The modal itself is not reachable from this harness — its DOM stub has no createElement, no focus
+# and no checkbox — so the four DECISIONS were written as pure functions taking their state as
+# arguments, and these test them directly against the real pricing engine. Open/close/focus is
+# verified in a browser instead, the same position this file already takes with confirmDanger.
+
+
+@needs_node
+def test_the_bulk_picker_searches_the_same_way_every_other_box_on_the_page_does(ran):
+    """Reuses `itemMatches`, so the bulk picker, the Items tab box and the per-line picker cannot
+    disagree about what a query finds. Will is filtering a real library; three boxes with three
+    behaviours would be worse than one box.
+
+    Mutation: make bulkCandidates do its own substring test."""
+    b = ran["bulkAdd"]
+    assert b["findsByName"] == ["i2"], "a bare word stopped matching the name"
+    assert b["findsByVendor"] == ["i1"], "the vendor: facet of the grammar is not reaching it"
+    assert b["negationWorks"] == ["i1"], "negation is not reaching it"
+    assert b["emptyQueryShowsAll"] == 2, "an empty query must show the whole library, not nothing"
+
+
+@needs_node
+def test_the_bulk_pickers_facets_are_its_own_and_do_not_move_the_items_tab(ran):
+    """THE TRAP THIS AVOIDS, stated by the note on `visibleItems`: a picker silently narrowed by a
+    bar on another tab. The modal draws its own facets, so it passes its own state and the Items
+    tab's FILTERS must be untouched by anything the modal does.
+
+    Mutation: have bulkCandidates read the module-level FILTERS."""
+    b = ran["bulkAdd"]
+    assert b["ownFacetNarrows"] == ["i1"], "the modal's own division facet did not narrow the list"
+    assert b["itemsTabFiltersUnmoved"] == '{"divisions":[],"vendor":"","condition":""}', (
+        "the modal moved the Items tab's filter state")
+
+
+@needs_node
+def test_select_all_speaks_about_what_is_on_screen(ran):
+    """"All" has to mean all of what you can SEE. After typing a query, a control claiming
+    everything is ticked while the visible list is half unticked is simply wrong — and ticks made
+    before the search are still held, because narrowing a search must not silently untick what you
+    already chose.
+
+    Mutation: compute the state over the whole library instead of the shown ids."""
+    b = ran["bulkAdd"]
+    assert (b["allNone"], b["allSome"], b["allAll"]) == ("none", "some", "all")
+    assert b["allOfTheShownOnes"] == "all", (
+        "a tick outside the current search made the shown ones read as partial")
+    assert b["emptyListIsNone"] == "none", "an empty list cannot be 'all'"
+
+
+@needs_node
+def test_a_bulk_added_line_prices_immediately_instead_of_arriving_broken(ran):
+    """THE ONE THAT MATTERS MOST, and the reason bulkLinesFor is a function with a test rather than
+    three lines in a click handler.
+
+    `priceLine` reports a line with no coverage as `no_coverage`, and priceAssembly COUNTS that
+    reason in `broken_lines`. So a bulk add that did not seed coverage from the item would drop
+    twelve amber "Needs a coverage" rows into the assembly, and the estimator would reasonably
+    conclude the feature was broken. The single-pick path has always seeded it; this matches it
+    deliberately rather than by luck.
+
+    Mutation: drop the coverage seed, or set it to null."""
+    b = ran["bulkAdd"]
+    assert b["lineCount"] == 2
+    assert b["lineKeys"] == ["coverage", "item_id", "note", "role", "roundup", "waste_pct"], (
+        "the bulk line shape drifted from what the single-pick path builds: %s" % b["lineKeys"])
+    assert b["seededCoverage"] == [275, 275], "coverage was not seeded from the item"
+    assert b["defaultWaste"] == [5, 5] and b["defaultRoundup"] == [True, True], (
+        "a bulk-added row would save with different defaults than a hand-added one")
+    assert b["allPriceable"], "a bulk-added line did not price"
+    assert b["noneReportNoCoverage"], "a bulk-added line arrived as broken"
+    assert b["firstQty"] == 11, "the priced quantity is not the one the engine gives"
+
+
+@needs_node
+def test_a_bulk_add_never_invents_a_blank_line(ran):
+    """An id that no longer resolves — the material was deleted while the picker was open — is
+    DROPPED rather than becoming a line with an empty item_id. The server drops such a line on save
+    anyway (`_clean_lines` refuses one with neither item_id nor role), so keeping it would show a
+    row that silently vanishes on the next load.
+
+    An item with no coverage of its own is the opposite case: it still lands, and still says
+    "Needs a coverage". That is an honest report about the material, not a fault in the add."""
+    b = ran["bulkAdd"]
+    assert b["unknownIdDropped"] == 1, "a ghost id became a line"
+    assert b["noCoverageItemStillLands"] == 1, "an item with no coverage was silently refused"
+    assert b["noCoverageItemSaysSo"] == "no_coverage"
+
+
+@needs_node
+def test_the_picker_knows_how_much_room_is_left_before_the_click(ran):
+    """The server caps an assembly at 60 lines. It used to take the first 60 SILENTLY, which is
+    defensible against a hostile 500-line payload and indefensible against a deliberate add of 40:
+    ten materials would vanish under a 200 OK.
+
+    Answering here lets the button explain itself while there is still something to change.
+    Hanz, 2026-08-28, choosing this over raising the cap: keep 60, but refuse loudly.
+
+    Mutation: return fits:true unconditionally, or drop the Math.max on room."""
+    b = ran["bulkAdd"]
+    assert b["maxIsTheServersCap"] == 60, (
+        "BULK_MAX_LINES drifted from _MAX_LINES in backend/library.py")
+    assert b["roomOnEmpty"] == {"used": 0, "room": 60, "over": 0, "fits": True, "max": 60}
+    assert b["roomAt59"]["fits"] is True and b["roomAt59"]["room"] == 1
+    assert b["roomAt59Over"]["fits"] is False and b["roomAt59Over"]["over"] == 1
+    assert b["roomAt60"]["fits"] is False and b["roomAt60"]["room"] == 0
+    # Already over the cap (a legacy row, or the cap lowered since): room clamps at zero rather
+    # than going negative and reading as "room for -1 more".
+    assert b["roomAt61"]["room"] == 0 and b["roomAt61"]["fits"] is False

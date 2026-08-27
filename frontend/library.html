@@ -407,6 +407,76 @@
       border-color:rgba(158,0,31,.35); }
     .fchip > input:focus-visible + .fchip-f { outline:2px solid var(--red); outline-offset:2px; }
 
+    /* ── ADD FROM LIBRARY (the bulk picker) ──────────────────────────────
+       The scrim comes from shared.js (.tw-ov). Only the BOX is here, because .tw-dlg is shaped for
+       a two-button question: 420px and centred text. Radii from the tokens, never a raw px value —
+       a test pins that, and it is the reason this page has one radius scale instead of five. */
+    .bulk-ov { align-items:flex-start; }
+    .bulk-dlg { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
+      width:min(760px, 100%); max-height:min(82vh, 720px); margin-top:6vh;
+      display:flex; flex-direction:column; overflow:hidden;
+      box-shadow:0 18px 48px rgba(92,64,63,.22); text-align:left; }
+    .bulk-head { display:grid; grid-template-columns:1fr auto; align-items:start;
+      gap:4px 10px; padding:16px 16px 12px; border-bottom:1px solid var(--line); }
+    .bulk-head h2 { margin:0; font:700 15px var(--ui); letter-spacing:-.01em; }
+    .bulk-head .icon { grid-row:1 / span 2; align-self:center; }
+    .bulk-sub { grid-column:1; margin:0; color:var(--ink-v); font-size:12.5px; }
+    .bulk-filters { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px;
+      padding:12px 16px; background:var(--surf-low); border-bottom:1px solid var(--line); }
+    /* The scroller. The list is the only part that grows, so the head, the filters and the footer
+       stay put while a 200-material library scrolls past them. */
+    .bulk-list { flex:1 1 auto; overflow-y:auto; padding:6px 0; }
+    .bulk-none { margin:0; padding:22px 16px; color:var(--ink-v); font-size:13px; }
+
+    /* A ROW IS A LABEL WRAPPING A REAL CHECKBOX, so the whole row is the hit target and the
+       keyboard gets the control for free. The tick is drawn with CSS `content` keyed off :checked,
+       which is also the house rule: a typed ✓ is rendered by whatever font the machine has, cannot
+       take the row's colour, and is caught by the emoji guard. */
+    .bulk-row { display:grid; grid-template-columns:auto 1fr auto; align-items:center;
+      gap:12px; padding:8px 16px; cursor:pointer;
+      transition:background .12s ease; }
+    .bulk-row:hover { background:var(--surf-low); }
+    .bulk-row > input { position:absolute; width:1px; height:1px; margin:0; padding:0; border:0;
+      clip-path:inset(50%); overflow:hidden; white-space:nowrap; }
+    .bulk-box { width:17px; height:17px; flex:none; border:1px solid var(--line);
+      border-radius:var(--r-sm); background:var(--card); display:inline-flex;
+      align-items:center; justify-content:center;
+      transition:background .12s ease, border-color .12s ease; }
+    .bulk-box::after { content:"¹4"; font-size:11px; line-height:1; color:#fff;
+      opacity:0; transform:scale(.7); transition:opacity .12s ease, transform .12s ease; }
+    .bulk-row > input:checked + .bulk-box { background:var(--red); border-color:var(--red); }
+    .bulk-row > input:checked + .bulk-box::after { opacity:1; transform:none; }
+    .bulk-row > input:focus-visible + .bulk-box { outline:2px solid var(--red); outline-offset:2px; }
+    .bulk-nm { min-width:0; }
+    .bulk-nm b { display:block; font-weight:600; overflow:hidden; text-overflow:ellipsis;
+      white-space:nowrap; }
+    .bulk-nm span { display:block; color:var(--ink-v); font-size:11.5px; overflow:hidden;
+      text-overflow:ellipsis; white-space:nowrap; }
+    .bulk-cost { color:var(--ink-v); font-size:12px; font-variant-numeric:tabular-nums;
+      white-space:nowrap; }
+    /* Already on this assembly. Shown rather than hidden, so the list is the library and not a
+       puzzle about which materials went missing — and untickable, because a duplicate line is a
+       duplicate price. */
+    .bulk-row.on { cursor:default; }
+    .bulk-row.on .bulk-nm b { color:var(--ink-v); }
+    .bulk-row.on:hover { background:none; }
+    .bulk-in { font:600 10px var(--ui); letter-spacing:.06em; text-transform:uppercase;
+      color:var(--ok); white-space:nowrap; }
+
+    .bulk-foot { display:flex; align-items:center; gap:12px; padding:12px 16px;
+      border-top:1px solid var(--line); background:var(--card); }
+    .bulk-all { display:inline-flex; align-items:center; gap:8px; cursor:pointer;
+      font:600 12.5px var(--ui); color:var(--ink-v); }
+    .bulk-count { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    .bulk-count.over { color:var(--red-dark); font-weight:600; }
+    .bulk-spacer { flex:1 1 auto; }
+    .bulk-foot .btn[disabled] { opacity:.5; cursor:not-allowed; }
+    .lineadds { display:flex; flex-wrap:wrap; gap:8px; }
+    @media (max-width:560px) {
+      .bulk-dlg { margin-top:0; max-height:100%; border-radius:0; border:0; }
+      .bulk-ov { padding:0; }
+    }
+
     .admin-grid { display:grid; gap:18px; }
     .admin-section h2 { margin:0 0 8px; font:700 14px var(--ui); letter-spacing:-.01em; }
 
@@ -659,6 +729,19 @@
         <div class="card apanel" id="asm-panel" hidden>
           <div class="atitle">
             <input id="asm-name" aria-label="Assembly name" maxlength="200" />
+            <!-- WHAT THIS ASSEMBLY IS MEASURED PER. Hanz, 2026-08-28: "Coverage per Unit — is there
+                 a way we can change it from SF and LF?"
+                 The field is not new: `unit` has been persisted since the table existed and the
+                 Polish beta already reads it to stamp SF/LF onto a takeoff row. It just had no
+                 editor, so every assembly said SF because the create call hardcoded it — and the
+                 rail's "$1.497/SF" was a guess that happened to be right.
+                 A whole assembly is one unit, not a unit per line: Kyle builds "Epoxy Broadcast" in
+                 SF and "Cove Base" in LF as SEPARATE assemblies, which is also how the Polish beta
+                 models cove (its own takeoff rows, LF kept out of the SF denominator). -->
+            <select id="asm-unit" aria-label="Measured and priced per">
+              <option value="SF">per SF</option>
+              <option value="LF">per LF</option>
+            </select>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
@@ -677,7 +760,7 @@
                 <tr>
                   <th><span class="th-help" tabindex="0" title="The material this line uses. Pick one from the library; its cost and pack size come with it." aria-label="Items. The material this line uses. Pick one from the library; its cost and pack size come with it.">Items</span></th>
                   <th class="n w-order"><span class="th-help" tabindex="0" title="How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon." aria-label="Order Amount. How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon.">Order Amount</span></th>
-                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF." aria-label="Coverage per Unit. How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF.">Coverage per Unit</span></th>
+                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much the assembly's unit one single unit of this material covers, in whatever that assembly is measured in. Per unit, not per pack - a 5 gallon pail at 275 a gallon covers 1,375." aria-label="Coverage per Unit. How much the assembly's unit one single unit of this material covers, in whatever that assembly is measured in. Per unit, not per pack - a 5 gallon pail at 275 a gallon covers 1,375.">Coverage per Unit</span></th>
                   <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor</span></th>
                   <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
                   <th class="n w-qty derived"><span class="th-help" tabindex="0" title="How much of this material the test area needs, after waste and rounding. The working is shown underneath." aria-label="Quantity. How much of this material the test area needs, after waste and rounding. The working is shown underneath.">Quantity</span></th>
@@ -693,11 +776,22 @@
                rather than in a card of its own, so there is no container edge for a full-width
                row to belong to. It keeps the ghost-button shape and takes the same drawn plus,
                so the page has one glyph for "add another" even where it has two shapes. -->
-          <div><button class="btn ghost sm addline" type="button" id="add-line">
+          <div class="lineadds"><button class="btn ghost sm addline" type="button" id="add-line">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
                  focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
-            Add item line</button></div>
+            Add item line</button>
+            <!-- ONE AT A TIME, OR TWELVE AT ONCE. Both, because they are different jobs: the
+                 single line is for "I know the next material", the picker is for "I am building
+                 this system out of the library". Hanz, 2026-08-28: "Will wants to add items in
+                 bulk from the Items list, but still being able to search and filter it out."
+                 Not an .addrow/.addbtn — see the note above; and its own shape rather than a
+                 second primary, because the line above it is the more common press. -->
+            <button class="btn ghost sm addline" type="button" id="bulk-open">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                   focusable="false"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+              Add from library…</button></div>
 
           <div class="totals">
             <div class="tot">
@@ -705,7 +799,9 @@
               <div class="v" id="t-total">—</div>
             </div>
             <div class="tot head">
-              <div class="k">Price per SF</div>
+              <!-- Filled by renderPanel from the assembly's own unit. Hardcoded "Price per SF" here
+                   for an LF assembly put the wrong noun over a real number. -->
+              <div class="k" id="t-unit-k">Price per SF</div>
               <div class="v" id="t-unit">—</div>
             </div>
           </div>
@@ -716,9 +812,11 @@
                id="area" and is still read by renderList, renderPanel and refreshNumbers, so
                moving it is presentational and nothing recalculates differently. -->
           <div class="areaband quiet">
-            <label for="area">Test area</label>
+            <!-- Both the label and the suffix are written by renderPanel from the assembly's unit:
+                 "Test area / SF" for a floor, "Test length / LF" for cove base. -->
+            <label for="area" id="area-k">Test area</label>
             <input id="area" class="num" inputmode="decimal" value="1000" />
-            <span>SF</span>
+            <span id="area-u">SF</span>
           </div>
         </div>
 
@@ -729,6 +827,70 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <!-- ── ADD FROM LIBRARY ────────────────────────────────────────────────────
+       A DIRECT CHILD OF <body>, and that is structural rather than tidiness. `.card` sets
+       overflow:hidden, and any overflow other than visible is a clipping context — a
+       position:fixed overlay nested inside one is clipped to it in every browser. The assembly
+       panel already carries `.apanel { overflow:visible }` for exactly this reason, for the item
+       picker's floating results; putting the dialog out here means it never has to.
+
+       The scrim is `.tw-ov` from shared.js, injected by TW.injectModalCss(). Reused rather than
+       re-drawn so this dialog dims the page exactly like every confirm on every other screen, and
+       sits above the portal drawer at the same z-index. The BOX is ours: `.tw-dlg` caps at 420px
+       and centres its text, which suits a two-button question and not a searchable list.
+
+       Its own markup is inert until the page script opens it — no inline handlers, CSP. -->
+  <div class="tw-ov bulk-ov" id="bulk-ov" role="dialog" aria-modal="true"
+       aria-labelledby="bulk-h" hidden>
+    <div class="bulk-dlg">
+      <div class="bulk-head">
+        <h2 id="bulk-h">Add materials</h2>
+        <p class="bulk-sub" id="bulk-sub"></p>
+        <button class="icon" type="button" id="bulk-x" title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+               focusable="false"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <!-- ITS OWN SEARCH AND ITS OWN FACETS. Same matcher as the Items tab (bulkCandidates calls
+           itemMatches), different STATE — a picker narrowed by a bar on a tab you cannot see while
+           the dialog is open would be a trap, which is the same reasoning that keeps the per-line
+           picker out of the Items tab's filters. -->
+      <div class="bulk-filters">
+        <span class="searchbox">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+               focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+          <input id="bulk-q" type="search" placeholder="Search materials, divisions or vendors"
+                 aria-label="Search materials" autocomplete="off" />
+        </span>
+        <div class="facets">
+          <span class="facet">
+            <span class="flabel" id="bulk-div-l">Division</span>
+            <span class="fchips" id="bulk-divisions" role="group" aria-labelledby="bulk-div-l"></span>
+          </span>
+          <span class="facet">
+            <label class="flabel" for="bulk-vendor">Vendor</label>
+            <select id="bulk-vendor"><option value="">Any vendor</option></select>
+          </span>
+        </div>
+      </div>
+
+      <div class="bulk-list" id="bulk-list" role="group" aria-labelledby="bulk-h"></div>
+      <p class="bulk-none" id="bulk-none" hidden></p>
+
+      <div class="bulk-foot">
+        <label class="bulk-all"><input type="checkbox" id="bulk-master"
+               aria-label="Select everything shown" /><span id="bulk-master-l">Select all</span></label>
+        <span class="bulk-count" id="bulk-count"></span>
+        <span class="bulk-spacer"></span>
+        <button class="btn ghost" type="button" id="bulk-cancel">Cancel</button>
+        <button class="btn" type="button" id="bulk-add" disabled>Add</button>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
