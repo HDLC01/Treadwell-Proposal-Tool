@@ -193,6 +193,10 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${fn("current")}
   ${fn("itemOf")}
+  // Lifted because renderPanel calls it. A lifted function that reaches for a helper this scope
+  // does not have dies with a ReferenceError, which takes every test in test_library_ui.py red at
+  // once with no hint of the real cause — so a new helper and its lift belong in one commit.
+  ${fn("asmUnit")}
   ${fn("byId")}
   ${fn("adoptSaved")}
   ${fn("paintDates")}
@@ -815,6 +819,42 @@ const out = {};
     totalWritten: d.nodes["t-total"].textContent,
     perUnitWritten: d.nodes["t-unit"].textContent,
   };
+
+  // THE ASSEMBLY'S UNIT REACHES ALL THREE LABELS, and the arithmetic is untouched by it.
+  //
+  // The field was persisted and read by the Polish beta long before it had an editor, so every
+  // assembly said SF and the rail's "$1.497/SF" was a guess that happened to be right. These two
+  // scenarios are the same fixture and the same numbers with only `unit` changed — so a divergence
+  // in `total`/`perUnit` between them would mean the relabel had started changing prices.
+  {
+    const lf = build({ ASMS: [{ id: "a1", name: "Cove Base", unit: "LF", lines: [
+      { item_id: "i1", coverage: 275, waste_pct: 5, roundup: true }] }] });
+    lf.api.renderPanel();
+    const sf = build({ ASMS: [{ id: "a1", name: "Floor", unit: "SF", lines: [
+      { item_id: "i1", coverage: 275, waste_pct: 5, roundup: true }] }] });
+    sf.api.renderPanel();
+    const bare = build({ ASMS: [{ id: "a1", name: "Legacy", unit: "sqft", lines: [
+      { item_id: "i1", coverage: 275, waste_pct: 5, roundup: true }] }] });
+    bare.api.renderPanel();
+    out.assemblyUnit = {
+      lfPerUnitLabel: lf.dom.nodes["t-unit-k"].textContent,
+      lfAreaLabel: lf.dom.nodes["area-k"].textContent,
+      lfAreaSuffix: lf.dom.nodes["area-u"].textContent,
+      lfSelectSynced: lf.dom.nodes["asm-unit"].value,
+      sfPerUnitLabel: sf.dom.nodes["t-unit-k"].textContent,
+      sfAreaLabel: sf.dom.nodes["area-k"].textContent,
+      sfAreaSuffix: sf.dom.nodes["area-u"].textContent,
+      // An off-list legacy value reads as SF rather than being echoed into the label, so the words
+      // still describe the arithmetic that actually ran.
+      legacyReadsAsSf: bare.dom.nodes["area-u"].textContent,
+      legacySelectSynced: bare.dom.nodes["asm-unit"].value,
+      // Identical money on both, which is the point: this is a label, not a calculation.
+      lfTotal: lf.dom.nodes["t-total"].textContent,
+      sfTotal: sf.dom.nodes["t-total"].textContent,
+      lfPerUnit: lf.dom.nodes["t-unit"].textContent,
+      sfPerUnit: sf.dom.nodes["t-unit"].textContent,
+    };
+  }
 
   // A broken line must be reported in the Quantity cell and cleared out of the Cost cell.
   const broken = build({ ASMS: [{ id: "a1", name: "Broken", unit: "SF", lines: [

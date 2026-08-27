@@ -79,6 +79,23 @@ DIVISIONS = ("Polished Concrete", "Epoxy", "Gypsum Underlayment")
 # of — a check constraint would block the purchase, not the typo.
 ITEM_UNITS = ("Gallon", "Kit", "Bag")
 
+# What an ASSEMBLY is measured and priced per, and it is a different question from ITEM_UNITS.
+# An item's unit is how you BUY it (a 5-gallon pail); an assembly's unit is what its coverage
+# numbers divide into and what its price is quoted per.
+#
+# Two values, because those are the two things Treadwell measures: floor area in square feet and
+# cove base / saw cuts / stripes in linear feet. Hanz, 2026-08-28: "Coverage per Unit — is there a
+# way we can change it from SF and LF?"
+#
+# The field itself is not new — DEFAULT_ASM_UNIT has been persisted since the table was created and
+# `polish-estimate.js` already reads it to stamp SF/LF onto a takeoff row. What was missing was a
+# vocabulary and an editor: every assembly said "SF" because the create call hardcoded it, so the
+# rail's "$1.497/SF" label was a guess that happened to be right.
+#
+# Offered, not enforced, exactly like DIVISIONS and ITEM_UNITS — a legacy row may hold "sqft" or
+# "Each" and must stay loadable and correctable rather than uneditable.
+ASM_UNITS = ("SF", "LF")
+
 _MAX_TEXT = 200
 _MAX_NOTES = 4000
 _MAX_LINES = 60                 # a system with 60 coats is a mistake, not a system
@@ -597,7 +614,11 @@ def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict
         out["name"] = name
 
     if "unit" in payload or not partial:
-        out["unit"] = _clean_text(payload.get("unit"), 24) or DEFAULT_ASM_UNIT
+        # Canonicalised against ASM_UNITS so "lf" typed anywhere becomes "LF" — the Polish beta
+        # matches this value case-sensitively (`polish-estimate.js` compares an upper-cased copy
+        # against "SF"/"LF"), so a lower-case row would silently fail to stamp a takeoff row's unit.
+        out["unit"] = _canonical(_clean_text(payload.get("unit"), 24), ASM_UNITS) \
+            or DEFAULT_ASM_UNIT
 
     for col, limit in (("category", _MAX_TEXT), ("description", _MAX_NOTES)):
         if col in payload or not partial:

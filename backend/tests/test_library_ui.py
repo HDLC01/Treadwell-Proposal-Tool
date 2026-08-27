@@ -252,6 +252,50 @@ def test_coverage_left_the_items_tab(ran):
 
 
 @needs_node
+def test_the_assembly_says_whether_it_is_measured_in_SF_or_LF(ran):
+    """Hanz, 2026-08-28: "Coverage per Unit - is there a way we can change it from SF and LF?"
+
+    Three labels, all read off the assembly instead of a constant: the totals tile, the test-quantity
+    label, and its suffix. Before this the page said "Price per SF" and "Test area / SF" over a cove
+    assembly's linear feet.
+
+    The `unit` column is not new - it has been persisted since the table existed and
+    polish-estimate.js already reads it to stamp SF/LF onto a takeoff row. It had no editor, so every
+    assembly said SF because the create call hardcoded it.
+
+    Mutation: hardcode "SF" in any of the three writes."""
+    u = ran["assemblyUnit"]
+    assert (u["lfPerUnitLabel"], u["lfAreaLabel"], u["lfAreaSuffix"]) == (
+        "Price per LF", "Test length", "LF"), (
+        "an LF assembly is still being described in square feet: %s" % u)
+    assert (u["sfPerUnitLabel"], u["sfAreaLabel"], u["sfAreaSuffix"]) == (
+        "Price per SF", "Test area", "SF")
+    assert u["lfSelectSynced"] == "LF" and u["legacySelectSynced"] == "SF", (
+        "the select does not show the unit the assembly actually holds")
+
+
+@needs_node
+def test_choosing_LF_relabels_the_screen_and_changes_no_number(ran):
+    """THE GUARANTEE THAT MAKES THIS SAFE. `priceAssembly` divides by whatever is in the one area
+    input and has no notion of what it measures, so the same lines and the same quantity must cost
+    the same whether the assembly calls itself SF or LF. If these ever diverge, a relabel has
+    started moving money.
+
+    It is also why per-line units were NOT built: they would need a second denominator, and the
+    Polish bid page cannot express one (a takeoff row carries a single measurement), so the library
+    and the bid would disagree while the cross-check between them stayed green.
+
+    An off-list legacy value ("sqft") reads as SF rather than being echoed, so the words on screen
+    keep describing the arithmetic that ran."""
+    u = ran["assemblyUnit"]
+    assert u["lfTotal"] == u["sfTotal"], (
+        "the unit label changed the total: %s vs %s" % (u["lfTotal"], u["sfTotal"]))
+    assert u["lfPerUnit"] == u["sfPerUnit"], (
+        "the unit label changed the per-unit price: %s vs %s" % (u["lfPerUnit"], u["sfPerUnit"]))
+    assert u["legacyReadsAsSf"] == "SF"
+
+
+@needs_node
 def test_the_vendor_is_a_dropdown_that_keeps_an_off_list_value(ran):
     """A vendor removed from the list must still show on the material bought from it — an item
     records where it actually came from — and must not appear twice when it is also on the list."""

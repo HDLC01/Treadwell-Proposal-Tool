@@ -144,6 +144,20 @@
   }
   function itemOf(id) { return L.findItem(ITEMS, id); }
 
+  /** What an assembly is measured and priced per: "SF" or "LF".
+   *
+   *  Takes the assembly so it stays a pure function of its argument — the harness lifts the three
+   *  renderers that call this out of the source text, and a helper that closed over module state
+   *  would need its own grab() in there.
+   *
+   *  Anything unrecognised reads as SF, matching `_coverage_unit`-style read-shaping on the server:
+   *  the column is free text to 24 chars and a legacy row may hold "sqft" or "Each". Defaulting
+   *  rather than displaying the raw value keeps the label honest about which arithmetic actually
+   *  ran — priceAssembly divides by the one area input either way. */
+  function asmUnit(asm) {
+    return String((asm || {}).unit || "").trim().toUpperCase() === "LF" ? "LF" : "SF";
+  }
+
   // ── writes ─────────────────────────────────────────────────────────────────
   var timers = {};
   var pendingPatch = {};
@@ -1350,6 +1364,18 @@
     var priced = p.priced_lines > 0;
     $("t-total").textContent = priced ? L.money(p.total) : "—";
     $("t-unit").textContent = p.per_unit == null ? "—" : L.perUnit(p.per_unit);
+
+    // THE UNIT, SAID OUT LOUD IN THREE PLACES. All three read the assembly rather than a constant,
+    // so a cove assembly stops being described as square feet. The arithmetic is identical either
+    // way — priceAssembly divides by whatever is in the one area input — which is exactly why the
+    // labels mattered: the number was already right and the words around it were wrong.
+    var u = asmUnit(asm);
+    $("t-unit-k").textContent = "Price per " + u;
+    $("area-k").textContent = u === "LF" ? "Test length" : "Test area";
+    $("area-u").textContent = u;
+    // Set, not rebuilt, and only when it differs — the same rule renderFilterBar follows for its
+    // selects. Rewriting a control somebody has open would close it mid-choice.
+    if ($("asm-unit").value !== u) $("asm-unit").value = u;
   }
 
   // renderFilterBar is in here rather than inside renderItems on purpose: it must run when the
@@ -1381,6 +1407,20 @@
     a.name = this.value;
     renderList();
     patchSoon("assemblies", a.id, { name: a.name });
+  });
+
+  // SF or LF for the whole assembly. `change` and not `input`: a select fires both, and there is no
+  // half-typed state to catch up with the way there is in the name field.
+  //
+  // renderPanel repaints so the three labels follow immediately, and renderList so the rail's
+  // "$1.497/SF" becomes "/LF" in the same tick. Nothing recalculates — priceAssembly divides by the
+  // one area input whatever the unit says — so this is a relabel that happens to be persisted.
+  $("asm-unit").addEventListener("change", function () {
+    var a = current(); if (!a) return;
+    a.unit = this.value === "LF" ? "LF" : "SF";
+    renderPanel();
+    renderList();
+    patchSoon("assemblies", a.id, { unit: a.unit });
   });
 
   // Item edits reprice every assembly live. That IS the reason items and assemblies are

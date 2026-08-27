@@ -659,6 +659,19 @@
         <div class="card apanel" id="asm-panel" hidden>
           <div class="atitle">
             <input id="asm-name" aria-label="Assembly name" maxlength="200" />
+            <!-- WHAT THIS ASSEMBLY IS MEASURED PER. Hanz, 2026-08-28: "Coverage per Unit — is there
+                 a way we can change it from SF and LF?"
+                 The field is not new: `unit` has been persisted since the table existed and the
+                 Polish beta already reads it to stamp SF/LF onto a takeoff row. It just had no
+                 editor, so every assembly said SF because the create call hardcoded it — and the
+                 rail's "$1.497/SF" was a guess that happened to be right.
+                 A whole assembly is one unit, not a unit per line: Kyle builds "Epoxy Broadcast" in
+                 SF and "Cove Base" in LF as SEPARATE assemblies, which is also how the Polish beta
+                 models cove (its own takeoff rows, LF kept out of the SF denominator). -->
+            <select id="asm-unit" aria-label="Measured and priced per">
+              <option value="SF">per SF</option>
+              <option value="LF">per LF</option>
+            </select>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
@@ -677,7 +690,7 @@
                 <tr>
                   <th><span class="th-help" tabindex="0" title="The material this line uses. Pick one from the library; its cost and pack size come with it." aria-label="Items. The material this line uses. Pick one from the library; its cost and pack size come with it.">Items</span></th>
                   <th class="n w-order"><span class="th-help" tabindex="0" title="How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon." aria-label="Order Amount. How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon.">Order Amount</span></th>
-                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF." aria-label="Coverage per Unit. How much area one single unit covers. Per unit, not per pack - a 5 gallon pail at 275 SF a gallon covers 1,375 SF.">Coverage per Unit</span></th>
+                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much the assembly's unit one single unit of this material covers, in whatever that assembly is measured in. Per unit, not per pack - a 5 gallon pail at 275 a gallon covers 1,375." aria-label="Coverage per Unit. How much the assembly's unit one single unit of this material covers, in whatever that assembly is measured in. Per unit, not per pack - a 5 gallon pail at 275 a gallon covers 1,375.">Coverage per Unit</span></th>
                   <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor</span></th>
                   <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
                   <th class="n w-qty derived"><span class="th-help" tabindex="0" title="How much of this material the test area needs, after waste and rounding. The working is shown underneath." aria-label="Quantity. How much of this material the test area needs, after waste and rounding. The working is shown underneath.">Quantity</span></th>
@@ -705,7 +718,9 @@
               <div class="v" id="t-total">—</div>
             </div>
             <div class="tot head">
-              <div class="k">Price per SF</div>
+              <!-- Filled by renderPanel from the assembly's own unit. Hardcoded "Price per SF" here
+                   for an LF assembly put the wrong noun over a real number. -->
+              <div class="k" id="t-unit-k">Price per SF</div>
               <div class="v" id="t-unit">—</div>
             </div>
           </div>
@@ -716,9 +731,11 @@
                id="area" and is still read by renderList, renderPanel and refreshNumbers, so
                moving it is presentational and nothing recalculates differently. -->
           <div class="areaband quiet">
-            <label for="area">Test area</label>
+            <!-- Both the label and the suffix are written by renderPanel from the assembly's unit:
+                 "Test area / SF" for a floor, "Test length / LF" for cove base. -->
+            <label for="area" id="area-k">Test area</label>
             <input id="area" class="num" inputmode="decimal" value="1000" />
-            <span>SF</span>
+            <span id="area-u">SF</span>
           </div>
         </div>
 
