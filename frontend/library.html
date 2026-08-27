@@ -166,6 +166,27 @@
     .addbtn:hover { background:var(--surf-low); color:var(--red-dark); }
     .addbtn:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
 
+    /* …AND MATERIALS IS THE ONE EXCEPTION. Hanz, 2026-08-28: "can we make the add material One
+       Small button only?" Moving it above the table (earlier the same day) turned the full-width
+       row idiom against itself: at the FOOT of a list the tinted full-bleed row reads as "the
+       next row", which is the whole point of it — but at the TOP it reads as a second table
+       header, a wide band of nothing sitting between the filters and the real column headings.
+       A small button is just a button, wherever it sits.
+
+       Scoped by ID, and deliberately NOT by adding a second class. The four other add rows still
+       want the row idiom, and library-ui-harness.js counts the addrow and addbtn class
+       attributes as exact literal strings to prove the page has one way of saying "add another"
+       — so adding a modifier alongside either name silently drops that element out of the count.
+       That already happened once today with a class called addrow-top, and again with this very
+       comment when it quoted the attributes in full. The id is already on the element for the
+       show/hide logic; reusing it as the style hook costs nothing and cannot break the count. */
+    #items-addrow { border-top:0; background:transparent; padding:10px 11px 2px; }
+    #items-addrow .addbtn { width:auto; padding:6px 12px; border:1px solid var(--line);
+      border-radius:var(--r-md); background:var(--card); font-weight:600;
+      transition:background .12s ease, color .12s ease, border-color .12s ease; }
+    #items-addrow .addbtn:hover { border-color:var(--red); background:var(--surf-low); }
+    #items-addrow .addbtn:focus-visible { outline-offset:2px; }
+
     /* assemblies workspace */
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
     @media (max-width:1080px){ .work { grid-template-columns:1fr; } }
