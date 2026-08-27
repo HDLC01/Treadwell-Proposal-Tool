@@ -82,6 +82,21 @@
   var M = null;
   var form = null;
 
+  // WHICH OF THE FIVE THE ESTIMATOR SETTLED THEMSELVES. Hanz, 2026-08-27: the verbal panel must
+  // respect the human. The panel is allowed to fill an empty form; it is not allowed to argue with
+  // a person. A key that got here by a real click is REPORTED back on the next run ("you set this
+  // yourself — left alone") instead of being flipped a second time, because the estimator who
+  // corrected the AI once should not have to correct it again after every re-ask.
+  //
+  // Deliberately NOT persisted to the draft. It is one page visit's worth of "who touched this",
+  // and a stale flag on tomorrow's draft would block a fill nobody had objected to.
+  //
+  // There is deliberately NO matching ledger of what the panel itself set. Its own record is the
+  // `applied` list it returns, and a second run is allowed to correct its own first reading — so a
+  // stored copy would have had no reader, and freezing keys the AI had touched would make the
+  // re-ask pointless.
+  var humanConditions = {};
+
   /** Point the page at one draft's blob.
    *
    *  Handed to enterSandbox as its adopt callback, so it also runs when the sandbox moves the page
@@ -127,8 +142,15 @@
     el.setAttribute("aria-checked", on ? "true" : "false");
   }
 
-  function toggleCondition(key) {
+  /** Flip one of the five, and record WHO flipped it.
+   *
+   *  `fromVerbal` is passed only by applyVerbal. Every other caller — the delegated click, the
+   *  keyboard, anything added later — counts as the estimator, which is the safe default in both
+   *  directions: forgetting the flag costs the panel one re-fill, while getting it wrong the other
+   *  way would let the AI overwrite a decision a person had already made. */
+  function toggleCondition(key, fromVerbal) {
     if (!isCondition(key)) return;          // only the five; a stray data-cond invents nothing
+    if (!fromVerbal) humanConditions[key] = true;
     M.conditions[key] = !M.conditions[key];
     paintCondition(key);
     // The county note quotes the Remodel tax toggle by name, so it is stale the moment one of these
@@ -148,16 +170,25 @@
    *
    *  Only ever sets what the SERVER accepted. Everything it hands over has already cleared the
    *  evidence gate in backend/verbal_intake.py; nothing here re-decides that, and nothing here
-   *  touches a county key — the picker below is the only thing allowed to write those four. */
+   *  touches a county key — the picker below is the only thing allowed to write those four.
+   *
+   *  IT SAVES ITS OWN FILLS. Nothing on this page listens for `input` — see wire(), which binds a
+   *  delegated click, a submit and the county box, and that is the whole list. So the eight text
+   *  boxes this fills reached the draft only by accident, when a condition happened to flip in the
+   *  same run and its save swept them up. saveSoon() is called outright below.
+   *
+   *  Returns three lists, and the third one is the point: `respected` names the conditions the
+   *  estimator had already settled by hand, which this LEAVES ALONE and asks the panel to say so. */
   function applyVerbal(res) {
-    var filled = [], applied = [];
+    var filled = [], applied = [], respected = [];
     var fields = (res && res.fields) || {};
     Object.keys(fields).forEach(function (key) {
       var el = form ? form.querySelector('[name="' + key + '"]') : null;
       if (!el) return;
       el.value = fields[key];
-      // Through a real input event, so the form's own change handling runs — the same path a
-      // keystroke takes. Setting .value alone leaves the draft unsaved and the page unaware.
+      // Fired because a programmatic fill should look like a keystroke to anything that IS
+      // listening — a later handler, an autofill extension, a test driving the page. It is not
+      // what saves the draft: see the note above.
       el.dispatchEvent(new Event("input", { bubbles: true }));
       filled.push(key);
     });
@@ -166,12 +197,26 @@
       if (!isCondition(key)) return;
       var item = conditions[key];
       if (!item || typeof item.value !== "boolean") return;
+      // THE HUMAN WINS. An estimator who corrected this switch after the first run is not asked to
+      // correct it again after the re-ask — the panel reports the disagreement instead of settling
+      // it. Reported rather than silently skipped, so the words the transcript rests on still
+      // reach the screen and the estimator can change their own mind on the evidence.
+      if (humanConditions[key]) { respected.push(key); return; }
       // Toggled only when it DIFFERS. Calling toggleCondition unconditionally would flip a switch
       // that was already right, which is the one way this could turn a correct form wrong.
-      if (!!M.conditions[key] !== item.value) toggleCondition(key);
+      if (!!M.conditions[key] !== item.value) toggleCondition(key, true);
       applied.push(key);
     });
-    return { filled: filled, applied: applied };
+    if (filled.length) {
+      // The caption above the form names the project and the town, and both of those are boxes
+      // this just filled. Written in hydrate() and nowhere else until now, so a verbal fill left
+      // it reading "Untitled project" over a form with the name in it.
+      paintProjLine();
+      // One extra call, not one extra PUT: saveSoon clears its own pending timer, so this and any
+      // toggle in the same run land on the single 600ms save.
+      saveSoon();
+    }
+    return { filled: filled, applied: applied, respected: respected };
   }
 
   window.TWPolishIntake = { applyVerbal: applyVerbal };
@@ -439,8 +484,12 @@
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
 
-  /** Debounced, same 600ms the calculator uses: a toggle is one click, but the text boxes above
-   *  are typed into and every save is a PUT of the whole blob. */
+  /** Debounced, same 600ms the calculator uses, because every save is a PUT of the WHOLE draft
+   *  blob and a run of the verbal panel schedules one per condition plus one for the fields.
+   *
+   *  WHO CALLS IT, exactly: toggleCondition, pickCounty, clearCounty, and applyVerbal. Typing in
+   *  the text boxes does NOT — no `input` listener exists on this page (see wire()) — so hand-typed
+   *  values reach the draft on Continue, through onSubmit's synchronous save(). */
   function saveSoon() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
@@ -483,6 +532,31 @@
   }
 
   // ── the form ────────────────────────────────────────────────────────────────
+
+  /** The caption above the form: which project this is, and where.
+   *
+   *  Its own function because TWO things change it now — hydrate on load, and a verbal fill that
+   *  types the name and the town into the boxes. While it lived inline in hydrate, the panel could
+   *  fill "Blue Valley West, Overland Park" into the form and leave the heading reading
+   *  "Untitled project" above it.
+   *
+   *  READS THE BOXES FIRST, then the draft. The boxes are what the estimator can see, and a verbal
+   *  fill reaches them 600ms before the save reaches `state`. On load the two agree, writeForm
+   *  having just put one into the other. */
+  function paintProjLine() {
+    var el = $("proj-line");
+    if (!el) return;
+    var boxed = function (name) {
+      var f = form ? form.querySelector('[name="' + name + '"]') : null;
+      return String((f && f.value) || "").trim();
+    };
+    var name = boxed("project_name") || state.project_name || "";
+    var city = boxed("city") || state.city || "";
+    var st = boxed("state") || state.state || "";
+    el.textContent = [name, city && st ? city + ", " + st : ""]
+      .filter(Boolean).join(" · ") || "Untitled project";
+  }
+
   function hydrate() {
     TW.writeForm(form, state);
     var bid = form.querySelector("[name='bid_date']");
@@ -496,8 +570,7 @@
     }
     renderConditions();
     hydrateCounty();                        // after the toggles: the note quotes Remodel tax
-    $("proj-line").textContent = [state.project_name, state.city && state.state
-      ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";
+    paintProjLine();
   }
 
   function onClick(e) {

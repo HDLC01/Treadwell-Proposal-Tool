@@ -447,6 +447,25 @@ def _item_key(name: Any) -> str:
     return "".join(ch for ch in str(name or "").casefold() if ch.isalnum())
 
 
+def _match_key(name: Any) -> str:
+    """`_item_key`, except that a name with no alphanumerics left still compares as itself.
+
+    "---" normalises to "" under _item_key, and the empty key used to mean "nothing to compare,
+    let it through" — so "---" was the one name that could be entered as many times as you liked,
+    and validate_item accepts it because _clean_text leaves it non-empty. When the key comes out
+    empty, fall back to the cleaned text: for those names the punctuation IS the name, and it is
+    the only thing left that tells two of them apart.
+
+    The \\x00 prefix keeps the two families of key from ever meeting. Without it a fallback key
+    could in principle equal a real one and refuse an unrelated material, which is the expensive
+    direction of a check that BLOCKS (see _item_key)."""
+    key = _item_key(name)
+    if key:
+        return key
+    text = _clean_text(name).casefold()
+    return "\x00" + text if text else ""
+
+
 def _clashing_item(name: Any, *, ignore_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """An existing live material whose name matches once case, spacing and punctuation are ignored.
 
@@ -458,12 +477,14 @@ def _clashing_item(name: Any, *, ignore_id: Optional[str] = None) -> Optional[Di
     different coverages". THAT REASON EXPIRED when coverage left the Items tab — coverage is a
     property of an assembly LINE now, which test_coverage_left_the_items_tab pins. Two materials
     with one name no longer have anything to distinguish them, so Hanz's "dont allow" does not
-    overrule his earlier "make it a hint"; the ground moved under it."""
-    target = _item_key(name)
+    overrule his earlier "make it a hint"; the ground moved under it.
+
+    A NAME MADE ENTIRELY OF PUNCTUATION still has to clash with itself — see _match_key."""
+    target = _match_key(name)
     if not target:
         return None
     for it in list_items():
-        if it.get("id") != ignore_id and _item_key(it.get("name")) == target:
+        if it.get("id") != ignore_id and _match_key(it.get("name")) == target:
             return it
     return None
 
