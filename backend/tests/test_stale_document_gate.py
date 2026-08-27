@@ -428,3 +428,85 @@ def test_the_arrival_note_is_pinned_chrome_and_announced():
     assert ".resync-note[hidden] { display:none; }" in html
     # One warning colour across the tool.
     assert "#fdf6e3" in html and "#7a5c00" in html
+
+
+# ── the server's refusal, when it beats the gate to it ───────────────────────
+# `POST /api/portal/publish` answers 409 with `code: "stale_document"` and writes nothing: no
+# portal row, no email. Three layers now, and each one covers what the one before it cannot.
+# The gate reads THIS browser's blob. The server reads the blob it is about to snapshot, which
+# is the one that counts when an edit lands from a second tab, another device, or a colleague
+# between the flush and the write. The post-send warning covers a send that somehow lands anyway.
+#
+# The numbers below are the real reported case: David Dyer Residence, revision 4. Live bid
+# $27,721 with no options; the frozen document still held three systems at $29,104. The customer
+# opened it nine minutes after the send.
+@needs_node
+def test_the_servers_refusal_is_recognised_by_its_CODE(ran):
+    """`code`, never the sentence. The sentence in `error` is copy and may be reworded any day;
+    branching on it would make a wording change silently stop handling refusals."""
+    assert ran["refusal"]["recognised"], "a 409 stale_document is not recognised at all"
+    assert ran["refusal"]["code"] == "stale_document"
+
+
+@needs_node
+def test_the_refusal_paints_the_same_panel_with_the_servers_numbers(ran):
+    """The contract's `snapshot` is byte-identical in shape to a successful send's
+    `sent_snapshot`, which is what makes this a mapping and not a second comparison: it drops
+    into the same TW.docDrift the gate uses. One panel, whichever layer said no."""
+    r = ran["refusal"]
+    assert r["rows"] == ["Price:$29,104>$27,721", "Options:2>0"], r["rows"]
+    assert "$29,104" in r["table"] and "$27,721" in r["table"], r["table"]
+
+
+@needs_node
+def test_a_refused_send_reads_as_NOTHING_WAS_SENT(ran):
+    """The server wrote nothing and emailed nobody, so the estimator must not have to tell
+    "the page stopped me" from "the server stopped me" — what they do about it is identical."""
+    assert ran["refusal"]["lede"].startswith("Nothing was sent."), ran["refusal"]["lede"]
+
+
+@needs_node
+@pytest.mark.parametrize("case", ["serverError", "validation", "otherCode", "network",
+                                  "empty", "notJson"])
+def test_every_other_failure_falls_through_to_the_ordinary_error_line(ran, case):
+    """A 500, a validation 400, a different 409, a dropped connection, an unparseable body. If
+    any of these were read as a stale document the estimator would be sent to rebuild a PDF that
+    was never the problem, while the real outage went unreported."""
+    assert ran["refusal"]["others"][case] is None, case
+
+
+@needs_node
+def test_a_refusal_with_no_snapshot_still_says_something(ran):
+    """An older server, or one that changes its mind about the payload. The panel cannot be
+    built without the figures, so the server's own sentence has to carry it: a refusal the
+    estimator cannot see is a Send button that does nothing when pressed."""
+    n = ran["refusal"]["noSnapshot"]
+    assert n["recognised"] and n["rows"] == 0
+    assert "$29,104" in n["error"] and "not $27,721" in n["error"], n["error"]
+
+
+@needs_node
+def test_the_refusal_is_handled_before_the_generic_error_line(ran):
+    """Inside the catch, and it leaves. Falling through would paint the panel and then overwrite
+    the estimator's inline error with a raw "POST … → 409: {…}" status string."""
+    assert ran["wiring"]["refusalHandledInCatch"]
+    assert ran["wiring"]["refusalReusesTheSamePanel"], (
+        "the refusal builds its own rows instead of reusing the shared comparison")
+
+
+@needs_node
+def test_a_reworded_refusal_is_still_recognised(ran):
+    """`error` is copy and somebody will improve it; `code` is the contract. If recognition
+    depended on a word in the sentence, a copy edit on the server would silently stop the panel
+    from ever appearing again, and the estimator would be back to reading a raw status string."""
+    r = ran["refusal"]["reworded"]
+    assert r["recognised"], "recognition depends on the wording of the message"
+    assert r["rows"] == 2, "the figures did not survive the reworded body"
+
+
+@needs_node
+def test_a_refusal_with_nothing_readable_still_reaches_the_estimator(ran):
+    """Read off the source, and said so: this branch lives inside the click handler, which needs
+    the whole page to run. What it guards is that a refusal the panel cannot render falls back to
+    the server's own sentence instead of leaving a Send button that does nothing when pressed."""
+    assert ran["wiring"]["refusalFallsBackToTheServersSentence"]

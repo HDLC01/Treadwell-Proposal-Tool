@@ -41,6 +41,10 @@ const LIFTED = [
   // one: a stub would let these tests pass on figures in a format no estimator ever sees.
   grabFrom(SHARED, "shared.js", /function fmtUsd\(n\) \{[\s\S]*?\n  \}/, "fmtUsd"),
   grabFrom(SRC, "done.js", /function showStaleDoc\(rows, mode\) \{[\s\S]*?\n  \}/, "showStaleDoc"),
+  // The 409 parser, plus the module-scope constant it switches on. Lifting the function
+  // without the constant is the ReferenceError this repo keeps re-learning.
+  grabFrom(SRC, "done.js", /const STALE_DOCUMENT_CODE = "[^"]+";/, "STALE_DOCUMENT_CODE"),
+  grabFrom(SRC, "done.js", /function staleDocRefusal\(err\) \{[\s\S]*?\n  \}/, "staleDocRefusal"),
 ].join("\n");
 
 // ── the smallest DOM the panel touches ───────────────────────────────────────
@@ -67,7 +71,7 @@ function load() {
     createElement: () => makeEl(""),
   };
   const fns = new Function("document", "window",
-    LIFTED + "; return { publishDigest, docDrift, showStaleDoc };")(doc, {});
+    LIFTED + "; return { publishDigest, docDrift, showStaleDoc, staleDocRefusal, CODE: STALE_DOCUMENT_CODE };")(doc, {});
   return Object.assign({ nodes: nodes }, fns);
 }
 
@@ -219,6 +223,69 @@ out.panel = (() => {
                       "showStaleDoc")) };
 })();
 
+// ── the server's refusal ─────────────────────────────────────────────────────
+// THE REAL CASE, off the live run: David Dyer Residence, revision 4. The live bid is $27,721
+// with no options; the frozen document still holds three systems at $29,104. The customer
+// opened it nine minutes after the send.
+const BODY = {
+  ok: false,
+  error: "Not sent - the proposal document is out of date: its price is $29,104, not $27,721 "
+       + "and it shows 2 options, not 0. Open the Proposal step and press Continue to rebuild "
+       + "the document, then send again.",
+  code: "stale_document",
+  differences: ["its price is $29,104, not $27,721", "it shows 2 options, not 0"],
+  page: { base_label: "Epoxy", lump_sum: 27721, option_count: 0 },
+  document: { base_label: "Epoxy", lump_sum: 29104, option_count: 2 },
+  snapshot: { base_tab_id: "Epoxy", base_label: "Epoxy", lump_sum: 27721, option_count: 0,
+              has_document: true, doc_base_label: "Epoxy", doc_lump_sum: 29104,
+              doc_option_count: 2 },
+};
+// Exactly what TW.postJSON throws: Error("POST <path> -> <status>: <body>").
+const thrown = (status, body) => new Error("POST /api/portal/publish?draft_id=d1 → "
+  + status + ": " + (typeof body === "string" ? body : JSON.stringify(body)));
+
+out.refusal = (() => {
+  const h = load();
+  const got = h.staleDocRefusal(thrown(409, BODY));
+  const rows = got ? h.docDrift(got.snapshot) : [];
+  h.showStaleDoc(rows, "blocked");
+  return {
+    code: h.CODE,
+    recognised: !!got,
+    rows: rows.map((r) => r.k + ":" + r.pdf + ">" + r.now),
+    // The panel must say the same thing it says when the page itself refuses.
+    lede: h.nodes["stale-doc-lede"].textContent,
+    table: h.nodes["stale-doc-rows"].read(),
+    // Everything else has to fall through to the ordinary error line, or a real outage gets
+    // reported to the estimator as a stale document and they hunt a problem that is not there.
+    others: {
+      serverError: h.staleDocRefusal(thrown(500, "Internal Server Error")),
+      validation: h.staleDocRefusal(thrown(400, { detail: "no_contact_email" })),
+      otherCode: h.staleDocRefusal(thrown(409, { ok: false, code: "already_sent" })),
+      network: h.staleDocRefusal(new Error("Failed to fetch")),
+      empty: h.staleDocRefusal(null),
+      notJson: h.staleDocRefusal(thrown(409, "{not json at all")),
+    },
+    // The sentence REWORDED and the code unchanged, which is what will actually happen: `error`
+    // is copy and somebody will improve it. Recognition must not depend on a word in it.
+    reworded: (() => {
+      const g = h.staleDocRefusal(thrown(409, {
+        ok: false, code: "stale_document",
+        error: "This did not go out. The document is older than the pricing.",
+        snapshot: BODY.snapshot }));
+      return { recognised: !!g, rows: g ? h.docDrift(g.snapshot).length : -1 };
+    })(),
+    // An older server that sends the code but no snapshot: the panel cannot be built, so the
+    // sentence has to carry the message instead of the estimator seeing nothing.
+    noSnapshot: (() => {
+      const g = h.staleDocRefusal(thrown(409, { ok: false, code: "stale_document",
+                                                error: BODY.error }));
+      return { recognised: !!g, rows: g ? h.docDrift(g.snapshot).length : -1,
+               error: g ? g.error : "" };
+    })(),
+  };
+})();
+
 // ── the wiring: where the gate sits in the send handler ──────────────────────
 // Source ORDER, deliberately: the verdict above is executed, but "no request went out" is a
 // claim about position in a handler that needs the whole page to run. The three indices below
@@ -245,6 +312,21 @@ out.wiring = (() => {
     // that arrives from another tab between the flush and the write.
     keepsPostSendWarning: /function publishDrift/.test(SRC)
       && /publishDrift\(j\.sent_snapshot\)/.test(SRC),
+    // The refusal is handled INSIDE the catch, before the generic error line, and leaves.
+    // Falling through would paint the panel and then overwrite it with a raw status string.
+    refusalHandledInCatch: (() => {
+      const i = SRC.indexOf("const refused = staleDocRefusal(err)");
+      const j = SRC.indexOf("const msg = portalErrMsg(err)", i > 0 ? i : 0);
+      if (i < 0 || j < i) return false;
+      const seg = SRC.slice(i, j);
+      return /showStaleDoc\(rows, "blocked"\)/.test(seg) && /\n\s*return;/.test(seg);
+    })(),
+    refusalReusesTheSamePanel: /const rows = TW\.docDrift\(refused\.snapshot\)/.test(SRC),
+    // Read off the source, deliberately: this branch lives inside the click handler, which needs
+    // the whole page to run. What it guards is that a refusal carrying no readable figures still
+    // reaches the estimator as the server's own sentence rather than as silence.
+    refusalFallsBackToTheServersSentence:
+      /setErr\(rows\.length \? "" : \(refused\.error/.test(SRC),
     fixButtonGoesToTheProposalStep:
       /stale-doc-fix[\s\S]{0,1200}?proposal-review\.html/.test(SRC),
   };

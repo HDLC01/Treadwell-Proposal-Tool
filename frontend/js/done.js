@@ -115,6 +115,38 @@
     return s || "Send failed — try again.";
   }
 
+  // The code the server answers a refused publish with. One value, and it is the switch: the
+  // sentence in `error` is for humans and may be reworded any day, so nothing branches on it.
+  const STALE_DOCUMENT_CODE = "stale_document";
+
+  /** The server's own refusal of a stale-document send, or null for any other failure.
+   *
+   *  THE THIRD LAYER, and it exists because the first two cannot see everything. The gate in
+   *  the Send handler judges this browser's blob; the server judges the blob it is about to
+   *  snapshot, which is the one that counts when an edit lands from another tab, another
+   *  device, or a colleague between the flush and the write. On 409 the server has written
+   *  nothing and sent no email, so this is still a refusal and not a report.
+   *
+   *  It reads the body back out of the thrown message, the same way portalErrMsg above does:
+   *  TW.postJSON flattens a non-2xx into Error("POST … → 409: <body>"). Parsing here rather
+   *  than teaching postJSON to carry structured errors keeps the blast radius to this page --
+   *  that function is called from every screen in the tool.
+   *
+   *  Branches on `code` alone. Not the status line, which is a format, and not the sentence,
+   *  which is copy. */
+  function staleDocRefusal(err) {
+    const text = String((err && err.message) || err || "");
+    const i = text.indexOf("{");
+    if (i < 0) return null;
+    let body;
+    try { body = JSON.parse(text.slice(i)); } catch { return null; }
+    if (!body || typeof body !== "object" || body.code !== STALE_DOCUMENT_CODE) return null;
+    // `snapshot` is documented as byte-identical in shape to a successful send's
+    // `sent_snapshot`, which is what makes this a mapping and not a second comparison: it
+    // drops straight into the same TW.docDrift the gate and the panel already use.
+    return body;
+  }
+
   // Inline recipients editor on the Files page — shown BEFORE sending (no popup).
   // The intake email is a fixed row; the estimator adds/removes extra recipients;
   // the "Send to customer portal" button sends to the whole list. Every recipient
@@ -1092,6 +1124,20 @@
         } catch (err) {
           portalBtn.disabled = false; portalBtn.textContent = orig;
           if (portalRecip.setBusy) portalRecip.setBusy(false);
+          // THE SERVER REFUSED IT. Same panel, same three columns, same one press: an estimator
+          // must not have to tell "the page stopped me" apart from "the server stopped me",
+          // because the thing they have to do about it is identical. Nothing was sent either way.
+          const refused = staleDocRefusal(err);
+          if (refused) {
+            const rows = TW.docDrift(refused.snapshot);
+            showStaleDoc(rows, "blocked");
+            // The server's own sentence only when the panel could not be built from the
+            // snapshot: a refusal the estimator cannot see is a Send button that does nothing.
+            if (portalRecip.setErr) {
+              portalRecip.setErr(rows.length ? "" : (refused.error || portalErrMsg(err)));
+            }
+            return;
+          }
           const msg = portalErrMsg(err);
           if (portalRecip.setErr) portalRecip.setErr(msg === "no_contact_email"
             ? "This proposal has no customer email — add a recipient above." : msg);
