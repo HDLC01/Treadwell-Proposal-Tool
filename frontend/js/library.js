@@ -161,6 +161,10 @@
   // ── writes ─────────────────────────────────────────────────────────────────
   var timers = {};
   var pendingPatch = {};
+  // WHICH RECORDS HAVE A PATCH ON THE WIRE RIGHT NOW. See the guard in flush(): without it a
+  // second debounced save goes out stamped with the version the FIRST one is about to
+  // replace, and the server rightly rejects it as stale — a 409 against our own write.
+  var inFlight = {};
   /** PATCH one record, debounced per record so holding a key is one write.
    *
    *  Pending fields are MERGED, not replaced. The first version replaced the body on each call,
@@ -469,6 +473,21 @@
     // throw on the missing payload BEFORE the try block, which turned a dropped write into an
     // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
     if (!payload) { delete timers[key]; return; }
+    // ONE PATCH PER RECORD ON THE WIRE AT A TIME.
+    //
+    // Every successful PATCH bumps `updated_at`, and an assembly save declares the version it was
+    // editing so two people cannot silently overwrite each other. Those two facts together made a
+    // race against OURSELVES: this function used to take the payload and await the request without
+    // recording that it was in flight, so a second save armed 600ms later read the SAME stale
+    // `updated_at` (adoptSaved has not run yet), went out, and came back 409. `adoptConflict` then
+    // replaced the model wholesale, dropped the pending buffer, and said "Somebody else changed
+    // this while you had it open" — about nobody. Reachable by typing quickly on a slow connection,
+    // and with the bulk picker it could discard a whole batch of lines.
+    //
+    // RE-ARM, never drop: the edit is still on screen and still unsaved, and the payload has not
+    // been consumed yet at this point — so the next tick sends it with a version stamp that is by
+    // then correct. This is the same "wait and try again" the three item gates below use.
+    if (inFlight[key]) { arm(kind, id, key); return; }
     if (kind === "items") {
       // ONE DIALOG AT A TIME, ACROSS ALL ROWS — and across all QUESTIONS, not just this one.
       //
@@ -499,6 +518,9 @@
     // per pause would be unusable; an item is reference data that other records are priced from,
     // which is the whole distinction Hanz drew.
     if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
+    // AFTER the confirm above, which can return false and bail — marking earlier would leave the
+    // record permanently locked by a question somebody answered "no" to.
+    inFlight[key] = 1;
     saving("Saving…");
     try {
       var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
@@ -528,6 +550,11 @@
     } catch (err) {
       say("Couldn't reach the server. " + (err.message || ""));
       saving("Not saved");
+    } finally {
+      // `finally`, because the try block returns early on 409 and on any non-ok status. A lock left
+      // set on one of those paths would silence every later save for that record — a worse bug than
+      // the one this guard fixes.
+      delete inFlight[key];
     }
   }
 

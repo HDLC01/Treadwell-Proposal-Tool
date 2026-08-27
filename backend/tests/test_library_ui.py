@@ -1791,3 +1791,58 @@ def test_the_picker_knows_how_much_room_is_left_before_the_click(ran):
     # Already over the cap (a legacy row, or the cap lowered since): room clamps at zero rather
     # than going negative and reading as "room for -1 more".
     assert b["roomAt61"]["room"] == 0 and b["roomAt61"]["fits"] is False
+
+
+# ── the save machinery cannot race itself ────────────────────────────────────
+
+
+@needs_node
+def test_a_second_save_waits_while_the_first_is_on_the_wire(ran):
+    """THE RACE WAS AGAINST OURSELVES, not another person.
+
+    Every successful PATCH bumps `updated_at`, and an assembly save declares the version it was
+    editing so two people cannot silently overwrite each other. Those two facts together produced a
+    self-conflict: save #1 left, save #2's timer fired 600ms later and read the SAME `updated_at`
+    (`adoptSaved` has not run until #1 returns), went out, and the server correctly called it stale.
+    `adoptConflict` then replaced the model wholesale, dropped the pending buffer, and told the
+    estimator "Somebody else changed this while you had it open" — about nobody. Reachable by typing
+    quickly on a slow connection, and with the bulk picker it could discard a whole batch of lines.
+
+    WHY THE EXISTING CONFLICT SCENARIO DID NOT CATCH THIS: it fires the second timer only AFTER the
+    reply is released, so a second flush never begins mid-flight and the guard is never reached.
+    Verified by removing the guard and re-running: `onlyOneWhileOpen` and `editStillQueued` both go
+    false, and BOTH requests carry the same stale stamp.
+
+    Mutation: delete the `if (inFlight[key])` line in flush."""
+    f = ran["inFlight"]
+    assert f["onlyOneWhileOpen"], "a second PATCH went out while the first was still in flight"
+    assert f["editStillQueued"] and f["stillArmed"], (
+        "the second save was DROPPED rather than made to wait — the edit is still on screen")
+    assert f["bothEventuallySent"], "the waiting save never got its turn"
+    assert f["noUnhandledError"]
+
+
+@needs_node
+def test_the_waiting_save_carries_the_version_the_first_one_produced(ran):
+    """The whole point, in one assertion. Waiting is only useful if what goes out afterwards is
+    stamped with the version the first save created — otherwise the second request is still stale
+    and still 409s, just later.
+
+    T1 then T2, never T1 twice."""
+    f = ran["inFlight"]
+    assert f["firstCarriedTheOldVersion"] == "T1"
+    assert f["secondCarriedTheNewVersion"] == "T2", (
+        "the waiting save went out with the stamp the first one replaced (%s) — it would 409 "
+        "against our own write" % f["secondCarriedTheNewVersion"])
+
+
+@needs_node
+def test_a_failed_save_does_not_silence_the_record_for_good(ran):
+    """A lock that is never released is worse than the bug it fixes. `flush` returns early on a 409
+    and on any non-ok status, so the release lives in a `finally` — without that, one failed save
+    would stop that record ever saving again for the rest of the session, with the screen reporting
+    nothing at all.
+
+    Mutation: move the `delete inFlight[key]` out of the finally and onto the success path."""
+    assert ran["inFlight"]["savesAgainAfterAFailure"], (
+        "after a 500 the record never saved again — the in-flight lock was not released")
