@@ -93,6 +93,11 @@ global.fetch = (url, opts) => {
 // shared.js is an IIFE that starts initDraftSync() on load.
 eval(fs.readFileSync(SHARED, "utf8"));
 const TW = global.window.TW;
+// ASKED BEFORE THE PAGE IS READY, synchronously after the IIFE, which is the one moment there can
+// genuinely be no draft id yet -- initDraftSync mints one, and every page that asks does so after
+// its own init. Captured here so the "no-draft" answer is reachable rather than a branch nobody
+// can contradict.
+const saveBlockedAtLoad = TW.saveBlocked ? TW.saveBlocked() : "MISSING";
 
 (async () => {
   await TW.draftReady;
@@ -110,5 +115,11 @@ const TW = global.window.TW;
     serverRows: server.rows,
     localAfter: JSON.parse(localStorage.getItem("treadwell.proposal_tool.state") || "null"),
     unverified: sessionStorage.getItem("treadwell.proposal_tool.unverified"),
+    // WOULD A SERVER SAVE BE REFUSED RIGHT NOW, and why. Reported from the real shared.js rather
+    // than re-derived, because Ctrl+S on the proposal editor asks exactly this question before it
+    // claims anything to the estimator -- flushState() answers `true` after DROPPING a refused
+    // save, so a readout that trusted it would say "Saved" over a write that never left.
+    saveBlocked: TW.saveBlocked ? TW.saveBlocked() : "MISSING",
+    saveBlockedAtLoad: saveBlockedAtLoad,
   }));
 })();
