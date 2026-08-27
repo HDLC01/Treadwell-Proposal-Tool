@@ -743,6 +743,138 @@
     };
   })();
 
+  /** The two halves of THIS project's pricing, read out of the draft the browser is holding.
+   *
+   *  A DELIBERATE MIRROR of `_publish_digest` in backend/main.py. That function decides what a
+   *  customer was quoted, from the blob the publish route snapshots; this one reaches the same
+   *  verdict from the same fields, in the same shape, BEFORE any request goes out. Same keys,
+   *  same `show !== false` option rule, same base-only fallback, so the pre-send check and the
+   *  post-send check can share one comparison and cannot disagree about what counts as drift.
+   *
+   *  IT READS `proposal_payload.rooms`, NOT `proposal_payload.values.rooms`. The first is what
+   *  the document renderer prints; the second is an inert echo of the page state that travels
+   *  alongside it. Reading the echo would report the pricing the estimator was LOOKING at
+   *  instead of the pricing the customer's PDF prints, which is this bug wearing a disguise.
+   *  backend/tests/test_publish_race.py pins the server side of the pair. */
+  function localPublishDigest(s) {
+    const st = (s && typeof s === "object") ? s : {};
+    const list = (v) => (Array.isArray(v) ? v : []);
+    const baseOf = (rs) => rs.find(r => r && typeof r === "object" && r.is_base) || {};
+    // Only the options a customer can actually pick. An option the estimator deliberately hid
+    // reaches neither the portal nor the document, so counting it here would cry drift on a
+    // correct send, and a warning that fires on correct sends is one nobody reads.
+    const opts = (rs) => rs.filter(r => r && typeof r === "object"
+                                     && !r.is_base && r.show !== false).length;
+    const num = (v) => (typeof v === "number" && isFinite(v)) ? v : null;
+
+    const rooms = list(st.rooms);
+    const pp = (st.proposal_payload && typeof st.proposal_payload === "object")
+      ? st.proposal_payload : {};
+    const pv = (pp.values && typeof pp.values === "object") ? pp.values : null;
+    const prooms = list(pp.rooms);
+    const pbase = baseOf(prooms);
+    // The base room's own total, falling back to the payload's mirror of the lump sum: a
+    // base-only proposal carries no rooms at all (rooms exist only once there is an option).
+    let docLump = num(pbase.bid && typeof pbase.bid === "object" ? pbase.bid.total : null);
+    if (docLump == null) docLump = num(pv ? pv.proposal_lump_sum : null);
+
+    return {
+      base_label: baseOf(rooms).name || null,
+      lump_sum: num(st.proposal_lump_sum),
+      option_count: opts(rooms),
+      // False on a project that has never been through the Proposal step. There is no document
+      // to be stale, so every check downstream stays silent instead of blocking a first send.
+      has_document: !!pv,
+      doc_base_label: pbase.name || null,
+      doc_lump_sum: docLump,
+      doc_option_count: prooms.length ? opts(prooms) : (pv ? 0 : null),
+    };
+  }
+
+  /** What the DOCUMENT half of a digest gets wrong, one row per difference, or [] when it
+   *  agrees. `{ k: "Price", pdf: "$13,265", now: "$18,670", say: "a price of $13,265, not …" }`
+   *  — the first three for the panel's three columns, `say` for the one-line warning, so the
+   *  prose and the table can never quote different figures at each other.
+   *
+   *  ONE COMPARISON, THREE CALLERS: the pre-send gate (fed a digest of local state), the
+   *  post-send warning (fed the server's own snapshot), and the panel that renders either.
+   *  A second copy of these three rules is how the two checks would start disagreeing about
+   *  whether a send is safe.
+   *
+   *  Silent on anything it cannot read. An absent doc figure is not evidence of drift, and
+   *  every revision minted before this existed carries none of these keys. */
+  function docDriftRows(d) {
+    if (!d || typeof d !== "object" || !d.has_document) return [];
+    // TW.fmtUsd, not the `money` in mountRevisions — that one is scoped to its own function,
+    // and reaching for it here would be a ReferenceError at the moment somebody most needs
+    // to be told their customer is about to get the wrong price.
+    const usd = (n) => (window.TW && TW.fmtUsd) ? TW.fmtUsd(n) : String(n);
+    const near = (a, b) => (a == null || b == null) ? a === b
+      : Math.abs(Number(a) - Number(b)) < 0.01;   // sub-cent is the same money, not drift
+    const rows = [];
+    // Price first: it is the number a customer signs. BOTH figures have to be there — a page
+    // that has somehow lost its own lump sum is not evidence that the document is wrong, and
+    // refusing the send over it would put "not $—" on the estimator's screen.
+    if (d.doc_lump_sum != null && d.lump_sum != null && !near(d.doc_lump_sum, d.lump_sum)) {
+      const pdf = usd(d.doc_lump_sum), now = usd(d.lump_sum);
+      rows.push({ k: "Price", pdf: pdf, now: now, say: "a price of " + pdf + ", not " + now });
+    }
+    // A base-only document has no base ROOM, so doc_base_label is null on the most common
+    // shape this tool produces. Comparing that against a real name would warn on every one.
+    if (d.doc_base_label && d.base_label && d.doc_base_label !== d.base_label) {
+      rows.push({ k: "Base bid", pdf: d.doc_base_label, now: d.base_label,
+                  say: d.doc_base_label + " as the base bid, not " + d.base_label });
+    }
+    if (typeof d.doc_option_count === "number" && typeof d.option_count === "number"
+        && d.doc_option_count !== d.option_count) {
+      const n = d.doc_option_count;
+      rows.push({ k: "Options", pdf: String(n), now: String(d.option_count),
+                  say: n + " option" + (n === 1 ? "" : "s") + ", not " + d.option_count });
+    }
+    return rows;
+  }
+
+  /** Put the stop sign on screen, or take it away.
+   *
+   *  `mode` only changes the opening line, and the opening line is the whole point: the same
+   *  three numbers mean "do not send this" before a send and "the customer already has this"
+   *  after one, and an estimator reading it at 11pm should not have to work out which. */
+  function showStaleDoc(rows, mode) {
+    const box = document.getElementById("stale-doc");
+    if (!box) return;
+    if (!rows || !rows.length) { box.hidden = true; return; }
+    const lede = document.getElementById("stale-doc-lede");
+    if (lede) {
+      lede.textContent =
+        mode === "blocked" ? "Nothing was sent. Your changes are saved, but the document the "
+                           + "customer would open was built before them."
+      : mode === "sent"    ? "This one has already gone to the customer, and the document they "
+                           + "can open was built before this pricing."
+      :                      "Your changes are saved, but the document the customer would open "
+                           + "was built before them. Sending now gives them the old figures.";
+    }
+    const tab = document.getElementById("stale-doc-rows");
+    if (tab) {
+      tab.textContent = "";
+      // textContent throughout, never markup: a base bid's name is a worksheet label the
+      // estimator typed, which makes it the one string in this panel from outside the page.
+      const cell = (cls, text) => {
+        const el = document.createElement("span");
+        el.className = cls;
+        el.textContent = text;
+        tab.appendChild(el);
+      };
+      cell("sd-h", "");
+      cell("sd-h", "The PDF says");
+      cell("sd-h", "It should say");
+      rows.forEach((r) => { cell("sd-k", r.k); cell("sd-was", r.pdf); cell("sd-now", r.now); });
+    }
+    box.hidden = false;
+    if (mode === "blocked" || mode === "sent") {
+      try { box.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
+    }
+  }
+
   /** Compare the pricing the server just SENT against the pricing this page is showing.
    *  Returns a human sentence naming the difference, or "" when they agree.
    *
@@ -776,28 +908,20 @@
                 + ", not " + localOpts);
     }
     // ── The DOCUMENT half of the same snapshot ────────────────────────────────────────────
-    // The portal page reads `rooms`; the customer's PDF is re-rendered from `proposal_payload`.
-    // One revision, two halves, and until the Proposal step's Continue runs they can disagree —
-    // which is exactly the "the PDF still shows the old base bid" report. This comparison is
-    // server truth vs server truth, so it fires no matter which tab, device or colleague caused
-    // the drift, and it survives a page whose own local state happens to match either half.
-    if (sent.has_document) {
-      const dbits = [];
-      if (sent.doc_base_label && sent.base_label && sent.doc_base_label !== sent.base_label) {
-        dbits.push("its base bid is " + sent.doc_base_label + ", not " + sent.base_label);
-      }
-      if (sent.doc_lump_sum != null && !near(sent.doc_lump_sum, sent.lump_sum)) {
-        dbits.push("its price is " + usd(sent.doc_lump_sum) + ", not " + usd(sent.lump_sum));
-      }
-      if (typeof sent.doc_option_count === "number" && typeof sent.option_count === "number"
-          && sent.doc_option_count !== sent.option_count) {
-        dbits.push("it shows " + sent.doc_option_count + " option"
-                   + (sent.doc_option_count === 1 ? "" : "s") + ", not " + sent.option_count);
-      }
-      if (dbits.length) {
-        bits.push("the customer's PDF is out of date — " + dbits.join(" and ")
-                  + ". Open the Proposal step, press Continue, then re-send");
-      }
+    // BELT AND BRACES, AND BOTH ARE NEEDED. The pre-send gate in the Send handler refuses a
+    // drifted publish before a request leaves this browser, and the server refuses one that
+    // gets past it. This is the third layer: it reads the snapshot the server ACTUALLY took,
+    // so it still speaks up when the drift arrived between the flush and the write, or from a
+    // second tab, another device, or a colleague editing while you sent. The gate cannot see
+    // any of those, and a send that lands drifted must never land silently.
+    //
+    // The rows come from the same docDriftRows the gate and the panel use, so what a warning
+    // calls drift and what a gate calls drift can never come apart.
+    const rows = docDriftRows(sent);
+    if (rows.length) {
+      bits.push("the PDF they can open was built before this pricing, and shows "
+                + rows.map(r => r.say).join(", and ")
+                + ". Press Update the PDF above, then send it again");
     }
     return bits.join("; ");
   }
@@ -908,6 +1032,27 @@
     const _estSel = document.getElementById("portal-estimator");
     if (_estSel) _estSel.addEventListener("change", paintNotifyChips);
     mountRevisions();
+    // Look at the document BEFORE the estimator has typed a message or picked recipients. The
+    // gate on the Send button is the thing that actually refuses; this is only so the news does
+    // not arrive as a surprise at the last click, and so the one button that fixes it is on
+    // screen from the moment the page settles.
+    try { showStaleDoc(docDriftRows(localPublishDigest(TW.getState())), "mount"); } catch {}
+    const fixBtn = document.getElementById("stale-doc-fix");
+    if (fixBtn) {
+      fixBtn.addEventListener("click", () => {
+        // THE PROPOSAL STEP IS WHERE THE FIX LIVES, and it cannot be done from here. The
+        // document payload is written by exactly one line of code, in that step's Continue
+        // handler, from machinery that only exists on that page: computeTokenValues, the
+        // paragraph and box overrides, the system picks. Re-deriving any of it here would be a
+        // second copy of the token mapping, which is how the two halves drifted in the first
+        // place. So this takes them there, one press, carrying the draft id.
+        //
+        // `resync=1` is the hook for making that step's Continue run by itself, so this becomes
+        // one press end to end. Nothing reads it yet: it is a query parameter proposal-review
+        // ignores, and it costs nothing to send until that half is approved.
+        window.location.assign(TW.withDraft("/proposal-review.html?resync=1"));
+      });
+    }
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
@@ -947,6 +1092,28 @@
           if (!await TW.flushState()) {
             throw new Error("Couldn't save your latest changes, so nothing was sent — "
                             + "check your connection and try again.");
+          }
+          // ── THE SEND STOPS HERE IF THE PDF WOULD BE THE OLD ONE ──────────────────────
+          // Checked AFTER the flush and BEFORE the publish, and that order is the whole
+          // trick. The flush has just made this browser's blob and the server's copy the
+          // same blob, so a verdict taken now is a verdict about what the publish would
+          // snapshot — no extra round trip, and nothing to read that the page does not
+          // already hold. Both halves are in that blob: `rooms` is what the customer's
+          // portal page renders, `proposal_payload` is what their PDF is rebuilt from.
+          //
+          // Until now this was only ever caught AFTERWARDS, from the publish response, by
+          // which point the email had gone and the revision was pinned. A teammate hit it
+          // at 11:47pm and could not tell what the yellow message meant, which is fair: it
+          // was an apology with a four-step manual dance attached. Refusing costs a send
+          // that was going to be wrong anyway.
+          const stale = docDriftRows(localPublishDigest(TW.getState()));
+          if (stale.length) {
+            showStaleDoc(stale, "blocked");
+            portalBtn.disabled = false; portalBtn.textContent = orig;
+            if (portalRecip.setBusy) portalRecip.setBusy(false);
+            const fix = document.getElementById("stale-doc-fix");
+            if (fix) fix.focus();
+            return;                            // NOTHING is posted. No portal row, no email.
           }
           portalBtn.textContent = "Sending…";
           // AWAITED, and read here rather than at pick time: an estimator who attaches four
@@ -1003,10 +1170,13 @@
             if (drift) {
               const w = document.createElement("p");
               w.className = "portal-drift";
-              w.textContent = "Heads up — what went to the customer isn't what this page is "
-                + "showing: " + drift + ". Reload this page to see the sent version, then "
-                + "re-send if that's wrong.";
+              w.textContent = "This one has gone to the customer, and it is not what this "
+                + "page is showing: " + drift + ".";
               r.appendChild(w);
+              // And raise the panel on the server's OWN numbers, so a send that landed
+              // drifted offers the same one press as one that was stopped. The paragraph is
+              // the notice; the panel is the way out of it.
+              showStaleDoc(docDriftRows(j.sent_snapshot), "sent");
             }
           }
           setTimeout(() => { portalBtn.textContent = "\u2197 Re-send to customer portal"; portalBtn.disabled = false; }, 2500);

@@ -166,12 +166,20 @@ out.donePage = (() => {
 })();
 
 // publishDrift executed against real shapes.
+//
+// LIFT ITS CALLEES TOO. publishDrift delegates the document comparison to docDriftRows, which
+// the pre-send gate and the warning panel also use, so injecting publishDrift alone gives every
+// scenario below a ReferenceError. This is the sixth time in this repo that adding a function an
+// already-lifted function calls has killed a harness; the fix is to keep this list current, not
+// to inline the helper back into the caller.
 out.drift = (() => {
   const src = fs.readFileSync(path.join(ROOT, "js", "done.js"), "utf8");
   const m = /function publishDrift\(sent\) \{[\s\S]*?\n  \}/.exec(src);
+  const dep = /function docDriftRows\(d\) \{[\s\S]*?\n  \}/.exec(src);
   if (!m) return { missing: true };
+  if (!dep) return { missingDep: "docDriftRows" };
   let STATE = {};
-  const fn = new Function("TW", "window", m[0] + "; return publishDrift;")(
+  const fn = new Function("TW", "window", dep[0] + "\n" + m[0] + "; return publishDrift;")(
     { getState: () => STATE, fmtUsd: (n) => "$" + Number(n).toFixed(2) },
     { TW: { fmtUsd: (n) => "$" + Number(n).toFixed(2) } });
   const set = (s) => { STATE = s; };
