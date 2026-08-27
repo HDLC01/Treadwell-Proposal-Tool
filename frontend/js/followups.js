@@ -114,8 +114,24 @@
     return { label: "Chasing", cls: "st-on", rank: 1 };
   }
 
+  // Test/demo projects get their own Test tab and are kept OUT of In play / Paused / Approved /
+  // Closed lost / All, same split as the Projects page (projects.js:isTest) — a scratch project's
+  // own decision (`is_test`) wins in both directions, falling back to the name heuristic for
+  // anything nobody has filed.
+  function nameLooksLikeTest(p) {
+    const n = String((p && p.project_name) || "");
+    return /\b(sample|test|verify|demo|qa|bugtest)\b/i.test(n)
+        || /delete me/i.test(n)
+        || /^\s*zz/i.test(n);
+  }
+  function isTest(p) {
+    if (p && typeof p.is_test === "boolean") return p.is_test;
+    return nameLooksLikeTest(p);
+  }
+
   /** Which tab a row belongs to. "live" is the working list — anything still in play. */
   function bucket(p) {
+    if (isTest(p)) return "test";
     if (C.isLost(p)) return "lost";
     if (String(p.proposal_status || "") === "approved") return "won";
     if (C.pausedUntil(p, TW.bizToday())) return "paused";
@@ -123,7 +139,7 @@
   }
 
   const TABS = [["live", "In play"], ["paused", "Paused"], ["won", "Approved"],
-                ["lost", "Closed lost"], ["all", "All"]];
+                ["lost", "Closed lost"], ["all", "All"], ["test", "Test"]];
 
   // ── filter + sort ──────────────────────────────────────────────────────────
   const matches = (p) => {
@@ -167,7 +183,8 @@
     // stays narrowed when you switch.
     const inTab = (VIEW === "board")
       ? ALL
-      : ALL.filter((p) => TAB === "all" || bucket(p) === TAB);
+      // "all" means all the real ones — test rows never show here, only under their own tab.
+      : ALL.filter((p) => TAB === "all" ? bucket(p) !== "test" : bucket(p) === TAB);
     const byEst = EST ? inTab.filter((p) => C.estimatorOf(p).toLowerCase() === EST) : inTab;
     return sorted(byEst.filter(matches));
   }
@@ -437,7 +454,10 @@
   function paintChrome() {
     const rows = visible();
     const counts = {};
-    TABS.forEach(([k]) => { counts[k] = k === "all" ? ALL.length : ALL.filter((p) => bucket(p) === k).length; });
+    TABS.forEach(([k]) => {
+      counts[k] = k === "all" ? ALL.filter((p) => bucket(p) !== "test").length
+                              : ALL.filter((p) => bucket(p) === k).length;
+    });
     const f = $("filters");
     f.hidden = !ALL.length || VIEW === "board";
     if (!f.hidden) {
