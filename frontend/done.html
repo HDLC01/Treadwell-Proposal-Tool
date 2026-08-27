@@ -356,6 +356,39 @@
     border:1px solid #e8d9a8; border-radius:6px; padding:7px 9px; }
   #portal-result { margin-top: 12px; }
 
+  /* ── the stop sign: the customer's PDF is older than the pricing on this page ─────────
+     Same amber family as .portal-drift, carried at more weight, because this one is a STOP
+     rather than a note: it appears before the send and it refuses one.
+
+     THE [hidden] RULE IS LOAD-BEARING. A class `display` beats the plain `hidden` attribute
+     on specificity, and this repo has shipped that bug four separate times. Without the
+     second line the panel would be visible on every project. */
+  .stale-doc { display:flex; gap:12px; margin:16px 0 0; padding:12px 14px;
+    color:#7a5c00; background:#fdf6e3; border:1px solid #e8d9a8; border-radius:8px; }
+  .stale-doc[hidden] { display:none; }
+  .stale-doc > svg { flex:0 0 auto; margin-top:2px; color:#a07c00; }
+  .sd-body { flex:1 1 auto; min-width:0; }
+  .sd-title { margin:0; font-size:15px; font-weight:700; color:#5f4700; }
+  .sd-lede { margin:5px 0 0; font-size:13px; font-weight:600; }
+  .sd-how  { margin:10px 0 0; font-size:12.5px; }
+  /* Three columns, sized to their content: what differs, what the document says, what it
+     ought to say. A grid rather than a table because there are never more than three rows
+     and the widths have to follow the room names, which come from the estimator's sheet. */
+  .sd-table { display:grid; grid-template-columns:auto auto auto; justify-content:start;
+    gap:4px 20px; margin:11px 0 0; font-size:13px; }
+  .sd-h { font-size:11px; font-weight:700; color:#8a6a00; }
+  .sd-k { font-weight:600; }
+  .sd-was, .sd-now { font-variant-numeric: tabular-nums; }
+  /* Struck through AND under a heading that says which column is which: the line alone would
+     be the only signal for anyone who cannot see it. */
+  .sd-was { text-decoration: line-through; }
+  .sd-now { font-weight:700; color:#5f4700; }
+  .sd-fix { margin:12px 0 0; padding:9px 16px; font:inherit; font-size:13px; font-weight:700;
+    color:#fff; background:#7a5c00; border:1px solid #5f4700; border-radius:6px;
+    cursor:pointer; }
+  .sd-fix:hover { background:#5f4700; }
+  .sd-fix:focus-visible { outline:2px solid #5f4700; outline-offset:2px; }
+
   /* ── the rules the inline styles never had ──────────────────────────────────────────
      Every `style=` this page carried came with no media query at all, so a half-width
      window squashed the lot. Two breakpoints: 1080px drops the two lanes to one column,
@@ -561,6 +594,31 @@
           <span class="fp-pill fp-pill--on">Deposit required</span>
           <span class="fp-pill fp-pill--off">No deposit</span>
         </label>
+
+        <!-- THE SEND STOPS HERE when the customer's PDF is older than the pricing on this page.
+             The portal page a customer opens is rendered from `rooms`; the PDF beside it is
+             re-rendered from `proposal_payload`, and only the Proposal step's Continue writes
+             that second one. Revise the pricing, come to Files, send, and the customer gets
+             today's page with last week's document.
+
+             It sits BELOW the deposit tick and immediately above Send on purpose: when it is
+             showing, it is the last thing worth reading before an irreversible click. Filled
+             and unhidden by done.js (showStaleDoc); hidden, which is the normal state. -->
+        <div id="stale-doc" class="stale-doc" role="alert" hidden>
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+            <path d="M12 9v4"/><path d="M12 17h.01"/>
+          </svg>
+          <div class="sd-body">
+            <p class="sd-title">The PDF has the old numbers</p>
+            <p class="sd-lede" id="stale-doc-lede"></p>
+            <div class="sd-table" id="stale-doc-rows"></div>
+            <p class="sd-how">Update the PDF opens the Proposal step. Press Continue there and
+              the document is rebuilt with these numbers, then you land back here to send.</p>
+            <button type="button" class="sd-fix" id="stale-doc-fix">Update the PDF</button>
+          </div>
+        </div>
 
         <button id="portal-btn" class="btn-primary fp-send" type="button">↗ Send to customer portal</button>
         <!-- #portal-result now carries ONLY the drift warning. The "Customer link: <url> / Emailed
