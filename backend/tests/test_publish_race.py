@@ -460,3 +460,300 @@ def test_the_echo_never_overwrites_what_the_portal_returned(monkeypatch):
     j = TestClient(main.app).post("/api/portal/publish?draft_id=d1",
                                   json={"assigned_estimator": "kyle@wetreadwell.com"}).json()
     assert j["revision_no"] == 99 and j["sent_snapshot"] == {"from": "the portal"}
+
+
+# ── 2026-08-27: the drift is now a REFUSAL, not an apology ────────────────────
+# Everything above this line was built on the assumption that a drifted send is worth warning
+# about. It is not. A teammate, 23:47:
+#
+#     "I revised a proposal and am getting the error message in yellow below. I think it's
+#      sending an outdated proposal."
+#
+# He was right, and the yellow message was the tool agreeing with him AFTER the fact.
+# `sent_snapshot` had the whole answer — the customer's PDF said $29,104 where his screen said
+# $27,721, and offered two options where his screen offered none — and the publish minted the
+# revision, wrote the portal row, sent the email, and returned 200 anyway. The estimator read
+# "Sent".
+#
+# That is the attachment bug wearing different clothes: detect, commit, report success. So the
+# order changed. The digest is computed BEFORE `create_revision`, and a document half that
+# disagrees with its portal half now stops the send with nothing written.
+#
+# THESE TESTS DRIVE THE ROUTE, not the helper alone. The helper returning a correct refusal is
+# worthless if the route computes it after the email has gone — which is precisely the bug — so
+# every case below counts the side effects.
+REPORTED = {
+    "base_tab_id": "Epoxy", "proposal_lump_sum": 27721,
+    "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 27721}}],
+    "proposal_payload": {
+        "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 29104}},
+                  {"name": "Polish", "is_base": False, "bid": {"total": 9000}, "show": True},
+                  {"name": "Seal", "is_base": False, "bid": {"total": 4000}, "show": True}],
+        "values": {"proposal_lump_sum": 29104}},
+}
+CLEAN = {
+    "base_tab_id": "Epoxy", "proposal_lump_sum": 27721,
+    "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 27721}},
+              {"name": "Polish", "is_base": False, "bid": {"total": 9000}, "show": True}],
+    "proposal_payload": {
+        "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 27721}},
+                  {"name": "Polish", "is_base": False, "bid": {"total": 9000}, "show": True}],
+        "values": {"proposal_lump_sum": 27721}},
+}
+
+
+class _Publish:
+    """A publish route with every write instrumented and nothing real behind it.
+
+    `writes` is the point. A refusal that logs beautifully and still mints a revision, or still
+    reaches `/api/admin/publish` (which writes the portal row AND sends the customer's email), is
+    the bug — so the assertion every test below shares is that the list is empty."""
+
+    def __init__(self, monkeypatch, blob, portal_out=None):
+        import main
+        self.writes = []
+        self.bodies = []
+        self.rev = 0
+        self.blob = blob
+        monkeypatch.setattr(main.drafts, "load_draft",
+                            lambda i: {"id": i, "data": self.blob, "owner_email": ""})
+        monkeypatch.setattr(main.profiles, "get_by_email",
+                            lambda e: {"email": e, "role": "admin"})
+        monkeypatch.setattr(main.drafts, "create_revision", self._create_revision)
+        monkeypatch.setattr(main.drafts, "delete_revision",
+                            lambda *a, **k: self.writes.append("delete_revision"))
+        monkeypatch.setattr(main.drafts, "log_event",
+                            lambda *a, **k: self.writes.append("log_event"))
+        monkeypatch.setattr(main, "_portal", self._portal)
+        self.portal_out = portal_out or {"ok": True, "url": "https://portal/x",
+                                         "customer_email": "c@x.com"}
+
+    def _create_revision(self, did, data, by=None):
+        self.writes.append("create_revision")
+        self.rev += 1
+        return self.rev
+
+    def _portal(self, path, method="GET", body=None):
+        # ONE call, and it is the one that writes the portal row and sends the email. Recorded
+        # under a name a failure message can be read out loud: "the email went".
+        self.writes.append("portal " + path)
+        self.bodies.append(body)
+        # A COPY. The route does `out.setdefault("revision_no", …)` on whatever comes back, and
+        # the real `_portal` parses fresh JSON per call — a shared dict would carry the first
+        # send's revision number into the second and fake a re-send bug that does not exist.
+        return dict(self.portal_out)
+
+    def send(self, **extra):
+        import main
+        from fastapi.testclient import TestClient
+        body = {"assigned_estimator": "kyle@wetreadwell.com"}
+        body.update(extra)
+        return TestClient(main.app).post("/api/portal/publish?draft_id=d1", json=body)
+
+
+def test_a_drifted_publish_is_REFUSED(monkeypatch):
+    """The reported case, driven through the real route. 409, not 200 — and the estimator must
+    not be able to mistake the response for a send."""
+    p = _Publish(monkeypatch, REPORTED)
+    r = p.send()
+    assert r.status_code == 409, r.text
+    assert r.json()["ok"] is False
+
+
+def test_a_refused_publish_WRITES_NOTHING_AND_SENDS_NOTHING(monkeypatch):
+    """THE test. The old behaviour did all of this and then apologised. If any of these fire, a
+    customer has the wrong price in their inbox and the refusal is theatre.
+
+    `create_revision` would pin the portal to the drifted snapshot; `/api/admin/publish` writes
+    the proposal row and sends the customer's email; `log_event` would record a send that never
+    happened. Nothing may run."""
+    p = _Publish(monkeypatch, REPORTED)
+    p.send()
+    assert p.writes == [], (
+        "a refused publish still had side effects — the customer may have been emailed: %s"
+        % p.writes)
+    assert p.rev == 0, "a revision was minted for a send that was refused"
+
+
+def test_the_refusal_names_the_MONEY_and_the_OPTION_COUNT(monkeypatch):
+    """A refusal that says "stale" and nothing else sends the estimator hunting. It has to carry
+    the same substance as the warning it replaces — his figures, both sides, in one sentence a UI
+    can print unchanged."""
+    msg = _Publish(monkeypatch, REPORTED).send().json()["error"]
+    flat = msg.replace(",", "")
+    assert "29104" in flat and "27721" in flat, msg
+    assert "$" in msg, "the figures must read like money, not like floats: %s" % msg
+    assert "2 options, not 0" in msg, msg
+    assert "not sent" in msg.lower(), "the sentence must say the send did NOT happen: %s" % msg
+    assert "Proposal step" in msg and "Continue" in msg, (
+        "the refusal must name the way out, not just the problem: %s" % msg)
+
+
+def test_the_refusal_is_MACHINE_READABLE(monkeypatch):
+    """The page has to offer a one-click fix without parsing English. A code plus both halves as
+    numbers; the prose is for humans only."""
+    import main
+    j = _Publish(monkeypatch, REPORTED).send().json()
+    assert j["code"] == main.STALE_DOCUMENT_CODE == "stale_document"
+    assert j["page"] == {"base_label": "Epoxy", "lump_sum": 27721, "option_count": 0}
+    assert j["document"] == {"base_label": "Epoxy", "lump_sum": 29104, "option_count": 2}
+    # Same shape as a successful send's echo, so one reader understands both.
+    assert j["snapshot"]["doc_lump_sum"] == 29104 and j["snapshot"]["has_document"] is True
+    assert isinstance(j["differences"], list) and len(j["differences"]) == 2
+
+
+def test_the_refusal_reaches_the_CURRENTLY_DEPLOYED_page_as_a_sentence(monkeypatch):
+    """Deploys are not atomic and estimators keep tabs open for days. Today's `portalErrMsg`
+    recovers a message from the raw response text with a regex over "detail"/"error", so the body
+    must be FLAT (`{"error": ...}`, not HTTPException's `{"detail": {...}}`) and the sentence must
+    contain no quote character. Otherwise the person this was built for reads a JSON dump and
+    calls it broken."""
+    import re
+    raw = _Publish(monkeypatch, REPORTED).send().text
+    m = re.search(r'"(?:detail|error)"\s*:\s*"([^"]+)"', raw)
+    assert m, "the old page's regex finds nothing to show: %s" % raw
+    assert "29104" in m.group(1).replace(",", ""), m.group(1)
+
+
+def test_the_refusal_is_LOGGED_with_the_reason_and_both_figures(monkeypatch, caplog):
+    """A bare "refused" costs an SSH session and a container probe. The one line has to answer
+    "refused what, and how far apart" without anybody opening the database."""
+    import logging
+    caplog.set_level(logging.WARNING)
+    _Publish(monkeypatch, REPORTED).send()
+    recs = [r for r in caplog.records if "refused" in r.getMessage()]
+    assert recs, "a refused publish logged nothing: %s" % [r.getMessage() for r in caplog.records]
+    line = recs[0].getMessage()
+    assert "d1" in line, "the log does not say WHICH draft: %s" % line
+    assert "27721" in line and "29104" in line, "the log omits a figure: %s" % line
+    # BOTH figures AND the reason. The raw values alone leave whoever is reading at 2am to work
+    # out which of base / price / option count actually drifted — a mutation that logged the
+    # numbers under a bare "stale" survived until this line existed.
+    assert "its price is" in line and "it shows 2 options" in line, (
+        "the log names no reason, only figures: %s" % line)
+    # …and side by side, so nobody has to cross-reference two log lines to compare them.
+    assert "page base=" in line and "document base=" in line, line
+
+
+# ── and the ordinary send must be completely unaffected ──────────────────────
+def test_a_CLEAN_publish_still_succeeds(monkeypatch):
+    """The gate is worthless if it costs the normal case. Both halves agree, so this must be the
+    byte-for-byte old behaviour: a revision, a portal call, an event, and the echo."""
+    p = _Publish(monkeypatch, CLEAN)
+    r = p.send()
+    assert r.status_code == 200, r.text
+    assert p.writes == ["create_revision", "portal /api/admin/publish", "log_event"], p.writes
+    assert r.json()["revision_no"] == 1
+    snap = r.json()["sent_snapshot"]
+    assert snap["lump_sum"] == snap["doc_lump_sum"] == 27721
+
+
+def test_a_clean_RE_SEND_still_succeeds(monkeypatch):
+    """Re-sending an already-sent revision that has not drifted is routine — a customer lost the
+    email, a recipient was added, a deposit flag flipped. It must mint the next revision and go,
+    exactly as before. Breaking this would be the fix causing its own outage."""
+    p = _Publish(monkeypatch, CLEAN)
+    assert p.send().status_code == 200
+    second = p.send()
+    assert second.status_code == 200, second.text
+    assert second.json()["revision_no"] == 2, "the re-send did not mint its own revision"
+    assert p.writes.count("portal /api/admin/publish") == 2, p.writes
+
+
+def test_a_project_that_has_never_been_GENERATED_still_publishes(monkeypatch):
+    """No `proposal_payload` at all — nothing has been generated, so nothing can be stale.
+    Refusing here would lock out every project that reaches the portal before the Proposal step,
+    and there would be no Continue to press that changes anything."""
+    p = _Publish(monkeypatch, {"base_tab_id": "Epoxy", "proposal_lump_sum": 27721,
+                               "rooms": [{"name": "Epoxy", "is_base": True,
+                                          "bid": {"total": 27721}}]})
+    assert p.send().status_code == 200
+    assert "portal /api/admin/publish" in p.writes
+
+
+def test_has_document_is_the_SAME_gate_the_page_uses(monkeypatch):
+    """A payload carrying `rooms` but no `values` reads as NO DOCUMENT, and still publishes.
+
+    `has_document` is `bool(payload["values"])`, and the Files page gates its own comparison on
+    exactly that key — so the server must too. Deciding this shape was readable here would give us
+    two rules: the page would say the send was fine and the server would refuse it, which is worse
+    than either answer on its own. Every real generate spreads the whole page state into `values`,
+    so the shape does not occur in practice; this test exists to keep the two halves in step if
+    somebody ever "improves" the guard. A mutation deleting it survived until this case existed."""
+    p = _Publish(monkeypatch, {
+        "base_tab_id": "Epoxy", "proposal_lump_sum": 27721,
+        "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 27721}}],
+        "proposal_payload": {"rooms": [
+            {"name": "Polish", "is_base": True, "bid": {"total": 13265}},
+            {"name": "Epoxy", "is_base": False, "bid": {"total": 18670}, "show": True}]}})
+    assert p.send().status_code == 200, (
+        "the server refused a shape the page treats as having no document to compare")
+
+
+def test_a_BASE_ONLY_proposal_still_publishes(monkeypatch):
+    """The commonest shape this tool produces: one system, no options, so the document carries no
+    base ROOM and `doc_base_label` is None. Comparing a null label against a real one would refuse
+    almost every send in the building."""
+    p = _Publish(monkeypatch, {
+        "base_tab_id": "Epoxy", "proposal_lump_sum": 27721, "rooms": [],
+        "proposal_payload": {"values": {"proposal_lump_sum": 27721}}})
+    assert p.send().status_code == 200, "a base-only proposal was refused"
+
+
+def test_SUB_CENT_rounding_does_not_refuse_a_send(monkeypatch):
+    """Floating point must never block a proposal. 27721.004 and 27721 are the same money, and a
+    gate that cannot tell the difference is a gate that stops work at random."""
+    blob = {**CLEAN, "proposal_lump_sum": 27721.004}
+    assert _Publish(monkeypatch, blob).send().status_code == 200
+
+
+def test_a_LEGACY_snapshot_shape_does_not_refuse_a_send(monkeypatch):
+    """A payload with values but no rooms and no readable price: we know a document exists and
+    know nothing about it. Absent evidence is not evidence of drift, and refusing on it would
+    strand old projects with no action that clears the block."""
+    p = _Publish(monkeypatch, {
+        "base_tab_id": "Epoxy", "proposal_lump_sum": 27721,
+        "rooms": [{"name": "Epoxy", "is_base": True, "bid": {"total": 27721}}],
+        "proposal_payload": {"values": {"job_name": "x"}}})
+    assert p.send().status_code == 200, "an unreadable document half refused the send"
+
+
+# ── the helper's own edges ───────────────────────────────────────────────────
+def test_a_base_FLIP_alone_is_enough_to_refuse():
+    """The original 2026-08-13 report: same money on both sides of the flip, inverted base bid.
+    The page says Epoxy, the PDF says Polish, and the customer signs for the wrong system."""
+    import main
+    ref = main._stale_document_refusal(main._publish_digest(DRIFTED))
+    assert ref is not None, "an inverted base bid was allowed through"
+    assert "Polish, not Epoxy" in ref["error"], ref["error"]
+
+
+def test_the_refusal_never_raises_on_a_malformed_blob():
+    """It now decides whether a proposal can be sent AT ALL, so a TypeError here is not a 500 on a
+    cosmetic warning — it is an estimator who cannot send anything and no idea why. Every shape a
+    browser could have written must fall through to "we don't know", which means send it."""
+    import main
+    for blob in ({}, {"rooms": "not a list"}, {"rooms": 5}, {"proposal_payload": "nope"},
+                 {"proposal_payload": {}}, {"proposal_payload": {"values": 5}},
+                 {"proposal_payload": {"values": {"proposal_lump_sum": "29,104"}}},
+                 {"proposal_lump_sum": "27721",
+                  "proposal_payload": {"values": {"proposal_lump_sum": 29104}}},
+                 {"proposal_lump_sum": True,
+                  "proposal_payload": {"values": {"proposal_lump_sum": 29104}}},
+                 {"proposal_lump_sum": float("nan"),
+                  "proposal_payload": {"values": {"proposal_lump_sum": 29104}}},
+                 {"proposal_lump_sum": float("inf"),
+                  "proposal_payload": {"values": {"proposal_lump_sum": 29104}}},
+                 {"proposal_lump_sum": {"a": 1},
+                  "proposal_payload": {"values": {"proposal_lump_sum": 29104}}}):
+        assert main._stale_document_refusal(main._publish_digest(blob)) is None, blob
+
+
+def test_money_in_the_refusal_reads_like_the_screen_it_contradicts():
+    """`_usd` mirrors the page's TW.fmtUsd (whole dollars, thousands separators). "29104.0" in a
+    refusal about money the estimator is looking at formatted as $27,721 reads as a different
+    kind of bug."""
+    import main
+    assert main._usd(29104) == "$29,104"
+    assert main._usd(27721.4) == "$27,721"
+    assert main._usd(None) == "$—" and main._usd("x") == "$—"
