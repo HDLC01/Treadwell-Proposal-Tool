@@ -111,13 +111,31 @@ def test_an_invisible_grip_does_not_take_the_click():
         "source order as well as the declaration itself")
 
 
-@pytest.mark.parametrize("state", ["hover", "focus-within"])
-def test_a_visible_grip_is_still_grabbable(state):
+def test_a_visible_grip_is_still_grabbable():
     """The other half: inert at rest must not mean undraggable. Kyle still has to be able
-    to move and resize a box, which is the only reason the grips exist."""
-    assert _resolved("opacity", BOX, GRIP, {state}) == ".85"
-    assert _resolved("pointer-events", BOX, GRIP, {state}) == "auto", (
-        "the grip is visible on " + state + " but cannot be grabbed")
+    to move and resize a box, which is the only reason the grips exist. HOVER is the state
+    that raises them — see the next test for why it is the only one."""
+    assert _resolved("opacity", BOX, GRIP, {"hover"}) == ".85"
+    assert _resolved("pointer-events", BOX, GRIP, {"hover"}) == "auto", (
+        "the grip is visible on hover but cannot be grabbed")
+
+
+def test_focusing_a_box_does_not_arm_its_grips():
+    """`:focus-within` used to raise the grips too, and that is the same click-theft bug from the
+    other end. The move grip sits ABOVE its own box (`top: -13px`), i.e. inside the box above it —
+    so while the estimator typed in PRICE, PRICE's grip was a live target sitting on WORK's last
+    line, and `wireBoxDrag`'s pointerdown `preventDefault()`s: the click that should have put a
+    caret in WORK produced nothing at all, with nothing on screen explaining why. Hanz,
+    2026-08-26, on the editor being clunky between sections; you clicked slightly to one side and
+    it worked.
+
+    Visible and grabbable still move together — the box you hover is the box whose grips arm —
+    which is what stops the other failure mode, a grip you can see but cannot drag."""
+    assert _resolved("opacity", BOX, GRIP, {"focus-within"}) == "0", (
+        "a merely-focused box shows its grips again, over its neighbour's text")
+    assert _resolved("pointer-events", BOX, GRIP, {"focus-within"}) == "none", (
+        "a focused box's grips are hit-testable again — that is PRICE's move grip eating the "
+        "click meant for WORK's last line")
 
 
 def test_a_dragging_box_keeps_its_grips_live():

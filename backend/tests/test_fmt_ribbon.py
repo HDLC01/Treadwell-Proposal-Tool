@@ -660,27 +660,79 @@ def test_escape_abandons_a_typed_size(ran):
     assert ran["escapeAbandons"]["runsUnchanged"], "Escape applied the typed size anyway"
 
 
-def test_ctrl_a_takes_the_line_then_the_whole_box(ran):
-    """Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still
-    sub boxes."
+def test_one_ctrl_a_takes_the_whole_box(ran):
+    """Hanz, 2026-08-26: "When I control A it doesnt select everything in Work."
 
-    The "sub boxes" are the paragraphs. Each `.tw-block` is its own editing host, so a native
-    select-all physically cannot reach past the line the caret is in — and no browser selection can
-    span two editing hosts, so there is nothing to widen a Range into. The second press is
-    therefore an EDITOR-level selection: a set of blocks the ribbon and the delete key both
-    understand, painted so it reads as selected.
+    THE LADDER IS GONE, and it is the FIRST rung that was the bug. Ctrl+A used to take the line and
+    a second press widened to the box — a design that made sense while every paragraph was its own
+    editing host and a native Range could not cross one. Once the box became the single host, the
+    browser's own Ctrl+A would have selected every line in it, and the first rung was spending a
+    `preventDefault` to replace that with a one-line selection. So the feature's own first press
+    was what made Ctrl+A look broken, and the widen that put it right was undiscoverable.
 
-    It deliberately does not pretend to be a DOM selection. `selectionRange` still refuses
-    anything spanning two blocks, which is what stops a stale cross-block range being formatted —
-    the bug `selectionLeftBlock` exists for."""
-    g = ran["selectAllWidens"]
-    assert g["afterFirst"]["prevented"], "Ctrl+A was left to the browser"
-    assert g["afterFirst"]["range"] == [0, 25], (
-        "the first press did not take the whole line: %r" % (g["afterFirst"]["range"],))
-    assert g["afterFirst"]["boxSel"] is None, "the first press already widened to the box"
-    assert sorted(g["afterSecondIds"]) == sorted(["115", "116", "52", "117"]), (
-        "the second press did not select every line in the box: %r" % (g["afterSecondIds"],))
+    One press now: every line in the box, painted, with a real native Range behind it — so Delete,
+    a paste, a typed character and a ribbon press all act on the box through the ordinary paths
+    instead of each needing to know about `boxSel`."""
+    g = ran["selectAllTakesTheBox"]
+    assert g["prevented"], "Ctrl+A was left to the browser"
+    assert sorted(g["ids"]) == sorted(["115", "116", "52", "117"]), (
+        "one press did not select every line in the box: %r" % (g["ids"],))
     assert g["painted"], "the selected lines are not marked, so nothing on screen shows it"
+    assert g["target"] == "116", (
+        "the ribbon lost the paragraph the caret was in, so Bold has nothing to act on")
+
+
+def test_the_box_selection_carries_a_real_range_with_element_boundaries(ran):
+    """WHAT the range is made of, because it is what makes the empty-line case work at all.
+
+    The endpoints are `setStartBefore(first)` / `setEndAfter(last)` — positions in the BOX, either
+    side of the outermost lines — not character offsets inside them. And it is deliberately not
+    `selectNodeContents(box)`, which reads as the obvious one-liner: `.tw-box-tools` is the box's
+    last child (addBoxTools), so the buttons' labels — "Collapse", "Reset box", "Fit to text" —
+    would land in the selection and in anything copied out of it."""
+    r = ran["selectAllTakesTheBox"]["range"]
+    assert r is not None, "the press painted a selection with no browser range behind it"
+    assert (r["startBefore"], r["endAfter"]) == ("115", "117"), (
+        "the range does not span the box's first and last lines: %r" % (r,))
+    assert r["sameParent"] and r["parent"] == "tw-txbx", (
+        "the two endpoints are not both children of the text box: %r" % (r,))
+
+
+@pytest.mark.parametrize("family", ["fromPrice", "fromNote"])
+def test_one_press_works_from_a_computed_line_too(ran, family):
+    """Ctrl+A in the PRICE box used to find nothing at all: the handler looked for `.tw-block`
+    only, which is what Hanz reported first. Both other families are here — a `.tw-line-edit`
+    price row and a `.tw-note-edit` bullet, the one family that does not also carry
+    `.tw-line-edit` and therefore answered none of the box-wide gestures at all."""
+    g = ran["selectAllFromComputedLines"][family]
+    assert sorted(g["ids"]) == sorted(["115", "116", "52", "117", "price", "note"]), (
+        "a press from a computed line did not take the whole box: %r" % (g["ids"],))
+    assert g["painted"], "the computed line the press came from is not painted as selected"
+
+
+def test_a_box_whose_first_or_last_line_is_blank_is_still_fully_selected(ran):
+    """THE BUG THE OLD STUB HID. `selectRangeAcross` used to ask `pointAt` for a caret position
+    inside the first and last lines and `return` if either came back null — and `pointAt` can only
+    land in a TEXT node, while an emptied line holds a lone `<br>`. So Ctrl+A over a box with a
+    blank first or last line painted every line and created NO range whatsoever, silently: a
+    selection the estimator could see and the keyboard could not touch.
+
+    Blank endpoints are ordinary here, not a corner: an empty Word anchor paragraph, a line the
+    estimator emptied, a `.tw-note-blank` spacer between notes bullets.
+
+    The harness stubbed `selectRangeAcross` — it recorded which ids a widen asked for — which is
+    exactly why this went unpinned; a recording stub cannot fail this way. It runs the real
+    function now."""
+    g = ran["selectAllOverBlankEnds"]
+    assert g["firstHasNoCaretPoint"] and g["lastHasNoCaretPoint"], (
+        "the fixture's blank lines do contain a caret position, so this scenario no longer "
+        "exercises the case that broke: %r" % (g,))
+    assert g["blankRunLength"] == 1, (
+        "a blank line stopped standing for one newline — re-derive what an emptied line contains")
+    assert sorted(g["ids"]) == sorted(["201", "202", "203"])
+    assert g["range"] is not None, "a blank endpoint produced no range at all, which is the bug"
+    assert (g["range"]["startBefore"], g["range"]["endAfter"]) == ("201", "203"), (
+        "the range stopped short of a blank endpoint: %r" % (g["range"],))
 
 
 def test_the_box_selection_stops_at_the_box_it_was_pressed_in(ran):
@@ -689,7 +741,10 @@ def test_the_box_selection_stops_at_the_box_it_was_pressed_in(ran):
     because the caret happened to be in the scope text.
 
     Scoped by `closest(".tw-txbx")`, which is a real container: the absolutely-positioned div
-    registered against the baked page artwork. Not a guess about which paragraphs look grouped."""
+    registered against the baked page artwork. Not a guess about which paragraphs look grouped.
+
+    Worth more now than under the two-press ladder, not less: the press that reaches the box is
+    the FIRST one, so a scope error would be one keystroke away rather than two."""
     g = ran["selectAllStopsAtTheBox"]
     assert "115" not in (g["ids"] or []), (
         "a block from another box was selected: %r" % (g["ids"],))

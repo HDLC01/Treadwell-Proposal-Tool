@@ -419,6 +419,32 @@ def test_an_expanded_box_carries_a_labelled_way_out(ran):
     assert grips == ["tw-grip-move", "tw-grip-e", "tw-grip-s", "tw-grip-se"]
 
 
+def test_the_way_into_a_clipped_box_is_a_labelled_button_too(ran):
+    """The other half of the same argument, added 2026-08-26. Getting OUT was a labelled button
+    from the start; getting IN was a click on the box, guarded by "unless the click landed on a
+    line" — and everything that is not a line is where a Word user clicks to start typing. So the
+    peek moved to its own control in the tools layer, beside Collapse, and for the same reason: it
+    is a word, outside the editable text, that no paragraph editor can swallow."""
+    t = ran["tools"]
+    assert t["hasPeek"], "a clipped box offers no way to read the text it is hiding"
+    assert t["peekLabel"] == "Show all"
+    assert t["peekInToolsLayer"], "the opener is inside the editable content, where it would be a "\
+                                  "click on the text"
+    assert t["peekIsNotAGrip"], "the way in reads as a drag handle"
+    assert "Collapse" in t["peekTitle"], (
+        "the tooltip does not say how to put the box back: %r" % t["peekTitle"])
+    # It must be OFFERED only while the box is clipped, and CSS is what decides that — the button
+    # is built on every box (addBoxTools) exactly like Collapse and Reset.
+    show = _css_rule(".tw-txbx.tw-notes-overflow:not(.tw-notes-open):not(.tw-box-dragging) "
+                     ".tw-box-peek")
+    assert "display: block" in show
+    assert "display: none" in _css_rule(".tw-box-peek"), (
+        "the opener shows on every box, including the ones whose text already fits")
+    assert "position: absolute" in _css_rule(".tw-box-peek"), (
+        "fitTxbx measures the box's offsetHeight, so a control in the flow makes every box look "
+        "too tall — which is the very notice this button answers")
+
+
 def test_the_collapse_button_clips_the_box_again(ran):
     """The point: it must restore the clipped maxHeight fitTxbx set, not merely drop the
     class — a box left at `max-height: none` looks expanded with no way to say so."""
@@ -487,6 +513,60 @@ def test_no_box_is_left_expanded_behind_another(ran):
     assert [b["maxHeight"] for b in ran["manyBoxes"]["afterOutside"]] == [CLIPPED, CLIPPED]
 
 
+def test_a_click_on_the_boxs_own_padding_places_a_caret_and_does_not_expand_it(ran):
+    """Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky, it doesnt
+    automatically transfer to the next text box when I click to edit a section."
+
+    THE MECHANISM. `wireOverflowExpand` toggled the box on any click it did not recognise as
+    belonging to a line — and after the box became the single editing host, its exclusion had to be
+    narrowed to `lineAt(e.target)`, because the old `[contenteditable=true]` test matched the box
+    itself and would have made a clipped box impossible to open. The consequence was that
+    everything which is NOT a line — the box's padding, the gap between two paragraphs, the strip
+    under the last one, a `.tw-priced-region`'s padding — expanded the box instead of putting a
+    caret in it. That is where a Word user clicks to start typing, and the box was `cursor:
+    zoom-in` there, so the page was advertising it.
+
+    Executed rather than read, because "the click landed a caret" is a claim about a Range, and
+    about a chain of three handlers not fighting each other. It is also asserted that nothing
+    preventDefaults: where the browser is already right, this must not overrule it."""
+    got = ran["padClick"]
+    assert got["open"] is False, "the click expanded the box instead of placing a caret"
+    assert got["caretIn"] is True, "the click left no caret in the box at all"
+    assert got["caretLine"] == got["lineIds"][-1], (
+        "the caret went to the wrong line: %r of %r" % (got["caretLine"], got["lineIds"]))
+    assert got["collapsed"] is True, "a click placed a SELECTION rather than a caret"
+    assert got["prevented"] is False, "the handler cancelled the click it only had to complete"
+
+
+def test_a_caret_the_browser_already_placed_is_left_alone(ran):
+    """The other half, and the one that would be a regression rather than a bug: a click that
+    lands on the text is placed by the browser, exactly where the pointer was. Re-placing it from
+    the nearest line would move the caret off the character the estimator aimed at, which is worse
+    than the padding click ever was."""
+    assert ran["padClickKeepsCaret"]["same"] is True, (
+        "the handler moved a caret the browser had already placed")
+    assert ran["padClickKeepsCaret"]["offset"] == 4, "the caret's own offset was rewritten"
+
+
+def test_a_resolvable_point_is_used_as_the_browser_resolved_it(ran):
+    """The nearest-line walk is a FALLBACK for a point that resolves to no text position, not the
+    mechanism. When `caretRangeFromPoint` answers, that answer is used — otherwise a click in the
+    middle of a wrapped line would jump to the start of it."""
+    got = ran["padClickUsesThePoint"]
+    assert (got["line"], got["offset"]) == ("116", 7), (
+        "the resolved point was thrown away for the nearest line: %r" % (got,))
+
+
+def test_releasing_a_resize_grip_does_not_move_the_caret(ran):
+    """A grip release fires a click on the box too. Somebody who has just dragged the box's edge
+    did not ask to start typing in it — and the grips are the one part of this layer that
+    `preventDefault`s the pointer, so a caret placed here would be a caret nobody asked for."""
+    assert ran["gripClickPlacesNoCaret"]["caret"] is None, (
+        "resizing the box moved the caret into it")
+    assert ran["gripClickPlacesNoCaret"]["open"] is False, (
+        "releasing a grip expanded the box — the peek is the opposite of what a resize wanted")
+
+
 def test_a_refit_puts_an_open_box_back(ran):
     """fitTxbx re-runs after every edit and every repagination. It already cleared the class;
     what matters is that it also restores the clip, so an open box cannot survive a render with
@@ -510,39 +590,74 @@ def _css_rule(selector):
     return "\n".join(found)
 
 
+def _rules_matching(needle):
+    """[(selector, declarations)] for every rule whose SELECTOR mentions `needle`, with comments
+    and @media wrappers stripped. Same helper as test_fmt_ribbon.py's, and here for the same
+    reason: the negative claims — "no rule anywhere paints one line on hover" — cannot be made by
+    looking one selector up, and the comments in this stylesheet quote the rules they explain."""
+    css = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
+    css = re.sub(r"@media[^{]*\{", "", css)
+    return [(m.group(1).strip(), m.group(2)) for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)
+            if needle in m.group(1)]
+
+
 def test_an_editable_paragraph_says_so_with_the_pointer():
     """Kyle read the un-highlighted half of a paragraph as not editable, and the pointer was
     agreeing with him: `.tw-block` set no cursor, and `cursor` is inherited — so inside a
-    clipped box the caret pointer over the text was the box's `zoom-in` magnifier."""
+    clipped box the caret pointer over the text was the box's `zoom-in` magnifier.
+
+    THE MAGNIFIER IS GONE FROM THE BOX ENTIRELY (2026-08-26), which is why the third assertion
+    inverted. It advertised a gesture that no longer exists: a click on a clipped box used to
+    expand it, and now it lands a caret like a click anywhere else in a text box. The zoom cursors
+    moved onto the two controls that really do zoom — `.tw-box-peek` and `.tw-box-collapse`."""
     assert "cursor: text" in _css_rule(".tw-block")
     assert "cursor: text" in _css_rule(".tw-block .tw-fill"), (
         "a token value inside an editable paragraph still claims to be read-only")
-    assert "cursor: zoom-in" in _css_rule(".tw-txbx.tw-notes-overflow"), (
-        "the box's own peek affordance was removed rather than overridden on the text")
+    assert "cursor: text" in _css_rule(".tw-txbx"), (
+        "the box does not say 'text', so its padding still reads as something else to click")
+    for sel, _decls in _rules_matching(".tw-txbx"):
+        assert "zoom" not in _decls, (
+            "%s puts a zoom cursor back on the box itself, which advertises a click gesture the "
+            "box no longer has" % sel)
+    assert "cursor: zoom-in" in _css_rule(".tw-box-peek"), (
+        "the control that DOES expand the box lost the cursor that says so")
 
 
-def test_hover_and_focus_are_visible_without_moving_the_page():
-    """This surface is a to-scale preview of a printed page and each box is registered against
-    baked page artwork, so an affordance that changed the geometry would be a worse bug than
-    the clunkiness. Every cue is `background` or `box-shadow`."""
-    for selector in (".tw-block:hover", ".tw-block:focus", ".tw-block.tw-dirty:focus"):
-        decls = _css_rule(selector)
-        assert "box-shadow" in decls or "background" in decls
-        for banned in ("border", "padding", "margin", "font-size", "letter-spacing", "outline-width"):
-            assert not re.search(r"(?m)^\s*%s\s*:" % banned, decls), (
-                "%s changes the layout (%s), which shifts the text off the artwork"
-                % (selector, banned))
+def test_the_per_line_hover_and_focus_rules_are_gone():
+    """Hanz, 2026-08-26: "why do we still have subboxes for the main text box?" / "Also remove the
+    sub textboxes the subsections."
+
+    `.tw-block:hover` drew a 1px inset ring around whichever paragraph the pointer was over — a
+    sub-box per line, following the mouse — and that is what he was looking at. This test used to
+    assert those rules were geometry-free; the rules themselves are now the thing that had to go,
+    so it asserts their absence instead, and that the ONE region cue left is on the text box.
+
+    The two `:focus` rules could not have painted anything either way: a `.tw-block` carries no
+    contenteditable since the box became the single editing host, so focus never lands on one."""
+    for gone in (".tw-block:hover", ".tw-block:focus", ".tw-block.tw-dirty:focus"):
+        assert not [s for s, _ in _rules_matching(gone) if s.strip() == gone], (
+            "%s is back: that is the per-line sub-box, one per paragraph, following the pointer"
+            % gone)
+    # And nothing replaced them with the same thing under another name: no rule anywhere paints a
+    # single line on hover or focus.
+    for sel, decls in _rules_matching("tw-block") + _rules_matching("tw-line-edit") \
+            + _rules_matching("tw-note-edit"):
+        if ":hover" not in sel and ":focus" not in sel:
+            continue
+        assert not re.search(r"(?m)^\s*(background|box-shadow|outline)\s*:", decls), (
+            "%s paints one line on hover/focus again: %r" % (sel, decls))
+    # The region cue that replaced them, on the editing host itself.
+    assert "outline" in _css_rule(".tw-txbx:focus-within"), (
+        "the box being typed in has no cue at all now, which is worse than a per-line one")
 
 
-def test_the_paragraph_being_edited_keeps_its_focus_ring_once_it_is_dirty():
-    """`.tw-block.tw-dirty` and `.tw-block:focus` have the same specificity, so while the focus
-    rule came first the hand-edited paragraph — the one most likely to still be being typed in —
-    lost its ring to the dirty bar. The combined rule has to come last and carry both shadows."""
-    combined = _css_rule(".tw-block.tw-dirty:focus")
-    assert "inset 2px 0 0" in combined, "the dirty bar disappears while the block has focus"
-    assert combined.count("rgba(158, 0, 31") >= 2, "the focus ring is missing from the combination"
-    assert CSS.index(".tw-block.tw-dirty {") < CSS.index(".tw-block.tw-dirty:focus"), (
-        "the combined rule is declared before the plain dirty rule, which overrides it")
+def test_the_dirty_bar_survives_on_its_own():
+    """`.tw-block.tw-dirty:focus` existed to stop the dirty bar losing a cascade fight with
+    `.tw-block:focus`. With both focus rules gone there is nothing to fight, and the bar has to
+    still be there: it is the mark that says "this paragraph was hand-edited", which is
+    provenance rather than chrome and was never part of the sub-box complaint."""
+    assert "inset 2px 0 0" in _css_rule(".tw-block.tw-dirty"), (
+        "the hand-edited paragraph no longer says so")
 
 
 def test_the_collapse_button_adds_no_height_to_the_box():
