@@ -115,8 +115,11 @@ function makeDom(log, formValues) {
       getAttribute(k) { return Object.prototype.hasOwnProperty.call(self.attrs, k)
         ? self.attrs[k] : null; },
       addEventListener(type, handler) { self.listeners.push({ type, handler }); },
+      // Either quote style, because the page uses both: hydrate reaches for [name='bid_date'] and
+      // applyVerbal/paintProjLine build [name="…"]. A stub that only understood one silently
+      // returned null for half the page's own lookups.
       querySelector(sel) {
-        const m = /^\[name='([^']+)'\]$/.exec(sel);
+        const m = /^\[name=['"]([^'"]+)['"]\]$/.exec(sel);
         if (m) return fields[m[1]] || null;
         return null;
       },
@@ -196,6 +199,9 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   var state = {};
   var M = null;
   var form = null;
+  // Who settled each of the five. A real binding rather than a stub: a click through onClick has
+  // to land in humanConditions, which is what stops a second verbal run overriding it.
+  var humanConditions = {};
   var saveTimer = null;
   var counties = [];
   var countyMatches = [];
@@ -220,6 +226,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("countyNoteText")}
   ${fn("renderCountyNote")}
   ${fn("hydrateCounty")}
+  ${fn("paintProjLine")}
   ${fn("onCountyInput")}
   ${fn("onCountyKeydown")}
   ${fn("saveSoon")}

@@ -17,9 +17,21 @@
  * transcript and runs once, rather than opening a conversation.
  *
  * WHAT THIS FILE DOES NOT DO: decide anything about money. The server drops any price flag it
- * cannot find a verbatim quote for (backend/verbal_intake.py), and this panel prints the quote
- * next to every flag it did apply, so the estimator can see what each one rests on. Flags the
- * server refused are listed as still-to-answer rather than quietly left off.
+ * cannot find a verbatim quote for (backend/verbal_intake.py), and this panel prints THE
+ * TRANSCRIPT'S OWN WORDS AROUND that quote next to every flag it applied, so the estimator can see
+ * what each one rests on. Flags the server refused are listed as still-to-answer rather than
+ * quietly left off.
+ *
+ * WHY THE SURROUNDING WORDS AND NOT THE QUOTE. The quote was the MODEL'S crop, and a crop can say
+ * the opposite of the sentence it came out of: a transcript reading "it is not a hard bid" contains
+ * the words "a hard bid", which is a verbatim quote the server is right to accept as evidence that
+ * those words were said. Printed alone beside "Hard bid on", it made the screen assert the reverse
+ * of what the estimator told it. The server now sends `context` INSTEAD OF `quote` — up to eight
+ * words either side of the match, raw out of the transcript — so the "not" is on screen next to the
+ * switch and the human check actually works. Nothing here reads `quote` any more; it is gone.
+ *
+ * AND IT DOES NOT ARGUE WITH THE ESTIMATOR. A condition they corrected by hand comes back from
+ * applyVerbal in `respected`, and is printed as left alone rather than flipped a second time.
  */
 (function () {
   "use strict";
@@ -41,6 +53,11 @@
     taxable: "Taxable", remodel_tax: "Remodel tax",
   };
 
+  // The resting labels of the two buttons that run an extraction. Named once because busy() puts
+  // them back, and a busy() that restored the wrong words would relabel a button mid-session.
+  var GO_LABEL = "Fill the form";
+  var ASK_LABEL = "Add this and read again";
+
   var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
   var rec = null;
   var listening = false;
@@ -56,9 +73,16 @@
     box.hidden = !msg;
   }
 
+  /** Both buttons that can start a run, not just the first one.
+   *
+   *  The follow-up button is rendered INTO #verbal-out and it is the button in front of the
+   *  estimator when the second run is in flight, so leaving it live meant the one control they were
+   *  looking at could spend the third of three rate-limited runs on a double click. */
   function busy(on) {
     var go = $("verbal-go");
-    if (go) { go.disabled = on; go.textContent = on ? "Reading…" : "Fill the form"; }
+    if (go) { go.disabled = on; go.textContent = on ? "Reading…" : GO_LABEL; }
+    var askGo = $("verbal-answer-go");
+    if (askGo) { askGo.disabled = on; askGo.textContent = on ? "Reading…" : ASK_LABEL; }
   }
 
   // ── dictation ──────────────────────────────────────────────────────────────
@@ -111,6 +135,57 @@
   }
 
   // ── the result ─────────────────────────────────────────────────────────────
+
+  /** Where one sentence of the transcript ends and the next begins.
+   *
+   *  Crude on purpose — a full stop, bang or question mark, then whitespace, then a real character.
+   *  It will break "Ridgeview Rd. Overland Park" in two, and that costs a line break in an excerpt
+   *  nobody is quoting back. Missing a break costs the thing described in evidenceHtml.
+   *
+   *  The newline is safe as a marker: the server collapses every whitespace run in `context`, so
+   *  one cannot already be in there. */
+  function sentencesOf(text) {
+    return String(text).replace(/([.!?])\s+(?=\S)/g, "$1\n").split("\n");
+  }
+
+  /** The words a price flag rests on, as the transcript said them.
+   *
+   *  `context` is the contract with backend/verbal_intake.py: a raw slice of the transcript — the
+   *  matched words plus up to eight either side, starting and ending on a word, with only
+   *  whitespace runs collapsed. It is the estimator's own capitals and punctuation, so it is
+   *  ESCAPED. It is also what makes the flag checkable — see the note at the top of this file for
+   *  the "not a hard bid" case that made the panel assert the opposite of what was said.
+   *
+   *  THE SENTENCE BREAK IS THE OTHER HALF OF THAT SAFEGUARD, and it is deliberately the display's
+   *  job. The server's matcher requires consecutive tokens, which kills the mid-word match, but it
+   *  cannot tell that "It is not local. Hard bid though." makes "not local hard bid" a legitimately
+   *  consecutive run across a full stop — the words really are in that order. The backend leaves
+   *  that to be judged by a person (their `_find_span` and
+   *  test_a_quote_cannot_be_stitched_across_a_full_stop say so out loud), which only works if the
+   *  boundary is impossible to skim past. So a multi-sentence excerpt is broken onto its own lines
+   *  AND counted in words, rather than run together into one grey line where the full stop
+   *  disappears.
+   *
+   *  There is NO `quote` fallback: the backend stopped sending one, on purpose. The last branch is
+   *  for a malformed response only, and it says so in words rather than printing a pair of empty
+   *  quote marks — which would read as "the estimator said nothing", the one thing the server has
+   *  already proved false. */
+  function evidenceHtml(c) {
+    var ctx = String((c && c.context) || "").trim();
+    if (!ctx) {
+      return '<span class="vq">nothing came back to show for this one. Check it yourself.</span>';
+    }
+    var parts = sentencesOf(ctx);
+    if (parts.length < 2) {
+      return '<span class="vq">the transcript says: “…' + esc(ctx) + '…”</span>';
+    }
+    // Counted, not just broken: "2 sentences, so read both" is the instruction, and the line break
+    // is what makes it followable. .vq is display:block, so the <br> costs no new CSS.
+    return '<span class="vq">the transcript says — ' + parts.length + " sentences, so read " +
+      (parts.length === 2 ? "both" : "them all") + ': “…' +
+      parts.map(esc).join("<br>") + '…”</span>';
+  }
+
   function renderResult(res, applied) {
     var out = $("verbal-out");
     if (!out) return;
@@ -126,13 +201,28 @@
     if (applied.applied.length) {
       // EVERY flag prints the words it rests on. The server has already proved the estimator said
       // them; whether they MEAN what the flag claims is a judgement only a person can make, and
-      // they can only make it if the sentence is on screen next to the switch.
+      // they can only make it if the SENTENCE — not the model's crop of it — is on screen next to
+      // the switch. There is no "because" here on purpose: this panel reports what was said, and
+      // the estimator decides whether it is a reason.
       html += '<div class="vgroup"><h3>Switches set</h3><ul>' +
         applied.applied.map(function (k) {
-          var c = res.conditions[k];
+          var c = (res.conditions || {})[k] || {};
           return "<li>" + esc(label(k)) + " <b>" + (c.value ? "on" : "off") +
-            '</b><span class="vq">because you said: “' + esc(c.quote) + '”</span></li>';
+            "</b>" + evidenceHtml(c) + "</li>";
         }).join("") + "</ul></div>";
+    }
+
+    if ((applied.respected || []).length) {
+      // THE ESTIMATOR'S OWN FLIPS, LEFT ALONE. Reported rather than silently skipped: the words
+      // still go on screen, because the point is to let them change their own mind on the evidence,
+      // not to hide that the transcript disagrees with the switch.
+      html += '<div class="vgroup"><h3>You set these yourself</h3><ul>' +
+        applied.respected.map(function (k) {
+          var c = (res.conditions || {})[k] || {};
+          return "<li>" + esc(label(k)) + " — left as you set it. What you said reads as <b>" +
+            (c.value ? "on" : "off") + "</b>." + evidenceHtml(c) + "</li>";
+        }).join("") +
+        "</ul><p>Yours wins. Change it below if those words change your mind.</p></div>";
     }
 
     if ((res.unsupported || []).length) {
@@ -154,8 +244,8 @@
     if (res.question && !asked) {
       html += '<div class="vgroup ask"><h3>One question</h3><p>' + esc(res.question) + "</p>" +
         '<textarea id="verbal-answer" rows="2" aria-label="Your answer"></textarea>' +
-        '<button type="button" class="btn sm" id="verbal-answer-go">Add this and read again</button>' +
-        "</div>";
+        '<button type="button" class="btn sm" id="verbal-answer-go">' + esc(ASK_LABEL) +
+        "</button></div>";
     }
 
     out.innerHTML = html || '<div class="vgroup"><h3>Nothing to fill in</h3>' +
@@ -209,7 +299,7 @@
       }
       var applied = (window.TWPolishIntake && window.TWPolishIntake.applyVerbal)
         ? window.TWPolishIntake.applyVerbal(j)
-        : { filled: [], applied: [] };
+        : { filled: [], applied: [], respected: [] };
       renderResult(j, applied);
     } catch (err) {
       say("Couldn't reach the server. " + (err && err.message ? err.message : ""), "warn");
