@@ -2852,6 +2852,12 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         return {"ok": False, "error": "Autofill failed. Please try again."}
 
 
+# The most a spoken account of one job can be worth reading. Matches leads._TEXT_CAP: nothing past
+# this point makes the extraction better, it just makes the paid CLI call longer and gives an
+# unbounded request body a way to cost real money.
+_VERBAL_TRANSCRIPT_CAP = 15_000
+
+
 @app.post("/api/polish/verbal-intake")
 def api_verbal_intake(payload: VerbalIntakeIn, request: Request) -> Any:
     """Turn what an estimator just said about a job into intake fields.
@@ -2877,7 +2883,20 @@ def api_verbal_intake(payload: VerbalIntakeIn, request: Request) -> Any:
         return {"ok": False, "too_short": True,
                 "error": "Say a bit more first — a name, a place, and when it is due."}
 
-    bucket = _autofill_bucket(request)
+    # Bounded BEFORE anything reads it, and the gate below runs on this same capped string — the
+    # one the model was actually sent — so a quote can only be supported by words the model saw.
+    # Same two lines as leads._cap, which is module-private on purpose; the shape of what gets
+    # truncated differs per caller and a shared helper would invite one caller's suffix into
+    # another's prompt.
+    if len(transcript) > _VERBAL_TRANSCRIPT_CAP:
+        transcript = transcript[:_VERBAL_TRANSCRIPT_CAP].rstrip() + "\n\n[truncated]"
+
+    # EMAIL ONLY — deliberately not `_autofill_bucket`, which mixes in the client-supplied
+    # `X-Project-Id` header. A caller who wants a fresh budget only has to send a new project id,
+    # so on this route the cap is keyed on the verified token's email and nothing else. Own
+    # prefix, like prequalify and leadest: this button's three runs are its own, not shared with
+    # whatever autofill spent on the same project.
+    bucket = "verbal|%s" % (_user_email(request) or "anon")
     retry = _autofill_rate_retry(bucket)
     if retry is not None:
         return _ai_rate_limited(retry, "Verbal intake")
@@ -2893,6 +2912,12 @@ def api_verbal_intake(payload: VerbalIntakeIn, request: Request) -> Any:
 
     try:
         ai = _autofill_via_cli(user_input, verbal_intake.SYSTEM_PROMPT)
+        # INSIDE the try, with the refund, exactly as the lead path keeps apply_ai_overlay inside
+        # its own. `clean()` is written not to raise, but "written not to raise" is not a
+        # mechanism: `{"missing": 3}` used to reach a TypeError here and the estimator got a 500
+        # with one of their three runs already spent. A cleaning step that fails now costs them a
+        # readable message and nothing else.
+        result = verbal_intake.clean(ai, transcript)
     except FileNotFoundError:
         _autofill_rate_refund(bucket)
         return {"ok": False,
@@ -2900,12 +2925,13 @@ def api_verbal_intake(payload: VerbalIntakeIn, request: Request) -> Any:
                          "https://claude.com/cli to enable verbal intake."}
     except Exception as exc:  # noqa: BLE001
         _autofill_rate_refund(bucket)
-        log.warning("Verbal intake failed: %s", exc)
+        # Type AND message: "Verbal intake failed" on its own has cost an SSH session and a
+        # container probe before now.
+        log.warning("Verbal intake failed: %s: %s", type(exc).__name__, exc)
         return {"ok": False, "error": "That didn't come back. Please try again."}
 
-    # The evidence gate runs on the SERVER's copy of the transcript — the one it actually sent —
-    # so a model cannot supply both the claim and the proof of it.
-    result = verbal_intake.clean(ai, transcript)
+    # The evidence gate ran on the SERVER's copy of the transcript — the one it actually sent — so
+    # a model cannot supply both the claim and the proof of it.
     result["ok"] = True
     return result
 

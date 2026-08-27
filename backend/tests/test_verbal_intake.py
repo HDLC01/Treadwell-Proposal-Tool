@@ -14,9 +14,17 @@ none of them was said, and all of them are invisible once the toggle is on: the 
 filled-in form, not a guess.
 
 So a flag is only accepted when the model returns a VERBATIM QUOTE and the server can still find
-that quote in the transcript IT sent. The model supplies the claim; the transcript supplies the
-proof; the model never supplies both. Anything it cannot quote is dropped and named in
-`unsupported`, which is what the page asks the estimator about.
+that quote in the transcript IT sent, as a consecutive run of whole words. The model supplies the
+claim; the transcript supplies the proof; the model never supplies both. Anything it cannot quote
+is dropped and named in `unsupported`, which is what the page asks the estimator about.
+
+THE SECOND HALF OF THAT GATE, and it is the half that was missing: what comes back with an
+accepted flag is `context` — the transcript's own text either side of the match — and never the
+model's quote. Word-for-word true is not the same as true: a transcript saying "it is not a hard
+bid" and a model quoting the three words "a hard bid" is an honest quote of an inverted claim, and
+the panel used to print that crop next to the word "because". Widening the display to the
+surrounding words is what lets the estimator catch it, which is the review this feature is built
+around rather than a substitute for it.
 
 The second thing defended here is narrower and sharper: **nothing in this path may write a
 county.** `county_remodel_rate` is null for "nobody said" and 0 for "we know, and it is nothing"
@@ -90,21 +98,105 @@ def test_a_one_word_quote_cannot_unlock_anything():
 
 
 def test_the_gate_proves_the_words_were_said_not_that_they_mean_what_is_claimed():
-    """THE LIMIT OF THIS MECHANISM, written down so nobody mistakes it for more than it is.
+    """THE LIMIT OF THIS MECHANISM, written down so nobody mistakes it for more than it is — and
+    what the display does about it.
 
-    "the district" really is in the transcript, so a model that offers it as grounds for "not
-    taxable" clears the gate. Provenance is checkable by machine; relevance is not, and any
-    keyword rule that tried would reject real evidence phrased unexpectedly.
+    "going out through the district" really is in the transcript, so a model that offers it as
+    grounds for "not taxable" clears the gate. Provenance is checkable by machine; relevance is
+    not, and any keyword rule that tried would reject real evidence phrased unexpectedly.
 
-    What the gate DOES buy is that the model can no longer invent the words. Everything it offers
-    was actually said, which is why the accepted quote is returned alongside the flag: the page
-    shows "not taxable — because you said: …" and the estimator judges the relevance in one
-    glance. That is the review this feature is built around, not a substitute for it."""
+    So the gate hands the judgement to the estimator, and the ONLY way that works is if what
+    reaches the screen is the transcript's own words rather than the model's selection of them.
+    That is `context`: the match plus eight words either side, in the estimator's punctuation.
+    The page renders `the transcript says: "…{context}…"`, and one glance covers both the
+    provenance and the relevance."""
     out = V.clean({"conditions": {
         "taxable": {"value": False, "quote": "going out through the district"}}}, TRANSCRIPT)
-    assert out["conditions"]["taxable"]["quote"] == "going out through the district", (
+    ctx = out["conditions"]["taxable"]["context"]
+    assert "going out through the district" in ctx, (
         "the flag was accepted without keeping the words it rests on, so nothing on screen can "
         "show the estimator what it was based on")
+    assert "It's a hard bid" in ctx, (
+        "the context stopped at the quote, so the estimator sees the model's crop and not the "
+        "sentence it came out of — which is the whole point of returning context")
+    assert "quote" not in out["conditions"]["taxable"], (
+        "the model's own crop is still on the accepted condition, so the panel can go back to "
+        "printing it — see the cropped-negation test below for what that costs")
+
+
+def test_a_quote_cropped_out_of_its_own_negation_shows_the_negation_too():
+    """THE DEFECT THIS FIELD EXISTS FOR, and it was live.
+
+    "a hard bid" is three words the estimator really said — inside the sentence "it is NOT a hard
+    bid". The gate cannot refuse it and should not try: every word is provably in the transcript,
+    and a machine that tried to judge which side of a negation a phrase sits on would start
+    throwing away real evidence.
+
+    What it CAN do is refuse to let the model choose which words the estimator reads back. The
+    accepted flag carries the transcript's text around the match, so "not a hard bid" arrives on
+    screen next to a switch that says Hard bid — and the person who said it sees the contradiction
+    immediately. That is the human check working, not a hole in the gate."""
+    transcript = ("This one is the Olathe fire station on Ridgeview. It is not a hard bid, they "
+                  "just want a number by Friday for budgeting.")
+    out = V.clean({"conditions": {
+        "hard_bid": {"value": True, "quote": "a hard bid"}}}, transcript)
+    assert out["conditions"]["hard_bid"]["value"] is True, (
+        "the gate started judging meaning — see the docstring for why it must not")
+    assert "not a hard bid" in out["conditions"]["hard_bid"]["context"], (
+        "the panel would print the model's crop and the estimator would read their own words back "
+        "with the negation cut off it")
+
+
+def test_a_quote_cannot_match_in_the_middle_of_a_word():
+    """The old check was a substring search over the transcript with punctuation stripped, so
+    "hard bid" was found inside "a shard bidding floor" — words that were never said, offered as
+    proof of a flag that moves money.
+
+    Comparing whole tokens in sequence anchors both ends of every word for free, which is why the
+    fix is a tokeniser and not a regex with \\b in it: \\b would still have to be built out of the
+    same normalisation, twice."""
+    transcript = ("We are pouring over a shard bidding floor at the Prevailing Wages Cafe on "
+                  "Locally Grown Road, and the slab is taxable to the penny.")
+    for quote in ("hard bid", "prevailing wage", "local job"):
+        out = V.clean({"conditions": {"hard_bid": {"value": True, "quote": quote}}}, transcript)
+        assert out["conditions"] == {}, "%r was matched inside a longer word" % quote
+
+
+def test_a_quote_cannot_be_stitched_across_a_full_stop():
+    """Punctuation is dropped from the comparison so that dictation's guessed commas do not throw
+    away real evidence — but dropping it also let a quote run straight through the end of one
+    sentence and into the next. "It is not local. Hard bid though." supported a quote of "local
+    hard bid", which is a sentence nobody spoke.
+
+    A consecutive-token match does not fix that on its own, and it is not meant to: the words ARE
+    consecutive. What fixes it is the same thing that fixes the crop — the estimator reads the
+    context and sees two sentences. This test pins the case so the next person to widen the
+    matcher knows it is here."""
+    transcript = "Talked to Dana this morning. It is not local. Hard bid though, due Friday."
+    out = V.clean({"conditions": {
+        "hard_bid": {"value": True, "quote": "not local hard bid"}}}, transcript)
+    assert "not local. Hard bid" in out["conditions"]["hard_bid"]["context"], (
+        "the flag was accepted on words spanning two sentences with nothing on screen to show it")
+
+
+def test_the_context_is_the_transcript_and_not_a_normalised_copy_of_it():
+    """It has to READ like something the estimator said. The matcher works on case-folded,
+    punctuation-free tokens, and returning THAT ("its a hard bid going out through the district")
+    would look like a machine talking and hide the very punctuation the estimator needs to see —
+    the full stop that separates two claims.
+
+    So the tokeniser records each word's offsets into the original string and the context is a
+    slice of it. Newlines collapse, because dictation arrives with them mid-sentence; nothing
+    else is touched.
+
+    The slice runs from the first word to the last and stops there, which is why the closing full
+    stop is not in it. The page wraps the value in ellipses — `the transcript says: "…{context}…"`
+    — so a context that began or ended mid-sentence reads as one either way."""
+    transcript = "Bid is\nhard,   like  it always is here.\nDue Friday."
+    out = V.clean({"conditions": {
+        "hard_bid": {"value": True, "quote": "bid is hard"}}}, transcript)
+    ctx = out["conditions"]["hard_bid"]["context"]
+    assert ctx == "Bid is hard, like it always is here. Due Friday", ctx
 
 
 def test_punctuation_and_case_do_not_break_a_real_quote():
@@ -164,7 +256,15 @@ def test_no_county_key_survives_whatever_the_model_returns(key):
     guessed 0 underprices the job with nothing on screen to notice.
 
     Enforced HERE rather than trusted to the prompt. A model that returns the key anyway must not
-    be able to reach the draft with it, and prompts are not a mechanism."""
+    be able to reach the draft with it, and prompts are not a mechanism.
+
+    THE MECHANISM IS THE WHITELIST, and this test is what proves it: `fields` is built by walking
+    TEXT_FIELDS, so a key that is not on that tuple has nowhere to arrive. There used to be an
+    explicit `pop` of BANNED_KEYS after that loop which looked like the enforcement and could
+    never fire — the two tuples do not intersect, so it removed keys that were never added. It is
+    deleted; this test passed before it existed and passes after it, because the whitelist was
+    always doing the work. BANNED_KEYS stays as the parametrisation, so the ban keeps a name and a
+    failing case."""
     out = V.clean({key: "Johnson", "project_name": "Blue Valley West"}, TRANSCRIPT)
     assert key not in out["fields"]
     assert out["fields"]["project_name"] == "Blue Valley West", (
@@ -205,6 +305,50 @@ def test_a_dead_or_confused_ai_never_costs_the_estimator_the_draft():
         assert out["fields"] == {} and out["conditions"] == {}
 
 
+@pytest.mark.parametrize("bad", [3, True, False, 0, 1.5, {"project_name": 1}, "project_name"])
+def test_a_missing_list_that_is_not_a_list_does_not_raise(bad):
+    """THIS ONE REACHED PRODUCTION AS A 500. `{"missing": 3}` walked past `ai.get("missing") or []`
+    — 3 is truthy — into a comprehension that iterates it, and `TypeError: 'int' object is not
+    iterable` came out of a `clean()` call that sat OUTSIDE the route's try block. The estimator
+    got a blank failure AND one of their three runs per five minutes was already spent on it.
+
+    `or []` guards falsiness; `isinstance(..., list)` guards the thing that actually matters. A
+    string is the interesting case among these: it is iterable, so it never raised, and it also
+    must not become a list of single characters."""
+    out = V.clean({"missing": bad, "project_name": "Blue Valley West"}, TRANSCRIPT)
+    assert out["missing"] == [], out["missing"]
+    assert out["fields"]["project_name"] == "Blue Valley West", (
+        "one bad key took the rest of a good extraction with it")
+
+
+@pytest.mark.parametrize("key", ["project_name", "address", "city", "contact_name"])
+@pytest.mark.parametrize("bad", [["Blue", "Valley"], {"name": "Blue"}, 42, True, 3.5, None])
+def test_a_field_that_is_not_a_string_is_not_a_value_anybody_said(key, bad):
+    """`str(["Blue", "Valley"])` is "['Blue', 'Valley']", and that is what landed in the project
+    name box — brackets, quotes and all, looking exactly as deliberate as a real answer, because
+    nothing on the form distinguishes a filled field from a correctly filled one.
+
+    Numbers are refused for the same reason and one more: `str()` on them has already lost
+    information a form needs. A zip of 06085 arrives as 6085 and no amount of later validation
+    gets the leading zero back."""
+    assert key not in V.clean({key: bad}, TRANSCRIPT)["fields"]
+
+
+def test_a_field_long_enough_to_be_the_whole_transcript_is_cut_down():
+    """Bounded the same way `question` is. A model that pastes its input back into project_name
+    gives the intake form a value nothing on screen can show and the draft blob has to carry on
+    every save — and the blob is PUT whole, every time.
+
+    Free text is TRUNCATED because a clipped project name is visible and the estimator fixes it;
+    a structured field over the cap is DROPPED, because a clipped email address is a plausible
+    address for somebody who does not exist."""
+    out = V.clean({"project_name": "B" * 5000,
+                   "contact_email": ("a" * 400) + "@bvschools.org"}, TRANSCRIPT)
+    assert len(out["fields"]["project_name"]) == 300, len(out["fields"].get("project_name", ""))
+    assert "contact_email" not in out["fields"], (
+        "a 400-character local part still matched the email pattern and was passed on")
+
+
 def test_only_the_known_condition_names_are_accepted():
     """A key nobody wired up is not a toggle, and inventing one here would show up as a flag the
     form silently ignores rather than as an error anyone sees."""
@@ -215,21 +359,11 @@ def test_only_the_known_condition_names_are_accepted():
 
 
 # ── merging into a project that already has a takeoff ────────────────────────
-def test_the_conditions_merge_rather_than_replace():
-    """`polish_estimate` carries every area, material and crew line of a takeoff. The intake owns
-    only `conditions` inside it, and replacing that object would delete a finished takeoff's
-    settings on the strength of one spoken sentence."""
-    existing = {"local": True, "taxable": True, "prevailing_wage": False}
-    out = V.merge_conditions(existing, {"prevailing_wage": {"value": True, "quote": "x"}})
-    assert out == {"local": True, "taxable": True, "prevailing_wage": True}
-    assert existing["prevailing_wage"] is False, "the caller's dict was mutated"
-
-
-def test_merging_ignores_anything_that_is_not_a_known_boolean_flag():
-    out = V.merge_conditions({"local": True},
-                             {"county_remodel_rate": {"value": True, "quote": "x"},
-                              "local": {"value": "yes", "quote": "x"}})
-    assert out == {"local": True}, out
+# There were two tests here for `merge_conditions()`, and they were the only callers it ever had.
+# The route RETURNS and does not write, so nothing on the server merges anything; the merge that
+# really happens is applyVerbal setting each switch through toggleCondition, which
+# backend/tests/test_verbal_apply.py pins — including the "already right" case that a naive
+# server-side merge would never have caught. Two rules for one decision is how they drift apart.
 
 
 # ── the one question ─────────────────────────────────────────────────────────
