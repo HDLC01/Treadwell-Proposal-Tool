@@ -324,8 +324,39 @@ BODY.appendChild(CANVAS);
 CANVAS.appendChild(DOC_ZOOM);
 DOC_ZOOM.appendChild(docSurface);
 
+/** A Range, modelled for the ONE thing Ctrl+A now does with one: `setStartBefore` a line and
+ *  `setEndAfter` another. Both remember the element they were given rather than a text offset,
+ *  which is the point — an empty line has no text node to offset into, and asking for one is what
+ *  made the old widen produce no range at all. */
+class Range {
+  constructor() {
+    this._startBefore = null; this._endAfter = null;
+    this.startContainer = null; this.endContainer = null;
+    this.collapsed = false;
+  }
+  setStartBefore(node) {
+    this._startBefore = node;
+    this.startContainer = node.parentNode;
+    this.commonAncestorContainer = node.parentNode;
+  }
+  setEndAfter(node) {
+    this._endAfter = node;
+    this.endContainer = node.parentNode;
+    this.commonAncestorContainer = node.parentNode;
+  }
+  setStart(node, offset) { this.startContainer = node; this.startOffset = offset; }
+  setEnd(node, offset) { this.endContainer = node; this.endOffset = offset; }
+  collapse() { this.collapsed = true; }
+}
+
+// The range the document is holding, when it is a real cross-line one rather than the modelled
+// single-block selection (SEL, below). Ctrl+A's widen is what puts one here.
+let ACROSS_RANGE = null;
+const readRange = () => ACROSS_RANGE;
+
 const document = {
   createElement: (t) => new El(t),
+  createRange: () => new Range(),
   activeElement: null,
   body: BODY,
   getElementById: (id) => (id === "fmt-ribbon" ? FMT_HOST : null),
@@ -351,6 +382,15 @@ const document = {
 //   null                              — nothing selected at all
 let SEL = null;
 
+/** Move the modelled selection. Every write goes through here so that ACROSS_RANGE — the real
+ *  cross-line Range one press of Ctrl+A leaves behind — cannot outlive it. A stale one would make
+ *  `lineAtSelection` answer with the box from a previous scenario, which is a harness lying about
+ *  where the caret is rather than a product bug. */
+function setSel(next) {
+  SEL = next;
+  ACROSS_RANGE = null;
+}
+
 const window = {
   _listeners: {},
   addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
@@ -359,14 +399,24 @@ const window = {
   // A range honest about BOTH ends. `startContainer` alone is all the page's selectionchange
   // listener reads, but `selectionLeftBlock` reads `endContainer` and `collapsed` too, and giving
   // it a stub that lied about either would put the bug back where the harness cannot see it.
-  getSelection: () => (SEL
-    ? { rangeCount: 1,
-        getRangeAt: () => ({
-          startContainer: SEL.block,
-          endContainer: SEL.endsIn || SEL.block,
-          collapsed: !SEL.endsIn && !SEL.foreign && SEL.range && SEL.range[0] === SEL.range[1],
-        }) }
-    : { rangeCount: 0, getRangeAt: () => null }),
+  //
+  // TWO KINDS OF SELECTION, and the second one is new. SEL is the modelled single-block highlight
+  // the whole ribbon story is told in; ACROSS_RANGE is a REAL Range object, built by the shipped
+  // selectRangeAcross out of two element boundaries, which is what one press of Ctrl+A leaves
+  // behind. `addRange` really stores it and `removeAllRanges` really drops it, so a widen that
+  // silently created no range (the empty-endpoint bug) reads back as null here instead of passing.
+  getSelection: () => ({
+    get rangeCount() { return ACROSS_RANGE || SEL ? 1 : 0; },
+    getRangeAt: () => (ACROSS_RANGE || (SEL
+      ? {
+        startContainer: SEL.block,
+        endContainer: SEL.endsIn || SEL.block,
+        collapsed: !SEL.endsIn && !SEL.foreign && SEL.range && SEL.range[0] === SEL.range[1],
+      }
+      : null)),
+    removeAllRanges: () => { ACROSS_RANGE = null; SEL = null; },
+    addRange: (r) => { ACROSS_RANGE = r; },
+  }),
 };
 
 function fire(node, type, props) {
@@ -422,7 +472,17 @@ const LIFTED = [
   topConst("LINE_SEL"),
   fn("boxLines"), fn("lineAt"), fn("lineAtSelection"), fn("lineTarget"), fn("editingBox"),
   fn("clearBoxLine"), fn("paintBoxSel"), fn("clearBoxSel"),
-  fn("wholeLineSelected"),
+  // THE NATIVE RANGE, LIFTED RATHER THAN RECORDED. It used to be stubbed here — the stub wrote
+  // down which line ids the widen asked for — and that is exactly why a real bug lived in it
+  // unseen: the shipped function asked `pointAt` for a caret position inside the first and last
+  // lines, `pointAt` can only land in a TEXT node, and an EMPTY line has none. So Ctrl+A over a
+  // box whose first or last line was blank painted the box and selected nothing at all, silently.
+  // A recording stub cannot fail that way, which made it the wrong shape of collaborator.
+  fn("selectRangeAcross"),
+  // pointAt is not called by anything else lifted here. It is lifted so a scenario can ask the
+  // question the bug turned on -- "is there any caret position inside this line at all?" -- with
+  // the real walker rather than with a guess about what an emptied line contains.
+  fn("pointAt"),
   // The real splice. This is the function that keeps a multi-line edit from merging two Word
   // paragraphs into one, so a harness that imitated it would be testing the imitation.
   fn("spliceLines"),
@@ -483,14 +543,8 @@ const api = new Function(
     const r = readSel(el);
     return r ? [{ el: el, start: r[0], end: r[1] }] : [];
   };
-  // Recorded rather than performed: placing a real Range across several elements is the one thing
-  // readSel/writeSel cannot model. What IS testable is that the widen asks for it, over exactly
-  // the lines it painted -- a boxSel with no native range behind it is a selection the estimator
-  // can see and Delete cannot act on.
-  const acrossCalls = [];
-  const selectRangeAcross = (lines) => {
-    acrossCalls.push((lines || []).map((n) => String(n.dataset.id)));
-  };
+  // selectRangeAcross is LIFTED (see the note in LIFTED), so what it builds is a real Range
+  // against the modelled selection below -- ACROSS_RANGE is whatever it last handed the browser.
   // The computed previews and their sweeps belong to doc-editor-labels-harness.js, which builds
   // that world. Empty stubs are the truthful answer for a harness that mounts none of them, and
   // they still fail loudly if the page renames one.
@@ -515,8 +569,6 @@ const api = new Function(
     rememberedRange: () => (fmtRange ? fmtRange.slice() : null),
     /** Which blocks the box selection holds, by id, in document order. */
     boxSelIds: () => (boxSel ? boxSel.map((n) => String(n.dataset.id)) : null),
-    /** Every native range the widen asked for, as the ids it spanned. */
-    acrossCalls: () => acrossCalls.map((a) => a.slice()),
     /** Mount blocks the way renderBlock does — class from the record, no inline para styling — so
      *  an untouched paragraph starts out exactly as it does today. */
     /** Mount blocks the way renderPositioned does: inside a .tw-txbx[data-box-id].
@@ -556,6 +608,22 @@ const api = new Function(
       }
       return els;
     },
+    /** What an EMPTIED line really looks like: renderRuns with no text, which writes a lone BR.
+     *  Built by the shipped function rather than by hand, because "a line with no text node in it"
+     *  is the exact shape that used to defeat Ctrl+A, and a hand-written BR would be the harness
+     *  asserting its own guess about it.
+     *
+     *  (No backticks in here: this block is inside the template literal the sandbox is built from,
+     *  and one would end the literal. It has cost this repo a parse error before.) */
+    renderBlank: (el) => renderRuns(el, [{ text: "", tok: null }]),
+    /** How many characters a line reports through the run algebra. A blank one reports 1 -- the
+     *  newline its lone BR stands for -- which is itself part of the story: the length is not zero,
+     *  yet there is nowhere to put a caret. */
+    runLength: (el) => runsLength(editRuns(el)),
+    /** Is there ANY caret position inside this line? False for a blank one, and that is the bug in
+     *  one call: pointAt only lands in a text node, a BR has none, and the old widen asked pointAt
+     *  for both of its endpoints and gave up when either answered null. */
+    caretPoint: (el) => !!pointAt(el, 0),
     /** A template reload: clearDocSurface() empties the surface, so whatever the ribbon
      *  remembered is now a detached orphan. */
     wipeSurface: () => {
@@ -581,7 +649,7 @@ const api = new Function(
   // Refuses an escaped or foreign selection, exactly as the real selectionRange does when one of
   // its endpoints is outside the block.
   (el) => (SEL && SEL.block === el && !SEL.endsIn && !SEL.foreign ? SEL.range.slice() : null),
-  (el, a, b) => { SEL = { block: el, range: [a, b] }; });
+  (el, a, b) => { setSel({ block: el, range: [a, b] }); });
 
 // ── driving it the way a person does ────────────────────────────────────────
 const bar = () => api.bar();
@@ -589,18 +657,35 @@ const bar = () => api.bar();
 const readSelRange = (el) => (SEL && SEL.block === el && !SEL.endsIn && !SEL.foreign
   ? SEL.range.slice() : null);
 
-/** Click into a paragraph: the browser focuses it and fires focusin, which is the ONLY place the
- *  ribbon ever learns a target. */
+/** Click into a paragraph: the browser focuses the EDITING HOST and fires focusin there, which is
+ *  the only place the ribbon ever learns a target.
+ *
+ *  THE HOST, not the paragraph, and that correction matters. This used to set
+ *  `document.activeElement` to the block and fire the event at it — the world where every
+ *  paragraph carried its own contenteditable. Under one host per box a browser focuses the box
+ *  once and leaves focus there while the caret moves between the paragraphs inside it, so every
+ *  handler resolves the line from the CARET (`lineAtSelection`). Firing at the block exercised
+ *  `lineTarget`'s event-target branch instead — the branch a real browser never takes — which is
+ *  how a handler that only worked on synthesized events could pass here and do nothing on the
+ *  page. */
 function focusBlock(el) {
-  document.activeElement = el;
-  SEL = { block: el, range: [0, 0] };      // a caret, no highlight yet
-  fire(el, "focusin", {});
+  const box = el.closest(".tw-txbx") || el;
+  document.activeElement = box;
+  setSel({ block: el, range: [0, 0] });      // a caret, no highlight yet
+  fire(box, "focusin", {});
+}
+
+/** The same click, into a COMPUTED line: a `.tw-line-edit` price row or a `.tw-note-edit` bullet.
+ *  Identical mechanics — the box is the host either way — and named separately only because the
+ *  ribbon is expected to go INERT for these, so a reader can see which one a scenario meant. */
+function focusLine(el) {
+  focusBlock(el);
 }
 
 /** Highlight characters [a, b) with the mouse: the selection moves and the browser fires
  *  selectionchange, which is where the ribbon records the range it will act on later. */
 function highlight(el, a, b) {
-  SEL = { block: el, range: [a, b] };
+  setSel({ block: el, range: [a, b] });
   fireDoc("selectionchange");
 }
 
@@ -608,14 +693,14 @@ function highlight(el, a, b) {
  *  paragraph. THE GESTURE THAT EXPOSED THE BUG: the browser reports a real, non-collapsed
  *  selection, `selectionRange` cannot read it, and the paragraph's text is untouched. */
 function highlightEscaping(el, a, b, endsIn) {
-  SEL = { block: el, range: [a, b], endsIn: endsIn || DOC_ZOOM };
+  setSel({ block: el, range: [a, b], endsIn: endsIn || DOC_ZOOM });
   fireDoc("selectionchange");
 }
 
 /** Highlight a word in a sidebar field. Unreadable too, but it is not a claim about the document,
  *  and the ribbon outliving it is the whole feature — so the remembered range MUST survive. */
 function highlightForeign(node) {
-  SEL = { block: node, foreign: true };
+  setSel({ block: node, foreign: true });
   fireDoc("selectionchange");
 }
 
@@ -625,7 +710,7 @@ function highlightForeign(node) {
 function leaveFor(node) {
   const from = document.activeElement;
   document.activeElement = node || null;
-  SEL = null;                              // the caret went with the focus
+  setSel(null);                              // the caret went with the focus
   if (from) fire(from, "focusout", { relatedTarget: node || null });
 }
 
@@ -842,13 +927,14 @@ out.onLoad = { bar: barSnapshot(), placement: placement(), target: api.targetId(
   const el = els.get(116);
   focusBlock(el);
   highlight(el, 0, 8);
+  // IN THE BOX, DECLARING NO HOST OF ITS OWN — the shape renderPositioned and the page's own
+  // markup now build. It used to be appended bare to the surface with its own contenteditable,
+  // i.e. its own editing host, which is exactly the structure the sub-box work removed; a harness
+  // that goes on building it keeps passing after the page stops working that way.
   const line = new El("p");
   line.className = "tw-priceline tw-line-edit";
-  line.attrs.contenteditable = "true";
-  docSurface.appendChild(line);
-  document.activeElement = line;
-  SEL = null;
-  fire(line, "focusin", {});
+  el.parentNode.appendChild(line);
+  focusLine(line);
   const idle = { bar: barSnapshot(), target: api.targetId(),
                  marked: el.classList.contains("tw-fmt-target") };
   const pressed = press(CONTROLS.bold);
@@ -1001,14 +1087,16 @@ const REFILL = RECORDS.concat([WORK_ROW]);
 // ═══ 16. The idle ribbon carries nothing over from the last target ═══─────
 // The ribbon is ONE memoized element that lives for the whole session now, so anything the idle
 // path does not clear is the previous paragraph's state sitting on a dead control.
+// The caret moves into a COMPUTED line — a price row, which is a channel run formatting cannot
+// reach — so the ribbon lets go. In the box, declaring no contenteditable of its own: the page's
+// own markup stopped declaring one on 2026-08-26, and a fixture that still did would be the only
+// place in the repo where a price row was its own editing host.
 function goIdle() {
+  const box = docSurface.querySelector(".tw-txbx") || docSurface;
   const line = new El("p");
   line.className = "tw-priceline tw-line-edit";
-  line.attrs.contenteditable = "true";
-  docSurface.appendChild(line);
-  document.activeElement = line;
-  SEL = null;
-  fire(line, "focusin", {});
+  box.appendChild(line);
+  focusLine(line);
 }
 {
   const els = api.mountBlocks(REFILL);
@@ -1054,7 +1142,7 @@ function goIdle() {
   const el = els.get(117);
   focusBlock(el);
   highlight(el, 12, 26);
-  SEL = { block: DOC_ZOOM, range: [0, 5], endsIn: el };   // started above, ended inside
+  setSel({ block: DOC_ZOOM, range: [0, 5], endsIn: el });   // started above, ended inside
   fireDoc("selectionchange");
   press(CONTROLS.bold);
   out.selectionEscapedUpward = { runs: runsOf(el) };
@@ -1073,7 +1161,7 @@ function goIdle() {
   WORD_RIBBON.appendChild(taxField);
   highlightForeign(taxField);
   leaveFor(taxField);
-  SEL = { block: taxField, foreign: true };    // the highlight is still up, in the sidebar
+  setSel({ block: taxField, foreign: true });    // the highlight is still up, in the sidebar
   press(CONTROLS.bold);
   out.foreignSelection = { runs: runsOf(el) };
 }
@@ -1122,7 +1210,7 @@ function goIdle() {
   const field = new El("input");
   WORD_RIBBON.appendChild(field);
   leaveFor(field);
-  SEL = null;                                  // caret in the sidebar: nothing selected in the doc
+  setSel(null);                                  // caret in the sidebar: nothing selected in the doc
   press(CONTROLS.bold);
   out.noSelectionRepaint = {
     // The format still landed…
@@ -1145,7 +1233,7 @@ function backspace(el) {
   const els = api.mountBlocks(RECORDS);
   const el = els.get(116);                       // bulleted WORK row, indent 288
   focusBlock(el);
-  SEL = { block: el, range: [0, 0] };                            // caret at the very start
+  setSel({ block: el, range: [0, 0] });                            // caret at the very start
   const before = api.paraNow(116);
   const ev = backspace(el);
   out.backspaceOnBullet = {
@@ -1173,7 +1261,7 @@ function backspace(el) {
   highlight(el, 0, 8);                           // a real selection starting at 0
   const onSelection = backspace(el);
   const afterSelection = api.paraNow(116);
-  SEL = { block: el, range: [5, 5] };                            // caret mid-line
+  setSel({ block: el, range: [5, 5] });                            // caret mid-line
   const midLine = backspace(el);
   out.backspaceElsewhere = {
     onSelectionPrevented: !!onSelection.defaulted,
@@ -1190,7 +1278,7 @@ function backspace(el) {
   const els = api.mountBlocks(RECORDS);
   const el = els.get(52);                        // locked
   focusBlock(el);
-  SEL = { block: el, range: [0, 0] };
+  setSel({ block: el, range: [0, 0] });
   const ev = backspace(el);
   out.backspaceOnLockedClause = {
     prevented: !!ev.defaulted,
@@ -1274,29 +1362,117 @@ function backspace(el) {
   };
 }
 
-/** Ctrl+A, as the keyboard sends it. */
+/** Ctrl+A, as the keyboard sends it: at the BOX, because that is the editing host and a browser
+ *  fires its editing events there. The caret is what says which line it is about (SEL), which is
+ *  the branch `lineTarget` takes in a real browser and the one `focusBlock` now exercises. */
 function selectAll(el) {
-  return fire(el, "keydown", { ctrlKey: true, key: "a" });
+  const box = el.closest(".tw-txbx") || el;
+  return fire(box, "keydown", { ctrlKey: true, key: "a" });
 }
 
-// ═══ 30. CTRL+A: THE LINE, THEN THE WHOLE BOX ══════════════════
-// Hanz: "when I click Ctrl+A It doesnt select everything in the box there still sub boxes." Those
-// "sub boxes" are the paragraphs -- each is its own editing host, so the browser's select-all
-// physically cannot reach past the one the caret is in. The second press is an editor-level
-// selection over the box instead.
+/** THE NATIVE RANGE Ctrl+A left behind, by its ENDPOINTS.
+ *
+ *  Reported as "before which element" and "after which element" rather than as a pair of character
+ *  offsets, because that is the whole change: an element boundary needs nothing inside the line, so
+ *  a blank first or last line can still be an endpoint. Offsets could not be -- `pointAt` has no
+ *  text node to measure into -- and the shipped function used to return with no range created at
+ *  all, which is a selection the estimator can see painted and Delete cannot act on. */
+function nativeRange() {
+  const r = ACROSS_RANGE;
+  if (!r) return null;
+  const name = (n) => (n && n.dataset && n.dataset.id !== undefined
+    ? String(n.dataset.id) : (n ? n.className || n.tagName || null : null));
+  return {
+    startBefore: name(r._startBefore),
+    endAfter: name(r._endAfter),
+    // Both endpoints are children of the same box, which is what makes this one range rather than
+    // two halves of nothing -- and what proves `.tw-box-tools` was not swept in with the text.
+    sameParent: !!(r._startBefore && r._endAfter
+      && r._startBefore.parentNode === r._endAfter.parentNode),
+    parent: r._startBefore ? r._startBefore.parentNode.className : null,
+  };
+}
+
+// ═══ 30. CTRL+A: ONE PRESS, THE WHOLE BOX ══════════════════════
+// Hanz, 2026-08-26: "When I control A it doesnt select everything in Work."
+//
+// It was a ladder: the first press took the LINE and the second widened to the box. The first rung
+// was the fault -- it preventDefault()ed the browser's own select-all, which with one editing host
+// per box would already have selected every line in it, and put a one-line selection there
+// instead. So the feature's own first press was what made Ctrl+A look broken.
 {
   const els = api.mountBlocks(REFILL);           // 4 records, all box 1
   const el = els.get(116);
   focusBlock(el);
   const first = selectAll(el);
-  const afterFirst = { range: readSelRange(el), boxSel: api.boxSelIds(),
-                       prevented: !!first.defaulted };
-  const second = selectAll(el);
-  out.selectAllWidens = {
-    afterFirst: afterFirst,
-    afterSecondIds: api.boxSelIds(),
-    secondPrevented: !!second.defaulted,
+  out.selectAllTakesTheBox = {
+    ids: api.boxSelIds(),
+    prevented: !!first.defaulted,
     painted: (api.boxSelIds() || []).every((id) => els.get(Number(id)).classList.contains("tw-boxsel")),
+    // A REAL range, not just a painted class: Delete, a paste and a typed character all act
+    // through the ordinary paths, so a boxSel with no range behind it is a selection the estimator
+    // can see and the keyboard cannot touch.
+    range: nativeRange(),
+    // The ribbon stays aimed at the paragraph the caret was in, so Bold has a target.
+    target: api.targetId(),
+  };
+}
+
+// ═══ 30b. …from a COMPUTED line as well as a template paragraph ═
+// Ctrl+A in the PRICE box used to find nothing at all, because the handler looked for `.tw-block`
+// only. Both other families are checked here: a `.tw-line-edit` price row and a `.tw-note-edit`
+// notes bullet, which is the one family that does not also carry `.tw-line-edit`.
+{
+  const els = api.mountBlocks(REFILL);
+  const box = els.get(116).parentNode;
+  const price = new El("p");
+  price.className = "tw-priceline tw-line-edit";
+  price.dataset.id = "price";                    // for reporting only; the page keys these by
+  price.textContent = "$41,900 - Epoxy flooring as described above";   // data-po-linekey
+  box.appendChild(price);
+  const note = new El("p");
+  note.className = "tw-li tw-note-edit";
+  note.dataset.id = "note";
+  note.textContent = "Price includes one mobilization.";
+  box.appendChild(note);
+  const fromPrice = (() => {
+    focusLine(price);
+    selectAll(price);
+    return { ids: api.boxSelIds(), painted: price.classList.contains("tw-boxsel") };
+  })();
+  fire(price, "mousedown", {});                  // let go of it
+  const fromNote = (() => {
+    focusLine(note);
+    selectAll(note);
+    return { ids: api.boxSelIds(), painted: note.classList.contains("tw-boxsel") };
+  })();
+  out.selectAllFromComputedLines = { fromPrice: fromPrice, fromNote: fromNote };
+}
+
+// ═══ 30c. A BLANK first or last line is still selected ═════════
+// The bug the lifted selectRangeAcross exposes. `pointAt` can only land in a text node, and
+// `renderRuns` writes `<br>` into an emptied line -- so an empty endpoint made the old widen
+// `return` with NO range created, silently. Blank endpoints are ordinary here: a Word anchor
+// paragraph, a line the estimator emptied, a `.tw-note-blank` spacer between notes bullets.
+{
+  const blanks = [{ id: 201, text: "" },
+                  { id: 202, text: "Schedule:  4 days on site" },
+                  { id: 203, text: "" }];
+  const els = api.mountBlocks(blanks);
+  api.renderBlank(els.get(201));                 // what renderRuns leaves: a lone <br>
+  api.renderBlank(els.get(203));
+  focusBlock(els.get(202));
+  selectAll(els.get(202));
+  out.selectAllOverBlankEnds = {
+    ids: api.boxSelIds(),
+    range: nativeRange(),
+    // THE PREMISE, executed rather than assumed: neither endpoint has a caret position inside it,
+    // which is exactly what the old offset-based widen needed and could not get. Reported so a
+    // future renderRuns that leaves a real text node behind cannot make this scenario vacuous.
+    firstHasNoCaretPoint: !api.caretPoint(els.get(201)),
+    lastHasNoCaretPoint: !api.caretPoint(els.get(203)),
+    // And a blank line is not "zero characters": its BR stands for one newline.
+    blankRunLength: api.runLength(els.get(201)),
   };
 }
 
@@ -1308,7 +1484,7 @@ function selectAll(el) {
   const els = api.mountBlocks(two);
   const el = els.get(116);                       // box 1
   focusBlock(el);
-  selectAll(el); selectAll(el);
+  selectAll(el);
   out.selectAllStopsAtTheBox = {
     ids: api.boxSelIds(),
     otherBoxUntouched: !els.get(115).classList.contains("tw-boxsel"),
@@ -1320,7 +1496,7 @@ function selectAll(el) {
   const els = api.mountBlocks(REFILL);
   const el = els.get(116);
   focusBlock(el);
-  selectAll(el); selectAll(el);
+  selectAll(el);
   const ids = api.boxSelIds();
   press(CONTROLS.bold);
   out.boxFormat = {
@@ -1335,7 +1511,7 @@ function selectAll(el) {
   const els = api.mountBlocks(REFILL);
   const el = els.get(116);
   focusBlock(el);
-  selectAll(el); selectAll(el);
+  selectAll(el);
   const ids = api.boxSelIds();
   fire(el, "keydown", { key: "Delete" });
   out.boxDelete = {
@@ -1353,11 +1529,11 @@ function selectAll(el) {
   const els = api.mountBlocks(REFILL);
   const el = els.get(116);
   focusBlock(el);
-  selectAll(el); selectAll(el);
+  selectAll(el);
   const held = api.boxSelIds();
   fire(el, "mousedown", {});
   const afterClick = api.boxSelIds();
-  selectAll(el); selectAll(el);
+  selectAll(el);
   fire(el, "input", {});
   const afterTyping = api.boxSelIds();
   out.boxSelLetsGo = { held: (held || []).length, afterClick: afterClick, afterTyping: afterTyping };
@@ -1381,7 +1557,7 @@ function tab(el, shift) {
   const els = api.mountBlocks(RECORDS);
   const el = els.get(116);                       // bulleted WORK row, indent 288
   focusBlock(el);
-  SEL = { block: el, range: [4, 4] };            // MID-LINE, not at the start
+  setSel({ block: el, range: [4, 4] });            // MID-LINE, not at the start
   const before = api.paraNow(116);
   const ev = tab(el);
   out.tabIndents = {
@@ -1401,7 +1577,7 @@ function tab(el, shift) {
   const els = api.mountBlocks(RECORDS);
   const el = els.get(116);
   focusBlock(el);
-  SEL = { block: el, range: [0, 0] };
+  setSel({ block: el, range: [0, 0] });
   // Walk it to the margin with the key itself rather than reaching into the state: doing it
   // through the handler is what proves the handler can actually reach zero.
   for (let i = 0; i < 6; i++) tab(el, true);
@@ -1418,7 +1594,7 @@ function tab(el, shift) {
   const els = api.mountBlocks(RECORDS);
   const el = els.get(52);
   focusBlock(el);
-  SEL = { block: el, range: [0, 0] };
+  setSel({ block: el, range: [0, 0] });
   const before = api.paraNow(52);
   const ev = tab(el);
   out.tabOnLockedClause = {
@@ -1432,7 +1608,7 @@ function tab(el, shift) {
   const els = api.mountBlocks(RECORDS);
   const first = els.get(116);
   focusBlock(first);
-  SEL = { block: first, range: [0, 3] };
+  setSel({ block: first, range: [0, 3] });
   fire(first, "keydown", { ctrlKey: true, key: "a" });   // line…
   fire(first, "keydown", { ctrlKey: true, key: "a" });   // …then the whole box
   const ids = (api.boxSelIds ? api.boxSelIds() : []).slice();

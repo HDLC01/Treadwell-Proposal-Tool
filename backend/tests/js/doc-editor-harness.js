@@ -274,7 +274,14 @@ class El {
   }
   blur() { if (document.activeElement === this) document.activeElement = null; }
   focus() { document.activeElement = this; }
-  getBoundingClientRect() { return { width: 0, height: 0, left: 0, top: 0 }; }
+  /** Zeros unless a scenario says otherwise. `_rect` exists because the nearest-line fallback in
+   *  `caretIntoBox` picks a line by vertical distance from the click, and a harness where every
+   *  line reports the same rect could not tell "the line you clicked beside" from "the first line
+   *  in the box" — which is the whole claim. */
+  getBoundingClientRect() {
+    return Object.assign({ width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0 },
+                         this._rect || null);
+  }
   get offsetHeight() {
     const pct = /^(\d+)%$/.exec(this.style.fontSize || "");
     const k = pct ? Number(pct[1]) / 100 : 1;
@@ -283,15 +290,52 @@ class El {
   }
 }
 
+// ── the caret, modelled just far enough for `caretIntoBox` ───────────────────
+// "A click inside a text box leaves a caret in it" is a claim about a Range: which node it ends up
+// in, and — just as important — that the code did NOT overrule a browser that had already placed
+// one. Stubbing the selection away would make both halves unfalsifiable, which is precisely the
+// hole that let a click on a box's padding expand the box for weeks.
+let SEL_RANGE = null;
+// What `caretRangeFromPoint` answers with. null is the interesting case and therefore the default:
+// it is what a real browser returns for a point that resolves to no text position, and it is what
+// sends `caretIntoBox` to its nearest-line fallback.
+const HIT = { range: null };
+
+class Range {
+  constructor() {
+    this.startContainer = null; this.startOffset = 0;
+    this.endContainer = null; this.endOffset = 0;
+    this.collapsed = true;
+  }
+  setStart(node, offset) { this.startContainer = node; this.startOffset = offset || 0; }
+  setEnd(node, offset) { this.endContainer = node; this.endOffset = offset || 0; }
+  setStartBefore(node) { this.startContainer = node.parentNode; this.startOffset = 0; }
+  setEndAfter(node) { this.endContainer = node.parentNode; this.endOffset = 0; }
+  collapse(toStart) {
+    this.collapsed = true;
+    if (toStart) { this.endContainer = this.startContainer; this.endOffset = this.startOffset; }
+  }
+}
+
+const selection = {
+  get rangeCount() { return SEL_RANGE ? 1 : 0; },
+  getRangeAt: () => SEL_RANGE,
+  removeAllRanges: () => { SEL_RANGE = null; },
+  addRange: (r) => { SEL_RANGE = r; },
+};
+
 const document = {
   createElement: (t) => new El(t),
   activeElement: null,
   body: new El("body"),
   querySelectorAll: () => [],
+  createRange: () => new Range(),
+  caretRangeFromPoint: () => HIT.range,
 };
 const window = {
   _listeners: {},
   addEventListener(t, f) { (this._listeners[t] = this._listeners[t] || []).push(f); },
+  getSelection: () => selection,
 };
 
 /** Bubble an event from `el` up through its ancestors and then to `window`, like the real
@@ -419,24 +463,36 @@ const out = {};
 // independently, so a harness that got the arithmetic wrong cannot agree with itself.
 const DESIGN_H = 183.75;
 
-function mountBox(naturalPt) {
+function mountBox(naturalPt, lineCount) {
   docSurface.childNodes = [];
+  SEL_RANGE = null;
+  HIT.range = null;
   const box = new El("div");
   box.className = "tw-txbx";
   box.dataset.boxId = "3";
   box.dataset.boxHPt = String(DESIGN_H);
   box.style.minHeight = DESIGN_H + "pt";
+  // THE EDITING HOST IS THE BOX, exactly as renderPositioned sets it. This used to go on the
+  // paragraph below, which is the structure the one-host change removed — and a harness that goes
+  // on building the old structure is worse than none, because it keeps passing after the page has
+  // stopped working that way.
+  box.attrs.contenteditable = "true";
   docSurface.appendChild(box);
-  // A real editable paragraph inside it — the thing that makes the trap a trap.
-  const block = new El("div");
-  block.className = "tw-block";
-  block.dataset.id = "115";
-  block.attrs.contenteditable = "true";
-  box.appendChild(block);
+  // Real editable paragraphs inside it — the thing that makes the trap a trap. Each is given a
+  // vertical position, 20px apart, so the nearest-line fallback has something to be near.
+  const blocks = [];
+  for (let i = 0; i < (lineCount || 1); i++) {
+    const block = new El("div");
+    block.className = "tw-block";
+    block.dataset.id = String(115 + i);
+    block._rect = { top: 100 + i * 20, bottom: 120 + i * 20 };
+    box.appendChild(block);
+    blocks.push(block);
+  }
   api.addBoxTools(box);
   box._naturalPx = Math.round(naturalPt * PX_PER_PT);
   api.fitTxbx(box);
-  return { box, block };
+  return { box, block: blocks[0], blocks };
 }
 
 const state = (box) => ({
@@ -448,28 +504,41 @@ const state = (box) => ({
 });
 
 const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
+/** The way IN, since 2026-08-26. Opening used to be a click on the box itself, and every scenario
+ *  below opened one that way — which is exactly the gesture that was taken away, because a click
+ *  inside a text box has to land a caret. */
+const peekBtn = (box) => box.querySelector("[data-box-peek]");
+const openBox = (box) => fire(peekBtn(box), "click", {});
 
 // 1. The box really is over capacity, and the tools carry a labelled way out.
 {
   const { box } = mountBox(400);
   out.clipped = state(box);
   const btn = collapseBtn(box);
+  const peek = peekBtn(box);
   out.tools = {
     hasCollapse: !!btn,
     label: btn ? btn.textContent : null,
     title: btn ? btn.title : null,
     inToolsLayer: !!(btn && btn.closest(".tw-box-tools")),
     isNotAGrip: !!(btn && btn.attrs["data-grip"] === undefined),
+    // The way IN, held to the same three rules as the way out: a word, in the tools layer, that
+    // cannot be mistaken for a drag handle.
+    hasPeek: !!peek,
+    peekLabel: peek ? peek.textContent : null,
+    peekTitle: peek ? peek.title : null,
+    peekInToolsLayer: !!(peek && peek.closest(".tw-box-tools")),
+    peekIsNotAGrip: !!(peek && peek.attrs["data-grip"] === undefined),
     // The order the tools are written in, so adding one can be seen not to have displaced the
     // grips box-drag-harness.js asserts the order of.
     order: box.querySelector(".tw-box-tools").children.map((c) => c.className),
   };
 }
 
-// 2. A click on the box body opens it (the existing peek), and the Collapse button closes it.
+// 2. The "Show all" button opens it, and the Collapse button closes it again.
 {
   const { box } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   const opened = state(box);
   fire(collapseBtn(box), "click", {});
   out.collapseButton = { opened: opened, closed: state(box) };
@@ -479,7 +548,7 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
 //    typing. This is why the button/Escape/outside click had to exist.
 {
   const { box, block } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   fire(block, "click", {});
   const afterBlockClick = state(box);
   // The nested case: a click on a `.tw-fill` island inside the paragraph.
@@ -493,7 +562,7 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
 // 4. Escape, with the caret inside the box's own paragraph.
 {
   const { box, block } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   document.activeElement = block;
   const e = fire(block, "keydown", { key: "Escape" });
   out.escape = { closed: state(box), blurred: document.activeElement === null,
@@ -512,7 +581,7 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
 // 6. Escape must not blur a field OUTSIDE the box (the sidebar is full of them).
 {
   const { box } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   const elsewhere = new El("input");
   pageBackground.appendChild(elsewhere);
   document.activeElement = elsewhere;
@@ -525,7 +594,7 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
 // 7. A click on the page outside the box collapses it.
 {
   const { box } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   fire(pageBackground, "click", {});
   out.outsideClick = state(box);
 }
@@ -536,7 +605,7 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
 //     edited, and now that it never moves it is the one control that is ALWAYS outside the box.
 {
   const { box } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   const host = new El("div");
   host.attrs.id = "fmt-ribbon";
   const bar = new El("div");
@@ -563,7 +632,7 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
     api.addBoxTools(box);
     box._naturalPx = Math.round(400 * PX_PER_PT);
     api.fitTxbx(box);
-    fire(box, "click", {});
+    openBox(box);
     boxes.push(box);
   }
   const bothOpen = boxes.map((b) => b.classList.contains("tw-notes-open"));
@@ -575,9 +644,71 @@ const collapseBtn = (box) => box.querySelector("[data-box-collapse]");
 //    open would stay open across a render with a stale maxHeight.
 {
   const { box } = mountBox(400);
-  fire(box, "click", {});
+  openBox(box);
   api.fitTxbx(box);
   out.refitCollapses = state(box);
+}
+
+// ═══ (e) a click INSIDE a box lands a caret, and does nothing else ═══════════
+// Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky, it doesnt automatically
+// transfer to the next text box when I click to edit a section." A clipped box used to expand on
+// any click that missed a line — its padding, the gap between two paragraphs, the strip under the
+// last one — which is exactly where a Word user clicks to start typing.
+
+// 10. The click that used to expand the box now places a caret in the nearest line, and the box
+//     stays as it was. `caretRangeFromPoint` returns null (HIT.range), which is what a browser
+//     answers for a point that resolves to no text position — the case the fallback exists for.
+{
+  const { box, blocks } = mountBox(400, 3);
+  // y=152 is in the strip under the last paragraph: the three lines span 100-120, 120-140 and
+  // 140-160, so the nearest midpoint is the third line's (150, against 130 and 110).
+  const e = fire(box, "click", { clientX: 40, clientY: 152 });
+  out.padClick = {
+    open: box.classList.contains("tw-notes-open"),
+    caretIn: !!(SEL_RANGE && box.contains(SEL_RANGE.startContainer)),
+    // WHICH line, because "a caret somewhere in the box" would pass with the first line every
+    // time and would not be the claim being made.
+    caretLine: SEL_RANGE && SEL_RANGE.startContainer && SEL_RANGE.startContainer.dataset
+      ? SEL_RANGE.startContainer.dataset.id : null,
+    lineIds: blocks.map((b) => b.dataset.id),
+    collapsed: !!(SEL_RANGE && SEL_RANGE.collapsed),
+    // The browser is still in charge of the gesture: nothing here preventDefaults a click.
+    prevented: !!e.defaulted,
+  };
+}
+
+// 11. …and a caret the browser HAS already placed is left exactly where it is. Overruling it
+//     would move the caret away from the character the estimator clicked on.
+{
+  const { box, blocks } = mountBox(400, 3);
+  const mine = new Range();
+  mine.setStart(blocks[2], 4);
+  SEL_RANGE = mine;
+  fire(box, "click", { clientX: 40, clientY: 100 });
+  out.padClickKeepsCaret = { same: SEL_RANGE === mine, offset: SEL_RANGE.startOffset };
+}
+
+// 12. A point that DOES resolve is used as the browser resolved it, rather than being rounded to
+//     the nearest line — the fallback is a fallback, not the mechanism.
+{
+  const { box, blocks } = mountBox(400, 3);
+  const hit = new Range();
+  hit.setStart(blocks[1], 7);
+  HIT.range = hit;
+  fire(box, "click", { clientX: 40, clientY: 999 });
+  out.padClickUsesThePoint = {
+    line: SEL_RANGE ? SEL_RANGE.startContainer.dataset.id : null,
+    offset: SEL_RANGE ? SEL_RANGE.startOffset : null,
+  };
+}
+
+// 13. A release of a resize grip fires a click on the box too, and it must not move the caret:
+//     somebody who just dragged the box's edge did not ask to start typing in it.
+{
+  const { box, blocks } = mountBox(400, 3);
+  const grip = box.querySelector("[data-grip='se']");
+  fire(grip, "click", { clientX: 40, clientY: 152 });
+  out.gripClickPlacesNoCaret = { caret: SEL_RANGE, open: box.classList.contains("tw-notes-open") };
 }
 
 // ═══ (b) a blank line the estimator types must reach the .docx ═══════════════
@@ -605,9 +736,17 @@ function mountBlock() {
   const el = new El("div");
   el.className = "tw-block";
   el.dataset.id = String(BLOCK.id);
-  el.attrs.contenteditable = "true";
   docSurface.childNodes = [];
-  docSurface.appendChild(el);
+  // IN A BOX, AND THE BOX CARRIES THE contenteditable. It used to go on the paragraph, which is
+  // the structure the one-host change removed: a paragraph that declares its own host is its own
+  // editing host, and a browser selection cannot cross one. Keeping the old shape here would mean
+  // the Enter handler was being exercised against a world the page no longer builds.
+  const box = new El("div");
+  box.className = "tw-txbx";
+  box.dataset.boxId = "3";
+  box.attrs.contenteditable = "true";
+  docSurface.appendChild(box);
+  box.appendChild(el);
   el.innerHTML = api.blockHtml(BLOCK, TOKENS);
   return el;
 }

@@ -564,6 +564,61 @@ def test_every_work_row_is_editable_through_the_box_and_declares_no_host_of_its_
         "something editable is nested inside a row again — that is the island model returning")
 
 
+def test_every_price_row_is_editable_through_the_box_and_declares_no_host_of_its_own(ran):
+    """THE SAME CLAIM AS THE WORK ROWS ABOVE, for the family that never had it — and the absence
+    is why this shipped broken.
+
+    Hanz, 2026-08-26: "why do we still have subboxes for the main text box?" / "Also remove the sub
+    textboxes the subsections." Six PRICE rows in proposal-review.html still hard-coded
+    `contenteditable="true"`: the Base Bid heading, the base line, the two tax rows, the total and
+    the Options heading. Each one is its own EDITING HOST, and a browser selection cannot cross
+    one — so Ctrl+A stopped at a row, a drag stopped at a row, and clicking from one price line to
+    the next fired a focusout whose normalizer re-rendered every other line in the same box under
+    the estimator's caret. The WORK rows were checked for exactly this from the day the box became
+    the host; nothing checked these, and the markup sat there.
+
+    These rows are STATIC MARKUP rather than the output of a render function, so the harness reads
+    them out of the page and mounts them the way `mountRegionPreviews` does — into a real
+    `.tw-txbx` — and then asks `hostOf`, the same walk the WORK rows answer with."""
+    got = ran["priceRows"]
+    assert got["keys"] == ["heading_base", "base", "sales_tax", "remodel", "total",
+                           "heading_options"], (
+        "the staged price rows changed — re-derive what this test is about: %r" % (got["keys"],))
+    assert not any(got["ownHost"]), (
+        "a PRICE row declares contenteditable itself: that is a second editing host inside the "
+        "box, and every box-wide gesture stops at it")
+    assert all(h == "tw-txbx" for h in got["host"]), (
+        "a PRICE row is not editable through its text box at all: %r" % (got["host"],))
+    assert all(got["wholeLine"]), (
+        "a PRICE row stopped using the whole-line model the base bid established")
+    assert got["islands"] == [0] * len(got["keys"]), (
+        "something editable is nested inside a price row — the island model returning")
+    assert got["anyHostBelowTheBox"] == 0, (
+        "something in the staging block still declares contenteditable below the box")
+
+
+def test_typing_in_notes_leaves_another_boxs_expanded_state_alone(ran):
+    """Hanz, 2026-08-26, on the editor being clunky between sections.
+
+    `syncNotesFromDom` ends by re-fitting, and it used to call `fitNotesBox()` — which loops EVERY
+    `.tw-txbx` on the page and hands each one to `fitTxbx`, which resets fontSize, transform,
+    maxHeight, overflow and zIndex and removes `tw-notes-open`. So one character typed in a notes
+    bullet re-ran the shrink ladder on WORK and PRICE and folded shut any box the estimator had
+    expanded to read. Only the notes box's content changed, so only the notes box is re-measured.
+
+    The WORK box here is genuinely over capacity (400pt of content in Kyle's 171pt box) and
+    genuinely expanded through its own button, so there is something real to destroy."""
+    got = ran["notesRefitScope"]
+    assert got["before"]["open"] is True, "the fixture never expanded the other box"
+    assert got["after"] == got["before"], (
+        "typing in a notes bullet changed another box: %r -> %r" % (got["before"], got["after"]))
+    assert got["notesFitted"], "the notes box itself was not re-measured, which is the point of it"
+    assert got["textarea"] == ("Price includes one mobilization.\n"
+                              "Anchor bolts by others, plus layout."), (
+        "the bullets no longer reach the textarea that is their source of truth: %r"
+        % got["textarea"])
+
+
 def test_the_whole_line_the_estimator_edits_carries_every_static_word(ran):
     """The static words are IN the editable element's own text, not beside it. Nothing else has
     to be true for him to be able to delete them."""

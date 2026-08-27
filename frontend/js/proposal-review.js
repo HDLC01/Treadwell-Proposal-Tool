@@ -1406,13 +1406,6 @@
     estimator_name: "Estimator",
   };
 
-  // Region badge wording by the region's leading block name.
-  const REGION_LABELS = {
-    system: "Systems — from the estimate & the fields sidebar; click any line to rewrite it",
-    notes:  "Notes — edit in the fields sidebar (one per line)",
-  };
-  const REGION_LABEL_DEFAULT = "Priced content — edit via the Pricing options & fields sidebars";
-
   // Live preview elements mounted into each region, by block name. Their content is
   // engine-generated but NOT read-only: every line inside them is one editable line
   // (see lineEl / renderSystemPreview / renderNotesPreview). The single_bid mount
@@ -2349,35 +2342,23 @@
 
   // ── selecting a whole text box ─────────────────────────────────────────────
   //
-  // Hanz, 2026-08-25: "when I click Ctrl+A It doesnt select everything in the box there still sub
-  // boxes."
+  // Hanz, 2026-08-26: "When I control A it doesnt select everything in Work."
   //
-  // He is describing the editing-host boundary. Every paragraph is its own contenteditable, so the
-  // browser's own select-all cannot reach past the line the caret is in -- the "sub boxes" are the
-  // paragraphs. There is no browser selection that spans them, and there is no making one: a
-  // native Range across two editing hosts is not something a document can hold.
+  // ONE PRESS, THE WHOLE BOX. The two-press ladder that shipped first (line, then box) is gone:
+  // its first rung cancelled the browser's own select-all -- which, with the box as the single
+  // editing host, would already have selected every line in it -- and replaced it with a
+  // one-line selection. So the feature's own first press was what made Ctrl+A look broken, and
+  // the widen that put the box back had nothing on screen to advertise it.
   //
-  // So the second press is an EDITOR-level selection instead: a set of blocks the ribbon and the
-  // delete key both understand, painted so it reads as selected. It is not a DOM selection and
-  // deliberately does not pretend to be one -- `selectionRange` still refuses anything spanning
-  // two blocks, which is what keeps a stale range from being formatted (see `selectionLeftBlock`).
-  //
-  // Scope is one text box, per his answer when asked: first press takes the line, pressing again
-  // takes every line in that box. The box is a real container -- `.tw-txbx[data-box-id]`, the
+  // Scope is one text box. The box is a real container -- `.tw-txbx[data-box-id]`, the
   // absolutely-positioned div registered against the baked page artwork -- so this is a
   // `closest()` call rather than a guess about which paragraphs look grouped. On the terms pages
   // there is no box, so the page is the unit.
   //
-  // The computed lines (`.tw-line-edit`, `.tw-note-edit`) are NOT included. They are re-rendered
-  // from the estimate whenever focus leaves them, so "selected" and "cleared" have no meaning
-  // there yet -- that is what E6's channel work is for.
+  // `boxSel` is the PAINTED cue, and it is kept alongside the native range rather than replaced by
+  // it: the range is gone the moment the caret moves, while the class is what the ribbon and the
+  // delete key read to know they are acting on a whole box.
   let boxSel = null;
-  // The line the last Ctrl+A landed on. The widen used to depend on reading the selection back and
-  // finding it covered the whole line -- which is a round trip through the browser's Range, and a
-  // block ending in a <br> reports a length the selection cannot actually reach. When that check
-  // said "not the whole line" the second press just re-selected the line and the feature looked
-  // dead. Remembering the target is what makes press-again reliable.
-  let lastSelectAll = null;
 
   /** Every editable LINE inside `el`'s box, in document order.
    *
@@ -2554,17 +2535,26 @@
     }
   }
 
-  /** One native selection spanning several lines: the first character of the first to the last of
-   *  the last. What Ctrl+A's widen produces now that a range is allowed to cross a paragraph. */
+  /** One native selection spanning several lines: from before the first to after the last. What
+   *  Ctrl+A produces now that a range is allowed to cross a paragraph.
+   *
+   *  ELEMENT BOUNDARIES, not text offsets, and that is the whole fix. This used to ask `pointAt`
+   *  for a caret position inside the first and last lines -- and `pointAt` can only land in a TEXT
+   *  node, while a BR is a synthetic newline it skips. So an EMPTY endpoint line returned null and
+   *  the function bailed with no range created at all: Ctrl+A painted the box and selected
+   *  nothing. Empty endpoints are ordinary here -- a Word anchor paragraph, a line the estimator
+   *  emptied (`renderRuns` writes `<br>`), a `.tw-note-blank` spacer between notes bullets.
+   *  `setStartBefore` / `setEndAfter` need no node inside the line at all.
+   *
+   *  NOT `selectNodeContents(box)`, which reads as the obvious one-liner: `.tw-box-tools` is the
+   *  box's LAST child (see addBoxTools), so its button labels -- "Collapse", "Reset box",
+   *  "Fit to text" -- would land inside the selection and inside anything copied out of it. */
   function selectRangeAcross(lines) {
     if (!lines || !lines.length) return;
-    const first = lines[0], last = lines[lines.length - 1];
-    const a = pointAt(first, 0), b = pointAt(last, runsLength(editRuns(last)));
-    if (!a || !b) return;
     try {
       const r = document.createRange();
-      r.setStart(a.node, Math.max(0, Math.min(a.offset, a.node.length)));
-      r.setEnd(b.node, Math.max(0, Math.min(b.offset, b.node.length)));
+      r.setStartBefore(lines[0]);
+      r.setEndAfter(lines[lines.length - 1]);
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(r);
@@ -2629,13 +2619,6 @@
     boxSel = null;
     paintBoxSel();
     return true;
-  }
-
-  /** Is the whole of `el` already selected? That is what turns a second Ctrl+A into a widen. */
-  function wholeLineSelected(el) {
-    const sel = selectionRange(el);
-    if (!sel) return false;
-    return sel[0] === 0 && sel[1] === runsLength(editRuns(el)) && sel[1] > 0;
   }
 
   /** The block the ribbon acts on, or null.
@@ -3065,10 +3048,12 @@
   }
 
   function mountRegionPreviews(wrap, names) {
-    // No card chrome — the region flows inline as part of the continuous
-    // document; the hover tooltip says where its content is edited.
-    const first = names.values().next().value;
-    wrap.title = REGION_LABELS[first] || REGION_LABEL_DEFAULT;
+    // NO CHROME OF ANY KIND: no card, no hover tint (see `.tw-priced-region` in styles.css) and no
+    // tooltip. The region flows inline as part of one continuous document, and the tooltip that
+    // used to name it ("Systems — from the estimate & the fields sidebar…") was the last thing
+    // announcing this group of lines as a thing of its own. Hanz, 2026-08-26: "why do we still
+    // have subboxes for the main text box?" Every line in here takes a caret and is rewritten
+    // whole, which is what that tooltip was explaining; the lines say it better by behaving.
     for (const name of names) {
       const mount = REGION_MOUNTS[name];
       if (mount) mount().forEach(el => { if (el) wrap.appendChild(el); });
@@ -3821,15 +3806,24 @@
    *  breaks the page layout on purpose — you are looking past the design to check content,
    *  and the marker stays so it is obvious this is not how it prints.
    *
-   *  THE TRAP THIS FIXES. Kyle, 2026-08-19: "He is confused on how to get out of that Textbox
-   *  view." Opening and closing were the same gesture — a click on the box — and the handler
-   *  deliberately ignores clicks that land on `.tw-block` / `.tw-line-edit` / a contenteditable,
-   *  because a click meant for a paragraph must put a caret in it. An OPEN box is nearly all
-   *  editable content, so in practice there was frequently no pixel left that would close it
-   *  again. So there are now three ways out, and none of them is a click on the text:
-   *    * the Collapse button in `.tw-box-tools` (checked BEFORE the tools exclusion below);
+   *  NEITHER GESTURE IS A CLICK ON THE BOX ANY MORE, and that is the change of 2026-08-26.
+   *
+   *  Kyle, 2026-08-19: "He is confused on how to get out of that Textbox view." That was answered
+   *  with a labelled Collapse button, Escape, and a click outside — three ways out, none of them a
+   *  click on the text. Opening, though, stayed a click on the box, guarded by "unless the click
+   *  landed on a line". Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky,
+   *  it doesnt automatically transfer to the next text box when I click to edit a section." The
+   *  guard was the fault: everything that is not a line — the box's padding, the gap between two
+   *  paragraphs, the strip under the last one, a priced region's padding — is exactly where a Word
+   *  user clicks to start typing, and there it expanded the box instead of placing a caret.
+   *
+   *  So the ways IN and OUT are now:
+   *    * the "Show all" button in `.tw-box-tools` opens a clipped box;
+   *    * the Collapse button in the same layer closes it;
    *    * Escape, from anywhere on the page;
    *    * a click on the page outside the box.
+   *  and any other click inside a box only has to land a caret (`caretIntoBox`).
+   *
    *  Escape and the outside click are bound on `window` rather than on `document` so this
    *  function stays reachable with the same collaborators the drag gestures already use. */
   function wireOverflowExpand() {
@@ -3847,6 +3841,58 @@
       box.style.overflow = open ? "visible" : "hidden";
       box.style.zIndex = open ? "30" : "";
     };
+    /** Make sure a click inside `box` leaves a caret in it. Nothing else: no geometry, no
+     *  expansion, no formatting, and no `preventDefault` -- where the browser is already right
+     *  this must not overrule it.
+     *
+     *  A click that lands ON a line needs nothing from us; the browser puts the caret under the
+     *  pointer, which is the whole reason this editor lets it. What needs answering is the click
+     *  that lands on the box's padding, on the gap between two paragraphs, on the strip under the
+     *  last one, or on a `.tw-priced-region`'s own padding -- the pixels a Word user aims at, and
+     *  the ones that used to expand the box instead. `caretRangeFromPoint` resolves the point the
+     *  way the browser would; when it resolves to nothing (or to something outside this box) the
+     *  nearest line by vertical distance takes the caret.
+     *
+     *  Declared INSIDE wireOverflowExpand deliberately: three harnesses lift this function whole,
+     *  and a helper declared beside it at the top level would be an unbound name in every one of
+     *  them until each lift list was updated -- the ReferenceError this repo has paid for six
+     *  times. Kept small enough to live here honestly. */
+    const caretIntoBox = (box, e) => {
+      if (e.target.closest && e.target.closest(".tw-box-tools")) return;   // a grip release is
+                                                    // not a click for text: it just resized this
+      const sel = typeof window !== "undefined" && window.getSelection ? window.getSelection() : null;
+      if (!sel || !document.createRange) return;
+      // The ordinary case, and it must be cheap: the browser placed the caret on mousedown, before
+      // this ever ran.
+      if (sel.rangeCount && box.contains(sel.getRangeAt(0).startContainer)) return;
+      let r = null;
+      try {
+        if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(e.clientX, e.clientY);
+        else if (document.caretPositionFromPoint) {
+          const p = document.caretPositionFromPoint(e.clientX, e.clientY);
+          if (p && p.offsetNode) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); }
+        }
+      } catch { r = null; }
+      if (r && !box.contains(r.startContainer)) r = null;      // resolved outside: not ours to use
+      if (!r) {
+        const lines = box.querySelectorAll(LINE_SEL);
+        if (!lines.length) return;
+        let best = lines[0], bestGap = Infinity;
+        for (const line of lines) {
+          const rect = line.getBoundingClientRect ? line.getBoundingClientRect() : null;
+          const gap = rect ? Math.abs((rect.top + rect.bottom) / 2 - e.clientY) : 0;
+          if (gap < bestGap) { bestGap = gap; best = line; }
+        }
+        r = document.createRange();
+        // OFFSET 0 IN THE ELEMENT, not a text offset: an emptied line holds a lone `<br>` and no
+        // text node at all, and asking for a position inside one is what left Ctrl+A with no range
+        // (see selectRangeAcross). A collapsed range on the element needs nothing inside it.
+        r.setStart(best, 0);
+      }
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    };
     const openBoxes = () => docSurface.querySelectorAll(".tw-txbx.tw-notes-open");
     // Every open box, not just one: WORK and NOTES can both be expanded, and one left behind
     // keeps a deliberately broken layout on a page the estimator has stopped looking at.
@@ -3854,26 +3900,26 @@
       Array.prototype.forEach.call(openBoxes(), (box) => setOpen(box, false));
 
     docSurface.addEventListener("click", (e) => {
-      const box = e.target.closest(".tw-txbx.tw-notes-overflow, .tw-txbx.tw-notes-open");
+      const box = e.target.closest(".tw-txbx");
       if (!box) return;
-      // The explicit way out, tested BEFORE the .tw-box-tools exclusion below — the button
-      // lives in that layer, so the exclusion would otherwise swallow its own control.
-      if (e.target.closest("[data-box-collapse]")) {
+      // The two explicit gestures, tested BEFORE anything else -- both buttons live in the tools
+      // layer, so an exclusion for that layer would otherwise swallow its own controls.
+      const peek = e.target.closest("[data-box-peek]");
+      if (peek || e.target.closest("[data-box-collapse]")) {
         e.preventDefault();
         e.stopPropagation();
-        setOpen(box, false);
+        setOpen(box, !!peek);
         return;
       }
-      // Don't fight the paragraph editor: a click meant for a LINE should edit it, not expand the
-      // box. `lineAt` rather than a hand-written selector list, because the list used to end in
-      // `[contenteditable=true]` -- and the box itself now carries that attribute, so every click
-      // inside a truncated NOTES box found it on the way up and returned. The box would never have
-      // expanded again. (Using lineAt also picks up `.tw-note-edit`, which that list was missing.)
-      if (lineAt(e.target)) return;
-      // Nor the drag handles: releasing a resize grip fires a click on the box, and peeking at
-      // the hidden text is the opposite of what somebody who just made the box bigger wanted.
-      if (e.target.closest(".tw-box-tools")) return;
-      setOpen(box, !box.classList.contains("tw-notes-open"));
+      // EVERY OTHER CLICK INSIDE A BOX IS A CLICK FOR THE TEXT. Hanz, 2026-08-26: a click meant to
+      // start editing a section must not do something else instead.
+      //
+      // This used to toggle the box open whenever the click missed a line -- the padding, the gap
+      // between two paragraphs, the strip under the last one, a priced region's own padding -- and
+      // those are the pixels a Word user aims at. Expanding is now the "Show all" button above,
+      // Collapse/Esc/an outside click are the ways back, and this handler's only remaining job is
+      // to make sure the click lands a caret.
+      caretIntoBox(box, e);
     });
 
     window.addEventListener("keydown", (e) => {
@@ -4138,6 +4184,17 @@
       '<button type="button" class="tw-box-fit" data-box-fit="1" ' +
         'title="Make this box tall enough for all of its text. The generated document gets the ' +
         'same size; drag the bottom edge or press Reset box to undo.">Fit to text</button>' +
+      // THE WAY IN, and it is a labelled control for the same reason Collapse is one.
+      // Hanz, 2026-08-26: "Editing from one text box to another is a bit clunky, it doesnt
+      // automatically transfer to the next text box when I click to edit a section." Opening a
+      // clipped box used to be a click on the box itself, and the exclusion that kept such a
+      // click for the paragraph editor had been narrowed to "did it land on a LINE" -- so a click
+      // on the box's padding, on the gap between two paragraphs, or on the strip under the last
+      // one expanded the box instead of putting a caret in it. That is exactly where a Word user
+      // clicks to start typing. A button in the tools layer cannot be confused with the text.
+      '<button type="button" class="tw-box-peek" data-box-peek="1" ' +
+        'title="Show the text this box is too small to fit. Nothing is changed: the box goes ' +
+        'back with Collapse, Esc, or a click outside it.">Show all</button>' +
       '<button type="button" class="tw-box-collapse" data-box-collapse="1" ' +
         'title="Put this box back to the size the template gives it. Esc does the same, and so ' +
         'does clicking the page outside the box.">Collapse</button>' +
@@ -4897,9 +4954,15 @@
                              && !(to && from.contains(to));
       if (left(systemPreviewEl)) renderSystemPreview();
       if (left(notesPreviewEl)) renderNotesPreview();
-      const pl = document.getElementById("price-lines-block");
-      const bb = document.getElementById("base-bid-row");
-      if (left(pl) || left(bb)) { try { refreshPriceDisplay(); } catch {} }
+      // EVERY PRICE ROW, not the two containers that used to be named here. The other eight rows
+      // normalised on their own `focusout` while each of them was its own editing host -- which is
+      // exactly what made moving the caret from one price line to the next re-render the rest of
+      // the box under the estimator. They have no host now, so this is where they are normalised:
+      // once, when the caret leaves the box they live in.
+      if (from.querySelector && from.querySelector("[data-po-kind=\"line\"][data-po-linekey]")
+          && !(to && from.contains(to))) {
+        try { refreshPriceDisplay(); } catch {}
+      }
     }
     if (!_repagPending) return;
     if (to && to.closest && to.closest(".tw-terms-page")) return;   // still in terms — wait
@@ -5068,13 +5131,15 @@
     // holds one of them -- a WORK-box edit has no business rewriting the price overrides.
     if (systemPreviewEl.isConnected && box.contains(systemPreviewEl)) syncSystemRows();
     if (notesPreviewEl.isConnected && box.contains(notesPreviewEl)) syncNotesFromDom();
-    // BY ID, not by selector. `querySelectorAll("#price-lines-block")` reads naturally but ties
-    // the sweep to id-selector support in every DOM this code runs under, harnesses included;
-    // getElementById plus a containment test says the same thing and cannot be over-matched.
-    [document.getElementById("price-lines-block"),
-     document.getElementById("base-bid-row")].forEach(root => {
-      if (root && box.contains(root)) syncPriceLinesIn(root);
-    });
+    // EVERY WHOLE-LINE PRICE ROW IN THIS BOX, which is what the sweep has to be now that the rows
+    // declare no editing host of their own. It used to name two containers by id, and that was
+    // survivable only because six rows carried `contenteditable` and therefore heard their own
+    // `input` events. They do not any more -- a keystroke arrives at the box -- so anything this
+    // sweep cannot see is an edit that reaches no channel and is silently lost on the next
+    // repaint. It also closes a gap that was already open: the combo breakout, the per-room lines
+    // and the ALTERNATE block are rendered into containers that NEVER had a host, so typing in
+    // one of those lines had nowhere to persist to.
+    if (box.querySelector("[data-po-kind=\"line\"][data-po-linekey]")) syncPriceLinesIn(box);
     schedulePersistOverrides();
     // A terms-page block can change height as it's edited; repaginate once
     // the caret leaves the terms flow (scheduleRepaginate defers on focus).
@@ -5089,8 +5154,8 @@
 
   // Typing, clicking or moving the caret means the box selection is over. Registered before the
   // focusin handler below so the class is gone by the time the ribbon re-renders.
-  docSurface.addEventListener("mousedown", () => { clearBoxSel(); lastSelectAll = null; });
-  docSurface.addEventListener("input", () => { clearBoxSel(); lastSelectAll = null; });
+  docSurface.addEventListener("mousedown", () => { clearBoxSel(); });
+  docSurface.addEventListener("input", () => { clearBoxSel(); });
   window.addEventListener("keydown", (e) => {
     // ESCAPE IS THE WAY OUT, and it has to be, because Tab now indents instead of moving focus.
     // Taking the keyboard's only exit from the text box away would be a real regression for
@@ -5156,33 +5221,29 @@
   docSurface.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (String(e.key).toLowerCase() === "a") {
-      // EITHER FAMILY. This used to look for `.tw-block` only, so pressing Ctrl+A anywhere in the
-      // PRICE box found nothing and looked broken -- which is exactly what Hanz reported.
+      // ONE PRESS TAKES THE WHOLE BOX. Hanz, 2026-08-26: "When I control A it doesnt select
+      // everything in Work."
+      //
+      // It used to be a ladder -- press once for the line, again to widen -- and the first press
+      // was the problem, not the second: it preventDefault()ed the browser's own select-all and
+      // put a one-LINE selection there instead. Under one editing host per box the browser would
+      // already have selected the box, so the ladder's first rung actively took away the
+      // behaviour asked for, and the widen that put it back was undiscoverable.
+      //
+      // EITHER FAMILY, still: a `.tw-block`, a `.tw-line-edit` price/system row, a `.tw-note-edit`
+      // bullet. Ctrl+A anywhere in the PRICE box used to find nothing and look broken.
       const el = lineTarget(e);
       if (!el) return;
       e.preventDefault();
-      // Already got the line? Widen to the box. Otherwise take the line first -- which is what
-      // the browser would have done anyway, done explicitly so the SECOND press has a state to
-      // recognise rather than depending on what the browser left behind.
-      // Second press on the SAME line -- or any press while a box is already held -- widens.
-      if (boxSel || lastSelectAll === el || wholeLineSelected(el)) {
-        boxSel = boxLines(el);
-        lastSelectAll = null;
-        paintBoxSel();
-        // A REAL BROWSER SELECTION over the whole box, not just a painted class. This is what the
-        // one-host change buys: the range can span every paragraph, so Delete, a paste, a typed
-        // character and a ribbon press all act on the box through the ordinary paths instead of
-        // each needing to know about `boxSel`. The class stays as the cue that survives the caret
-        // moving on.
-        selectRangeAcross(boxSel);
-        if (el.classList.contains("tw-block")) showFmtBar(el);
-      } else {
-        clearBoxSel();
-        lastSelectAll = el;
-        const total = runsLength(editRuns(el));
-        if (total) placeSelection(el, 0, total);
-        if (el.classList.contains("tw-block")) showFmtBar(el);
-      }
+      boxSel = boxLines(el);
+      paintBoxSel();
+      // A REAL BROWSER SELECTION over the whole box, not just a painted class. This is what the
+      // one-host change buys: the range can span every paragraph, so Delete, a paste, a typed
+      // character and a ribbon press all act on the box through the ordinary paths instead of
+      // each needing to know about `boxSel`. The class stays as the cue that survives the caret
+      // moving on.
+      selectRangeAcross(boxSel);
+      if (el.classList.contains("tw-block")) showFmtBar(el);
       return;
     }
     const key = { b: "bold", i: "italic", u: "underline" }[String(e.key).toLowerCase()];
@@ -5524,9 +5585,17 @@
     let run = 0;
     for (const s of lines) { if (s === "") { if (++run > 2) continue; } else run = 0; kept.push(s); }
     ta.value = kept.join("\n");
-    // Re-fit the font as bullets are typed. This only changes the box's
-    // font-size (never rebuilds the bullets), so the caret is preserved.
-    try { fitNotesBox(); } catch {}
+    // Re-fit the font as bullets are typed -- THE NOTES BOX, and nothing else on the page.
+    //
+    // This used to call fitNotesBox(), which loops every `.tw-txbx` and hands each one to fitTxbx
+    // -- and fitTxbx resets fontSize, transform, maxHeight, overflow and zIndex and takes
+    // `tw-notes-open` off. So one character typed in a notes bullet re-ran the shrink ladder on
+    // WORK and PRICE and folded shut any box the estimator had expanded to read (Hanz,
+    // 2026-08-26, on the editor being clunky between sections). The notes box is the only one
+    // whose content just changed, so it is the only one re-measured. fitTxbx returns immediately
+    // when handed null, which is the honest answer before the preview is mounted into a box.
+    // Only the box's own font-size changes (the bullets are never rebuilt), so the caret survives.
+    try { fitTxbx(notesPreviewEl.closest(".tw-txbx")); } catch {}
     if (_notesOvTimer) clearTimeout(_notesOvTimer);
     _notesOvTimer = setTimeout(() => { try { TW.setState({ notes_text: ta.value }); } catch {} }, 300);
   }
@@ -5650,32 +5719,30 @@
     if (_povTimer) clearTimeout(_povTimer);
     _povTimer = setTimeout(() => { try { TW.setState({ price_overrides: state.price_overrides }); } catch {} }, 500);
   }
-  const _plBlockEl = document.getElementById("price-lines-block");
-  const _baseBidRowEl = document.getElementById("base-bid-row");
-  if (_plBlockEl) {
-    _plBlockEl.addEventListener("input", _handlePoInput);
-    _plBlockEl.addEventListener("focusout", (e) => {
-      if (!_plBlockEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
-    });
-  }
-  if (_baseBidRowEl) {
-    _baseBidRowEl.addEventListener("input", _handlePoInput);
-    _baseBidRowEl.addEventListener("focusout", (e) => {
-      if (!_baseBidRowEl.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }  // normalize + reverts
-    });
-  }
-  // Every whole-line PRICE element: the tax rows, the Base Bid / Options headings,
-  // the combo breakout, and the ALTERNATE SYSTEM block. Same delegated input +
-  // focusout-normalize pattern (base-bid-row + price-lines-block wired above).
-  ["sales-tax-row", "remodel-tax-row", "total-row", "base-bid-heading",
-   "options-heading", "combo-price-block", "alternate-block"].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("input", _handlePoInput);
-    el.addEventListener("focusout", (e) => {
-      if (!el.contains(e.relatedTarget)) { try { refreshPriceDisplay(); } catch {} }
-    });
-  });
+  // Every whole-line PRICE element: the base bid and its option/manual lines, the tax rows, the
+  // Base Bid / Options headings, the combo breakout, the per-room block and the ALTERNATE SYSTEM
+  // block. Named in one place so nothing can be wired half-way.
+  const PRICE_PREVIEW_IDS = ["price-lines-block", "base-bid-row", "sales-tax-row",
+    "remodel-tax-row", "total-row", "base-bid-heading", "options-heading",
+    "combo-price-block", "rooms-block", "alternate-block"];
+  const pricePreviewEls = () => PRICE_PREVIEW_IDS
+    .map(id => document.getElementById(id)).filter(el => el);
+  // INPUT ONLY. There is no per-element `focusout` here any more, and its absence is the fix.
+  //
+  // Three of these used to normalise on their OWN focusout -- and each of those handlers called
+  // refreshPriceDisplay(), whose paintLine rewrites `textContent` on every price row that is not
+  // holding the caret. While each row was its own editing host, clicking from one price line to
+  // the next really did move focus between two hosts, so moving the caret between two lines OF
+  // THE SAME BOX re-rendered the others under the estimator (Hanz, 2026-08-26: "Editing from one
+  // text box to another is a bit clunky"). The rows no longer declare a host, so focus stays on
+  // the box and there is nothing to hear -- the box-scoped `focusout` on #doc-surface normalises
+  // them when the caret leaves the BOX, which is the only moment a re-render is safe.
+  //
+  // The `input` listeners stay exactly as they were: these are the channels that put an edit in
+  // the right place in the customer's document. They now fire only for the synthesized events
+  // clearBoxLine / the Enter handler dispatch AT a line; a real keystroke arrives at the box and
+  // is swept by syncPriceLinesIn there.
+  pricePreviewEls().forEach(el => el.addEventListener("input", _handlePoInput));
 
   // Pricing options is a FLOATING, MOVABLE widget: drag its header to reposition
   // it (so it never has to sit over the document or the top controls). One-time
