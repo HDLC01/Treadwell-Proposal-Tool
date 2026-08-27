@@ -1128,22 +1128,32 @@
       : "";
   }
 
-  /** The facets, ANDed with each other and ORed within the division list. */
-  function matchesFilters(it) {
-    if (FILTERS.divisions.length) {
+  /** The facets, ANDed with each other and ORed within the division list.
+   *
+   *  `F` defaults to this tab's FILTERS so every existing caller is unchanged. It is a parameter
+   *  because the bulk-add picker draws its OWN facet bar and must not move the Items tab's — the
+   *  same reasoning the note on visibleItems gives for why the line picker ignores these. Sharing
+   *  one FILTERS between two visible bars is how a screen ends up narrowed by a control on another
+   *  tab that the estimator cannot see.
+   *
+   *  ES5 default rather than a default parameter: this file is var-and-function throughout, and the
+   *  harness lifts it into a `new Function` scope where the surrounding dialect is what it is. */
+  function matchesFilters(it, F) {
+    F = F || FILTERS;
+    if (F.divisions.length) {
       var mine = {};
       itemDivisions(it).forEach(function (d) { mine[String(d).toLowerCase()] = true; });
       var any = false;
-      for (var i = 0; i < FILTERS.divisions.length; i++) {
-        if (mine[String(FILTERS.divisions[i]).toLowerCase()]) { any = true; break; }
+      for (var i = 0; i < F.divisions.length; i++) {
+        if (mine[String(F.divisions[i]).toLowerCase()]) { any = true; break; }
       }
       if (!any) return false;
     }
-    if (FILTERS.vendor &&
-        String(it.vendor || "").toLowerCase() !== String(FILTERS.vendor).toLowerCase()) {
+    if (F.vendor &&
+        String(it.vendor || "").toLowerCase() !== String(F.vendor).toLowerCase()) {
       return false;
     }
-    if (FILTERS.condition && !conditionHits(it, FILTERS.condition)) return false;
+    if (F.condition && !conditionHits(it, F.condition)) return false;
     return true;
   }
 
@@ -1169,6 +1179,83 @@
     return ITEMS.filter(function (it) {
       return matchesFilters(it) && itemMatches(it, itemQuery);
     });
+  }
+
+  // ── bulk add: the decisions, as pure functions ─────────────────────────────
+  // Will wants to put a dozen materials into an assembly at once instead of pressing "Add item
+  // line" twelve times and searching twelve times (Hanz, 2026-08-28).
+  //
+  // WHY THESE ARE SEPARATE FROM THE MODAL. The test harness builds a DOM stub that knows only
+  // innerHTML/textContent/hidden/value — it cannot open a dialog, move focus or tick a checkbox, and
+  // it takes the same position with `confirmDanger`. So every DECISION lives in a function that
+  // takes its state as arguments and returns a value, and the modal is left holding only wiring.
+  // Everything worth being wrong about is therefore testable.
+  //
+  // The 60 here is `_MAX_LINES` in backend/library.py. Two literals for one rule is not ideal, but
+  // there is no config endpoint to read it from, and the alternative — finding out on save — is the
+  // bug this guard exists to prevent.
+  var BULK_MAX_LINES = 60;
+
+  /** The materials a bulk picker should show, given its own query and its OWN facets.
+   *
+   *  Reuses itemMatches, so this box, the Items tab's box and the per-line picker cannot disagree
+   *  about what "vendor:sherwin" or "-epoxy" finds. `F` is the MODAL's filter state, never the Items
+   *  tab's FILTERS — see the note on matchesFilters. */
+  function bulkCandidates(items, query, F) {
+    return (items || []).filter(function (it) {
+      return matchesFilters(it, F) && itemMatches(it, query);
+    });
+  }
+
+  /** "none" | "some" | "all" for the select-all control, over WHAT IS CURRENTLY SHOWN.
+   *
+   *  Shown, not the whole library: after typing a query, "all" has to mean "all of these", or the
+   *  control claims everything is ticked while the list in front of you is half unticked. Ticks
+   *  outside the current search are still held — narrowing the search must not silently untick
+   *  what you already chose — so `picked` is read, not overwritten. */
+  function bulkSelectAllState(shownIds, picked) {
+    var ids = shownIds || [], on = 0;
+    for (var i = 0; i < ids.length; i++) if (picked && picked[ids[i]]) on += 1;
+    if (!ids.length || !on) return "none";
+    return on === ids.length ? "all" : "some";
+  }
+
+  /** Assembly lines for the picked materials, in the order they were shown.
+   *
+   *  SEEDS COVERAGE FROM THE ITEM, which is the whole reason this is a function with a test rather
+   *  than three lines inside a click handler. `priceLine` reports a line with no coverage as
+   *  `no_coverage`, and that reason IS counted in `broken_lines` — so a twelve-material add without
+   *  this seed arrives with twelve amber rows reading "Needs a coverage", and the estimator would
+   *  reasonably conclude the feature is broken. The single-pick path has always done it; this
+   *  matches it deliberately rather than by coincidence.
+   *
+   *  An item whose own coverage is unset still lands, and still reads "Needs a coverage" — that is
+   *  an honest report about the material, not a fault in the add. */
+  function bulkLinesFor(itemIds, items) {
+    var out = [];
+    (itemIds || []).forEach(function (id) {
+      var it = L.findItem(items || [], id);
+      if (!it) return;                       // deleted between opening the picker and pressing Add
+      out.push({ role: "", item_id: it.id,
+                 coverage: (Number(it.coverage) > 0) ? it.coverage : null,
+                 // The same defaults the single "Add item line" path sets, so a bulk-added row and
+                 // a hand-added one save with identical numbers.
+                 waste_pct: 5, roundup: true, note: "" });
+    });
+    return out;
+  }
+
+  /** How much room is left, so the picker can say so BEFORE the click.
+   *
+   *  The server caps an assembly at 60 lines. It used to take `raw[:60]` silently, which is
+   *  defensible against a hostile 500-line payload and indefensible against a deliberate add of 40:
+   *  ten materials would vanish under a 200 OK. Answering here means the button can explain itself
+   *  while there is still something to change. */
+  function bulkAddRoom(asm, n) {
+    var used = ((asm && asm.lines) || []).length;
+    var room = Math.max(0, BULK_MAX_LINES - used);
+    return { used: used, room: room, over: Math.max(0, (n || 0) - room),
+             fits: (n || 0) <= room, max: BULK_MAX_LINES };
   }
 
   function itemMatches(it, query) {
