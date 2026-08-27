@@ -79,6 +79,23 @@ DIVISIONS = ("Polished Concrete", "Epoxy", "Gypsum Underlayment")
 # of — a check constraint would block the purchase, not the typo.
 ITEM_UNITS = ("Gallon", "Kit", "Bag")
 
+# What an ASSEMBLY is measured and priced per, and it is a different question from ITEM_UNITS.
+# An item's unit is how you BUY it (a 5-gallon pail); an assembly's unit is what its coverage
+# numbers divide into and what its price is quoted per.
+#
+# Two values, because those are the two things Treadwell measures: floor area in square feet and
+# cove base / saw cuts / stripes in linear feet. Hanz, 2026-08-28: "Coverage per Unit — is there a
+# way we can change it from SF and LF?"
+#
+# The field itself is not new — DEFAULT_ASM_UNIT has been persisted since the table was created and
+# `polish-estimate.js` already reads it to stamp SF/LF onto a takeoff row. What was missing was a
+# vocabulary and an editor: every assembly said "SF" because the create call hardcoded it, so the
+# rail's "$1.497/SF" label was a guess that happened to be right.
+#
+# Offered, not enforced, exactly like DIVISIONS and ITEM_UNITS — a legacy row may hold "sqft" or
+# "Each" and must stay loadable and correctable rather than uneditable.
+ASM_UNITS = ("SF", "LF")
+
 _MAX_TEXT = 200
 _MAX_NOTES = 4000
 _MAX_LINES = 60                 # a system with 60 coats is a mistake, not a system
@@ -529,11 +546,25 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
 
     A half-built line is the normal state of this screen: somebody adds a row, then picks the
     material. Refusing the whole save because one line has no material yet would make the
-    editor unusable, so an empty line is simply not stored."""
+    editor unusable, so an empty line is simply not stored.
+
+    THE CAP IS THE EXCEPTION, and it changed on 2026-08-28. This used to take `raw[:_MAX_LINES]`
+    silently, which is the right posture for a hostile or buggy 500-line payload and the wrong one
+    for the bulk picker Will asked for: a deliberate add of 40 onto an assembly holding 30 lost ten
+    materials under a 200 OK, with nothing anywhere to say so. A count is not a malformed line — the
+    caller knows exactly how many it sent — so an over-cap array is refused and named.
+
+    The truncation stays as the shape defence behind it. The browser guards first
+    (`bulkAddRoom` in library.js) so the button can explain itself while there is still something to
+    change; this is what makes the rule true rather than merely displayed."""
     if raw in (None, ""):
         return []
     if not isinstance(raw, list):
         raise ValidationError("Those lines aren't in a shape we can read.")
+    if len(raw) > _MAX_LINES:
+        raise ValidationError(
+            "An assembly holds at most %d lines; that save had %d. Remove some and try again."
+            % (_MAX_LINES, len(raw)))
     out: List[Dict[str, Any]] = []
     for entry in raw[:_MAX_LINES]:
         if not isinstance(entry, dict):
@@ -576,7 +607,11 @@ def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict
         out["name"] = name
 
     if "unit" in payload or not partial:
-        out["unit"] = _clean_text(payload.get("unit"), 24) or DEFAULT_ASM_UNIT
+        # Canonicalised against ASM_UNITS so "lf" typed anywhere becomes "LF" — the Polish beta
+        # matches this value case-sensitively (`polish-estimate.js` compares an upper-cased copy
+        # against "SF"/"LF"), so a lower-case row would silently fail to stamp a takeoff row's unit.
+        out["unit"] = _canonical(_clean_text(payload.get("unit"), 24), ASM_UNITS) \
+            or DEFAULT_ASM_UNIT
 
     for col, limit in (("category", _MAX_TEXT), ("description", _MAX_NOTES)):
         if col in payload or not partial:
