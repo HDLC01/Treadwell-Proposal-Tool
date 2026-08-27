@@ -115,6 +115,38 @@
     return s || "Send failed — try again.";
   }
 
+  // The code the server answers a refused publish with. One value, and it is the switch: the
+  // sentence in `error` is for humans and may be reworded any day, so nothing branches on it.
+  const STALE_DOCUMENT_CODE = "stale_document";
+
+  /** The server's own refusal of a stale-document send, or null for any other failure.
+   *
+   *  THE THIRD LAYER, and it exists because the first two cannot see everything. The gate in
+   *  the Send handler judges this browser's blob; the server judges the blob it is about to
+   *  snapshot, which is the one that counts when an edit lands from another tab, another
+   *  device, or a colleague between the flush and the write. On 409 the server has written
+   *  nothing and sent no email, so this is still a refusal and not a report.
+   *
+   *  It reads the body back out of the thrown message, the same way portalErrMsg above does:
+   *  TW.postJSON flattens a non-2xx into Error("POST … → 409: <body>"). Parsing here rather
+   *  than teaching postJSON to carry structured errors keeps the blast radius to this page --
+   *  that function is called from every screen in the tool.
+   *
+   *  Branches on `code` alone. Not the status line, which is a format, and not the sentence,
+   *  which is copy. */
+  function staleDocRefusal(err) {
+    const text = String((err && err.message) || err || "");
+    const i = text.indexOf("{");
+    if (i < 0) return null;
+    let body;
+    try { body = JSON.parse(text.slice(i)); } catch { return null; }
+    if (!body || typeof body !== "object" || body.code !== STALE_DOCUMENT_CODE) return null;
+    // `snapshot` is documented as byte-identical in shape to a successful send's
+    // `sent_snapshot`, which is what makes this a mapping and not a second comparison: it
+    // drops straight into the same TW.docDrift the gate and the panel already use.
+    return body;
+  }
+
   // Inline recipients editor on the Files page — shown BEFORE sending (no popup).
   // The intake email is a fixed row; the estimator adds/removes extra recipients;
   // the "Send to customer portal" button sends to the whole list. Every recipient
@@ -743,6 +775,47 @@
     };
   })();
 
+  /** Put the stop sign on screen, or take it away.
+   *
+   *  `mode` only changes the opening line, and the opening line is the whole point: the same
+   *  three numbers mean "do not send this" before a send and "the customer already has this"
+   *  after one, and an estimator reading it at 11pm should not have to work out which. */
+  function showStaleDoc(rows, mode) {
+    const box = document.getElementById("stale-doc");
+    if (!box) return;
+    if (!rows || !rows.length) { box.hidden = true; return; }
+    const lede = document.getElementById("stale-doc-lede");
+    if (lede) {
+      lede.textContent =
+        mode === "blocked" ? "Nothing was sent. Your changes are saved, but the document the "
+                           + "customer would open was built before them."
+      : mode === "sent"    ? "This one has already gone to the customer, and the document they "
+                           + "can open was built before this pricing."
+      :                      "Your changes are saved, but the document the customer would open "
+                           + "was built before them. Sending now gives them the old figures.";
+    }
+    const tab = document.getElementById("stale-doc-rows");
+    if (tab) {
+      tab.textContent = "";
+      // textContent throughout, never markup: a base bid's name is a worksheet label the
+      // estimator typed, which makes it the one string in this panel from outside the page.
+      const cell = (cls, text) => {
+        const el = document.createElement("span");
+        el.className = cls;
+        el.textContent = text;
+        tab.appendChild(el);
+      };
+      cell("sd-h", "");
+      cell("sd-h", "The PDF says");
+      cell("sd-h", "It should say");
+      rows.forEach((r) => { cell("sd-k", r.k); cell("sd-was", r.pdf); cell("sd-now", r.now); });
+    }
+    box.hidden = false;
+    if (mode === "blocked" || mode === "sent") {
+      try { box.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
+    }
+  }
+
   /** Compare the pricing the server just SENT against the pricing this page is showing.
    *  Returns a human sentence naming the difference, or "" when they agree.
    *
@@ -776,28 +849,20 @@
                 + ", not " + localOpts);
     }
     // ── The DOCUMENT half of the same snapshot ────────────────────────────────────────────
-    // The portal page reads `rooms`; the customer's PDF is re-rendered from `proposal_payload`.
-    // One revision, two halves, and until the Proposal step's Continue runs they can disagree —
-    // which is exactly the "the PDF still shows the old base bid" report. This comparison is
-    // server truth vs server truth, so it fires no matter which tab, device or colleague caused
-    // the drift, and it survives a page whose own local state happens to match either half.
-    if (sent.has_document) {
-      const dbits = [];
-      if (sent.doc_base_label && sent.base_label && sent.doc_base_label !== sent.base_label) {
-        dbits.push("its base bid is " + sent.doc_base_label + ", not " + sent.base_label);
-      }
-      if (sent.doc_lump_sum != null && !near(sent.doc_lump_sum, sent.lump_sum)) {
-        dbits.push("its price is " + usd(sent.doc_lump_sum) + ", not " + usd(sent.lump_sum));
-      }
-      if (typeof sent.doc_option_count === "number" && typeof sent.option_count === "number"
-          && sent.doc_option_count !== sent.option_count) {
-        dbits.push("it shows " + sent.doc_option_count + " option"
-                   + (sent.doc_option_count === 1 ? "" : "s") + ", not " + sent.option_count);
-      }
-      if (dbits.length) {
-        bits.push("the customer's PDF is out of date — " + dbits.join(" and ")
-                  + ". Open the Proposal step, press Continue, then re-send");
-      }
+    // BELT AND BRACES, AND BOTH ARE NEEDED. The pre-send gate in the Send handler refuses a
+    // drifted publish before a request leaves this browser, and the server refuses one that
+    // gets past it. This is the third layer: it reads the snapshot the server ACTUALLY took,
+    // so it still speaks up when the drift arrived between the flush and the write, or from a
+    // second tab, another device, or a colleague editing while you sent. The gate cannot see
+    // any of those, and a send that lands drifted must never land silently.
+    //
+    // The rows come from the same TW.docDrift the gate and the panel use, so what a warning
+    // calls a problem and what a gate refuses to send can never come apart.
+    const rows = TW.docDrift(sent);
+    if (rows.length) {
+      bits.push("the PDF they can open was built before this pricing, and shows "
+                + rows.map(r => r.say).join(", and ")
+                + ". Press Update the PDF above, then send it again");
     }
     return bits.join("; ");
   }
@@ -908,6 +973,27 @@
     const _estSel = document.getElementById("portal-estimator");
     if (_estSel) _estSel.addEventListener("change", paintNotifyChips);
     mountRevisions();
+    // Look at the document BEFORE the estimator has typed a message or picked recipients. The
+    // gate on the Send button is the thing that actually refuses; this is only so the news does
+    // not arrive as a surprise at the last click, and so the one button that fixes it is on
+    // screen from the moment the page settles.
+    try { showStaleDoc(TW.docDrift(TW.publishDigest(TW.getState())), "mount"); } catch {}
+    const fixBtn = document.getElementById("stale-doc-fix");
+    if (fixBtn) {
+      fixBtn.addEventListener("click", () => {
+        // THE PROPOSAL STEP IS WHERE THE FIX LIVES, and it cannot be done from here. The
+        // document payload is written by exactly one line of code, in that step's Continue
+        // handler, from machinery that only exists on that page: computeTokenValues, the
+        // paragraph and box overrides, the system picks. Re-deriving any of it here would be a
+        // second copy of the token mapping, which is how the two halves drifted in the first
+        // place. So this takes them there, one press, carrying the draft id.
+        //
+        // `resync=1` is the hook for making that step's Continue run by itself, so this becomes
+        // one press end to end. Nothing reads it yet: it is a query parameter proposal-review
+        // ignores, and it costs nothing to send until that half is approved.
+        window.location.assign(TW.withDraft("/proposal-review.html?resync=1"));
+      });
+    }
     const portalBtn = document.getElementById("portal-btn");
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
@@ -947,6 +1033,28 @@
           if (!await TW.flushState()) {
             throw new Error("Couldn't save your latest changes, so nothing was sent — "
                             + "check your connection and try again.");
+          }
+          // ── THE SEND STOPS HERE IF THE PDF WOULD BE THE OLD ONE ──────────────────────
+          // Checked AFTER the flush and BEFORE the publish, and that order is the whole
+          // trick. The flush has just made this browser's blob and the server's copy the
+          // same blob, so a verdict taken now is a verdict about what the publish would
+          // snapshot — no extra round trip, and nothing to read that the page does not
+          // already hold. Both halves are in that blob: `rooms` is what the customer's
+          // portal page renders, `proposal_payload` is what their PDF is rebuilt from.
+          //
+          // Until now this was only ever caught AFTERWARDS, from the publish response, by
+          // which point the email had gone and the revision was pinned. A teammate hit it
+          // at 11:47pm and could not tell what the yellow message meant, which is fair: it
+          // was an apology with a four-step manual dance attached. Refusing costs a send
+          // that was going to be wrong anyway.
+          const stale = TW.docDrift(TW.publishDigest(TW.getState()));
+          if (stale.length) {
+            showStaleDoc(stale, "blocked");
+            portalBtn.disabled = false; portalBtn.textContent = orig;
+            if (portalRecip.setBusy) portalRecip.setBusy(false);
+            const fix = document.getElementById("stale-doc-fix");
+            if (fix) fix.focus();
+            return;                            // NOTHING is posted. No portal row, no email.
           }
           portalBtn.textContent = "Sending…";
           // AWAITED, and read here rather than at pick time: an estimator who attaches four
@@ -1003,16 +1111,33 @@
             if (drift) {
               const w = document.createElement("p");
               w.className = "portal-drift";
-              w.textContent = "Heads up — what went to the customer isn't what this page is "
-                + "showing: " + drift + ". Reload this page to see the sent version, then "
-                + "re-send if that's wrong.";
+              w.textContent = "This one has gone to the customer, and it is not what this "
+                + "page is showing: " + drift + ".";
               r.appendChild(w);
+              // And raise the panel on the server's OWN numbers, so a send that landed
+              // drifted offers the same one press as one that was stopped. The paragraph is
+              // the notice; the panel is the way out of it.
+              showStaleDoc(TW.docDrift(j.sent_snapshot), "sent");
             }
           }
           setTimeout(() => { portalBtn.textContent = "\u2197 Re-send to customer portal"; portalBtn.disabled = false; }, 2500);
         } catch (err) {
           portalBtn.disabled = false; portalBtn.textContent = orig;
           if (portalRecip.setBusy) portalRecip.setBusy(false);
+          // THE SERVER REFUSED IT. Same panel, same three columns, same one press: an estimator
+          // must not have to tell "the page stopped me" apart from "the server stopped me",
+          // because the thing they have to do about it is identical. Nothing was sent either way.
+          const refused = staleDocRefusal(err);
+          if (refused) {
+            const rows = TW.docDrift(refused.snapshot);
+            showStaleDoc(rows, "blocked");
+            // The server's own sentence only when the panel could not be built from the
+            // snapshot: a refusal the estimator cannot see is a Send button that does nothing.
+            if (portalRecip.setErr) {
+              portalRecip.setErr(rows.length ? "" : (refused.error || portalErrMsg(err)));
+            }
+            return;
+          }
           const msg = portalErrMsg(err);
           if (portalRecip.setErr) portalRecip.setErr(msg === "no_contact_email"
             ? "This proposal has no customer email — add a recipient above." : msg);

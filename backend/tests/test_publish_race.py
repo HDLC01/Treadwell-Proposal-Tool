@@ -170,7 +170,11 @@ def test_a_stale_document_inside_the_sent_revision_is_reported(ran):
     assert "PDF" in msg, msg
     assert "Polish" in msg and "Epoxy" in msg, msg
     assert "13265" in msg.replace(",", "") and "18670" in msg.replace(",", ""), msg
-    assert "press Continue" in msg, "the warning must say how to fix it"
+    # It must still say how to fix it, and it now names the ONE control that does it. The old
+    # wording ("Open the Proposal step, press Continue, then re-send") sent the estimator on a
+    # hunt across two pages; the teammate who hit this at 11:47pm on 2026-08-26 could not tell
+    # what it meant. See test_stale_document_gate.py for the button it points at.
+    assert "Update the PDF" in msg, "the warning must name the control that fixes it"
 
 
 @needs_node
