@@ -65,6 +65,27 @@
      the flex row that node is otherwise carrying. */
   .board.as-table { display:block; overflow-x:auto; }
   .col { flex:0 0 270px; background:var(--surf-low); border:1px solid var(--line); border-radius:10px; padding:10px; }
+  /* ── THE BOARD ON A PHONE: ONE COLUMN PER SWIPE ──────────────────────────────────────────────
+     WHICH COLUMN A JOB SITS IN IS THE INFORMATION on this page. Flattening the five stages into one
+     scrolling list of cards - the obvious way to make a kanban board fit 375px - throws away the
+     only thing the board says that the Proposals Database does not. And 270px columns at 375px are
+     a column and a half of a five-column pipeline: legible, but with nothing to tell a rep that
+     there is more, because the horizontal scrollbar is hidden on touch.
+     So the columns stay and the phone gets one at a time. 86% wide, snapped, which leaves the next
+     stage's edge showing at every width - that sliver is the affordance the scrollbar used to be.
+     .board already owned its overflow-x, so the BODY never scrolls sideways either way; scroll-snap
+     is what makes a swipe land somewhere legible rather than halfway between two stages.
+     Not applied to .board.as-table: the Table view is one wide table and snapping its columns to
+     the viewport would fight reading a row across. */
+  @media (max-width:767px) {
+    /* 28px of gutter each side spends 15% of a 375px screen on nothing. 12 is still a margin. */
+    .wrap { padding:14px 12px 64px; }
+    .board:not(.as-table) { scroll-snap-type:x mandatory; }
+    .board:not(.as-table) > .col { flex:0 0 86%; scroll-snap-align:start; }
+    /* Files / Info sit on every card and are the two things a phone user reaches for most, so they
+       take a real touch target. 10.5px type is kept: the label is not what was too small. */
+    .deal-act { min-height:44px; padding:0 12px; }
+  }
   .col h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-v);
     margin:2px 4px 10px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
   /* "+ New" in the Created-but-not-sent header. The count keeps the middle of the row, so

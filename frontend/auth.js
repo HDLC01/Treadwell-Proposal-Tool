@@ -484,22 +484,70 @@
     // back, that rewrite comes back with it — it is not optional, or the link opens the wrong job.
 
     const backdrop = document.createElement("div"); backdrop.id = "tw-backdrop";
+    backdrop.setAttribute("aria-hidden", "true");
     document.body.appendChild(backdrop);
     const burger = document.createElement("button"); burger.id = "tw-burger";
-    burger.title = "Menu"; burger.innerHTML = "☰"; document.body.appendChild(burger);
+    burger.title = "Menu";
+    // aria-label as well as the glyph: the ☰ reads as "trigram for heaven" to a screen reader.
+    burger.setAttribute("aria-label", "Menu");
+    burger.setAttribute("aria-controls", "tw-sidebar");
+    burger.innerHTML = "☰"; document.body.appendChild(burger);
+    const collapse = document.getElementById("tw-collapse");
 
+    // ── THE VIEWPORT OWNS THE OPEN STATE, NOT THE ACCOUNT ────────────────────────────────
+    // `tw_nav_open` is read and written ONLY at desktop width. Below it, every page starts with the
+    // drawer shut and every toggle lasts as long as the visit.
+    //
+    // WHAT WAS WRONG. The flag used to be restored at any width, and the DESKTOP default is open, so
+    // one visit on a laptop wrote "1" and every later phone visit inherited it. Measured on staging
+    // at 375px: the 240px rail covered 64% of the screen and clicking the Items tab timed out with
+    // the drawer's own <a class="tw-nav-item"> named as the element intercepting pointer events. The
+    // drawer, the burger and the scrim all existed and all worked - what was broken was who decided
+    // the starting state. That is why this is nine lines and not a new component.
+    //
+    // A live query object, not a one-shot boolean: the same page is a phone in portrait and a small
+    // tablet in landscape, and the old `const wide = ...matches` answered for whichever it was at
+    // sign-in.
+    const mql = window.matchMedia("(min-width: 768px)");
+    const wide = () => mql.matches;
+    const isOpen = () => document.documentElement.classList.contains("tw-nav-open");
     const setOpen = (open) => {
       document.documentElement.classList.toggle("tw-nav-open", open);
-      try { localStorage.setItem("tw_nav_open", open ? "1" : "0"); } catch {}
+      // The assistive tree agrees with the cascade. Without this a screen reader still walks a menu
+      // the CSS has made inert, which is the same bug in the other modality.
+      aside.setAttribute("aria-hidden", open ? "false" : "true");
+      burger.setAttribute("aria-expanded", open ? "true" : "false");
+      if (wide()) { try { localStorage.setItem("tw_nav_open", open ? "1" : "0"); } catch {} }
     };
     let persisted = null; try { persisted = localStorage.getItem("tw_nav_open"); } catch {}
-    const wide = window.matchMedia("(min-width: 768px)").matches;
-    setOpen(persisted !== null ? persisted === "1" : wide);
+    // Desktop keeps exactly the behaviour it had: remembered if remembered, open if never set.
+    setOpen(wide() ? persisted !== "0" : false);
 
-    burger.addEventListener("click", () => setOpen(true));
-    backdrop.addEventListener("click", () => setOpen(false));
-    document.getElementById("tw-collapse").addEventListener("click", () => setOpen(false));
+    const openNav = () => { setOpen(true); if (!wide()) collapse.focus(); };
+    // Focus goes back where the finger was. A drawer that closes and leaves the caret inside its
+    // now-invisible subtree is why visibility:hidden is doing half this job in CSS.
+    const closeNav = () => { const wasNarrow = !wide(); setOpen(false); if (wasNarrow) burger.focus(); };
+
+    burger.addEventListener("click", openNav);
+    backdrop.addEventListener("click", closeNav);
+    collapse.addEventListener("click", closeNav);
     document.getElementById("tw-signout").addEventListener("click", signOut);
+    // Escape only where the drawer is MODAL. At desktop it is a rail beside the page and closing it
+    // on Escape would fight every dialog and every Escape-to-cancel on the page behind it.
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !wide() && isOpen()) closeNav();
+    });
+    // Tapping a destination shuts the sheet. The next page starts shut anyway, but the drawer would
+    // otherwise sit over the old page for the whole load, which reads as a tap that did nothing.
+    aside.addEventListener("click", (e) => {
+      if (!wide() && e.target.closest && e.target.closest(".tw-nav-item")) setOpen(false);
+    });
+    // Crossing DOWN over 768px shuts it, so a rotate or a resize cannot leave a desktop rail lying
+    // across a phone. It writes nothing: setOpen only persists while wide() is true, and by the time
+    // this fires it is false - so a rotate can never poison the remembered desktop state.
+    const onWidthChange = () => { if (!wide()) setOpen(false); };
+    if (typeof mql.addEventListener === "function") mql.addEventListener("change", onWidthChange);
+    else if (typeof mql.addListener === "function") mql.addListener(onWidthChange);
 
     // Notification bell. When the page has a brand/step header (the wizard pages),
     // fold the burger + bell INTO that one row — no separate bar — so the content
@@ -742,11 +790,23 @@
 :root{--tw-red:#c8102e;--tw-red-dark:#9e001f;--tw-ink:#1b1c1c;--tw-ink-v:#5c403f;
 --tw-surf-low:#f5f3f3;--tw-surf-high:#e9e8e7;--tw-w:240px;}
 body{transition:margin-left .2s ease;}
+/* THE CLOSED DRAWER IS INERT, not merely off-screen. visibility:hidden takes the whole subtree
+   out of hit-testing AND out of the tab order, so a shut menu can neither steal a tap meant for
+   the page nor hand the keyboard thirteen links nobody can see; pointer-events:none states the
+   first half again in the property a test can resolve without a browser. transform alone was
+   never the guarantee it looked like - it is animatable, and mid-transition the rail is still
+   over the page - and this repo has shipped the wearing-a-disguise version of this bug twice
+   already (a class display rule beating the hidden attribute, and opacity:0 still taking clicks).
+   visibility is switched with a 0s transition DELAYED by the slide's duration on the way out and
+   0s on the way in, so the drawer is visible for the whole animation in both directions and
+   inert the instant it has finished leaving. */
 #tw-sidebar{position:fixed;top:0;left:0;height:100vh;width:var(--tw-w);background:#fff;
 border-right:1px solid rgba(27,28,28,.1);display:flex;flex-direction:column;
-padding:18px 14px;z-index:9998;transform:translateX(-100%);transition:transform .2s ease;
+padding:18px 14px;z-index:9998;transform:translateX(-100%);visibility:hidden;pointer-events:none;
+transition:transform .2s ease,visibility 0s linear .2s;
 font:400 14px/1.4 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--tw-ink);box-sizing:border-box;}
-html.tw-nav-open #tw-sidebar{transform:translateX(0);}
+html.tw-nav-open #tw-sidebar{transform:translateX(0);visibility:visible;pointer-events:auto;
+transition:transform .2s ease,visibility 0s linear 0s;}
 .tw-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;}
 /* block kills the inline baseline gap; flex:none stops the 240px rail squeezing the mark */
 .tw-bison{width:54px;height:34px;display:block;flex:none;}
@@ -804,7 +864,7 @@ color:#fff;vertical-align:middle;text-transform:uppercase;}
 .tw-useremail{font-size:11px;color:var(--tw-ink-v);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tw-signout{border:none;background:none;color:var(--tw-ink-v);font-size:16px;cursor:pointer;flex:none;padding:4px;border-radius:6px;}
 .tw-signout:hover{background:var(--tw-surf-high);color:var(--tw-red-dark);}
-#tw-burger{position:fixed;top:12px;left:12px;z-index:9996;width:40px;height:40px;border-radius:9px;
+#tw-burger{position:fixed;top:12px;left:12px;z-index:9996;width:44px;height:44px;border-radius:9px;
 border:1px solid rgba(27,28,28,.12);background:#fff;color:var(--tw-ink);font-size:18px;cursor:pointer;
 display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.08);}
 html.tw-nav-open #tw-burger{display:none;}
@@ -812,13 +872,36 @@ html.tw-nav-open #tw-burger{display:none;}
 #tw-burger.tw-burger-inline{position:static;top:auto;left:auto;box-shadow:none;width:34px;height:34px;flex:none;}
 .tw-hdr-left{display:flex;align-items:center;gap:12px;min-width:0;}
 .tw-hdr-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;}
-#tw-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9997;}
+/* pointer-events as well as display: the scrim is the other half of the shut-drawer guarantee,
+   and a stray display:block from anywhere would otherwise hand it every tap on the page. */
+#tw-backdrop{display:none;pointer-events:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9997;}
 @media (min-width:768px){
   html.tw-nav-open body{margin-left:var(--tw-w);}
   #tw-backdrop{display:none !important;}
 }
 @media (max-width:767px){
-  html.tw-nav-open #tw-backdrop{display:block;}
+  html.tw-nav-open #tw-backdrop{display:block;pointer-events:auto;}
+  /* WIDER ON A PHONE, NOT NARROWER. 240px was chosen against a 1440px desktop where it is a rail
+     beside the page; on a phone it is a modal sheet, and at 240 of 375 the long labels
+     ("Notification Sending", "Items and Assemblies") truncate on the one screen where the label is
+     all you have. min() keeps a strip of the page showing at every width this supports, so the
+     sheet still reads as something laid OVER the page rather than as a new one. */
+  #tw-sidebar{width:min(296px,86vw);}
+  /* 44px is Apple's floor and 48 is Material's; a menu row is a whole-width target either way, so
+     it takes the larger. Everything else in the chrome is a lone glyph and takes 44. The DESKTOP
+     sizes are untouched - a mouse does not need this and the rail has no room for it. */
+  .tw-nav-item{min-height:48px;}
+  #tw-burger,#tw-burger.tw-burger-inline{width:44px;height:44px;}
+  .tw-collapse,.tw-signout,.tw-bell{min-width:44px;min-height:44px;display:inline-flex;
+    align-items:center;justify-content:center;}
+  /* WIDE CONTENT SCROLLS IN ITS OWN BOX AND STOPS THERE. Every one of these already had
+     overflow-x:auto; what they lacked is the second half - a swipe that runs off the end of a
+     table used to hand the gesture to the browser's back navigation, which on the Bid Pipeline
+     means losing the board rather than reaching the last column. Named one by one, and deliberately
+     WITHOUT the proposal editor's .word-canvas: that box scrolls in both axes and a rule aimed at
+     the horizontal one is not the place to start changing how the editor handles gestures. */
+  .tablewrap,.tw,.t12-wrap,.mx-scroll,.board,.boardwrap{
+    overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;}
 }
 /* a page this account may not open. Centred in the content column, not the viewport, so the
    sidebar beside it still reads as the way out. */
@@ -838,7 +921,8 @@ font-weight:600;padding:9px 16px;border-radius:9px;}
 border-bottom:1px solid rgba(27,28,28,.1);display:flex;align-items:center;justify-content:flex-end;
 padding:0 18px;box-sizing:border-box;}
 @media (min-width:768px){ html.tw-nav-open #tw-topbar{left:var(--tw-w);} }
-@media (max-width:767px){ #tw-topbar{padding-left:60px;} }   /* clear the burger */
+/* clear the burger: it is fixed at left:12px and 44px wide since the phone pass, so 64 is 12+44+8 */
+@media (max-width:767px){ #tw-topbar{padding-left:64px;} }
 /* notification bell + dropdown */
 .tw-bell{position:relative;border:none;background:none;color:var(--tw-ink-v);
 font-size:18px;cursor:pointer;padding:5px 6px;border-radius:8px;line-height:1;}

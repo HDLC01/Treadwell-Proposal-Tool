@@ -36,6 +36,20 @@
     .views a:hover { background:var(--surf-low); color:var(--ink); }
     .views a[aria-current] { background:var(--card); border-color:var(--line);
       color:var(--red-dark); box-shadow:var(--shadow); }
+    /* The header row is bison + a 29px "Bid Calendar" + three view links, and it does not fit a
+       phone: measured on staging at 375px, documentElement.scrollWidth was 457 against clientWidth
+       375, so the whole page scrolled sideways. .top has no flex-wrap, and flex does not wrap by
+       default, so the nav simply ran off the right edge - which for the Pipeline and Analytics links
+       means they are not there as far as the estimator is concerned.
+       The nav takes its own full-width row below the title rather than shrinking: these are the
+       three ways of reading the same bids and none of them is a secondary control. */
+    @media (max-width:767px) {
+      .top { flex-wrap:wrap; gap:10px 12px; }
+      h1 { font-size:23px; }
+      .views { margin-left:0; width:100%; gap:6px; }
+      .views a { flex:1 1 auto; min-height:44px; display:inline-flex; align-items:center;
+        justify-content:center; text-align:center; }
+    }
     .hint { max-width:1660px; margin:0 auto 18px; color:var(--ink-v); font-size:13.5px; }
     .wrap { max-width:1660px; margin:0 auto; }
 
