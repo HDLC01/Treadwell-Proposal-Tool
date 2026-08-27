@@ -639,10 +639,21 @@
     // Three states, not two: nothing in the library, nothing matching the search, and rows. The
     // "No materials yet" panel offers an Add button, which is the wrong thing to offer somebody
     // who has 40 materials and a typo in the search box.
-    var filtering = !!String(itemQuery).trim();
+    // A FACET COUNTS AS FILTERING, not just the text box. The version of this line that read
+    // only itemQuery left the no-match panel hidden whenever the search box was empty, so
+    // narrowing to a division that nothing is filed under produced a blank table with the add
+    // row gone and nothing on screen saying why.
+    var filtering = anyFilterActive();
     $("items-empty").hidden = ITEMS.length > 0;
     if ($("items-nomatch")) {
       $("items-nomatch").hidden = !(filtering && ITEMS.length > 0 && shown.length === 0);
+    }
+    // The empty state names what it left out. "Nothing matches that" on its own makes the
+    // estimator reconstruct the query from three controls and a text box to find the one that
+    // went too far.
+    if ($("items-nomatch-why")) {
+      $("items-nomatch-why").textContent = filtering
+        ? "No materials " + filterSummary() + "." : "";
     }
     // THE ADD ROW IS THE NEXT ROW OF THE TABLE, so it belongs to the table having rows. Under
     // "No materials yet" it would be the second Add button in one card, and under "Nothing
@@ -752,24 +763,228 @@
    *  strip `_`-prefixed keys to undo it. A filter is a view of the data, not part of it. */
   var itemQuery = "";
 
-  /** The materials the query leaves, in the order they already had.
+  /** The facets, and the same rule: A PLAIN VARIABLE, never a field on a record.
    *
-   *  Reuses itemMatches — the same every-word-must-appear matcher the assembly picker searches
-   *  with — so the two boxes on this page cannot disagree about what "Sika primer" finds. */
+   *  Kept on one line so library-ui-harness.js can lift the declaration verbatim rather than
+   *  restating a default shape that could drift from this one.
+   *
+   *  divisions is an array because a facet with one value is a dropdown; the question an
+   *  estimator actually asks is "epoxy OR gypsum", so it ORs within itself and ANDs against the
+   *  other two, which is what every faceted list does and what nobody has to be told. */
+  var FILTERS = { divisions: [], vendor: "", condition: "" };
+
+  /** Is the tab showing a subset? Text, facets, or both.
+   *
+   *  One predicate rather than four checks at four call sites: the hits count, the no-match
+   *  panel, the Clear button and visibleItems must agree about whether a filter is on, and the
+   *  version of this that only looked at the search box left the no-match panel hidden behind an
+   *  active facet, which is a blank table with nothing on screen saying why. */
+  function anyFilterActive() {
+    return !!String(itemQuery).trim() || FILTERS.divisions.length > 0 ||
+      !!FILTERS.vendor || !!FILTERS.condition;
+  }
+
+  /** Break a query into terms.
+   *
+   *  THE GRAMMAR, and it is deliberately small enough to guess at:
+   *
+   *      sherwin              a bare word: name, division or vendor
+   *      "opf primer"         a phrase, matched as one string
+   *      vendor:sherwin       scoped to one field
+   *      cost:>200            a number, with > < >= <= or plain equals
+   *      -epoxy               everything that does NOT match
+   *
+   *  Every term narrows. That is the rule the old matcher already followed and the one Hanz asked
+   *  for in the first place ("could be from name, divison or vendor or comibation of those"), so a
+   *  bare word behaves exactly as it did before this and the assembly picker inherits the rest.
+   *
+   *  A SCOPED TERM WITH NOTHING AFTER THE COLON IS NOT YET A TERM. Somebody typing vendor:s goes
+   *  through vendor: on the way, and blanking the table for one keystroke reads as the search
+   *  breaking. An unknown field name is NOT dropped, though: sku:x is searched as the literal
+   *  text "sku:x", which finds nothing and says so, rather than being quietly ignored and handing
+   *  back every row. */
+  function parseQuery(q) {
+    var out = [];
+    var toks = String(q == null ? "" : q).match(/-?(?:[a-z]+:)?"[^"]*"|\S+/gi) || [];
+    for (var i = 0; i < toks.length; i++) {
+      var tok = toks[i];
+      var neg = tok.charAt(0) === "-";
+      if (neg) tok = tok.slice(1);
+      var field = "", value = tok;
+      var colon = tok.indexOf(":");
+      if (colon > 0) {
+        var key = tok.slice(0, colon).toLowerCase();
+        var mapped =
+            (key === "name" || key === "material") ? "name"
+          : (key === "division" || key === "div") ? "divisions"
+          : (key === "vendor" || key === "supplier") ? "vendor"
+          : (key === "unit") ? "unit"
+          : (key === "cost" || key === "price") ? "unit_cost"
+          : (key === "pack" || key === "qty" || key === "buy") ? "buy_qty"
+          : "";
+        if (mapped) { field = mapped; value = tok.slice(colon + 1); }
+      }
+      value = value.replace(/^"/, "").replace(/"$/, "").trim();
+      if (!value) continue;
+      out.push({ neg: neg, field: field, value: value });
+    }
+    return out;
+  }
+
+  /** Does one term hit this material?
+   *
+   *  An unscoped term searches name, division and vendor as one string, which is the haystack the
+   *  previous matcher used and the reason "polished primer" narrows instead of finding nothing. */
+  function termHits(it, term) {
+    if (term.field === "unit_cost" || term.field === "buy_qty") {
+      return numberHits(it[term.field], term.value);
+    }
+    var hay = term.field === "name" ? String(it.name || "")
+      : term.field === "divisions" ? itemDivisions(it).join(" ")
+      : term.field === "vendor" ? String(it.vendor || "")
+      : term.field === "unit" ? String(it.unit || "")
+      : [String(it.name || ""), itemDivisions(it).join(" "), String(it.vendor || "")].join(" ");
+    return hay.toLowerCase().indexOf(term.value.toLowerCase()) !== -1;
+  }
+
+  /** cost:>200, pack:5, cost:<=99.99. A comma and a dollar sign are tolerated, because that is
+   *  how the number is written on the invoice being read from.
+   *
+   *  NONSENSE MATCHES NOTHING, NOT EVERYTHING. cost:abc cannot be true of any material, so it
+   *  returns false rather than being discarded: a discarded term hands back the whole list and
+   *  reads as the filter being ignored, which is the one behaviour a search must never have.
+   *  A material with no cost recorded fails every cost comparison for the same reason. Absent is
+   *  not zero, and treating it as zero would file it under cost:<1 as though somebody had priced
+   *  it at nothing. */
+  function numberHits(actual, expr) {
+    var m = /^(>=|<=|>|<|=)?\s*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)$/.exec(String(expr).trim());
+    if (!m) return false;
+    var want = Number(String(m[2]).replace(/,/g, ""));
+    var have = Number(actual);
+    if (!isFinite(want) || actual === null || actual === undefined || actual === "" ||
+        !isFinite(have)) return false;
+    var op = m[1] || "=";
+    return op === ">" ? have > want
+      : op === "<" ? have < want
+      : op === ">=" ? have >= want
+      : op === "<=" ? have <= want
+      : have === want;
+  }
+
+  /** The condition facet. Four states a material can be in that a price list cares about, every
+   *  one of them read off a column that already exists.
+   *
+   *  THIS IS THE FACET THAT EARNS THE BAR. Division and vendor only narrow what somebody could
+   *  already find by typing; these answer the question no search can, which is what in here is
+   *  not safe to price a bid from. A material with no cost prices every assembly built on it at
+   *  nothing, silently, and until now there was no way to go looking for one. */
+  function conditionHits(it, c) {
+    if (c === "no_cost") return !(Number(it.unit_cost) > 0);
+    if (c === "no_division") return itemDivisions(it).length === 0;
+    if (c === "no_vendor") return !String(it.vendor || "").trim();
+    if (c === "no_price_date") return !it.cost_updated_at;
+    return true;
+  }
+
+  function conditionPhrase(c) {
+    return c === "no_cost" ? "with no cost recorded"
+      : c === "no_division" ? "not filed under a division"
+      : c === "no_vendor" ? "with no vendor"
+      : c === "no_price_date" ? "whose price has never been recorded"
+      : "";
+  }
+
+  /** The facets, ANDed with each other and ORed within the division list. */
+  function matchesFilters(it) {
+    if (FILTERS.divisions.length) {
+      var mine = {};
+      itemDivisions(it).forEach(function (d) { mine[String(d).toLowerCase()] = true; });
+      var any = false;
+      for (var i = 0; i < FILTERS.divisions.length; i++) {
+        if (mine[String(FILTERS.divisions[i]).toLowerCase()]) { any = true; break; }
+      }
+      if (!any) return false;
+    }
+    if (FILTERS.vendor &&
+        String(it.vendor || "").toLowerCase() !== String(FILTERS.vendor).toLowerCase()) {
+      return false;
+    }
+    if (FILTERS.condition && !conditionHits(it, FILTERS.condition)) return false;
+    return true;
+  }
+
+  /** What is being filtered out, in a sentence, so the empty state can say it instead of leaving
+   *  the estimator to reconstruct it from three controls and a text box. */
+  function filterSummary() {
+    var bits = [];
+    var q = String(itemQuery).trim();
+    if (q) bits.push("matching " + JSON.stringify(q));
+    if (FILTERS.divisions.length) bits.push("in " + FILTERS.divisions.join(" or "));
+    if (FILTERS.vendor) bits.push("from " + FILTERS.vendor);
+    if (FILTERS.condition) bits.push(conditionPhrase(FILTERS.condition));
+    return bits.join(", ");
+  }
+
+  /** The materials the query and the facets leave, in the order they already had.
+   *
+   *  Reuses itemMatches, the same matcher the assembly picker searches with, so the two boxes on
+   *  this page cannot disagree about what "Sika primer" finds. The FACETS are this tab's alone: a
+   *  line picker silently narrowed by a bar on another tab would be a trap. */
   function visibleItems() {
-    if (!String(itemQuery).trim()) return ITEMS;
-    return ITEMS.filter(function (it) { return itemMatches(it, itemQuery); });
+    if (!anyFilterActive()) return ITEMS;
+    return ITEMS.filter(function (it) {
+      return matchesFilters(it) && itemMatches(it, itemQuery);
+    });
   }
 
   function itemMatches(it, query) {
-    var words = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return true;
-    var hay = [String(it.name || ""), itemDivisions(it).join(" "), String(it.vendor || "")]
-      .join(" ").toLowerCase();
-    for (var i = 0; i < words.length; i++) {
-      if (hay.indexOf(words[i]) === -1) return false;
+    var terms = parseQuery(query);
+    for (var i = 0; i < terms.length; i++) {
+      var hit = termHits(it, terms[i]);
+      if (terms[i].neg ? hit : !hit) return false;
     }
     return true;
+  }
+
+  /** Fill the facet controls, and DO NOT REBUILD THEM UNLESS THE OFFERED VALUES CHANGED.
+   *
+   *  This is the whole answer to "the filter must survive a re-render". The controls live outside
+   *  #items-body, so renderItems, which replaces only that tbody, cannot reach them; and the
+   *  state itself lives in FILTERS and itemQuery rather than in the DOM, so nothing is read back
+   *  off a control that might have been rebuilt. What is left is this function, which paint()
+   *  calls on every edit and every save: rebuilding the chip strip there would throw away the
+   *  focus of anybody tabbing through it, so it compares the offered lists first and writes
+   *  markup only when an admin has actually added or renamed something.
+   *
+   *  When it does rebuild, it rebuilds FROM FILTERS, so a division that is switched on comes
+   *  back switched on. */
+  var filterBarSig = "";
+  function renderFilterBar() {
+    var names = divisionNames();
+    var vendors = vendorNames();
+    var sig = JSON.stringify([names, vendors]);
+    if (sig !== filterBarSig) {
+      filterBarSig = sig;
+      var on = {};
+      FILTERS.divisions.forEach(function (d) { on[String(d).toLowerCase()] = true; });
+      $("f-divisions").innerHTML = names.map(function (d) {
+        return '<label class="fchip" title="' + esc(d) + '">' +
+          '<input type="checkbox" data-fdiv="' + esc(d) + '" aria-label="' + esc(d) + '"' +
+          (on[String(d).toLowerCase()] ? " checked" : "") + ">" +
+          '<span class="fchip-f">' + esc(d) + "</span></label>";
+      }).join("");
+      $("f-vendor").innerHTML = '<option value="">Any vendor</option>' +
+        vendors.map(function (v) {
+          return '<option value="' + esc(v) + '"' +
+            (String(v).toLowerCase() === String(FILTERS.vendor).toLowerCase() ? " selected" : "") +
+            ">" + esc(v) + "</option>";
+        }).join("");
+    }
+    // Cheap every time, and safe on a control somebody has focused: setting a value it already
+    // holds is a no-op, where re-writing its markup would not be.
+    $("f-vendor").value = FILTERS.vendor;
+    $("f-condition").value = FILTERS.condition;
+    $("f-clear").hidden = !anyFilterActive();
   }
 
   function itemResultsHtml(line) {
@@ -917,7 +1132,12 @@
     $("t-unit").textContent = p.per_unit == null ? "—" : L.perUnit(p.per_unit);
   }
 
-  function paint() { renderItems(); renderVendors(); renderList(); renderPanel(); }
+  // renderFilterBar is in here rather than inside renderItems on purpose: it must run when the
+  // OFFERED values change (an admin adds a division, a new vendor appears on a material) and it
+  // must not run on every keystroke of a search. It is cheap and self-guarding either way.
+  function paint() {
+    renderItems(); renderFilterBar(); renderVendors(); renderList(); renderPanel();
+  }
 
   // ── view switch ────────────────────────────────────────────────────────────
   var PANES = ["items", "asm", "vendors"];
@@ -997,7 +1217,80 @@
     $("item-q").addEventListener("input", function (e) {
       itemQuery = e.target.value;
       renderItems();
+      // Only the Clear button's visibility depends on the text, and it lives outside the tbody,
+      // so this is a two-property sync rather than a rebuild. renderFilterBar guards its own
+      // markup write, so calling it per keystroke cannot cost the caret.
+      renderFilterBar();
     });
+    // CLEARABLE WITHOUT A MOUSE. type="search" gets a native clear affordance in Chromium but it
+    // is a mouse target, and Escape is not wired to it consistently across browsers. This is one
+    // line and it is the same key that closes the item picker two tables over, so the page
+    // answers Escape the same way twice.
+    $("item-q").addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !String(itemQuery).trim()) return;
+      e.preventDefault();
+      itemQuery = "";
+      e.target.value = "";
+      renderItems();
+      renderFilterBar();
+    });
+  }
+
+  // ── the facets ────────────────────────────────────────────────────────────
+  // Bound to the CONTAINERS, which are never re-rendered by renderItems, rather than to the
+  // controls, which renderFilterBar can replace when an admin adds a division. A listener on a
+  // replaced element goes with it, silently, and the facet stops working with nothing on screen
+  // to show for it.
+  if ($("f-divisions")) {
+    $("f-divisions").addEventListener("change", function (e) {
+      if (!e.target.getAttribute || !e.target.getAttribute("data-fdiv")) return;
+      // Read back off the DOM rather than pushing and splicing, so the model cannot drift from
+      // the boxes: whatever is ticked IS the filter.
+      FILTERS.divisions = Array.prototype.slice
+        .call(this.querySelectorAll("input[data-fdiv]:checked"))
+        .map(function (x) { return x.getAttribute("data-fdiv"); })
+        .filter(Boolean);
+      renderItems();
+      renderFilterBar();
+    });
+  }
+  if ($("f-vendor")) {
+    $("f-vendor").addEventListener("change", function (e) {
+      FILTERS.vendor = e.target.value;
+      renderItems();
+      renderFilterBar();
+    });
+  }
+  if ($("f-condition")) {
+    $("f-condition").addEventListener("change", function (e) {
+      FILTERS.condition = e.target.value;
+      renderItems();
+      renderFilterBar();
+    });
+  }
+
+  /** Put the tab back to showing everything.
+   *
+   *  Reachable from two places on purpose: the bar, where somebody who can see the controls looks
+   *  for it, and the empty state, where somebody staring at no rows looks for it. Both carry
+   *  data-clear-filters so one handler serves them and neither can drift.
+   *
+   *  The chips are unticked in the DOM as well as in FILTERS. renderFilterBar only rewrites that
+   *  markup when the offered list changes, which this is not, so clearing the model alone would
+   *  leave three ticked chips over an unfiltered table. */
+  function clearFilters() {
+    itemQuery = "";
+    FILTERS.divisions = [];
+    FILTERS.vendor = "";
+    FILTERS.condition = "";
+    if ($("item-q")) $("item-q").value = "";
+    var boxes = $("f-divisions") ? $("f-divisions").querySelectorAll("input[data-fdiv]") : [];
+    for (var i = 0; i < boxes.length; i++) boxes[i].checked = false;
+    renderItems();
+    renderFilterBar();
+    // Focus goes to the search box, which is where the next thing they type belongs, and it means
+    // clearing from the empty state does not leave focus on a button that just vanished.
+    if ($("item-q")) $("item-q").focus();
   }
 
   $("items-body").addEventListener("input", onItemEdit);
@@ -1183,6 +1476,9 @@
 
   document.addEventListener("click", async function (e) {
     var t = e.target;
+
+    // Both the bar's button and the empty state's, one handler.
+    if (t.closest && t.closest("[data-clear-filters]")) { clearFilters(); return; }
 
     var open = t.closest && t.closest("[data-open]");
     if (open) { openId = open.getAttribute("data-open"); paint(); return; }
