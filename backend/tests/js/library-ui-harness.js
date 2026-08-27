@@ -243,6 +243,12 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("visibleItems")}
   ${fn("nameKey")}
   ${fn("duplicateName")}
+  // The name a BRAND NEW row is created under. Separate from duplicateName because the first
+  // candidate differs: a copy of "Densifier" must never be called "Densifier", and a new material
+  // wants the bare "New material" whenever it is free.
+  ${fn("nameTaken")}
+  ${fn("newMaterialName")}
+  ${fn("newRefName")}
   ${fn("itemMatches")}
   ${fn("itemResultsHtml")}
   ${fn("lineForSave")}
@@ -262,6 +268,11 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   // scope — it fires at flush time inside the real patchSoon, which is stubbed here and exercised
   // in saveScope below, and that split is the whole reason the dialog was not put in onItemEdit.
   var itemBefore = {};
+  // LIFTED, not restated: onItemEdit's first line reads the first of these and its snapshot line
+  // writes the second, so a rename in library.js has to break this file rather than quietly
+  // leave the guard untested.
+  ${grab(/^  var itemConfirmOpen = null;$/m, "the itemConfirmOpen declaration")}
+  ${grab(/^  var itemLastField = \{\};$/m, "the itemLastField declaration")}
   ${fn("snapshotItem")}
   ${fn("rememberItem")}
   ${fn("onItemEdit")}
@@ -274,6 +285,7 @@ const scope = new Function("L", "$", "TW", "state", "document", `
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
            onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
+           newMaterialName, newRefName,
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
 
@@ -872,7 +884,7 @@ const out = {};
 // Driven by a hand-cranked clock so the race is deterministic: type → PATCH in flight → keep
 // typing (re-arming the timer) → 409 lands → the repaint empties the buffer.
 async function conflictChecks() {
-  const saveScope = new Function("api", "clock", "hooks", "state", "TW", "L", `
+  const saveScope = new Function("api", "clock", "hooks", "state", "TW", "L", "document", `
     "use strict";
     var timers = {};
     var pendingPatch = {};
@@ -885,22 +897,52 @@ async function conflictChecks() {
     function renderItems() { hooks.renders.push("items"); }
     function paintDates() {}
     function datesHtml() { return ""; }
+    ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
     // The item-change confirmation, REAL, because this is the scope that has the real patchSoon —
-    // and the dialog fires from inside its timer callback, after the payload has been coalesced.
+    // and the dialog fires from inside the flush, after the payload has been coalesced.
     // TW is a parameter so a test can answer Yes or No and read back what it was asked.
     var itemBefore = {};
+    // WHICH ROW'S DIALOG IS ON SCREEN, and where the caret was when it opened. Both are lifted
+    // rather than restated: the guard at the top of onItemEdit reads the first, and the whole
+    // bypass this file now probes for is a re-entry that happens while it is set.
+    ${grab(/^  var itemConfirmOpen = null;$/m, "the itemConfirmOpen declaration")}
+    ${grab(/^  var itemLastField = \{\};$/m, "the itemLastField declaration")}
+    ${grab(/^  var SERVER_OWNED_ITEM_FIELDS = \[[^\]]*\];$/m, "SERVER_OWNED_ITEM_FIELDS")}
+    ${grab(/^  var NUMERIC_ITEM_FIELDS = \[[^\]]*\];$/m, "NUMERIC_ITEM_FIELDS")}
     ${grab(/^  var ITEM_FIELD_LABELS = \{[\s\S]*?\n  \};$/m, "ITEM_FIELD_LABELS")}
     ${fn("itemOf")}
     ${fn("snapshotItem")}
     ${fn("rememberItem")}
     ${fn("shownValue")}
+    ${fn("rowHasFocus")}
+    ${fn("refocusItemField")}
+    // CALLED BY BOTH confirmItemPatch AND forgetItem, so leaving it out is a ReferenceError that
+    // kills every scenario in this file at once rather than failing one assertion.
+    ${fn("endItemRound")}
     ${fn("confirmItemPatch")}
     ${fn("byId")}
     ${fn("adoptSaved")}
     ${fn("adoptConflict")}
+    ${fn("arm")}
+    ${fn("flush")}
+    ${fn("forgetItem")}
+    ${fn("flushItemRow")}
+    ${fn("onItemRowFocusOut")}
     ${fn("patchSoon")}
+    // THE REAL onItemEdit, in THIS scope, on top of the REAL patchSoon. The first scope in this
+    // file runs it against a stubbed patchSoon, which is what made the bypass invisible: the
+    // re-entrant keystroke the dialog's own focus move produces has to reach the real queue and
+    // the real timer for the probe below to mean anything. similarNames/dupeHtml come with it
+    // because the name branch calls them.
+    ${fn("similarNames")}
+    ${fn("dupeHtml")}
+    ${fn("onItemEdit")}
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
-             rememberItem: rememberItem,
+             rememberItem: rememberItem, onItemEdit: onItemEdit,
+             onItemRowFocusOut: onItemRowFocusOut, flushItemRow: flushItemRow,
+             forgetItem: forgetItem,
+             confirmOpen: function () { return itemConfirmOpen; },
+             snapshotOf: function (id) { return itemBefore[id]; },
              armed: function () { return Object.keys(timers).length; },
              pending: function () { return Object.keys(pendingPatch).length; },
              // Empties the buffer WITHOUT disarming, which is the state the empty-payload guard
@@ -910,12 +952,80 @@ async function conflictChecks() {
              dropBuffer: function () { pendingPatch = {}; } };
   `);
 
+  /** Just enough DOM for the row-leave rules: one item row per id, one focusable control per
+   *  field, and an activeElement a test can move.
+   *
+   *  Purpose-built rather than a DOM emulator, and it THROWS on a selector it does not model —
+   *  the two questions the page asks it ("does this row hold the focus", "where do I put the
+   *  caret back") are asked through selectors renderItems' own output has to carry, so a renamed
+   *  attribute must break this file loudly rather than quietly answer null. */
+  function makeRowDom(itemIds, fields) {
+    const rows = {};
+    const doc = {
+      activeElement: null,
+      rows,
+      querySelector(sel) {
+        let m = /^\[data-item="([^"]+)"\]$/.exec(sel);
+        if (m) return rows[m[1]] || null;
+        m = /^\[data-item="([^"]+)"\] \[data-f="([^"]+)"\]$/.exec(sel);
+        if (m) return (rows[m[1]] || { cells: {} }).cells[m[2]] || null;
+        throw new Error("the page asked document for " + sel + ", which this stub does not model "
+          + "— the row/field selector moved and rowHasFocus cannot find anything either");
+      },
+    };
+    itemIds.forEach((id) => {
+      const cells = {};
+      const row = {
+        id, cells,
+        getAttribute: (k) => (k === "data-item" ? id : null),
+        contains: (el) => !!el && Object.keys(cells).some((f) => cells[f] === el),
+      };
+      fields.forEach((f) => {
+        cells[f] = {
+          field: f, value: "", focused: 0,
+          getAttribute: (k) => (k === "data-f" ? f : null),
+          closest: (sel) => (sel === "[data-item]" ? row : null),
+          // A cell has no parentNode/querySelector: the name branch of onItemEdit is not exercised
+          // here, and a stub that silently answered it would hide that.
+          focus() { doc.activeElement = this; this.focused++; },
+        };
+      });
+      rows[id] = row;
+    });
+    return doc;
+  }
+
   function run409(fix, answer) {
-    const hooks = { saving: [], said: [], renders: [], requests: [], errors: [], asked: [] };
-    // The confirmation the real patchSoon now puts in front of an ITEM save. `answer` is what the
-    // estimator presses; the default is Yes so every assembly-side scenario below is unaffected,
-    // which is the point — the dialog is scoped to items and must not appear anywhere else.
-    const TW = { confirmDanger: async (opts) => { hooks.asked.push(opts); return answer !== false; } };
+    const hooks = { saving: [], said: [], renders: [], requests: [], bodies: [], errors: [],
+                    asked: [], dialogs: [], onDialogOpen: null, autoReply: null };
+    // THE DIALOG IS A DEFERRED, NOT A RESOLVED PROMISE, and that is the whole point of this
+    // rework. The old stub was `async (opts) => answer !== false`, which settles on the next
+    // microtask — so no test could ever run code in the window while the dialog is OPEN, which is
+    // exactly the window the focus-steal bypass lived in. `onDialogOpen` fires SYNCHRONOUSLY at
+    // the moment the real helper appends its overlay and moves the focus, which is the moment the
+    // page used to re-enter onItemEdit.
+    //
+    // `answer`: undefined/true = Yes, false = Cancel, "throw" = the dialog itself blew up,
+    // "manual" = the test resolves it by hand off hooks.dialogs.
+    // Whether SOME OTHER dialog is on screen — the delete confirmation a row's own Remove button
+    // opens. Answerable from a test, because the hazard is that dialog's focus move firing the
+    // focusout this page saves on.
+    let othersOpen = 0;
+    const TW = {
+      modalOpen: () => othersOpen > 0,
+      openAnotherDialog: () => { othersOpen += 1; },
+      closeAnotherDialog: () => { othersOpen -= 1; },
+      confirmDanger: (opts) => {
+        hooks.asked.push(opts);
+        return new Promise((resolve, reject) => {
+          const d = { opts, resolve, reject };
+          hooks.dialogs.push(d);
+          if (hooks.onDialogOpen) hooks.onDialogOpen(d);
+          if (answer === "throw") Promise.resolve().then(() => reject(new Error("dialog blew up")));
+          else if (answer !== "manual") Promise.resolve().then(() => resolve(answer !== false));
+        });
+      },
+    };
     let due = [];
     // Handles start at 1, as every browser's do — a 0 handle would make `if (timers[key])` skip,
     // which is a condition the real page never meets and would fake a pass here.
@@ -927,17 +1037,76 @@ async function conflictChecks() {
     const inflight = new Promise((r) => { release = r; });
     const api = (path, opts) => {
       hooks.requests.push(((opts || {}).method || "GET") + " " + path);
+      // A SCENARIO THAT DOES NOT CARE ABOUT THE RACE answers immediately. Held requests are the
+      // point of the 409 scenarios and a deadlock in every other one: a mutation that opens one
+      // more dialog than expected leaves a flush awaiting a reply the test was never going to
+      // release, node's event loop empties, and the harness exits 0 having printed nothing — which
+      // reads as "the harness itself failed" instead of naming the assertion that broke.
+      if (hooks.autoReply) {
+        hooks.bodies.push(String((opts || {}).body || ""));
+        return Promise.resolve(hooks.autoReply);
+      }
+      // EVERY BODY, kept separately from the request line so the bypass probe can assert on what
+      // was actually SENT rather than on how many times we sent something. "Cancel stopped the
+      // dialog" and "the rejected number never left the browser" are different claims.
+      hooks.bodies.push(String((opts || {}).body || ""));
       return inflight;
     };
     const state = { ASMS: [{ id: "a1", name: "MACRO", unit: "SF", lines: [], updated_at: "T1" }],
                     ITEMS: [{ id: "i1", name: "Densifier", unit: "Gallon", unit_cost: 42,
-                              buy_qty: 5, vendor: "Sika", divisions: ["Polished Concrete"] }],
+                              buy_qty: 5, vendor: "Sika", divisions: ["Polished Concrete"],
+                              updated_at: "T1", cost_updated_at: "STAMP-1" },
+                            { id: "i2", name: "Hardener", unit: "Gallon", unit_cost: 10,
+                              buy_qty: 1, vendor: "Sika", divisions: [],
+                              updated_at: "T1", cost_updated_at: "STAMP-1" }],
                     VENDORS: [] };
-    const s = saveScope(api, clock, hooks, state, TW, L);
-    return { hooks, clock, s, state, release, fire: async () => {
+    const doc = makeRowDom(["i1", "i2"], ["name", "unit_cost", "vendor", "buy_qty", "unit"]);
+    const s = saveScope(api, clock, hooks, state, TW, L, doc);
+    return { hooks, clock, s, state, release, doc, TW, fire: async () => {
       const now = due; due = [];
-      for (const t of now) if (t.live) { try { await t.fn(); } catch (e) { hooks.errors.push(String(e)); } }
-    }, cancelledCount: () => due.filter((t) => !t.live).length };
+      for (const t of now) {
+        if (!t.live) continue;
+        try {
+          // BOUNDED. The timer callback hands its promise back, and a flush can legitimately sit
+          // on a request this scenario has not released — but it can also sit on a DIALOG nobody
+          // is going to answer, which is what a change that asks one more time than expected
+          // produces. Unbounded, that stops the whole harness and it prints nothing; bounded, it
+          // becomes a line in hooks.errors that the scenario's own `errors == []` catches.
+          let stuck = false;
+          await Promise.race([
+            Promise.resolve(t.fn()),
+            new Promise((r) => global.setTimeout(() => { stuck = true; r(); }, 250)),
+          ]);
+          if (stuck) hooks.errors.push("a flush never settled — an unanswered dialog or a reply "
+            + "this scenario never released");
+        } catch (e) { hooks.errors.push(String(e)); }
+      }
+    }, cancelledCount: () => due.filter((t) => !t.live).length,
+      // The methods the page's own paths are driven through, so no scenario below hand-rolls an
+      // event shape the real handlers do not receive.
+      type: (id, field, value) => {
+        const cell = doc.rows[id].cells[field];
+        cell.value = value;
+        doc.activeElement = cell;
+        s.onItemEdit({ target: cell });
+      },
+      // …and the browser's own blur→change, which is what a .focus() elsewhere provokes: the
+      // input reports `change` with the value it still holds.
+      synthChange: (id, field) => s.onItemEdit({ target: doc.rows[id].cells[field] }),
+      // Returns the flush's promise so a scenario can await it. The rejection has to be reachable:
+      // a dialog that throws rejects this chain, and an unawaited rejection kills node with an
+      // unhandled-rejection exit instead of failing the assertion that cares.
+      leaveRow: (id, field, to) => {
+        doc.activeElement = to || null;
+        return Promise.resolve(
+          s.onItemRowFocusOut({ target: doc.rows[id].cells[field], relatedTarget: to || null })
+        ).catch((e) => { hooks.errors.push(String(e)); });
+      },
+      // Every value that reached the wire, flattened, so "58 was never sent" is one assertion
+      // rather than a walk over request bodies.
+      sentValues: () => hooks.bodies.map((b) => {
+        try { return JSON.parse(b); } catch (e) { return b; }
+      }) };
   }
 
   // Scenario: the 409 arrives while a newer keystroke is already queued.
@@ -1088,6 +1257,265 @@ async function conflictChecks() {
     const { c } = await itemRun(true, (x) => { x.unit_cost = 42; }, { unit_cost: "42" });
     out.itemNoChange = { asked: c.hooks.asked.length, requests: c.hooks.requests };
   }
+
+  // ══ THE BYPASS PROBE ═══════════════════════════════════════════════════════
+  // The defect this whole block exists for, EXECUTED rather than reasoned about.
+  //
+  // The dialog's own focus move blurs the input the estimator was typing in. A blurred input with
+  // an uncommitted value fires `change`, `change` is bound to #items-body, so the page re-entered
+  // onItemEdit WHILE ITS OWN DIALOG WAS OPEN — took a fresh snapshot of the already-edited model,
+  // queued a second patch, and 600ms later found before == after and sent the rejected number
+  // with no dialog at all. Cancel put 42 back on screen; 58 was in the database.
+  //
+  // Everything below is driven through the REAL onItemEdit on the REAL patchSoon, and the
+  // re-entrant keystroke is fired from inside the dialog-open hook — which is the only ordering
+  // that can catch this and the reason the old resolved-promise stub could not.
+  {
+    const c = run409(undefined, "manual");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) };
+    const it = c.state.ITEMS[0];
+    const reentries = [];
+    c.hooks.onDialogOpen = (d) => {
+      // What .focus() on anything else provokes: the cost input reports `change`, still holding
+      // "58", and it bubbles to the tbody listener.
+      c.synthChange("i1", "unit_cost");
+      reentries.push({ armed: c.s.armed(), pending: c.s.pending(),
+                       // The SNAPSHOT still has to hold 42. Before the fix the re-entry found it
+                       // already deleted, took a fresh one off the edited model, and every later
+                       // comparison then agreed that 58 was where the row had started.
+                       snapshotCost: (c.s.snapshotOf("i1") || {}).unit_cost,
+                       open: c.s.confirmOpen() });
+      d.resolve(false);
+    };
+    c.type("i1", "unit_cost", "58");            // 42 → 58, model updated live as the page does
+    const modelMidEdit = it.unit_cost;
+    c.leaveRow("i1", "unit_cost", null);        // focus leaves the row → flush + ask
+    await settle(); await settle();
+    // Anything the re-entry managed to arm gets its turn, twice, so a deferred timer cannot hide.
+    await c.fire(); await settle();
+    await c.fire(); await settle();
+    out.itemBypass = {
+      modelMidEdit,
+      asked: c.hooks.asked.length,
+      // THE ONE THAT MATTERS: no request body ever carried the rejected number.
+      sent: c.sentValues(),
+      requests: c.hooks.requests,
+      costAfter: it.unit_cost,
+      // The re-entrant event must be DISCARDED, not merged: no fresh snapshot, nothing queued,
+      // no timer re-armed behind the dialog.
+      reentries,
+      confirmOpenAfter: c.s.confirmOpen(),
+      pendingAfter: c.s.pending(),
+      errors: c.hooks.errors,
+    };
+  }
+
+  // A SECOND ROW'S FLUSH WAITS FOR THE OPEN DIALOG rather than stacking a second one on top of it.
+  // Two of these modals at once is one trapping the focus the other one needs, over a question
+  // that names neither row clearly.
+  //
+  // DRIVEN THROUGH patchSoon, NOT THROUGH A KEYSTROKE, and that is not a shortcut: with the guard
+  // in place, typing into a second row while a dialog is open is unreachable — the overlay traps
+  // the input on the page and onItemEdit discards anything that gets past it. The reachable state
+  // is an ARMED TIMER left over from a previous round, which is exactly what a deferred flush
+  // leaves behind, so that is what this constructs.
+  {
+    const c = run409(undefined, "manual");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "x" } }) };
+    // Every dialog after the first answers itself, so the queue really drains.
+    c.hooks.onDialogOpen = (d) => { if (c.hooks.dialogs.length > 1) d.resolve(true); };
+    const first = c.state.ITEMS[0], second = c.state.ITEMS[1];
+    c.s.rememberItem(second);
+    second.unit_cost = 77;
+    c.s.patchSoon("items", "i2", { unit_cost: "77" });
+    // …and now row one is left, which opens row one's dialog.
+    c.type("i1", "unit_cost", "58");
+    c.leaveRow("i1", "unit_cost", null);
+    await settle();
+    const whileOpen = { asked: c.hooks.asked.length, forRow: (c.hooks.asked[0] || {}).name };
+    // Row two's timer comes due WITH that dialog still on screen.
+    await c.fire(); await settle();
+    const secondAsked = c.hooks.asked.length;
+    const secondDeferred = c.s.pending();
+    const secondRearmed = c.s.armed();
+    // Row one is answered; row two's re-armed timer then gets its turn.
+    c.hooks.dialogs[0].resolve(true);
+    await settle(); await settle();
+    await c.fire(); await settle(); await settle();
+    out.itemDialogQueue = {
+      whileOpen,
+      // Still ONE dialog while the first was open…
+      askedWhileOpen: secondAsked,
+      secondStillQueued: secondDeferred >= 1,
+      secondRearmed: secondRearmed >= 1,
+      // …and the second row's question does get asked once the first is answered.
+      askedInTheEnd: c.hooks.asked.length,
+      secondAskedAbout: (c.hooks.asked[1] || {}).name,
+      firstCost: first.unit_cost,
+      secondCost: second.unit_cost,
+      errors: c.hooks.errors,
+    };
+  }
+
+  // A THROWN DIALOG IS A CANCEL, NOT A DROPPED WRITE. Without the try/catch the rejection escapes
+  // the flush: the payload has already been taken out of pendingPatch, the snapshot has been
+  // consumed, itemConfirmOpen is left set — so onItemEdit's guard silently swallows every
+  // subsequent keystroke on the page and nothing is ever saved again, with no error on screen.
+  {
+    const c = run409(undefined, "throw");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) };
+    const it = c.state.ITEMS[0];
+    c.type("i1", "unit_cost", "58");
+    // AWAITED, so a rejection that escapes confirmItemPatch lands in hooks.errors instead of
+    // killing node with an unhandled rejection and taking every other scenario with it.
+    await c.leaveRow("i1", "unit_cost", null);
+    await settle(); await settle();
+    await c.fire(); await settle();
+    out.itemDialogThrew = {
+      asked: c.hooks.asked.length,
+      requests: c.hooks.requests,
+      sent: c.sentValues(),
+      costAfter: it.unit_cost,
+      // The page is still usable: the flag is down and a later edit is still asked about.
+      confirmOpenAfter: c.s.confirmOpen(),
+      // The rejection was HANDLED, not left to become an unhandled rejection.
+      errors: c.hooks.errors,
+    };
+  }
+
+  // CANCEL DOES NOT RESTORE THE SERVER'S OWN STAMPS. `updated_at` and `cost_updated_at` are the
+  // server's to decide — adoptSaved takes them off a successful write — so putting the snapshot's
+  // copy back discards what the server just told us and the Dates cell goes on quoting a price
+  // date the database has already moved past.
+  {
+    const c = run409(undefined, "manual");
+    const it = c.state.ITEMS[0];
+    c.type("i1", "unit_cost", "58");
+    // The server's answer to an EARLIER write lands while the snapshot is held, exactly as it
+    // does on the page: adoptSaved is what moves these two, and it can land at any point during
+    // the round the snapshot spans.
+    it.updated_at = "T9";
+    it.cost_updated_at = "STAMP-9";
+    const stampsBefore = { updated_at: it.updated_at, cost_updated_at: it.cost_updated_at };
+    c.hooks.onDialogOpen = (d) => d.resolve(false);
+    c.leaveRow("i1", "unit_cost", null);
+    await settle(); await settle();
+    out.itemCancelStamps = {
+      asked: c.hooks.asked.length,
+      costAfter: it.unit_cost,
+      stampsBefore,
+      stampsAfter: { updated_at: it.updated_at, cost_updated_at: it.cost_updated_at },
+      errors: c.hooks.errors,
+      // AND THE CARET GOES BACK to the field the refused edit was typed into. The row was rebuilt
+      // by the repaint above, so this is the NEW input being focused, not the one they left.
+      refocused: c.doc.rows.i1.cells.unit_cost.focused,
+      focusedElsewhere: Object.keys(c.doc.rows.i1.cells)
+        .filter((f) => f !== "unit_cost" && c.doc.rows.i1.cells[f].focused > 0),
+    };
+  }
+
+  // ROW-LEAVE TIMING. Hanz, 2026-08-27: the dialog fires when focus leaves the row, not on a
+  // typing pause. While the row is being worked in, the flush re-defers; the moment focus lands
+  // outside it, the row's edits go in one question.
+  {
+    const c = run409(undefined, "manual");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) };
+    c.hooks.onDialogOpen = (d) => d.resolve(true);
+    c.type("i1", "unit_cost", "58");
+    // The 600ms timer comes due with the focus still in the row.
+    await c.fire(); await settle();
+    const duringTyping = { asked: c.hooks.asked.length, requests: c.hooks.requests.length,
+                           stillQueued: c.s.pending(), rearmed: c.s.armed() };
+    await c.fire(); await settle();               // and again: it keeps deferring, it does not fire
+    const afterASecondPause = { asked: c.hooks.asked.length, requests: c.hooks.requests.length };
+    // Tabbing to another cell IN THE SAME ROW is not leaving it — edits accumulate.
+    c.type("i1", "vendor", "Euclid");
+    c.leaveRow("i1", "vendor", c.doc.rows.i1.cells.name);
+    await settle();
+    const insideTheRow = { asked: c.hooks.asked.length };
+    // …and now out of the row altogether.
+    c.leaveRow("i1", "name", c.doc.rows.i2.cells.unit_cost);
+    await settle(); await settle(); await settle();
+    out.itemRowLeave = {
+      duringTyping,
+      afterASecondPause,
+      insideTheRow,
+      askedOnLeaving: c.hooks.asked.length,
+      // ONE question, listing BOTH fields — which is the interruption this design removes.
+      detail: (c.hooks.asked[0] || {}).detail,
+      sent: c.sentValues(),
+      errors: c.hooks.errors,
+    };
+  }
+
+  // A DIALOG SOMEBODY ELSE PUT UP holds the save back too. The route in is the row's own Remove
+  // button: clicking it leaves the focus inside the row, so nothing flushes — and then the delete
+  // confirmation focuses ITS Cancel button, which blurs that button and fires the focusout this
+  // page saves on. Without asking shared.js whether a modal is up, "Remove this material?" gets
+  // "Save this change?" stacked on top of it.
+  {
+    const c = run409(undefined, "manual");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) };
+    c.hooks.onDialogOpen = (d) => d.resolve(true);
+    c.type("i1", "unit_cost", "58");
+    // Reaching for that row's Remove button: still inside the row, so nothing has flushed yet.
+    c.TW.openAnotherDialog();
+    // …and the delete dialog's own .focus() blurs the button, out of the row.
+    await c.leaveRow("i1", "unit_cost", null);
+    await settle(); await settle();
+    const whileTheOtherIsOpen = { asked: c.hooks.asked.length, queued: c.s.pending(),
+                                  rearmed: c.s.armed() };
+    // The estimator cancels the delete; the save question is asked then, on its own.
+    c.TW.closeAnotherDialog();
+    await c.fire(); await settle(); await settle();
+    out.itemOtherModal = {
+      whileTheOtherIsOpen,
+      askedAfterItClosed: c.hooks.asked.length,
+      sent: c.sentValues(),
+      errors: c.hooks.errors,
+    };
+  }
+
+  // A DELETED ROW'S QUEUE DIES WITH IT. Far more likely now the save waits for the row to be
+  // left: typing a cost and then reaching for that row's Remove button never leaves the row, so
+  // the edit is still queued when the material stops existing.
+  {
+    const c = run409(undefined, "manual");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) };
+    c.hooks.onDialogOpen = (d) => d.resolve(true);
+    c.type("i1", "unit_cost", "58");
+    const queuedBefore = c.s.pending();
+    c.s.forgetItem("i1");
+    const queuedAfter = c.s.pending();
+    const snapshotAfter = c.s.snapshotOf("i1");
+    await c.fire(); await settle(); await settle();
+    out.itemForgotten = {
+      queuedBefore, queuedAfter,
+      snapshotDropped: snapshotAfter === undefined,
+      // Nothing asked and nothing sent: there is no row left to ask about.
+      asked: c.hooks.asked.length,
+      requests: c.hooks.requests,
+      errors: c.hooks.errors,
+      // …and the delete path really calls it. The handler it lives in is a 200-line click
+      // listener this harness cannot lift, so the call site is checked in the source — weaker than
+      // the assertions above, and paired with them rather than standing alone.
+      calledOnDelete: /await del\("items", di\);\s*\n\s*\/\/[^\n]*\n\s*forgetItem\(di\);/.test(src),
+    };
+  }
+
+  // WHAT THE DIALOG IS ASKED FOR. Two opt-ins that exist only for this caller, and both are about
+  // the bypass rather than about looks: focusing the dialog itself means a stray SPACE cannot
+  // press Cancel, and requiring an explicit answer means clicking the next cell cannot silently
+  // revert a deliberate edit.
+  {
+    const c = run409(undefined, "manual");
+    c.hooks.autoReply = { status: 200, ok: true, json: async () => ({ item: { id: "i1" } }) };
+    c.hooks.onDialogOpen = (d) => d.resolve(true);
+    c.type("i1", "unit_cost", "58");
+    c.leaveRow("i1", "unit_cost", null);
+    await settle(); await settle();
+    out.itemAskedOpts = c.hooks.asked[0] || {};
+  }
 }
 
 // ── B. the Items tab's own search box ───────────────────────────────────────
@@ -1140,6 +1568,288 @@ async function conflictChecks() {
     // way, so a counter matching exact strings would hand back a name the save then refuses.
     skipsTaken: crowded.duplicateName("Densifier"),
     blank: plain.duplicateName(""),
+  };
+
+  // ── and the name a NEW row is created under ────────────────────────────────
+  // "+ Add material" posted the literal "New material". `create_item` refuses a duplicate name
+  // with a 400, so the second press of that button was dead: "Couldn't add that material. "New
+  // material" is already in the library." — with nothing on screen explaining that the fix is to
+  // go and rename the first one.
+  const free = build({ ITEMS: [{ id: "y1", name: "OPF", unit: "Gallon", divisions: [] }] }).api;
+  const taken = build({ ITEMS: [
+    { id: "y1", name: "New material", unit: "Gallon", divisions: [] },
+  ] }).api;
+  const takenTwice = build({ ITEMS: [
+    { id: "y1", name: "New material", unit: "Gallon", divisions: [] },
+    { id: "y2", name: "new  material (2)", unit: "Gallon", divisions: [] },
+  ] }).api;
+  out.newMaterialName = {
+    // Bare stem while it is free: "New material (2)" as the FIRST material would be absurd.
+    whenFree: free.newMaterialName("New material"),
+    whenTaken: taken.newMaterialName("New material"),
+    // Taken in another spelling counts, because the server's own block strips punctuation and
+    // spacing the same way — otherwise the button offers a name the save then refuses.
+    whenTwoTaken: takenTwice.newMaterialName("New material"),
+    blank: free.newMaterialName(""),
+    // The Administration tab has the identical literal default, checked against ITS OWN list.
+    refWhenFree: free.newRefName("vendors"),
+    refWhenTaken: build({ VENDORS: [{ id: "v9", name: "New vendor", notes: "" }] })
+      .api.newRefName("vendors"),
+    refDivision: build({ DIVISION_REFS: [{ id: "d9", name: "New division", notes: "" }] })
+      .api.newRefName("divisions"),
+    // A material named "New vendor" must not stop the Vendors tab adding one: the two lists are
+    // unique within themselves, not against each other.
+    refIgnoresItems: build({
+      ITEMS: [{ id: "y1", name: "New vendor", unit: "Gallon", divisions: [] }],
+      VENDORS: [],
+    }).api.newRefName("vendors"),
+  };
+}
+
+// ── F. the shared dialog's two opt-ins, EXECUTED out of shared.js ───────────
+// Nothing in this repo has ever executed confirmDanger, and that is the second half of why the
+// bypass survived review: `noBtn.focus()` is one line inside a requestAnimationFrame and reads as
+// an accessibility nicety rather than as the thing that fires a `change` event on whatever the
+// estimator was typing in.
+//
+// Both opt-ins default OFF, so the other callers on this page and the twenty elsewhere in the
+// frontend get byte-identical behaviour — which is asserted here rather than assumed, by running
+// the SAME function with no options and reading back what it focused and what it listened for.
+async function dialogChecks() {
+  const sharedSrc = read(path.join(ROOT, "shared.js"));
+  const m = /\n  function confirmDanger\s*\(/.exec(sharedSrc);
+  if (!m) throw new Error("confirmDanger() is gone from shared.js — rewrite this harness");
+  const start = sharedSrc.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0, end = -1;
+  for (let j = start; j < sharedSrc.length; j++) {
+    if (sharedSrc[j] === "{") depth++;
+    else if (sharedSrc[j] === "}" && --depth === 0) { end = j + 1; break; }
+  }
+  const confirmSrc = sharedSrc.slice(m.index, end);
+
+  /** The narrowest DOM the real dialog touches: createElement, one appendChild, querySelector
+   *  over the markup it just wrote, and a focus() that records who got it.
+   *
+   *  Elements are objects rather than parsed HTML because the only questions asked here are "what
+   *  did it focus" and "what did it listen for" — but `innerHTML` is really assigned and really
+   *  queried, so a renamed internal class breaks the lift rather than passing. */
+  function fakeDialogDom() {
+    const focused = [];
+    const mk = (tag) => {
+      const node = {
+        tag, className: "", innerHTML: "", textContent: "", children: [], attrs: {},
+        listeners: {},
+        setAttribute(k, v) { this.attrs[k] = v; },
+        getAttribute(k) { return this.attrs[k] === undefined ? null : this.attrs[k]; },
+        appendChild(c) { this.children.push(c); return c; },
+        append(...cs) { this.children.push(...cs); },
+        remove() { this.removed = true; },
+        addEventListener(ev, fn2) { (this.listeners[ev] = this.listeners[ev] || []).push(fn2); },
+        removeEventListener() {},
+        focus() { focused.push(this); doc.activeElement = this; },
+        classList: { add() {}, remove() {} },
+        querySelector(sel) {
+          // The dialog writes its own markup and then reads it back by class. Modelled by class
+          // name so a rename in that template is a null here and a loud failure, not a pass.
+          const known = {
+            ".tw-dlg-ic": "ic", ".tw-dlg-h": "h", ".tw-dlg-m": "m", ".tw-dlg-d": "d",
+            ".tw-dlg-no": "no", ".tw-dlg-go": "go",
+          };
+          if (!(sel in known)) {
+            throw new Error("the dialog asked for " + sel + ", which this stub does not model");
+          }
+          this._parts = this._parts || {};
+          if (!this._parts[sel]) {
+            const part = mk("div");
+            part.role = known[sel];
+            this._parts[sel] = part;
+          }
+          return this._parts[sel];
+        },
+      };
+      return node;
+    };
+    const body = mk("body");
+    const doc = {
+      activeElement: null,
+      body,
+      focused,
+      docListeners: {},
+      createElement: (t) => mk(t),
+      createTextNode: (t) => ({ text: t }),
+      addEventListener(ev, fn2) {
+        (this.docListeners[ev] = this.docListeners[ev] || []).push(fn2);
+      },
+      removeEventListener() {},
+    };
+    return doc;
+  }
+
+  function sharedGrab(re, what) {
+    const m = re.exec(sharedSrc);
+    if (!m) throw new Error(what + " is gone from shared.js — rewrite this harness");
+    return m[0];
+  }
+
+  const runDialog = new Function("document", "requestAnimationFrame", "setTimeout",
+    "injectModalCss", "opts", `
+    "use strict";
+    // The dialog keeps a count of how many of itself are on screen, for callers that must not put
+    // a second question on top of one being asked. LIFTED, not restated: it lives outside
+    // confirmDanger, and without it every call in here throws a ReferenceError inside the promise
+    // executor — which surfaces as a rejected promise and an empty overlay rather than as an error.
+    ${sharedGrab(/^  let openModals = 0;$/m, "the openModals counter")}
+    ${sharedGrab(/^  function modalOpen\(\) \{[^\n]*$/m, "modalOpen()")}
+    ${confirmSrc}
+    // A FACTORY, not one call, so a scenario can put two dialogs up in ONE scope and watch the
+    // counter. That is the whole reason it is a count and not a boolean: with a flag, the first of
+    // two overlapping dialogs closing would report the second one gone.
+    return { open: confirmDanger, modalOpen: modalOpen, first: opts && confirmDanger(opts) };
+  `);
+
+  function askWith(opts) {
+    const doc = fakeDialogDom();
+    // The control the page's focus is really on when the dialog goes up. It records who focused
+    // it, so "the dialog handed the focus back to a stale element" is a fact rather than a guess.
+    const prev = { role: "prev", focused: 0,
+                   focus() { this.focused++; doc.activeElement = this; } };
+    doc.activeElement = prev;
+    const frames = [];
+    const later = [];
+    const built = runDialog(doc, (fn2) => frames.push(fn2),
+      (fn2) => { later.push(fn2); return 1; }, () => {}, opts);
+    const promise = built.first;
+    frames.forEach((f) => f());                     // the rAF the real helper focuses inside
+    // NO SILENT FALLBACK. An empty body means the helper threw inside its own promise executor —
+    // a lifted identifier it needs that this scope does not have — and a stub object standing in
+    // for the dialog would report that as "it stopped setting tabindex".
+    if (!doc.body.children.length) {
+      throw new Error("confirmDanger appended no overlay: it threw inside its promise executor, "
+        + "most likely on an identifier declared outside the function and not lifted here");
+    }
+    const ov = doc.body.children[0];
+    const dlg = ov.children[0];
+    const focusedRole = doc.focused[0] === dlg ? "dialog" : ((doc.focused[0] || {}).role || null);
+    return { doc, ov, dlg, promise, focusedRole, prev, modalOpen: built.modalOpen,
+             openAnother: (o) => built.open(o),
+             // The teardown timer, run on demand: this is where the helper restores the focus it
+             // took, which is the piece the row-leave design has to be able to opt out of.
+             settle: () => later.forEach((f) => f()),
+             icon: () => (dlg._parts || {})[".tw-dlg-ic"],
+             fire: (ev, e) => (ov.listeners[ev] || []).forEach((h) => h(e)),
+             backdropListens: Object.keys(ov.listeners || {}) };
+  }
+
+  /** What the dialog answered, or the fact that it never did.
+   *
+   *  A promise that never settles is a HANG, and a hung harness prints nothing at all — which
+   *  reports as "the harness itself failed" and sends the next reader to this file instead of to
+   *  the assertion that broke. A real answer resolves on a microtask, so it always wins the race
+   *  against a sentinel scheduled on the next turn of the loop. */
+  const answered = (p) =>
+    Promise.race([p, new Promise((r) => setImmediate(() => r("never answered")))]);
+
+  const plainAsk = askWith({ title: "Remove this material?", name: "OPF" });
+  const optedIn = askWith({ tone: "warn", title: "Save this change?", name: "Densifier",
+                            focus: "container", dismiss: "explicit" });
+  out.confirmFocus = {
+    // DEFAULT, unchanged for every other caller: the No button takes the focus, and a mousedown
+    // on the backdrop cancels.
+    defaultFocusesCancel: plainAsk.focusedRole === "no",
+    defaultHasBackdropCancel: plainAsk.backdropListens.indexOf("mousedown") !== -1,
+    // OPTED IN: the dialog element itself takes the focus, so SPACE cannot press a button that
+    // was never focused…
+    optedInFocusesTheDialog: optedIn.focusedRole === "dialog",
+    optedInDialogIsFocusable: optedIn.dlg.getAttribute("tabindex") === "-1",
+    // …and the backdrop is inert, so clicking the next cell cannot answer the question.
+    optedInHasNoBackdropCancel: optedIn.backdropListens.indexOf("mousedown") === -1,
+    // Escape still works in BOTH — an inert backdrop must not mean an unclosable dialog.
+    bothTrapTheKeyboard: (plainAsk.doc.docListeners.keydown || []).length === 1 &&
+      (optedIn.doc.docListeners.keydown || []).length === 1,
+    // The default caller's own defaults are untouched by the new options existing.
+    defaultTabindexAbsent: plainAsk.dlg.getAttribute("tabindex") === null,
+  };
+  // A BACKDROP MOUSEDOWN on the default dialog still cancels it, and on the opted-in one does
+  // nothing at all. Both proved by what the promise resolves to, not by a listener count.
+  const backdropDefault = askWith({ title: "x", name: "y" });
+  backdropDefault.fire("mousedown", { target: backdropDefault.ov });
+  out.confirmFocus.defaultBackdropCancels = (await answered(backdropDefault.promise)) === false;
+
+  // ESCAPE CANCELS the opted-in dialog too — an inert backdrop must not mean a trapped estimator.
+  const escaped = askWith({ focus: "container", dismiss: "explicit", title: "x", name: "y" });
+  (escaped.doc.docListeners.keydown || []).forEach((h) =>
+    h({ key: "Escape", preventDefault() {} }));
+  out.confirmFocus.escapeStillCancels = (await answered(escaped.promise)) === false;
+
+  // FOCUS RESTORATION. The default caller wants the focus put back where it was — its dialog went
+  // up over a live element. The row-leave caller does NOT: focus had already left the row before
+  // the question was asked, so `prevFocus` is whatever the browser parked on mid-transition, and
+  // handing the focus back to it 170ms later would yank the caret out of wherever the estimator
+  // actually went and out of the field confirmItemPatch just restored.
+  const restoreDefault = askWith({ title: "x", name: "y" });
+  (restoreDefault.doc.docListeners.keydown || []).forEach((h) =>
+    h({ key: "Escape", preventDefault() {} }));
+  restoreDefault.settle();
+  out.confirmFocus.defaultRestoresTheFocus = restoreDefault.prev.focused === 1;
+
+  const restoreOpted = askWith({ focus: "container", dismiss: "explicit", title: "x", name: "y" });
+  (restoreOpted.doc.docListeners.keydown || []).forEach((h) =>
+    h({ key: "Escape", preventDefault() {} }));
+  restoreOpted.settle();
+  out.confirmFocus.optedInLeavesTheFocusAlone = restoreOpted.prev.focused === 0;
+
+  // THE MODAL COUNTER, which the Items page reads to avoid stacking a save question on top of a
+  // delete confirmation. Two dialogs in ONE scope, because a boolean would report the second one
+  // gone the moment the first closed — and that is the case the Items page is exposed to, since
+  // the delete dialog's own focus move is what triggers the save it must not ask about yet.
+  {
+    const counter = askWith({ title: "Remove this material?", name: "OPF" });
+    const afterOne = counter.modalOpen();
+    const second = counter.openAnother({ title: "And another", name: "OPF" });
+    const afterTwo = counter.modalOpen();
+    // Close the FIRST one only — through its own Cancel BUTTON, not Escape. Both dialogs listen
+    // for Escape on `document`, so an Escape here would close both and this would be measuring
+    // nothing. (That both answer one Escape is the shared helper's own long-standing behaviour and
+    // not something this change touches.)
+    const noBtn = counter.dlg.querySelector(".tw-dlg-no");
+    (noBtn.listeners.click || []).forEach((h) => h({}));
+    const afterClosingOne = counter.modalOpen();
+    // Read BEFORE the second one is closed, or "the other dialog is still waiting" measures
+    // nothing: one of them really was answered and the other really was not.
+    const firstAnswered = (await answered(counter.promise)) === false;
+    const secondStillWaiting = (await answered(second)) === "never answered";
+    // …and then the other one, which has to bring the count back to nothing. Without the
+    // decrement the Items page would never save again: every flush from here on would defer
+    // against a modal that is not on screen.
+    const secondDlg = counter.doc.body.children[1].children[0];
+    (secondDlg.querySelector(".tw-dlg-no").listeners.click || []).forEach((h) => h({}));
+    out.confirmModalCount = {
+      beforeAny: false,          // no dialog has been opened in this scope before askWith
+      afterOne, afterTwo, afterClosingOne,
+      afterClosingBoth: counter.modalOpen(),
+      firstAnswered, secondStillWaiting,
+    };
+  }
+
+  // THE ICON. The slot is filled with textContent, so an SVG cannot go through `icon` — and the
+  // warn tone's own default is a WASTEBASKET, which is the wrong glyph over "Save this change?".
+  // `iconSvg` is markup this page writes itself (never a project name), and every caller that
+  // does not pass it keeps the exact glyph it draws today.
+  const svgAsk = askWith({ tone: "warn", title: "Save this change?", name: "Densifier",
+                           focus: "container", dismiss: "explicit",
+                           iconSvg: '<svg class="ic"><path d="M1 1"></path></svg>' });
+  const warnDefault = askWith({ tone: "warn", title: "Remove this vendor?", name: "Sika" });
+  const glyphAsk = askWith({ tone: "warn", title: "x", name: "y", icon: "✎" });
+  out.confirmIcon = {
+    svgReachesTheSlot: /<svg class="ic">/.test((svgAsk.icon() || {}).innerHTML || ""),
+    // …and it is not ALSO written as text, which would draw the markup as a literal string.
+    svgNotWrittenAsText: !/svg/.test((svgAsk.icon() || {}).textContent || ""),
+    // UNCHANGED for everybody else: the warn default is still the wastebasket glyph and a caller
+    // passing `icon` still gets it as text.
+    warnDefaultUnchanged: (warnDefault.icon() || {}).textContent === "\u{1F5D1}",
+    dangerDefaultUnchanged: (plainAsk.icon() || {}).textContent === "⚠️",
+    plainIconStillText: (glyphAsk.icon() || {}).textContent === "✎",
+    plainIconNotInjected: ((glyphAsk.icon() || {}).innerHTML || "") === "",
   };
 }
 
@@ -1726,6 +2436,18 @@ out.page = {
   noRoleHeader: !/<th[^>]*>Role<\/th>/.test(html),
 };
 
-conflictChecks().then(
-  () => console.log(JSON.stringify(out)),
-  (err) => { console.error(err); process.exit(1); });
+// A WATCHDOG, because the alternative failure mode is silence. These scenarios await dialogs and
+// held requests, so a change that opens one more dialog than a test answers leaves a flush waiting
+// forever: node's loop empties, the process exits 0, and nothing is printed — which the fixture
+// reports as "the harness itself failed" with no line number and no clue. A pending timer keeps
+// the loop alive long enough to say what actually happened.
+const watchdog = setTimeout(() => {
+  console.error("A SCENARIO NEVER SETTLED. Something is awaiting a dialog nobody answered or a "
+    + "request nobody released — most likely a change that asks one MORE time than the scenario "
+    + "expects. Look at the scenario you touched, not at this file.");
+  process.exit(1);
+}, 30000);
+
+Promise.all([conflictChecks(), dialogChecks()]).then(
+  () => { clearTimeout(watchdog); console.log(JSON.stringify(out)); },
+  (err) => { clearTimeout(watchdog); console.error(err); process.exit(1); });

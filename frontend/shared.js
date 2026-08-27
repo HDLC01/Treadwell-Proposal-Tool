@@ -575,6 +575,11 @@
       "font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}",
       ".tw-ov.tw-in .tw-dlg{transform:none;}",
       ".tw-dlg-ic{width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:25px;margin:0 auto 14px;}",
+      // Only reaches a dialog whose caller asked to hold the focus (opts.focus === "container").
+      // The ring belongs on a control; on the modal wrapper it outlines the whole card.
+      ".tw-dlg[tabindex]:focus{outline:none;}",
+      ".tw-dlg--warn .tw-dlg-ic svg{color:#b45309;}",
+      ".tw-dlg--danger .tw-dlg-ic svg{color:#c8102e;}",
       ".tw-dlg--danger .tw-dlg-ic{background:rgba(200,16,46,.10);}",
       ".tw-dlg--warn .tw-dlg-ic{background:rgba(245,158,11,.14);}",
       ".tw-dlg-h{font-size:18px;font-weight:800;margin:0 0 7px;letter-spacing:-.01em;}",
@@ -594,9 +599,48 @@
     document.head.appendChild(s);
   }
 
+  /** How many confirmDanger dialogs are on screen. Counted, not a boolean, because `close()`
+   *  decrements and two overlapping dialogs would otherwise leave the flag down after the first
+   *  one closed.
+   *
+   *  Exposed as TW.modalOpen() for callers that must not put a SECOND question on screen on top of
+   *  one already being asked. The Items page needs it: a row's own Remove button opens a delete
+   *  confirmation, and that dialog focusing its Cancel button fires a `focusout` on the row — which
+   *  is that page's save trigger, so without this check it would stack a "save this change?" modal
+   *  on top of the "remove this material?" one. */
+  let openModals = 0;
+  function modalOpen() { return openModals > 0; }
+
+  /** The shared two-button modal. Resolves true for the confirm button, false for anything else.
+   *
+   *  THREE OPT-INS ADDED 2026-08-27, ALL DEFAULT-OFF. There are twenty-odd call sites for this
+   *  helper and every one of them was written against the behaviour below, so the new options are
+   *  read only where they are passed and the untouched path is byte-identical.
+   *
+   *    opts.focus === "container"  focus the DIALOG (tabindex="-1") instead of the Cancel button,
+   *                                and do not hand the focus back on close.
+   *    opts.dismiss === "explicit" no backdrop-mousedown-cancels listener.
+   *    opts.iconSvg                inline SVG for the icon slot, as markup.
+   *
+   *  The first two exist because of a real defect on the Items page. `noBtn.focus()` BLURS
+   *  whatever the estimator was typing in, a blurred input with an uncommitted value fires
+   *  `change`, and on a page that saves on `change` that re-entered the very handler the dialog
+   *  was asking about — so a Cancel could restore the screen while the rejected value went to the
+   *  database. Focusing the dialog itself also means a stray SPACE cannot press a button nobody
+   *  aimed at, and an inert backdrop means clicking the next cell cannot silently revert an edit
+   *  somebody meant to make. Escape closes either way: an unclosable dialog is worse than both.
+   *
+   *  `iconSvg` is separate from `icon` on purpose. `icon` goes through textContent because the
+   *  same dialog renders customer-typed project and vendor names, and there is no route by which
+   *  one of those should ever be parsed as markup. `iconSvg` is only ever a literal written in
+   *  our own source. */
   function confirmDanger(opts) {
     opts = opts || {};
     const tone = opts.tone === "warn" ? "warn" : "danger";
+    // The caller manages the focus itself when it asks to hold it: see the Items page, where the
+    // question is asked AFTER focus has left the row, so `prevFocus` is whatever the browser
+    // parked on mid-transition and restoring it would yank the caret back out again.
+    const holdFocus = opts.focus === "container";
     return new Promise((resolve) => {
       injectModalCss();
       const prevFocus = document.activeElement;
@@ -614,8 +658,14 @@
         '<p class="tw-dlg-d" hidden></p>' +
         '<div class="tw-dlg-act"><button type="button" class="tw-dlg-no"></button>' +
         '<button type="button" class="tw-dlg-go"></button></div>';
-      // textContent everywhere → no HTML injection from project names.
-      dlg.querySelector(".tw-dlg-ic").textContent = opts.icon || (tone === "warn" ? "🗑" : "⚠️");
+      // Focusable only when the caller asked for it, or Tab would find a dialog wrapper that no
+      // other caller expects in its tab order.
+      if (holdFocus) dlg.setAttribute("tabindex", "-1");
+      // textContent everywhere → no HTML injection from project names. The ONE exception is
+      // iconSvg, which is markup out of our own source and never a value anybody typed.
+      const icEl = dlg.querySelector(".tw-dlg-ic");
+      if (opts.iconSvg) icEl.innerHTML = opts.iconSvg;
+      else icEl.textContent = opts.icon || (tone === "warn" ? "🗑" : "⚠️");
       dlg.querySelector(".tw-dlg-h").textContent = opts.title || "Are you sure?";
       const mEl = dlg.querySelector(".tw-dlg-m");
       // message may carry an emphasised name → support {name} highlight
@@ -634,11 +684,17 @@
       ov.appendChild(dlg);
 
       let settled = false;
+      openModals += 1;
       function close(val) {
         if (settled) return; settled = true;
+        openModals -= 1;
         document.removeEventListener("keydown", onKey, true);
         ov.classList.remove("tw-in");
-        setTimeout(() => { ov.remove(); try { prevFocus && prevFocus.focus && prevFocus.focus(); } catch {} }, 170);
+        setTimeout(() => {
+          ov.remove();
+          if (holdFocus) return;
+          try { prevFocus && prevFocus.focus && prevFocus.focus(); } catch {}
+        }, 170);
         resolve(val);
       }
       function onKey(e) {
@@ -651,10 +707,21 @@
       }
       noBtn.addEventListener("click", () => close(false));
       goBtn.addEventListener("click", () => close(true));
-      ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(false); });  // click backdrop = cancel
+      // Click backdrop = cancel, unless the caller wants the question answered on purpose. A
+      // wrong click is a cheap "no" in front of a deletion and an expensive one in front of a
+      // save the estimator meant to make.
+      if (opts.dismiss !== "explicit") {
+        ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(false); });
+      }
       document.addEventListener("keydown", onKey, true);
       document.body.appendChild(ov);
-      requestAnimationFrame(() => { ov.classList.add("tw-in"); noBtn.focus(); });  // focus Cancel (safe default)
+      requestAnimationFrame(() => {
+        ov.classList.add("tw-in");
+        // Cancel is the safe default — EXCEPT where focusing a button is itself the hazard: it
+        // makes SPACE an answer, and .focus() on anything blurs whatever the caller's page had
+        // focused. onKey moves the focus onto a button the moment Tab is pressed either way.
+        if (holdFocus) dlg.focus(); else noBtn.focus();
+      });
     });
   }
 
@@ -915,6 +982,7 @@
     postJSON,
     authHeaders,
     confirmDanger,
+    modalOpen,
     injectModalCss,
     fmtBizDate,
     fmtBizDateTime,
