@@ -300,6 +300,25 @@
    *  "Undo won" on a paid job would be a button that appears to do nothing. */
   function wonByHand(p) { return !!(p && p.won_at); }
 
+  /** AT OR PAST Won/Approved: the customer has said yes, whether a person marked it or the portal
+   *  recorded the approval. This is the SHARED question the Won/Approved column and the Hand it off
+   *  button both have to ask, and the reason it exists is that they did not.
+   *
+   *  Shipped 2026-08-28 the column asked `wonByHand || approvedInPortal` while both Hand it off
+   *  controls asked `isWon`, which ALSO demands the deposit be settled. So every job the customer
+   *  approved while the money was still outstanding — by the file's own account "the single most
+   *  worth-chasing project there is", and the ordinary state of a fresh win — sat in a column
+   *  labelled Won/Approved offering to be marked won a second time, with no way to hand it off at
+   *  all. Three of them were on staging within the hour.
+   *
+   *  DELIBERATELY NOT isWon, and isWon is deliberately not this. They answer different questions.
+   *  isWon is "did we win, money and all" — it feeds the Won chip and the Notification Sending
+   *  page, where an approved-but-unpaid job must NOT read as finished. This one is "has the
+   *  customer said yes", which is what decides where the card sits and whether operations can be
+   *  handed it. Every isWon row satisfies this one; the reverse is what was missing.
+   */
+  function wonOrApproved(p) { return wonByHand(p) || approvedInPortal(p); }
+
   function stage(p) {
     if (isLost(p)) return STAGE_LOST;
     // No schedule branch. A scheduled job now reads as Contact info, the furthest stage that
@@ -319,10 +338,17 @@
     // card does have was the one field that could never be read.
     //
     // Below the deposit branches on purpose: a won job whose money has landed reads
-    // "Deposit received", so winning it never hides the work still owed on it. approvedInPortal
-    // rather than a bare status check, so this column and isWon cannot come to disagree about
-    // what "approved" means; wonByHand is the half that reaches unsent rows.
-    if (wonByHand(p) || approvedInPortal(p)) return STAGE_WON;
+    // "Deposit received", so winning it never hides the work still owed on it. wonByHand is the
+    // half that reaches unsent rows; approvedInPortal is the half that needs no button pressed.
+    //
+    // This comment used to end "so this column and isWon cannot come to disagree about what
+    // 'approved' means", which was false and cost a day. The column has never asked isWon — isWon
+    // also demands the deposit be settled, and settling it moves the card to a LATER column
+    // anyway, so an isWon card is one this branch can barely reach. What the two really shared was
+    // the word, not the question. The card button did ask isWon, which is how an approved job with
+    // the money still out ended up under a Won/Approved header being offered the chance to be
+    // marked won a second time. Both now ask wonOrApproved; keep them on it.
+    if (wonOrApproved(p)) return STAGE_WON;
     // Checked before the remaining portal states, because a synthesised row has none of them: it
     // is a draft of ours, not a proposal the customer has. The flag is set server-side rather
     // than inferred from missing fields, so a portal row that arrives without a status cannot
@@ -610,6 +636,7 @@
     MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
     followup: followup, isLost: isLost, isWon: isWon, wonByHand: wonByHand,
+    wonOrApproved: wonOrApproved,
     isHandedOff: isHandedOff,
     depositSatisfied: depositSatisfied, approvedInPortal: approvedInPortal,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,

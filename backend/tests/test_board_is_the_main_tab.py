@@ -287,8 +287,21 @@ def test_every_undecided_card_gets_the_two_outcome_buttons():
     assert "data-files=" not in acts and "data-info=" not in acts, (
         "the old Files/Info sheet pair is back on the card as well")
     assert "not_sent" not in acts, "the buttons are gated on the not-sent rows only"
-    assert "isLost(p)" in acts and "isWon(p)" in acts, (
-        "an already-decided card is offered a button that cannot change anything")
+    # NAMED GATES, and the names changed on 2026-08-29. This read `isWon(p)` until the card button
+    # and the column header were found asking different questions about the same card — the column
+    # `wonByHand || approvedInPortal`, the button `isWon`, which also demands the deposit be settled
+    # — so an approved job with the money still out sat under a Won/Approved header offering to be
+    # marked won again. Both now ask `wonOrApproved`.
+    #
+    # A string check cannot tell a correct gate from a plausible one, which is why it kept passing
+    # through that bug: test_card_actions.py executes the render and asserts the pair agrees. What
+    # this one is still good for is the STRUCTURAL claim — that a decided card is short-circuited
+    # before any button is built, rather than each button remembering to check for itself.
+    assert 'if (isLost(p) || C.isHandedOff(p)) return ""' in acts, (
+        "a lost or handed-off card is no longer short-circuited, so every button below has to "
+        "remember to check on its own")
+    assert "wonOrApproved(p)" in acts, (
+        "the card no longer picks its first button by asking whether the customer said yes")
 
 
 def test_the_urls_match_the_proposals_database_character_for_character():

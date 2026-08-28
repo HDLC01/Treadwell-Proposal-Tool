@@ -113,6 +113,32 @@ const ROWS = [
   { proposal_id: "handoff-1", project_name: "Olathe Distribution", proposal_status: "approved",
     approved_at: "2026-08-10T12:00:00Z", won_at: "2026-08-12T15:00:00Z",
     contacts_status: "received", handed_off_at: "2026-08-26T14:00:00Z" },
+  // ── approved, but NOT in the Won/Approved column ────────────────────────────────────────────
+  // stage() tests the deposit and contacts branches BEFORE the won branch, so approval puts a card
+  // in Won/Approved only until the money starts moving. These three are the shapes that made my
+  // first invariant here wrong: it asserted Hand it off appears only under Won/Approved, and passed
+  // purely because this harness had none of them. Hanz found it in a screenshot of a real card.
+  //
+  // `approved-submitted` is that card: approved, deposit sent and not yet confirmed. It must offer
+  // the hand-off, because Won/Approved is an EARLIER stage than this one and offers it — being
+  // unable to hand off a job that has progressed FURTHER is incoherent.
+  { proposal_id: "approved-submitted", project_name: "Encore Gyp", proposal_status: "approved",
+    approved_at: "2026-08-11T12:00:00Z", deposit_required: true, deposit_status: "submitted",
+    deposit_submitted_at: "2026-08-18T12:00:00Z" },
+  // Approved with everything settled: the furthest a card gets without being handed off, and the
+  // exact card Hanz described — "once we receive the Contact Info, we indicate it as handed off".
+  { proposal_id: "approved-contacts", project_name: "Riverside Logistics",
+    proposal_status: "approved", approved_at: "2026-08-06T12:00:00Z", deposit_required: true,
+    deposit_status: "received", deposit_received_at: "2026-08-09T12:00:00Z",
+    contacts_status: "received", contacts_received_at: "2026-08-10T12:00:00Z" },
+  // THE COUNTER-EXAMPLE, and why the deposit columns cannot decide this by themselves: publishing a
+  // revision drops proposal_status back to 'sent' and NULLs approved_at, while deliberately leaving
+  // the money columns alone. So this card sits in Deposit received having been approved by nobody.
+  // It must NOT be offered a hand-off, and no rule keyed on its column could tell.
+  { proposal_id: "revised-deposit-in", project_name: "Sedgwick Distribution",
+    proposal_status: "sent", sent_at: "2026-08-16T12:00:00Z", current_revision_no: 2,
+    deposit_required: true, deposit_status: "received",
+    deposit_received_at: "2026-08-05T12:00:00Z", contacts_status: "pending" },
   { proposal_id: "lost-1", project_name: "Brookfield Site", proposal_status: "closed_lost",
     followup_state: { closed_lost_reason: "not_low_bid", closed_at: "2026-08-01T12:00:00Z" } },
   // An id that does not survive a round trip through the attribute unless both halves happen. Its
@@ -301,10 +327,31 @@ async function press(which, id, className) {
                                   files: block.includes("data-files="),
                                   info: block.includes("data-info=") }];
     }));
+    // WHICH COLUMN each card actually landed in, read back out of the same paint the buttons were
+    // read from. This is the pair that has to agree: the column header states what the board thinks
+    // happened, the first button offers what to do about it, and on 2026-08-28 they shipped
+    // disagreeing — every approved-but-unpaid card sat under "Won/Approved" offering to be marked
+    // won. Deriving the column with C.stage() here instead would let both sides be wrong together.
+    const colOf = (html) => {
+      const out = {};
+      for (const block of html.split('<div class="col').slice(1)) {
+        const h = /<h2>([^<]*)</.exec(block);
+        const name = h ? h[1] : "?";
+        for (const m of block.matchAll(/data-id="([^"]+)"/g)) out[m[1]] = name;
+      }
+      return out;
+    };
     out.rendered = {
       board, table, handoffBoard, lostBoard,
       // Per card, read back OUT of the html: which buttons its own .deal block carries.
       byCard: byCardOf(board),
+      columnOf: colOf(board),
+      // The question the button is SUPPOSED to be asking, per card, so the deposit and contacts
+      // columns can be checked against something. Their names cannot decide it — a published
+      // revision returns a card to 'sent' while leaving the money columns alone, so Deposit
+      // received holds approved and unapproved cards alike. Only the Won/Approved column and the
+      // three below the won branch are decidable from the paint, and those are asserted that way.
+      wonOrApproved: Object.fromEntries(ROWS.map((p) => [p.proposal_id, !!C.wonOrApproved(p)])),
       // The same read over the tab that holds the finished work, so "offers nothing" is asserted
       // per card rather than over one long string where a single leftover button hides.
       handoffByCard: byCardOf(handoffBoard),

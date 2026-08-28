@@ -238,15 +238,21 @@ def test_a_job_cancelled_after_the_fact_appears_only_under_lost(ran, pid):
 def test_an_approved_job_with_the_money_still_out_is_won_approved_but_not_won(ran):
     """THE distinction isWon's derived half exists for, and the column is deliberately WIDER than it.
 
-    The column says "the customer said yes". The button says "we may hand this over". Approval alone
-    earns the first and not the second: this is the most worth-chasing row there is, so it belongs in
-    front of the meeting under Won/Approved, and it must not be offered a hand-off while the deposit
-    it was invoiced for has not arrived."""
+    The column says "the customer said yes". isWon says "we won it, money and all". Approval alone
+    earns the first and not the second, so this row belongs in front of the meeting under
+    Won/Approved while it still does NOT carry the Won chip or count as won on the Notification
+    Sending page.
+
+    What it DOES get is the hand-off, and the first version of this test said the opposite. It
+    reasoned that handing off with an invoice outstanding would leave "nobody chasing it". That
+    premise is simply false: the chasing is the portal's follow-up cadence, which runs off
+    deposit_status against the portal's own row and does not know the word handed_off exists in
+    either repo. Hand-off moves a card between tabs. It does not stop a single email."""
     assert "approved-unpaid" in ran["boards"]["active"]["by"][STAGE_WON]
     assert ran["stageRouting"]["approved + deposit requested"] == STAGE_WON
     assert ran["routingIsWon"]["approved + deposit requested"] is False, (
-        "an approved job with the money still out is being called won, which would offer a hand-off "
-        "on a job nobody has been paid for")
+        "an approved job with the money still out is being called won, which would put a Won chip "
+        "on it and count it as finished on the Notification Sending page")
 
 
 # ── the columns, all seven of them, on the one board there is ────────────────
@@ -485,13 +491,25 @@ def test_a_won_card_offers_the_hand_off_and_an_unmarked_one_offers_the_mark(ran)
 
 
 @needs_node
-def test_an_approved_but_unpaid_card_is_not_offered_the_hand_off(ran):
-    """The gate is isWon, which is wider than the column. Offering a hand-off here would let a job
-    leave the board with an invoice outstanding and nobody chasing it."""
+def test_an_approved_but_unpaid_card_is_offered_the_hand_off_and_not_the_mark(ran):
+    """THE REGRESSION, stated on the one row that has it. Reversed on 2026-08-29 after driving the
+    real board: three Test-tab cards sat under a "Won/Approved" header offering to be marked won a
+    second time, with no way to hand any of them off.
+
+    The card gated on isWon while the column gated on wonOrApproved, so a job the customer had
+    approved but not yet paid for — which is what a fresh win looks like on the day it happens — got
+    a button whose only effect was to assert the money was in when it was not, and never got the one
+    button that would move it. Both now ask wonOrApproved.
+
+    Asserted here as the PAIR, because either half alone reads as a preference. Together they are the
+    invariant: the column header and the first button are six pixels apart and have to agree."""
     body = _card(ran, "active", "approved-unpaid")
-    assert 'data-handoff=' not in body, (
-        "a job whose deposit has not arrived is being offered to operations: %s" % body)
-    assert 'data-won="approved-unpaid"' in body
+    assert 'data-handoff="approved-unpaid"' in body, (
+        "a card sitting in the Won/Approved column offers no way to hand it off: %s" % body)
+    assert "Hand it off" in body
+    assert 'data-won="approved-unpaid"' not in body, (
+        "it offers to mark a card won that its own column already calls Won/Approved, and the press "
+        "would claim a deposit had landed that has not: %s" % body)
 
 
 @needs_node
@@ -584,6 +602,33 @@ def test_a_job_won_by_the_numbers_has_no_undo_but_can_still_be_handed_off(ran):
         "the panel is silent about why it has no undo: %r" % html)
     assert "Proposal tab" in html, (
         "it does not say where un-approving it or unwinding the deposit actually live")
+
+
+@needs_node
+def test_the_drawer_of_an_approved_unpaid_job_offers_the_hand_off_and_says_the_chasing_goes_on(ran):
+    """THE BRANCH THAT DID NOT EXIST, and the reason no test caught the card-side bug either: every
+    other won-ish fixture in this harness carries `won_at`, so every one of them reached the panel
+    through wonByHand and rendered correctly whatever the approved-only path did. This row is the
+    only one that exercises it, and before 2026-08-29 it fell through to the "Won it already?"
+    fallback — a drawer arguing with the column header three inches to its left, offering a Mark won
+    press whose only effect was to write a stamp for something the portal had already recorded.
+
+    The copy is its own rather than a share of the deposit-in branch, and that is the point: that
+    branch's promise is "the deposit is settled" and here it is precisely not. The panel has to say
+    the chasing carries on, because handing off does not end it — the cadence runs on deposit_status
+    and has never heard of hand-off."""
+    html = ran["wonControl"]["approved-unpaid"]
+    assert html, "the approved-but-unpaid panel renders nothing at all"
+    assert 'id="handoff-mark"' in html, (
+        "a card in the Won/Approved column has no way to reach operations from its drawer")
+    assert 'id="won-mark"' not in html, (
+        "the drawer offers to mark won a job its own column already calls Won/Approved: %r" % html)
+    assert 'id="won-undo"' not in html, (
+        "it offers to take off a mark nobody made, which would save and change nothing")
+    assert "deposit is still outstanding" in html, (
+        "the panel does not say the money is out, so Hand it off reads as 'this one is finished'")
+    assert "Handed Off tab" in html or "operations has it" in html, (
+        "it does not say what pressing Hand it off actually does")
 
 
 @needs_node
