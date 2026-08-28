@@ -202,19 +202,89 @@ def test_hand_it_off_is_offered_on_a_won_card_and_nowhere_else(out):
     gets this button: before the win there is nothing to hand over, and after the hand-off the press
     would save and change nothing visible, which reads as a broken control.
 
+    "WON" HERE MEANS THE COLUMN, and until 2026-08-29 this test said otherwise — it listed
+    `approved-1` among the cards that must NOT be offered a hand-off, on the reasoning that it "has
+    not been won". The board disagreed: stage() files an approved job under Won/Approved whether or
+    not the deposit has landed, so that card sat under a Won/Approved header offering to be marked
+    won a second time, and could not be handed off at all. Three of them were on staging. The list
+    below is now the right one; the invariant that would have caught the wrong one either way is
+    asserted in test_the_column_and_the_first_button_never_disagree.
+
     Read per card off the real paints of the Active and Handed Off tabs, not off cardActions called
     on its own — the branch that picks between the two first buttons runs inside kanbanHtml's own
     .map()."""
     by = out["rendered"]["byCard"]
-    for pid in ("won-1", "won-received"):
+    for pid in ("won-1", "won-received", "approved-1"):
         assert by[pid]["handoff"], "%s is won but offers no way to hand it to operations" % pid
-    for pid in ("ns-1", "sent-1", "approved-1"):
+    for pid in ("ns-1", "sent-1"):
         assert not by[pid]["handoff"], (
             "%s has not been won, so handing it off would take a live bid off the board" % pid)
     handed = out["rendered"]["handoffByCard"]
     assert handed, "the Handed Off tab drew no cards, so the third case proves nothing"
     for pid, has in handed.items():
         assert not has["handoff"], "%s offers to hand off a job operations already has" % pid
+
+
+@needs_node
+def test_the_column_and_the_first_button_never_disagree(out):
+    """THE INVARIANT, at the second attempt. A board card states two things six pixels apart — the
+    column header says what happened, the first button offers what to do about it — and on
+    2026-08-28 they shipped disagreeing.
+
+    MY FIRST VERSION OF THIS TEST WAS ALSO WRONG, and Hanz found it in a screenshot of a real card
+    rather than here. It asserted Hand it off appears if and only if the column is Won/Approved.
+    But stage() tests the deposit and contacts branches BEFORE the won branch, so an approved card
+    leaves that column the moment money moves: it is reachable in Deposit submitted, Deposit
+    received and Contact info as well. The rule passed only because this harness contained none of
+    those shapes. I had replaced a wrong hand-kept list with a wrong hand-reasoned rule.
+
+    So it is stated over the stage ORDER, which is the thing that actually holds:
+
+      · Won/Approved is reachable ONLY through wonOrApproved, so every card there offers the
+        hand-off unconditionally. This is the direction that broke.
+      · Created but not sent, Sent and Viewed all sit BELOW the won branch, so reaching one of them
+        means wonOrApproved already answered no. No card there may offer a hand-off. This is the
+        direction that keeps a live bid from being filed away.
+      · The deposit and contacts columns are genuinely ambiguous and no rule keyed on their name can
+        decide them — publishing a revision returns a card to 'sent' while leaving the money columns
+        alone, so Deposit received holds both approved and unapproved cards. Those are checked
+        against wonOrApproved itself, which is the question the button is supposed to be asking."""
+    cols = out["rendered"]["columnOf"]
+    by = out["rendered"]["byCard"]
+    eligible = out["rendered"]["wonOrApproved"]
+    assert cols, "the board paint yielded no columns, so this asserts nothing"
+
+    BEFORE_THE_WON_BRANCH = {"Created but not sent", "Sent", "Viewed"}
+    seen_won_col = seen_early = seen_ambiguous = False
+
+    for pid, col in cols.items():
+        if col == "Won/Approved":
+            seen_won_col = True
+            assert by[pid]["handoff"], (
+                "%s sits under a Won/Approved header with no way to hand it off — the exact card "
+                "Hanz screenshotted" % pid)
+            assert not by[pid]["won"], (
+                "%s offers to mark won a card its own column already calls Won/Approved" % pid)
+        elif col in BEFORE_THE_WON_BRANCH:
+            seen_early = True
+            assert not by[pid]["handoff"], (
+                "%s is in %s, a column only reachable when nobody has won it, yet it offers to "
+                "hand a live bid to operations" % (pid, col))
+            assert by[pid]["won"], "%s in %s offers no way to mark it won" % (pid, col)
+        else:
+            seen_ambiguous = True
+            assert by[pid]["handoff"] == eligible[pid], (
+                "%s is in %s: the column cannot say whether it was approved, and the button "
+                "disagrees with wonOrApproved, which can" % (pid, col))
+            assert by[pid]["won"] != eligible[pid], (
+                "%s offers both buttons or neither" % pid)
+
+    assert seen_won_col, "no card landed in Won/Approved, so the direction that broke is untested"
+    assert seen_early, "no pre-win card on the board, so the safety direction is untested"
+    assert seen_ambiguous, (
+        "no approved card outside Won/Approved, so this is the same blind spot as the first version")
+    assert any(eligible[p] for p in cols) and not all(eligible[p] for p in cols), (
+        "every card is eligible or none is, so the invariant is trivially satisfied")
 
 
 @needs_node

@@ -432,7 +432,10 @@
   function cardActions(p) {
     if (isLost(p) || C.isHandedOff(p)) return "";
     const id = encodeURIComponent(p.proposal_id);
-    const first = C.isWon(p)
+    // wonOrApproved, NOT isWon. isWon also demands the deposit be settled, so gating here left
+    // every approved-but-unpaid card — which is what a fresh win looks like — sitting in the
+    // Won/Approved column with a button offering to mark it won again and no way to hand it off.
+    const first = C.wonOrApproved(p)
       ? `<button type="button" class="deal-act" data-handoff="${id}" title="Operations has it — moves this off the board onto Handed Off">Hand it off</button>`
       : `<button type="button" class="deal-act" data-won="${id}" title="We won it — moves this to the Won/Approved column">Mark as won/approved</button>`;
     return `<div class="deal-acts">
@@ -1415,6 +1418,31 @@
             + "nothing to bring back here: no person marked it, so there is no mark to take off. It "
             + "stops counting as won if the approval or the deposit changes, and both of those are "
             + "on the Proposal tab. Hand it off once operations has it.")}
+        <p class="note" id="won-note"></p>${close}`;
+    }
+    // APPROVED, MONEY STILL OUT. wonByHand and isWon between them miss this one, and it is not an
+    // edge case: it is what a win looks like on the day it happens. The card is already in the
+    // Won/Approved column because stage() asks wonOrApproved, so a drawer that fell through to
+    // "Won it already?" here was arguing with the column header three inches to its left, and
+    // offering a Mark won press whose only effect would be to write a stamp for something the
+    // portal had already recorded.
+    //
+    // Its own copy rather than a share of the branch above, because that branch's promise is "the
+    // deposit is settled" and here it is precisely not. Saying so is the point: the chasing is
+    // still on, and handing off does not end it.
+    if (C.wonOrApproved(p)) {
+      return `${open}${head("Won/Approved")}
+        ${control('<div class="fu-line">' + handoffBtn + "</div>",
+          acts
+          ? "The customer approved this in the portal, so it counts as won without anyone marking "
+            + "it. The deposit is still outstanding and the chasing carries on. Hand it off once "
+            + "operations has it."
+          : "The customer approved this in the portal, so it sits in the Won/Approved column on the "
+            + "Active board without anyone having marked it. The deposit is still outstanding, so "
+            + "the follow-ups carry on and it does NOT yet count as won on the Notification Sending "
+            + "page. There is nothing to bring back here: no person marked it, so there is no mark "
+            + "to take off, and un-approving it lives on the Proposal tab. Hand it off once "
+            + "operations has it, and the card leaves the board for the Handed Off tab.")}
         <p class="note" id="won-note"></p>${close}`;
     }
     return `${open}${head("Won it already?")}
