@@ -1673,6 +1673,11 @@ def api_portal_pipeline() -> Dict[str, Any]:
     # lands on a project that HAS been sent. Carrying it only onto the synthesised not-sent rows
     # would ship the feature to the column it is least needed in.
     wons = {s["id"]: s.get("won_at") for s in summaries}
+    # The hand-off, carried for the same reason and with more riding on it. The won mark decides a
+    # COLUMN; this one decides a TAB, so a sent project whose stamp never reached the row would keep
+    # appearing on the Active board after somebody had already handed it to operations, and the
+    # sales meeting would keep discussing a job nobody there still owns.
+    hands = {s["id"]: s.get("handed_off_at") for s in summaries}
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
@@ -1684,6 +1689,8 @@ def api_portal_pipeline() -> Dict[str, Any]:
         # honest answer is "no such field", and isWon reads the stamp's truthiness either way.
         if wons.get(pid):
             row["won_at"] = wons[pid]
+        if hands.get(pid):
+            row["handed_off_at"] = hands[pid]
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
     return data
 
@@ -1732,6 +1739,12 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # complete truth about the project rather than a key invented over a portal field.
             # isWon reads the stamp's truthiness, so None simply means nobody has said so.
             "won_at": s.get("won_at"),
+            # Handed to operations by hand — see drafts.set_handed_off. Unconditional for the same
+            # reason as won_at directly above: this row is ours from nothing, so None here is the
+            # whole truth rather than a key invented over a portal field. Unsent AND handed off is a
+            # rare pair but a real one: a job won on the phone, priced, and passed straight to
+            # operations without the customer ever being sent the paperwork.
+            "handed_off_at": s.get("handed_off_at"),
         })
         # Dead before it was ever sent. Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in
         # the Created not sent category" — the commonest dead bid there is, priced and generated
@@ -4758,7 +4771,7 @@ def _hold_until(now: Optional[datetime] = None) -> str:
 
 
 class DraftStatusIn(BaseModel):
-    """Close an unsent project as lost or on hold, mark one won by hand, or clear any of it."""
+    """Close an unsent project as lost or on hold, mark one won or handed off, or clear any of it."""
     status: str = "closed_lost"
     reason: str = ""
     note: str = ""
@@ -4806,6 +4819,16 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
     the button looks broken. One press, one write, one event — see drafts.clear_outcome. The narrow
     undos stay because they say what they undid; this one exists because "bring it back" is one act.
 
+    HANDING OFF IS ITS OWN STATUS, `handed_off`, added 2026-08-28, and it is the status that let
+    "won" stop meaning two things. Until that day, marking a job won took its card off the Active
+    board, so one press said both "we got it" and "we are done looking at it" — and the second half
+    was wrong, because a won job still owes a deposit and a set of contacts, and the sales meeting
+    is run off that board. Hanz: "the mark as won button would move the project the Won/Approved not
+    into a separate pipeline", and "we need to add a button on the Project container in the Active
+    project named as 'Hand it off'". So winning is now a column and handing off is the press that
+    empties the card off the board. `not_handed_off` clears it, aiming at the thing it undid exactly
+    as `not_won` does.
+
     ON HOLD, `on_hold`, is not an outcome at all. Kyle's list carries two answers that pause a bid
     instead of killing it (HOLD_REASONS above), and an unsent project has no portal row to pause,
     so the draft records the reason and a date and the board keeps the card in its Created column.
@@ -4817,6 +4840,17 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
             existed = drafts.set_won(draft_id, status == "won", _user_email(request))
         except Exception as exc:  # noqa: BLE001 — the drawer repaints itself on ok; see below
             log.warning("set_won failed for %s: %s", draft_id, exc)
+            raise HTTPException(502, "Could not save the status.") from exc
+        if not existed:
+            raise HTTPException(404, "project_not_found")
+        return {"ok": True, "status": status}
+
+    if status in ("handed_off", "not_handed_off"):
+        try:
+            existed = drafts.set_handed_off(draft_id, status == "handed_off",
+                                            _user_email(request))
+        except Exception as exc:  # noqa: BLE001 — same contract as the won branch above
+            log.warning("set_handed_off failed for %s: %s", draft_id, exc)
             raise HTTPException(502, "Could not save the status.") from exc
         if not existed:
             raise HTTPException(404, "project_not_found")

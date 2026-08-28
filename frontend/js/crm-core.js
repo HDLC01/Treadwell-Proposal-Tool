@@ -8,9 +8,9 @@
 //   WHICH COLUMN?  `stage()`. Closed-lost wins over everything: a customer who
 //   said they aren't moving forward must not keep sitting halfway down the board
 //   as live work. A deposit gates progress past it, so an unpaid deal can never
-//   read as further along than a paid one. A WON job is off the pipeline
-//   altogether since 2026-08-20 and columned by `wonColumn()` instead — what is
-//   still outstanding on it, not how far along it is. See the note there.
+//   read as further along than a paid one. A WON job STAYS on the pipeline, in
+//   the Won/Approved column, and leaves it only when a human hands it off
+//   (`isHandedOff`) — see the note on STAGE_WON.
 //
 //   WHAT DATE?  `stageTs()` for "how long has it been HERE", `activityTs()` for
 //   "when did anything last happen". Sorting a kanban column by last activity
@@ -55,7 +55,16 @@
   // api_portal_pipeline synthesises those rows out of our own drafts and marks them `not_sent`;
   // see the note there for what counts as one.
   var STAGE_CREATED = "Created but not sent";
-  var STAGES = [STAGE_CREATED, "Sent", "Viewed", "Approved", STAGE_SUBMITTED,
+  // Hanz, 2026-08-28: "Relabel Approved to 'Won/Approved'" — and with it, won jobs come BACK onto
+  // this board instead of leaving for a tab of their own. A won job still has a deposit and
+  // contacts to chase, and the sales meeting is run off the Active board; a card the meeting
+  // cannot see is a card nobody chases. The board keeps it until a human hands it off.
+  //
+  // A CONSTANT, not three spellings. group() buckets on stage()'s return value, so the label
+  // string IS the column key — a typo between STAGES and stage() empties a column silently rather
+  // than throwing, which is the failure mode this whole module is written to avoid.
+  var STAGE_WON = "Won/Approved";
+  var STAGES = [STAGE_CREATED, "Sent", "Viewed", STAGE_WON, STAGE_SUBMITTED,
                 "Deposit received", "Contact info"];
 
   // ── why a bid died, and whether it died at all ─────────────────────────────
@@ -164,12 +173,15 @@
     "Created but not sent": "drafted_at",
     "Sent": "sent_at",
     "Viewed": "last_viewed_at",
-    "Approved": "approved_at",
     "Deposit submitted": "deposit_submitted_at",
     "Deposit received": "deposit_received_at",
     "Contact info": "contacts_received_at",
     "Closed lost": "closed_at",
   };
+  // Assigned rather than written as a literal key, so the column label and the date it reads
+  // cannot drift apart. A won-by-hand card that was never sent has no approved_at at all —
+  // stageTs falls back to activityTs for it, which is the honest answer rather than a blank.
+  STAGE_DATE_KEY[STAGE_WON] = "approved_at";
 
   function followup(p) { return (p && p.followup_state) || {}; }
   function isLost(p) { return String((p && p.proposal_status) || "") === "closed_lost"; }
@@ -205,7 +217,7 @@
   }
 
   /** No deposit stage stands between approval and contacts when this job doesn't
-   *  collect one — otherwise a GC project would sit in "Approved" forever, unable
+   *  collect one — otherwise a GC project would sit in Won/Approved forever, unable
    *  to reach Contact info. An issued invoice means a deposit is genuinely
    *  outstanding, flag or not, so it still gates. */
   function depositSatisfied(p) {
@@ -244,14 +256,18 @@
    *  the two paths deliberately do not gate each other — requiring approval as well would refuse
    *  exactly the case this exists for.
    *
-   *  SINCE 2026-08-20 THIS DECIDES A TAB, not just a chip. Hanz moved won jobs off the Active board
-   *  onto their own tab (see wonColumn), so a false positive here no longer merely mislabels a card,
-   *  it takes the card off the board a rep is watching. Which is why the derived half stays as
-   *  strict as it is: "approved" alone would move every approved-but-unpaid job — the most
-   *  worth-chasing rows there are — off the live board, and the Won tab's "Deposit outstanding"
-   *  column is the safety net for the ones that legitimately get there, not a licence to widen this.
- *
- *  Nothing here checks isLost, and that is on purpose: every reader asks isLost FIRST (stage(),
+   *  IT NO LONGER DECIDES A TAB. Between 2026-08-20 and 2026-08-28 a true answer here took the card
+   *  off the Active board onto a Won tab of its own, and the derived half had to stay strict for
+   *  that reason alone. What leaves the board now is a human pressing Hand it off (isHandedOff), so
+   *  a false positive here offers a button too early rather than hiding a live job from the rep
+   *  watching the board. The half-strictness stays anyway, because it is still what the Hand it off
+   *  button is gated on and handing off an unpaid job is the mistake worth making hard.
+   *
+   *  Note that stage() does NOT call this: the Won/Approved column is wonByHand || approvedInPortal,
+   *  deliberately wider, because an approved job with money outstanding belongs in that column and
+   *  emphatically does not belong handed off.
+   *
+   *  Nothing here checks isLost, and that is on purpose: every reader asks isLost FIRST (stage(),
    *  ppCategory(), chipsHtml()), so a job marked won and then cancelled reads as Lost only. Folding
    *  it in here would put the same rule in two places, and a SENT project's closed_lost belongs to
    *  the portal, which the mark cannot see or clear. */
@@ -260,9 +276,9 @@
     return approvedInPortal(p) && depositSatisfied(p);
   }
 
-  /** The customer has agreed IN THE PORTAL. Named once and shared, because wonColumn gates on it
-   *  too now and two spellings of "approved" is exactly how the Won tab would come to disagree
-   *  with the pipeline about the same card.
+  /** The customer has agreed IN THE PORTAL. Named once and shared, because stage() and isWon both
+   *  gate on it and two spellings of "approved" is exactly how the Won/Approved column would come
+   *  to disagree with the Hand it off button about the same card.
    *
    *  `approved_at` as well as the status, for two reasons that both matter. The portal's
    *  `proposal_status` is ONE terminal column — closed_lost REPLACES 'approved' rather than
@@ -286,11 +302,6 @@
 
   function stage(p) {
     if (isLost(p)) return STAGE_LOST;
-    // Checked before every portal state, because a synthesised row has none of them: it is a
-    // draft of ours, not a proposal the customer has. The flag is set server-side rather than
-    // inferred from missing fields, so a portal row that arrives without a status cannot fall
-    // into this column by accident.
-    if (p.not_sent) return STAGE_CREATED;
     // No schedule branch. A scheduled job now reads as Contact info, the furthest stage that
     // still exists, rather than vanishing: group() only keeps cards whose stage is a live
     // column. See the note on STAGES.
@@ -301,90 +312,49 @@
     // Checked AFTER "received" so a confirmed deposit can never fall back into the
     // submitted column if the portal ever sends both signals.
     if (p.deposit_status === "submitted") return STAGE_SUBMITTED;
-    if (p.proposal_status === "approved") return "Approved";
+    // THE WON MARK OUTRANKS not_sent, and that ordering is the whole Trabon complaint —
+    // Hanz, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but
+    // Not Sent bucket". The mark is a DRAFT-side field, so a synthesised row carries it while it
+    // carries no portal state whatsoever; testing not_sent first meant the one field an unsent
+    // card does have was the one field that could never be read.
+    //
+    // Below the deposit branches on purpose: a won job whose money has landed reads
+    // "Deposit received", so winning it never hides the work still owed on it. approvedInPortal
+    // rather than a bare status check, so this column and isWon cannot come to disagree about
+    // what "approved" means; wonByHand is the half that reaches unsent rows.
+    if (wonByHand(p) || approvedInPortal(p)) return STAGE_WON;
+    // Checked before the remaining portal states, because a synthesised row has none of them: it
+    // is a draft of ours, not a proposal the customer has. The flag is set server-side rather
+    // than inferred from missing fields, so a portal row that arrives without a status cannot
+    // fall into this column by accident.
+    if (p.not_sent) return STAGE_CREATED;
     if (p.proposal_status === "viewed") return "Viewed";
     return "Sent";
   }
 
-  // ── the Won tab's columns ──────────────────────────────────────────────────
-  // Hanz, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but Not
-  // Sent bucket", and then the decision: a Won TAB takes every won job, off the Active board
-  // entirely, the same way Lost comes off it.
+  // ── handed off ────────────────────────────────────────────────────
+  // Hanz, 2026-08-28: "Once we receive the Contact Info, we indicate it as handed off... Then the
+  // Won category would be relabeled as 'Handed Off'. After the Handed Off Pipeline would just be
+  // one list."
   //
-  // THIS REVERSES the reasoning that shipped on 2026-08-19, which is recorded in chipsHtml
-  // (portal.js) and in test_lost_tab.py: the board KEPT a won card because a won job still has work
-  // on it, and moving it would hide "Deposit received" and "Contact info" work from the people
-  // doing it. That reasoning was right about the risk and wrong about the fix — a Won chip on a card
-  // in the Created column is a card that both says it was won and sits in the bucket for bids nobody
-  // has sent, and the estimator reads the bucket, not the chip.
+  // THIS REPLACES the Won tab of 2026-08-20 and its four outstanding-work columns. That tab existed
+  // to answer "what is still owed on this won job" precisely BECAUSE winning took the card off the
+  // Active board; now winning does not, so the question is answered where the work is - on the live
+  // board, in the Won/Approved, Deposit received and Contact info columns it was always in.
   //
-  // These four columns are the mitigation, and the whole reason the move is safe: the Won tab is
-  // grouped by WHAT IS STILL OUTSTANDING rather than by pipeline stage, so nothing outstanding
-  // becomes invisible by leaving the Active board. It is the same trade the Lost tab makes with its
-  // close reasons — every card there shares one stage, so stages would say nothing and the columns
-  // have to answer the question the tab is actually opened to ask.
+  // What leaves the board is a HUMAN ACT, not a derived state. A job is handed off when somebody
+  // presses the button, which is the difference between "the numbers say this is done" and
+  // "operations has it now" - the second is the only one worth taking a card off a sales board for,
+  // and nothing in the data can tell us it happened. So this reads one field and derives nothing:
+  // unlike isWon, there is no second half.
   //
-  // Deliberately derived from the SAME predicates the rest of this module reads — approvedInPortal,
-  // depositSatisfied, contacts_status — and not from parallel ones: two rules for "is the deposit in"
-  // is how a card ends up under "Deposit outstanding" here while the pipeline calls it "Deposit
-  // received", and two rules for "has the customer approved" is how it ended up there with nothing
-  // owed on it at all.
-  var WON_EARLY = "Won before approval";
-  var WON_DEPOSIT = "Deposit outstanding";
-  var WON_CONTACTS = "Contacts outstanding";
-  var WON_DONE = "Complete";
-  var WON_COLS = [WON_EARLY, WON_DEPOSIT, WON_CONTACTS, WON_DONE];
+  // ONE COLUMN, because the tab is a record rather than a workflow. Grouping a finished list by
+  // anything invites the reader to believe the groups mean work; a flat list, defaulting to the
+  // table view, says the only thing true of every card on it - we are done here.
+  var HANDOFF_COL = "Handed off";
+  var HANDOFF_COLS = [HANDOFF_COL];
 
-  /** Which Won column a won job belongs in. Total: every branch returns a member of WON_COLS.
-   *
-   *  THE FIRST COLUMN MEANS "the portal flow has not caught up", not merely "never sent". It read
-   *  "Won before sending" and tested `not_sent` alone for a few hours on 2026-08-20, and that was
-   *  wrong for the single case this whole feature exists for. Two shapes reach it now:
-   *
-   *    · `not_sent` — a bid nobody has emailed. It carries no deposit or contacts fields AT ALL
-   *      (the pipeline sends not_sent, bid_total, drafted_at, estimator_email and won_at, and
-   *      little else — see api_portal_pipeline), so any rule that reads them first files it under
-   *      an invoice that does not exist. This is the card Hanz marked won.
-   *    · sent, and the customer has NOT approved — the verbal yes on the phone. drafts.set_won was
-   *      built for exactly this ("days before the customer clicks Approve, weeks before the money
-   *      lands"), and lost-tab-harness.js fixtures it as `won-marked`: sent, unapproved, no
-   *      deposit. Far from being impossible, it is the commonest way we learn we won.
-   *
-   *  That second shape used to land under "Deposit outstanding", and the comment there claimed it
-   *  could not — that depositSatisfied is false "only when a deposit is actually outstanding".
-   *  It is false whenever `deposit_required` is unset, which is every row that has not reached the
-   *  deposit step. So the board was telling whoever chases money that money was owed on a proposal
-   *  NOBODY HAS INVOICED and the customer has not even approved. depositSatisfied answers "is the
-   *  money question settled"; on an unapproved proposal the honest answer is "it has not been
-   *  asked", which is not the same thing.
-   *
-   *  Hence approval gates the money and contacts questions here exactly as the portal gates them:
-   *  a deposit cannot be requested and contacts cannot be collected until the customer approves.
-   *  Every column's rule is then true of every card in it —
-   *
-   *    Won before approval    the customer has not agreed in the portal (unsent, or sent and
-   *                           unapproved), so nothing downstream of approval has been asked for
-   *    Deposit outstanding    approved, and the money question is not settled — the SAME
-   *                           depositSatisfied the pipeline gates on, so this column and the live
-   *                           board's Approved / Deposit submitted columns cannot disagree
-   *    Contacts outstanding   approved, money settled, the customer has not sent the contacts
-   *    Complete               nothing outstanding
-   *
-   *  — and a DERIVED win can only ever reach the last three, because isWon's derived half already
-   *  requires approval. Every card in the first column is one a person marked by hand.
-   *
-   *  `p.not_sent` in that first test is BELT AND BRACES, and stated as such because mutation testing
-   *  says so: deleting it leaves every assertion in test_won_tab.py green. A synthesised row carries
-   *  no portal state at all, so !approvedInPortal is already true of every one of them. It stays
-   *  because it puts the reason at the branch — this is the same not_sent-before-everything ordering
-   *  stage() depends on — and because a shape that is both unsent and stamped approved would be a
-   *  bug in the pipeline rather than a card for the deposit column. */
-  function wonColumn(p) {
-    if (p.not_sent || !approvedInPortal(p)) return WON_EARLY;
-    if (!depositSatisfied(p)) return WON_DEPOSIT;
-    if (p.contacts_status !== "received") return WON_CONTACTS;
-    return WON_DONE;
-  }
+  function isHandedOff(p) { return !!(p && p.handed_off_at); }
 
   function lastActivity(p) {
     var best = null;
@@ -613,50 +583,43 @@
     return by;
   }
 
-  /** The same, for the Won tab's four columns.
+  /** The same, for the Handed Off tab's single column.
    *
    *  Here and not in portal.js, unlike the Lost tab's groupByReason, for one blunt reason: portal.js
    *  referring to a grouping function it does not own means nothing new has to be bound into the
    *  page's scope, and an unbound identifier inside a render callback is what took this board down on
    *  2026-08-12.
    *
-   *  The `||` fallback cannot fire today — wonColumn is total over WON_COLS, and the two live three
-   *  lines apart so a fifth branch cannot be added without a column staring at whoever adds it. It is
-   *  here because a throw inside this loop blanks the entire board, and a card in the wrong column is
-   *  a smaller lie than a won job nobody can find: somebody scanning the column opens the card and
-   *  learns the truth.
-   *
-   *  It falls back to the FIRST column rather than "Deposit outstanding", which is where it landed
-   *  until 2026-08-20. The other three each assert something specific about a card — approved and
-   *  the money owed, approved and the contacts missing, nothing left — and a card we could not
-   *  classify has not earned any of those claims. "Won before approval" says only "somebody told us
-   *  we won and the flow has not caught up", which is the weakest true thing left to say. */
-  function groupWon(items) {
+   *  It takes every item it is handed rather than re-testing isHandedOff, because the caller has
+   *  already partitioned the pool and a second, disagreeing test is how a card ends up on a tab that
+   *  renders it into no column at all — group()'s "unknown stages are dropped" rule, arriving as a
+   *  blank tab nobody can explain. */
+  function groupHandedOff(items) {
     var by = {};
-    WON_COLS.forEach(function (c) { by[c] = []; });
-    items.forEach(function (p) { (by[wonColumn(p)] || by[WON_EARLY]).push(p); });
+    by[HANDOFF_COL] = items.slice();
     return by;
   }
 
   return {
     STAGES: STAGES, STAGE_SUBMITTED: STAGE_SUBMITTED, STAGE_LOST: STAGE_LOST,
     STAGE_CREATED: STAGE_CREATED,
-    WON_COLS: WON_COLS, WON_EARLY: WON_EARLY, WON_DEPOSIT: WON_DEPOSIT,
-    WON_CONTACTS: WON_CONTACTS, WON_DONE: WON_DONE,
+    STAGE_WON: STAGE_WON,
+    HANDOFF_COL: HANDOFF_COL, HANDOFF_COLS: HANDOFF_COLS,
     LOST_REASON: LOST_REASON, CLOSE_CHOICES: CLOSE_CHOICES, HOLD_REASON: HOLD_REASON,
     CUSTOMER_ONLY_LOST_REASON: CUSTOMER_ONLY_LOST_REASON, closeOutcome: closeOutcome,
     MILESTONES: MILESTONES, STAGE_DATE_KEY: STAGE_DATE_KEY,
     SORT_FIELDS: SORT_FIELDS, NATURAL_DIR: NATURAL_DIR, COMPARE: COMPARE,
     followup: followup, isLost: isLost, isWon: isWon, wonByHand: wonByHand,
+    isHandedOff: isHandedOff,
     depositSatisfied: depositSatisfied, approvedInPortal: approvedInPortal,
     isTest: isTest, nameLooksLikeTest: nameLooksLikeTest,
-    stage: stage, wonColumn: wonColumn,
+    stage: stage,
     lastActivity: lastActivity, activityTs: activityTs, stageTs: stageTs,
     estimatorOf: estimatorOf, isAssigned: isAssigned, cardTotal: cardTotal,
     pausedUntil: pausedUntil,
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,
     initialsOf: initialsOf, colorOf: colorOf, avatarHtml: avatarHtml, identityKey: identityKey,
     AVATAR_COLORS: AVATAR_COLORS, AVATAR_NONE: AVATAR_NONE,
-    sort: sort, group: group, groupWon: groupWon,
+    sort: sort, group: group, groupHandedOff: groupHandedOff,
   };
 });

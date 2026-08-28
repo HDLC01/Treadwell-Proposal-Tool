@@ -116,6 +116,10 @@
   /* Approved AND the deposit settled. Green because it is the one chip that is good news; the word
      still carries it on its own, for the synthesized dark theme some browsers apply here. */
   .chip-won { background:#eaf7ee; border-color:#b6ddc2; color:#1c6b35; }
+  /* Handed to operations, so the job has left the Active board. Slate rather than green: it is not
+     better news than winning, it is the end of our part, and a second green chip beside the won one
+     would read as two pieces of good news on one card. */
+  .chip-handoff { background:#eef1f5; border-color:#ccd4de; color:#3c4a5c; }
   /* Every proposal as one sortable list — the answer to "show me all sixty". */
   .ptable { width:100%; border-collapse:separate; border-spacing:0; background:#fff;
     border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px; }
@@ -774,18 +778,21 @@
     <h1>Active Projects</h1>
     <p class="sub">Proposals sent to customers — track approvals, answer questions, and advance deposit &amp; schedule status.</p>
     <!-- Which board, not how it's filtered: the same Active / Test split as the Proposals
-         Database, off the same is_test flag. The two outcomes, Won and Lost, sit on this row too
-         because they are the things that are no longer on the live board. -->
+         Database, off the same is_test flag. The two ways a job leaves the live board, Handed Off
+         and Lost, sit on this row too. -->
     <div id="crm-tabs" class="tw-tabs">
       <button type="button" class="tw-tab on" data-tab="active" aria-pressed="true">Active <span class="n">0</span></button>
-      <!-- Hanz, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but
-           Not Sent bucket" — and the decision that a Won tab takes every won job, off the Active
-           board the way Lost comes off it. Its columns are what is still outstanding on the job
-           (C.WON_COLS in crm-core.js), which is what makes moving the card safe: the deposit and
-           contacts chasing is visible on the tab that owns it. Placed between Active and Lost: the
-           two outcomes read together beside the live board, and the scratch tab keeps the far end,
-           which is the order he asked for when Lost moved next to Active on 2026-08-15. -->
-      <button type="button" class="tw-tab" data-tab="won" aria-pressed="false">Won <span class="n">0</span></button>
+      <!-- WAS "Won", until 2026-08-28. A Won tab took every won job off the Active board, and that
+           went one step too far: a won job still owes a deposit and a set of contacts, and the sales
+           meeting is run off the Active board, so the work vanished from the screen it is discussed
+           on. Hanz: "the mark as won button would move the project the Won/Approved not into a
+           separate pipeline", and "the Won category would be relabeled as 'Handed Off'".
+           So winning is a COLUMN on the Active board now (C.STAGE_WON), and a card leaves the board
+           only when somebody presses Hand it off. ONE COLUMN here (C.HANDOFF_COLS), because this tab
+           is a record rather than a workflow: "After the Handed Off Pipeline would just be one list.
+           Default View should be a list." Placed between Active and Lost, which is the order he
+           asked for when Lost moved next to Active on 2026-08-15. -->
+      <button type="button" class="tw-tab" data-tab="handed_off" aria-pressed="false">Handed Off <span class="n">0</span></button>
       <!-- Hanz, 2026-08-12: "Actualy create another tab for 'Lost' This is where the lost projects
            will be held". This REPLACED a "0 closed lost →" link that pointed at the Proposals
            Database, which could not filter to the dead ones — /projects.html lists our drafts and
