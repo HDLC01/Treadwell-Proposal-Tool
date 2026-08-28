@@ -480,9 +480,15 @@ out.wonControl = {};
 // gap where every other state has a control. `handoff-complete` is the state past it — the job
 // operations has — which needs its own answer again, because "Hand it off" on a card already handed
 // off is a button that does nothing.
+//
+// `approved-unpaid` is the state that had no drawer here at all until 2026-08-29, and its absence is
+// why the bug shipped. Every other won-ish fixture carries `won_at`, so every one of them reaches
+// the panel through `wonByHand` and would have rendered correctly no matter what the approved-only
+// branch did. This row is approved with nobody having marked it: the ONLY fixture whose drawer
+// depends on the branch that was missing.
 const WON_CONTROL_ROWS = ["won-unsent", "unsent-plain", "won-marked-sent", "lost-after-won",
                           "won-complete", "handoff-complete", "handoff-unsent",
-                          "won-deposit-out"];
+                          "won-deposit-out", "approved-unpaid"];
 for (const row of WON_CONTROL_ROWS.map((id) => {
   const hit = ROWS.find((p) => p.proposal_id === id);
   if (!hit) throw new Error("no fixture called " + id + " — rewrite this harness, don't delete it");
