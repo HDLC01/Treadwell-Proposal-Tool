@@ -419,7 +419,12 @@ def clear_outcome(draft_id: str, actor_email: Optional[str] = None) -> bool:
     if not cur.data:
         return False
     data = dict(cur.data[0].get("data") or {})
-    for key in ("closed_lost", "on_hold", "won"):
+    # "handed_off" joined the list on 2026-08-28. A job that was handed to operations and then
+    # closed lost has two marks on it, and Bring it back has to mean the same thing here as it does
+    # for the other three: one press, one write, the card back on the live board. Leaving the
+    # hand-off behind would put it straight back on the Handed Off tab, where the estimator who
+    # just pressed Bring it back would not look for it.
+    for key in ("closed_lost", "on_hold", "won", "handed_off"):
         data.pop(key, None)
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "brought_back",
@@ -469,6 +474,54 @@ def set_won(draft_id: str, won: bool, actor_email: Optional[str] = None) -> bool
         data.pop("won", None)
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "won" if won else "not_won",
+              {"project_name": data.get("project_name"), "id": draft_id})
+    _cache_clear()
+    return True
+
+
+def set_handed_off(draft_id: str, handed_off: bool, actor_email: Optional[str] = None) -> bool:
+    """Hand a won project to operations, or undo that. `handed_off` False clears it.
+
+    Hanz, 2026-08-28: "Once we receive the Contact Info, we indicate it as handed off... We need to
+    add a button on the Project container in the Active project named as 'Hand it off'."
+
+    THIS IS THE FIELD THAT REPLACED A DERIVED TAB. Between 2026-08-20 and today, winning a job took
+    its card off the Active board by itself: isWon was the routing question, so the moment the
+    numbers said won, the work still owed on the job (the deposit, the contacts) left the board the
+    sales meeting is run from. Handing off is a HUMAN ACT with no timestamp anywhere else in either
+    database to derive it from, which is precisely why it earns a stored field where "won" could
+    have been computed.
+
+    Stored on the draft blob beside `won` and `closed_lost`, for the same two reasons: an unsent
+    project has no `portal_proposals` row to write to, and `proposal_status` is CHECK-constrained,
+    so a "handed_off" status value there would mean DDL on a column the portal owns. Following that
+    precedent exactly is the point — a third storage shape for a fourth outcome is how the word
+    "lost" came to mean two things on two screens before crm-core existed.
+
+    NOT GATED ON `won` HERE, deliberately, and the gate is in the UI instead. Hand it off is only
+    rendered on a card isWon already accepts, so the button cannot be reached otherwise; putting a
+    second copy of that rule in here would give the two a way to disagree, and it would reject a
+    legitimate correction (a job handed off, then un-marked won, then re-marked) for no gain. What
+    the API must not do is invent state, and it does not: it records who pressed the button.
+
+    `updated_at` is deliberately NOT bumped, as with the other blob writers here: recording an
+    outcome is not work on the estimate, and shuffling the project to the top of a list sorted by
+    date-updated on its way OUT would be backwards.
+
+    Returns True if the project existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if handed_off:
+        data["handed_off"] = {"at": _now_iso(), "by": actor_email or ""}
+    else:
+        # Drop the key rather than storing `{"at": null}`: every reader tests the stamp's presence,
+        # and an object with nothing in it reads as "somebody decided" when nobody did.
+        data.pop("handed_off", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "handed_off" if handed_off else "not_handed_off",
               {"project_name": data.get("project_name"), "id": draft_id})
     _cache_clear()
     return True
@@ -602,7 +655,11 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # JSON paths rather than the blob, so a key that is not named reaches no card. The
                 # fast path is the one that serves every real page load; the full-blob `_summary`
                 # below only runs when PostgREST refuses this select.
-                "won_at:data->won->>at")
+                "won_at:data->won->>at,"
+                # Handed to operations — see set_handed_off. Named for exactly the reason above,
+                # and it is the field the Handed Off TAB routes on, so an unnamed key here does not
+                # degrade the board, it empties a tab.
+                "handed_off_at:data->handed_off->>at")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -636,6 +693,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "on_hold_until": r.get("on_hold_until") or None,
             "on_hold_note": r.get("on_hold_note") or None,
             "won_at": r.get("won_at") or None,
+            "handed_off_at": r.get("handed_off_at") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -922,6 +980,10 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         # scalar: both paths have to expose it or the Won mark reaches the card on some page loads
         # and not others, which is indistinguishable from the mark not having saved.
         "won_at": ((data.get("won") or {}).get("at") or None),
+        # Handed to operations — see set_handed_off. Both paths, same argument as the won mark
+        # above, and with more at stake: this one decides which TAB the project appears on, so a
+        # field on only one path would move a project between tabs depending on which query ran.
+        "handed_off_at": ((data.get("handed_off") or {}).get("at") or None),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

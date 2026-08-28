@@ -79,7 +79,10 @@ function topConstValue(name) {
 // Asserted equal on the Python side: a tab with no button is unreachable, a button with no tab blanks
 // the board, and neither is visible from either file alone.
 const TABS = topConstValue("TABS");
-const PILLS = Array.from(html.matchAll(/data-tab="([a-z]+)"/g)).map((m) => m[1]);
+// `[a-z_]+`, not `[a-z]+`: the tab ids gained an underscore on 2026-08-28 (`handed_off`) and a
+// letters-only class silently dropped that pill, which reads here as "portal.html is missing a
+// button" — a false product bug that costs more to chase than the character costs to type.
+const PILLS = Array.from(html.matchAll(/data-tab="([a-z_]+)"/g)).map((m) => m[1]);
 if (!PILLS.length) throw new Error("portal.html has no [data-tab] pills — rewrite this harness");
 
 // EXACTLY what portal.js pulls off crm-core, taken from portal.js's own destructuring lines so this
@@ -142,6 +145,21 @@ const ROWS = [
     approved_at: "2026-08-16T12:00:00Z", won_at: "2026-08-18T15:00:00Z", deposit_required: true,
     deposit_status: "pending", deposit_requested_at: "2026-08-17T12:00:00Z",
     approved_total: 61000.0, assigned_estimator: "will@wetreadwell.com" },
+  // ── the Handed Off tab, which since 2026-08-28 is what winning no longer does ───
+  // Handed off with everything settled: the ordinary way a job leaves the board.
+  { proposal_id: "handoff-1", project_name: "Galloway Logistics", proposal_status: "approved",
+    approved_at: "2026-08-11T12:00:00Z", deposit_status: "received",
+    deposit_received_at: "2026-08-12T12:00:00Z", contacts_status: "received",
+    contacts_received_at: "2026-08-12T13:00:00Z", won_at: "2026-08-12T14:00:00Z",
+    handed_off_at: "2026-08-13T09:00:00Z", assigned_estimator: "kyle@wetreadwell.com",
+    approved_total: 47000.0 },
+  // Handed off from an UNSENT bid — won on the phone, priced, passed straight to operations. It
+  // carries no portal fields at all, so it is the row that catches a Handed Off rule reading them
+  // first, and it proves the tab is not merely the far end of the pipeline.
+  { proposal_id: "handoff-2", project_name: "Sparrow Point Annex", not_sent: true,
+    won_at: "2026-08-14T15:00:00Z", handed_off_at: "2026-08-15T09:00:00Z",
+    bid_total: 32500.0, drafted_at: "2026-08-13T12:00:00Z",
+    estimator_email: "will@wetreadwell.com" },
   { proposal_id: "paused-1", project_name: "Hillcrest Annex", proposal_status: "viewed",
     followup_state: { enrolled: true, enabled: true, paused_until: "2026-12-01" } },
   { proposal_id: "autooff-1", project_name: "Lakeside Garage", proposal_status: "sent",
@@ -214,7 +232,7 @@ function columnsOf(board) {
 }
 
 const out = { imported: NAMES, absent: absent, tabs: TABS, pills: PILLS,
-              wonCols: C.WON_COLS, stages: C.STAGES,
+              handoffCols: C.HANDOFF_COLS, stages: C.STAGES,
               // The Lost tab's own vocabulary, read the way portal.js builds it (LOST_COLS):
               // every label in the derived LOST_REASON map, then the catch-all. Exported so the
               // Lost-tab test can assert column NAMES rather than a bare count, which is the only

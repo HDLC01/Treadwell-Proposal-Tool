@@ -300,8 +300,9 @@ def test_saying_no_to_the_prompt_changes_nothing(out):
 @needs_node
 def test_the_bring_back_clears_every_mark_in_one_press(out):
     """`bring_back`, not `active`. A bid marked won and then closed lost reads as Lost only, so
-    clearing one mark drops the card onto the Won tab instead of back on the board — which is the
-    case Hanz named: "if projects are both won and lost"."""
+    clearing one mark leaves the other standing and the card lands under the won mark rather than
+    back where its own stamps put it — the Won tab until 2026-08-28, the Won/Approved column since.
+    Either way it is the case Hanz named: "if projects are both won and lost"."""
     assert out["wonThenLost"]["readsAsLost"] is True
     assert out["wonThenLost"]["readsAsWon"] is True, (
         "the fixture is not actually both, so this test proves nothing")
@@ -315,8 +316,8 @@ def test_the_bring_back_clears_every_mark_in_one_press(out):
 
 @needs_node
 def test_the_prompt_for_a_won_and_lost_bid_names_the_column_the_timestamps_earn(out):
-    """Not "Won". Clearing the by-hand mark is part of the same press, so promising the Won tab
-    would send the estimator looking for the card on the wrong board."""
+    """Not "Won/Approved". Clearing the by-hand mark is part of the same press, so promising the
+    column the mark would have earned names somewhere the card does not land."""
     dest = out["wonThenLost"]["destination"]
     assert dest == "Created but not sent", (
         "the prompt promises %r for a bid that was never sent" % dest)
@@ -346,19 +347,30 @@ def test_the_destination_is_the_furthest_step_the_card_actually_reached(out):
     `viewed` answers "Sent" ON PURPOSE and matches the portal: db.reopen_if_closed deliberately
     restores a previously-viewed row as 'sent' because "reopening is a fresh chase", and
     cycle_viewed_at is what picks the reminder track. Promising "Viewed" here would be this file
-    disagreeing with the write it is describing."""
+    disagreeing with the write it is describing.
+
+    THE LABELS MOVED ON 2026-08-28 AND THE DERIVATION DID NOT, which is the argument for deriving
+    them. stage() renamed its approval column to "Won/Approved" and stopped sending won jobs off the
+    board, so every answer below is now a live column of the Active board — a stored "previous
+    stage" written before that day would still be promising a tab that no longer exists. The one
+    destination that is not a column is a HANDED-OFF card, and reopenDestination answers that from
+    its own isHandedOff branch rather than from stage()."""
     d = out["destinations"]
     assert d["unsent"] == "Created but not sent"
     assert d["sent"] == "Sent"
     assert d["viewed"] == "Sent", (
         "this says %r; the portal restores a viewed row as sent, so the prompt would lie" % d["viewed"])
-    assert d["approved"] == "Approved", (
+    assert d["approved"] == "Won/Approved", (
         "an approved job is promised %r — the approval survives close_lost and reopen_if_closed "
         "restores it, so anything else throws away a win" % d["approved"])
-    # Money in and contacts in are WON by the numbers, and clearing a by-hand mark cannot undo
-    # that, so the honest answer names the Won tab rather than an Active column.
-    assert d["depositIn"].startswith("Won"), d["depositIn"]
-    assert d["contactsIn"] == "Won · Complete", d["contactsIn"]
+    # Money in and contacts in are WON by the numbers, and until 2026-08-28 that named a TAB, so
+    # the promise did too. Winning no longer moves a card: these two go back to the furthest live
+    # column their own stamps earn, and naming "Won · Complete" now would send the estimator
+    # hunting a tab nothing is filed under. Note both are BELOW Won/Approved on the board — a job
+    # whose money has landed reads "Deposit received", so winning it never hides the work still
+    # owed on it.
+    assert d["depositIn"] == "Deposit received", d["depositIn"]
+    assert d["contactsIn"] == "Contact info", d["contactsIn"]
 
 
 # ── the failure path ────────────────────────────────────────────────────────
@@ -408,9 +420,10 @@ def test_taking_a_by_hand_won_mark_off_asks_first_and_names_where_it_lands(out):
     """wireWon's comment said for a day that NEITHER half of the won mark had a prompt, and gave a
     good reason: nothing is sent, nothing leaves the pipeline. That held while a won card stayed
     among the live ones. It stopped holding on 2026-08-20, when the Won TAB took won jobs off the
-    Active board — undoing the mark MOVES the card now, to whichever Active column its own stamps
-    earn — and Hanz asked for the prompt in the same breath as the bring-back: "before they do that
-    there should be a prompt saying are they sure"."""
+    Active board — and it did NOT start holding again on 2026-08-28 when they came back onto it,
+    because stage() reads the mark first: a won card sits in Won/Approved, so undoing the mark still
+    MOVES it, to whichever Active column its own stamps earn. Hanz asked for the prompt in the same
+    breath as the bring-back: "before they do that there should be a prompt saying are they sure"."""
     panel = out["wonByHandPanel"]
     assert panel["hasUndo"] and not panel["hasMark"], panel
     r = out["wonUndone"]

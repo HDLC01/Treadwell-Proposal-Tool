@@ -181,14 +181,16 @@ function harness(row, opts) {
     // unrendered in every case, including the ones about reopening.
     isLost: (p) => String((p && p.proposal_status) || "") === "closed_lost",
     lostReason: (p) => CORE.LOST_REASON[((p && p.followup_state) || {}).closed_lost_reason] || "",
-    // EXACTLY what the lifted functions read off crm-core, by their real names and with the real
-    // implementations. closeOutcome decides which outcome the dialog resolves, and stage/wonColumn
-    // decide what the bring-back prompt promises — both are the subject here, not scaffolding.
-    C: { LOST_REASON: CORE.LOST_REASON, CLOSE_CHOICES: CORE.CLOSE_CHOICES,
-         HOLD_REASON: CORE.HOLD_REASON, closeOutcome: CORE.closeOutcome,
-         followup: CORE.followup, pausedUntil: CORE.pausedUntil,
-         stage: CORE.stage, isWon: CORE.isWon, wonByHand: CORE.wonByHand,
-         wonColumn: CORE.wonColumn },
+    // crm-core ITSELF, not a hand-listed subset of it. This was a literal naming the eight exports
+    // the lifted panel happened to read; every value in it was already CORE's real one, so the list
+    // bought nothing except a build break each time the panel learned to read a ninth. It broke on
+    // 2026-08-28 when wonControlHtml started asking C.isHandedOff, and on the same day `wonColumn`
+    // — which the literal still named — stopped existing.
+    //
+    // Nothing is lost by passing the module: the panel is EXECUTED here, so a rename in crm-core
+    // that portal.js has not followed still throws "C.x is not a function" out of this harness,
+    // which is the failure the explicit list was written to guarantee.
+    C: CORE,
     // The module WRAPPER, not C.pausedUntil: crm-core's own takes Central's today as a second
     // argument and answers "" without one, so binding the bare export would have made the held
     // panel silently dateless — which is how the first version of this test passed while showing

@@ -505,9 +505,17 @@ def test_a_test_project_can_be_marked_won_and_is_still_a_test_project(verdicts):
 @needs_node
 def test_a_re_send_does_not_un_win_it(verdicts):
     """Decided up front: the mark is deliberate, and a revision is not a customer changing their
-    mind. Nothing about sending clears `won_at`, so the only thing that can is the undo button."""
+    mind. Nothing about sending clears `won_at`, so the only thing that can is the undo button.
+
+    THE COLUMN IS THE PROOF, since 2026-08-28. `manual_resent` is an ordinary `sent` row whose only
+    other fact is the mark, and stage() now reads the mark ahead of the pipeline status — so
+    "Won/Approved" is a statement about `won_at` having survived the send, and "Sent" is precisely
+    where the card would land the moment it stopped. Asserting the stage rather than only the
+    predicate is what makes the two halves impossible to satisfy separately."""
     assert verdicts["manual_resent"]["won"] is True
-    assert verdicts["manual_resent"]["stage"] == "Sent", "fixture drift"
+    assert verdicts["manual_resent"]["stage"] == "Won/Approved", (
+        "a re-sent won job columns as %r; Sent is where it lands if the re-send wiped the mark"
+        % verdicts["manual_resent"]["stage"])
 
 
 @needs_node
@@ -530,10 +538,17 @@ def test_by_hand_is_distinguishable_from_won_anyway(verdicts):
 @needs_node
 def test_won_is_still_defined_once_for_both_screens():
     """The reason it moved to crm-core on 2026-08-19. A local copy on either page is how "won"
-    starts meaning two things again — this time with a manual override to disagree about."""
+    starts meaning two things again — this time with a manual override to disagree about.
+
+    ONLY portal.js READS isWon SINCE 2026-08-28. Winning stopped moving a card that day, so the
+    notification page routes its tabs on `isHandedOff` and mentions isWon only in the comment
+    recording the swap — which means the old `"isWon" in js` over both pages would now be satisfied
+    by a COMMENT. A source read that passes on prose proves nothing, so each page is asked for the
+    predicate it actually routes on, and both are still forbidden their own copy."""
     core = CORE.read_text(encoding="utf-8")
     assert "function isWon" in core and "isWon: isWon" in core
-    for page in ("portal.js", "notifications.js"):
+    for page, call in (("portal.js", "C.isWon("), ("notifications.js", "C.isHandedOff")):
         js = (ROOT / "frontend" / "js" / page).read_text(encoding="utf-8")
         assert "function isWon" not in js, "%s has its own copy of isWon" % page
-        assert "isWon" in js, "%s does not use the shared isWon at all" % page
+        assert call in js, (
+            "%s does not read %s from crm-core, so it is deciding the question locally" % (page, call))

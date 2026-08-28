@@ -61,9 +61,16 @@ def test_closed_lost_outranks_every_other_signal():
 
 
 def test_the_normal_progression():
+    """The fourth column reads "Won/Approved" as of 2026-08-28, not "Approved".
+
+    Marking a job won used to lift its card off the Active board onto a Won tab of its own. It no
+    longer does — a won job still owes a deposit and a set of contacts, and the sales meeting is
+    run off the Active board — so the by-hand won mark and the customer's approval now share one
+    column here. Only the COLUMN was renamed: "Approved" still names the milestone EVENT, which is
+    why the lastActivity tests further down still expect that word."""
     assert stage() == "Sent"
     assert stage(proposal_status="viewed") == "Viewed"
-    assert stage(proposal_status="approved") == "Approved"
+    assert stage(proposal_status="approved") == "Won/Approved"
     assert stage(proposal_status="approved", deposit_status="submitted") == "Deposit submitted"
     assert stage(proposal_status="approved", deposit_status="received") == "Deposit received"
     assert stage(proposal_status="approved", deposit_status="received",
@@ -73,7 +80,7 @@ def test_the_normal_progression():
     # date on the phone. A scheduled job now reads as the furthest stage that still exists,
     # and that it does not fall OFF the board is pinned in test_schedule_removed.py — which is
     # the assertion that matters, since group() drops any row whose stage is not a column.
-    assert stage(proposal_status="approved", schedule_status="scheduled") == "Approved"
+    assert stage(proposal_status="approved", schedule_status="scheduled") == "Won/Approved"
 
 
 def test_a_project_created_but_never_sent_comes_before_sent():
@@ -84,29 +91,81 @@ def test_a_project_created_but_never_sent_comes_before_sent():
 
 def test_an_unpaid_deal_never_reads_as_further_along_than_a_paid_one():
     """The portal lets a customer submit contacts straight after approving. Without
-    the deposit gate that deal would jump two columns ahead of one that has paid."""
-    assert stage(proposal_status="approved", contacts_status="received") == "Approved"
+    the deposit gate that deal would jump two columns ahead of one that has paid.
+
+    The column it falls back to was relabelled "Won/Approved" on 2026-08-28. The gate itself is
+    untouched — an unpaid deal is held exactly where it was."""
+    assert stage(proposal_status="approved", contacts_status="received") == "Won/Approved"
 
 
 def test_a_job_that_collects_no_deposit_can_still_advance():
     """Typical for GC work. Gating on a deposit that was never asked for would park
-    it in Approved permanently."""
+    it in Won/Approved permanently."""
     assert stage(proposal_status="approved", deposit_required=False,
                  contacts_status="received") == "Contact info"
 
 
 def test_an_invoiced_job_still_gates_even_when_the_flag_says_otherwise():
     """Someone sent a request anyway — the money is genuinely outstanding, so the
-    flag doesn't get to wave it through."""
+    flag doesn't get to wave it through.
+
+    Held in "Won/Approved", which is what that column has been called since 2026-08-28. The
+    rename does not soften the gate: money still outstanding still stops the card here."""
     assert stage(proposal_status="approved", deposit_required=False,
                  deposit_requested_at="2026-07-02T00:00:00+00:00",
-                 contacts_status="received") == "Approved"
+                 contacts_status="received") == "Won/Approved"
 
 
 def test_a_confirmed_deposit_cannot_fall_back_into_submitted():
     got = run("out(C.stage(%s));" % json.dumps(prop(
         proposal_status="approved", deposit_status="received")))
     assert got == "Deposit received"
+
+
+# ── the won mark, and what it does not do ───────────────────────────────────
+# stage() reordered by one line on 2026-08-28: the won mark now outranks not_sent and still sits
+# BELOW the deposit branches. Both halves of that are easy to lose in a refactor without emptying
+# a column or throwing, because every answer involved is a real column — a card just quietly reads
+# as the wrong one. Hence three tests on an ordering rather than a trust in the source comment.
+def test_a_job_marked_won_before_it_was_ever_sent_reads_as_won():
+    """The Trabon complaint, pinned. Hanz, 2026-08-20: "I marked Trabon Group project as Won but
+    it's still in the Created but Not Sent bucket."
+
+    `won_at` is a DRAFT-side field, so a synthesised unsent row carries it while carrying no portal
+    state whatsoever. Testing not_sent first therefore made the one field an unsent card does have
+    the one field that could never be read. The mark is a person overriding the derived rule, and
+    an override that the estimator can watch do nothing is worse than no button at all."""
+    assert stage(won_at="2026-08-20T00:00:00+00:00", not_sent=True) == "Won/Approved"
+    # And the column it jumped is still reachable by the cards that belong in it — the reorder
+    # promoted the mark, it did not retire "Created but not sent".
+    assert stage(not_sent=True) == "Created but not sent"
+
+
+def test_winning_a_job_never_hides_the_work_still_owed_on_it():
+    """The won mark sits BELOW the deposit and contacts branches on purpose. A won job whose money
+    has landed still reads "Deposit received", and one whose contacts are in still reads "Contact
+    info", because the Active board is what the sales meeting is run off: a paid job parked in
+    Won/Approved is a job nobody is chasing. Winning is not the end of the work — it is the point
+    the rest of it starts."""
+    won = {"won_at": "2026-08-20T00:00:00+00:00"}
+    assert stage(deposit_status="submitted", **won) == "Deposit submitted"
+    assert stage(deposit_status="received", **won) == "Deposit received"
+    assert stage(deposit_status="received", contacts_status="received", **won) == "Contact info"
+
+
+def test_a_card_leaves_the_board_only_when_a_human_hands_it_off():
+    """isHandedOff reads one field and derives nothing, and that is the whole 2026-08-28 change.
+
+    Winning no longer removes a card; pressing Hand it off does. So the two answers have to stay
+    independent in both directions — a won job with no hand-off stamp is still on the Active board,
+    and the stamp alone is what takes it off. Deriving hand-off from won state would silently
+    reinstate the behaviour that was deliberately removed."""
+    got = run("out([C.isHandedOff(%s), C.isHandedOff(%s), C.isHandedOff(%s), C.isWon(%s)]);" % (
+        json.dumps(prop()),
+        json.dumps(prop(won_at="2026-08-20T00:00:00+00:00")),
+        json.dumps(prop(handed_off_at="2026-08-28T00:00:00+00:00")),
+        json.dumps(prop(handed_off_at="2026-08-28T00:00:00+00:00"))))
+    assert got == [False, False, True, False]
 
 
 # ── what date ───────────────────────────────────────────────────────────────
@@ -310,9 +369,11 @@ def test_sorting_does_not_mutate_the_caller_list():
 def test_grouping_covers_every_column_even_the_empty_ones():
     got = run("out(Object.keys(C.group([], C.STAGES)));")
     # "Scheduled" came off the end on 2026-08-11 and "Created but not sent" went on the front
-    # the same day. Both are separate changes with their own files; this stays the assertion
-    # that the GROUPING covers every column, so an empty column still renders.
-    assert got == ["Created but not sent", "Sent", "Viewed", "Approved", "Deposit submitted",
+    # the same day. The fourth column was relabelled "Won/Approved" on 2026-08-28, when winning a
+    # job stopped taking its card off this board. All three are separate changes with their own
+    # files; this stays the assertion that the GROUPING covers every column, so an empty column
+    # still renders — and a column key that drifts from what stage() returns empties it silently.
+    assert got == ["Created but not sent", "Sent", "Viewed", "Won/Approved", "Deposit submitted",
                    "Deposit received", "Contact info"]
 
 

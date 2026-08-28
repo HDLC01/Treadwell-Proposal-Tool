@@ -172,7 +172,15 @@ function build(opts) {
   const o = opts || {};
   const store = o.store || {};
   const sessionStorage = makeStorage(store);
-  const dom = makeDom(["active", "won", "lost", "test"]);
+  // The ids come from the PAGE, not from a literal here. render() generates the real pill
+  // markup out of PP_TABS, so a second spelling in this file cannot catch a drift that the
+  // browser could have — it can only invent one. It did: the ids became `handed_off` on
+  // 2026-08-28 and the literal still said `won`, which left every pill click falling through
+  // ppGoto's unknown-tab guard back onto Active while the assertions read as if a tab had been
+  // opened.
+  const dom = makeDom(JSON.parse(
+    grab(/^  const PP_TABS = .*$/m, "PP_TABS")
+      .replace(/^  const PP_TABS = /, "").replace(/;\s*$/, "")).map((t) => t[0]));
   const puts = [];
   const source = [
     grab(/^  const PP_TABS = .*$/m, "PP_TABS"),
@@ -185,10 +193,12 @@ function build(opts) {
     grab(/^  const ssSet = .*$/m, "ssSet()"),
     grab(/^  let PP_TAB = .*$/m, "PP_TAB"),
     grab(/^  let PP_PAGE = .*$/m, "PP_PAGE"),
-    // isWon moved to crm-core on 2026-08-19 ("CRM lost and won should also tie up to the
-    // notification sending"). Lifted from the PAGE as the line that binds it, so the harness
-    // still fails loudly if the page ever re-implements it locally instead of reading core.
-    grab(/^  const isWon = C\.\w+;$/m, "the isWon binding"), fn("ppCategory"), fn("ppCounts"), fn("ppPageCount"), fn("ppSlice"),
+    // The binding the page routes its tabs on, lifted from the PAGE rather than read off C here,
+    // so the harness still fails loudly if the page ever re-implements it locally instead of
+    // reading core. It was `isWon` from 2026-08-19 ("CRM lost and won should also tie up to the
+    // notification sending"); it became `isHandedOff` on 2026-08-28, when winning stopped taking a
+    // job off the board and a human press started doing it instead.
+    grab(/^  const isHandedOff = C\.\w+;$/m, "the isHandedOff binding"), fn("ppCategory"), fn("ppCounts"), fn("ppPageCount"), fn("ppSlice"),
     fn("ppMatches"), fn("ppGoto"), fn("syncPpTabs"), fn("syncPpPager"), fn("ppRowHtml"),
     fn("renderProjects"), fn("peopleFor"), fn("toggleProject"),
     // The REAL wiring out of render(), wrapped in a function so it can be called once. Lifted
@@ -205,7 +215,7 @@ function build(opts) {
     "$", "esc", "nameOf", "plainAvatar", "C", "sessionStorage", "api", "ADMIN", "MY_EMAIL",
     "ROSTER", "PROJECTS", "OVERRIDES", "ppAlert", "puts",
     '"use strict";\n' + source + "\n" +
-    "return { renderProjects, ppCategory, ppCounts, ppPageCount, ppSlice, ppMatches, isWon,\n" +
+    "return { renderProjects, ppCategory, ppCounts, ppPageCount, ppSlice, ppMatches, isHandedOff,\n" +
     "         ppGoto, peopleFor, wirePp, PP_PER_PAGE, PP_IDS,\n" +
     "         tab: () => PP_TAB, page: () => PP_PAGE };");
 
@@ -286,7 +296,10 @@ const ROWS = [
   { proposal_id: "a-nodeposit-unapproved", project_name: "Brookside Gym",
     proposal_status: "sent", deposit_required: false },
 
-  // Won: they said yes AND the money question is settled.
+  // WON, AND STILL ACTIVE (2026-08-28). They said yes and the money question is settled, and every
+  // one of these stays on the working list. Winning used to file a card away; now only a human
+  // pressing Hand it off does, so these five are the fixtures that fail the moment won starts
+  // silently emptying the estimator's list again.
   { proposal_id: "w-deposit-in", project_name: "Westport Retail Center",
     proposal_status: "approved", approved_at: "2026-07-20T10:00:00+00:00",
     deposit_requested_at: "2026-07-21T10:00:00+00:00", deposit_status: "received" },
@@ -302,11 +315,27 @@ const ROWS = [
 
   // MARKED WON BY HAND (2026-08-19). Hanz: "Is there any way to also mark as won for now other than
   // after the deposit has been received". Neither half of the derived rule is true of these two —
-  // one was never even sent — so they are what proves the override reaches this page's Won tab.
+  // one was never even sent — so they are what proves the by-hand override is read here at all. It
+  // no longer files them anywhere: since 2026-08-28 both stay Active until someone hands them off.
   { proposal_id: "w-marked", project_name: "Elmwood Cold Storage", proposal_status: "sent",
     won_at: "2026-08-19T15:00:00+00:00" },
   { proposal_id: "w-marked-notsent", project_name: "Pinecrest Distribution", not_sent: true,
     won_at: "2026-08-19T15:00:00+00:00" },
+
+  // HANDED OFF (2026-08-28). The one thing that takes a card off the working list now, and it is a
+  // HUMAN PRESS rather than anything derived — `handed_off_at`, and nothing else. Both routes into a
+  // win are represented, because the page must not care which one got the job here.
+  { proposal_id: "h-derived", project_name: "Stonebridge Freightways",
+    proposal_status: "contacts", approved_at: "2026-08-10T10:00:00+00:00",
+    deposit_requested_at: "2026-08-11T10:00:00+00:00", deposit_status: "received",
+    contacts_status: "received", handed_off_at: "2026-08-28T14:00:00+00:00" },
+  { proposal_id: "h-marked", project_name: "Oakfield Commerce Park", proposal_status: "sent",
+    won_at: "2026-08-26T15:00:00+00:00", handed_off_at: "2026-08-28T14:00:00+00:00" },
+  // HANDED OFF WITHOUT EVER BEING SENT. An unsent row carries no portal fields whatsoever, so a
+  // routing rule that reaches for one before reading the hand-off stamp drops this card out of every
+  // tab at once — the failure nobody notices, because a missing row shows up as nothing at all.
+  { proposal_id: "h-notsent", project_name: "Willow Creek Depot", not_sent: true,
+    won_at: "2026-08-26T15:00:00+00:00", handed_off_at: "2026-08-28T14:00:00+00:00" },
 
   // Test, by the flag and by the name.
   { proposal_id: "t-flag", project_name: "Cedar Ridge Distribution Center", is_test: true,
@@ -320,6 +349,11 @@ const ROWS = [
   // the project is real work, so the manual override must not be a way round the same precedence.
   { proposal_id: "t-marked-won", project_name: "Verify Street zz", is_test: true,
     proposal_status: "sent", won_at: "2026-08-19T15:00:00+00:00" },
+  // HANDED OFF AND TEST — Test still wins. Handing a scratch job off is housekeeping on a fake
+  // project; it must not promote it into a list a human reads as real work.
+  { proposal_id: "t-handed-off", project_name: "Sample Handoff Job", is_test: true,
+    proposal_status: "sent", won_at: "2026-08-26T15:00:00+00:00",
+    handed_off_at: "2026-08-28T14:00:00+00:00" },
   // Named like a test but FILED as real — the flag's false has to beat the heuristic.
   { proposal_id: "a-testname-real", project_name: "Test Street Remodel", is_test: false,
     proposal_status: "sent" },
@@ -339,6 +373,14 @@ const ROWS = [
   // cancelled job off the Won tab.
   { proposal_id: "l-was-marked-won", project_name: "Grandview Terminal",
     proposal_status: "closed_lost", won_at: "2026-08-19T15:00:00+00:00",
+    followup_state: { closed_lost_reason: "canceled" } },
+  // HANDED OFF AND THEN CLOSED LOST — Lost still wins, and this is the sharper version of the same
+  // precedence, because a hand-off is the LAST thing to happen to a healthy job. If the routing ever
+  // reads the hand-off stamp first, a cancelled job sits in Handed Off looking finished, which is the
+  // one place nobody goes back to check.
+  { proposal_id: "l-handed-off", project_name: "Riverside Freight Terminal",
+    proposal_status: "closed_lost", won_at: "2026-08-26T15:00:00+00:00",
+    handed_off_at: "2026-08-28T14:00:00+00:00",
     followup_state: { closed_lost_reason: "canceled" } },
 ];
 
@@ -403,7 +445,7 @@ function snap(s) {
   const s = build({ projects: ROWS });
   s.renderProjects();
   out.tabs = { active: snap(s) };
-  ["won", "lost", "test"].forEach((id) => {
+  s.PP_IDS.filter((id) => id !== "active").forEach((id) => {
     s.clickTab(id);
     out.tabs[id] = snap(s);
   });
@@ -427,7 +469,7 @@ function snap(s) {
   // Switching tab resets to page 1 — and the pager vanishes on a tab with one page.
   s.clickNext();
   out.paging.beforeTabSwitch = snap(s);
-  s.clickTab("won");
+  s.clickTab("handed_off");                          // empty here, which is the point
   out.paging.afterTabSwitch = snap(s);
   // Back to Active: a fresh tab choice starts at page 1 rather than resuming page 3.
   s.clickTab("active");

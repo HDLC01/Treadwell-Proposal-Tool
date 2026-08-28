@@ -1033,8 +1033,10 @@ async function runScenario(name, s) {
   try {
     /** Press one of the two won buttons and report what the drawer did about it.
      *
-     *  BOTH buttons ask now (2026-08-27: the mark moves the card to another tab, and it was the one
-     *  control in that group without a prompt). `danger.answer` is the answer given, and the calls
+     *  BOTH buttons ask now (2026-08-27: it was the one control in that group without a prompt.
+     *  The reason given then was that the mark moved the card to another tab; since 2026-08-28 it
+     *  moves it to the Won/Approved column and the card stays put, and the prompt was kept anyway
+     *  -- see the note above the test). `danger.answer` is the answer given, and the calls
      *  are recorded on `danger.calls` so what the dialog SAID is assertable as well as that it was
      *  asked. Every scenario below that presses through the mark says yes explicitly rather than
      *  leaning on the module default, which is `false` on purpose so a scenario written before a

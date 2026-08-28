@@ -38,8 +38,10 @@ if (!colsLine) throw new Error("LOST_COLS is gone from portal.js");
 // test_active_projects_board.py used to pin `const TABS = ["active", "test", "lost"]` as a literal
 // string, which is worth almost nothing here: it cannot see that a tab in the list has no pill in
 // the markup, and it cannot see that boardPool sends nothing to it. It also had to be edited by hand
-// on 2026-08-20 when the Won tab arrived, which is the tell. Both declarations are single-line and
-// semicolon-terminated, so a bracket count is not needed.
+// on 2026-08-20 when the Won tab arrived, which is the tell. On 2026-08-28 the same habit cost more
+// than an edit: a hand-typed `data-tab="([a-z]+)"` elsewhere silently dropped `handed_off` and
+// reported the markup as missing a pill it ships. Read TABS, don't retype it. Both declarations are
+// single-line and semicolon-terminated, so a bracket count is not needed.
 const tabsLine = /const TABS = \[[^\]]*\];/.exec(src);
 if (!tabsLine) throw new Error("const TABS is gone from portal.js — rewrite this harness, don't delete it");
 const tabDecl = /\n\s*let TAB = [^;]*;/.exec(src);
@@ -67,7 +69,10 @@ let ALL = [];
 const esc = (v) => String(v == null ? "" : v);
 const pausedUntil = () => null;
 const followupOff = () => false;
-const TW = { fmtBizDay: (v) => String(v) };
+// BOTH date formatters chipsHtml reaches for. fmtBizDate is the Handed off chip's, added with the
+// handed-off fixture below: a stub missing one formatter throws a TypeError inside the chip and
+// takes the whole harness down, which is the same failure the real page would have.
+const TW = { fmtBizDay: (v) => String(v), fmtBizDate: (v) => String(v) };
 const scope = eval(
   "(() => {\n" + colsLine[0] + "\n" + fn("boardPool") + "\n" + fn("groupByReason") + "\n" + fn("chipsHtml") +
   "\nreturn { boardPool, groupByReason, chipsHtml, LOST_COLS };\n})()");
@@ -110,11 +115,22 @@ const ROWS = [
   { proposal_id: "lost-after-marked-won", project_name: "Grandview Terminal",
     proposal_status: "closed_lost", won_at: "2026-08-19T15:00:00Z",
     followup_state: { closed_lost_reason: "canceled" } },
-  // Somebody's scratch work, won. Here so the PARTITION runs over a row two of the three pool
-  // predicates both claim — since 2026-08-20 the pools are decided by isLost, then is_test, then
-  // isWon, and a row only one predicate has an opinion about cannot exercise the order at all. Which
-  // pool it belongs in (Test: scratch work does not become real work by being marked won) is
-  // asserted by name in test_won_tab.py, not here.
+  // HANDED OFF (2026-08-28): the same shape as won-paid, one press of the button later. The pools
+  // stopped turning on isWon that day — a won job still owes a deposit and a set of contacts, so it
+  // stays on the Active board — and a hand-off is what takes a card off it now. Without a row
+  // carrying the stamp, "won-paid is on Active" would be equally true of a board nothing ever leaves,
+  // so this fixture is what makes that assertion mean anything.
+  //
+  // `handed_off_at` and nothing else, because isHandedOff derives nothing: a person pressing the
+  // button is the only thing that can know operations has the job.
+  { proposal_id: "handoff-done", project_name: "Northgate Cold Storage",
+    proposal_status: "approved", deposit_status: "received", contacts_status: "received",
+    handed_off_at: "2026-08-28T14:00:00Z" },
+  // Somebody's scratch work, won. The pools are decided by isLost, then is_test, then isHandedOff
+  // (isWon held that third place from 2026-08-20 until 2026-08-28), so this is the row a restored
+  // won-leaves-the-board rule would move: it is a test project AND a won one, and it has to stay
+  // under Test either way. Which pool it belongs in — Test, because scratch work does not become
+  // real work by being marked won — is asserted by name in test_handed_off_tab.py, not here.
   { proposal_id: "won-test", project_name: "Will 8/20 Test", is_test: true,
     proposal_status: "approved", deposit_status: "received", contacts_status: "received" },
 ];

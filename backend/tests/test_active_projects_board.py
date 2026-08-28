@@ -18,10 +18,21 @@ not filter to the lost ones, because that page lists our own drafts and has neve
 `closed_lost`. The count was honest; the destination was not.
 
 AND THEN, 2026-08-20: "I marked Trabon Group project as Won but it's still in the Created but Not
-Sent bucket." A FOURTH TAB, Won, on the same shape as Lost — a won job comes off this board rather
-than carrying a chip on it, which reverses the decision taken one day earlier. The tab is owned by
-test_won_tab.py; what this file keeps is the tab machinery they share, and it asks portal.js for its
-tab list rather than restating it, so the next tab does not need this file edited to be checked.
+Sent bucket." A FOURTH TAB, Won, on the same shape as Lost — a won job came off this board rather
+than carrying a chip on it, which reversed the decision taken one day earlier.
+
+AND THEN, 2026-08-28, THAT FOURTH TAB CHANGED HANDS. Winning stopped being the thing that takes a
+card off this board. "Approved" became the Won/Approved COLUMN and a won job stays here, because it
+still owes a deposit and a set of contacts and the sales meeting is run off THIS board — a card the
+meeting cannot see is a card nobody chases. What removes a card is a human act instead: somebody
+presses Hand it off. So the fourth tab is `handed_off`, reading "Handed Off", and it holds one flat
+column rather than four. That tab is owned by test_handed_off_tab.py; what this file keeps is the
+tab machinery they share, and it asks portal.js for its tab list rather than restating it, so the
+next tab does not need this file edited to be checked.
+
+A WARNING TO ANYONE MATCHING TAB IDS IN THIS FILE. `handed_off` has an underscore in it, and
+`data-tab="([a-z]+)"` drops that pill without a word — which reads exactly like a tab missing from
+portal.html, when portal.html ships it. Match `[a-z_]+`.
 
 WHAT WAS THERE BEFORE, AND WHY IT IS WORTH A TEST THAT IT IS GONE.
 
@@ -238,16 +249,22 @@ def test_every_tab_prints_the_number_it_holds():
     assert "lost: lostCount()" in body, "the Lost badge is not the count of lost proposals"
     assert re.search(r"c\.textContent = n\[b\.dataset\.tab\]", body), (
         "the badge is not filled from the per-tab counts, so a pill can advertise a wrong number")
-    # The live counts come off `live` (lost already removed), so Active + Won + Test + Lost is every
-    # row. Won joined them on 2026-08-20.
+    # The live counts come off `live` (lost already removed), so Active + Handed Off + Test + Lost is
+    # every row. The fourth of them was `won` from 2026-08-20 until 2026-08-28, when winning stopped
+    # taking a card off the board and the hand-off took over the job of emptying this one.
     assert "ALL.filter((p) => !isLost(p))" in body, (
-        "the Active/Won/Test counts include lost rows, so the tabs sum to more than exist")
+        "the Active/Handed Off/Test counts include lost rows, so the tabs sum to more than exist")
     # A missing key in `n` reads as 0 through `n[b.dataset.tab] || 0` — a pill that silently says
-    # nobody has won anything. The NUMBERS are executed in test_won_tab.py
-    # (test_the_won_tab_reads_as_pressed_and_the_four_counts_add_up); what this pins is that the key
-    # exists at all, in the same place the other three are computed.
-    assert re.search(r"\bwon:", body), (
-        "the Won badge is not computed at all, so the pill sits on 0 whatever the board shows")
+    # nothing has been handed off. The NUMBERS are executed in test_handed_off_tab.py
+    # (test_the_handed_off_tab_reads_as_pressed_and_the_four_counts_add_up); what this pins is that
+    # the key exists at all, in the same place the other three are computed.
+    #
+    # Spelled with the underscore because the badge is filled by `n[b.dataset.tab]`: this key has to
+    # match the markup's `data-tab` character for character, and a `handedOff:` that read perfectly
+    # well in the source would leave the pill on 0 forever.
+    assert re.search(r"\bhanded_off:", body), (
+        "the Handed Off badge is not computed at all, so the pill sits on 0 whatever the board "
+        "shows")
 
 
 def test_the_count_is_out_of_what_THIS_TAB_holds():
@@ -271,8 +288,8 @@ def test_the_lost_count_is_in_the_board_signature():
 def test_the_tabs_are_painted_under_the_signature_guard():
     """Same reason populateEstimators/populateMonths sit below it: work done before the
     compare-and-return runs on every 25s poll whether or not anything moved. syncTabs paints the tab
-    counts — three of them until 2026-08-20, four since Won became a tab — which is the job the
-    retired lost link used to have."""
+    counts — three of them until 2026-08-20, four since an outcome tab joined them (Won then,
+    Handed Off since 2026-08-28) — which is the job the retired lost link used to have."""
     body = _block("portal.js", "renderBoard")
     assert body.index("BOARD_SIG) return") < body.index("syncTabs()")
 
@@ -300,7 +317,7 @@ def test_a_lost_proposal_can_still_be_brought_back():
     assert "confirmBringBack" in wire, "it puts a bid back with no prompt at all"
 
 
-# ── Change B: the tabs (Active | Won | Lost | Test) ──────────────────────────
+# ── Change B: the tabs (Active | Handed Off | Lost | Test) ───────────────────
 @needs_node
 def test_the_tabs_exist_and_each_one_has_a_pill(ran_tabs):
     """The tab set the page RESOLVES, against the pills the markup ships — both sides derived.
@@ -312,27 +329,34 @@ def test_the_tabs_exist_and_each_one_has_a_pill(ran_tabs):
 
     Run instead: the harness evaluates portal.js's own `const TABS = […]` and reports what it holds,
     and the expected value is read out of portal.html in markup order. Neither side is typed here, so
-    a tab and its pill can only arrive or leave together."""
-    pills = re.findall(r'data-tab="([a-z]+)"', PORTAL_HTML)
+    a tab and its pill can only arrive or leave together.
+
+    THE CHARACTER CLASS IS LOAD-BEARING. It was `[a-z]+` until 2026-08-28, which covered every tab id
+    there had ever been; `handed_off` arrived that day, fell straight out of `pills`, and this test
+    then reported portal.html as missing a pill it ships. The markup was right and the regex was
+    wrong, twice, before anybody read the file. `[a-z_]+` — and if a tab id ever grows a digit or a
+    dash, widen this before believing the failure."""
+    pills = re.findall(r'data-tab="([a-z_]+)"', PORTAL_HTML)
     assert pills, "portal.html ships no [data-tab] pills at all"
     assert ran_tabs["tabs"] == pills, (
         "TABS and the pills disagree: portal.js says %s, the markup says %s — a tab in one and not "
         "the other is either an unclickable tab or a pill that falls back to Active"
         % (ran_tabs["tabs"], pills))
-    # Won is named because it is the one that CHANGED, and because the reversal that put it here is
-    # the kind of decision a later reader undoes by accident. Hanz, 2026-08-20: "I marked Trabon
-    # Group project as Won but it's still in the Created but Not Sent bucket" — won jobs come off the
-    # Active board onto their own tab, reversing the 2026-08-19 decision to keep them on it. Drop the
-    # tab and every won job is back in the bucket he complained about. test_won_tab.py owns the rest.
-    assert "won" in ran_tabs["tabs"], (
-        "the Won tab is gone, so won jobs are back among live bids on the Active board")
+    # Handed Off is named because it is the one that CHANGED, twice, and a tab rewritten twice is the
+    # one a later reader removes by accident. It was Won from 2026-08-20; on 2026-08-28 Hanz put won
+    # jobs back on the Active board — they still owe a deposit and a set of contacts, and the sales
+    # meeting is run off that board — and gave this tab to the hand-off instead. Drop it and a job
+    # operations already has is either back among the live bids the meeting works through, or
+    # reachable from no tab at all. test_handed_off_tab.py owns the rest.
+    assert "handed_off" in ran_tabs["tabs"], (
+        "the Handed Off tab is gone, so handed-off jobs are back among live bids on the Active board")
     assert re.search(r'data-tab="active" aria-pressed="true"', PORTAL_HTML), (
         "Active is not the tab that reads as selected before the first paint")
 
 
 @needs_node
 def test_a_session_that_never_chose_and_one_that_chose_a_dead_tab_both_land_on_active(ran_tabs):
-    """Test, Won and Lost are all somewhere you go on purpose. Defaulting to any of them, or to
+    """Test, Handed Off and Lost are all somewhere you go on purpose. Defaulting to any of them, or to
     "all" (which would put scratch work back among customer bids), is the failure this pins.
 
     And an UNKNOWN stored value has to fall back the same way: a stale session holding a tab a past
@@ -626,20 +650,28 @@ def test_the_two_pages_agree_about_the_same_project(monkeypatch):
         assert board[p["id"]]["is_test"] is p["is_test"]
 
 
-def test_the_tabs_read_active_won_lost_test():
+def test_the_tabs_read_active_handed_off_lost_test():
     """Hanz, 2026-08-15: "Active and Lost should be the beside move the Test to the right most".
 
     What he was buying is that Test is scratch work and belongs at the far end, with real customer
-    work to the left of it. Won landed BETWEEN Active and Lost on 2026-08-20, which separates the two
-    he named — deliberately: Won and Lost are the two outcomes, so they read as a pair after the live
-    board, and putting Won to the right of Test would have broken the constraint he actually stated.
+    work to the left of it. A fourth tab landed BETWEEN Active and Lost on 2026-08-20, which separates
+    the two he named — deliberately: that tab and Lost are the two ways a bid stops being live work,
+    so they read as a pair after the live board, and putting either to the right of Test would have
+    broken the constraint he actually stated.
+
+    The middle pill was Won until 2026-08-28 and is Handed Off since. Its POSITION did not move,
+    because what the slot means did not: it is still where a card goes when there is nothing left to
+    sell on it. What changed is that winning alone no longer qualifies — a won job still owes a
+    deposit and a set of contacts, so it stays on Active in the Won/Approved column until somebody
+    presses Hand it off.
 
     Behaviour-neutral — every click resolves through `data-tab` and the badges fill by `dataset.tab`
     — which is why the ORDER is the only thing holding it, and why it needs saying."""
     html = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "portal.html").read_text(
         encoding="utf-8")
     active = html.index('data-tab="active"')
-    won = html.index('data-tab="won"')
+    handed_off = html.index('data-tab="handed_off"')
     lost = html.index('data-tab="lost"')
     test = html.index('data-tab="test"')
-    assert active < won < lost < test, "the board tabs are not Active | Won | Lost | Test"
+    assert active < handed_off < lost < test, (
+        "the board tabs are not Active | Handed Off | Lost | Test")
