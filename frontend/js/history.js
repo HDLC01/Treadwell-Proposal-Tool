@@ -24,6 +24,11 @@
       // as closed_lost — one says "nobody has decided yet", the other says "we lost it".
       won:"marked won", not_won:"cleared the won mark on",
       closed_lost:"closed as lost", reactivated:"reopened",
+      // Handing the job to operations, 2026-08-28, and it is a DIFFERENT event from winning it.
+      // Winning moves the card to the Won/Approved column and leaves it on the Active board;
+      // this is the press that takes it off. Spelled so the two never read as one thing that
+      // happened twice — "handed off to operations", not "marked handed off".
+      handed_off:"handed off to operations", not_handed_off:"brought back onto the board",
       // On hold is NOT a loss. Two of the eight answers on the close-out list pause a bid and
       // leave it on the Active board (2026-08-20), and a feed that called that "closed as lost"
       // would report a live bid dead. `brought_back` is the one undo that clears every mark at

@@ -176,13 +176,19 @@ function harness(row, opts) {
     lostReason: (p) => CORE.LOST_REASON[((p && p.followup_state) || {}).closed_lost_reason] || "",
     estimatorOf: (p) => String(p.assigned_estimator || p.estimator_email || ""),
     cardTotal: () => null,
-    // Only the two Won predicates, taken from crm-core itself: wonControlHtml branches on them and a
-    // hand-copy here could disagree with the page while both looked fine.
-    // The whole of what the not-sent panel reads off crm-core, by their real names. HOLD_REASON,
-    // followup and pausedUntil arrived with the on-hold outcome (2026-08-20): nsHoldReason needs
-    // the first two and the panel's own copy needs the third.
-    C: { isWon: CORE.isWon, wonByHand: CORE.wonByHand, HOLD_REASON: CORE.HOLD_REASON,
-         followup: CORE.followup, pausedUntil: CORE.pausedUntil },
+    // The WHOLE module, not a named subset, since 2026-08-28 — matching not-sent-lost-harness.
+    //
+    // It used to list exactly what the panel read (isWon, wonByHand, HOLD_REASON, followup,
+    // pausedUntil), on the reasoning that a hand-copy could disagree with the page. That reasoning
+    // was right and the list was still a trap: an allowlist has to be edited every time the lifted
+    // code reaches for one more thing, and it fails LOUDLY AND ELSEWHERE when nobody does. Adding
+    // the Hand it off control put `C.isHandedOff` inside wonControlHtml, which this file lifts for
+    // real (see liftPair), and every test in it died on `C.isHandedOff is not a function` — a
+    // failure about the estimator picker that had nothing to do with the estimator picker.
+    //
+    // Passing CORE keeps the property the list was protecting (these are the page's real
+    // predicates, never re-implemented here) and drops the maintenance the list was charging for.
+    C: CORE,
     // The module wrapper, which supplies Central's today. See the note in not-sent-lost-harness.
     pausedUntil: (p) => CORE.pausedUntil(p, "2026-08-21"),
     money: (n) => "$" + n,

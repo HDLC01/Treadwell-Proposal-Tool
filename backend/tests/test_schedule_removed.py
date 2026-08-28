@@ -81,8 +81,13 @@ def test_the_columns_that_remain_are_the_expected_seven():
     """Named explicitly so a stray edit to the list is a test failure rather than a surprise on
     the board. "Created but not sent" was added the same day, AFTER this removal (see
     test_created_not_sent.py) — it is a different change and is listed here so this test stays
-    the single place that says what the board's columns are."""
-    assert _node("C.STAGES") == ["Created but not sent", "Sent", "Viewed", "Approved",
+    the single place that says what the board's columns are.
+
+    The fourth column was relabelled "Won/Approved" on 2026-08-28, when winning a job stopped
+    lifting its card onto a Won tab and became a column on this board instead. Still seven: the
+    rename added a meaning to an existing column rather than a column to the list, and what takes
+    a card off the board now is the separate Hand it off press."""
+    assert _node("C.STAGES") == ["Created but not sent", "Sent", "Viewed", "Won/Approved",
                                  "Deposit submitted", "Deposit received", "Contact info"]
 
 

@@ -50,9 +50,22 @@
   // because it now holds either a month ("2026-08") or a week ("w:2026-08-10").
   const PERIOD_KEY = "tw_crm_month";
   const SORTFIELD_KEY = "tw_crm_sortfield", SORTDIR_KEY = "tw_crm_sortdir";
-  const TAB_KEY = "tw_crm_tab", VIEW_KEY = "tw_crm_view";
+  const TAB_KEY = "tw_crm_tab";
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
+  // Which view is remembered PER TAB, not once for the page — the key is `tw_crm_view_<tab>`,
+  // which is why the old shared `tw_crm_view` is simply abandoned rather than migrated (it is a
+  // session preference; the cost of it is one toggle).
+  //
+  // Hanz, 2026-08-28: "After the Handed Off Pipeline would just be one list. Default View should be
+  // a list." A single shared key meant whichever view you last used decided how the OTHER tab
+  // opened, and a one-column kanban is not a board — it reads as a board that failed to load.
+  const viewKey = (tab) => "tw_crm_view_" + tab;
+  const defaultView = (tab) => (tab === "handed_off" ? "table" : "board");
+  const readView = (tab) => {
+    const v = ss(viewKey(tab), "");
+    return v === "table" || v === "board" ? v : defaultView(tab);
+  };
   let EST = ss(EST_KEY, "");
   let PERIOD = ss(PERIOD_KEY, "");
   let SORTFIELD = SORT_FIELDS.includes(ss(SORTFIELD_KEY, "")) ? ss(SORTFIELD_KEY, "") : "activity";
@@ -69,14 +82,19 @@
   // the lost projects will be held." Same intent as before — a dead deal must not take up room
   // on a board of live work — with somewhere to actually look at them.
   //
-  // WON IS THE SAME SHAPE, since 2026-08-20. Hanz: "I marked Trabon Group project as Won but it's
-  // still in the Created but Not Sent bucket." A won job now comes off this board exactly as a lost
-  // one does, into a tab whose columns are what is still OUTSTANDING on it (C.WON_COLS) rather than
-  // how far along the pipeline it got — so nothing gets hidden by the move. This reverses the
-  // 2026-08-19 decision to keep won cards on the live board; see the note in chipsHtml.
-  const TABS = ["active", "won", "lost", "test"];
+  // HANDED OFF IS THE SAME SHAPE, and it replaced a Won tab on 2026-08-28. Between 2026-08-20 and
+  // then, winning a job took it off this board; Hanz reversed that ("the mark as won button would
+  // move the project to the Won/Approved [column] not into a separate pipeline"). A won job has a
+  // deposit and contacts still to chase and the sales meeting is run off this board, so it stays
+  // here in the Won/Approved column. What comes off is a job somebody has HANDED TO OPERATIONS —
+  // a human act, one button, and the only thing that means there is no more selling to do.
+  //
+  // The stale-value fallback matters more than usual today: every rep with `won` in
+  // sessionStorage from before the rename lands back on Active rather than a tab that no longer
+  // exists, which is why no storage migration is needed.
+  const TABS = ["active", "handed_off", "lost", "test"];
   let TAB = TABS.includes(ss(TAB_KEY, "")) ? ss(TAB_KEY, "") : "active";
-  let VIEW = ss(VIEW_KEY, "") === "table" ? "table" : "board";
+  let VIEW = readView(TAB);
 
   function api(path, opts) {
     // MERGE headers — a caller passing its own `headers` used to replace the auth
@@ -144,9 +162,10 @@
    *  `is_test` flag, that the Proposals Database uses. Anything that page shows under Test has
    *  to show up under Test here too.
    *
-   *  WON IS ITS OWN TAB TOO, since 2026-08-20 (Hanz: "I marked Trabon Group project as Won but it's
-   *  still in the Created but Not Sent bucket"). Won jobs leave the Active board the way lost ones
-   *  do, and land under C.WON_COLS, which say what is still outstanding on them.
+   *  HANDED OFF IS ITS OWN TAB TOO, since 2026-08-28. It was a WON tab for eight days; Hanz
+   *  reversed that — a won job still has a deposit and contacts to chase and the sales meeting is
+   *  run off the live board, so winning no longer moves anything. Being handed to operations does,
+   *  and only when a human presses the button.
    *
    *  THE ORDER OF THE THREE TESTS IS THE PARTITION, and each one is load-bearing:
    *    · isLost first — a won-then-cancelled job is Lost only, which is the precedence crm-core
@@ -166,9 +185,12 @@
     if (TAB === "lost") return ALL.filter(isLost);
     const live = ALL.filter((p) => !isLost(p) && isTest(p) === (TAB === "test"));
     if (TAB === "test") return live;
-    // C.isWon rather than a destructured isWon, deliberately: chipsHtml reads it the same way, and
-    // the node harnesses that lift these functions bind the module by name.
-    return live.filter((p) => C.isWon(p) === (TAB === "won"));
+    // isHandedOff, NOT isWon — that swap is the whole 2026-08-28 change. A won job is still live
+    // work (deposit, contacts) and belongs on Active; only a hand-off takes it off.
+    //
+    // C.isHandedOff rather than a destructured one, deliberately: chipsHtml reads it the same way,
+    // and the node harnesses that lift these functions bind the module by name.
+    return live.filter((p) => C.isHandedOff(p) === (TAB === "handed_off"));
   }
 
   /** Everything the current filters allow, in the current order. Both views read
@@ -193,26 +215,27 @@
       // okay?" The Notification Sending page files these under a Won tab; same predicate, from
       // crm-core, one definition.
       //
-      // THIS BOARD USED TO KEEP A WON CARD ON THE LIVE TABS, and that reasoning is now REVERSED.
-      // The argument for keeping it (recorded here until 2026-08-20) was that a won job still has
-      // work on it — "Deposit received" and "Contact info" are live columns, and moving the card off
-      // would hide real work from the people doing it. What it missed is the card Hanz actually hit:
-      // "I marked Trabon Group project as Won but it's still in the Created but Not Sent bucket."
-      // A chip cannot argue with a column. He chose the Won TAB instead, on 2026-08-20, and the risk
-      // the old reasoning named is answered by that tab's own columns rather than by keeping the card
-      // among live bids: C.WON_COLS groups won jobs by what is still outstanding, so the deposit and
-      // the contacts chasing stay visible on the tab that owns them.
+      // THE CARD IS BACK ON THE LIVE BOARD, which is where it was before 2026-08-20 and where
+      // Hanz put it again on 2026-08-28. The original argument for keeping it here was right: a won
+      // job still has a deposit and contacts to chase, and moving it hides that work from the people
+      // doing it. What went wrong in between was not the chip, it was the COLUMN — "I marked Trabon
+      // Group project as Won but it's still in the Created but Not Sent bucket". The fix for that is
+      // stage() reading the won mark above not_sent, so the card sits in Won/Approved and the column
+      // and the chip finally say the same thing.
       //
-      // The chip STAYS, and now only ever draws on the Won tab and on Test (where a won test project
-      // stays, because scratch work does not become real work by being marked won — and there the
-      // chip is the ONLY thing saying so). On Won it is not redundant with the tab name either: the
-      // columns there answer "what is left to do", so the chip is the only thing on the card that
-      // says why the card is on that board at all.
+      // Which makes the chip nearly redundant on a Won/Approved card, and deliberately kept anyway:
+      // a card further along (Deposit received, Contact info) is also won, and its column no longer
+      // says so. The chip is then the only thing on the card that does.
       //
       // The title names BOTH routes to the chip since 2026-08-19, because a rep who reads only the
       // derived one on a project nobody has approved would take the chip for a bug rather than for
       // the colleague who marked it won on the phone.
-      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Won — either marked won by hand, or approved with the deposit settled. Off the Active board, and counts under Won on the Notification Sending page">Won</span>');
+      if (C.isWon(p)) out.push('<span class="chip chip-won" title="Won — either marked won by hand, or approved with the deposit settled. Still on the Active board until somebody hands it off, and still counts under Active on the Notification Sending page">Won</span>');
+      // Only ever drawn on the Handed Off tab and on Test, where a handed-off test project stays
+      // (scratch work does not become real work by being handed off, and the chip is the only thing
+      // that says so there).
+      if (C.isHandedOff(p)) out.push(`<span class="chip chip-handoff" title="Handed to operations — nothing left to sell on it">Handed off${
+        p.handed_off_at ? " · " + esc(TW.fmtBizDate(p.handed_off_at)) : ""}</span>`);
       const until = pausedUntil(p);
       if (until) out.push(`<span class="chip chip-pause" title="The customer asked us to come back to this">Paused to ${esc(TW.fmtBizDay(until))}</span>`);
       // Only worth saying when it's OFF: automation being on is the norm, and a chip
@@ -291,31 +314,30 @@
   }
 
   function kanbanHtml(items) {
-    // Three shapes: the pipeline (STAGES) on the live tabs, the close reasons on Lost, and what is
-    // still outstanding (C.WON_COLS) on Won.
+    // Three shapes: the pipeline (STAGES) on the live tabs, the close reasons on Lost, and one flat
+    // column on Handed Off.
     //
-    // There is no Closed lost and no Won column on the live tabs — neither is in the pool (see
-    // boardPool), and C.group drops any row whose stage has no column, so one arriving by some
-    // other route is left out rather than throwing.
+    // There is no Closed lost column on the live tabs — it is not in the pool (see boardPool), and
+    // C.group drops any row whose stage has no column, so one arriving by some other route is left
+    // out rather than throwing. Won/Approved IS a live column now; that is the 2026-08-28 change.
     const lost = TAB === "lost";
-    const won = TAB === "won";
+    const handoff = TAB === "handed_off";
     if (lost && !items.length) {
       return '<div class="empty">Nothing closed lost' + (
         boardPool().length ? " matches those filters." : " — every proposal is still live.") + "</div>";
     }
     // Same two kinds of empty the Lost tab distinguishes: "nothing matches your filter" means clear
     // the filter, and an unfiltered empty tab is just a tab nobody has won a job onto yet.
-    if (won && !items.length) {
-      return '<div class="empty">Nothing won' + (boardPool().length
+    if (handoff && !items.length) {
+      return '<div class="empty">Nothing handed off' + (boardPool().length
         ? " matches those filters."
-        : " yet — a job lands here when somebody marks it won, or when it is approved with the"
-          + " deposit settled.") + "</div>";
+        : " yet — a job lands here when somebody presses Hand it off on a won project.") + "</div>";
     }
-    // Grouping and columns are chosen in ONE ternary each, and the Won branch reads the module off
-    // `C`, so nothing new is free in this scope. An unbound identifier inside the .map() below is
-    // what took the whole board down on 2026-08-12; see the note at the top of this file.
-    const cols = lost ? LOST_COLS : won ? C.WON_COLS : STAGES;
-    const byStage = lost ? groupByReason(items) : won ? C.groupWon(items) : C.group(items, STAGES);
+    // Grouping and columns are chosen in ONE ternary each, and the Handed Off branch reads the
+    // module off `C`, so nothing new is free in this scope. An unbound identifier inside the .map()
+    // below is what took the whole board down on 2026-08-12; see the note at the top of this file.
+    const cols = lost ? LOST_COLS : handoff ? C.HANDOFF_COLS : STAGES;
+    const byStage = lost ? groupByReason(items) : handoff ? C.groupHandedOff(items) : C.group(items, STAGES);
     return cols.map((s) => {
       const cards = byStage[s].map((p) => {
         const act = lastActivity(p);
@@ -353,11 +375,10 @@
       // proposal under that not sent category". Only this column gets the button, because it is
       // the only one whose membership rule a new project can satisfy — everything to the right
       // requires the customer to have been sent something.
-      // `!lost && !won` is belt as well as braces: no reason label and no Won column equals
-      // STAGE_CREATED today, and a "+ New" button on a column of dead deals would file a brand-new
-      // bid as closed lost. ("Won before approval" is the near miss on the Won tab — a new bid
-      // started from there would be neither won nor approved.)
-      const add = !lost && !won && s === STAGE_CREATED
+      // `!lost && !handoff` is belt as well as braces: no reason label and no "Handed off" label
+      // equals STAGE_CREATED today, and a "+ New" button on a column of dead deals would file a
+      // brand-new bid as closed lost.
+      const add = !lost && !handoff && s === STAGE_CREATED
         ? '<button type="button" class="col-add" data-new-proposal title="Start a new proposal — opens the intake form">+ New</button>'
         : "";
       return `<div class="col${attn}"><h2>${esc(s)}<span>${byStage[s].length}</span>${add}</h2>${cards}</div>`;
@@ -376,8 +397,8 @@
    *  "CLOSED" MEANS WON. Hanz confirmed it, so this reuses the existing by-hand won mark — POST
    *  /api/draft/{id}/status {status:"won"}, the same call the drawer's Mark won button makes — and
    *  invents no third state. A separate "closed" state would be a second word for won that only the
-   *  board could speak, and the Won tab, the Won chip and the Notification Sending page would all
-   *  have to learn it.
+   *  board could speak, and the Won chip and the Notification Sending page would both have to
+   *  learn it.
    *
    *  THESE REPLACED Files and Info sheet, which shipped here on 2026-08-12 and moved into BOTH
    *  drawers' Proposal tab on 2026-08-20 — the sent drawer has #go-files/#go-info and the not-sent
@@ -389,16 +410,36 @@
    *  buttons: a row is 7 columns of facts, and a control in a table cell that also opens the drawer
    *  on click is a click nobody can aim. That is a deliberate asymmetry, not an omission.
    *
-   *  NOTHING ON A CARD THAT IS ALREADY DECIDED. A lost card offering Lost and a won card offering
-   *  Mark as won are both buttons that save and change nothing visible, which reads as broken.
-   *  The way back for those two is the drawer's bring-back, which needs a prompt naming the
-   *  destination and so cannot live on a 224px card.
+   *  NOTHING ON A CARD THAT IS ALREADY DECIDED, and "decided" changed meaning on 2026-08-28. It
+   *  used to mean lost OR won, because winning took the card off this board and there was nothing
+   *  left to ask of it. A won card is back on the board now with real work still on it, so it gets
+   *  the two questions that are still open — is it ready to hand over, and did we lose it after all
+   *  — and only a lost or a handed-off card is finished.
+   *
+   *  HAND IT OFF IS NOT GATED ON CONTACTS. Hanz's phrasing was "once we receive the Contact Info, we
+   *  indicate it as handed off", which describes the usual order rather than a rule, and a hard gate
+   *  would make the button UNREACHABLE on the unsent rows that need it most: a synthesised row
+   *  carries no contacts_status at all (see _not_sent_rows in main.py), so the gate could never open
+   *  for a job we won on the phone and never emailed. It asks instead — see markCardHandoff.
+   *
+   *  A won card still offers Mark as lost. A job can be verbally won and then die, and the reason
+   *  dialog is the only place that records why; the alternative is a card nobody can close without
+   *  first undoing the win in the drawer.
+   *
+   *  The way back from lost or handed off is the drawer's bring-back, which needs a prompt naming
+   *  the destination and so cannot live on a 224px card.
    */
   function cardActions(p) {
-    if (isLost(p) || C.isWon(p)) return "";
+    if (isLost(p) || C.isHandedOff(p)) return "";
     const id = encodeURIComponent(p.proposal_id);
+    // wonOrApproved, NOT isWon. isWon also demands the deposit be settled, so gating here left
+    // every approved-but-unpaid card — which is what a fresh win looks like — sitting in the
+    // Won/Approved column with a button offering to mark it won again and no way to hand it off.
+    const first = C.wonOrApproved(p)
+      ? `<button type="button" class="deal-act" data-handoff="${id}" title="Operations has it — moves this off the board onto Handed Off">Hand it off</button>`
+      : `<button type="button" class="deal-act" data-won="${id}" title="We won it — moves this to the Won/Approved column">Mark as won/approved</button>`;
     return `<div class="deal-acts">
-      <button type="button" class="deal-act" data-won="${id}" title="We won it — moves this to the Won tab">Mark as won</button>
+      ${first}
       <button type="button" class="deal-act" data-lost="${id}" title="Not going ahead — pick a reason and say what happened">Mark as lost</button>
     </div>`;
   }
@@ -480,6 +521,8 @@
     // and the drawer would win the paint.
     const won = e.target.closest("[data-won]");
     if (won) { markCardWon(won); return; }
+    const handoff = e.target.closest("[data-handoff]");
+    if (handoff) { markCardHandoff(handoff); return; }
     const lostBtn = e.target.closest("[data-lost]");
     if (lostBtn) { closeCardOut(lostBtn); return; }
     if (e.target.closest("[data-new-proposal]")) { startNewProposal(); return; }
@@ -496,7 +539,7 @@
    *  A missing row is still possible (the project was trashed in another tab) and both callers
    *  check. */
   function cardRowOf(btn) {
-    const id = btn.dataset.won || btn.dataset.lost || "";
+    const id = btn.dataset.won || btn.dataset.lost || btn.dataset.handoff || "";
     return ALL.find((x) => String(x.proposal_id) === decodeURIComponent(id)) || null;
   }
 
@@ -505,9 +548,10 @@
    *  draft-side won mark the drawer's Mark won button makes, on the same route, with no new state.
    *
    *  NO PROMPT, exactly as the drawer's Mark won has none: nothing is sent, nothing leaves the
-   *  pipeline, and the way back is the drawer's bring-back. The button reports its own progress
-   *  because the card is about to move to another tab and vanish from under the cursor, and a
-   *  silent 12 seconds there is indistinguishable from a dead control. */
+   *  pipeline, and the way back is the drawer's bring-back. Since 2026-08-28 the card does not even
+   *  leave the board — it moves into the Won/Approved column. The button still reports its own
+   *  progress, because the card moves out from under the cursor either way and a silent 12 seconds
+   *  there is indistinguishable from a dead control. */
   async function markCardWon(btn) {
     const row = cardRowOf(btn);
     if (!row) return;
@@ -522,9 +566,50 @@
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      // Patch the board's own object so the card leaves for the Won tab on this paint rather than
+      // Patch the board's own object so the card moves into Won/Approved on this paint rather than
       // on the next poll — the same reason the drawer patches its row. load() then re-reads.
       row.won_at = new Date().toISOString();
+      renderBoard();
+      load();
+    } catch (err) {
+      btn.textContent = "Failed: " + (err.message || "retry");
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 2600);
+    }
+  }
+
+  /** Hand it off, from the card. Hanz, 2026-08-28: "We need to add a button on the Project
+   *  container in the Active project named as 'Hand it off'."
+   *
+   *  Mirrors markCardWon exactly — same route, same optimistic patch, same in-button progress —
+   *  because the two are the same shape of act and a second pattern for it is how the board comes
+   *  to behave differently depending on which button you press.
+   *
+   *  IT ASKS WHEN THE CONTACTS ARE NOT IN, and only then. His sentence was "once we receive the
+   *  Contact Info, we indicate it as handed off", which is the usual order rather than a rule; a
+   *  hard gate would make the button unreachable on the very rows that need it, because a
+   *  synthesised not-sent row carries no contacts_status at all. So the button is always live and
+   *  the prompt carries the warning — the estimator who knows operations already has the details
+   *  says yes, and the one who forgot is told before the card leaves the board.
+   *
+   *  `!== "received"` rather than a falsy check: an unsent row's undefined and a sent row's
+   *  "requested" both mean the same thing here, which is that nobody has confirmed they arrived. */
+  async function markCardHandoff(btn) {
+    const row = cardRowOf(btn);
+    if (!row) return;
+    if (!(await confirmHandoff(row))) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Saving…";
+    try {
+      const r = await api("/api/draft/" + encodeURIComponent(row.proposal_id) + "/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "handed_off" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      row.handed_off_at = new Date().toISOString();
       renderBoard();
       load();
     } catch (err) {
@@ -1031,9 +1116,10 @@
              DRAFT endpoint (wireWon and wireNotSentLost below) — this comment exists because the
              pair is now an asserted invariant rather than two features that happen to coexist, and
              because it has to survive the card MOVING: this panel is reached from whichever tab the
-             card is on, so a project marked won still offers Mark closed lost from the Won tab, and
-             a won unsent bid the GC then cancels does not have to be un-won first.
-             test_won_tab.py renders this panel on a won not-sent row and asserts both controls. -->
+             card is on, so a project marked won still offers Mark closed lost from the Won/Approved
+             column it now sits in, and a won unsent bid the GC then cancels does not have to be
+             un-won first. test_handed_off_tab.py renders this panel on a won not-sent row and
+             asserts both controls. -->
         ${wonHtml ? `<div class="sec" id="dsec-ns-won">${wonHtml}</div>` : ""}
         <!-- THREE STATES, not two, since 2026-08-20. Two of the eight answers on Kyle's
              close-out list put a bid ON HOLD rather than killing it, so a held bid needs its own
@@ -1238,13 +1324,22 @@
    *  existed. `lblClass` is the only difference: the sent drawer drops this into the middle of an
    *  existing section, where a heading needs its top margin.
    *
-   *  FOUR STATES, because three of them are things a button must NOT be offered for:
+   *  FIVE STATES since 2026-08-28, and the reason there are five is that WINNING AND LEAVING THE
+   *  BOARD STOPPED BEING THE SAME EVENT. Hanz: "the mark as won button would move the project the
+   *  Won/Approved not into a separate pipeline", and "we need to add a button on the Project
+   *  container in the Active project named as 'Hand it off'". So a won job keeps its card on the
+   *  Active board, in the Won/Approved column, with real work still owed on it, and a second,
+   *  human press is what takes it off:
    *    · lost      → nothing at all. Lost beats Won everywhere (see isWon), so a Mark won press here
    *                  would save and change nothing visible, which reads as a broken control. The
    *                  Reactivate button beside it is the way back.
-   *    · by hand   → the state and an undo, exactly as the closed-lost control does.
-   *    · won anyway→ the state, and NO control. There is nothing to undo about a deposit that
-   *                  arrived, and a Mark won button would file a redundant human mark over a fact.
+   *    · handed off→ the state and a way back. This is the end of the line, so there is no forward
+   *                  control left to offer, and the undo is the only thing a person can want here.
+   *    · by hand   → the state, the hand-off, and an undo of the mark. TWO buttons, Hand it off
+   *                  first because it is the step forward.
+   *    · won anyway→ the state and the hand-off, but NO undo. There is nothing to undo about a
+   *                  deposit that arrived, and a Mark won button would file a redundant human mark
+   *                  over a fact. Handing it off is still a human act, so that half stays.
    *    · otherwise → the offer. */
   function wonControlHtml(p, lblClass, acts) {
     if (isLost(p)) return "";
@@ -1273,45 +1368,103 @@
     // No em dash anywhere in this copy: it renders in the sent drawer, where that is a house rule
     // (test_no_em_dash_in_the_panels_copy) because the portal's own system lines use one as a field
     // separator and splitSystem cuts on it.
-    if (C.wonByHand(p)) {
-      return `${open}${head("Won")}
-        ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>',
+    // HANDED OFF FIRST, because it is the later state: a handed-off job is always a won one, so
+    // asking about the won mark first would answer with the wrong panel for every card that has
+    // already left the board.
+    if (C.isHandedOff(p)) {
+      return `${open}${head("Handed off")}
+        ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="handoff-undo">Bring it back to the board</button></div>',
           acts
-          ? "Somebody marked this won, so it is on the Won tab. The chasing carries on until the "
-            + "deposit is in."
-          : "Somebody marked this won, so it sits on the Won tab instead of the Active board, and "
-            + "counts under Won on the Notification Sending page. Follow-ups do NOT stop: the "
+          ? "Operations has this one, so it has left the Active board and sits on the Handed Off tab."
+          : "Somebody handed this to operations, so it has left the Active board and sits on the "
+            + "Handed Off tab. Bring it back if that press was early: the card returns to whichever "
+            + "Active column its own dates earn.")}
+        <p class="note" id="won-note"></p>${close}`;
+    }
+    // THE HAND-OFF BUTTON, on both won states below. Written once here rather than twice, where the
+    // two copies would drift apart the first time the label changed.
+    const handoffBtn = '<button type="button" class="btn btn-s" id="handoff-mark">Hand it off</button>';
+    if (C.wonByHand(p)) {
+      return `${open}${head("Won/Approved")}
+        ${control('<div class="fu-line">' + handoffBtn
+            + '<button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>',
+          acts
+          ? "Somebody marked this won, so it sits in the Won/Approved column. The chasing carries "
+            + "on until the deposit is in. Hand it off once operations has it."
+          : "Somebody marked this won, so it sits in the Won/Approved column on the Active board, "
+            + "and counts under Active on the Notification Sending page. Follow-ups do NOT stop: the "
             + "chasing runs until the deposit is in, and the customer is not emailed about this "
-            + "either way.")}
+            + "either way. Hand it off once operations has the contact info, and the card leaves "
+            + "the board for the Handed Off tab.")}
         <p class="note" id="won-note"></p>${close}`;
     }
     if (C.isWon(p)) {
-      // NO BUTTON, and the copy now SAYS SO rather than leaving a gap where every other state has a
+      // NO UNDO, and the copy now SAYS SO rather than leaving a gap where every other state has a
       // control. Hanz asked for the bring-back on 2026-08-20 and this is the one case with nothing
       // to bring back: nobody marked this job won, the numbers did, so there is no mark to clear.
       // An Undo here would save and change nothing, which reads as a broken control. Un-approving
       // it or unwinding the deposit are different acts and live where those facts do.
-      return `${open}${head("Won")}
-        ${control("", "Approved, and the deposit question is settled, so this already counts as won "
-          + "without anyone marking it. It sits on the Won tab. There is nothing to bring back "
-          + "here: no person marked it, so there is no mark to take off. It stops counting as won "
-          + "if the approval or the deposit changes, and both of those are on the Proposal tab.")}${close}`;
+      //
+      // THE HAND-OFF IS STILL OFFERED, and that is the split this state used to lack: the numbers
+      // decide whether the job is won, a person decides whether operations has it, and the second
+      // one has no other way to be recorded.
+      return `${open}${head("Won/Approved")}
+        ${control('<div class="fu-line">' + handoffBtn + "</div>",
+          acts
+          ? "Approved, and the deposit is settled, so this counts as won without anyone marking it. "
+            + "Hand it off once operations has it."
+          : "Approved, and the deposit question is settled, so this already counts as won without "
+            + "anyone marking it. It sits in the Won/Approved column on the Active board. There is "
+            + "nothing to bring back here: no person marked it, so there is no mark to take off. It "
+            + "stops counting as won if the approval or the deposit changes, and both of those are "
+            + "on the Proposal tab. Hand it off once operations has it.")}
+        <p class="note" id="won-note"></p>${close}`;
+    }
+    // APPROVED, MONEY STILL OUT. wonByHand and isWon between them miss this one, and it is not an
+    // edge case: it is what a win looks like on the day it happens. The card is already in the
+    // Won/Approved column because stage() asks wonOrApproved, so a drawer that fell through to
+    // "Won it already?" here was arguing with the column header three inches to its left, and
+    // offering a Mark won press whose only effect would be to write a stamp for something the
+    // portal had already recorded.
+    //
+    // Its own copy rather than a share of the branch above, because that branch's promise is "the
+    // deposit is settled" and here it is precisely not. Saying so is the point: the chasing is
+    // still on, and handing off does not end it.
+    if (C.wonOrApproved(p)) {
+      return `${open}${head("Won/Approved")}
+        ${control('<div class="fu-line">' + handoffBtn + "</div>",
+          acts
+          ? "The customer approved this in the portal, so it counts as won without anyone marking "
+            + "it. The deposit is still outstanding and the chasing carries on. Hand it off once "
+            + "operations has it."
+          : "The customer approved this in the portal, so it sits in the Won/Approved column on the "
+            + "Active board without anyone having marked it. The deposit is still outstanding, so "
+            + "the follow-ups carry on and it does NOT yet count as won on the Notification Sending "
+            + "page. There is nothing to bring back here: no person marked it, so there is no mark "
+            + "to take off, and un-approving it lives on the Proposal tab. Hand it off once "
+            + "operations has it, and the card leaves the board for the Handed Off tab.")}
+        <p class="note" id="won-note"></p>${close}`;
     }
     return `${open}${head("Won it already?")}
-      ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark won</button></div>',
+      ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark as won/approved</button></div>',
         acts
-        ? "Moves it to the Won tab. The chasing carries on until the deposit is in. You can undo it."
+        ? "Moves it to the Won/Approved column. It stays on the Active board and the chasing carries "
+          + "on until the deposit is in. You can undo it."
         : "Mark it won as soon as they say yes on the phone. It does not wait for the customer to "
           + "click Approve or for the deposit to land, the customer is not emailed, and the "
-          + "follow-ups carry on until the money is in. The card moves to the Won tab, which "
-          + "columns it by whatever is still outstanding, so nothing stops being chased. You can "
-          + "undo it.")}
+          + "follow-ups carry on until the money is in. The card moves to the Won/Approved column "
+          + "and STAYS on the Active board, so nothing stops being chased. Hand it off separately "
+          + "once operations takes it over. You can undo it.")}
       <p class="note" id="won-note"></p>${close}`;
   }
 
-  /** Wire the pair of buttons wonControlHtml can render. Shared by both drawers, which is why the
+  /** Wire the buttons wonControlHtml can render. Shared by both drawers, which is why the
    *  repaint is a callback: the not-sent panel redraws from its board row, and a sent project's
    *  drawer redraws from its cached portal payload with the row merged back in.
+   *
+   *  FOUR BUTTONS SINCE 2026-08-28, not two, and only ever two of them on screen at once: the won
+   *  mark and its undo, plus the hand-off and its undo. All four post to the same route with a
+   *  different status, so they share the same `post` helper and the same #won-note for errors.
    *
    *  Posts to the DRAFT endpoint from BOTH drawers, unlike Mark closed lost, which uses the portal's
    *  route once a proposal exists. There is no portal equivalent to defer to: `proposal_status` is
@@ -1346,13 +1499,13 @@
     };
 
     const mark = $("won-mark");
-    // THERE IS A CONFIRM ON THE WAY IN NOW, since 2026-08-27, and this comment used to argue there
-    // should not be: "nothing is sent, nothing leaves the pipeline, and the way back is one click".
-    // The first two halves of that are still true and the third one stopped being the whole story
-    // the day the Won TAB took won jobs off the Active board. This press MOVES THE CARD to another
-    // tab, and it was the only control in this group without a prompt, sitting between Mark delayed
-    // and Mark closed lost, which both have one. A pointer landing one row high files a live bid as
-    // won, and the estimator's next look at the Active board simply does not have it on there.
+    // THERE IS A CONFIRM ON THE WAY IN, since 2026-08-27. The argument for it USED TO BE that the
+    // press moved the card off the Active board onto the Won tab, and as of 2026-08-28 it does not:
+    // a won card stays on the board, in the Won/Approved column. The prompt stays anyway, for the
+    // reason that outlived the tab. This is the consequential group, sitting between Mark delayed
+    // and Mark closed lost, which both prompt; a pointer landing one row high would file a live bid
+    // as won, change what the sales meeting reads and what the Notification Sending page counts,
+    // and nothing else in the group is that quiet about it.
     //
     // WHAT THE DIALOG SAYS IS THE FEATURE, not the fact that it exists. Every one of these four
     // sentences answers a question somebody would otherwise have to ask the person who built it:
@@ -1364,10 +1517,10 @@
       const ok = await TW.confirmDanger({
         title: "Mark this won?",
         before: "Move ", name: (row && row.project_name) || "this project",
-        after: " to the Won tab?",
+        after: " to the Won/Approved column?",
         detail: "It does not wait for the customer to approve or for the deposit to land, and the"
-          + " customer is not emailed. The follow-ups carry on until the money is in, and you can"
-          + " undo this.",
+          + " customer is not emailed. The card stays on the Active board, the follow-ups carry on"
+          + " until the money is in, and you can undo this.",
         // A tick, not a trophy: confirmDanger's own warn default is a WASTEBASKET, which is the
         // wrong picture entirely on the one dialog here that is good news. Kept to the same kind of
         // glyph the other two in this file use (the pause and the play) rather than an emoji.
@@ -1376,10 +1529,8 @@
       if (!ok) return;
       post(mark, { status: "won" }, { won_at: new Date().toISOString() });
     });
-    // ON THE WAY OUT THERE IS ONE, since 2026-08-20. This comment used to say neither half had a
-    // prompt and gave the reason above for both. That held while a won card stayed among the live
-    // ones, and stopped holding the day the Won TAB took won jobs off the Active board: undoing the
-    // mark MOVES THE CARD now, to whichever Active column its own timestamps earn, and Hanz asked
+    // ON THE WAY OUT THERE IS ONE TOO, since 2026-08-20. Undoing the mark still MOVES THE CARD,
+    // out of Won/Approved and into whichever Active column its own timestamps earn, and Hanz asked
     // for the prompt in the same breath as the bring-back — "before they do that there should be a
     // prompt saying are they sure". Same helper as the other two, so it names the destination.
     //
@@ -1390,6 +1541,26 @@
     if (undo) undo.addEventListener("click", async () => {
       if (!(await confirmBringBack(row || {}))) return;
       post(undo, { status: "not_won" }, { won_at: "" });
+    });
+
+    // HAND IT OFF, and its undo. Same route, same note, same optimistic-stamp trick as the won
+    // mark: `handed_off_at` is the field the pipeline sends and isHandedOff reads, the browser's
+    // clock is good enough to repaint with, and the next board load replaces it with the server's.
+    //
+    // confirmHandoff rather than an inline dialog, because the card in cardActions offers the same
+    // press and the two must not come to describe it differently.
+    const hand = $("handoff-mark");
+    if (hand) hand.addEventListener("click", async () => {
+      if (!(await confirmHandoff(row || {}))) return;
+      post(hand, { status: "handed_off" }, { handed_off_at: new Date().toISOString() });
+    });
+    // confirmBringBack names the destination by running the board's own stage() over the row, which
+    // is exactly the right answer here: clearing the hand-off puts the card back on the Active
+    // board in whatever column it earns, which for a won job is Won/Approved.
+    const handUndo = $("handoff-undo");
+    if (handUndo) handUndo.addEventListener("click", async () => {
+      if (!(await confirmBringBack(row || {}))) return;
+      post(handUndo, { status: "not_handed_off" }, { handed_off_at: "" });
     });
   }
 
@@ -3548,14 +3719,19 @@
    *  restores 'approved' when approved_at survived and 'sent' otherwise; a synthesised not-sent row
    *  has no portal status at all and stage() reads `not_sent` before any of this.
    *
-   *  A DERIVED WIN SURVIVES THE CLEAR, so the answer has to be able to be a Won column. Clearing
-   *  won_at unmarks a by-hand win, but a job that is approved with the deposit settled is won by
-   *  the numbers (C.isWon) and belongs on the Won tab whatever anybody clears — telling the
-   *  estimator it was going back to "Contact info" would be a lie about a card they are about to go
-   *  looking for.
+   *  ONE CALL, since 2026-08-28, where it used to be a Won-tab branch and a stage() branch. Won is
+   *  a COLUMN on the Active board again rather than a tab of its own, and stage() names that column
+   *  itself, so "where would it land" is one question with one answer. The handed-off check stays a
+   *  branch because that IS still a tab, and a card can in principle be closed lost after it was
+   *  handed off, in which case reopening it puts it back where it was rather than on the board.
+   *
+   *  A DERIVED WIN SURVIVES THE CLEAR, and the answer has to say so. Clearing won_at unmarks a
+   *  by-hand win, but a job that is approved with the deposit settled is won by the numbers, and
+   *  stage() returns Won/Approved for it whatever anybody clears — telling the estimator it was
+   *  going back to "Contact info" would be a lie about a card they are about to go looking for.
    *
    *  TWO FIELDS AND NO MORE. followup_state is left exactly as it is, and that is deliberate rather
-   *  than an omission: stage(), isWon() and wonColumn() read proposal_status, not_sent, the deposit
+   *  than an omission: stage() and isWon() read proposal_status, not_sent, the deposit
    *  and contacts columns and won_at, and none of them touches followup_state - only lostReason,
    *  pausedUntil, followupOff and stageTs do, and none of those is asked here. A copy that also
    *  blanked closed_lost_reason and closed_at would be a line no test could tell from its absence,
@@ -3565,7 +3741,31 @@
       proposal_status: p.not_sent ? "" : (p.approved_at ? "approved" : "sent"),
       won_at: "",
     });
-    return C.isWon(clean) ? "Won \u00B7 " + C.wonColumn(clean) : C.stage(clean);
+    return C.isHandedOff(clean) ? "Handed off" : C.stage(clean);
+  }
+
+  /** HANDING IT OFF. One helper for the card button and the drawer button, same argument as
+   *  confirmBringBack below: two surfaces, one description of the act.
+   *
+   *  IT PROMPTS ONLY WHEN THE CONTACTS ARE NOT IN, and that is the whole design decision. Hanz:
+   *  "Once we receive the Contact Info, we indicate it as handed off" — so the ordinary case is a
+   *  card that already has them, where a dialog would be a click tax on the happy path. Handing off
+   *  early is legitimate (operations can be told over the phone), so this warns rather than blocks.
+   *
+   *  A HARD GATE ON CONTACTS WOULD MAKE THE BUTTON UNREACHABLE on an unsent row: _not_sent_rows
+   *  synthesises those and they carry no contacts_status at all, so `!== "received"` is true for
+   *  every one of them forever. That is the bug this shape avoids, not a nicety. */
+  function confirmHandoff(p) {
+    if (p && p.contacts_status === "received") return Promise.resolve(true);
+    return TW.confirmDanger({
+      title: "Hand it off anyway?",
+      before: "We have not recorded the contact info for ",
+      name: (p && p.project_name) || "this project",
+      after: " yet.",
+      detail: "Handing off takes it off the Active board and onto the Handed Off tab. Operations"
+        + " will need those details from somewhere. You can bring it back.",
+      confirmText: "Hand it off", cancelText: "Not yet", tone: "warn", icon: "\u2192",
+    });
   }
 
   /** The prompt. ONE helper for all three controls that put a card back, so the three cannot come
@@ -4273,14 +4473,14 @@
 
   function lostCount() { return ALL.filter(isLost).length; }
 
-  /** The Active / Won / Lost / Test switch. The counts come off the same predicates boardPool
+  /** The Active / Handed Off / Lost / Test switch. The counts come off the same predicates boardPool
    *  filters with, so a tab can never advertise a number it then refuses to show — and because the
    *  four pools partition `ALL`, the four counts add up to every proposal there is.
    *
    *  Computed here rather than as `boardPool()` per tab because boardPool closes over TAB: asking it
    *  four times would mean assigning TAB four times mid-render. So the precedence is spelled out a
-   *  second time, in the same order — lost, then test, then won — and test_won_tab.py asserts the
-   *  four numbers sum to `ALL`, which is the property that catches the two copies drifting.
+   *  second time, in the same order — lost, then test, then handed off — and test_handed_off_tab.py
+   *  asserts the four numbers sum to `ALL`, the property that catches the two copies drifting.
    *
    *  This replaced a "N closed lost →" link out to /projects.html. That link could never do what
    *  it implied: that page reads no filter from the URL, its tabs are Active / Inactive / All /
@@ -4290,12 +4490,15 @@
     const wrap = $("crm-tabs");
     if (!wrap) return;
     const live = ALL.filter((p) => !isLost(p));
-    // Real live work: what the Active and Won pills split between them. A won TEST project is
-    // counted under Test, exactly as boardPool files it.
+    // Real live work: what the Active and Handed Off pills split between them. A handed-off TEST
+    // project is counted under Test, exactly as boardPool files it.
+    //
+    // ON isHandedOff, NOT isWon, since 2026-08-28: a won job is Active work now, so counting it
+    // here would advertise a Handed Off number the tab then refused to show.
     const real = live.filter((p) => !isTest(p));
     const n = { test: live.filter(isTest).length,
-                won: real.filter((p) => C.isWon(p)).length,
-                active: real.filter((p) => !C.isWon(p)).length,
+                handed_off: real.filter((p) => C.isHandedOff(p)).length,
+                active: real.filter((p) => !C.isHandedOff(p)).length,
                 lost: lostCount() };
     wrap.querySelectorAll("[data-tab]").forEach((b) => {
       const on = b.dataset.tab === TAB;
@@ -4357,11 +4560,19 @@
       // Active, painted the Active board, and looked like a dead button.
       TAB = TABS.includes(b.dataset.tab) ? b.dataset.tab : "active";
       ssSet(TAB_KEY, TAB);
+      // THE VIEW IS PER TAB, since 2026-08-28. Handed Off opens as a table because Hanz asked for
+      // one flat list there ("Default View should be a list"), while the Active board opens as
+      // columns; one shared VIEW would have meant every trip to Handed Off silently changed how
+      // Active looked on the way back. An explicit toggle still sticks, per tab, for the session.
+      VIEW = readView(TAB);
+      syncViewToggle();
       renderBoard();
     });
     if (view) view.addEventListener("click", () => {
       VIEW = VIEW === "table" ? "board" : "table";
-      ssSet(VIEW_KEY, VIEW === "table" ? "table" : "");
+      // The chosen value, not "" for board: "" would read back as the DEFAULT, which for Handed Off
+      // is table, so deliberately switching that tab to columns would not survive the next click.
+      ssSet(viewKey(TAB), VIEW);
       syncViewToggle(); renderBoard();
     });
     if (clear) clear.addEventListener("click", () => {
