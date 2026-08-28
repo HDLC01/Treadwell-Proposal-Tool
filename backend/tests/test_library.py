@@ -209,9 +209,28 @@ def test_a_lines_coverage_is_read_and_zero_becomes_unset():
     assert got["lines"][1]["coverage"] is None
 
 
-def test_too_many_lines_are_capped_not_rejected():
+def test_too_many_lines_are_refused_rather_than_silently_dropped():
+    """Was test_too_many_lines_are_capped_not_rejected. REWRITTEN, not deleted, because the old
+    posture was a deliberate decision that stopped being safe rather than a mistake.
+
+    Silently keeping the first 60 is right against a hostile or buggy 500-line payload. It became
+    data loss on 2026-08-28, when the Items page grew a bulk picker: adding 40 materials to an
+    assembly already holding 30 dropped ten of them and returned 200 OK, with nothing on screen or
+    in the response to say which. A count is not a malformed line — the caller knows exactly how
+    many it sent — so it is told.
+
+    Hanz chose this over raising the cap: keep 60, refuse loudly. The browser guards first
+    (`bulkAddRoom` in library.js names the number while there is still something to change); this is
+    what makes the rule true rather than merely displayed."""
+    with pytest.raises(library.ValidationError) as err:
+        library.validate_assembly({"name": "x", "lines": [
+            {"item_id": "a"} for _ in range(500)]})
+    # The message has to carry both numbers, or "too many" leaves somebody counting rows.
+    assert "60" in str(err.value) and "500" in str(err.value), str(err.value)
+
+    # AT the cap is fine — the refusal is for going over it, not for reaching it.
     got = library.validate_assembly({"name": "x", "lines": [
-        {"item_id": "a"} for _ in range(500)]})
+        {"item_id": "a"} for _ in range(library._MAX_LINES)]})
     assert len(got["lines"]) == library._MAX_LINES
 
 

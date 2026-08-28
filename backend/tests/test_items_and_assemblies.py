@@ -110,6 +110,56 @@ def test_a_division_or_unit_typed_in_the_wrong_case_becomes_the_offered_spelling
     assert library.validate_item({"name": "x", "unit": "Gal"})["unit"] == "Gal"
 
 
+def test_an_assembly_is_measured_in_SF_or_LF_and_says_which():
+    """Hanz, 2026-08-28: "Coverage per Unit - is there a way we can change it from SF and LF?"
+
+    Treadwell measures floor area in square feet and cove base in linear feet, and until today
+    every assembly said SF because the create call hardcoded it - the column has always been
+    persisted and has always been free text.
+
+    CANONICALISED, because the Polish beta compares this value against the literal "LF" after
+    upper-casing (polish-estimate.js stamps a takeoff row's unit from it). A row holding "lf" would
+    load fine here and then silently fail to stamp anything over there."""
+    assert library.validate_assembly({"name": "x", "unit": "LF"})["unit"] == "LF"
+    assert library.validate_assembly({"name": "x", "unit": "lf"})["unit"] == "LF"
+    assert library.validate_assembly({"name": "x", "unit": "  Lf "})["unit"] == "LF"
+    assert library.validate_assembly({"name": "x", "unit": "sf"})["unit"] == "SF"
+    # Absent means SF: what every existing row holds, and what a floor system is.
+    assert library.validate_assembly({"name": "x"})["unit"] == "SF"
+    assert library.validate_assembly({"name": "x", "unit": ""})["unit"] == "SF"
+
+
+def test_an_off_list_assembly_unit_is_kept_rather_than_refused():
+    """Same posture as DIVISIONS and ITEM_UNITS: offered, not enforced. This column was free text to
+    24 characters before it had a vocabulary, so a legacy row may hold "sqft" or "Each" - and
+    refusing it would make that assembly uneditable, which is worse than an odd label. The frontend
+    reads anything unrecognised as SF so the label still matches the arithmetic that ran."""
+    assert library.validate_assembly({"name": "x", "unit": "sqft"})["unit"] == "sqft"
+    assert library.validate_assembly({"name": "x", "unit": "Each"})["unit"] == "Each"
+
+
+def test_the_assembly_unit_round_trips_through_the_endpoint(store):
+    """The whole point of the feature is that the choice STICKS - a relabel that is not persisted
+    would read as a bug the next time somebody opened the assembly.
+
+    And a PATCH carrying ONLY the unit is exactly what the select sends, so it must not disturb the
+    name or the lines: `validate_assembly` is partial for a PATCH, and a unit-only body that reset
+    the other columns would lose a takeoff to a relabel."""
+    asm = library.create_assembly({"name": "Cove Base", "unit": "lf"}, "hanz@wetreadwell.com")
+    assert asm["unit"] == "LF"
+
+    r = client.patch("/api/library/assemblies/%s" % asm["id"], json={"lines": [
+        {"item_id": "a", "coverage": 40}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["assembly"]["unit"] == "LF", "a lines PATCH dropped the unit"
+
+    back = client.patch("/api/library/assemblies/%s" % asm["id"], json={"unit": "SF"})
+    assert back.status_code == 200, back.text
+    assert back.json()["assembly"]["unit"] == "SF"
+    assert back.json()["assembly"]["name"] == "Cove Base"
+    assert len(back.json()["assembly"]["lines"]) == 1, "a unit PATCH dropped the lines"
+
+
 def test_an_item_can_belong_to_multiple_divisions_without_losing_legacy_category(store):
     it = _mk_item(divisions=["epoxy", "Polished Concrete", "EPOXY"])
     got = library.get_item(it["id"])

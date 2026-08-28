@@ -144,9 +144,27 @@
   }
   function itemOf(id) { return L.findItem(ITEMS, id); }
 
+  /** What an assembly is measured and priced per: "SF" or "LF".
+   *
+   *  Takes the assembly so it stays a pure function of its argument — the harness lifts the three
+   *  renderers that call this out of the source text, and a helper that closed over module state
+   *  would need its own grab() in there.
+   *
+   *  Anything unrecognised reads as SF, matching `_coverage_unit`-style read-shaping on the server:
+   *  the column is free text to 24 chars and a legacy row may hold "sqft" or "Each". Defaulting
+   *  rather than displaying the raw value keeps the label honest about which arithmetic actually
+   *  ran — priceAssembly divides by the one area input either way. */
+  function asmUnit(asm) {
+    return String((asm || {}).unit || "").trim().toUpperCase() === "LF" ? "LF" : "SF";
+  }
+
   // ── writes ─────────────────────────────────────────────────────────────────
   var timers = {};
   var pendingPatch = {};
+  // WHICH RECORDS HAVE A PATCH ON THE WIRE RIGHT NOW. See the guard in flush(): without it a
+  // second debounced save goes out stamped with the version the FIRST one is about to
+  // replace, and the server rightly rejects it as stale — a 409 against our own write.
+  var inFlight = {};
   /** PATCH one record, debounced per record so holding a key is one write.
    *
    *  Pending fields are MERGED, not replaced. The first version replaced the body on each call,
@@ -455,6 +473,21 @@
     // throw on the missing payload BEFORE the try block, which turned a dropped write into an
     // unhandled rejection and a silent screen. Belt to adoptConflict's braces.
     if (!payload) { delete timers[key]; return; }
+    // ONE PATCH PER RECORD ON THE WIRE AT A TIME.
+    //
+    // Every successful PATCH bumps `updated_at`, and an assembly save declares the version it was
+    // editing so two people cannot silently overwrite each other. Those two facts together made a
+    // race against OURSELVES: this function used to take the payload and await the request without
+    // recording that it was in flight, so a second save armed 600ms later read the SAME stale
+    // `updated_at` (adoptSaved has not run yet), went out, and came back 409. `adoptConflict` then
+    // replaced the model wholesale, dropped the pending buffer, and said "Somebody else changed
+    // this while you had it open" — about nobody. Reachable by typing quickly on a slow connection,
+    // and with the bulk picker it could discard a whole batch of lines.
+    //
+    // RE-ARM, never drop: the edit is still on screen and still unsaved, and the payload has not
+    // been consumed yet at this point — so the next tick sends it with a version stamp that is by
+    // then correct. This is the same "wait and try again" the three item gates below use.
+    if (inFlight[key]) { arm(kind, id, key); return; }
     if (kind === "items") {
       // ONE DIALOG AT A TIME, ACROSS ALL ROWS — and across all QUESTIONS, not just this one.
       //
@@ -485,6 +518,9 @@
     // per pause would be unusable; an item is reference data that other records are priced from,
     // which is the whole distinction Hanz drew.
     if (kind === "items" && !(await confirmItemPatch(id, payload))) return;
+    // AFTER the confirm above, which can return false and bail — marking earlier would leave the
+    // record permanently locked by a question somebody answered "no" to.
+    inFlight[key] = 1;
     saving("Saving…");
     try {
       var r = await api("/api/library/" + kind + "/" + encodeURIComponent(id),
@@ -514,6 +550,11 @@
     } catch (err) {
       say("Couldn't reach the server. " + (err.message || ""));
       saving("Not saved");
+    } finally {
+      // `finally`, because the try block returns early on 409 and on any non-ok status. A lock left
+      // set on one of those paths would silence every later save for that record — a worse bug than
+      // the one this guard fixes.
+      delete inFlight[key];
     }
   }
 
@@ -1114,22 +1155,32 @@
       : "";
   }
 
-  /** The facets, ANDed with each other and ORed within the division list. */
-  function matchesFilters(it) {
-    if (FILTERS.divisions.length) {
+  /** The facets, ANDed with each other and ORed within the division list.
+   *
+   *  `F` defaults to this tab's FILTERS so every existing caller is unchanged. It is a parameter
+   *  because the bulk-add picker draws its OWN facet bar and must not move the Items tab's — the
+   *  same reasoning the note on visibleItems gives for why the line picker ignores these. Sharing
+   *  one FILTERS between two visible bars is how a screen ends up narrowed by a control on another
+   *  tab that the estimator cannot see.
+   *
+   *  ES5 default rather than a default parameter: this file is var-and-function throughout, and the
+   *  harness lifts it into a `new Function` scope where the surrounding dialect is what it is. */
+  function matchesFilters(it, F) {
+    F = F || FILTERS;
+    if (F.divisions.length) {
       var mine = {};
       itemDivisions(it).forEach(function (d) { mine[String(d).toLowerCase()] = true; });
       var any = false;
-      for (var i = 0; i < FILTERS.divisions.length; i++) {
-        if (mine[String(FILTERS.divisions[i]).toLowerCase()]) { any = true; break; }
+      for (var i = 0; i < F.divisions.length; i++) {
+        if (mine[String(F.divisions[i]).toLowerCase()]) { any = true; break; }
       }
       if (!any) return false;
     }
-    if (FILTERS.vendor &&
-        String(it.vendor || "").toLowerCase() !== String(FILTERS.vendor).toLowerCase()) {
+    if (F.vendor &&
+        String(it.vendor || "").toLowerCase() !== String(F.vendor).toLowerCase()) {
       return false;
     }
-    if (FILTERS.condition && !conditionHits(it, FILTERS.condition)) return false;
+    if (F.condition && !conditionHits(it, F.condition)) return false;
     return true;
   }
 
@@ -1155,6 +1206,83 @@
     return ITEMS.filter(function (it) {
       return matchesFilters(it) && itemMatches(it, itemQuery);
     });
+  }
+
+  // ── bulk add: the decisions, as pure functions ─────────────────────────────
+  // Will wants to put a dozen materials into an assembly at once instead of pressing "Add item
+  // line" twelve times and searching twelve times (Hanz, 2026-08-28).
+  //
+  // WHY THESE ARE SEPARATE FROM THE MODAL. The test harness builds a DOM stub that knows only
+  // innerHTML/textContent/hidden/value — it cannot open a dialog, move focus or tick a checkbox, and
+  // it takes the same position with `confirmDanger`. So every DECISION lives in a function that
+  // takes its state as arguments and returns a value, and the modal is left holding only wiring.
+  // Everything worth being wrong about is therefore testable.
+  //
+  // The 60 here is `_MAX_LINES` in backend/library.py. Two literals for one rule is not ideal, but
+  // there is no config endpoint to read it from, and the alternative — finding out on save — is the
+  // bug this guard exists to prevent.
+  var BULK_MAX_LINES = 60;
+
+  /** The materials a bulk picker should show, given its own query and its OWN facets.
+   *
+   *  Reuses itemMatches, so this box, the Items tab's box and the per-line picker cannot disagree
+   *  about what "vendor:sherwin" or "-epoxy" finds. `F` is the MODAL's filter state, never the Items
+   *  tab's FILTERS — see the note on matchesFilters. */
+  function bulkCandidates(items, query, F) {
+    return (items || []).filter(function (it) {
+      return matchesFilters(it, F) && itemMatches(it, query);
+    });
+  }
+
+  /** "none" | "some" | "all" for the select-all control, over WHAT IS CURRENTLY SHOWN.
+   *
+   *  Shown, not the whole library: after typing a query, "all" has to mean "all of these", or the
+   *  control claims everything is ticked while the list in front of you is half unticked. Ticks
+   *  outside the current search are still held — narrowing the search must not silently untick
+   *  what you already chose — so `picked` is read, not overwritten. */
+  function bulkSelectAllState(shownIds, picked) {
+    var ids = shownIds || [], on = 0;
+    for (var i = 0; i < ids.length; i++) if (picked && picked[ids[i]]) on += 1;
+    if (!ids.length || !on) return "none";
+    return on === ids.length ? "all" : "some";
+  }
+
+  /** Assembly lines for the picked materials, in the order they were shown.
+   *
+   *  SEEDS COVERAGE FROM THE ITEM, which is the whole reason this is a function with a test rather
+   *  than three lines inside a click handler. `priceLine` reports a line with no coverage as
+   *  `no_coverage`, and that reason IS counted in `broken_lines` — so a twelve-material add without
+   *  this seed arrives with twelve amber rows reading "Needs a coverage", and the estimator would
+   *  reasonably conclude the feature is broken. The single-pick path has always done it; this
+   *  matches it deliberately rather than by coincidence.
+   *
+   *  An item whose own coverage is unset still lands, and still reads "Needs a coverage" — that is
+   *  an honest report about the material, not a fault in the add. */
+  function bulkLinesFor(itemIds, items) {
+    var out = [];
+    (itemIds || []).forEach(function (id) {
+      var it = L.findItem(items || [], id);
+      if (!it) return;                       // deleted between opening the picker and pressing Add
+      out.push({ role: "", item_id: it.id,
+                 coverage: (Number(it.coverage) > 0) ? it.coverage : null,
+                 // The same defaults the single "Add item line" path sets, so a bulk-added row and
+                 // a hand-added one save with identical numbers.
+                 waste_pct: 5, roundup: true, note: "" });
+    });
+    return out;
+  }
+
+  /** How much room is left, so the picker can say so BEFORE the click.
+   *
+   *  The server caps an assembly at 60 lines. It used to take `raw[:60]` silently, which is
+   *  defensible against a hostile 500-line payload and indefensible against a deliberate add of 40:
+   *  ten materials would vanish under a 200 OK. Answering here means the button can explain itself
+   *  while there is still something to change. */
+  function bulkAddRoom(asm, n) {
+    var used = ((asm && asm.lines) || []).length;
+    var room = Math.max(0, BULK_MAX_LINES - used);
+    return { used: used, room: room, over: Math.max(0, (n || 0) - room),
+             fits: (n || 0) <= room, max: BULK_MAX_LINES };
   }
 
   function itemMatches(it, query) {
@@ -1350,6 +1478,18 @@
     var priced = p.priced_lines > 0;
     $("t-total").textContent = priced ? L.money(p.total) : "—";
     $("t-unit").textContent = p.per_unit == null ? "—" : L.perUnit(p.per_unit);
+
+    // THE UNIT, SAID OUT LOUD IN THREE PLACES. All three read the assembly rather than a constant,
+    // so a cove assembly stops being described as square feet. The arithmetic is identical either
+    // way — priceAssembly divides by whatever is in the one area input — which is exactly why the
+    // labels mattered: the number was already right and the words around it were wrong.
+    var u = asmUnit(asm);
+    $("t-unit-k").textContent = "Price per " + u;
+    $("area-k").textContent = u === "LF" ? "Test length" : "Test area";
+    $("area-u").textContent = u;
+    // Set, not rebuilt, and only when it differs — the same rule renderFilterBar follows for its
+    // selects. Rewriting a control somebody has open would close it mid-choice.
+    if ($("asm-unit").value !== u) $("asm-unit").value = u;
   }
 
   // renderFilterBar is in here rather than inside renderItems on purpose: it must run when the
@@ -1373,14 +1513,252 @@
     $(TAB_OF[p]).addEventListener("click", function () { showView(p); });
   });
 
+  // ── add from library: the modal ────────────────────────────────────────────
+  // The DECISIONS are the four pure functions above; this is wiring, and it is kept apart from them
+  // on purpose. The test harness's DOM stub cannot open a dialog, move focus or tick a checkbox, so
+  // anything that lives only here is verified in a browser instead — the same split this file
+  // already accepts for confirmDanger.
+  var BULK = { open: false, q: "", picked: {}, shown: [], against: null,
+               F: { divisions: [], vendor: "", condition: "" } };
+
+  function bulkShow(on) {
+    BULK.open = !!on;
+    $("bulk-ov").hidden = !on;
+    // The class the shared stylesheet fades in with. Set after `hidden` clears so the transition
+    // has a frame to run in.
+    if (on) $("bulk-ov").classList.add("tw-in");
+    else $("bulk-ov").classList.remove("tw-in");
+  }
+
+  function bulkClose() {
+    bulkShow(false);
+    BULK.picked = {}; BULK.q = ""; BULK.against = null;
+    BULK.F = { divisions: [], vendor: "", condition: "" };
+    // Back to the control that opened it, which is where the keyboard expects to be.
+    var back = $("bulk-open");
+    if (back) back.focus();
+  }
+
+  function bulkOpen() {
+    // A confirm dialog can stack on top of this one — `flush`'s modal gate only covers item saves,
+    // and shared.js's counter cannot see an overlay it did not create. Refusing to open on top of a
+    // question is cheaper than fighting over the focus trap.
+    if (TW.modalOpen && TW.modalOpen()) { say("Answer the question on screen first."); return; }
+    var asm = current();
+    if (!asm) return;
+    // HELD AS AN IDENTITY TOKEN AND NOTHING ELSE. `adoptConflict` replaces ASMS[i] wholesale on a
+    // 409, so comparing identity at Add time is what catches "the assembly moved underneath you".
+    // Mutating through this reference would push pre-conflict lines back and undo the very thing
+    // the conflict machinery protected.
+    BULK.against = asm;
+    BULK.picked = {}; BULK.q = "";
+    BULK.F = { divisions: [], vendor: "", condition: "" };
+    $("bulk-q").value = "";
+    $("bulk-sub").textContent = 'Tick what this assembly uses. Added to "' + asm.name + '".';
+    bulkFilters();
+    bulkPaint();
+    bulkShow(true);
+    $("bulk-q").focus();
+  }
+
+  /** The modal's own facet controls, built from the same offered lists the Items tab uses. */
+  function bulkFilters() {
+    $("bulk-divisions").innerHTML = divisionNames().map(function (d) {
+      return '<label class="fchip" title="' + esc(d) + '">' +
+        '<input type="checkbox" data-bdiv="' + esc(d) + '" aria-label="' + esc(d) + '">' +
+        '<span class="fchip-f">' + esc(d) + "</span></label>";
+    }).join("");
+    $("bulk-vendor").innerHTML = '<option value="">Any vendor</option>' +
+      vendorNames().map(function (v) {
+        return '<option value="' + esc(v) + '">' + esc(v) + "</option>";
+      }).join("");
+  }
+
+  function bulkPaint() {
+    var asm = current();
+    // Materials already on this assembly are shown but not tickable: hiding them would make the
+    // list a puzzle about which materials went missing, and a second line for the same material is
+    // a second charge for it.
+    var already = {};
+    ((asm && asm.lines) || []).forEach(function (ln) { if (ln.item_id) already[ln.item_id] = true; });
+
+    var list = bulkCandidates(ITEMS, BULK.q, BULK.F);
+    BULK.shown = list.map(function (it) { return it.id; });
+
+    $("bulk-list").innerHTML = list.map(function (it) {
+      var on = !!already[it.id];
+      var divs = itemDivisions(it).join(", ") || "No division";
+      var vendor = it.vendor || "No vendor";
+      return '<label class="bulk-row' + (on ? " on" : "") + '">' +
+        '<input type="checkbox" data-bpick="' + esc(it.id) + '"' +
+          (on ? " disabled" : (BULK.picked[it.id] ? " checked" : "")) + ">" +
+        '<span class="bulk-box"></span>' +
+        '<span class="bulk-nm"><b>' + esc(it.name) + "</b><span>" +
+          esc(divs) + " &middot; " + esc(vendor) + "</span></span>" +
+        (on ? '<span class="bulk-in">On this assembly</span>'
+            : '<span class="bulk-cost">' + esc(orderAmount(it)) + "</span>") +
+        "</label>";
+    }).join("");
+
+    var none = !list.length;
+    $("bulk-none").hidden = !none;
+    if (none) {
+      $("bulk-none").textContent = ITEMS.length
+        ? "Nothing in the library matches that. Try fewer words, or clear a facet."
+        : "The library has no materials yet. Add some on the Items tab first.";
+    }
+
+    // Tickable ids only, so "select all" cannot claim to have ticked a disabled row.
+    var pickable = BULK.shown.filter(function (id) { return !already[id]; });
+    var state = bulkSelectAllState(pickable, BULK.picked);
+    var master = $("bulk-master");
+    master.checked = state === "all";
+    master.indeterminate = state === "some";
+    master.disabled = !pickable.length;
+    $("bulk-master-l").textContent = state === "all" && pickable.length ? "Clear all" : "Select all";
+
+    var n = bulkPickedIds().length;
+    var room = bulkAddRoom(asm, n);
+    var count = $("bulk-count");
+    count.classList.toggle("over", !room.fits);
+    if (!room.fits) {
+      // Names the number, because "too many" leaves the estimator counting rows.
+      count.textContent = "Untick " + room.over + " — this assembly holds " + room.max +
+                          " lines and " + room.used + " are used.";
+    } else {
+      count.textContent = n ? n + " selected · " + room.used + " of " + room.max + " lines used"
+                            : room.used + " of " + room.max + " lines used";
+    }
+    var add = $("bulk-add");
+    add.disabled = !n || !room.fits;
+    add.textContent = n ? "Add " + n + " material" + (n === 1 ? "" : "s") : "Add";
+  }
+
+  /** The ticked ids, in the order the library holds them — so the lines land in a predictable
+   *  order rather than in whatever order the boxes happened to be clicked. */
+  function bulkPickedIds() {
+    return ITEMS.filter(function (it) { return BULK.picked[it.id]; })
+                .map(function (it) { return it.id; });
+  }
+
+  function bulkCommit() {
+    var picked = bulkPickedIds();
+    if (!picked.length) return;
+    var asm = current();
+    // THE CONFLICT CHECK. Identity, not id: a 409 handled while the picker was open replaced the
+    // object, and appending to the detached one would resurrect the lines the server rejected.
+    if (!asm || asm !== BULK.against) {
+      bulkClose();
+      say("This assembly changed while the picker was open — reopen it and pick again.");
+      return;
+    }
+    var room = bulkAddRoom(asm, picked.length);
+    if (!room.fits) { bulkPaint(); return; }         // the footer already says what to do
+
+    asm.lines = asm.lines.concat(bulkLinesFor(picked, ITEMS));
+    bulkClose();
+    paint();
+    // ONE PATCH for the whole batch. patchSoon debounces per record and merges by field, so this
+    // replaces any pending lines snapshot with the newer one rather than racing it.
+    patchSoon("assemblies", asm.id, { lines: asm.lines });
+    say("");
+  }
+
   // ── events ─────────────────────────────────────────────────────────────────
   $("area").addEventListener("input", function () { renderList(); renderPanel(); });
+
+  // ── add-from-library listeners ─────────────────────────────────────────────
+  // The stylesheet for .tw-ov lives in shared.js and is injected on demand. Called once here
+  // rather than on open, so the first press does not paint an unstyled overlay for a frame.
+  if (TW.injectModalCss) TW.injectModalCss();
+
+  $("bulk-open").addEventListener("click", bulkOpen);
+  $("bulk-x").addEventListener("click", bulkClose);
+  $("bulk-cancel").addEventListener("click", bulkClose);
+  $("bulk-add").addEventListener("click", bulkCommit);
+
+  $("bulk-q").addEventListener("input", function () { BULK.q = this.value; bulkPaint(); });
+  // Escape in the search box clears it before it closes the dialog — the same two-stage behaviour
+  // the Items tab's box has, so a typo does not cost you the whole selection.
+  $("bulk-q").addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && this.value) { e.stopPropagation(); this.value = ""; BULK.q = ""; bulkPaint(); }
+  });
+
+  $("bulk-vendor").addEventListener("change", function () {
+    BULK.F.vendor = this.value; bulkPaint();
+  });
+  // Bound to the CONTAINER, not the chips: bulkFilters replaces that markup, and a listener on a
+  // replaced element dies with it. Same rule renderFilterBar's note gives for the Items tab.
+  $("bulk-divisions").addEventListener("change", function () {
+    BULK.F.divisions = Array.prototype.map.call(
+      this.querySelectorAll("input[data-bdiv]:checked"),
+      function (el) { return el.getAttribute("data-bdiv"); });
+    bulkPaint();
+  });
+
+  // ONE delegated listener for the rows, because bulkPaint replaces all of them on every keystroke.
+  $("bulk-list").addEventListener("change", function (e) {
+    var box = e.target && e.target.closest && e.target.closest("[data-bpick]");
+    if (!box) return;
+    var id = box.getAttribute("data-bpick");
+    if (box.checked) BULK.picked[id] = true; else delete BULK.picked[id];
+    bulkPaint();
+  });
+
+  $("bulk-master").addEventListener("change", function () {
+    var asm = current();
+    var already = {};
+    ((asm && asm.lines) || []).forEach(function (ln) { if (ln.item_id) already[ln.item_id] = true; });
+    var pickable = BULK.shown.filter(function (id) { return !already[id]; });
+    // Over the SHOWN rows only. Ticking "all" while a search is narrowing the list must not reach
+    // materials the estimator cannot see, and clearing must not drop ticks made before the search.
+    if (this.checked) pickable.forEach(function (id) { BULK.picked[id] = true; });
+    else pickable.forEach(function (id) { delete BULK.picked[id]; });
+    bulkPaint();
+  });
+
+  // Escape closes, and a press on the scrim itself closes — but a press that started inside the box
+  // does not, or dragging to select text in the search field would dismiss the dialog.
+  $("bulk-ov").addEventListener("mousedown", function (e) {
+    if (e.target === this) bulkClose();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (!BULK.open) return;
+    if (e.key === "Escape") { e.preventDefault(); bulkClose(); return; }
+    if (e.key !== "Tab") return;
+    // FOCUS STAYS IN THE DIALOG. Without this, Tab walks into the page behind — which is both a
+    // keyboard trap in reverse and a way to edit the assembly under an open picker.
+    var ov = $("bulk-ov");
+    var f = ov.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    var real = Array.prototype.filter.call(f, function (el) {
+      return el.offsetParent !== null || el.type === "checkbox";   // the visually-hidden boxes count
+    });
+    if (!real.length) return;
+    var first = real[0], last = real[real.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
 
   $("asm-name").addEventListener("input", function () {
     var a = current(); if (!a) return;
     a.name = this.value;
     renderList();
     patchSoon("assemblies", a.id, { name: a.name });
+  });
+
+  // SF or LF for the whole assembly. `change` and not `input`: a select fires both, and there is no
+  // half-typed state to catch up with the way there is in the name field.
+  //
+  // renderPanel repaints so the three labels follow immediately, and renderList so the rail's
+  // "$1.497/SF" becomes "/LF" in the same tick. Nothing recalculates — priceAssembly divides by the
+  // one area input whatever the unit says — so this is a relabel that happens to be persisted.
+  $("asm-unit").addEventListener("change", function () {
+    var a = current(); if (!a) return;
+    a.unit = this.value === "LF" ? "LF" : "SF";
+    renderPanel();
+    renderList();
+    patchSoon("assemblies", a.id, { unit: a.unit });
   });
 
   // Item edits reprice every assembly live. That IS the reason items and assemblies are
@@ -1743,8 +2121,10 @@
       try {
         var j = await post("items",
           { name: newMaterialName("New material"), unit: "Gallon", buy_qty: 1 });
-        ITEMS.push(j.item);
-        ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        // Unshift, not push+sort: the add control moved to the TOP of the list (Hanz,
+        // 2026-08-28) precisely so pressing it and seeing the result stay the same spot on
+        // screen — sorting it back into alphabetical order would undo that.
+        ITEMS.unshift(j.item);
         showView("items"); paint();
         var f = $("items-body").querySelector('[data-item="' + j.item.id + '"] input[data-f="name"]');
         if (f) { f.focus(); f.select(); }
@@ -1774,8 +2154,8 @@
           vendor: src.vendor || "",
           divisions: itemDivisions(src),
         });
-        ITEMS.push(copy.item);
-        ITEMS.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+        // Same reasoning as the Add button above: land at the top, don't re-sort it away.
+        ITEMS.unshift(copy.item);
         showView("items"); paint();
         // Focused and selected, like the Add button does: the name is the one field a copy always
         // needs changing, and "(2)" is a placeholder rather than an answer.

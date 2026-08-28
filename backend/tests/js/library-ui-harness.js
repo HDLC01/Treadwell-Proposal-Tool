@@ -193,6 +193,10 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${grab(/^  var esc = function[\s\S]*?\n  \};$/m, "esc")}
   ${fn("current")}
   ${fn("itemOf")}
+  // Lifted because renderPanel calls it. A lifted function that reaches for a helper this scope
+  // does not have dies with a ReferenceError, which takes every test in test_library_ui.py red at
+  // once with no hint of the real cause — so a new helper and its lift belong in one commit.
+  ${fn("asmUnit")}
   ${fn("byId")}
   ${fn("adoptSaved")}
   ${fn("paintDates")}
@@ -250,6 +254,14 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("newMaterialName")}
   ${fn("newRefName")}
   ${fn("itemMatches")}
+  // BULK ADD. The modal itself is out of reach here — this DOM stub has no createElement, no focus
+  // and no checkbox — so every decision it makes lives in one of these four and is tested directly.
+  // Same position this harness already takes with confirmDanger.
+  ${grab(/^  var BULK_MAX_LINES = \d+;$/m, "the BULK_MAX_LINES declaration")}
+  ${fn("bulkCandidates")}
+  ${fn("bulkSelectAllState")}
+  ${fn("bulkLinesFor")}
+  ${fn("bulkAddRoom")}
   ${fn("itemResultsHtml")}
   ${fn("lineForSave")}
   ${fn("pickerFor")}
@@ -286,6 +298,7 @@ const scope = new Function("L", "$", "TW", "state", "document", `
            onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
            newMaterialName, newRefName,
+           bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
            snapshotOf: function (id) { return itemBefore[id]; } };
 `);
 
@@ -816,6 +829,42 @@ const out = {};
     perUnitWritten: d.nodes["t-unit"].textContent,
   };
 
+  // THE ASSEMBLY'S UNIT REACHES ALL THREE LABELS, and the arithmetic is untouched by it.
+  //
+  // The field was persisted and read by the Polish beta long before it had an editor, so every
+  // assembly said SF and the rail's "$1.497/SF" was a guess that happened to be right. These two
+  // scenarios are the same fixture and the same numbers with only `unit` changed — so a divergence
+  // in `total`/`perUnit` between them would mean the relabel had started changing prices.
+  {
+    const lf = build({ ASMS: [{ id: "a1", name: "Cove Base", unit: "LF", lines: [
+      { item_id: "i1", coverage: 275, waste_pct: 5, roundup: true }] }] });
+    lf.api.renderPanel();
+    const sf = build({ ASMS: [{ id: "a1", name: "Floor", unit: "SF", lines: [
+      { item_id: "i1", coverage: 275, waste_pct: 5, roundup: true }] }] });
+    sf.api.renderPanel();
+    const bare = build({ ASMS: [{ id: "a1", name: "Legacy", unit: "sqft", lines: [
+      { item_id: "i1", coverage: 275, waste_pct: 5, roundup: true }] }] });
+    bare.api.renderPanel();
+    out.assemblyUnit = {
+      lfPerUnitLabel: lf.dom.nodes["t-unit-k"].textContent,
+      lfAreaLabel: lf.dom.nodes["area-k"].textContent,
+      lfAreaSuffix: lf.dom.nodes["area-u"].textContent,
+      lfSelectSynced: lf.dom.nodes["asm-unit"].value,
+      sfPerUnitLabel: sf.dom.nodes["t-unit-k"].textContent,
+      sfAreaLabel: sf.dom.nodes["area-k"].textContent,
+      sfAreaSuffix: sf.dom.nodes["area-u"].textContent,
+      // An off-list legacy value reads as SF rather than being echoed into the label, so the words
+      // still describe the arithmetic that actually ran.
+      legacyReadsAsSf: bare.dom.nodes["area-u"].textContent,
+      legacySelectSynced: bare.dom.nodes["asm-unit"].value,
+      // Identical money on both, which is the point: this is a label, not a calculation.
+      lfTotal: lf.dom.nodes["t-total"].textContent,
+      sfTotal: sf.dom.nodes["t-total"].textContent,
+      lfPerUnit: lf.dom.nodes["t-unit"].textContent,
+      sfPerUnit: sf.dom.nodes["t-unit"].textContent,
+    };
+  }
+
   // A broken line must be reported in the Quantity cell and cleared out of the Cost cell.
   const broken = build({ ASMS: [{ id: "a1", name: "Broken", unit: "SF", lines: [
     { item_id: "deleted-material", coverage: 275, waste_pct: 5, roundup: true }] }] });
@@ -888,6 +937,10 @@ async function conflictChecks() {
     "use strict";
     var timers = {};
     var pendingPatch = {};
+    // Declared here rather than grab()bed, exactly like its two siblings above: this scope owns
+    // the save machinery's state so a scenario can drive it. flush() reads it to refuse a second
+    // PATCH while one is on the wire.
+    var inFlight = {};
     var ASMS = state.ASMS, ITEMS = state.ITEMS, VENDORS = state.VENDORS;
     var setTimeout = clock.setTimeout, clearTimeout = clock.clearTimeout;
     function saving(m) { hooks.saving.push(m); }
@@ -1132,6 +1185,70 @@ async function conflictChecks() {
     screenRepainted: c.hooks.renders.join(",") === "list,panel",
     toldTheUser: c.hooks.said.some((m) => /changed/i.test(String(m))),
   };
+
+  // ── EXECUTED: a second save cannot go out while the first is on the wire ────
+  // THE RACE THIS PREVENTS IS AGAINST OURSELVES, not another person.
+  //
+  // Every successful PATCH bumps `updated_at`, and an assembly save declares the version it edited.
+  // So before the in-flight guard: save #1 leaves, save #2's timer fires 600ms later and reads the
+  // SAME `updated_at` (adoptSaved has not run yet), goes out, and the server correctly calls it
+  // stale. `adoptConflict` then replaced the model, dropped the buffer and blamed a person who does
+  // not exist. With the bulk picker that could discard a whole batch of lines.
+  //
+  // NOTE WHY THE SCENARIO ABOVE DID NOT CATCH IT: it calls fire() a second time only AFTER release,
+  // so a second flush never begins mid-flight and the guard is never reached. This one fires while
+  // the first request is still awaiting, which is the only shape that exercises it.
+  {
+    const c = run409();
+    c.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = c.fire();                     // #1 leaves and awaits api()
+    await new Promise((r) => setTimeout(r, 0));
+    c.s.patchSoon("assemblies", "a1", { name: "AB" });
+    await c.fire();                              // #2 tries WHILE #1 is on the wire
+    const midFlight = { requests: c.hooks.requests.length, pending: c.s.pending(),
+                        armed: c.s.armed() };
+    // #1 succeeds and hands back a NEW version stamp.
+    c.release({ status: 200, ok: true, json: async () => ({ assembly:
+      { id: "a1", name: "A", unit: "SF", lines: [], updated_at: "T2" } }) });
+    await firing;
+    await c.fire();                              // now #2 gets its turn
+    out.inFlight = {
+      // Only ONE request while the first was open — the second waited instead of racing.
+      onlyOneWhileOpen: midFlight.requests === 1,
+      // …and it WAITED rather than being dropped: the edit was still on screen and unsaved.
+      editStillQueued: midFlight.pending > 0,
+      stillArmed: midFlight.armed,
+      // Both saves eventually reach the server.
+      bothEventuallySent: c.hooks.requests.length === 2,
+      // AND THE POINT OF ALL OF IT: the second save carries the version the first one produced,
+      // so it cannot 409 against our own write.
+      secondCarriedTheNewVersion: (function () {
+        var bodies = c.sentValues();
+        var last = bodies[bodies.length - 1] || {};
+        return last.expected_updated_at;
+      })(),
+      firstCarriedTheOldVersion: (function () {
+        var bodies = c.sentValues();
+        return (bodies[0] || {}).expected_updated_at;
+      })(),
+      noUnhandledError: c.hooks.errors.length === 0,
+    };
+  }
+
+  // A LOCK THAT IS NEVER RELEASED WOULD BE WORSE THAN THE BUG. flush returns early on a 409 and on
+  // any non-ok status, so the release lives in a `finally` — this proves a record still saves after
+  // one of those early returns rather than being silenced for the rest of the session.
+  {
+    const c = run409();
+    c.s.patchSoon("assemblies", "a1", { name: "A" });
+    const firing = c.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    c.release({ status: 500, ok: false, json: async () => ({ error: "boom" }) });
+    await firing;
+    c.s.patchSoon("assemblies", "a1", { name: "B" });
+    await c.fire();
+    out.inFlight.savesAgainAfterAFailure = c.hooks.requests.length === 2;
+  }
 
   // And the belt to that brace: a timer that fires with nothing queued must be a quiet no-op,
   // not a TypeError thrown outside the try.
@@ -1940,9 +2057,12 @@ out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
     // The same shape in all four places, so the page has ONE way of saying "add another".
     addRowCount: (html.match(/class="addrow"/g) || []).length,
     addBtnCount: (html.match(/class="addbtn"/g) || []).length,
-    // Materials and each of the three administration lists put theirs inside the table's own card.
+    // Materials moved to the TOP of its card (Hanz, 2026-08-28) — it was getting lost below the
+    // horizontal scrollbar and a full table of rows. Still inside the same card as the table;
+    // just above it instead of after it. The three administration lists are unchanged, at the
+    // foot of theirs.
     materialsAddRowInTheCard: /id="items-addrow"/.test(html) &&
-      html.indexOf('<tbody id="items-body">') < html.indexOf('id="items-addrow"'),
+      html.indexOf('id="items-addrow"') < html.indexOf('<tbody id="items-body">'),
     adminAddRows: ["divisions", "units", "vendors"].every((k) =>
       new RegExp('class="addrow" data-addrow-ref="' + k + '"').test(html)),
     // renderRefSection hides those three for a non-admin by that same attribute, so moving the
@@ -2083,6 +2203,77 @@ out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
     // The fields still have their widths, they are just wearing them as classes now.
     nameFieldStillSized: /class="cell-name"/.test(rendered),
     costFieldStillSized: /cell-cost/.test(rendered),
+  };
+}
+
+// ── EXECUTED: bulk add, the four decisions ──────────────────────────────────
+// Will wants a dozen materials in one go instead of twelve searches (Hanz, 2026-08-28). The modal
+// is not reachable from this stub — no createElement, no focus, no checkbox — so the decisions were
+// written as pure functions and are exercised here directly, against the REAL priceLine.
+{
+  const { api } = build();
+  const ids = (list) => list.map((it) => it.id);
+  const NO_F = { divisions: [], vendor: "", condition: "" };
+
+  // i1 = OPF / Epoxy / Sherwin-Williams / pack of 1, i2 = OPF Primer / Polished Concrete /
+  // Gone Supply Co / pack of 5. Both carry coverage 275, so `seededCoverage` reading [275, 275]
+  // is the fixture, not a copied value — the differing PACK size is what makes the priced
+  // quantities differ and prove the seed reached each line separately.
+  const lines = api.bulkLinesFor(["i1", "i2"], api.ITEMS);
+  const priced = lines.map((ln) => L.priceLine(ln, api.ITEMS, 2875));
+
+  // An item with NO coverage of its own must still land, and must still say so honestly.
+  const noCov = api.bulkLinesFor(["nocov"], api.ITEMS.concat(
+    [{ id: "nocov", name: "Mystery", unit: "Gal", buy_qty: 1, unit_cost: 10, coverage: null,
+       divisions: ["Epoxy"], vendor: "" }]));
+  const noCovPriced = L.priceLine(noCov[0], api.ITEMS.concat(
+    [{ id: "nocov", name: "Mystery", unit: "Gal", buy_qty: 1, unit_cost: 10, coverage: null,
+       divisions: ["Epoxy"], vendor: "" }]), 2875);
+
+  out.bulkAdd = {
+    // SEARCH — the same matcher as the other two boxes on the page.
+    findsByName: ids(api.bulkCandidates(api.ITEMS, "primer", NO_F)),
+    findsByVendor: ids(api.bulkCandidates(api.ITEMS, "vendor:sherwin", NO_F)),
+    negationWorks: ids(api.bulkCandidates(api.ITEMS, "-primer", NO_F)),
+    emptyQueryShowsAll: api.bulkCandidates(api.ITEMS, "", NO_F).length,
+
+    // FACETS — the MODAL's own, passed in. The Items tab's FILTERS must be untouched by this.
+    ownFacetNarrows: ids(api.bulkCandidates(api.ITEMS, "",
+      { divisions: ["Epoxy"], vendor: "", condition: "" })),
+    itemsTabFiltersUnmoved: JSON.stringify(api.FILTERS),
+
+    // TRI-STATE — over what is SHOWN, not the whole library.
+    allNone: api.bulkSelectAllState(["i1", "i2"], {}),
+    allSome: api.bulkSelectAllState(["i1", "i2"], { i1: true }),
+    allAll: api.bulkSelectAllState(["i1", "i2"], { i1: true, i2: true }),
+    // Narrowing the search must not untick what is already chosen, nor claim "all" wrongly.
+    allOfTheShownOnes: api.bulkSelectAllState(["i2"], { i1: true, i2: true }),
+    emptyListIsNone: api.bulkSelectAllState([], { i1: true }),
+
+    // LINES — shape, defaults, and the coverage seed.
+    lineCount: lines.length,
+    lineKeys: Object.keys(lines[0]).sort(),
+    seededCoverage: lines.map((ln) => ln.coverage),
+    defaultWaste: lines.map((ln) => ln.waste_pct),
+    defaultRoundup: lines.map((ln) => ln.roundup),
+    // THE POINT: they price immediately. A missing coverage seed would make these no_coverage,
+    // which priceAssembly counts as BROKEN — twelve amber rows on a twelve-material add.
+    allPriceable: priced.every((r) => r.ok && r.priced),
+    noneReportNoCoverage: priced.every((r) => r.reason !== "no_coverage"),
+    firstQty: priced[0].qty,
+    // An unknown id is dropped rather than becoming a blank line.
+    unknownIdDropped: api.bulkLinesFor(["i1", "ghost"], api.ITEMS).length,
+    // An item with no coverage still lands, and reports honestly rather than being refused.
+    noCoverageItemStillLands: noCov.length,
+    noCoverageItemSaysSo: noCovPriced.reason,
+
+    // ROOM — the 60-line cap, answered before the click.
+    maxIsTheServersCap: api.BULK_MAX_LINES,
+    roomOnEmpty: api.bulkAddRoom({ lines: [] }, 5),
+    roomAt59: api.bulkAddRoom({ lines: new Array(59).fill({}) }, 1),
+    roomAt59Over: api.bulkAddRoom({ lines: new Array(59).fill({}) }, 2),
+    roomAt60: api.bulkAddRoom({ lines: new Array(60).fill({}) }, 1),
+    roomAt61: api.bulkAddRoom({ lines: new Array(61).fill({}) }, 1),
   };
 }
 
