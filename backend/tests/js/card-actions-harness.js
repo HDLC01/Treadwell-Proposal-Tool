@@ -6,12 +6,26 @@
  * means WON. Files and Info sheet came off the card the same day, having moved into both drawers'
  * Proposal tab.
  *
- * WHY EXECUTED. Four claims here, none of them settled by a source read:
+ * THE FIRST BUTTON HAS TWO FACES SINCE 2026-08-28, and that is what this file was rewritten for.
+ * Winning a job stopped taking its card off the board. Hanz: "the mark as won button would move the
+ * project the Won/Approved not into a separate pipeline", and "we need to add a button on the
+ * Project container in the Active project named as 'Hand it off'". So a won card stays on the Active
+ * board in the Won/Approved column, still owing a deposit and a set of contacts, and its first
+ * button becomes Hand it off — a second, human press, and now the only thing that takes a card off
+ * the board. The second button (Mark as lost) is offered in both states, because a job won on the
+ * phone can still die and the reason dialog is the only place that records why.
+ *
+ * WHY EXECUTED. Six claims here, none of them settled by a source read:
  *   · the buttons reach the RIGHT project — cardRowOf looks the row up out of ALL by id, and a
  *     board that repainted between the render and the click must not act on a neighbour;
- *   · "Mark as won" posts the existing won mark rather than inventing a state;
+ *   · "Mark as won/approved" posts the existing won mark rather than inventing a state;
+ *   · WHICH first button a card draws is decided by C.isWon over the real row, inside kanbanHtml's
+ *     own .map() — the exact place the 2026-08-12 outage lived;
+ *   · "Hand it off" posts handed_off, and ASKS FIRST when the contacts are not in. Asks rather than
+ *     gates: a synthesised not-sent row carries no contacts_status at all, so a gate would never
+ *     open for a job won on the phone and never emailed;
  *   · "Lost" picks its endpoint off `not_sent`, because an unsent project has no portal row;
- *   · a click on either one does NOT also open the drawer. That last one is a returns-from-a-branch
+ *   · a click on any of them does NOT also open the drawer. That is a returns-from-a-branch
  *     property of a delegated listener, so the listener itself is lifted and fired.
  *
  * The 2026-08-12 outage was an unbound identifier inside kanbanHtml's own .map() with every source
@@ -73,9 +87,17 @@ function boardClickStatement() {
 }
 
 // ── the fixtures ─────────────────────────────────────────────────────────────
-// One of each shape the two buttons have to tell apart. Deliberately including the two that must
-// get NO buttons: a lost card offering "Mark as lost" and a won card offering "Mark as won" are both
-// controls that save and change nothing visible, which reads as broken.
+// One of each shape the buttons have to tell apart, including the two that must get NO buttons at
+// all: a lost card offering "Mark as lost" and a handed-off card offering "Hand it off" are both
+// controls that save and change nothing visible, which reads as broken. A WON card stopped being
+// one of those on 2026-08-28 — it is live work with a press still owed on it, so it swaps its first
+// button rather than losing both.
+//
+// THREE WON ROWS, because each asks a different question of the hand-off:
+//   · won-1        — won on the phone, never sent, so it carries no contacts_status at all. This is
+//                    the row a hard contacts gate would strand forever, and why the prompt asks.
+//   · won-received — the ordinary case: the contacts are in, so it must NOT stop to ask.
+//   · handoff-1    — already with operations. Finished, so it draws nothing.
 const ROWS = [
   { proposal_id: "ns-1", project_name: "Cedar Ridge", not_sent: true,
     drafted_at: "2026-08-09T12:00:00Z", estimator_email: "kyle@wetreadwell.com" },
@@ -85,6 +107,12 @@ const ROWS = [
     approved_at: "2026-08-07T12:00:00Z", deposit_status: "pending", deposit_required: true },
   { proposal_id: "won-1", project_name: "Trabon Group", not_sent: true,
     won_at: "2026-08-19T15:00:00Z", drafted_at: "2026-08-09T12:00:00Z" },
+  { proposal_id: "won-received", project_name: "Lenexa Cold Store", proposal_status: "approved",
+    approved_at: "2026-08-18T12:00:00Z", won_at: "2026-08-19T15:00:00Z",
+    contacts_status: "received" },
+  { proposal_id: "handoff-1", project_name: "Olathe Distribution", proposal_status: "approved",
+    approved_at: "2026-08-10T12:00:00Z", won_at: "2026-08-12T15:00:00Z",
+    contacts_status: "received", handed_off_at: "2026-08-26T14:00:00Z" },
   { proposal_id: "lost-1", project_name: "Brookfield Site", proposal_status: "closed_lost",
     followup_state: { closed_lost_reason: "not_low_bid", closed_at: "2026-08-01T12:00:00Z" } },
   // An id that does not survive a round trip through the attribute unless both halves happen. Its
@@ -98,6 +126,10 @@ let VIEW = "board";
 
 // ── the lifted module ────────────────────────────────────────────────────────
 const answer = { value: null, calls: [] };
+/** The hand-off prompt, ANSWERABLE. confirmHandoff is lifted whole rather than stubbed, because the
+ *  claim under test is the decision INSIDE it: whether the question gets put at all. So this stub
+ *  controls only the answer and records only that it was asked. */
+const confirmed = { answer: true, calls: [] };
 const net = { requests: [], fails: false, respond: { ok: true } };
 const painted = { board: 0, load: 0 };
 const opened = [];
@@ -151,7 +183,8 @@ const deps = {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
   money: (n) => "$" + Number(n || 0).toLocaleString(),
   pausedUntil: (p) => C.pausedUntil(p, "2026-08-21"),
-  TW: { fmtBizDate: (v) => String(v), fmtBizDay: (v) => String(v), bizYM: (v) => String(v).slice(0, 7) },
+  TW: { fmtBizDate: (v) => String(v), fmtBizDay: (v) => String(v), bizYM: (v) => String(v).slice(0, 7),
+        confirmDanger: (o) => { confirmed.calls.push(o); return Promise.resolve(confirmed.answer); } },
   $: (id) => (id === "board" ? boardNode : null),
   api,
   // The dialog, ANSWERABLE. Its own markup and its required comment are not-sent-lost-harness's
@@ -198,6 +231,8 @@ const body = `"use strict";
   ${fn("tableHtml")}
   ${fn("cardRowOf")}
   ${fn("markCardWon")}
+  ${fn("markCardHandoff")}
+  ${fn("confirmHandoff")}
   ${fn("closeCardOut")}
   ${boardClickStatement()}
   return {
@@ -226,15 +261,20 @@ async function tick() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 async function press(which, id, className) {
   net.requests.length = 0;
   answer.calls.length = 0;
+  confirmed.calls.length = 0;
   opened.length = 0;
   navigated.length = 0;
   const before = { board: painted.board, load: painted.load };
   const deal = node({ className: className || "deal", dataset: { id } });
   const btn = node({ dataset: { [which]: encodeURIComponent(id) }, className: "deal-act",
-                     text: which === "won" ? "Mark as won" : "Mark as lost" }, deal);
+                     text: { won: "Mark as won/approved", handoff: "Hand it off",
+                             lost: "Mark as lost" }[which] }, deal);
   page.click(btn);
   await tick();
   return { requests: net.requests.slice(), asked: answer.calls.slice(),
+           // `prompts` is confirmHandoff's own dialog, kept apart from `asked` (the close-out
+           // dialog) so a test cannot pass by counting the wrong question.
+           prompts: confirmed.calls.slice(),
            openedDrawer: opened.slice(), navigated: navigated.slice(),
            rendered: painted.board - before.board, reloaded: painted.load - before.load,
            label: btn.textContent, disabled: btn.disabled };
@@ -246,19 +286,29 @@ async function press(which, id, className) {
     // ── what the card draws ──
     const board = page.render("active", "board", ROWS);
     const table = page.render("active", "table", ROWS);
-    const wonBoard = page.render("won", "board", ROWS);
+    // The Won tab became the Handed Off tab on 2026-08-28 (TABS in portal.js), so this is the tab
+    // whose cards are finished now. Rendered as a kanban even though that tab opens as a list:
+    // cardActions has one call site and it is kanbanHtml, so a board paint is the only place the
+    // claim "a handed-off card offers nothing" can be made at all, and the view toggle reaches it.
+    const handoffBoard = page.render("handed_off", "board", ROWS);
     const lostBoard = page.render("lost", "board", ROWS);
     page.render("active", "board", ROWS);
+    const byCardOf = (html) => Object.fromEntries(html.split('<div class="deal"').slice(1).map((block) => {
+      const id = /data-id="([^"]+)"/.exec(block);
+      return [id ? id[1] : "?", { won: block.includes("data-won="),
+                                  handoff: block.includes("data-handoff="),
+                                  lost: block.includes("data-lost="),
+                                  files: block.includes("data-files="),
+                                  info: block.includes("data-info=") }];
+    }));
     out.rendered = {
-      board, table, wonBoard, lostBoard,
+      board, table, handoffBoard, lostBoard,
       // Per card, read back OUT of the html: which buttons its own .deal block carries.
-      byCard: Object.fromEntries(board.split('<div class="deal"').slice(1).map((block) => {
-        const id = /data-id="([^"]+)"/.exec(block);
-        return [id ? id[1] : "?", { won: block.includes("data-won="),
-                                    lost: block.includes("data-lost="),
-                                    files: block.includes("data-files="),
-                                    info: block.includes("data-info=") }];
-      })),
+      byCard: byCardOf(board),
+      // The same read over the tab that holds the finished work, so "offers nothing" is asserted
+      // per card rather than over one long string where a single leftover button hides.
+      handoffByCard: byCardOf(handoffBoard),
+      lostByCard: byCardOf(lostBoard),
     };
 
     // ── the row lookup ──
@@ -286,6 +336,23 @@ async function press(which, id, className) {
     // …and it must not have opened the drawer over its own navigation.
     net.fails = true;
     out.markWonFailed = await press("won", "approved-1");
+    net.fails = false;
+
+    // ── Hand it off ──
+    // REFUSED FIRST, on the same row that is handed off two lines below: a prompt somebody answered
+    // "Not yet" has to leave the row exactly as it found it, and pressing the SAME row afterwards is
+    // what proves the refusal changed nothing rather than merely posting late.
+    confirmed.answer = false;
+    out.handoffRefused = await press("handoff", "won-1");
+    out.handoffRefusedRow = { handedOffAt: (page.row("won-1") || {}).handed_off_at || null };
+    confirmed.answer = true;
+    out.handoffAsked = await press("handoff", "won-1");
+    out.handoffAskedRow = { handedOffAt: (page.row("won-1") || {}).handed_off_at || null };
+    // Contacts in — the ordinary case, and the one that must not stop to ask.
+    out.handoffQuiet = await press("handoff", "won-received");
+    // …and a refused write leaves the row alone and says so on the button, same as the won mark.
+    net.fails = true;
+    out.handoffFailed = await press("handoff", "won-received");
     net.fails = false;
 
     // ── Lost, dismissed ──

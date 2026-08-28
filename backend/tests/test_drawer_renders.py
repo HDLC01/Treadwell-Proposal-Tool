@@ -299,6 +299,21 @@ CONDITIONAL_IDS = {
     "won-mark": "not rendered once the project is won, or when it is closed lost",
     "won-undo": "only rendered on a project somebody marked won by hand",
     "won-note": "rendered with either button, so absent when neither is offered",
+    # The hand-off pair (2026-08-28), wired by the same wireWon and rendered by the same
+    # wonControlHtml, which is why they land in this dict rather than a new one. Winning a job
+    # stopped taking its card off the board on that date, so a second human press does it, and
+    # wonControlHtml grew from three states to five. Exactly one of these two is ever on screen.
+    #
+    # NOT A RELAXATION: the mark is pinned positively below on every won state this harness paints
+    # — just marked (test_the_panel_repaints_into_the_won_state_with_an_undo), marked by somebody
+    # else (test_a_project_somebody_else_marked_…), and won by the deposit landing
+    # (test_a_project_won_by_the_deposit_landing_…) — and asserted ABSENT on all four states that
+    # must not offer it (test_both_drawers_offer_the_mark, test_undoing_it_clears_the_mark_…,
+    # test_a_closed_lost_project_is_offered_nothing). The undo has no fixture here, because nothing
+    # this harness paints is handed off; it is pressed in test_handed_off_tab.py, which owns that
+    # state, so allowlisting it here leaves it covered rather than untested.
+    "handoff-mark": "only rendered on a won project nobody has handed off yet",
+    "handoff-undo": "only rendered on a project already handed to operations",
 }
 
 # The NOT-SENT paint's own additions, kept out of the dict above on purpose. On a sent drawer
@@ -676,6 +691,10 @@ def test_both_drawers_offer_the_mark(out, where):
     html = out["won"][where]["html"]
     assert 'id="won-mark"' in html, "%s has no way to mark a project won" % where
     assert 'id="won-undo"' not in html, "it offers an undo on a project nobody has marked"
+    # And NOT the hand-off (2026-08-28): nothing has been won here, so handing it to operations
+    # would take a live bid off the Active board on one press with nothing recording a win.
+    assert 'id="handoff-mark"' not in html, (
+        "%s offers Hand it off on a project nobody has won" % where)
 
 
 @needs_node
@@ -706,6 +725,12 @@ def test_the_panel_repaints_into_the_won_state_with_an_undo(out, case):
     assert 'id="won-undo"' in r["html"], "the panel did not repaint into the won state"
     assert 'id="won-mark"' not in r["html"], "it still offers to mark a project it just marked"
     assert "Somebody marked this won" in r["html"], "the panel does not say what state it is in"
+    # And the NEXT press appears in the same repaint (2026-08-28). Marking a job won is now the
+    # step before handing it to operations rather than the end of the road, so a repaint that
+    # offered only the undo would hide the one control the rep came here to reach next.
+    assert 'id="handoff-mark"' in r["html"], (
+        "the repaint offers no way to hand the job off, so the rep has to close and reopen the "
+        "drawer to find it")
 
 
 @needs_node
@@ -728,6 +753,9 @@ def test_undoing_it_clears_the_mark_and_offers_it_again(out):
     assert r["requests"][0]["body"] == {"status": "not_won"}, r["requests"]
     assert not r["rowWonAt"], "the board row still carries the mark it just cleared"
     assert 'id="won-mark"' in r["html"], "there is no way to mark it again"
+    assert 'id="handoff-mark"' not in r["html"], (
+        "it still offers to hand off a job it just un-marked, which would take a live bid off the "
+        "board with no win recorded")
 
 
 @needs_node
@@ -739,6 +767,10 @@ def test_a_project_somebody_else_marked_shows_as_won_in_the_sent_drawer(out):
     assert r["merged"] == "2026-08-19T15:00:00+00:00", (
         "the drawer payload never received the mark, so the panel contradicts the card")
     assert 'id="won-undo"' in r["html"]
+    # BOTH buttons on this state since 2026-08-28, and only this state has both: a job marked won
+    # by hand can be un-marked or handed on, and the panel is the one place offering the choice.
+    assert 'id="handoff-mark"' in r["html"], (
+        "a job somebody marked won offers no way to hand it to operations")
 
 
 @needs_node
@@ -762,17 +794,30 @@ def test_a_closed_lost_project_is_offered_nothing(out):
     change nothing visible, which reads as a broken control. Reactivate beside it is the way back."""
     html = out["won"]["lost"]["html"]
     assert 'id="won-mark"' not in html and 'id="won-undo"' not in html
+    assert 'id="handoff-mark"' not in html, (
+        "a dead bid offers to hand it to operations, which would file a loss as delivered work")
     assert 'id="fu-reopen"' in html, "the way back is missing too, so the bid is stuck"
 
 
 @needs_node
-def test_a_project_won_by_the_deposit_landing_says_so_and_offers_no_button(out):
-    """There is nothing to undo about a deposit that arrived, and a Mark won button on a paid job
-    would file a redundant human mark over a fact. The state is still stated, because a panel that
-    says nothing about a won job reads as one nobody has looked at."""
+def test_a_project_won_by_the_deposit_landing_offers_the_hand_off_but_no_won_mark(out):
+    """This test said "and offers no button" until 2026-08-28, and that is now the wrong half of the
+    sentence. What is true of the WON MARK has not changed: there is nothing to undo about a deposit
+    that arrived, and a Mark won button on a paid job would file a redundant human mark over a fact.
+    What changed is that winning stopped being the thing that takes a card off the board, so this
+    state gained the press that does — the numbers decide whether the job is won, a person decides
+    whether operations has it, and the second has no other way to be recorded.
+
+    Leaving the old assertion in place would have quietly required the opposite: a paid, approved
+    job that can never leave the Active board."""
     html = out["won"]["derived"]["html"]
-    assert "already counts as won" in html
-    assert 'id="won-mark"' not in html and 'id="won-undo"' not in html
+    assert "counts as won without anyone marking it" in html, (
+        "the panel no longer says why this reads as won, so it looks like one nobody has touched")
+    assert 'id="handoff-mark"' in html, (
+        "a won, paid job offers no way to hand it to operations, so its card can never leave the "
+        "Active board")
+    assert 'id="won-mark"' not in html and 'id="won-undo"' not in html, (
+        "it offers a won mark or an undo over a fact nobody typed")
 
 
 # ── the bank numbers ─────────────────────────────────────────────────────────

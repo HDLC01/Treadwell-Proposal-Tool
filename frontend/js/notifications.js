@@ -130,10 +130,15 @@
   // One flat list of every project the portal knows about was the complaint: scratch bids,
   // dead deals and finished work all sat in the working list, and it only ever grew.
   //
-  // Won sits beside Active because both are news worth reading; Test is at the far end, which
-  // is the order Hanz asked for on the CRM board on 2026-08-15 ("Active and Lost are both real
-  // work, so they read together and the scratch tab sits at the far end").
-  const PP_TABS = [["active", "Active"], ["won", "Won"], ["lost", "Lost"], ["test", "Test"]];
+  // Handed Off sits beside Active because both are news worth reading; Test is at the far end,
+  // which is the order Hanz asked for on the CRM board on 2026-08-15 ("Active and Lost are both
+  // real work, so they read together and the scratch tab sits at the far end").
+  //
+  // WAS "Won" until 2026-08-28, and the rename is not cosmetic: the CRM board stopped moving won
+  // jobs off Active that day, so a Won tab here would have held live work the board still shows,
+  // and the two screens would disagree about where a job lives. Handed off is the state that
+  // actually means "not our problem any more" on both.
+  const PP_TABS = [["active", "Active"], ["handed_off", "Handed Off"], ["lost", "Lost"], ["test", "Test"]];
   const PP_IDS = PP_TABS.map((t) => t[0]);
   const PP_LABEL = {};
   PP_TABS.forEach((t) => { PP_LABEL[t[0]] = t[1]; });
@@ -146,11 +151,11 @@
   let PP_TAB = PP_IDS.indexOf(ss(PP_TAB_KEY, "")) >= 0 ? ss(PP_TAB_KEY, "") : "active";
   let PP_PAGE = Math.max(1, parseInt(ss(PP_PAGE_KEY, "1"), 10) || 1);
 
-  // Won and Lost both come from crm-core, which is the point. Hanz, 2026-08-19: "CRM lost and won
-  // should also tie up to the notification sending okay?" — isWon used to live in this file, the one
-  // page with a Won tab, and a local copy is how two screens end up disagreeing about a word Troy
-  // reads as a number. The reasoning behind the predicate is documented at its definition.
-  const isWon = C.isWon;
+  // Handed off and Lost both come from crm-core, which is the point. Hanz, 2026-08-19: "CRM lost
+  // and won should also tie up to the notification sending okay?" — isWon used to live in this file,
+  // the one page with a Won tab, and a local copy is how two screens end up disagreeing about a word
+  // Troy reads as a number. The reasoning behind the predicate is documented at its definition.
+  const isHandedOff = C.isHandedOff;
 
   /** Exactly one category per project. The ORDER is the whole content of this function.
    *
@@ -159,9 +164,9 @@
    *  project on the Lost tab carrying a Test chip. Two screens disagreeing about where a dead deal
    *  lives is worse than either answer, so this page copies the board and carries the same chip.
    *
-   *  TEST ABOVE WON, because a test project's outcome is fiction. Won is a number a human reads as
-   *  real work, and somebody's scratch bid must not be able to inflate it. The board agrees here
-   *  too — it has no Won tab, and a won test project sits on its Test tab.
+   *  TEST ABOVE HANDED OFF, because a test project's outcome is fiction. Handed Off is a number a
+   *  human reads as real work, and somebody's scratch bid must not be able to inflate it. The board
+   *  agrees here too: boardPool files a handed-off test project on its Test tab.
    *
    *  ACTIVE IS THE REMAINDER, never a predicate of its own. That is what makes these four a
    *  partition: a project the categories don't recognise lands in the working list, where someone
@@ -169,7 +174,9 @@
   function ppCategory(p) {
     if (C.isLost(p)) return "lost";
     if (C.isTest(p)) return "test";
-    if (isWon(p)) return "won";
+    // isHandedOff, NOT isWon, since 2026-08-28: a won job is still live work on the CRM board, so
+    // filing it here would take it out of the working list while the board still chased it.
+    if (isHandedOff(p)) return "handed_off";
     return "active";
   }
 

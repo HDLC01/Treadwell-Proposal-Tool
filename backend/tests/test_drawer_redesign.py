@@ -502,6 +502,14 @@ def test_a_short_thread_sits_on_the_composer():
 # stayed among the live ones. It stopped being sound the day the Won TAB took won jobs off the
 # Active board: this press MOVES THE CARD, and a pointer landing one row high files a live bid as
 # won and takes it off the board the estimator is about to look at.
+#
+# THE ORIGINAL REASON HAS SINCE GONE AND THE PROMPT HAS NOT, deliberately. On 2026-08-28 winning a
+# job stopped removing the card: it moves to the Won/Approved COLUMN and stays on the Active board,
+# and the press that empties it off the board is now Hand it off. So this dialog no longer guards a
+# disappearance -- it guards a state change that starts a customer-facing clock (the follow-ups keep
+# running until the money is in) and that the estimator would otherwise have to undo in the drawer.
+# Kept because Hanz approved it and Mark delayed and Mark closed lost both still ask; the thing that
+# had to change is WHAT IT SAYS, which is what the assertion below pins.
 @needs_node
 def test_marking_a_project_won_asks_before_anything_is_sent(out):
     """Asked, and asked through the house helper. TW.confirmDanger is what confirmBringBack, Mark
@@ -514,7 +522,20 @@ def test_marking_a_project_won_asks_before_anything_is_sent(out):
     a = r["asked"][0]
     assert a["name"] == "Riverbend Logistics Hub", (
         "the dialog does not name the project: %r" % a.get("name"))
-    assert "Won tab" in a["after"], a["after"]
+    # It names the DESTINATION, which is the only reason a confirmation beats no confirmation. The
+    # destination MOVED on 2026-08-28 -- "Won tab" was right until the day winning stopped taking
+    # the card off the board -- so this asserts the new one and, below, that the old one is gone.
+    assert "Won/Approved column" in a["after"], a["after"]
+    # A dialog that still says "tab" is telling the estimator the card is about to leave the board,
+    # which is the exact belief this whole change exists to correct. Word-boundary, so a future
+    # "table" in the copy is not read as a regression.
+    assert not re.search(r"tabs?", a["after"] + " " + (a.get("detail") or ""), re.I), (
+        "the dialog still sends the estimator to a tab, and marking won no longer moves the card "
+        "off the Active board: %r" % a)
+    # And it says so positively, because the old behaviour is what anyone who used the tool last
+    # week remembers. Asserted here rather than in the four-things test below because it is the one
+    # line of that copy this change is responsible for.
+    assert "stays on the Active board" in (a.get("detail") or ""), a.get("detail")
     assert a["confirmText"] and a["confirmText"] != "OK", a["confirmText"]
     # warn, not danger. Winning a job is good news and it is reversible, so it takes the tone Mark
     # delayed has rather than the tone a delete has.

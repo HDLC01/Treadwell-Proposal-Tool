@@ -27,10 +27,13 @@ where that chip appears — on the live tabs the tab itself is the label.
 
 THE POOLS PARTITION THE ROWS, and that property is worth more than any single assertion here: it is
 what makes the tab badges add up, and what guarantees no proposal can fall between them. There were
-three pools until 2026-08-20, when Won became a tab of its own the same way Lost is one (see
-test_won_tab.py, and the reversal note further down this file); the partition is now over four, and
-it is asserted over whatever `TABS` actually holds rather than over a list typed here, so a fifth tab
-cannot arrive without this claim being checked against it.
+three pools until 2026-08-20, when a fourth tab joined Lost in taking cards off the live board. That
+fourth tab was Won until 2026-08-28 and is Handed Off since: a won job still owes a deposit and a
+set of contacts, so it belongs in front of the sales meeting, and what takes a card off the board is
+now a person pressing Hand it off (see test_handed_off_tab.py, and the note above the last test in
+this file). The partition is over four either way, and it is asserted over whatever `TABS` actually
+holds rather than over a list typed here, so a fifth tab cannot arrive without this claim being
+checked against it.
 """
 import json
 import pathlib
@@ -97,9 +100,11 @@ def test_a_lost_project_is_off_every_other_tab(ran):
     """His 2026-08-10 constraint, still enforced: a dead deal must not clutter live work.
 
     Over every tab but Lost, derived from TABS — this said "both live tabs" and checked active and
-    test by name, which stopped being every other tab when Won arrived on 2026-08-20. Two of the
-    fixtures are jobs that were won (one derived, one marked by hand) and then cancelled, so the Won
-    tab is a place a dead deal could genuinely reappear."""
+    test by name, which stopped being every other tab when a fourth arrived on 2026-08-20. Two of the
+    fixtures are jobs that were won (one derived, one marked by hand) and then cancelled, and since
+    2026-08-28 a won job STAYS on the Active board, so those two are exactly the rows that a pool
+    asking about the win before the cancellation would leave sitting among live work. Lost is asked
+    first, everywhere, for that reason."""
     for tab in ran["tabs"]:
         if tab == "lost":
             continue
@@ -120,22 +125,23 @@ def test_every_tab_together_partitions_every_proposal(ran):
     """The property the badges depend on: each row in exactly one pool, and every row in one.
 
     SUMMED OVER `TABS` ITSELF, not over a list of tab names typed here. It was active + test + lost
-    until 2026-08-20, when Hanz gave won jobs their own tab and this stopped covering the rows — the
-    sum was short by three, and a hand-written sum can only ever be short by however many tabs the
-    board has grown since somebody last edited this line. The harness derives the pools from
-    portal.js's own TABS, so a fifth tab is partitioned or this fails.
+    until 2026-08-20, when a fourth tab arrived and this stopped covering the rows — the sum was
+    short by three, and a hand-written sum can only ever be short by however many tabs the board has
+    grown since somebody last edited this line. The harness derives the pools from portal.js's own
+    TABS, so a fifth tab is partitioned or this fails.
 
     Mutations this kills: making Lost `isLost(p) && !isTest(p)`, which silently strips the lost test
-    projects out of the only tab that would have shown them; filtering won rows off Active with no
-    Won pool to catch them, which leaves the card reachable from no tab at all and looks to the
-    estimator like data loss; and adding the Won pool without removing those rows from Active, which
-    double-counts them and makes both badges wrong.
+    projects out of the only tab that would have shown them; filtering handed-off rows off Active
+    with no Handed Off pool to catch them, which leaves the card reachable from no tab at all and
+    looks to the estimator like data loss; and adding the Handed Off pool without removing those rows
+    from Active, which double-counts them and makes both badges wrong.
 
-    All three were run against a mutated copy of portal.js before this was committed, and each one
-    fails here. Precedence between the pools is a different question and belongs to the tests that
-    name the row — test_a_lost_TEST_project_is_under_lost_and_not_under_test here, and
-    test_a_won_test_project_stays_under_test in test_won_tab.py — because a swap that keeps every row
-    in exactly one pool is invisible to a partition."""
+    All three were run against a mutated copy of portal.js on 2026-08-28, and each one fails here.
+    WHAT A PARTITION CANNOT SEE is a swap that keeps every row in exactly one pool — routing the
+    won rows to Handed Off and the handed-off one to Active satisfies this test completely. That
+    belongs to the tests that name the row: test_a_lost_TEST_project_is_under_lost_and_not_under_test
+    here, test_a_won_job_stays_on_the_board_and_only_a_hand_off_takes_it_off at the foot of this
+    file, and test_a_test_project_stays_under_test_however_it_was_marked in test_handed_off_tab.py."""
     pools = ran["pools"]
     assert sorted(pools) == sorted(ran["tabs"]), (
         "the harness did not visit every tab portal.js names, so this partition is over a subset")
@@ -220,25 +226,29 @@ def test_the_test_chip_is_styled():
     assert ".chip-test" in PORTAL_HTML, "the Test chip has no styling, so it renders as a bare pill"
 
 
-# ── the Won chip: the card saying out loud what put it on the Won tab ─────────
+# ── the Won chip: the card saying out loud that the customer said yes ─────────
 # Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending okay?"
 #
-# The two screens share one isWon, in crm-core. As of 2026-08-20 they also AGREE about where a won
-# job goes: both move it out of the working list.
+# The two screens share one isWon, in crm-core. One definition, so a board and a page cannot come to
+# disagree about a word Troy reads as a number.
 #
-# THIS BLOCK USED TO SAY THE OPPOSITE, and the difference it described was real for one day. The
-# 2026-08-19 reasoning was that this board keeps a won card because a won job still has work on it —
-# "Deposit received" and "Contact info" are both live columns — so the chip was how the board agreed
-# about the word without moving the card. Hanz reversed it on 2026-08-20 ("I marked Trabon Group
-# project as Won but it's still in the Created but Not Sent bucket"): a chip cannot argue with a
-# column, and the estimator reads the column. What makes the move safe is that the Won tab carries
-# its OWN columns — Won before sending / Deposit outstanding / Contacts outstanding / Complete — so
-# the outstanding work the old reasoning was protecting is moved rather than hidden. That tab is
-# exercised in test_won_tab.py; what this file still owns is Lost, and the chip.
+# THIS BLOCK HAS SAID BOTH THINGS, and the 2026-08-19 answer is the one that stood. The original
+# reasoning was that this board KEEPS a won card, because a won job still has work on it — the deposit
+# and the contacts, both live columns — and moving the card hides that work from the people doing
+# it. So the chip was how the board said the word out loud without moving anything. Hanz reversed it
+# on 2026-08-20 ("I marked Trabon Group project as Won but it's still in the Created but Not Sent
+# bucket"), and won jobs left for a tab of their own for eight days.
 #
-# The chip survives the reversal because it is still the only thing on a card that says WHY it is on
-# the board it is on: the Won tab's columns answer "what is left to do", not "why is this here", and
-# a won TEST project stays under Test where the chip is the only marker at all.
+# ON 2026-08-28 HE PUT THEM BACK, because the complaint was never that the card was ON the board:
+# it was that the card was in the wrong COLUMN, and taking it off the board answered him by hiding
+# the thing he was pointing at. The real fix is stage() reading the won mark above not_sent, so the
+# card sits in Won/Approved and the column and the chip finally say the same thing. What takes a
+# card off this board now is a person pressing Hand it off — test_handed_off_tab.py owns that tab;
+# what this file owns is Lost, the chip, and which tab holds a card.
+#
+# The chip survives both reversals because a card FURTHER ALONG than Won/Approved — Deposit received,
+# Contact info — is also won, and its column no longer says so; the chip is then the only thing on
+# the card that does. A won TEST project stays under Test, where it is the only marker at all.
 @needs_node
 @pytest.mark.parametrize("pid", ["won-paid", "won-nodeposit"])
 def test_a_won_job_says_so_on_its_card(ran, pid):
@@ -291,22 +301,40 @@ def test_a_job_marked_won_and_then_cancelled_reads_as_lost_only(ran):
 
 @needs_node
 @pytest.mark.parametrize("pid", ["won-paid", "won-nodeposit", "won-marked"])
-def test_a_won_job_comes_off_the_active_board_onto_the_won_tab(ran, pid):
-    """THE REVERSAL, asserted as its opposite. This test read `test_a_won_job_stays_on_the_board`
-    until 2026-08-20 and asserted these ids were in the Active pool, on the reasoning that the chip
-    is an annotation and not a filter. Hanz decided otherwise that day — "I marked Trabon Group
-    project as Won but it's still in the Created but Not Sent bucket" — so a won job now leaves the
-    Active board exactly as a lost one does. The git history will show the flip; the reason it is not
-    a regression is that the Won tab groups by what is still OUTSTANDING, so the deposit and
-    contact-gathering work the old version was protecting moved with the card instead of vanishing.
+def test_a_won_job_stays_on_the_board_and_only_a_hand_off_takes_it_off(ran, pid):
+    """THE REVERSAL, REVERSED — and asserted as the contrast, because either half alone is weak.
 
-    All three routes to won are covered, because the mark is not another input to the derived rule
-    but a person overriding it: approved-and-paid, approved-with-no-deposit-to-collect, and marked by
-    hand on a bid neither of those is true of. A tab that only moved the derived ones would leave the
-    exact card he reported on the board he reported it from."""
-    assert pid in ran["pools"]["won"], "%s is not on the Won tab" % pid
-    assert pid not in ran["pools"]["active"], (
-        "%s is still on the Active board, which is the bug Hanz reported on 2026-08-20" % pid)
+    This was `test_a_won_job_stays_on_the_board` on 2026-08-19, flipped to
+    `test_a_won_job_comes_off_the_active_board_onto_the_won_tab` on 2026-08-20 after "I marked Trabon
+    Group project as Won but it's still in the Created but Not Sent bucket", and is back to the first
+    claim since 2026-08-28. That is not indecision: his complaint was about the COLUMN, and moving the
+    card off the board answered it by hiding the card he was complaining about. Winning no longer
+    moves a card at all — stage() files it under Won/Approved — because a won job still owes a deposit
+    and a set of contacts, and the sales meeting is run off the Active board. A card the meeting
+    cannot see is a card nobody chases.
+
+    All three routes to won are covered, because the hand mark is not another input to the derived
+    rule but a person overriding it: approved-and-paid, approved-with-no-deposit-to-collect, and
+    marked by hand on a bid neither of those is true of. A rule that kept only the derived ones would
+    lose the exact card he reported.
+
+    ASSERTED AGAINST `handoff-done` IN THE SAME BREATH, because "this id is on Active" is equally
+    true of a board nothing ever leaves. Both mutations were run against a copy of portal.js on
+    2026-08-28 and both survive the partition test above, which cannot see a swap that keeps every
+    row in exactly one pool: putting the pool back on isWon moves the three won ids off Active, and
+    a pool predicate that never fires strands handoff-done there. The contrast fails on both.
+
+    WHICH COLUMN a won card lands in is test_handed_off_tab.py's claim, not this file's — this one
+    owns which TAB holds it."""
+    assert pid in ran["pools"]["active"], (
+        "%s left the Active board without anybody handing it off, so a job that still owes a deposit "
+        "is invisible to the meeting the board is run from" % pid)
+    assert pid not in ran["pools"]["handed_off"], (
+        "%s is on the Handed Off tab, which claims operations already has it" % pid)
+    assert "handoff-done" in ran["pools"]["handed_off"], (
+        "a job somebody pressed Hand it off on is not on the Handed Off tab")
+    assert "handoff-done" not in ran["pools"]["active"], (
+        "a handed-off job is still among the live bids, so nothing ever leaves this board")
 
 
 def test_the_won_chip_is_styled():

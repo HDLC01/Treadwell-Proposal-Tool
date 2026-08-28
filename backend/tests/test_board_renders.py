@@ -67,10 +67,14 @@ def _declared_tabs():
 
 TABS = _declared_tabs()
 # The tabs that draw the PIPELINE. boardPool has exactly two exceptions to that — Lost, columned by
-# close reason, and Won, columned by what is outstanding — so this is stated as "everything else"
+# close reason, and Handed Off, which is one flat column — so this is stated as "everything else"
 # rather than as a list: a fifth tab then lands in here and fails the column-identity assertions
 # below out loud, which is the right way for a new tab to reach whoever maintains this file.
-LIVE_TABS = tuple(t for t in TABS if t not in ("lost", "won"))
+#
+# The exclusion list is spelled with the tab IDS, and `handed_off` carries an underscore. A pattern
+# that assumes ids are letters-only drops that tab silently, which is the failure this whole file
+# exists to make loud.
+LIVE_TABS = tuple(t for t in TABS if t not in ("lost", "handed_off"))
 
 
 @pytest.fixture(scope="module")
@@ -104,7 +108,12 @@ def test_the_tab_list_is_the_products_own(rendered):
     """The guard on the guard. This file renders `TABS`, so if that list is not the page's real one
     a whole tab can be untested while every test here passes — which is exactly what happened to the
     Won tab. Three independent reads of the same fact have to agree: portal.js's `const TABS` (read
-    twice, here and in the harness) and the [data-tab] pills portal.html actually ships."""
+    twice, here and in the harness) and the [data-tab] pills portal.html actually ships.
+
+    The pills assertion earns its keep a second way since 2026-08-28: tab ids now contain an
+    underscore (`handed_off`), and anything that matches them as `[a-z]+` drops that pill and reports
+    it as a missing button. A tab dropped by a character class looks exactly like a tab nobody
+    built."""
     assert rendered["tabs"] == TABS, (
         "the harness and this file disagree about portal.js's tab list: %s vs %s"
         % (rendered["tabs"], TABS))
@@ -112,9 +121,10 @@ def test_the_tab_list_is_the_products_own(rendered):
         "portal.html's tab buttons are %s but portal.js declares %s — a tab with no button is "
         "unreachable, and a button with no tab blanks the board"
         % (rendered["pills"], TABS))
-    assert "won" in TABS, (
-        "the Won tab is gone from portal.js. If that was deliberate, delete the won assertions "
-        "below with it; until then this is the tab a won job lands on")
+    assert "handed_off" in TABS, (
+        "the Handed Off tab is gone from portal.js. If that was deliberate, delete the hand-off "
+        "assertions below with it; until then this is the tab a job lands on when somebody presses "
+        "Hand it off — and pressing it is the only thing that takes a card off the Active board")
     for tab in TABS:
         assert "%s/board" % tab in rendered["results"], (
             "the harness never rendered the %s tab" % tab)
@@ -188,81 +198,104 @@ def test_the_lost_tab_draws_the_reason_columns(rendered):
     assert r["cards"] == 3, "the Lost board drew %s cards; the fixture has 3" % r["cards"]
 
 
-# ── the Won tab, off the Active board since 2026-08-20 ───────────────────────
-# Hanz: "I marked Trabon Group project as Won but it's still in the Created but Not Sent bucket."
+# ── the Handed Off tab, which since 2026-08-28 is what winning no longer does ──
+# Hanz, 2026-08-28: "Once we receive the Contact Info, we indicate it as handed off... Then the Won
+# category would be relabeled as 'Handed Off'. After the Handed Off Pipeline would just be one list."
 @needs_node
-def test_the_won_tab_draws_the_outstanding_columns(rendered):
-    """A THIRD column vocabulary through the same kanbanHtml — what is still outstanding, not how far
-    down the pipeline the job got. Asserted against crm-core's own WON_COLS, and against the pipeline
-    it must not be, so a Won branch quietly falling through to STAGES fails here."""
-    r = rendered["results"]["won/board"]
-    won_cols = rendered["wonCols"]
-    assert len(won_cols) == 4, won_cols
-    assert r["colNames"] == won_cols, (
-        "the Won board drew %s; C.WON_COLS is %s" % (r["colNames"], won_cols))
-    assert r["colNames"] != rendered["stages"], "the Won board drew the pipeline columns"
+def test_the_handed_off_tab_draws_one_flat_column(rendered):
+    """A THIRD column vocabulary through the same kanbanHtml, and the shortest one the page has.
 
+    This replaces two tests that asserted the FOUR outstanding-work columns of the Won tab, which
+    existed from 2026-08-20 to 2026-08-28. That tab needed columns precisely because winning took a
+    card OFF the live board: the deposit and the contacts still owed on the job had to stay visible
+    somewhere, so the tab re-answered "what is left to do" away from the board. Winning no longer
+    moves anything, so that question is answered where the work is — in the pipeline's own
+    Won/Approved, Deposit received and Contact info columns — and what is left here is a record of
+    finished jobs. Grouping a finished list invites the reader to believe the groups mean work, so
+    there is one column, and the only thing it claims is the one thing true of every card under it.
 
-@needs_node
-def test_the_won_tab_is_not_rendered_empty(rendered):
-    """An empty tab renders trivially and proves nothing, so the fixture puts a card on this one by
-    BOTH routes into it — and in three different columns, so a Won board with one column collapsed
-    onto another cannot render identically to a correct one.
-
-    The columns are named POSITIONALLY off C.WON_COLS rather than by string, so renaming a heading is
-    a one-line change in crm-core and not a rewrite here; the names in the messages are the current
-    ones, for whoever reads the failure."""
-    r = rendered["results"]["won/board"]
-    won_cols = rendered["wonCols"]
-    assert len(won_cols) == 4, (
-        "C.WON_COLS is %s — this test names its columns by position, so a changed column set needs "
-        "reading before the positions below mean anything" % won_cols)
-    assert r["cards"] >= 3, (
-        "the Won board drew %s cards — the fixture is supposed to land at least three here, or this "
-        "whole file is asserting that an empty tab renders" % r["cards"])
-    # Marked won by hand, on a bid nobody has sent: the reported card. It carries no deposit or
-    # contacts fields at all, so it is also the row a column rule that reads them first misfiles.
-    assert "won-hand-1" in r["poolIds"], (
-        "a project marked won by hand is not on the Won tab: %s" % r["poolIds"])
-    # Won because the deposit arrived — nobody marked it; isWon derives it.
-    assert "received-1" in r["poolIds"], (
-        "a project won by its deposit arriving is not on the Won tab: %s" % r["poolIds"])
-    by_col = r["byCol"]
-
-    def drew(pid):
-        """Where the card actually landed, for the failure message — a bare "not in" says nothing
-        about which column swallowed it."""
-        return [c for c, ids in by_col.items() if pid in ids]
-
-    assert "won-hand-1" in by_col[won_cols[0]], (
-        "the unsent won bid drew under %r, not \"Won before approval\" — a column rule that reads "
-        "the deposit before asking whether the customer approved files it under an invoice that "
-        "does not exist" % drew("won-hand-1"))
-    # Money genuinely out on a job somebody won on the phone. This is the card the old "keep won
-    # cards on the live board" argument was protecting, and the column is the whole mitigation for
-    # moving it: if it draws anywhere else, the work on it has been made invisible by the move.
-    assert "won-hand-2" in by_col[won_cols[1]], (
-        "the won job with its deposit still outstanding drew under %r, not \"Deposit outstanding\""
-        % drew("won-hand-2"))
-    assert "received-1" in by_col[won_cols[3]], (
-        "the settled job drew under %r, not \"Complete\"" % drew("received-1"))
+    Asserted against crm-core's own HANDOFF_COLS and against the pipeline it must not be, so a
+    hand-off branch quietly falling through to STAGES fails here rather than on screen. An empty tab
+    renders trivially and proves nothing, so the fixture lands a card by both routes into it: a job
+    that went the whole distance, and one won on the phone off a bid nobody sent — the second has no
+    portal fields at all, which is what makes it the row that catches a rule reading deposit or
+    contacts before it reads `handed_off_at`."""
+    r = rendered["results"]["handed_off/board"]
+    handoff_cols = rendered["handoffCols"]
+    assert len(handoff_cols) == 1, (
+        "C.HANDOFF_COLS is %s — one flat column IS the tab; a Handed Off board that grew columns "
+        "back needs reading before the assertions below mean anything" % handoff_cols)
+    assert r["colNames"] == handoff_cols, (
+        "the Handed Off board drew %s; C.HANDOFF_COLS is %s" % (r["colNames"], handoff_cols))
+    assert r["colNames"] != rendered["stages"], "the Handed Off board drew the pipeline columns"
+    assert r["columns"] == len(handoff_cols), (
+        "the Handed Off board matched `class=\"col` %s times; expected %s column and no + New "
+        "button, because nothing new starts on the tab of finished work"
+        % (r["columns"], len(handoff_cols)))
+    assert r["cards"] >= 2, (
+        "the Handed Off board drew %s cards — the fixture is supposed to land two here, or this "
+        "whole test is asserting that an empty tab renders" % r["cards"])
+    under = r["byCol"][handoff_cols[0]]
+    # Approved, deposit in, contacts in, then handed over: the ordinary way a job leaves the board.
+    assert "handoff-1" in under, (
+        "a handed-off job is not under the one column: %s" % r["byCol"])
+    # Won on the phone off an unsent bid and passed straight to operations. It has no portal state
+    # whatsoever, so a rule that reads the deposit or the contacts first loses this card entirely —
+    # and it is also the proof that the tab is not merely the far end of the pipeline.
+    assert "handoff-2" in under, (
+        "the handed-off UNSENT bid is not under the one column: %s" % r["byCol"])
 
 
 @needs_node
-def test_a_won_job_is_off_the_live_board(rendered):
-    """The point of the tab. Both won rows have to be GONE from Active — the bug was a card that said
-    Won sitting in the Created but Not Sent column."""
+def test_a_won_job_stays_on_the_live_board_until_somebody_hands_it_off(rendered):
+    """This assertion INVERTED on 2026-08-28, and the inversion is the product change.
+
+    From 2026-08-20 these two rows had to be GONE from Active. Eight days of it showed why that was
+    wrong: a won job still owes a deposit and a set of contacts, and the sales meeting is run off the
+    Active board — so taking the card away the moment somebody said "we won it" hid the remaining
+    work from the very people chasing it. Winning is now a COLUMN on that board, and the only thing
+    that removes a card is a human pressing Hand it off.
+
+    Both routes to won are checked, because they reach the board through different fields: one
+    derived from the deposit landing, one marked by hand on a bid nobody has sent. The hand-off rows
+    are checked in the other direction — if they linger, the button does nothing and the board never
+    empties.
+
+    Staying put is only half right, so the old Trabon complaint is asserted here too — "I marked
+    Trabon Group project as Won but it's still in the Created but Not Sent bucket". The card has to
+    MOVE as well as stay: it belongs with the approved work, not in the column for bids nobody has
+    sent. Named off the fixture rather than off the heading string, so renaming a column in crm-core
+    stays a one-line change there."""
     active = rendered["results"]["active/board"]["poolIds"]
     for pid in ("won-hand-1", "received-1"):
+        assert pid in active, (
+            "%s was won and has left the Active board — winning stopped moving cards off it on "
+            "2026-08-28, because the deposit and contacts owed on a won job are still live work: %s"
+            % (pid, active))
+    for pid in ("handoff-1", "handoff-2"):
         assert pid not in active, (
-            "%s is still on the Active board after being won: %s" % (pid, active))
+            "%s has been handed off and is still on the Active board — pressing that button is the "
+            "one thing that clears a card now: %s" % (pid, active))
+    by_col = rendered["results"]["active/board"]["byCol"]
+    assert "won-hand-1" not in by_col[rendered["stages"][0]], (
+        "the bid marked won by hand is back in the %r column, which is the Trabon complaint that "
+        "the won mark outranking not_sent was written to settle" % rendered["stages"][0])
+    approved = [c for c, ids in by_col.items() if "approved-1" in ids]
+    assert len(approved) == 1, (
+        "the plainly-approved fixture row is in %s columns, so there is no column left to name the "
+        "hand-won bid against" % len(approved))
+    approved_col = approved[0]
+    assert "won-hand-1" in by_col[approved_col], (
+        "the bid marked won by hand did not file with the approved work (%r) — it drew under %s"
+        % (approved_col, [c for c, ids in by_col.items() if "won-hand-1" in ids]))
 
 
 @needs_node
 def test_every_row_in_the_pool_becomes_a_card(rendered):
     """A card silently dropped by C.group (an unknown stage) is invisible on screen and looks like
-    a data problem. C.groupWon has the same exposure on the Won tab, and its `||` fallback means a
-    dropped card would land in the wrong column rather than throw."""
+    a data problem. C.groupHandedOff cannot drop one — it takes every item it is handed straight
+    into its single column, deliberately, rather than re-deriving who belongs there — so on that tab
+    this reads as a check that the pool and the render agree about how many cards there are."""
     for tab in TABS:
         r = rendered["results"]["%s/board" % tab]
         assert r["cards"] == r["pool"], (
@@ -287,8 +320,8 @@ def test_the_pools_partition_every_row(rendered):
 
 @needs_node
 def test_the_new_button_is_only_on_the_live_tabs(rendered):
-    """Not on Lost, where it would file a brand-new bid as closed lost; not on Won, where it would
-    file one as already won before anybody has sent it."""
+    """Not on Lost, where it would file a brand-new bid as closed lost; not on Handed Off, where it
+    would file one as finished and passed to operations before anybody has sent it."""
     for tab in LIVE_TABS:
         assert rendered["results"]["%s/board" % tab]["newButton"]
     for tab in TABS:
@@ -311,26 +344,32 @@ def test_the_test_chip_appears_only_on_the_lost_board(rendered):
 
 
 @needs_node
-def test_the_won_chip_survived_the_move_to_its_own_tab(rendered):
+def test_the_won_chip_draws_on_every_board_a_won_job_reaches(rendered):
     """Three places, three different reasons, and the fixture puts a won card on each.
 
-    ON WON, both views: the columns there answer "what is left to do", so the chip is the only thing
-    on the card saying why the card is on that board at all.
-
-    ON TEST: a scratch project that was won stays under Test (boardPool checks is_test before isWon),
-    and there the chip is the ONLY thing saying it was won.
-
-    NOT ON ACTIVE: this is the bug the tab replaced. A chip reading "Won" on a card sitting in the
+    ON ACTIVE, both views — and this is the assertion that INVERTED on 2026-08-28. It read `not`
+    until then, and the reasoning behind it was that a chip saying "Won" on a card sitting in the
     Created but Not Sent column is a card arguing with the bucket it is in, and the estimator reads
-    the bucket."""
+    the bucket. That reading was right about the symptom and wrong about the cause: what disagreed
+    was the COLUMN, not the chip. stage() now reads the won mark above not_sent, so the card sits
+    under Won/Approved and the two finally say the same thing — which makes the chip nearly
+    redundant there and worth keeping anyway, because a card further along (Deposit received,
+    Contact info) is also won and its column no longer says so.
+
+    ON TEST: a scratch project that was won stays under Test (boardPool files by is_test before it
+    asks anything else), and there the chip is the ONLY thing saying it was won.
+
+    ON HANDED OFF: every card on that tab was won on the way to being handed over, and the single
+    column heading says only that we are done — not how the job ended."""
     for view in ("board", "table"):
-        assert rendered["results"]["won/%s" % view]["wonChip"], (
-            "no Won chip in the %s view of the Won tab" % view)
+        assert rendered["results"]["active/%s" % view]["wonChip"], (
+            "no Won chip in the %s view of the Active board — a won job lives there again since "
+            "2026-08-28, and past the Won/Approved column the chip is the only thing that says a "
+            "card was won" % view)
     assert rendered["results"]["test/board"]["wonChip"], (
         "a won TEST project draws no Won chip — on that tab the chip is the only thing saying so")
-    assert not rendered["results"]["active/board"]["wonChip"], (
-        "a Won chip is still drawing on the Active board — a chip cannot argue with a column, "
-        "which is the bug the Won tab replaced")
+    assert rendered["results"]["handed_off/board"]["wonChip"], (
+        "a handed-off job draws no Won chip — the one column heading does not say it was won")
 
 
 @needs_node
