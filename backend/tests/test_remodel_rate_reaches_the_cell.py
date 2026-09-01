@@ -34,6 +34,12 @@ PRISTINE template, so a copy's rate cell arrives holding the 10% placeholder. Co
 picking the county, or changing the county after copying, shipped a 10% option line beside an
 otherwise correct base bid — while the pill overhead said the real rate was applied
 automatically. Cases 6-9 in the harness are those four holes.
+
+Case 10 is the regression cases 6-9 introduced, and it took a real browser to see it. Bringing
+copies in meant the override's own grid refresh reached a copied tab for the first time — and it
+refreshed by discarding the active sheet's cache and re-fetching it, which 404s for a copy and
+painted "Failed to load Copy1" over the tab. All nine cases above sit on a base tab, where that
+refetch happens to succeed, so all nine stayed green while staging carried the bug.
 """
 import json
 import pathlib
@@ -85,10 +91,15 @@ def test_the_write_also_reaches_the_live_hf_engine(result):
 
 def test_the_active_sheets_grid_is_refreshed(result):
     """cellValues alone would be right in the generated file but stale on screen — the estimator
-    would see the old total until they clicked away and back."""
+    would see the old total until they clicked away and back.
+
+    HOW it refreshes matters, which is why the cache is asserted alongside. This used to
+    `delete sheetCache[activeSheet]` and re-run `showSheet` — a wasteful round trip on a base tab,
+    and outright data loss on a copy (see the last test in this file). It now
+    re-renders from the live HF engine and leaves the cache alone."""
     p = result["pickedCity"]
-    assert p["activeSheetCacheBusted"] is True
-    assert p["showSheetCalledWith"] == ["Epoxy"]
+    assert p["gridRefreshedFor"] == ["Epoxy"]
+    assert p["cachePreserved"] is True
 
 
 def test_state_still_carries_what_the_proposal_step_reads(result):
@@ -195,3 +206,22 @@ def test_a_copy_of_a_copy_resolves_through_the_chain_to_its_template_layout(resu
     # the base tabs in the tab bar are the same ids as the layouts, and writing one twice would
     # be harmless here but would hide a double-write bug on a real structural translation.
     assert c["targetCount"] == 13
+
+
+def test_picking_while_sitting_on_a_copied_tab_keeps_the_tab_on_screen(result):
+    """The regression the four tests above created, caught by a browser and not by any of them.
+
+    Once copies became rate targets, the override's own grid refresh reached a copied tab for the
+    first time — and it refreshed by discarding the active sheet's cache and re-fetching it. A copy
+    has no server-side worksheet (`addCopy` builds `sheetCache[newId]` client-side from its
+    source), so `GET /api/sheet/Copy1` 404s and `showSheet`'s `!r.ok` branch paints
+    "Failed to load Copy1" over a tab whose cache is now gone. Picking a county with a copy open —
+    an ordinary sequence — blanked the option the estimator was looking at.
+
+    For a client-side-only cache, a refetch is data loss, not a round trip. Every one of cases 1-9
+    sits on a base tab, where the refetch happens to succeed, which is exactly why they were all
+    green while staging carried the bug."""
+    c = result["pickedWhileOnACopy"]
+    assert c["copy1"] == '=IF(D6="yes",0.0935,0)'   # the rate still lands
+    assert c["cachePreserved"] is True              # ...without destroying the tab to deliver it
+    assert c["gridRefreshedFor"] == ["Copy1"]       # ...and the copy redraws with the new number
