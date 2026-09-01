@@ -57,10 +57,16 @@ const REMODEL_RATE_BY_LAYOUT = new Function(
   "return REMODEL_RATE_BY_LAYOUT;"
 )(GYP_SHEETS);
 
-function harness(tabs) {
+function harness(tabs, active) {
   const cellValues = {};
-  const sheetCache = { Epoxy: { stale: true } };
-  const showSheetCalls = [];
+  // A warm cache for every sheet a fixture might sit on. It is asserted to SURVIVE: the override
+  // used to delete the active sheet's entry and re-fetch it, which 404s on a copy (a copy has no
+  // server-side worksheet) and blanked the tab. See refreshActiveGridFromHF in the real file.
+  const sheetCache = {
+    Epoxy: { sheet: "Epoxy", cells: [] },
+    Copy1: { sheet: "Copy1", cells: [] },
+  };
+  const refreshCalls = [];
   const setStateCalls = [];
   const hfCalls = [];
   const state = {};
@@ -77,7 +83,9 @@ function harness(tabs) {
     setCellValue(sheet, addr, v) { hfCalls.push([sheet, addr, v]); },
   };
   const TW = { setState: (p) => setStateCalls.push(p) };
-  const activeSheet = "Epoxy";   // the fixture's active tab — proves the cache-bust path fires
+  // The fixture's active tab — proves the grid-refresh path fires. Pass "Copy1" to sit on a
+  // COPIED tab, which is where the discarded cache used to blank the grid.
+  const activeSheet = active || "Epoxy";
 
   // `tabs` is the live tab bar (base tabs + copies). Passed by reference and read fresh inside
   // remodelRateTargets, so a test can push a copy onto it and re-run the override — which is
@@ -95,17 +103,22 @@ function harness(tabs) {
     document, state, TW, HF, cellValues, sheetCache, activeSheet,
     REMODEL_RATE_BY_LAYOUT, countySelected, countyInput, countyResults,
     tabs: tabList, txAddr, layoutIdFor,
-    showSheet: (name) => showSheetCalls.push(name),
+    // Leaf stubs. refreshActiveGridFromHF itself is LIFTED and runs for real — stubbing it would
+    // stub out the very fix these last cases exist to prove.
+    sheetGrid: { querySelector: () => null },
+    refreshDomFromHF: (data) => refreshCalls.push(data && data.sheet),
+    updateTotalBarFromHF: () => {},
   };
   deps.escHtml = lift("escHtml", deps);
   deps.countyRowLabel = lift("countyRowLabel", deps);
   deps.remodelRateTargets = lift("remodelRateTargets", deps);
+  deps.refreshActiveGridFromHF = lift("refreshActiveGridFromHF", deps);
   deps.applyRemodelRateOverride = lift("applyRemodelRateOverride", deps);
   deps.renderCountyPill = lift("renderCountyPill", deps);
   const pickCounty = lift("pickCounty", deps);
 
   return {
-    state, cellValues, sheetCache, showSheetCalls, setStateCalls, hfCalls, tabs: tabList,
+    state, cellValues, sheetCache, refreshCalls, setStateCalls, hfCalls, tabs: tabList,
     countySelected, countyInput, countyResults, clearListeners,
     pickCounty, applyRemodelRateOverride: deps.applyRemodelRateOverride,
     remodelRateTargets: deps.remodelRateTargets,
@@ -130,9 +143,9 @@ out.gypSheetCount = GYP_SHEETS.length;
     // every write also reached the live HF engine, same shape
     hfMatchesCellValues: h.hfCalls.every(([sheet, addr, v]) => h.cellValues[`${sheet}!${addr}`] === v),
     hfCallCount: h.hfCalls.length,
-    // the active sheet's cache was busted and the grid re-rendered
-    activeSheetCacheBusted: !("Epoxy" in h.sheetCache),
-    showSheetCalledWith: h.showSheetCalls,
+    // the active sheet's grid was re-rendered from HF, and its cache SURVIVED
+    gridRefreshedFor: h.refreshCalls,
+    cachePreserved: "Epoxy" in h.sheetCache,
     // state carries what the proposal step reads ({{county}})
     stateCounty: h.state.county,
     stateCountyTaxRate: h.state.county_tax_rate,
@@ -249,6 +262,22 @@ out.gypSheetCount = GYP_SHEETS.length;
     copy2: h.cellValues["Copy2!B81"],           // Copy1 → Epoxy → B81
     copy3: h.cellValues["Copy3!B75"],           // Seal layout → B75
     targetCount: h.remodelRateTargets().length, // 10 layouts + 3 copies, no duplicates
+  };
+}
+
+// ── 10. picking the county while SITTING ON a copied tab ─────────────────────
+// The regression case 8 created. Once copies became targets, the override's own refresh reached a
+// copy for the first time — and it refreshed by deleting the active sheet's cache and re-running
+// showSheet, which for a copy means GET /api/sheet/Copy1 → 404 → "Failed to load Copy1", cache
+// gone. Found by driving a real browser against staging; no assertion in cases 1-9 could see it,
+// because every one of them sits on a base tab where the refetch happens to succeed.
+{
+  const h = harness([{ id: "Epoxy" }, { id: "Copy1", source: "Epoxy" }], "Copy1");
+  h.pickCounty(OP);
+  out.pickedWhileOnACopy = {
+    copy1: h.cellValues["Copy1!B81"],
+    cachePreserved: "Copy1" in h.sheetCache,
+    gridRefreshedFor: h.refreshCalls,
   };
 }
 

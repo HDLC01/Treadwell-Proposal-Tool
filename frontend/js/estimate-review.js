@@ -3416,10 +3416,31 @@ function applyRemodelRateOverride(rate) {
     }
     if (sheet === activeSheet) touchedActiveSheet = true;
   }
-  if (touchedActiveSheet) {
-    delete sheetCache[activeSheet];
-    showSheet(activeSheet);
-  }
+  if (touchedActiveSheet) refreshActiveGridFromHF();
+}
+
+// Re-draw the active grid after a programmatic write, WITHOUT discarding its cache.
+//
+// This used to `delete sheetCache[activeSheet]` and re-run `showSheet`. On a base
+// tab that was merely wasteful — the refetch returns the template's own cached
+// values, which `renderSheet` then immediately overwrites from HF anyway. On a
+// COPIED tab it was destructive: a copy has no server-side worksheet (addCopy
+// builds its cache client-side from the source), so `/api/sheet/<copyId>` 404s
+// and the tab renders "Failed to load <id>" with its cache gone.
+//
+// Copies only became reachable from here when the remodel-rate targets stopped
+// being a fixed list of template sheets, so this is the same change's other half
+// — found by driving a real browser, which is the only place it was visible.
+//
+// Every write that lands here is a formula, so `refreshDomFromHF` picks it up via
+// its `userFormula` branch along with everything downstream of it. A caller that
+// writes a PLAIN value would need the full re-render instead (which is why the
+// autofill path below still does one).
+function refreshActiveGridFromHF() {
+  const data = sheetCache[activeSheet];
+  if (!data) return;
+  try { refreshDomFromHF(data, sheetGrid.querySelector(".xl-grid")); } catch {}
+  try { updateTotalBarFromHF(); } catch {}
 }
 
 // Renders the picked pill from an already-built label string, rather than
