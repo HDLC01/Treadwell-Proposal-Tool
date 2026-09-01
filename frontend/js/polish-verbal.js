@@ -114,7 +114,21 @@
       stopDictation();
     };
     rec.onend = function () { if (listening) stopDictation(); };
-    try { rec.start(); } catch (err) { return; }
+    try {
+      rec.start();
+    } catch (err) {
+      // A DOMException here — as opposed to the async onerror above — means the browser refused
+      // to even ATTEMPT dictation: no permission prompt ever appears, because there was nothing
+      // to ask. The one seen in the wild is a Permissions-Policy that disallows `microphone` for
+      // the page (nginx sets that header on this app, not this file — see CSP/headers ops notes),
+      // which throws synchronously from .start() rather than firing onerror. Silently returning
+      // here, as this used to, left the estimator staring at a mic button that does nothing: no
+      // prompt, no message, no filled box, and no way to tell a policy block from a broken feature.
+      say("This browser or site setting is blocking the microphone outright — no permission " +
+        "prompt will appear. Type into the box instead, or try a different browser.", "warn");
+      rec = null;
+      return;
+    }
     listening = true;
     paintMic();
   }
