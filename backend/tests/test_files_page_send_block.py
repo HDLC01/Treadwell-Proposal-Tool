@@ -295,10 +295,14 @@ def test_the_downloads_are_the_outline_variant_and_it_finally_has_a_hover():
     """Three solid-red buttons at the top of the page competed with the one irreversible action
     at the bottom of it. `.secondary` has been sitting unused in styles.css the whole time — and
     with no working hover, because `.download-link:hover` and `.download-link.secondary` are
-    both (0,2,0) and the variant, declared second, painted the button back to white on contact."""
+    both (0,2,0) and the variant, declared second, painted the button back to white on contact.
+
+    FOUR since 2026-08-28 — the optional cover letter's .docx joined the row, and it is in the list
+    rather than exempt from it for the same reason the other three are: a solid fourth would
+    compete with Send just as hard."""
     dl = POST.find_class("fp-dl")
     kinds = [e.id for e in dl.kids if e.tag == "button"]
-    assert kinds == ["dl-xlsx", "dl-docx", "dl-pdf"]
+    assert kinds == ["dl-xlsx", "dl-docx", "dl-pdf", "dl-cover"]
     assert all({"download-link", "secondary"} <= e.classes for e in dl.kids if e.tag == "button")
     assert _rule(STYLES, ".download-link.secondary:hover"), "the outline button has no hover state"
 
@@ -309,7 +313,7 @@ def test_no_button_the_javascript_rewrites_carries_an_icon():
     deleted by the first click and never comes back, so the icon is not a styling choice here,
     it is a bug with a delay on it. Icons go in section heads and on the two buttons nothing
     rewrites (Add a photo or file, Start a new project)."""
-    rewritten = ("dl-xlsx", "dl-docx", "dl-pdf", "portal-btn", "gen-btn", "dbx-go")
+    rewritten = ("dl-xlsx", "dl-docx", "dl-pdf", "dl-cover", "portal-btn", "gen-btn", "dbx-go")
     for node_id in rewritten:
         el = DOC.find_id(node_id)
         assert el is not None, node_id

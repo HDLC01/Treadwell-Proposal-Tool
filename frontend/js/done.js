@@ -84,6 +84,12 @@
       // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
       // option + manual line label/amount). Display-only — never affects pricing.
       price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
+      // The optional cover letter, carried here for the same reason box_overrides is: this
+      // rebuild is what "View files" regenerates from, and without it a project the estimator
+      // gave a letter would come back with the proposal alone — the second download disagreeing
+      // with the first one they already checked. Read through the one helper the Proposal step's
+      // Continue also uses, so the two cannot drift apart on what "enabled" means.
+      ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);
@@ -956,6 +962,26 @@
         "pdf_download_url", `${safeName}_proposal.pdf`, pdfBtn));
     } else {
       pdfBtn.style.display = "none";
+    }
+    // THE COVER LETTER, on exactly the same terms as the PDF above: wired only when the estimator
+    // asked for one AND the generate response carried a url for it. Both halves are load-bearing
+    // -- `cover_letter_enabled` is what the estimator chose, the url is what the backend actually
+    // produced, and a button offered on the strength of the choice alone would 404 the first time
+    // a template went missing.
+    //
+    // `downloadAs` unchanged and unforked: the same bearer fetch, the same 404-after-a-restart
+    // self-heal, the same octet-stream blob that stops Chrome's viewer from swallowing the
+    // filename. Only the key and the suffix differ.
+    const coverBtn = document.getElementById("dl-cover");
+    if (coverBtn) {
+      const wantsCover = !!(state.proposal_payload && state.proposal_payload.cover_letter_enabled);
+      if (wantsCover && result.cover_letter_download_url) {
+        coverBtn.style.display = "";
+        coverBtn.addEventListener("click", () => downloadAs(
+          "cover_letter_download_url", `${safeName}_cover_letter.docx`, coverBtn));
+      } else {
+        coverBtn.style.display = "none";
+      }
     }
 
     // Send to the inline recipient list shown above (no popup). Every recipient

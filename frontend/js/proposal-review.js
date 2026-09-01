@@ -6667,6 +6667,18 @@
         // amount / tax phrase, option + manual line label/amount). Display-only —
         // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
         price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
+        // THE OPTIONAL COVER LETTER — the enabled flag, the estimator's edits, and the template
+        // version those edit ids were captured against.
+        //
+        // Inside proposal_payload, not merely on the POST body, because the payload is what gets
+        // FROZEN into a sent revision: the portal re-renders a customer's letter from the pinned
+        // copy (api_admin_cover_letter_pdf reads pp["cover_letter_enabled"]), so a letter that
+        // rode only the request would vanish the first time a customer re-opened their proposal.
+        //
+        // Read through the ONE helper on window, which the Files page's rebuild also reads, so the
+        // two cannot come to disagree about what the estimator asked for. An empty object when
+        // that script did not load — which the backend already treats as "no cover letter".
+        ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
