@@ -435,7 +435,13 @@ function makePage(label) {
     // The token values the sidebar currently resolves to. Settable, because "the estimator
     // changed the square footage" is one of the things under test.
     let TOKENS = {};
-    const computeTokenValues = () => TOKENS;
+    // It DEREFERENCES its argument before answering, because the real one does
+    // (proposal-review.js reads mergedValues.polish_sf with no default parameter), and a stub
+    // that shrugs at undefined is a stub that cannot fail. This one ignored its argument until
+    // 2026-09-02 and scenario 14b below was green over a live TypeError: restoreEmptiedClause
+    // called it with nothing, so the safety net that puts a deleted numbered clause back — the
+    // one standing between an estimator and a bare "1." in a signed contract — threw instead.
+    const computeTokenValues = (mergedValues) => { void mergedValues.polish_sf; return TOKENS; };
 ` + LIFTED + `
     docSurface.addEventListener("input", (e) => ${INPUT_HANDLER});
 

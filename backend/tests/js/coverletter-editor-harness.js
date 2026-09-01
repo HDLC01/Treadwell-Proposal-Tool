@@ -299,7 +299,18 @@ function makePage(seed, opts) {
     TWAuth: { ready: Promise.resolve() },
     // The proposal editor's token resolver, borrowed by the letter. Present here because it is
     // present on the page; the "absent" case gets its own scenario below.
-    computeTokenValues: opts.noTokens ? undefined : () => JSON.parse(JSON.stringify(TOKENS)),
+    //
+    // SHAPED LIKE THE REAL ONE ON PURPOSE: `computeTokenValues(mergedValues)` in proposal-review.js
+    // dereferences its argument immediately (`mergedValues.polish_sf`, ...), so calling it with
+    // none throws. A stub that ignored its argument and always returned TOKENS could not tell a
+    // caller that passed the draft's real values apart from one that called it blind — which is
+    // exactly the bug that shipped every `{{token}}` raw into the letter (clTokens() swallowed the
+    // throw and came back with `{}`). This stub throws the same way and echoes back the job_name
+    // it was actually handed, so scenario 12 below can prove which one happened.
+    computeTokenValues: opts.noTokens ? undefined : (mergedValues) => {
+      void mergedValues.polish_sf; // throws TypeError when called with no argument, like the real one
+      return Object.assign({}, TOKENS, mergedValues.job_name ? { job_name: mergedValues.job_name } : {});
+    },
     // The formatting ribbon's "aimed at nothing". Spied rather than stubbed away: the whole
     // reason it is called is that the ribbon keeps its target after focus leaves, and a press on
     // Bold while the letter is in front would otherwise format a proposal paragraph off-screen.
@@ -683,6 +694,28 @@ const out = {};
         const q = makePage(p.STORE.blob);
         return q.CL().payloadFields();
       })(),
+    };
+  }
+
+  // ══ 12 · the resolver is called WITH the draft, not called blind ═══════════
+  /* `computeTokenValues` throws when it is not handed a mergedValues object (see the stub above),
+   * and `clTokens()` swallows any throw and hands `render()` an empty token map — which looks
+   * exactly like "this letter has no tokens", so every `{{token}}` prints literally. That is the
+   * bug Hanz reported and the screenshots showed: nothing on the cover letter was substituted.
+   *
+   * This draft's job_name is one the letterhead default (TOKENS.job_name, "Olathe Fire Station 4")
+   * does not know, so the ONLY way it reaches the page is a call that actually passes this draft's
+   * state through. If clTokens() regresses to calling the resolver with no argument, the stub
+   * throws, the catch swallows it, and this assertion sees the raw "{{job_name}}" text instead. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct", job_name: "Regression Test Job" });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    const block = p.look(1);
+    out.resolverGetsTheDraft = {
+      jobNameBlock: block ? block.text : null,
+      stillRaw: block ? block.text.indexOf("{{") >= 0 : null,
     };
   }
 

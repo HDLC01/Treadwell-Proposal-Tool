@@ -42,11 +42,26 @@
    *  these templates is one the proposal already fills". So the proposal editor's own resolver is
    *  the correct answer and a second one would be a second source of truth for the same numbers.
    *  Borrowed, not copied — and guarded, because a letter that renders raw {{tokens}} is still a
-   *  usable editor while a page that threw is not. */
+   *  usable editor while a page that threw is not.
+   *
+   *  `computeTokenValues` REQUIRES its `mergedValues` argument — it dereferences it immediately
+   *  (`mergedValues.polish_sf`, ...) — so it must be called the same way every one of its callers
+   *  in proposal-review.js calls it: the stored draft overlaid with whatever is currently typed
+   *  into the on-screen form, `Object.assign({}, state, TW.readForm(form))`. Calling it with no
+   *  argument throws, and that throw was landing in the catch below and coming back as `{}` —
+   *  which is indistinguishable, to `render()`, from "no tokens are known", so every `{{token}}`
+   *  printed literally. Read fresh each time (`clState()`, not a load-time snapshot) for the same
+   *  reason the rest of this file does. */
   function clTokens() {
     const f = g("computeTokenValues");
     if (!f) return {};
-    try { return f() || {}; } catch { return {}; }
+    try {
+      const st = clState();
+      const formEl = document.getElementById("proposal-form");
+      const canReadForm = formEl && window.TW && typeof TW.readForm === "function";
+      const merged = canReadForm ? Object.assign({}, st, TW.readForm(formEl)) : st;
+      return f(merged) || {};
+    } catch { return {}; }
   }
 
   // ── work type + audience, DUPLICATED on purpose ───────────────────────────────────────────
