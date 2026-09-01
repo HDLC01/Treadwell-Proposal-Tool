@@ -627,14 +627,33 @@ def test_an_unreadable_drafts_list_does_not_take_the_board_down(monkeypatch):
     assert "is_test" not in out["p1"], "a failed lookup invented a flag"
 
 
-def test_an_unreachable_portal_still_fails_the_way_it_always_did(monkeypatch):
-    """The proxy raised before this change and must keep raising: the board's own catch keeps
-    the stale rows on screen and shows the reason, and swallowing the error here would replace
-    that with an empty, authoritative-looking board."""
+def test_an_unreachable_portal_no_longer_takes_the_board_with_it(monkeypatch):
+    """REVERSES the posture this test used to pin. It used to assert the proxy KEPT raising, on
+    the reasoning that the board's own catch would hold the stale rows on screen and show the
+    reason, and that swallowing the error here would leave an empty, authoritative-looking board.
+
+    Both halves turned out to be wrong. The browser's catch only holds rows it ALREADY has, so a
+    first load — or any load after a container restart — got nothing at all; and the board was
+    never empty-but-authoritative, it was a red error box with every tab reading 0. That is what
+    staging showed on 2026-08-28 when the portal container auto-slept, and Hanz's answer settled
+    it: "portal and proposal are two different services so if portal is down it should still show
+    the projects... if that happens live then we are cooked."
+
+    So the endpoint now degrades instead of failing (see test_portal_pipeline_fallback.py for the
+    two tiers). What stays true from the old test is the part that mattered: nothing is invented.
+    With no cache and no drafts the board is honestly empty and says why in `portal_status`.
+
+    RuntimeError rather than HTTPException on purpose — the catch has to be wider than the one
+    exception _portal happens to raise today, or an httpx or json surprise blanks the board
+    through a gap nobody tested."""
+    main._PIPELINE_CACHE.update({"rows": None, "fetched_at": None})
     monkeypatch.setattr(main, "_portal",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("portal offline")))
-    with pytest.raises(RuntimeError):
-        client.get("/api/portal/pipeline")
+    monkeypatch.setattr(main.drafts, "list_drafts", lambda *a, **k: [])
+    r = client.get("/api/portal/pipeline")
+    assert r.status_code == 200, r.text
+    assert r.json()["portal_status"] == "offline"
+    assert r.json()["proposals"] == []
 
 
 def test_the_two_pages_agree_about_the_same_project(monkeypatch):
