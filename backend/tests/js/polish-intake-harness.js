@@ -56,12 +56,32 @@ const P = require(path.join(ROOT, "js", "polish-bid-core.js"));
 // made-up rate would keep passing after the table it is meant to be pinning had changed.
 //
 // Each row in that file is one line of double-quoted keys and plain numbers, which is already JSON.
+//
+// Bounded to the COUNTIES literal itself (bracket-balanced), NOT sliced to end-of-file: a CITIES
+// table was added below COUNTIES in reference_tax.py, shaped as the same `{"name": ...}` dicts, and
+// an unbounded slice-to-EOF swept those city rows in too — untagged (no `kind`), so the real
+// countyRowLabel() then mislabelled a city ("Shawnee" in Johnson Co.) as a county ("Shawnee
+// County, KS"). Bracket-balancing is safe here because no row has a nested `[`.
 const COUNTIES = (function () {
   const py = read(path.join(ROOT, "..", "backend", "reference_tax.py"));
-  const from = py.indexOf("COUNTIES: list[dict] = [");
+  const decl = "COUNTIES: list[dict] = [";
+  const from = py.indexOf(decl);
   if (from < 0) throw new Error("COUNTIES is gone from backend/reference_tax.py — rewrite this");
-  const rows = (py.slice(from).match(/\{"name":[^}]*\}/g) || []).map((s) => JSON.parse(s));
+  // The declaration's own type annotation ("list[dict]") has a "[" before the list literal's own —
+  // start the bracket search at the "[" the decl string ends on, not the first one after `from`.
+  const open = from + decl.length - 1;
+  let depth = 0, end = -1;
+  for (let i = open; i < py.length; i++) {
+    if (py[i] === "[") depth++;
+    else if (py[i] === "]" && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) throw new Error("COUNTIES list never closes — rewrite this");
+  const body = py.slice(open, end + 1);
+  const rows = (body.match(/\{"name":[^}]*\}/g) || []).map((s) => JSON.parse(s));
   if (rows.length < 20) throw new Error("only parsed " + rows.length + " counties — rewrite this");
+  if (rows.some((c) => "county" in c && !("fips" in c))) {
+    throw new Error("parsed a CITIES-shaped row into COUNTIES — the bracket bound broke, rewrite this");
+  }
   return rows;
 })();
 
@@ -210,6 +230,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("loadCounties")}
   ${fn("countyStateOf")}
   ${fn("countyRowRate")}
+  ${fn("countyRowLabel")}
   ${fn("filterCounties")}
   ${fn("closeCountyResults")}
   ${fn("renderCountyResults")}
