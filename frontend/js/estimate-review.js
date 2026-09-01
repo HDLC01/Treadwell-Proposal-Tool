@@ -1090,6 +1090,15 @@ function copyTab(sourceId) {
   order.splice(si >= 0 ? si + 1 : order.length, 0, newId);
   state.tab_order = order;
   buildTabs();
+  // Stamp the picked remodel rate onto the new tab. The cellValues replay above
+  // already carries it when the source itself was overridden, but that is a side
+  // effect of copying edits, not a guarantee: it does nothing when the source is
+  // a layout the old override list never wrote (Seal, Leveling, Epoxy blank), and
+  // nothing when the estimator copies BEFORE picking a county. Re-running the
+  // override here means a priced option can never quote Kyle's 10% placeholder
+  // while the pill overhead claims the real rate is applied automatically.
+  // Runs after buildTabs() so `remodelRateTargets` can see the new tab.
+  applyRemodelRateOverride(state.county_remodel_rate != null ? state.county_remodel_rate : null);
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_order: state.tab_order, cell_values: cellValues });
   renderTabs();
@@ -3336,14 +3345,57 @@ function renderCountyResults(query) {
 // "if project awarded." The county picker used to tell the estimator to type
 // the real rate into K81/K75/K80 — those are legend text, so following that
 // instruction changed nothing about the actual tax. Write straight into the
-// formula cell instead, one row per tab that has a remodel-tax line (Seal,
-// Seal (+Jnts), Leveling, and Epoxy blank have none — see estimate_writer.py's
-// LOCK_MAP, which locks exactly these cells and no others per tab).
-const REMODEL_RATE_CELLS = [
-  ["Epoxy", "B81", "D6"],
-  ["Polish", "B75", "D6"],
-  ...GYP_SHEETS.map(s => [s, "B80", "D8"]),
-];
+// formula cell instead, one row per tab that has a remodel-tax line.
+//
+// Keyed by template LAYOUT, and enumerated by reading the real workbook rather
+// than by reasoning from LOCK_MAP. The previous version of this list named only
+// Epoxy, Polish and the gyp variants, and asserted in this comment that "Seal,
+// Seal (+Jnts), Leveling and Epoxy blank have none". Three of those four DO:
+// Seal!B75, Leveling!B77 and Epoxy blank!B78 all hold `=IF(D6="yes",0.1,0)`, so
+// anything priced on them quoted the customer Kyle's 10% placeholder while the
+// picker's pill claimed the real rate was "applied automatically".
+//
+// "Seal (+Jnts)" is deliberately ABSENT, and that is not the same omission: its
+// B75 is `=Seal!B75`, a mirror, so writing Seal already carries it. Writing it
+// too would replace the mirror with a literal and fork the two sheets apart —
+// the same independent-cell divergence found in Kyle's own filed workbooks.
+const REMODEL_RATE_BY_LAYOUT = {
+  "Epoxy":       ["B81", "D6"],
+  "Polish":      ["B75", "D6"],
+  "Seal":        ["B75", "D6"],
+  "Leveling":    ["B77", "D6"],
+  "Epoxy blank": ["B78", "D6"],
+};
+GYP_SHEETS.forEach((s) => { REMODEL_RATE_BY_LAYOUT[s] = ["B80", "D8"]; });
+
+// Every sheet id the rate must be written to, as [id, addr, toggleCell].
+//
+// COPIED tabs are the reason this is computed per call instead of being a
+// constant. A copy is a priced proposal option, and the backend clones it from
+// the PRISTINE template (`estimate_writer._create_copied_tabs`), so its rate
+// cell arrives holding the 10% placeholder. `addCopy` replays the source's
+// existing `cellValues` onto the new tab, which covers "pick the county, then
+// copy" — but not "copy, then pick the county", and not changing the county
+// afterwards. Both of those shipped a 10% option on an otherwise correct bid.
+//
+// Addresses go through `txAddr` because a copy can have inserted or deleted
+// rows, which moves the cell; a deleted one returns null and is skipped.
+function remodelRateTargets() {
+  const out = [];
+  const seen = new Set();
+  const add = (id, layout) => {
+    const spec = REMODEL_RATE_BY_LAYOUT[layout];
+    if (!spec || seen.has(id)) return;
+    const addr = txAddr(id, spec[0]);
+    const toggle = txAddr(id, spec[1]);
+    if (!addr || !toggle) return;
+    seen.add(id);
+    out.push([id, addr, toggle]);
+  };
+  for (const layout in REMODEL_RATE_BY_LAYOUT) add(layout, layout);
+  for (const t of (tabs || [])) add(t.id, layoutIdFor(t.id));
+  return out;
+}
 
 // Writes `rate` (or, with none picked, Kyle's own 10% placeholder) into every
 // remodel-tax formula cell, keeping his own "$0 unless the toggle says yes"
@@ -3355,7 +3407,7 @@ const REMODEL_RATE_CELLS = [
 function applyRemodelRateOverride(rate) {
   const rateText = rate != null ? String(rate) : "0.1";
   let touchedActiveSheet = false;
-  for (const [sheet, addr, toggleCell] of REMODEL_RATE_CELLS) {
+  for (const [sheet, addr, toggleCell] of remodelRateTargets()) {
     const formula = `=IF(${toggleCell}="yes",${rateText},0)`;
     cellValues[`${sheet}!${addr}`] = formula;
     if (HF && HF.ready) {

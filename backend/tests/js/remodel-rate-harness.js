@@ -8,8 +8,15 @@
  * cellValues/HF writes, exactly the way `main.py`'s cell_values write step and the live HF engine
  * would consume them.
  *
- * Lifts `REMODEL_RATE_CELLS`, `applyRemodelRateOverride`, `escHtml`, `countyRowLabel`,
- * `renderCountyPill`, and `pickCounty` out of the real file and runs them against stub DOM/state.
+ * Lifts `REMODEL_RATE_BY_LAYOUT`, `remodelRateTargets`, `applyRemodelRateOverride`, `escHtml`,
+ * `countyRowLabel`, `renderCountyPill`, and `pickCounty` out of the real file and runs them
+ * against stub DOM/state.
+ *
+ * 2026-09-02: the target list stopped being a constant. It had named only Epoxy/Polish/Gyp while
+ * Seal!B75, Leveling!B77 and "Epoxy blank"!B78 also carry `=IF(D6="yes",0.1,0)` in the shipped
+ * template, and COPIED tabs — the ordinary way to add a priced proposal option — are cloned from
+ * the pristine template by the backend and so arrived holding the 10% placeholder. Cases 6-9
+ * below are those four holes; each one was a real number on a real customer's proposal.
  *
  * Usage: node remodel-rate-harness.js <frontend-dir>   →  one line of JSON
  */
@@ -33,21 +40,24 @@ function lift(name, deps) {
   return new Function(...names, m[0] + NL + "return " + name + ";")(...names.map(k => deps[k]));
 }
 
-// GYP_BASE + GYP_SHEETS, because REMODEL_RATE_CELLS is built from GYP_SHEETS.map(...) in the
-// real source — the fixture must use the SHIPPED variant list, not a hand-typed copy of it.
+// GYP_BASE + GYP_SHEETS, because REMODEL_RATE_BY_LAYOUT is extended by a GYP_SHEETS.forEach in
+// the real source — the fixture must use the SHIPPED variant list, not a hand-typed copy of it.
 const GYP_SRC = [
   grab(/^const GYP_BASE = .*$/m, "GYP_BASE"),
   grab(/^const GYP_SHEETS = \[[\s\S]*?\];$/m, "GYP_SHEETS"),
 ].join(NL);
 const { GYP_BASE, GYP_SHEETS } = new Function(GYP_SRC + NL + "return { GYP_BASE, GYP_SHEETS };")();
 
-const REMODEL_RATE_CELLS = new Function(
+// The layout→cell map plus the GYP_SHEETS.forEach line that extends it — lifted together so the
+// fixture uses the SHIPPED table, including the gyp variants, not a hand-typed copy.
+const REMODEL_RATE_BY_LAYOUT = new Function(
   "GYP_SHEETS",
-  grab(/^const REMODEL_RATE_CELLS = \[[\s\S]*?\];$/m, "REMODEL_RATE_CELLS") + NL +
-  "return REMODEL_RATE_CELLS;"
+  grab(/^const REMODEL_RATE_BY_LAYOUT = \{[\s\S]*?^\};$/m, "REMODEL_RATE_BY_LAYOUT") + NL +
+  grab(/^GYP_SHEETS\.forEach\(\(s\) => \{ REMODEL_RATE_BY_LAYOUT.*$/m, "gyp extension") + NL +
+  "return REMODEL_RATE_BY_LAYOUT;"
 )(GYP_SHEETS);
 
-function harness() {
+function harness(tabs) {
   const cellValues = {};
   const sheetCache = { Epoxy: { stale: true } };
   const showSheetCalls = [];
@@ -69,24 +79,41 @@ function harness() {
   const TW = { setState: (p) => setStateCalls.push(p) };
   const activeSheet = "Epoxy";   // the fixture's active tab — proves the cache-bust path fires
 
+  // `tabs` is the live tab bar (base tabs + copies). Passed by reference and read fresh inside
+  // remodelRateTargets, so a test can push a copy onto it and re-run the override — which is
+  // exactly the "copy the tab, THEN pick the county" sequence that shipped a 10% option.
+  const tabList = tabs || [];
+  // Real signature, trivial bodies: no fixture here has structural row/col edits, so txAddr is
+  // identity. layoutIdFor walks a copy back to the template sheet it was cloned from.
+  const txAddr = (_id, addr) => addr;
+  const layoutIdFor = (id) => {
+    const t = tabList.find(x => x.id === id);
+    return t && t.source ? layoutIdFor(t.source) : id;
+  };
+
   const deps = {
     document, state, TW, HF, cellValues, sheetCache, activeSheet,
-    REMODEL_RATE_CELLS, countySelected, countyInput, countyResults,
+    REMODEL_RATE_BY_LAYOUT, countySelected, countyInput, countyResults,
+    tabs: tabList, txAddr, layoutIdFor,
     showSheet: (name) => showSheetCalls.push(name),
   };
   deps.escHtml = lift("escHtml", deps);
   deps.countyRowLabel = lift("countyRowLabel", deps);
+  deps.remodelRateTargets = lift("remodelRateTargets", deps);
   deps.applyRemodelRateOverride = lift("applyRemodelRateOverride", deps);
   deps.renderCountyPill = lift("renderCountyPill", deps);
   const pickCounty = lift("pickCounty", deps);
 
   return {
-    state, cellValues, sheetCache, showSheetCalls, setStateCalls, hfCalls,
+    state, cellValues, sheetCache, showSheetCalls, setStateCalls, hfCalls, tabs: tabList,
     countySelected, countyInput, countyResults, clearListeners,
     pickCounty, applyRemodelRateOverride: deps.applyRemodelRateOverride,
+    remodelRateTargets: deps.remodelRateTargets,
     renderCountyPill: deps.renderCountyPill,
   };
 }
+
+const OP = { kind: "city", name: "Overland Park", state: "KS", rate: 0.0935, remodel_rate: 0.0935, notes: "" };
 
 const out = {};
 out.gypSheetCount = GYP_SHEETS.length;
@@ -164,6 +191,64 @@ out.gypSheetCount = GYP_SHEETS.length;
     epoxy: h.cellValues["Epoxy!B81"],
     polish: h.cellValues["Polish!B75"],
     gyp: h.cellValues[`${GYP_SHEETS[0]}!B80`],
+  };
+}
+
+// ── 6. the three layouts the old list wrongly claimed had no remodel line ────
+// Seal!B75, Leveling!B77 and "Epoxy blank"!B78 all hold `=IF(D6="yes",0.1,0)` in the shipped
+// workbook. Until 2026-09-02 the override skipped all three, so anything priced on one of them
+// billed Kyle's 10% placeholder while the pill said the picked rate was applied automatically.
+{
+  const h = harness();
+  h.pickCounty(OP);
+  out.previouslyMissedLayouts = {
+    seal: h.cellValues["Seal!B75"],
+    leveling: h.cellValues["Leveling!B77"],
+    epoxyBlank: h.cellValues["Epoxy blank!B78"],
+  };
+}
+
+// ── 7. "Seal (+Jnts)" is NOT written, on purpose ─────────────────────────────
+// Its B75 is `=Seal!B75` — a mirror. Writing a literal there would fork the two sheets, which is
+// the same independent-cell divergence found in Kyle's own filed workbooks. Absence here is a
+// deliberate design decision, so it gets an assertion rather than being left to chance.
+{
+  const h = harness();
+  h.pickCounty(OP);
+  out.sealJointsLeftAsMirror = {
+    written: Object.keys(h.cellValues).some(k => k.startsWith("Seal (+Jnts)!")),
+  };
+}
+
+// ── 8. copy the tab, THEN pick the county ────────────────────────────────────
+// The backend clones a copied tab from the PRISTINE template, so its rate cell arrives at 10%.
+// addCopy's cellValues replay cannot help here — the copy exists before any override does.
+{
+  const h = harness([
+    { id: "Epoxy" }, { id: "Polish" },
+    { id: "Copy1", source: "Epoxy" }, { id: "Copy2", source: "Polish" },
+  ]);
+  h.pickCounty(OP);
+  out.copyThenPick = {
+    copy1: h.cellValues["Copy1!B81"],     // epoxy layout → B81
+    copy2: h.cellValues["Copy2!B75"],     // polish layout → B75
+    base: h.cellValues["Epoxy!B81"],
+  };
+}
+
+// ── 9. a copy of a copy resolves through the chain to its template layout ────
+{
+  const h = harness([
+    { id: "Epoxy" },
+    { id: "Copy1", source: "Epoxy" },
+    { id: "Copy2", source: "Copy1" },
+    { id: "Copy3", source: "Seal" },
+  ]);
+  h.pickCounty(OP);
+  out.copyChain = {
+    copy2: h.cellValues["Copy2!B81"],           // Copy1 → Epoxy → B81
+    copy3: h.cellValues["Copy3!B75"],           // Seal layout → B75
+    targetCount: h.remodelRateTargets().length, // 10 layouts + 3 copies, no duplicates
   };
 }
 
