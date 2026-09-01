@@ -1687,7 +1687,18 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
         raise HTTPException(422, "That revision has no generated documents to rebuild.")
     # persist=False: this replays a payload frozen at revision `revision_no`. Writing it back
     # would push an old revision's pricing over the live draft.
-    return _generate(GenerateIn(**payload), request, persist=False)
+    #
+    # want_cover_letter=False for the same reason as the other two replays: don't build what you
+    # don't serve. GenerateOut carries a cover_letter_download_url and this route returns it, but
+    # nothing reads it -- the two callers (done.js downloadRevision, portal.js) both pick from a
+    # hardcoded xlsx/docx/pdf list, so no button for it exists anywhere. The historic letter is
+    # already served by /api/admin/cover-letter-pdf?revision_no=, which resolves the same snapshot.
+    # Building one here only widens the blast radius: cover_letter_writer raises BEFORE the xlsx
+    # and docx are cached (see _generate), so a template this replay can't render 500s the whole
+    # revision download -- and CoverLetter/README.md documents re-running
+    # prepare_cover_letter_templates.py whenever Kyle edits the master, which is exactly how the
+    # letter templates break on their own while the estimate sheet and proposal templates are fine.
+    return _generate(GenerateIn(**payload), request, persist=False, want_cover_letter=False)
 
 
 @app.get("/api/portal/pipeline")
@@ -2430,7 +2441,9 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     # persist=False — this is the CUSTOMER'S on-demand PDF render. It re-runs the payload frozen
     # in the (possibly pinned, possibly superseded) revision; a customer opening an old link must
     # never rewrite the estimator's draft.
-    out = _generate(GenerateIn(**pp), request, persist=False)  # reuse the full generate logic
+    # want_cover_letter=False — this endpoint renders the PROPOSAL only; a cover-letter fill
+    # failure on an unrelated draft must not 500 a proposal PDF the portal is waiting on.
+    out = _generate(GenerateIn(**pp), request, persist=False, want_cover_letter=False)
     tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
     entry = _FILE_CACHE.get(tok)
     if not entry:
@@ -4237,7 +4250,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     return _generate(payload, request, persist=True)
 
 
-def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) -> GenerateOut:
+def _generate(payload: GenerateIn, request: Request, *, persist: bool = True,
+              want_cover_letter: bool = True) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -4245,7 +4259,15 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
     links, the To-Dropbox re-upload. Those re-run a payload that was frozen at some earlier
     moment; writing its values back would push that moment over the live draft (an old revision's
     replay is literally time travel). Only a browser POST, which carries the current state,
-    persists."""
+    persists.
+
+    `want_cover_letter=False` for a caller that only wants the PROPOSAL (xlsx/docx) and has no
+    interest in the letter — /api/admin/proposal-pdf and the To-Dropbox re-file, neither of which
+    ever reads cover_letter_bytes. The cover-letter block below refuses loudly (by design: a live
+    generate that silently drops the letter would let an estimator send a portal that promises one
+    and shows nothing), and that refusal must not leak into a caller whose whole job is the
+    proposal document. Without this gate, a cover-letter-only bug 500s the proposal PDF, or fails
+    a Dropbox filing that never touches the letter at all."""
     values = payload.values
     _ensure_state_name(values)
     # payload.work_type is authoritative; make sure it's in `values` so the
@@ -4700,7 +4722,7 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
     # returned 200 — so the refusal is a 500 whose message names the cover
     # letter, and the log carries the exception type and text.
     cover_letter_bytes = None
-    if payload.cover_letter_enabled:
+    if payload.cover_letter_enabled and want_cover_letter:
         _cl_audience = payload.audience or None
         _cl_path = cover_letter_writer.pick_template(payload.work_type, _cl_audience)
         _cl_cur_version = _cover_letter_template_version(payload.work_type, _cl_audience)
@@ -5661,7 +5683,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     try:
         # persist=False — the payload came OUT of this draft a moment ago; feeding its values back
         # in can only ever re-age it. Re-filing to Dropbox is not an edit.
-        out = _generate(gi, request, persist=False)         # reuse the full generate pipeline
+        # want_cover_letter=False — Dropbox gets the estimate + proposal only; a cover-letter
+        # fill failure on this draft must not block a filing that never reads the letter.
+        out = _generate(gi, request, persist=False, want_cover_letter=False)
         xlsx_entry = _FILE_CACHE.get((out.xlsx_download_url or "").rsplit("/", 1)[-1])
         docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
         if not xlsx_entry or not docx_entry:

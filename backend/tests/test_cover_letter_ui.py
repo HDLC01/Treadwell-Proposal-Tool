@@ -201,6 +201,25 @@ def test_the_letterhead_arrives_as_a_data_uri_behind_the_text(ran):
         "the artwork is handed to the page as a blob URL, which production's CSP will drop")
 
 
+def test_the_body_is_appended_under_the_boxes_and_not_over_them(ran):
+    """THE BUG THAT ONLY A CLICK FOUND. `.cl-body` and `.tw-txbx` both carry `z-index: 1`
+    (`styles.css:898` and the page's own rule) and with equal z-index the LATER sibling paints on
+    top. The body is a full-page click surface, so appending it after the boxes covers every one of
+    them: the date box renders in the right place, looks editable, and swallows the click.
+
+    Read out of the LIVE DOM, not out of the source. A source assertion cannot see paint order at
+    all — which is the same reason `STAGE_CREATED` took the prod board down on 2026-08-12 with
+    every source check green."""
+    order = ran["positioned"]["pageOrder"]
+    assert order, "the page rendered no children — the harness scenario is not exercising render()"
+    body = [i for i, c in enumerate(order) if "cl-body" in c]
+    boxes = [i for i, c in enumerate(order) if "tw-txbx" in c]
+    assert body and boxes, "expected both a body surface and at least one box: %r" % (order,)
+    assert max(body) < min(boxes), (
+        "the body is painted OVER the boxes and will eat every click meant for the date: %r"
+        % (order,))
+
+
 # ══ what gets saved ═══════════════════════════════════════════════════════════
 def test_an_edit_is_saved_in_the_shape_the_backend_reads(ran):
     """`{"<block id>": {"text": "..."}}` — the same shape as the proposal's `paragraph_overrides`,
@@ -461,16 +480,31 @@ def test_four_downloads_wrap_instead_of_being_crushed_into_one_line():
 
 
 def test_the_button_only_appears_when_there_is_a_file_behind_it():
-    """BOTH halves are load-bearing and neither is enough alone: `cover_letter_enabled` is what the
-    estimator chose, the url is what the backend actually produced. Offered on the choice alone it
-    404s the day a template goes missing; offered on the url alone it appears on bids nobody asked
-    for a letter on."""
+    """TWO conditions, not one. An earlier revision of this test demanded only the response's own
+    url, reasoning that `_generate` sets `cover_letter_download_url` from `cover_letter_token`,
+    which only exists inside `if payload.cover_letter_enabled and want_cover_letter` -- so the url
+    already means "asked for, and rendered", and a state check beside it looked like a second,
+    disagreeing source of truth. That was true of the response `result` came from, but `result` is
+    `state.generate_result`, which is persisted and NEVER cleared -- and `continueToDone` (the
+    Proposal step's Continue) does not call /api/generate at all, so toggling the letter off and
+    hitting Continue reaches this page with the OLD `result` from before the toggle. The url-only
+    gate would then show a stale letter for a proposal that no longer has one queued to send.
+
+    The fix is not the old nested `proposal_payload.cover_letter_enabled` copy (that was the
+    original, different bug -- a copy only Continue ever wrote). It is the TOP-LEVEL flag
+    (`coverletter-editor.js setEnabled`, also what `payloadFields()` reads), checked fresh."""
     m = re.search(r'const coverBtn = document\.getElementById\("dl-cover"\);(.*?)\n    \}\n',
                   DONE_JS, re.S)
     assert m, "the cover-letter wiring moved — re-derive this check"
     block = m.group(1)
-    assert "cover_letter_enabled" in block and "result.cover_letter_download_url" in block, (
-        "the button is offered on only one of the two conditions")
+    assert "result.cover_letter_download_url" in block, (
+        "the button is no longer gated on the file the backend actually produced")
+    assert "TW.getState()" in block and "cover_letter_enabled" in block, (
+        "the button no longer re-checks the estimator's CURRENT choice — a stale generate_result "
+        "from before a toggle-then-Continue can show or hide the wrong thing")
+    assert "proposal_payload" not in block, (
+        "back to the NESTED copy — that is the original bug (a copy only Continue ever writes), "
+        "not the top-level flag payloadFields() actually reads")
     assert 'coverBtn.style.display = "none"' in block, "there is no else — the button never hides"
 
 
@@ -485,6 +519,47 @@ def test_the_download_helper_is_reused_and_not_forked():
     assert "downloadAs(" in m.group(0), "the cover letter has its own download path"
     assert "_cover_letter.docx" in m.group(0), (
         "the file would download under the same name as the proposal, or as a blob UUID")
+
+
+def test_the_portal_is_told_the_proposal_has_a_letter():
+    """The portal shows the letter only if it is TOLD there is one. `has_cover_letter` has been on
+    `PortalPublishIn` and forwarded by /api/portal/publish since the field was added, and no real
+    caller ever set it — so a customer whose bid had a letter got a portal that did not know.
+
+    An earlier revision of this test derived the value from the GENERATE RESULT, on the reasoning
+    that the question is "is there a letter in the package you just sent" and the generate response
+    is the one thing that can't disagree with itself. That is true of the RESPONSE, but `result` is
+    `state.generate_result` — persisted, never cleared — and `continueToDone` does not call
+    /api/generate at all; it stashes a fresh `proposal_payload` and navigates straight to Done. So
+    a toggle-then-Continue reaches this send with the OLD `generate_result` describing the
+    PREVIOUS state of the letter, while `create_revision` (main.py) is about to pin the persisted
+    `proposal_payload` — the exact blob /api/admin/cover-letter-pdf reads back later. Telling the
+    portal what the generate response says, rather than what is about to be pinned, can disagree
+    with the pinned snapshot in either direction.
+
+    The correct source is `proposal_payload.cover_letter_enabled` — the same blob create_revision
+    pins. Read FRESH out of TW.getState() at send time, not off the module-top `state`: this call
+    site runs AFTER TW.flushState() (asserted below), which is what makes a fresh read race-free —
+    the flush has just made the browser's copy and the server's copy identical."""
+    m = re.search(r'TW\.postJSON\("/api/portal/publish\?draft_id=[^;]+;', DONE_JS, re.S)
+    assert m, "the publish call moved — re-derive this check"
+    body = m.group(0)
+    assert "has_cover_letter" in body, (
+        "the publish body never tells the portal about the letter — the field is a no-op again")
+    assert "await TW.flushState()" in DONE_JS[max(0, m.start() - 4500):m.start()], (
+        "the publish call moved ahead of the flush — a fresh TW.getState() read here would no "
+        "longer be guaranteed to match what create_revision is about to pin")
+    # The value, not just the key. `generate_result` / its download url would be the stale copy.
+    src = re.search(r"const hasCoverLetter = [^;]+;", DONE_JS, re.S)
+    assert src, "hasCoverLetter is not derived — the key may be hard-coded"
+    ctx = DONE_JS[max(0, src.start() - 700):src.end()]
+    assert "TW.getState()" in ctx, "hasCoverLetter is read off a snapshot rather than live state"
+    assert "proposal_payload" in ctx and "cover_letter_enabled" in src.group(0), (
+        "hasCoverLetter no longer follows the blob create_revision is about to pin — the portal "
+        "can now disagree with the pinned snapshot in either direction")
+    assert "cover_letter_download_url" not in ctx, (
+        "back to the stale generate_result — continueToDone never calls /api/generate, so this "
+        "can describe the state of the letter BEFORE the estimator's last toggle")
 
 
 def test_the_files_page_rebuild_carries_the_letter_too():
@@ -518,6 +593,34 @@ def test_the_editor_is_inert_on_every_other_page():
     assert m, "init moved — re-derive this check"
     assert re.search(r"if \(!toggleEl \|\| !tabsEl \|\| !surface\) return;", m.group(1)), (
         "init does not bail on a page without the cover-letter markup")
+
+
+def test_a_click_on_the_error_panel_does_not_detach_itself_first():
+    """`recheck` re-renders the letter on any `pointerdown`, capture-phase and document-wide,
+    because the click that reveals a stale template is usually the click INTO the letter. But
+    `load()` runs synchronously up to its first `await`, and it starts by calling `showLoading()`,
+    which does `surface.textContent = ""` — synchronously, before anything the estimator clicked
+    can fire its own handler.
+
+    The amber error panel's own "Try again" and "Turn the cover letter off" buttons live INSIDE
+    `surface`. A capture-phase `pointerdown` on either one used to run `recheck` first, which wiped
+    `surface` out from under the pointer before `pointerup`. Per the UI Events spec, `click` is
+    never dispatched when its target is detached between `pointerdown` and `pointerup` — so both
+    buttons looked clickable and did nothing. "Turn the cover letter off" is the one that silently
+    breaks worse: nothing else in the UI can flip that checkbox back off.
+
+    There is no harness here that can drive a real pointerdown-vs-detach race under jsdom's timing
+    — the same reason `pr-cover-letter.md` records two other DOM-click findings as source-scans
+    rather than executed scenarios. This asserts the guard is present and reads the right flag,
+    which is the same class of check already used for the DOM-order fix a few tests up."""
+    m = re.search(r"const recheck = \(\) => \{[^}]+\};", CL_JS, re.S)
+    assert m, "recheck moved — re-derive this check"
+    assert 'surface.classList.contains("cl-error")' in m.group(0), (
+        "recheck no longer checks for the error panel — a pointerdown on its own buttons will "
+        "detach them before their click handlers run")
+    assert re.search(r"!\s*surface\.classList\.contains\(\"cl-error\"\)", m.group(0)), (
+        "the error-panel check is inverted — it should SKIP the recheck while the panel is up, "
+        "not require it")
 
 
 def test_no_emoji_reached_the_interface():

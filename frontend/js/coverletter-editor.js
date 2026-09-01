@@ -320,6 +320,20 @@
     }
 
     if (positioned) {
+      // Body goes in FIRST. It and every box share z-index:1 (styles.css), so with equal
+      // z-index the later DOM sibling paints on top — boxes must be appended after the body
+      // or the body's full-page click/edit surface covers them and eats every click.
+      const body = document.createElement("div");
+      body.className = "cl-body";
+      // The body's own inset. The boxes are absolutely positioned so they do not push it down;
+      // the artwork is behind it; this is what keeps the letter inside the printable area.
+      body.style.padding = `${Number(margin.top) || 72}pt ${Number(margin.right) || 90}pt ` +
+                           `${Number(margin.bottom) || 72}pt ${Number(margin.left) || 90}pt`;
+      body.contentEditable = "true";
+      body.spellcheck = false;
+      (blocks || []).filter((b) => b.txbx == null).forEach((b) => body.appendChild(renderBlock(b, tokens)));
+      pg.appendChild(body);
+
       for (const bx of boxes) {
         const host = document.createElement("div");
         host.className = "tw-txbx cl-txbx";
@@ -334,16 +348,6 @@
         boxed.get(bx.id).forEach((b) => host.appendChild(renderBlock(b, tokens)));
         pg.appendChild(host);
       }
-      const body = document.createElement("div");
-      body.className = "cl-body";
-      // The body's own inset. The boxes are absolutely positioned so they do not push it down;
-      // the artwork is behind it; this is what keeps the letter inside the printable area.
-      body.style.padding = `${Number(margin.top) || 72}pt ${Number(margin.right) || 90}pt ` +
-                           `${Number(margin.bottom) || 72}pt ${Number(margin.left) || 90}pt`;
-      body.contentEditable = "true";
-      body.spellcheck = false;
-      (blocks || []).filter((b) => b.txbx == null).forEach((b) => body.appendChild(renderBlock(b, tokens)));
-      pg.appendChild(body);
     } else {
       // THE PAGE IS THE EDITING HOST. Same role a box plays above, for the same reason: without
       // one, the paragraphs render as text nobody can type in, because none of them carries a
@@ -470,8 +474,13 @@
     box.setAttribute("role", "alert");
     const p = document.createElement("p");
     p.className = "cl-warn-text";
+    // The old copy said "you can carry on and send it without a letter", which was not true while
+    // the box was still ticked: /api/generate builds the letter from the same template, and a
+    // fault there 500s the whole generate — the estimator would have lost the xlsx and the docx
+    // too. The way out is real, but it is the button below, so say so.
     p.innerHTML = "<strong>The cover letter template didn’t load.</strong> " +
-      "The proposal itself is fine — you can carry on and send it without a letter. " +
+      "Your bid and your proposal aren’t affected. Try again, or turn the letter off and send " +
+      "the proposal on its own — leaving it on will stop the files generating. " +
       esc(msg ? "(" + msg + ")" : "");
     const row = document.createElement("div");
     row.className = "cl-warn-actions";
@@ -593,11 +602,42 @@
     setEnabled(toggleEl.checked);
 
     // A base-bid switch changes the effective work type with no page load, which picks a
-    // different letter. Nothing broadcasts that, so the cheapest honest signal is to re-check
-    // when the estimator comes back to this tab — a reload is a no-op when the key is unchanged.
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && activeTab === "cover") load(false);
-    });
+    // different letter. Nothing broadcasts that — there is no event bus on this page — so the
+    // re-check has to be driven off whatever the estimator does next. `load(false)` is a no-op
+    // whenever the key is unchanged (`loadedFor === want`), so these are cheap to fire often.
+    //
+    // Three triggers, covering the three ways a stale letter can be reached:
+    //   showTab("cover")   — flipped the base bid while the proposal was in front, then came back
+    //   visibilitychange   — flipped it, left the tab, returned
+    //   pointerdown        — flipped it while the LETTER was in front and never left the page
+    //
+    // The last one is the one that matters and the one that was missing. The letter stays on
+    // screen showing the old work type's template, and the overrides `persistNow()` has already
+    // stamped are keyed to that old template — so pressing Continue ships edits the backend
+    // version-gate then silently drops (template_version is the file's mtime; a mismatch discards
+    // every paragraph override). Safe, but the estimator's wording vanishes with no warning.
+    //
+    // Capture phase and document-wide, because the click that reveals the staleness is usually
+    // the click INTO the letter. Re-rendering under a live pointer normally steals the
+    // interaction the estimator just started, which is a real cost — but it is only paid when the
+    // letter on screen is genuinely the wrong document, and losing one click beats typing a
+    // paragraph into a template that is about to be thrown away.
+    //
+    // EXCEPT while the amber error panel is up (`surface.classList.contains("cl-error")`,
+    // set by showError / cleared by showLoading). `load()` starts synchronously — it calls
+    // showLoading(), which does `surface.textContent = ""`, before its first `await` — so a
+    // capture-phase pointerdown on the panel's OWN "Try again" / "Turn the cover letter off"
+    // buttons ran this same recheck first and detached them before their own click handlers
+    // could fire (per the UI Events spec, `click` does not dispatch when the target is removed
+    // between pointerdown and pointerup). Both buttons appear to do nothing; "Turn the cover
+    // letter off" is the one that silently breaks, since nothing else would flip the checkbox.
+    // The panel's buttons already call load() themselves on success — skipping the recheck here
+    // costs nothing but a redundant reload we were about to trigger anyway.
+    const recheck = () => {
+      if (activeTab === "cover" && !surface.classList.contains("cl-error")) load(false);
+    };
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) recheck(); });
+    document.addEventListener("pointerdown", recheck, true);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
@@ -618,8 +658,16 @@
     setEnabled: setEnabled,
     load: load,
     /** The three fields the generate payload carries. One reader, so the Proposal step's Continue
-     *  and the Files page's rebuild cannot drift into disagreeing about what was sent. */
+     *  and the Files page's rebuild cannot drift into disagreeing about what was sent.
+     *
+     *  FLUSHES THE PENDING DEBOUNCE FIRST. This reads the persisted store, and `persistNow` runs
+     *  800ms after the last keystroke — so an estimator who types a sentence and clicks Continue
+     *  inside that window had the sentence silently dropped from the generate payload and from the
+     *  revision frozen for the customer. Only when a timer is actually pending: an unconditional
+     *  write would stamp the keyed store with the module's empty `templateVersion` on a page (or a
+     *  harness) where the editor never loaded. */
     payloadFields: function () {
+      if (persistTimer) persistNow();
       const enabled = !!live("cover_letter_enabled");
       const flat = live("cover_letter_paragraph_overrides");
       return {

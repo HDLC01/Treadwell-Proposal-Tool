@@ -174,14 +174,15 @@ def _blank(v: Any) -> bool:
 # reaches the PDF at all, so "August 27, 2026" printed as the single word
 # "August" on every letter. The box is his design and stays; the date matches it.
 #
-# `proposal_date` leads (after an explicit short override) because the short date
-# must be the SAME DAY as the long one — this letter would otherwise letterhead
-# itself with the bid date while its own body, and the proposal behind it, print
-# another. `_ensure_cover_letter_values` has already backfilled `proposal_date`
-# from the bid date by the time this ladder runs, so in the common case the whole
-# list collapses to "whatever date the letter is dated".
-_SHORT_DATE_SOURCES = ("proposal_date_short", "proposal_date", "bid_date_formatted",
-                       "bid_date", "site_visit_date")
+# `bid_date_formatted` leads (after an explicit short override) because it is what the
+# PROPOSAL's own header prints (`{{bid_date_formatted}}`, in all 8 real templates), and the
+# letterhead date box must match it. `proposal_date` is NOT a stand-in for the bid date here:
+# the Proposal Review screen stamps it fresh with `new Date().toLocaleDateString(...)` on every
+# generate (`proposal-review.js`), so it is "today", not the bid date, and trails as a last
+# resort — a bid entered 2026-08-20 and finalized 2026-08-27 must letterhead itself 8/20/26,
+# not the day someone happened to click Generate.
+_SHORT_DATE_SOURCES = ("proposal_date_short", "bid_date_formatted", "bid_date",
+                       "site_visit_date", "proposal_date")
 
 # `%y` before `%Y` so "8/26/26" is read as 2026 rather than the year 26; a
 # four-digit "8/26/2026" fails `%y` and falls through to `%Y` on the next pass.

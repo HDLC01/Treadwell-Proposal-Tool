@@ -423,6 +423,13 @@ const out = {};
                     return im ? String(im.src).slice(0, 11) : null; })(),
       artBehindText: (() => { const pg = p.surface.querySelector(".cl-page");
                               return pg && pg.children[0] ? pg.children[0].className : null; })(),
+      // PAINT ORDER, which is DOM order here. `.cl-body` and `.tw-txbx` both carry `z-index: 1`
+      // in styles.css, and with equal z-index the LATER sibling paints on top — so the body,
+      // which is a full-page click surface, has to be appended BEFORE the boxes or it covers
+      // every one of them and eats the click that should have landed in the date box. Reported
+      // from live DOM order rather than asserted here so the Python side can name the failure.
+      pageOrder: (() => { const pg = page;
+                          return pg ? pg.children.map((c) => String(c.className || "")) : null; })(),
       mediaUrl: p.fetches.find((u) => u.indexOf("/media") >= 0) || null,
     };
   }

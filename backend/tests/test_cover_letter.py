@@ -458,9 +458,15 @@ def test_a_long_date_still_prints_in_full_inside_the_box(key):
         (`pw._TXBX_GLYPH_W`, ~0.5em for Carlito/Calibri, which LibreOffice substitutes in the
         container) against the box's real `wp:extent` less its real `bodyPr` insets. "August 27,
         2026" at 12pt needs ~90pt of a 48.6pt usable width; "8/27/26" needs ~42pt.
+
+    The other short-date sources are CLEARED, deliberately. This test is about one long date
+    surviving the narrowing, not about which source outranks which — leaving `bid_date_formatted`
+    populated made it a second, accidental assertion on the priority ladder, and it failed the day
+    that ladder was corrected. Priority has its own two tests below.
     """
     work_type, audience = key
-    values = dict(FULL_VALUES, proposal_date="August 27, 2026")
+    values = dict(FULL_VALUES, proposal_date="August 27, 2026",
+                  bid_date_formatted="", bid_date="", site_visit_date="")
     d = docx.Document(io.BytesIO(
         clw.fill_cover_letter(work_type=work_type, audience=audience, values=values)))
 
@@ -494,7 +500,24 @@ def test_the_long_date_is_not_narrowed_for_the_proposal_too():
     token would silently re-date every proposal document to M/D/YY."""
     out = clw._ensure_cover_letter_values(dict(FULL_VALUES, proposal_date="August 27, 2026"))
     assert out["proposal_date"] == "August 27, 2026"
-    assert out["proposal_date_short"] == "8/27/26"
+    # NOT "8/27/26": `bid_date_formatted` ("8/26/26" in FULL_VALUES) outranks `proposal_date`
+    # for the letterhead box, because it is what the proposal's own header prints. `proposal_date`
+    # is stamped fresh to "today" on every generate and would otherwise date the letterhead the
+    # day someone clicked Generate rather than the day the bid was actually dated.
+    assert out["proposal_date_short"] == "8/26/26"
+
+
+def test_the_short_date_prefers_the_bid_date_over_todays_stamped_proposal_date():
+    """The bug this guards: `proposal_date` is recomputed to `new Date()` on every Proposal Review
+    load (`proposal-review.js`), so a bid entered 2026-08-20 and finalized/sent 2026-08-27 must
+    still letterhead itself 8/20/26 — the same date the proposal's own header prints — not the day
+    someone happened to click Generate."""
+    out = clw._ensure_cover_letter_values(dict(
+        FULL_VALUES,
+        bid_date_formatted="8/20/26",
+        proposal_date="August 27, 2026",
+    ))
+    assert out["proposal_date_short"] == "8/20/26"
 
 
 @pytest.mark.parametrize("raw, expect", [
@@ -566,6 +589,64 @@ def test_enabled_returns_a_real_downloadable_letter():
     assert "Epoxy / Resinous Flooring Proposal" in text
     # And it is a DIFFERENT document from the proposal, not a second copy of it.
     assert "TERMS AND CONDITIONS" not in text.upper()
+
+
+def test_a_broken_letter_fails_the_live_generate_loudly(monkeypatch):
+    """The default half of the `want_cover_letter` gate, and the reason it defaults to True: an
+    estimator who ticked the box must not be handed a silent proposal-only send. They would publish
+    a portal that promises a letter and shows nothing, and only the customer would find out."""
+    def boom(*a, **k):
+        raise RuntimeError("template is corrupt")
+    monkeypatch.setattr(clw, "fill_cover_letter", boom)
+    r = client.post("/api/generate", json=dict(BASE, cover_letter_enabled=True))
+    assert r.status_code >= 400, "a failed letter was swallowed on the live generate path"
+
+
+def test_a_broken_letter_does_not_take_down_the_proposal_only_callers(monkeypatch):
+    """`want_cover_letter=False`. /api/admin/proposal-pdf, the To-Dropbox re-file and the revision
+    replay all rebuild a stored payload with `GenerateIn(**pp)` — so a draft that had the box
+    ticked replays with it ticked — and NONE of them ever serves the letter. Before the gate, a
+    cover-letter fault 500'd a proposal PDF the portal was waiting on and blocked a Dropbox filing
+    that has nothing to do with the letter."""
+    import inspect
+    monkeypatch.setattr(clw, "fill_cover_letter",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("template is corrupt")))
+    gi = main.GenerateIn(**dict(BASE, cover_letter_enabled=True))
+    # The signature is the contract these two call sites depend on.
+    assert "want_cover_letter" in inspect.signature(main._generate).parameters
+    out = main._generate(gi, _req(), persist=False, want_cover_letter=False)
+    assert out.docx_download_url, "the proposal was lost to a cover-letter fault"
+    assert out.cover_letter_download_url is None
+
+
+def _req():
+    """The minimum Request `_generate` touches (it reads headers for the base url)."""
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "POST", "path": "/api/generate",
+                    "headers": [(b"host", b"testserver")], "query_string": b"",
+                    "scheme": "http", "server": ("testserver", 80), "client": ("test", 1)})
+
+
+def test_every_proposal_only_call_site_still_passes_the_gate():
+    """A reader of `main.py`, not of a mock: the gate is only worth having if the call sites it was
+    added for actually pass it. THREE of them now — the customer proposal PDF, the To-Dropbox
+    re-file, and the revision replay (/api/draft/{id}/revisions/{n}/files). If someone adds a
+    fourth proposal-only replay this test does not catch it — but it does catch the known ones
+    silently losing the argument in a refactor.
+
+    Each has its own executed test asserting the value at the call site; this one exists because
+    those use a stubbed `_generate` and so cannot notice a site that stopped calling it at all."""
+    import inspect
+    import re as _re
+    src = inspect.getsource(main)
+    # CALLS only. Counting the bare string would also count the comment above each call site and
+    # the parameter's own docstring, which is how this test first went red against correct code.
+    # Not `[^)]*` — two of the three call sites are `_generate(GenerateIn(**pp), ...)`, whose own
+    # closing paren ends the class before the argument is reached.
+    calls = _re.findall(r"_generate\(.{0,120}?want_cover_letter=False", src, _re.S)
+    assert len(calls) == 3, (
+        "a proposal-only caller stopped opting out of the letter (or a fourth one appeared "
+        "without being reviewed): found %d" % len(calls))
 
 
 @pytest.mark.parametrize("audience", ["Direct", "GC"])
@@ -775,9 +856,10 @@ def _pinned(monkeypatch, payload, live=None):
 
 
 def _stub_generate(monkeypatch, seen, token="cl-tok"):
-    def fake_generate(gi, request, *, persist=True):
+    def fake_generate(gi, request, *, persist=True, want_cover_letter=True):
         seen["name"] = gi.values.get("project_name")
         seen["persist"] = persist
+        seen["want_cover_letter"] = want_cover_letter
         seen["enabled"] = gi.cover_letter_enabled
         return main.GenerateOut(
             work_type="epoxy", audience="Direct",
