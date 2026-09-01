@@ -836,7 +836,14 @@ def test_the_ribbon_row_sits_between_the_toolbar_and_the_canvas():
     """Where it is IS the feature. `body.word-app` is a flex column and `.word-canvas` is
     `flex: 1; overflow-y: auto`, so the canvas is the scroller and everything above it is
     permanently-visible chrome — which is why this needs no `position: sticky` and no `fixed`
-    coordinates. The div is empty on purpose: `ensureFmtBar` mounts the bar into it."""
+    coordinates. The div is a MOUNT POINT: `ensureFmtBar` puts the bar inside it.
+
+    It was empty until 2026-08-28, when the optional cover letter's document tabs joined the row —
+    a within-step switch between two documents, which does not belong beside the step pills above
+    (that would make the letter a fifth step) and did not earn a chrome row of its own on a canvas
+    that is a to-scale preview of printed paper. So what this asserts is the thing the emptiness
+    was standing in for: the host holds nothing but that tab strip, and the bar is APPENDED, so it
+    still lands inside the row and nothing has replaced the host's contents wholesale."""
     assert PAGE.count('id="fmt-ribbon"') == 1, (
         "there is more than one ribbon host; getElementById picks one and the rest stay empty")
     i_body = PAGE.index('<body class="word-app">')
@@ -845,8 +852,14 @@ def test_the_ribbon_row_sits_between_the_toolbar_and_the_canvas():
     i_canvas = PAGE.index('<div class="word-canvas">')
     assert i_body < i_tools < i_ribbon < i_canvas, (
         "the formatting ribbon is not the row between the toolbar and the canvas")
-    assert re.search(r'<div id="fmt-ribbon" class="fmt-ribbon">\s*</div>', PAGE), (
-        "the ribbon host is not an empty div — the bar is mounted into it by ensureFmtBar")
+    host = re.search(r'<div id="fmt-ribbon" class="fmt-ribbon">(.*?)</div></div>', PAGE, re.S)
+    assert host, "the ribbon host is not a self-contained div any more"
+    inside = re.sub(r"<!--.*?-->", "", host.group(1), flags=re.S)
+    assert re.fullmatch(r'\s*<div id="doc-tabs".*', inside, re.S), (
+        "something other than the document tabs was put in the ribbon host: %r" % inside[:120])
+    assert '.tw-fmtbar' not in inside, "the formatting bar is hardcoded into the page markup"
+    assert 'getElementById("fmt-ribbon") || document.body).appendChild(' in JS, (
+        "the bar no longer APPENDS into the host — anything already in that row is destroyed")
     # A direct child of <body>, not nested inside the toolbar above it: div depth must be back to
     # zero by the time we reach it, or the flex column does not contain it as its own row.
     between = PAGE[i_body:i_ribbon]

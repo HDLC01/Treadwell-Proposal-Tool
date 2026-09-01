@@ -179,8 +179,9 @@ def _wire(monkeypatch, dbx, draft_data, saved=None):
                         lambda i, d, **k: (saved if saved is not None else []).append(d))
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
 
-    def fake_generate(gi, request, persist=True):
-        assert_callable_accepts(_real_generate, (gi, request), {"persist": persist})
+    def fake_generate(gi, request, persist=True, want_cover_letter=True):
+        assert_callable_accepts(_real_generate, (gi, request),
+                                {"persist": persist, "want_cover_letter": want_cover_letter})
         return main.GenerateOut(work_type="gyp", audience="Direct",
                                 xlsx_download_url="/api/files/x",
                                 docx_download_url="/api/files/d",

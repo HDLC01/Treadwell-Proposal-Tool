@@ -84,6 +84,12 @@
       // Doc-editor per-line PRICE display overrides (base amount / tax phrase,
       // option + manual line label/amount). Display-only — never affects pricing.
       price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
+      // The optional cover letter, carried here for the same reason box_overrides is: this
+      // rebuild is what "View files" regenerates from, and without it a project the estimator
+      // gave a letter would come back with the proposal alone — the second download disagreeing
+      // with the first one they already checked. Read through the one helper the Proposal step's
+      // Continue also uses, so the two cannot drift apart on what "enabled" means.
+      ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);
@@ -957,6 +963,37 @@
     } else {
       pdfBtn.style.display = "none";
     }
+    // THE COVER LETTER. Two things both have to be true: the backend actually built and cached a
+    // letter for THIS `result` (`cover_letter_download_url` set from `cover_letter_token`, which
+    // only exists inside `if payload.cover_letter_enabled and want_cover_letter` — see `_generate`),
+    // AND the estimator's CURRENT choice still wants one. The url alone used to be treated as the
+    // whole gate; it isn't, because `result` can be stale.
+    //
+    // `result` is `state.generate_result` (see the top of this file), persisted by every entry
+    // point into this function and NEVER cleared. `continueToDone` (proposal-review.js) does not
+    // call /api/generate — it stashes a fresh `proposal_payload` and navigates straight here — so
+    // toggling the letter off, then Continue, lands on the "restored" branch of the IIFE below
+    // with the OLD `generate_result` from before the toggle. Gating on its url alone would offer a
+    // stale letter for a proposal that no longer has one queued to send.
+    //
+    // The estimator's actual current choice is TOP-LEVEL state (`coverletter-editor.js setEnabled`,
+    // also what `payloadFields()` reads when building the generate request) — read fresh rather
+    // than the module-top `state` snapshot from page load, since nothing here re-runs it.
+    //
+    // `downloadAs` unchanged and unforked: the same bearer fetch, the same 404-after-a-restart
+    // self-heal, the same octet-stream blob that stops Chrome's viewer from swallowing the
+    // filename. Only the key and the suffix differ.
+    const coverBtn = document.getElementById("dl-cover");
+    if (coverBtn) {
+      const _wantsCoverNow = !!(TW.getState() || {}).cover_letter_enabled;
+      if (_wantsCoverNow && result.cover_letter_download_url) {
+        coverBtn.style.display = "";
+        coverBtn.addEventListener("click", () => downloadAs(
+          "cover_letter_download_url", `${safeName}_cover_letter.docx`, coverBtn));
+      } else {
+        coverBtn.style.display = "none";
+      }
+    }
 
     // Send to the inline recipient list shown above (no popup). Every recipient
     // gets a secure link + full portal access (view / ask / approve).
@@ -1061,8 +1098,30 @@
           // photos and removes three should not have paid to encode all four, and holding the
           // encoded copies alongside the File objects doubles the memory for nothing.
           const attachments = await sendAtts.payload();
+          // What the portal is told must agree with what `create_revision` (main.py) is about to
+          // pin — `row.get("data")`, i.e. the persisted `proposal_payload` — because that is the
+          // exact blob `/api/admin/cover-letter-pdf` reads back later (`pp["cover_letter_enabled"]`).
+          // `generate_result` is the WRONG source for this: it is whatever the last successful
+          // `/api/generate` call happened to return, and Continuing from the Proposal step after
+          // toggling the letter does not call generate again (it stashes a fresh `proposal_payload`
+          // and navigates straight to Done — see continueToDone). So a toggle-then-Continue leaves
+          // `generate_result` describing the PREVIOUS state of the letter, disagreeing with the
+          // payload that is about to be frozen — in either direction: advertising a letter the
+          // pinned snapshot has no letter for (a 404 when the customer clicks it), or hiding one
+          // the pinned snapshot does have.
+          //
+          // Read FRESH, not from the module-top `state` — that is a one-shot snapshot taken on
+          // load. Safe to do here specifically because this line runs AFTER `TW.flushState()`
+          // above: the flush has just made this browser's blob and the server's copy identical, so
+          // `TW.getState().proposal_payload` is exactly what `create_revision` is about to pin —
+          // the same guarantee `docDrift`'s check three lines up already relies on.
+          const _liveState = TW.getState() || {};
+          const _pp = (_liveState.proposal_payload && typeof _liveState.proposal_payload === "object")
+            ? _liveState.proposal_payload : {};
+          const hasCoverLetter = !!_pp.cover_letter_enabled;
           const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
                                       { emails, message, require_deposit: requireDeposit,
+                                        has_cover_letter: hasCoverLetter,
                                         // They travel in this body rather than being uploaded
                                         // first because on a FIRST send the portal proposal row
                                         // does not exist until this request creates it — there is
