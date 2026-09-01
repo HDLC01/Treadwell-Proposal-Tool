@@ -200,6 +200,14 @@ const FN_NAMES = [
   // rather than stubbed because what the dialog SAYS is the feature: TW.confirmDanger is recorded
   // (see `danger` below) so the two bodies can be read back and compared.
   "deleteProjectHtml", "wireDeleteProject",
+  // The drawer for a row the portal cannot be asked about (2026-09-02). SEVENTH addition to this
+  // list for the same reason as the six above, and the most dangerous kind: openDetail reaches it
+  // through `if (row && row.portal_unknown)`, a branch no existing fixture takes. Leaving it out
+  // would NOT have failed anything — every drawer test would have stayed green while a rep
+  // clicking any card during a portal outage got a ReferenceError, which is the precise shape of
+  // the 2026-08-12 production outage this whole harness exists to prevent. So it is lifted, and
+  // test_drawer_renders drives it with a row that takes that branch.
+  "renderPortalUnknown",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -403,6 +411,18 @@ const BOARD_ROWS = [
   { proposal_id: "notsent", project_name: "Cedar Ridge Distribution Center", not_sent: true,
     bid_total: 88000.0, drafted_at: "2026-08-09T12:00:00Z", estimator_email: "kyle@wetreadwell.com",
     customer_email: "dave@cedarridge.com" },
+  // Synthesised by _sent_unknown_rows while the portal is unreachable (2026-09-02): a bid that
+  // definitely went out, with no portal state to describe what happened to it since. Carries no
+  // proposal_status ON PURPOSE — stage() rests it on "Sent" — and no drafted_at, so it can never
+  // be mistaken for a project nobody has sent.
+  { proposal_id: "unknown", project_name: "Maple Street Warehouse", portal_unknown: true,
+    bid_total: 41250.0, last_activity_at: "2026-09-01T12:00:00Z",
+    assigned_estimator: "kyle@wetreadwell.com", customer_email: "buyer@maplest.com" },
+  // The same, closed lost. We hold the close ourselves, so it survives the outage and the panel
+  // has to say so — while chipsHtml deliberately does NOT draw the unknown chip on it.
+  { proposal_id: "unknown-lost", project_name: "Old Mill Retrofit", portal_unknown: true,
+    proposal_status: "closed_lost", followup_state: { closed_lost_reason: "price" },
+    bid_total: 19000.0, last_activity_at: "2026-08-30T12:00:00Z" },
   // The Won-by-hand rows (2026-08-19). Separate from the four above so the click scenarios can
   // mutate them — the drawer patches the board row in place, which is the point — without changing
   // what every other scenario renders.
@@ -800,7 +820,7 @@ const body = `"use strict";
   ${FN_NAMES.map(fnSrc).join("\n")}
   ${openDetailRealSrc}
   return {
-    renderDetail, renderNotSent, focusSection,
+    renderDetail, renderNotSent, renderPortalUnknown, focusSection,
     // The real entry point, under its lifted name: the ?sec= deep link and the per-project
     // ACTIVE_SEC reset live in it.
     openDetail: openDetailReal,
@@ -1015,6 +1035,49 @@ async function runScenario(name, s) {
     };
   } catch (e) {
     out.errors.notSent = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── the drawer for a row the portal cannot be asked about ──────────────────
+  // Driven through the REAL openDetail rather than by calling renderPortalUnknown directly,
+  // because the claim under test is the ROUTE: during an outage every card on the board is one of
+  // these, and openDetail's default path is a portal fetch that will not answer. A test that
+  // called the renderer by hand would prove the panel renders while leaving the branch that
+  // reaches it unexecuted — which is how a renderer nobody can get to ships green.
+  //
+  // Two rows: an ordinary one, and a LOST one, because _sent_unknown_rows mirrors the portal's
+  // closed_lost shape from our own draft. The lost row is the one that proves the chip and the
+  // panel disagree on purpose (chipsHtml suppresses the unknown chip on a dead deal; this panel
+  // still has to say the customer side is unavailable).
+  try {
+    page.open("unknown");
+    dom.paints = 0;
+    net.requests.length = 0;
+    await page.openDetail("unknown");
+    const html = dom.html;
+    const requests = net.requests.slice();
+    const before = dom.paints;
+    await page.openDetail("unknown");
+    // MEASURED HERE, before the lost row is rendered below. Read after it, this flag was True on a
+    // guard that works perfectly — the second drawer's own paint. A dedupe assertion has to be
+    // taken between the two renders it is about and nowhere else.
+    const repainted = dom.paints > before;
+    const openedOn = page.activeSec();
+    const missing = dom.lookups.filter((l) => !l.present).map((l) => l.id);
+    page.open("unknown-lost");
+    await page.openDetail("unknown-lost");
+    out.portalUnknown = {
+      html, chars: html.length,
+      openedOn: openedOn,
+      repaintedOnIdenticalPayload: repainted,
+      // The whole reason this route exists: not one request may leave the page. The default path
+      // is GET /api/portal/proposal/<id>, which during an outage is a 20s wait ending in an error
+      // box — on every card.
+      requests: requests,
+      lostHtml: dom.html,
+      missing: missing,
+    };
+  } catch (e) {
+    out.errors.portalUnknown = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
 
   // ── the customer's link, and the fact that there no longer is one ──────────
@@ -1518,8 +1581,16 @@ async function runScenario(name, s) {
   // A notification links straight to a tab (?open=<id>&sec=deposit). That override is the one
   // thing above defaultSection, it is consumed ONCE per page, and it lives in openDetail — so
   // this runs the real openDetail, LAST, because DEEPLINK_USED is a page-lifetime latch.
+  //
+  // AND IT RESETS THAT LATCH FIRST, rather than trusting "last" to mean "first to call openDetail".
+  // It stopped meaning that on 2026-09-01: the portal-unknown scenario above is also driven through
+  // the real openDetail, so it spends the latch, and this block then read a search string nothing
+  // was left to consume — ?sec=deposit lost to the ordinary routing and the failure named the
+  // product rather than the ordering. The reset costs nothing and the next scenario inserted above
+  // this one cannot repeat it.
   try {
     const s = SCENARIOS.viewed;
+    page.resetDeepLink();
     detailFetch.data = JSON.parse(JSON.stringify(s.data));
     locationStub.search = "?open=viewed&sec=deposit";
     await page.openDetail("viewed");
