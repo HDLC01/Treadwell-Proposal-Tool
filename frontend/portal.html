@@ -141,6 +141,19 @@
      better news than winning, it is the end of our part, and a second green chip beside the won one
      would read as two pieces of good news on one card. */
   .chip-handoff { background:#eef1f5; border-color:#ccd4de; color:#3c4a5c; }
+  /* This was sent, but a portal outage means we can't say what happened after — reuses the
+     pause chip's warm-amber tokens (same "we don't know, not bad news" register). */
+  .chip-unknown { background:#fdf6e3; border-color:#e8d9a8; color:#7a5c00; }
+  /* Above the board, not inside it — #board's innerHTML is replaced wholesale on every
+     repaint (see BOARD_SIG/renderBoard), so this has to live outside that to survive it.
+     [hidden] restated: a class display rule outranks the attribute in the cascade, and this
+     repo has shipped that exact bug four times already (see test_hidden_is_actually_hidden.py) —
+     this stays hidden until the rule below says otherwise. */
+  .crm-degraded { display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600;
+    background:#fdf6e3; border:1px solid #e8d9a8; color:#7a5c00; border-radius:8px;
+    padding:8px 12px; margin:0 0 10px; }
+  .crm-degraded[hidden] { display:none; }
+  .crm-degraded .n { font-weight:700; }
   /* Every proposal as one sortable list — the answer to "show me all sixty". */
   .ptable { width:100%; border-collapse:separate; border-spacing:0; background:#fff;
     border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px; }
@@ -843,6 +856,7 @@
       <span id="count" class="count"></span>
       <a href="/notifications.html" class="btn btn-s" style="min-height:40px;display:inline-flex;align-items:center;text-decoration:none">Notification Sending →</a>
     </div>
+    <div id="crm-degraded" class="crm-degraded" hidden></div>
     <div id="board" class="board"><div class="empty">Loading…</div></div>
   </div>
 

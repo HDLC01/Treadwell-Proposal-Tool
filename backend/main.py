@@ -30,7 +30,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cachetools
 
@@ -1092,6 +1092,20 @@ def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
 # The portal owns the portal_* tables; here we just call its SERVICE_TOKEN-gated
 # admin API. PORTAL_ADMIN_URL + SERVICE_TOKEN live in the env (not committed).
+
+# The last pipeline the portal successfully gave us, and when. In-process only, exactly like the
+# download-token cache: two different services, two different uptimes, and the Active Projects
+# board is THIS app's page. Hanz, 2026-08-28, after staging's portal container auto-slept and the
+# board came up blank with every tab reading 0: "portal and proposal are two different services so
+# if portal is down it should still show the projects... if that happens live then we are cooked."
+#
+# Not persisted on purpose. A snapshot that survives a restart would also survive being wrong for
+# days; this one dies with the process, and the cold-start case degrades to local drafts instead
+# (see _sent_unknown_rows). `rows` stays None until the first success, which is how
+# api_portal_pipeline tells "stale" from "never had it".
+_PIPELINE_CACHE: Dict[str, Any] = {"rows": None, "fetched_at": None}
+
+
 def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     import httpx
     base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
@@ -1110,6 +1124,40 @@ def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = Non
             detail = None
         raise HTTPException(resp.status_code if resp.status_code < 500 else 502, detail or "Portal error.")
     return resp.json()
+
+
+def _pipeline_snapshot() -> Tuple[List[Dict[str, Any]], str]:
+    """Fetch /api/admin/pipeline, falling back to the shared cache on failure.
+
+    Shared by every reader of the pipeline — the Active Projects board, Follow-ups, and the
+    digest preview — so a portal outage degrades exactly one way instead of three different
+    ways depending which page you had open. Returns (rows, portal_status), status one of
+    "live" / "stale" / "offline"; see _PIPELINE_CACHE above for why the cache isn't persisted.
+
+    The try is deliberately tight — the portal call and nothing else. Widen it and a genuine
+    bug in a caller's own decoration starts reporting itself as "the portal is offline".
+
+    `Exception`, not just HTTPException: HTTPException is what _portal raises today (503
+    unconfigured, 502 unreachable), but a json decode on a half-written response or an httpx
+    surprise must not blank a page either. The point is that NOTHING about the other
+    service's health reaches the estimator as a broken page.
+    """
+    try:
+        data = _portal("/api/admin/pipeline", "GET") or {}
+        rows = data.get("proposals") or []
+        _PIPELINE_CACHE["rows"] = rows
+        _PIPELINE_CACHE["fetched_at"] = time.time()
+        return rows, "live"
+    except Exception as exc:  # noqa: BLE001 (the page matters more than the portal)
+        # Type AND message: "refused" on its own costs an SSH session to find out what refused.
+        log.warning("portal pipeline unreachable, degrading: %s: %s",
+                    type(exc).__name__, getattr(exc, "detail", None) or exc)
+        if _PIPELINE_CACHE["rows"] is not None:
+            # Tier 1. Full fidelity — real stages, real deposit and approval timestamps — just
+            # as of a few minutes ago. This is the common case: a blip, a redeploy, an auto-sleep.
+            return _PIPELINE_CACHE["rows"], "stale"
+        # Tier 2. Nothing cached — a fresh container that has never had a good answer.
+        return [], "offline"
 
 
 async def _portal_raw(path: str, method: str, blob: bytes, ctype: str) -> Response:
@@ -1722,8 +1770,8 @@ def api_portal_pipeline() -> Dict[str, Any]:
         "nobody has said" and keeps that heuristic in charge; writing False would claim every
         row we failed to look up had been confirmed a real bid.
     """
-    data = _portal("/api/admin/pipeline", "GET") or {}
-    rows = data.get("proposals") or []
+    rows, portal_status = _pipeline_snapshot()
+    data: Dict[str, Any] = {}
     summaries: List[Dict[str, Any]] = []
     try:
         summaries = drafts.list_drafts()
@@ -1769,7 +1817,16 @@ def api_portal_pipeline() -> Dict[str, Any]:
             row["won_at"] = wons[pid]
         if hands.get(pid):
             row["handed_off_at"] = hands[pid]
+    if portal_status == "offline":
+        # Only with a cold cache. With a warm one the real rows are right there, and inventing
+        # a second card for a project already on the board would double it.
+        rows = rows + _sent_unknown_rows(summaries, rows)
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
+    # What the browser needs to say WHY the board looks the way it does. "live" is the normal
+    # answer; the banner only appears for the other two. fetched_at is the cache's stamp, so on
+    # "offline" it is null — there is nothing to date.
+    data["portal_status"] = portal_status
+    data["portal_fetched_at"] = _PIPELINE_CACHE["fetched_at"]
     return data
 
 
@@ -1864,6 +1921,84 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
     return out
 
 
+def _sent_unknown_rows(summaries: List[Dict[str, Any]],
+                       sent: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The other half of a cold-start outage: bids we KNOW went out, and nothing more.
+
+    Only ever called when `portal_status == "offline"` — no live rows and nothing cached, so the
+    board is being rebuilt from this app's own drafts alone. Without these rows, `_not_sent_rows`
+    below would sweep up every generated project (its `have` set is the portal's rows, and there
+    are none) and file six months of sent work under "Created but not sent". That is not a blank
+    board, it is a WRONG board, which is worse — a rep would start re-sending proposals customers
+    already have.
+
+    `sent_revision` is the local answer to the one question the portal is not here to answer.
+    `create_revision` runs on publish and is deleted again if the send fails (see api_publish), so
+    a project with a revision is a project the customer was given something. `has_files` is NOT
+    that question — it only means Generate has run, which is exactly why `_not_sent_rows` exists.
+
+    And that is where this stops. We know it left the door; we cannot know whether it was opened,
+    approved, or paid, so NOTHING sets `proposal_status` except a lost mark somebody typed here.
+    `stage()` falls back to "Sent" with none of the portal fields present, which is the honest
+    bucket. Inventing "viewed" to make the board look complete would be a lie with a timestamp on
+    it. `portal_unknown` is the only new field — the same discipline `not_sent` follows — so the
+    card can wear a muted "status unknown" chip and nobody mistakes it for a confirmed step.
+
+    On the full-blob fallback in `_build_summaries` there is no `sent_revision` at all, so this
+    returns nothing and the board degrades to exactly what it did before this function existed.
+    A missing field must not invent a send.
+    """
+    have = {r.get("proposal_id") for r in sent}
+    out: List[Dict[str, Any]] = []
+    for s in summaries:
+        if s["id"] in have or s.get("archived"):
+            continue
+        if not s.get("has_files") or int(s.get("sent_revision") or 0) <= 0:
+            continue
+        out.append({
+            "proposal_id": s["id"],
+            # NOT `not_sent`: this one was. The board reads it to draw the unknown-status chip.
+            "portal_unknown": True,
+            "project_name": s.get("project_name"),
+            "customer_email": s.get("contact_email") or "",
+            "is_test": s.get("is_test"),
+            "assigned_estimator": s.get("assigned_estimator"),
+            # Same fallback as the not-sent rows: with nobody assigned, the person who priced it
+            # is the person to ask about it.
+            "estimator_email": s.get("owner_email"),
+            # No `drafted_at` — that dates the "Created but not sent" column and would be a claim
+            # about a bid that HAS been sent. `last_activity_at` only sorts the card, so these
+            # land among real proposals by when somebody last touched them instead of piling up
+            # dateless at the bottom of whatever column they fall into.
+            "last_activity_at": s.get("updated_at"),
+            # NOT approved_total: nobody can tell us anybody approved this. cardTotal() reads both.
+            "bid_total": s.get("total"),
+            "work_type": s.get("work_type"),
+            # Marked won by hand — see drafts.set_won. Ours, so it survives the outage; carried
+            # unconditionally because a null here is the complete truth rather than a key invented
+            # over a portal field, and isWon reads the stamp's truthiness.
+            "won_at": s.get("won_at"),
+        })
+        # The one status we can still state, because somebody in this app typed it. Shaped as the
+        # portal's own closed_lost state for the same reason `_not_sent_rows` does it: isLost()
+        # reads proposal_status and lostReason() reads followup_state.closed_lost_reason, so the
+        # Lost tab, its reason columns, the chip and the counts all keep working with nothing new.
+        if s.get("closed_lost_reason"):
+            out[-1]["proposal_status"] = "closed_lost"
+            out[-1]["followup_state"] = {"closed_lost_reason": s["closed_lost_reason"],
+                                         "closed_at": s.get("closed_lost_at"),
+                                         "closed_lost_note": s.get("closed_lost_note")}
+        # Paused, not dead — Kyle's close-out list has two answers that keep the card on the live
+        # board. Writes no proposal_status, so the card still stages as "Sent" with a
+        # "Paused to ..." chip. `elif` for the same reason the sibling uses one: both branches
+        # write followup_state, and a hold must never overwrite a closed-lost mark.
+        elif s.get("on_hold_reason"):
+            out[-1]["followup_state"] = {"paused_until": s.get("on_hold_until"),
+                                         "on_hold_reason": s["on_hold_reason"],
+                                         "on_hold_note": s.get("on_hold_note")}
+    return out
+
+
 @app.get("/api/portal/followups")
 def api_portal_followups() -> Dict[str, Any]:
     """The Follow-ups page: every proposal ever sent, with where its chase stands.
@@ -1875,9 +2010,15 @@ def api_portal_followups() -> Dict[str, Any]:
 
     Deliberately uses the TEMPLATED reason, not the Claude one: this endpoint is hit on
     every page load and a poll, and an AI call per row per refresh would be absurd. The
-    written-out sentence stays in the digest, where it is worth the spend."""
-    data = _portal("/api/admin/pipeline", "GET") or {}
-    rows = data.get("proposals") or []
+    written-out sentence stays in the digest, where it is worth the spend.
+
+    Same portal-outage guard as api_portal_pipeline, and off the SAME cache — a portal blip
+    degrades the board and this page identically, because they're reading the same upstream
+    call. Unlike the board there is nothing here to rebuild offline: this page is entirely
+    ABOUT portal-side send/view history, so a cold cache is an honest empty list rather than
+    a synthesised one. Serving "stale" is the real win — a rep mid-review keeps their list
+    instead of it vanishing under them."""
+    rows, portal_status = _pipeline_snapshot()
     # Same stamp as api_portal_pipeline: the portal has no notion of a test project, `is_test`
     # lives in this app's `drafts` blob. Without it the Follow-ups page has no way to keep a
     # scratch project out of In play / Paused / Approved / Closed lost / All.
@@ -1913,7 +2054,9 @@ def api_portal_followups() -> Dict[str, Any]:
     # A column headed "needs attention" has to lead with what needs attention.
     out.sort(key=lambda x: (not x["eligible"], -x["followup_score"],
                             (x.get("project_name") or "").lower()))
-    return {"ok": True, "proposals": out}
+    return {"ok": True, "proposals": out,
+            "portal_status": portal_status,
+            "portal_fetched_at": _PIPELINE_CACHE["fetched_at"]}
 
 
 @app.get("/api/portal/proposal/{proposal_id}")
@@ -2264,14 +2407,20 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
     The scoring is arithmetic, so "why is this one first?" has an answer — this is
     where you read it. Returns each estimator's list with the score and the facts
     behind it, so a weight that ranks something wrongly is visible before a customer
-    ever gets phoned about it."""
+    ever gets phoned about it.
+
+    Same portal-outage guard, off the same cache as the board and Follow-ups: this is an
+    admin preview, not a daily surface, so "stale" is fine (it's a preview of what WOULD send,
+    a few minutes old costs nothing) and "offline" is an honest empty rather than a 502."""
     _require_admin(request)
     digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
-    rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
+    rows, portal_status = _pipeline_snapshot()
     by = digest_worker.build(rows, state=digest_worker.load_state())
     return {"ok": True, "estimators": by,
             "considered": len(rows),
-            "would_send": sorted(by.keys())}
+            "would_send": sorted(by.keys()),
+            "portal_status": portal_status,
+            "portal_fetched_at": _PIPELINE_CACHE["fetched_at"]}
 
 
 # ─── Notification Sending: roster + per-project overrides (proxied to the portal) ─
