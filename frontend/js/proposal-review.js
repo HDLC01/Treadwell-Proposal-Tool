@@ -3031,7 +3031,12 @@
     // tw-dirty / tw-empty are not touched here: the caller (the delegated `input` handler)
     // recomputes both from the restored DOM on the very next line, and a paragraph that matches
     // the template again is not dirty. Two owners of one class is how a stale badge happens.
-    setBlockContent(el, blockById.get(id), computeTokenValues());
+    // computeTokenValues reads its argument (mergedValues.polish_sf, no default parameter), so
+    // the bare call this used to make threw a TypeError and took the restore down with it — the
+    // safety net failing in exactly the situation it exists for. Same merge as the other four
+    // call sites; TW.readForm tolerates a missing form and returns {}.
+    setBlockContent(el, blockById.get(id),
+                    computeTokenValues(Object.assign({}, state, TW.readForm(form))));
     el.classList.add("tw-clause-kept");
     el.title = _CLAUSE_KEPT_MSG;
     return true;
