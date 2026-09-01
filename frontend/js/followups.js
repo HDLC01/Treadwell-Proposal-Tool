@@ -488,16 +488,44 @@
   // (calendar.js) and the Customer Portal CRM (portal.js). Every piece of view state is in the
   // signature so switching tab, filtering, sorting, searching or changing view still repaints.
   let LAST_SIG = "";
+  // What the server said about the customer portal on the last load: "live", "stale" (the portal
+  // failed and this is the last good answer) or "offline" (it failed with nothing cached). This
+  // page is ABOUT portal-side send history, so there is nothing local to rebuild it from — the
+  // honest offline answer is an empty list, and an empty list is exactly what "everybody has been
+  // chased" looks like. Hence the banner: without it the page reads as good news.
+  let PSTATUS = "live", PFETCHED = null;
+
+  function paintDegraded() {
+    const el = $("fu-degraded");
+    if (!el) return;
+    if (PSTATUS === "stale") {
+      el.textContent = "Showing follow-ups as of " +
+        (PFETCHED ? TW.fmtBizDateTime(PFETCHED) : "the last successful load") +
+        ". The customer portal isn't responding, so nothing here has changed since then.";
+      el.hidden = false;
+    } else if (PSTATUS === "offline") {
+      el.textContent = "The customer portal isn't responding, so follow-ups can't be listed right" +
+        " now. This is not an empty list because everybody has been chased. Chasing itself keeps" +
+        " running on the server.";
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  }
 
   function paint() {
     // OPEN and HIST_GEN are in here for the same reason every other piece of view state is:
     // expanding a project's history and its fetch landing are both changes the page must redraw
     // for, and neither of them touches ALL. Without them the panel opens on the click and the
     // arriving log never appears, because the signature never moved.
+    // PSTATUS is in the signature so a recovery repaints. It has to be: on the way back the rows
+    // are often byte-identical to the stale ones already on screen, so without it the banner would
+    // sit there saying "isn't responding" over a list that is live again.
     const sig = JSON.stringify([ALL, TAB, EST, SORT, DIR, Q, VIEW,
-                                Array.from(OPEN).sort(), HIST_GEN]);
+                                Array.from(OPEN).sort(), HIST_GEN, PSTATUS, PFETCHED]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
+    paintDegraded();
 
     const rows = paintChrome();
     if (VIEW === "board") return paintBoard();
@@ -506,7 +534,12 @@
     if (!rows.length) {
       el.className = "empty";
       el.textContent = !ALL.length
-        ? "No proposals have been sent to a customer yet."
+        ? (PSTATUS === "offline"
+            // NOT "no proposals have been sent". That sentence is a claim about the business, and
+            // during an outage we have no basis for it — the banner above says why the list is
+            // empty, and this line must not contradict it.
+            ? "Nothing can be listed while the customer portal is unreachable."
+            : "No proposals have been sent to a customer yet.")
         : "Nothing in this view.";
       return;
     }
@@ -947,6 +980,8 @@
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       ALL = j.proposals || [];
+      PSTATUS = j.portal_status || "live";
+      PFETCHED = j.portal_fetched_at || null;
       paint();
     } catch (err) {
       // Only when there is nothing to keep. This runs on a 45s timer, so one blip would
