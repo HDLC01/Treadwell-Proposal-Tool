@@ -232,10 +232,11 @@
   //
   // THE FOUR KEYS ARE THE CONTRACT, and they are the live estimate screen's own (see the county
   // picker in js/estimate-review.js): `county`, `county_tax_rate`, `county_remodel_rate`,
-  // `county_notes`. Written under the same names and in the same "<Name> County, ST" shape so a
-  // project that picked its county on either screen is understood by both — js/polish-estimate.js
-  // reads `county_remodel_rate` off the draft without caring which screen set it, and the live
-  // screen parses `county` back apart to restore its own pill.
+  // `county_notes`. Written under the same names and in the same label shape (city "<Name>, ST" or
+  // county "<Name> County, ST" — see countyRowLabel) so a project that picked its county/city on
+  // either screen is understood by both — js/polish-estimate.js reads `county_remodel_rate` off the
+  // draft without caring which screen set it, and both screens now replay `county` verbatim to
+  // restore their pill instead of parsing it back apart (a city label has no "County" substring).
   //
   // The list is NEVER hardcoded here. It comes from /api/reference/counties, which serves
   // backend/reference_tax.py — rates pulled one by one from the KS DOR Address Tax Rate Locator.
@@ -284,6 +285,13 @@
       : "remodel labour exempt";
   }
 
+  /** A row is either a CITY (kind: "city" — the full combined local rate, correct for a job site
+   *  inside that city's limits) or a COUNTY (kind: "county" — a floor rate, correct only for
+   *  unincorporated land; see backend/reference_tax.py). Only county rows get " County" appended. */
+  function countyRowLabel(c) {
+    return c.kind === "city" ? c.name + ", " + c.state : c.name + " County, " + c.state;
+  }
+
   function filterCounties(query) {
     var q = String(query == null ? "" : query).trim().toLowerCase();
     if (!q) return [];
@@ -329,7 +337,7 @@
     }
     box.innerHTML = countyMatches.map(function (c, i) {
       return '<div class="c-row" id="county-row-' + i + '" data-county="' + i + '">' +
-        '<span class="c-name">' + esc(c.name) + ' County, ' + esc(c.state) + '</span>' +
+        '<span class="c-name">' + esc(countyRowLabel(c)) + '</span>' +
         '<span class="c-rate">' + esc(countyRowRate(c)) + '</span></div>';
     }).join("");
     box.hidden = false;
@@ -358,8 +366,9 @@
   function pickCounty(c) {
     if (!c || !c.name) return;
     countyPick = {
-      // The live screen's shape, because its own restore path parses this string back apart.
-      county: c.name + " County, " + c.state,
+      // The live screen's shape (city "Overland Park, KS" or county "Johnson County, KS") — its
+      // own restore path now replays this label verbatim rather than parsing it back apart.
+      county: countyRowLabel(c),
       county_tax_rate: c.rate == null ? null : c.rate,
       // MISSOURI ROWS HAVE NO remodel_rate, and that is correct rather than missing data: Missouri
       // remodel labour is generally exempt. Left null instead of filled in with something.

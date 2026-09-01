@@ -3285,6 +3285,15 @@ function escHtml(s) {
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// A row is either a CITY (kind: "city" — the FULL combined local rate,
+// correct for a job site inside that city's limits) or a COUNTY (kind:
+// "county" — a floor rate, correct only for unincorporated land; see
+// backend/reference_tax.py for why those are two different numbers).
+// Only county rows get " County" appended to their display name.
+function countyRowLabel(c) {
+  return c.kind === "city" ? `${c.name}, ${c.state}` : `${c.name} County, ${c.state}`;
+}
+
 function renderCountyResults(query) {
   const q = query.trim().toLowerCase();
   if (!q) { countyResults.classList.remove("open"); return; }
@@ -3297,7 +3306,7 @@ function renderCountyResults(query) {
         || `${c.name} county, ${c.state}`.toLowerCase().includes(q);
   }).slice(0, 30);
   if (!matches.length) {
-    countyResults.innerHTML = `<div class="county-row" style="cursor:default;color:var(--ink-variant);">No counties match "${escHtml(q)}"</div>`;
+    countyResults.innerHTML = `<div class="county-row" style="cursor:default;color:var(--ink-variant);">No matches for "${escHtml(q)}"</div>`;
     countyResults.classList.add("open");
     return;
   }
@@ -3305,7 +3314,7 @@ function renderCountyResults(query) {
   countyResults.innerHTML = matches.map((c, i) => `
     <div class="county-row" data-idx="${i}">
       <div>
-        <span class="county-name">${escHtml(c.name)} County</span>
+        <span class="county-name">${escHtml(c.kind === "city" ? c.name : `${c.name} County`)}</span>
         <span class="county-meta">${escHtml(c.state)}${c.remodel_rate != null
           ? ` · Remodel ${(c.remodel_rate * 100).toFixed(3)}%`
           : ` · ${(c.rate * 100).toFixed(3)}%`}</span>
@@ -3320,31 +3329,80 @@ function renderCountyResults(query) {
   }
 }
 
-function pickCounty(c) {
-  // Kansas remodel tax = state 6.5% + county portion (exact, not rounded).
-  // Shown here so the estimator can type it into the sheet's manual
-  // "ks remodel (enter rounded)" cell (Epoxy!K81 / per-tab equivalent).
-  const remodelNote = c.remodel_rate != null
-    ? ` — KS remodel tax <b>${(c.remodel_rate * 100).toFixed(3)}%</b> (enter in K81)`
+// The workbook's remodel-tax FORMULA cells — NOT the K-column legend next to
+// them, which is only a text label wired to nothing. Kyle's template hardcodes
+// a 10% placeholder here (`=IF(D6="yes",0.1,0)` / `=IF(D8="yes",0.1,0)` on the
+// Gyp variants) with his own comment calling it out as a placeholder to fix
+// "if project awarded." The county picker used to tell the estimator to type
+// the real rate into K81/K75/K80 — those are legend text, so following that
+// instruction changed nothing about the actual tax. Write straight into the
+// formula cell instead, one row per tab that has a remodel-tax line (Seal,
+// Seal (+Jnts), Leveling, and Epoxy blank have none — see estimate_writer.py's
+// LOCK_MAP, which locks exactly these cells and no others per tab).
+const REMODEL_RATE_CELLS = [
+  ["Epoxy", "B81", "D6"],
+  ["Polish", "B75", "D6"],
+  ...GYP_SHEETS.map(s => [s, "B80", "D8"]),
+];
+
+// Writes `rate` (or, with none picked, Kyle's own 10% placeholder) into every
+// remodel-tax formula cell, keeping his own "$0 unless the toggle says yes"
+// shape so flipping D6/D8 off still zeroes it. Reaches the .xlsx through the
+// existing cell_values verbatim-write path (estimate_writer.fill_estimate
+// step 2, which runs before the sheet is protected in step 6 — see LOCK_MAP),
+// and also pushes into the live HF engine so the on-screen totals update now,
+// same as the autofill apply path above does for its own cell writes.
+function applyRemodelRateOverride(rate) {
+  const rateText = rate != null ? String(rate) : "0.1";
+  let touchedActiveSheet = false;
+  for (const [sheet, addr, toggleCell] of REMODEL_RATE_CELLS) {
+    const formula = `=IF(${toggleCell}="yes",${rateText},0)`;
+    cellValues[`${sheet}!${addr}`] = formula;
+    if (HF && HF.ready) {
+      try { HF.setCellValue(sheet, addr, formula); }
+      catch (e) { console.warn("HF.setCellValue failed for", sheet, addr, e); }
+    }
+    if (sheet === activeSheet) touchedActiveSheet = true;
+  }
+  if (touchedActiveSheet) {
+    delete sheetCache[activeSheet];
+    showSheet(activeSheet);
+  }
+}
+
+// Renders the picked pill from an already-built label string, rather than
+// re-deriving city-vs-county from what's saved — the saved `county` string
+// is the label verbatim, so restoring a prior pick just replays it as-is
+// instead of guessing its shape back apart.
+function renderCountyPill(label, remodelRate) {
+  const remodelNote = remodelRate != null
+    ? ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> applied automatically`
     : "";
   countySelected.innerHTML = `
-    <span class="county-pill">${escHtml(c.name)} County, ${escHtml(c.state)}${remodelNote}
+    <span class="county-pill">${escHtml(label)}${remodelNote}
       <span class="x" id="county-clear">×</span>
     </span>
   `;
   countyInput.value = "";
   countyResults.classList.remove("open");
-  // Persist to state so the proposal step can use it (token: {{county}})
-  state.county = `${c.name} County, ${c.state}`;
-  state.county_tax_rate = c.rate;
-  state.county_remodel_rate = c.remodel_rate != null ? c.remodel_rate : null;
-  state.county_notes = c.notes;
-  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_remodel_rate: state.county_remodel_rate, county_notes: state.county_notes });
   document.getElementById("county-clear").addEventListener("click", () => {
     delete state.county; delete state.county_tax_rate; delete state.county_remodel_rate; delete state.county_notes;
     TW.setState(state);
     countySelected.innerHTML = "";
+    applyRemodelRateOverride(null);   // no county picked — revert to the template's own placeholder
   });
+}
+
+function pickCounty(c) {
+  const label = countyRowLabel(c);
+  renderCountyPill(label, c.remodel_rate != null ? c.remodel_rate : null);
+  applyRemodelRateOverride(c.remodel_rate != null ? c.remodel_rate : null);
+  // Persist to state so the proposal step can use it (token: {{county}})
+  state.county = label;
+  state.county_tax_rate = c.rate;
+  state.county_remodel_rate = c.remodel_rate != null ? c.remodel_rate : null;
+  state.county_notes = c.notes;
+  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_remodel_rate: state.county_remodel_rate, county_notes: state.county_notes });
 }
 
 countyInput.addEventListener("input", e => renderCountyResults(e.target.value));
@@ -3379,15 +3437,16 @@ document.addEventListener("click", e => {
   }
 });
 
-// Restore prior selection if user revisits
+// Restore prior selection if user revisits. `state.county` is already the
+// exact label a pick rendered (city "Overland Park, KS" or county "Johnson
+// County, KS") — replay it verbatim instead of re-deriving name/kind from
+// its shape, which a city label (no "County" substring) can't round-trip.
 if (state.county) {
-  pickCounty({
-    name: state.county.replace(/ County,.*$/, ""),
-    state: (state.county.match(/,\s*([A-Z]{2})/) || [])[1] || "",
-    rate: state.county_tax_rate || 0,
-    remodel_rate: state.county_remodel_rate != null ? state.county_remodel_rate : null,
-    notes: state.county_notes || "",
-  });
+  renderCountyPill(state.county, state.county_remodel_rate != null ? state.county_remodel_rate : null);
+  // Self-heal drafts saved before the formula-cell fix: a prior pick only ever
+  // reached state.county_remodel_rate, never the actual B81/B75/B80 formula
+  // cell (see applyRemodelRateOverride above), so re-apply it now.
+  applyRemodelRateOverride(state.county_remodel_rate != null ? state.county_remodel_rate : null);
 }
 
 loadCounties();
