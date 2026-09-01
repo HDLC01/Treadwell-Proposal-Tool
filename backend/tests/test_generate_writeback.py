@@ -240,12 +240,17 @@ def _statements(fn):
     return "\n".join(l.split("#")[0] for l in lines)
 
 
-@pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_draft_revision_files",
-                                    "api_to_dropbox"])
+@pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_admin_cover_letter_pdf",
+                                    "api_draft_revision_files", "api_to_dropbox"])
 def test_every_replay_caller_opts_out_of_persisting(caller):
-    """These three re-run a payload frozen at some earlier moment. Named individually because each
-    one is a separate route somebody could add a fourth sibling to — and because the customer PDF
-    path is reachable by anyone holding a portal link."""
+    """These four re-run a payload frozen at some earlier moment. Named individually because each
+    one is a separate route somebody could add a fifth sibling to — and because the customer PDF
+    paths are reachable by anyone holding a portal link.
+
+    `api_admin_cover_letter_pdf` is the newest and the reason this list is worth keeping: it was
+    written by copying its proposal sibling, and a copy that dropped the keyword would have
+    pushed a months-old pinned revision over the estimator's live draft every time a customer
+    opened the letter."""
     src = _statements(getattr(main, caller))
     assert "_generate(" in src, f"{caller} no longer calls _generate — recheck this guard"
     assert "persist=False" in src, f"{caller} replays a stored payload AND persists it"

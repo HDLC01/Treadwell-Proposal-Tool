@@ -63,6 +63,7 @@ import analytics_export
 import audit
 import basisboard_client
 import calendar_events
+import cover_letter_writer
 import digest_worker
 import drafts
 import dropbox_client
@@ -154,6 +155,9 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       # server-to-server (the customer portal renders the proposal
                       # PDF on demand); gated by SERVICE_TOKEN inside the handler.
                       "/api/admin/proposal-pdf",
+                      # the optional cover letter the portal shows AHEAD of the
+                      # proposal — same server-to-server render, same gate.
+                      "/api/admin/cover-letter-pdf",
                       # same deal for the deposit invoice — the portal owns deposits
                       # but has no LibreOffice, so it renders here.
                       "/api/admin/deposit-invoice"}
@@ -424,6 +428,45 @@ class GenerateIn(BaseModel):
     # Empty -> _build_epoxy_systems keeps its legacy Epoxy!-cell reads (stale
     # drafts / the To-Dropbox reconstruction path). Sanitized in api_generate.
     sheet_systems: list = Field(default_factory=list)
+    # ── Cover Letter (optional, shown to the customer BEFORE the proposal) ──
+    #
+    # OFF by default, and that default is what makes every existing draft safe:
+    # `GenerateIn(**proposal_payload)` is how the portal PDF, the revision replay
+    # and the To-Dropbox re-upload rebuild a frozen payload, and a payload saved
+    # before this feature simply carries none of these three keys.
+    #
+    # They also need NO new persistence. `proposal_payload` is the whole
+    # GenerateIn body, stored on the draft and copied verbatim into a revision
+    # when a proposal is sent — so the letter a customer sees is pinned to the
+    # revision exactly as the proposal is, for free. (Which is the point: a
+    # letter that quietly re-rendered from the live draft would contradict the
+    # pinned prices on the page below it.)
+    cover_letter_enabled: bool = False
+    # The cover-letter document editor's free-text paragraph edits:
+    #   {"<block id from /api/coverletter-template>": {text?, runs?, para?}}
+    #
+    # Its own channel rather than a bucket inside `paragraph_overrides`: those
+    # ids are positions in a walk over the PROPOSAL template, and mixing two
+    # documents' ids in one list is how an edit lands on the wrong paragraph.
+    #
+    # A DICT KEYED BY ID, like `box_overrides` and unlike the proposal's list of
+    # {id, text} — the entry cannot exist without its id, so there is no shape in
+    # which an override travels with no idea which paragraph it belongs to.
+    # Normalized back to the writer's list form (and validated entry by entry by
+    # the SAME sanitizer the proposal uses) in _sanitize_cover_letter_overrides.
+    cover_letter_paragraph_overrides: dict = Field(default_factory=dict)
+    # The cover-letter template version those ids were captured against, echoed
+    # from /api/coverletter-template. Same fail-safe as `template_version` above:
+    # non-empty and stale -> the overrides are DROPPED, because a regenerated
+    # template shifts every id after the changed paragraph.
+    #
+    # It is "<work_type>:<audience>@<mtime>", not a bare mtime, and that carries
+    # the frontend's per-template override keying (proposal-review.js's
+    # `overrideKey(wt, audience)`) onto the server. The seven cover-letter files
+    # are written by ONE generator run and can share an mtime, so mtime alone
+    # would let a Direct/Combo edit replay onto GC/Epoxy. See
+    # `_cover_letter_template_version`.
+    cover_letter_template_version: str = ""
 
 
 class VerbalIntakeIn(BaseModel):
@@ -448,6 +491,11 @@ class GenerateOut(BaseModel):
     docx_download_url: str
     pdf_download_url: str       # on-demand LibreOffice render of the .docx
     totals: Dict[str, Any]     # Python-computed preview totals
+    # The optional Cover Letter .docx, cached under the same _FILE_CACHE token
+    # mechanism as the other two (so /api/file/{token} and /api/file/{token}/pdf
+    # both work on it). None — not a dead link — whenever the project has no
+    # cover letter, which is every project that didn't tick the box.
+    cover_letter_download_url: Optional[str] = None
 
 
 # ─── In-memory file cache for downloads ───────────────────────────────
@@ -1162,6 +1210,13 @@ class PortalPublishIn(BaseModel):
     emails: list[str] = Field(default_factory=list)
     message: str = ""
     require_deposit: Optional[bool] = None
+    # Does this project have a Cover Letter for the portal to show FIRST, ahead
+    # of the proposal? Deliberately Optional/None on the SAME contract as
+    # `require_deposit` above: omitting it forwards nothing, so the portal keeps
+    # whatever it already had and a legacy caller's request body is unchanged
+    # byte for byte. The letter itself is rendered on demand from
+    # /api/admin/cover-letter-pdf; this flag only tells the portal to show it.
+    has_cover_letter: Optional[bool] = None
     assigned_estimator: str = ""
     # Which of those contacts should NOT receive the automated follow-ups — the per-contact
     # checkbox on the Files screen. An opt-OUT list rather than an opt-in one, so the default
@@ -1323,6 +1378,11 @@ def api_portal_publish(draft_id: str, request: Request,
     # a legacy caller should do.
     if payload is not None and payload.require_deposit is not None:
         body["require_deposit"] = bool(payload.require_deposit)
+    # Same rule, same reason (see the field's note on PortalPublishIn): only
+    # forwarded when the caller expressed a choice, so a re-send from an older
+    # page cannot switch a customer's cover letter off behind their back.
+    if payload is not None and payload.has_cover_letter is not None:
+        body["has_cover_letter"] = bool(payload.has_cover_letter)
     # Cleaned with the SAME helper as `emails`, so a malformed entry is refused rather than
     # dropped: silently ignoring one means somebody un-ticked a box and the contact is chased
     # anyway, which nobody would notice until a customer complained.
@@ -2389,6 +2449,71 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
                     headers={"Content-Disposition": f'inline; filename="{proj} - Proposal.pdf"'})
 
 
+@app.get("/api/admin/cover-letter-pdf")
+def api_admin_cover_letter_pdf(draft_id: str, request: Request,
+                               revision_no: Optional[int] = None) -> Response:
+    """Render a draft's COVER LETTER to PDF, on demand. Called server-to-server
+    by the customer portal, which shows the letter ahead of the proposal.
+
+    Deliberately a near-copy of /api/admin/proposal-pdf, including the reason it
+    exists in that shape: `revision_no` renders the snapshot that was SENT, not
+    the live draft. The portal passes the revision it pinned, so a letter a
+    customer opens can never disagree with the proposal below it — the exact
+    problem that appeared when both were rendered from whatever the estimator
+    had most recently saved. The letter rides inside the same frozen
+    `proposal_payload`, so pinning it needs no separate storage.
+
+    Refuses, by name, when the project has no cover letter: a 404 saying so is
+    what lets the portal show "no cover letter" rather than a broken viewer."""
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+    if revision_no is not None:
+        rev = drafts.get_revision(draft_id, revision_no)
+        if not rev:
+            raise HTTPException(404, "Revision not found")
+        row = {"data": rev.get("data") or {}}
+    else:
+        row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        raise HTTPException(422, "This proposal hasn't been generated yet.")
+    if not pp.get("cover_letter_enabled"):
+        # NAMED refusal, not an empty 404 body: the portal shows this sentence.
+        raise HTTPException(404, "This proposal has no cover letter.")
+    # persist=False — the customer's on-demand render replays a payload frozen at
+    # an earlier moment; writing its values back would push that moment over the
+    # estimator's live draft. Same reasoning as the proposal PDF above.
+    out = _generate(GenerateIn(**pp), request, persist=False)
+    tok = (out.cover_letter_download_url or "").rsplit("/", 1)[-1]
+    entry = _FILE_CACHE.get(tok) if tok else None
+    if not entry:
+        # cover_letter_enabled was set, so this is a real failure, not a
+        # configuration choice — and _generate already raises on a fill error, so
+        # reaching here means the token went missing between the two.
+        log.warning("Cover letter PDF: no cached document for draft %s revision %s",
+                    draft_id, revision_no)
+        raise HTTPException(500, "Could not build the cover letter document.")
+    pdf_bytes = entry.get("_pdf")
+    if pdf_bytes is None:
+        try:
+            with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
+                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
+            entry["_pdf"] = pdf_bytes
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Cover letter PDF render failed (draft=%s): %s: %s",
+                          draft_id, type(exc).__name__, exc)
+            raise HTTPException(500, "Failed to render the cover letter PDF.") from exc
+    proj = re.sub(r"[^\x20-\x7e]", "_",
+                  str((row.get("data") or {}).get("project_name") or "Treadwell Proposal"))
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{proj} - Cover Letter.pdf"'})
+
+
 @app.post("/api/admin/deposit-invoice")
 async def api_admin_deposit_invoice(request: Request) -> Response:
     """Render the deposit invoice from Kyle's Invoice_Deposit.docx template.
@@ -3436,6 +3561,38 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
     return out
 
 
+def _sanitize_cover_letter_overrides(overrides_in) -> list:
+    """`{"<block id>": {text?, runs?, para?}}` → the writer's list form.
+
+    The id-keyed dict is folded back into an `id` field and the ENTRY ITSELF is
+    then validated by `_sanitize_paragraph_overrides` — the very same rules the
+    proposal's overrides pass through. That delegation is the point: the two
+    documents are edited in one UI, and a second, subtly different idea of what a
+    legal override looks like is how the cover letter would start accepting a
+    3000-run paragraph the proposal refuses.
+
+    Defensive like its delegate — a non-dict, a key that isn't an integer, or a
+    malformed entry is skipped, never raised. A hand-built request body cannot
+    500 /api/generate."""
+    if not isinstance(overrides_in, dict):
+        return []
+    staged = []
+    for raw_id, entry in list(overrides_in.items())[:_PARAGRAPH_OVERRIDES_MAX]:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            pid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        one = dict(entry)
+        one["id"] = pid          # the key is authoritative; an `id` inside loses
+        staged.append(one)
+    # Stable by id so the applied order can't depend on dict insertion order (a
+    # re-serialized draft round-trips its keys in whatever order it was stored).
+    staged.sort(key=lambda o: o["id"])
+    return _sanitize_paragraph_overrides(staged)
+
+
 # Cap + coerce the doc editor's per-option system_overrides. UNLIKE
 # _sanitize_paragraph_overrides, this is INDEX-PRESERVING: a malformed entry
 # coerces to {} in place rather than being dropped, because the list is
@@ -3893,6 +4050,111 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
     }
     return _versioned_json(request, payload,
                            version=f"{work_type}:{audience}:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+
+
+def _cover_letter_template_version(work_type: str, audience: Optional[str]) -> str:
+    """The version string a cover-letter override id is pinned to:
+    `"<work_type>:<audience>@<mtime_ns>"`.
+
+    NOT the bare mtime the proposal uses, and the difference is load-bearing. A
+    block id is a position in a walk over ONE file; the proposal's templates are
+    eight files Kyle edits one at a time, so their mtimes distinguish them in
+    practice. The seven cover letters are written by ONE generator run, so two
+    variants can share an mtime — and a guard that only compared mtimes would
+    accept a Direct/Combo override set against GC/Epoxy and rewrite whichever
+    sentence happened to sit at that index, in a document a customer reads.
+
+    `cover_letter_writer.variant_key` resolves the pair the same way the picker
+    does (epoxy fallback, audience-agnostic gyp), so the stamp always names the
+    file that was actually opened."""
+    path = cover_letter_writer.pick_template(work_type, audience)
+    return (cover_letter_writer.variant_key(work_type, audience) + "@"
+            + _template_proposal_version(path))
+
+
+@app.get("/api/coverletter-template")
+def api_coverletter_template(request: Request, work_type: str = "epoxy",
+                             audience: str = "Direct") -> Response:
+    """The Cover Letter template for `(work_type, audience)`, as the same ordered
+    list of editable blocks `/api/proposal-template` returns — so the one
+    document editor can render either document.
+
+    Keyed on BOTH, exactly like the proposal: `cover_letter_writer` mirrors
+    `proposal_writer.TEMPLATE_PICKER`'s audience-first folders, including its
+    asymmetry (gyp ignores audience; sealer and budget have no letter and fall
+    back). An unmapped combination serves the fallback template rather than
+    404-ing, because an empty editor is a worse answer than the wrong-but-usable
+    one the proposal already gives.
+
+    `id` is the paragraph's index in `proposal_writer.iter_editable_blocks` over
+    THIS file — the walk `cover_letter_writer.fill_cover_letter` resolves
+    `cover_letter_paragraph_overrides` against. `template_version` is
+    `"<work_type>:<audience>@<mtime>"` (see `_cover_letter_template_version`), so
+    a stale cached id set is detectable after a deploy AND after an
+    audience/work-type switch; `_generate` drops overrides that no longer match.
+
+    Every block comes back with `in_block: null` — a letter has no
+    priced/repeatable regions, so every paragraph is freely editable. Exactly ONE
+    block, the floating date, comes back with `in_txbx: true` and a `txbx` index
+    into `geometry.boxes` (which therefore holds exactly one entry): Hanz's
+    example letter floats the date over the artwork rather than typing it on a
+    line, and the editor needs to know it cannot place that one freely. The
+    letterhead artwork arrives in `geometry.images`, served by
+    /api/coverletter-template/media."""
+    try:
+        template_path, blocks, geometry = cover_letter_writer.describe_template(
+            work_type, audience or None)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    payload = {
+        "work_type": work_type,
+        "audience": audience,
+        # Folder + file: `Epoxy.docx` alone does not say which of Direct/ and GC/
+        # the editor is showing, and those are two different documents.
+        "template_name": template_path.relative_to(
+            cover_letter_writer.TEMPLATES_ROOT / "CoverLetter").as_posix(),
+        "template_version": _cover_letter_template_version(work_type, audience or None),
+        "geometry": geometry,
+        "blocks": blocks,
+    }
+    return _versioned_json(
+        request, payload,
+        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+
+
+@app.get("/api/coverletter-template/media")
+def api_coverletter_template_media(request: Request, work_type: str = "epoxy",
+                                   audience: str = "Direct", name: str = "") -> Response:
+    """One media part (by basename) from the picked cover-letter template's
+    package — the letterhead artwork the editor draws the page on.
+
+    Same whitelist-against-the-package's-own-listing as
+    /api/proposal-template/media: a crafted `name` can't reach any other part
+    (no separators survive the basename match), and unknown names 404."""
+    import zipfile
+    template_path = cover_letter_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Cover letter template not found: {template_path.name}")
+    try:
+        with zipfile.ZipFile(str(template_path)) as z:
+            allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
+                       if n.startswith("word/media/") and "/" not in n[len("word/media/"):]}
+            part = allowed.get(name)
+            if not part:
+                raise HTTPException(404, "No such media in this template")
+            data = z.read(part)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(500, "Cover letter template package is unreadable.") from exc
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
+    version = (f"cl:{name}:"
+               + _cover_letter_template_version(work_type, audience or None))
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
 
 
 # Media (letterhead artwork) served straight out of the template package.
@@ -4423,6 +4685,55 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         log.exception("Proposal fill failed")
         raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
 
+    # ── The optional Cover Letter ─────────────────────────────────────────────
+    #
+    # Built AFTER the proposal, from the SAME `values` dict — by this point
+    # _ensure_value_aliases and the epoxy_system_name / bid_date_formatted
+    # backfills have all run, so the letter and the proposal cannot disagree
+    # about the job name, the system or the date.
+    #
+    # AND IT REFUSES LOUDLY. A cover letter that failed to build cannot be
+    # allowed to return 200 with the proposal alone: the estimator would read
+    # "generated", press Send, and the customer would open a portal that
+    # promises a letter and shows nothing. This is the same failure as the
+    # publish that wrote the proposal row, refused the attachment, logged it and
+    # returned 200 — so the refusal is a 500 whose message names the cover
+    # letter, and the log carries the exception type and text.
+    cover_letter_bytes = None
+    if payload.cover_letter_enabled:
+        _cl_audience = payload.audience or None
+        _cl_path = cover_letter_writer.pick_template(payload.work_type, _cl_audience)
+        _cl_cur_version = _cover_letter_template_version(payload.work_type, _cl_audience)
+        _cl_overrides = payload.cover_letter_paragraph_overrides
+        if (payload.cover_letter_template_version
+                and payload.cover_letter_template_version != _cl_cur_version):
+            # Same fail-safe as the proposal's template_version guard, plus the
+            # variant: the ids are positions in a walk over a SPECIFIC file, so a
+            # regenerated template — or a switch between Direct and GC, or
+            # between work types — can land an edit on the wrong paragraph.
+            log.warning(
+                "Dropping %d cover-letter paragraph override(s): stale "
+                "cover_letter_template_version %r != current %r",
+                len(_cl_overrides or {}),
+                payload.cover_letter_template_version, _cl_cur_version)
+            _cl_overrides = {}
+        try:
+            cover_letter_bytes = cover_letter_writer.fill_cover_letter(
+                work_type=payload.work_type,
+                audience=_cl_audience,
+                values=values,
+                paragraph_overrides=_sanitize_cover_letter_overrides(_cl_overrides),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal below
+            log.exception("Cover letter fill failed (work_type=%s, audience=%s, "
+                          "template=%s): %s: %s",
+                          payload.work_type, _cl_audience, _cl_path.name,
+                          type(exc).__name__, exc)
+            raise HTTPException(
+                500, "Failed to generate the cover letter. Please try again.") from exc
+
     project_name = (values.get("project_name") or "Untitled Project").strip()
 
     # Cache files for download (Done screen download buttons hit /api/file/{token}).
@@ -4439,6 +4750,15 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         f"{safe_name}_proposal.docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+    # Same cache, same token mechanism — so /api/file/{token} downloads the .docx
+    # and /api/file/{token}/pdf renders it, with no second code path. Stays None
+    # when the project has no cover letter, and GenerateOut then carries None
+    # rather than a URL that 404s.
+    cover_letter_token = _cache_file(
+        cover_letter_bytes,
+        f"{safe_name}_cover_letter.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ) if cover_letter_bytes is not None else None
 
     # Audit trail: who generated this proposal, for what, and where it landed.
     fb = (payload.computed_bid or {}).get("full_bid") or {}
@@ -4499,6 +4819,8 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         xlsx_download_url=f"/api/file/{xlsx_token}",
         docx_download_url=f"/api/file/{docx_token}",
         pdf_download_url=f"/api/file/{docx_token}/pdf",
+        cover_letter_download_url=(f"/api/file/{cover_letter_token}"
+                                   if cover_letter_token else None),
         # Authoritative totals from the 5.7-recipe engine (computed on
         # Screen 2 and passed through). Falls back to an empty dict if a
         # caller generated without first running the pricing engine.

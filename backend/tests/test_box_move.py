@@ -321,6 +321,285 @@ def test_a_move_does_not_disturb_the_size_sites():
     assert (ext.get("cx"), ext.get("cy")) == before
 
 
+# ── which SECTION a floating object is measured from ──────────────────────
+# A `relativeFrom="column"` offset is measured from the margin of the section the anchor sits
+# in. `_pos_of_anchor` used to take that margin from `d.sections[0]`, which is only the same
+# thing on a single-section document — and all nine proposal templates are single-section, so
+# nothing could see it — those templates' reported box positions (30-165pt across) were right
+# all along and are not what this section is about.
+#
+# The LETTERHEAD IMAGES are the ones that flattered the old sum: each carries a posOffset of
+# exactly minus its own margin, so x came out 0, the right answer from the wrong arithmetic.
+# The Cover Letter templates inherit the Treadwell letterhead's two sections (171pt, then
+# 49.5pt with the artwork and every body paragraph in it), where minus-49.5 plus section 0's
+# 171 put the full-bleed letterhead 121.5pt off to the right in the editor's page view.
+#
+# The same first-section read reached the WORDS too, through `_page_metrics` -> the served
+# `geometry.page.margin`, which the editor uses as the padding of its flowing text column.
+
+def _end_section_at_top(d, left_pt, top_pt=None):
+    """Insert a leading empty paragraph that CLOSES a section with its own page margins.
+
+    Word puts the `sectPr` of a section in the `w:pPr` of its LAST paragraph, so this makes the
+    document two-section with everything already in it living in the SECOND — exactly the shape
+    the Treadwell letterhead has. In memory only; the template on disk is untouched.
+
+    `top_pt` moves the vertical margin too, and it is not decoration: both sections of every
+    real fixture here happen to share a `top` of 117pt, so a document that varies only `left`
+    cannot tell a correct y from one still read off section 0. Vary the top and the y-axis
+    becomes falsifiable as well."""
+    import copy
+
+    body = d.element.body
+    sect = copy.deepcopy(body.find(pw.qn("w:sectPr")))
+    pg = sect.find(pw.qn("w:pgMar"))
+    pg.set(pw.qn("w:left"), str(int(round(left_pt * 20))))
+    if top_pt is not None:
+        pg.set(pw.qn("w:top"), str(int(round(top_pt * 20))))
+    p = body.makeelement(pw.qn("w:p"), {})
+    ppr = p.makeelement(pw.qn("w:pPr"), {})
+    ppr.append(sect)
+    p.append(ppr)
+    body.insert(0, p)
+    return d
+
+
+def test_a_box_is_measured_from_its_own_sections_margin_not_the_first():
+    """Red before the fix by 300pt across and 200pt down: the box was reported most of a sheet
+    from where Word puts it, so the editor drew it there and a drag from that phantom position
+    wrote the offset back just as far out.
+
+    The y arm carries `+ _ANCHOR_LINE_H_PT` because the fixture inserts a paragraph, which is
+    exactly one more empty line above the anchor — the estimate `_pos_of_anchor` documents.
+    Anything past that one step is section 0's top margin leaking in."""
+    d = _open()
+    m0 = pw._page_metrics(d)["margin"]
+    before = _geo(d)
+    _end_section_at_top(d, left_pt=m0["left"] + 300.0, top_pt=m0["top"] + 200.0)
+    assert len(d.sections) == 2, "the fixture did not actually create a second section"
+    assert d.sections[0].left_margin.pt == pytest.approx(m0["left"] + 300.0), "fixture premise"
+    assert d.sections[0].top_margin.pt == pytest.approx(m0["top"] + 200.0), "fixture premise"
+    after = _geo(d)
+    assert after["x_pt"] == pytest.approx(before["x_pt"]), (
+        "a section the box is not in moved the box sideways")
+    assert after["y_pt"] == pytest.approx(before["y_pt"] + pw._ANCHOR_LINE_H_PT), (
+        "a section the box is not in moved the box down the page")
+
+
+def _top_level_of(body, el):
+    """The `w:body` child that contains `el` — the unit a section break divides."""
+    while el is not None and el.getparent() is not body:
+        el = el.getparent()
+    return el
+
+
+def _end_section_after(d, after_index, left_pt, top_pt):
+    """Close a section immediately AFTER one top-level child, stranding it in a section of its
+    own with margins nothing else in the document shares. In memory only.
+
+    The counterpart to `_end_section_at_top`, and the only shape that can falsify
+    `_pos_of_anchor`'s own section lookup. Once `_page_metrics` also resolves the section (it
+    must — it feeds the editor's text column), the `page` dict handed to `_pos_of_anchor`
+    ALREADY carries the right margin for any anchor sitting with the bulk of the text, so a
+    fixture where the box and the words share a section cannot tell the per-anchor lookup from
+    no lookup at all. Both of the real two-section templates are that shape."""
+    import copy
+
+    body = d.element.body
+    sect = copy.deepcopy(body.find(pw.qn("w:sectPr")))
+    pg = sect.find(pw.qn("w:pgMar"))
+    pg.set(pw.qn("w:left"), str(int(round(left_pt * 20))))
+    pg.set(pw.qn("w:top"), str(int(round(top_pt * 20))))
+    p = body.makeelement(pw.qn("w:p"), {})
+    ppr = p.makeelement(pw.qn("w:pPr"), {})
+    ppr.append(sect)
+    p.append(ppr)
+    body.insert(after_index + 1, p)
+    return d
+
+
+def test_a_box_follows_its_own_section_even_when_the_text_is_in_another():
+    """The per-anchor half of the fix, on BOTH axes.
+
+    Box 3 is stranded in a leading section with margins 300pt across and 200pt down from the
+    one the other 39 text-bearing paragraphs use, so the box must be reported to have moved by
+    exactly that and the editor's column must not have moved at all. A `_pos_of_anchor` reading
+    the served page margin instead scores nothing on either axis."""
+    d = _open()
+    body = d.element.body
+    before, was = _geo(d), pw._page_metrics(d)["margin"]
+    anchored_in = _top_level_of(body, pw._txbx_anchor(_box(d)))
+    _end_section_after(d, list(body).index(anchored_in),
+                       left_pt=was["left"] + 300.0, top_pt=was["top"] + 200.0)
+
+    assert len(d.sections) == 2, "the fixture did not create a second section"
+    assert pw._section_ordinal(body, anchored_in) == 0, "the box is not in the stranded section"
+    assert pw._body_section_ordinal(d) == 1, "the words did not stay in the other section"
+    assert pw._page_metrics(d)["margin"] == pytest.approx(was), (
+        "one stranded paragraph dragged the editor's whole text column with it")
+
+    after = _geo(d)
+    assert after["x_pt"] == pytest.approx(before["x_pt"] + 300.0), (
+        "the box was measured from the text's margin, not from its own section's")
+    assert after["y_pt"] == pytest.approx(before["y_pt"] + 200.0), (
+        "the box's vertical was measured from the text's top margin, not its own section's")
+
+
+def test_the_page_the_editor_is_told_about_is_the_section_the_words_are_in():
+    """`geometry.page.margin` is not decoration — `proposal-review.js` uses it verbatim as the
+    padding of the one flowing text column it lays the body out in, and `max_box` bounds a
+    resize. Read off section 0, the letterhead served a 396pt column indented 171pt when the
+    letter's own paragraphs live in a 522pt column at 49.5pt: every line of the customer's
+    cover letter rendered in a squeezed, over-indented ribbon.
+
+    The same bug as the artwork, moved from the picture to the words."""
+    d = _end_section_at_top(_open(), left_pt=390.0, top_pt=300.0)
+    was = pw._page_metrics(_open())["margin"]
+    page = pw._page_metrics(d)
+    assert page["margin"]["left"] == pytest.approx(was["left"]), (
+        "the editor was handed the margin of the section holding one empty paragraph")
+    assert page["margin"]["top"] == pytest.approx(was["top"])
+    # …and the two bounds derived from the same page setup still agree with it.
+    assert page["max_box"]["w_pt"] == pytest.approx(
+        page["w_pt"] - page["margin"]["left"] - page["margin"]["right"])
+    assert pw.box_size_limits(d) == pytest.approx(
+        (page["max_box"]["w_pt"], page["max_box"]["h_pt"]))
+
+
+def test_the_sheet_is_the_one_the_body_text_prints_on():
+    """`page_size` bounds a drag, and Word lets each section have its own paper — a title page
+    on tabloid and a body on Letter is an ordinary thing to do. Every fixture in this repo has
+    uniform paper, so this is the only place the section walk in `page_size` is observable at
+    all: without it a leading tabloid title section would let the estimator drag a box 600pt
+    across a Letter body page, and the customer's PDF would clip whatever went past 612."""
+    from docx.shared import Pt as _Pt
+
+    d = _end_section_at_top(_open(), left_pt=390.0, top_pt=300.0)
+    d.sections[0].page_width = _Pt(1224)          # 17in title section…
+    assert pw._body_section_ordinal(d) == 1, "the words must be in the OTHER section"
+    assert pw.page_size(d) == pytest.approx((612.0, 792.0)), (
+        "the drag was bounded by a sheet the body text is not printed on")
+    assert pw._page_metrics(d)["w_pt"] == pytest.approx(612.0)
+    # …and the bound really refuses the position that only the wrong sheet would allow.
+    assert pw._apply_box_overrides(d, {str(BOX): {"x_pt": 700.0}}) == 0
+
+
+def test_the_paragraph_carrying_a_break_belongs_to_the_section_it_closes():
+    """The half of Word's rule that is easy to get backwards. The `sectPr` sits in the LAST
+    paragraph of its section, not the first of the next one — so resolving 'the next break at or
+    after me' has to be inclusive. Off by one here and every anchor lands a section too late."""
+    d = _end_section_at_top(_open(), left_pt=390.0, top_pt=300.0)
+    body = d.element.body
+    closer, following = list(body)[0], list(body)[1]
+    assert closer.find(pw.qn("w:pPr") + "/" + pw.qn("w:sectPr")) is not None, "fixture premise"
+    assert pw._section_ordinal(body, closer) == 0
+    assert pw._section_ordinal(body, following) == 1
+    assert pw._margins_of(d, pw._section_ordinal(body, closer))["left"] == pytest.approx(390.0)
+    assert pw._margins_of(d, pw._section_ordinal(body, following))["left"] == pytest.approx(
+        pw._page_metrics(_open())["margin"]["left"])
+
+
+def _letterhead_pgMar(d):
+    """The `w:pgMar` of the letterhead's BODY section — the one the words are in.
+
+    Deliberately not one of the proposal templates: every one of those is 90/90/72/72, which is
+    exactly `_DEFAULT_MARGIN_PT`, so a margin read that collapsed entirely to the fallback would
+    return the right numbers anyway and neither test below could fail. The letterhead's
+    49.5/40.5/117/99 differs on all four sides."""
+    pg = d.element.body.find(pw.qn("w:sectPr")).find(pw.qn("w:pgMar"))
+    assert pw._margins_of(d, 1) != pw._DEFAULT_MARGIN_PT, "fixture cannot distinguish a fallback"
+    return pg
+
+
+def test_a_universal_measure_margin_is_read_rather_than_dropped():
+    """`w:pgMar/@w:left` is an ST_TwipsMeasure: "990" and "0.6875in" are the same margin, and a
+    hand-rolled int() of the second drops the page setup back to the Letter guess — which on the
+    letterhead would re-indent the whole letter by 40pt. python-docx's own Length conversion
+    reads both."""
+    d = docx.Document(str(COVER_LETTERS[0]))
+    want = d.sections[1].left_margin.pt
+    _letterhead_pgMar(d).set(pw.qn("w:left"), "%sin" % (want / 72.0))
+    assert pw._margins_of(d, 1)["left"] == pytest.approx(want)
+
+
+def test_a_single_unreadable_margin_costs_only_that_side():
+    """The old hand-rolled read took all four sides in one try/except, so one bad attribute
+    silently relaid the whole page instead of just its own edge."""
+    d = docx.Document(str(COVER_LETTERS[0]))
+    kept = {s: d.sections[1].__getattribute__(s + "_margin").pt
+            for s in ("right", "top", "bottom")}
+    _letterhead_pgMar(d).set(pw.qn("w:left"), "banana")
+    got = pw._margins_of(d, 1)
+    assert got["left"] == pw._DEFAULT_MARGIN_PT["left"], "a bad side should take the fallback"
+    for side, want in kept.items():
+        assert got[side] == pytest.approx(want), (
+            "a bad `left` took `%s` down with it" % side)
+
+
+COVER_LETTERS = sorted((TEMPLATES / "CoverLetter").rglob("*.docx"))
+# Without this, a tree whose Cover Letter templates land in a different commit than this fix
+# collapses the parametrization to zero cases, and pytest reports that as SKIP rather than as
+# failure — the whole two-section guard would quietly stop guarding anything.
+assert COVER_LETTERS, (
+    "no Cover Letter templates under %s: the two-section regression tests below would cover "
+    "nothing. Run backend/prepare_cover_letter_templates.py." % (TEMPLATES / "CoverLetter"))
+
+
+@pytest.mark.parametrize("path", COVER_LETTERS)
+def test_the_letterhead_artwork_sits_flush_with_the_left_edge_of_the_sheet(path):
+    """The real two-section fixture, and the bug as the frontend agent hit it. The letterhead is
+    full-bleed art — bison top-right, red bar along the bottom — anchored at posOffset -49.5pt
+    against its own section's 49.5pt margin, so it starts at x=0. Reported at 121.5pt it renders
+    off the page in the editor preview."""
+    d = docx.Document(str(path))
+    geo = pw.template_geometry(d)
+    assert len(d.sections) == 2, "%s stopped being the two-section case this guards" % path.name
+    assert geo["images"], "%s lost its letterhead artwork" % path.name
+    for img in geo["images"]:
+        assert img["x_pt"] == pytest.approx(0.0, abs=0.5), (
+            "%s reports the letterhead at x=%.2fpt" % (path.name, img["x_pt"]))
+    page_w, _page_h = pw.page_size(d)
+    for b in geo["boxes"]:
+        assert 0.0 <= b["x_pt"] and b["x_pt"] + b["w_pt"] <= page_w, (
+            "%s reports box %d off the sheet at x=%.2f" % (path.name, b["id"], b["x_pt"]))
+
+
+@pytest.mark.parametrize("path", COVER_LETTERS)
+def test_the_letter_is_laid_out_in_the_section_its_paragraphs_live_in(path):
+    """Section 0 of the letterhead holds ONE empty paragraph; every body paragraph, and the
+    artwork, are in section 1. So the editor's column must be section 1's 522pt at 49.5pt."""
+    d = docx.Document(str(path))
+    words = pw._body_section_ordinal(d)
+    assert words != 0, "%s: the words are in section 0 after all" % path.name
+    margin = pw._page_metrics(d)["margin"]
+    assert margin["left"] == pytest.approx(d.sections[words].left_margin.pt)
+    assert margin["left"] == pytest.approx(49.5), "%s: not the letterhead setup" % path.name
+    page_w, _h = pw.page_size(d)
+    assert page_w - margin["left"] - margin["right"] == pytest.approx(522.0)
+
+
+@pytest.mark.parametrize("path", sorted(TEMPLATES.rglob("*.docx")))
+def test_a_single_section_template_reads_exactly_as_it_did_before(path):
+    """Requirement one of the fix: the templates already in production must report exactly what
+    they reported when these four functions said `d.sections[0]` and nothing else. Pinned
+    against that literal expression rather than against a copied constant, so the check cannot
+    drift along with the code it is checking."""
+    d = docx.Document(str(path))
+    if len(d.sections) != 1:
+        pytest.skip("%s is multi-section; covered above" % path.name)
+    sec = d.sections[0]
+    assert pw._body_section_ordinal(d) == 0
+    for child in d.element.body:
+        assert pw._section_ordinal(d.element.body, child) == 0
+    assert pw._page_metrics(d)["margin"] == pytest.approx({
+        "top": sec.top_margin.pt, "left": sec.left_margin.pt,
+        "right": sec.right_margin.pt, "bottom": sec.bottom_margin.pt})
+    assert pw.page_size(d) == pytest.approx((sec.page_width.pt, sec.page_height.pt))
+    assert pw.box_size_limits(d) == pytest.approx((
+        sec.page_width.pt - sec.left_margin.pt - sec.right_margin.pt,
+        sec.page_height.pt - sec.top_margin.pt - sec.bottom_margin.pt))
+
+
 # ── the bounds ────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("spec", [
     {"x_pt": 600.0},          # corner on the paper, box hanging off the right
