@@ -313,6 +313,24 @@ def test_a_template_that_will_not_load_leaves_a_way_out_that_works(ran):
         "the way out closed the message without turning anything off")
 
 
+# ══ the resolver has to be called WITH the draft ═════════════════════════════
+def test_the_letters_token_resolver_is_handed_the_drafts_values(ran):
+    """`computeTokenValues(mergedValues)` is the proposal's own resolver, borrowed rather than
+    copied, and it REQUIRES that argument — it dereferences it immediately. Calling it with none
+    throws, `clTokens()` swallows any throw, and `render()` cannot tell a swallowed throw apart
+    from "this letter genuinely has no tokens" — so every `{{token}}` printed literally. That is
+    exactly what Hanz's screenshots showed: `{{job_name}}`, `{{system_name}}`, `{{epoxy_sf}}`,
+    `{{cove_lf}}`, `{{schedule_notes}}`, `{{estimator_name}}` all rendering raw on the Cover letter
+    tab. This draft's job_name is one the letterhead default does not know, so only a call that
+    actually reaches the draft's own state can print it here."""
+    r = ran["resolverGetsTheDraft"]
+    assert r["jobNameBlock"] == "Regression Test Job", (
+        "the resolver was not handed this draft's values (or was not called at all) — the block "
+        "shows %r" % (r["jobNameBlock"],))
+    assert r["stillRaw"] is False, (
+        "the token printed literally in the editor preview instead of being substituted")
+
+
 # ══ the duplicated inference ══════════════════════════════════════════════════
 def test_the_letters_work_type_inference_has_not_drifted_from_the_proposals(ran):
     """WHY THERE ARE TWO COPIES AT ALL: `effectiveWorkType` is lifted out of proposal-review.js by
