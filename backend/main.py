@@ -2744,7 +2744,11 @@ class PriceIn(BaseModel):
     extras: list = Field(default_factory=list)   # custom material lines: [{"label","qty","unit_price"}] or [{"label","amount"}]
     bulk_discount: bool = False   # Kyle's D41 toggle — swaps 6 materials to bulk rates
     sales_tax_rate: float = 0.09475   # combined sales-tax rate (on material) if taxable
-    remodel_rate: float = 0       # KS remodel rate = state 6.5% + county (on labor/service)
+    remodel_rate: float = 0       # KS remodel rate on labor/service — caller-supplied full combined
+                                   # rate for the job site (state+county+city+special district; see
+                                   # backend/reference_tax.py). Confirmed unreached by any live
+                                   # frontend caller as of 2026-09 — the sheet-formula path is what's
+                                   # actually live for Epoxy/Polish/Gyp/Combo.
     taxable: bool = True
     remodel: bool = False
     full_bid: bool = False        # also compute labor+markup+bond -> Total Base Bid
@@ -2912,9 +2916,15 @@ def api_tax_rate(city_state: str = "") -> Dict[str, Any]:
 
 @app.get("/api/reference/counties")
 def api_counties(state: str = "") -> Dict[str, Any]:
-    """Searchable county list for the Remodel-Tax dropdown.
-    Optional ?state=MO|KS filter."""
-    return {"counties": reference_tax.list_counties(state)}
+    """Searchable city + county list for the Remodel-Tax dropdown.
+    Optional ?state=MO|KS filter. Cities come first and carry the FULL
+    combined local rate (state+county+city+special district) — the one
+    that's actually correct for a job inside that city's limits, per
+    KDOR's destination-sourcing rule. Counties are the county-only floor
+    rate, correct only for unincorporated land (see reference_tax.py).
+    Key stays "counties" for backward compatibility with existing
+    frontend callers; each row now carries a `kind` ("city"|"county")."""
+    return {"counties": reference_tax.list_tax_areas(state)}
 
 
 @app.get("/api/sheet/{sheet_name}")
