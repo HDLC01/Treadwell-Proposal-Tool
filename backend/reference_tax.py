@@ -168,12 +168,28 @@ def list_counties(state: str | None = None) -> list[dict]:
 # site. A job anywhere inside one of these cities' limits should use the
 # `remodel_rate` below instead of its county's county-only floor above.
 #
-# Rows ported from the pre-existing `TAX_RATES` table (same numbers, just
-# reshaped for the picker) are marked "from prior snapshot" below and
-# have NOT been individually re-verified this pass — re-check one before
-# leaning on it the way Overland Park's was found stale. Rows marked
-# "verified 2026-09-02" were freshly cross-checked against 2+ independent
-# current sources as part of diagnosing Kyle's remodel-tax bug report.
+# EVERY row below was driven through KDOR's own Address Tax Rate Locator
+# (kssst.kdor.ks.gov/webLookupResults.cfm) on 2026-09-02 against a real
+# street address in that city, and each row's note records the address
+# used so the next person can re-run the same query.
+#
+# That pass found SEVEN of the rows ported from the old `TAX_RATES`
+# snapshot were wrong, and every one of them was wrong in the same
+# direction — too HIGH, overstating the tax on the bid by between 0.025
+# and 0.625 points. Kansas City KS was the worst at 9.75% against a real
+# 9.125%. "From prior snapshot, not re-verified" turned out to mean
+# "probably wrong", so no row is allowed to carry that status any more:
+# if a row cannot be verified, it does not belong in this table.
+#
+# A CITY NAME CANNOT REACH A SPECIAL DISTRICT. Kansas layers CID / TDD /
+# STAR-bond districts on top of the city rate, and KDOR's address lookup
+# returns them while a city picker structurally cannot. Two real ones:
+# 5601 W 135th St, Overland Park (Prairiefire STAR+CID) is 10.85%, and
+# 1843 Village West Pkwy, Kansas City (Legends CID + Village West TDD) is
+# 10.725% — 1.5 and 1.6 points above their own city rows here. Those are
+# exactly the retail-buildout sites Treadwell bids, so the per-address
+# lookup stays the final word; this table only makes the app's suggestion
+# close enough not to read as a bug.
 #
 # Sources drift: KDOR revises local rates quarterly (Jan/Apr/Jul/Oct).
 # Kyle's own KDOR Address Tax Rate Locator lookup for the exact job
@@ -183,15 +199,15 @@ def list_counties(state: str | None = None) -> list[dict]:
 # that lookup.
 CITIES: list[dict] = [
     {"name": "Overland Park",   "state": "KS", "county": "Johnson",     "remodel_rate": 0.0935,  "notes": "Verified 2026-09-02: 6.5% state + 1.475% county + 1.375% city. Up to 0.1135 inside a TDD/CID special district — verify the exact address for those."},
-    {"name": "Olathe",          "state": "KS", "county": "Johnson",     "remodel_rate": 0.09475, "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Lenexa",          "state": "KS", "county": "Johnson",     "remodel_rate": 0.09475, "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Shawnee",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.0975,  "notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. From prior snapshot — re-verify before relying on it."},
-    {"name": "Kansas City",     "state": "KS", "county": "Wyandotte",   "remodel_rate": 0.0975,  "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Leawood",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.095,   "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Merriam",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.0975,  "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Mission",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.0975,  "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Prairie Village", "state": "KS", "county": "Johnson",     "remodel_rate": 0.0935,  "notes": "From prior snapshot — re-verify before relying on it for a live bid."},
-    {"name": "Topeka",          "state": "KS", "county": "Shawnee",     "remodel_rate": 0.0935,  "notes": "County seat of Shawnee County. From prior snapshot — re-verify before relying on it for a live bid."},
+    {"name": "Olathe",          "state": "KS", "county": "Johnson",     "remodel_rate": 0.09475, "notes": "Verified 2026-09-02 against KDOR (100 E Santa Fe St, 66061): 9.475%."},
+    {"name": "Lenexa",          "state": "KS", "county": "Johnson",     "remodel_rate": 0.0935,  "notes": "Verified 2026-09-02 against KDOR (17101 W 87th St Pkwy, 66219): 9.35%. Prior snapshot said 9.475% — 0.125 pt too high."},
+    {"name": "Shawnee",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.096,   "notes": "City of Shawnee (Johnson County) — not to be confused with Shawnee County (Topeka), below. Verified 2026-09-02 against KDOR (11110 Johnson Dr, 66203): 9.6%. Prior snapshot said 9.75% — 0.15 pt too high."},
+    {"name": "Kansas City",     "state": "KS", "county": "Wyandotte",   "remodel_rate": 0.09125, "notes": "Verified 2026-09-02 against KDOR (701 N 7th St, 66101): 9.125%. Prior snapshot said 9.75% — 0.625 pt too high, the worst of the batch. Village West / Legends addresses sit in a CID+TDD and run 10.725% — verify the exact address there."},
+    {"name": "Leawood",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.091,   "notes": "Verified 2026-09-02 against KDOR (4800 Town Center Dr, 66211): 9.1%. Prior snapshot said 9.5% — 0.4 pt too high."},
+    {"name": "Merriam",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.09475, "notes": "Verified 2026-09-02 against KDOR (9001 W 62nd St, 66202): 9.475%. Prior snapshot said 9.75% — 0.275 pt too high."},
+    {"name": "Mission",         "state": "KS", "county": "Johnson",     "remodel_rate": 0.09725, "notes": "Verified 2026-09-02 against KDOR (6090 Woodson St, 66202): 9.725%. Prior snapshot said 9.75% — 0.025 pt too high."},
+    {"name": "Prairie Village", "state": "KS", "county": "Johnson",     "remodel_rate": 0.08975, "notes": "Verified 2026-09-02 against KDOR (7700 Mission Rd, 66208): 8.975%. Prior snapshot said 9.35% — 0.375 pt too high."},
+    {"name": "Topeka",          "state": "KS", "county": "Shawnee",     "remodel_rate": 0.0935,  "notes": "County seat of Shawnee County. Verified 2026-09-02 against KDOR (215 SE 7th St, 66603): 9.35%."},
     {"name": "Lawrence",        "state": "KS", "county": "Douglas",     "remodel_rate": 0.0935,  "notes": "Verified 2026-09-02: 6.5% state + 1.25% county + 1.6% city."},
     {"name": "Junction City",   "state": "KS", "county": "Geary",       "remodel_rate": 0.0975,  "notes": "Verified 2026-09-02: 6.5% state + 1.25% county + 2.0% city. Some ZIPs add a special district on top — verify the exact address."},
     {"name": "Leavenworth",     "state": "KS", "county": "Leavenworth", "remodel_rate": 0.095,   "notes": "City of Leavenworth. Verified 2026-09-02: 6.5% state + 1.0% county + 2.0% city."},

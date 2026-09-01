@@ -194,3 +194,65 @@ def test_lookup_blank_input():
 
 def test_lookup_unparseable_input():
     assert reference_tax.lookup("not a city state pair")["source"] == "unknown"
+
+
+# ─── No row may sit in this table unverified ───────────────────────────────
+#
+# Added 2026-09-02 after seven of the fifteen KS city rows turned out to be
+# wrong at once. Every one of the seven carried the note "From prior snapshot —
+# re-verify before relying on it for a live bid", and every one was too HIGH,
+# overstating tax on a customer's bid by up to 0.625 points (Kansas City KS:
+# 9.75% in this table against a real 9.125% from KDOR).
+#
+# The old suite could not have caught it: it asserted the table was internally
+# consistent, and a table can be perfectly consistent and uniformly wrong. The
+# only thing that finds a bad rate is comparing it to the authority, so what is
+# enforced here is that each row SAYS which authority and which address it was
+# checked against — a claim a human can re-run in one query.
+
+def test_no_city_row_is_left_unverified():
+    """A row that admits it was never checked is a wrong rate waiting to be quoted."""
+    # Match the ADMISSION, not the words "prior snapshot" — a corrected row is
+    # expected to say what the prior snapshot wrongly claimed, and that history
+    # is the useful part of the note.
+    unverified = [c["name"] for c in reference_tax.CITIES
+                  if "re-verify before relying" in c.get("notes", "").lower()]
+    assert unverified == [], (
+        "These city rows carry no verification and must not ship — check each "
+        f"against KDOR's address lookup or drop it: {unverified}")
+
+
+def test_every_city_row_names_the_date_it_was_verified():
+    for city in reference_tax.CITIES:
+        assert "verified" in city.get("notes", "").lower(), (
+            f"{city['name']} does not say when or against what it was verified")
+
+
+def test_no_city_rate_sits_below_its_own_county_floor():
+    """The county rows are a FLOOR (state + county). A city inside that county
+    adds a city portion on top, so a city rate under its county's floor means
+    one of the two numbers is wrong — which is how a 0.625-point error hides."""
+    floors = {(c["name"], c["state"]): c["remodel_rate"]
+              for c in reference_tax.COUNTIES if c.get("remodel_rate") is not None}
+    for city in reference_tax.CITIES:
+        rate = city.get("remodel_rate")
+        floor = floors.get((city["county"], city["state"]))
+        if rate is None or floor is None:
+            continue
+        assert rate >= floor, (
+            f"{city['name']}, {city['state']} is {rate} but its county "
+            f"{city['county']} floors at {floor}")
+
+
+def test_no_city_rate_is_implausible_for_kansas():
+    """Kansas state is 6.5%. A plain city rate above ~10.5% means a special
+    district got baked into a city-wide row, which the picker must never do —
+    districts are address-level and are called out in `notes` instead."""
+    for city in reference_tax.CITIES:
+        if city["state"] != "KS":
+            continue
+        rate = city.get("remodel_rate")
+        if rate is None:
+            continue
+        assert reference_tax.KS_STATE_RATE <= rate <= 0.105, (
+            f"{city['name']} at {city['remodel_rate']} is outside the plausible KS band")
