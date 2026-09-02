@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -274,6 +275,62 @@ def _ensure_cover_letter_values(values: Mapping[str, Any]) -> dict:
                         ", ".join(_SHORT_DATE_SOURCES), first,
                         out.get("project_name") or out.get("job_name") or "(unnamed)")
         out["proposal_date_short"] = ""
+    # ── Will Buchanan's Direct wording, 2026-09-03 ───────────────────────────
+    # THE OTHER HALF OF A DUAL RESOLUTION. `computeTokenValues` in
+    # proposal-review.js resolves these same three for the editor's on-screen
+    # preview; this side serves generate AND the portal's server-side replay of
+    # a pinned revision. A token filled on only one side previews as a raw
+    # {{token}} over a correct PDF -- the bug PR #431 fixed for
+    # {{proposal_date_short}}. Same rules on both sides, deliberately.
+    #
+    # A replay is why these are backfilled rather than assumed: a payload pinned
+    # before these fields existed carries none of them, and the customer can ask
+    # for that PDF at any time.
+    if _blank(out.get("greeting")):
+        # The letter opens on the contact's first name and nothing else:
+        # "Brandon,". A blank contact box would leave a bare comma at the top of
+        # a customer document, so fall back to a real greeting.
+        first = re.split(r"[\s,]+", str(out.get("contact_name") or "").strip())[0]
+        # Measure the name with an initial's own punctuation removed: "B." is one letter and must
+        # not greet a customer as "B.,", while "J.R." is two and is what that person is called.
+        # Stripping rather than counting A-Za-z keeps accented names working.
+        if len(re.sub(r"[.'-]", "", first)) < 2 or "@" in first:
+            out["greeting"] = "Hello,"          # an email or a lone initial is not a name
+        else:
+            # "brandon" -> "Brandon"; "McDonald" kept exactly as typed.
+            shown = first[0].upper() + first[1:] if first == first.lower() else first
+            out["greeting"] = shown + ","
+
+    # Area -- the estimator's words for what the floor covers. `area_description`
+    # is the frontend's SF line ("~4,200 sf of epoxy flooring"), which is a worse
+    # answer than the estimator's own and a much better one than an empty "Area:".
+    if _blank(out.get("work_areas")):
+        out["work_areas"] = str(out.get("area_description") or "")
+
+    # Materials / System: '1/4" MACRO Flake Single Broadcast with 6" Integral
+    # Cove Base'.
+    if _blank(out.get("cover_system_line")):
+        name = str(out.get("system_name") or "").strip()
+        thick = str(out.get("system_thickness") or "").strip()
+        # Three of Kyle's fifteen system names already state a thickness
+        # ('3/16" Urethne Cement With Color Fast (SLB)'). Prepending there prints
+        # two, and where the estimator's pick disagrees with the name, two
+        # CONTRADICTORY ones. An inch fraction already in the name wins: it is
+        # Kyle's spec, not ours.
+        line = name
+        if thick and not re.search(r'\d\s*/\s*\d+\s*"', name):
+            line = (thick + " " + name) if name else thick
+        # No cove, no cove clause. The proposal body has always printed "with 0 LF
+        # of integral cove base" on a no-cove job; the letter does not inherit it.
+        try:
+            cove_lf = float(re.sub(r"[^0-9.]", "", str(out.get("cove_lf") or "0")) or 0)
+        except ValueError:
+            cove_lf = 0.0
+        if cove_lf > 0:
+            height = str(out.get("cove_height") or "6").strip() or "6"
+            line = (line + " with " if line else "") + height + '" Integral Cove Base'
+        out["cover_system_line"] = line
+
     return out
 
 

@@ -1,4 +1,4 @@
-# Cover Letter templates — FIRST DRAFT COPY, NOT SIGNED OFF
+# Cover Letter templates — Direct is Will's wording; GC and Gyp are still draft
 
 The optional cover letter shown to the customer in the portal **before** the
 proposal itself. Seven files, generated — not hand-typed:
@@ -36,11 +36,17 @@ generated and Kyle's are not:
   for a GC combo bid because no GC combo Word file was ever made. A *letter*
   doing the same would tell a combo customer, in prose, that the pages behind it
   are an epoxy proposal — half the scope simply missing.
-- **`GC/*` currently carries the SAME body copy as `Direct/*`.** Hanz's source
-  PDF has no GC variant, and inventing contractor-flavoured sentences would put
-  wording nobody approved in front of a customer. The files are separate so the
-  copy pass can diverge them without a code change. **This is a question for the
-  copy review: should the GC letter read differently?**
+- **`Direct/*` and `GC/*` have diverged — as of 2026-09-03 they are different
+  copy.** They shipped identical because the source PDF had no GC variant, and
+  inventing contractor-flavoured sentences would have put wording nobody approved
+  in front of a customer; the separate files existed so a copy pass could diverge
+  them without a code change. That pass happened for Direct only. Will Buchanan
+  sent the Direct text verbatim — *"In addition to what Greg sent you for GC
+  projects please use the text template below for direct projects. The highlighted
+  text should be pulled from the intake form"* — and `DIRECT_COPY` in the generator
+  is it, to the comma. **GC still waits on Greg's text**, which has not reached this
+  repo; `spec_for()` hands GC and Gyp the shared `COPY` until it does. The same
+  rule as before applies to it: do not invent it.
 
 ## The copy is a draft. It needs Hanz's review.
 
@@ -51,7 +57,7 @@ templates 1-4. Those were written as outbound **emails**; this is a portal
 | Source (email) | Here (document) |
 |---|---|
 | `Subject Line: TREADWELL Proposal - Epoxy Flooring - {Job_Name}` | A red underlined document title, `Epoxy / Resinous Flooring Proposal - {{job_name}}`. The "Subject Line:" label is gone; the heading itself is kept because Hanz's own `Treadwell Cover Letter - Example1.docx` opens with one. |
-| "I've attached our Epoxy/Resinous Flooring proposal to this email." | "The pages that follow are our Epoxy / Resinous Flooring proposal for this project. A few things to note:" — there is no email and no attachment. |
+| "I've attached our Epoxy/Resinous Flooring proposal to this email." | **GC and Gyp:** "The pages that follow are our Epoxy / Resinous Flooring proposal for this project. A few things to note:" — there is no email and no attachment. **Direct:** just "A few things to note:", per Will's text. He is right that the first half was redundant — the red underlined title one line above already names the proposal that follows, so the letter was saying it twice. |
 | The cc note | Dropped. |
 
 Templates 5 (the gyp addendum note) and 6 (BuildingConnected) were out of scope
@@ -67,11 +73,11 @@ prints as itself and reads as an instruction.
 
 | Placeholder | In | Why it is not a token |
 |---|---|---|
-| `[THICKNESS - pick one: 1/8" / 3/16" / 1/4" nominal thickness with urethane topcoat.]` | Epoxy, Combo | The tool has no thickness field anywhere. |
-| `[COVE HEIGHT - pick one: 4" / 6" / 8".]` | Epoxy, Combo | `cove_lf` gives the length, never the height. |
-| `[AGGREGATE EXPOSURE - pick one: Class A ... / Class B ... / Class C ...]` | Polish, Combo | No aggregate-exposure field. |
-| `[SHEEN - pick one: Level 2 (400 grit) / Level 3 (800 grit).]` | Polish, Combo | No sheen field. |
-| `[SCHEDULE - assumes 1 mobilization per phase ...]` | all | Follows the filled `{{schedule_notes}}`; the mobilization assumption is not modelled. |
+| `[THICKNESS - pick one: 1/8" / 3/16" / 1/4" nominal thickness with urethane topcoat.]` | **GC** Epoxy, Combo | Nothing captured a thickness when this shipped. **Direct no longer has it**: the intake form asks (`system_thickness`), and `{{cover_system_line}}` prints the answer. Retiring it on the GC side is a copy decision waiting on Greg's text, not a code change. |
+| `[COVE HEIGHT - pick one: 4" / 6" / 8".]` | **GC** Epoxy, Combo | `cove_lf` gives the length, never the height. **Direct no longer has it** — `{{cover_system_line}}` appends `6" Integral Cove Base` from `cove_height`, and drops the clause entirely when `cove_lf` is 0. |
+| `[AGGREGATE EXPOSURE - pick one: Class A ... / Class B ... / Class C ...]` | Polish, Combo (**both** audiences) | No aggregate-exposure field. Kept on Direct on purpose: Will's Materials / System line is an epoxy one and he wrote nothing about polished concrete, so Direct's polish letter takes his *structure* — the Area line, the fixed Schedule sentence, the closings — and keeps its own system wording. Exposure and sheen are real spec decisions; guessing them is not a copy edit. |
+| `[SHEEN - pick one: Level 2 (400 grit) / Level 3 (800 grit).]` | Polish, Combo (**both** audiences) | No sheen field. Same reasoning as the row above. |
+| `[SCHEDULE - assumes 1 mobilization per phase ...]` | **GC and Gyp** | Follows the filled `{{schedule_notes}}`; the mobilization assumption is not modelled. **Direct no longer has it, and no longer prints `{{schedule_notes}}` either** — Hanz's call was a fixed sentence, and Will wrote the whole thing out: it states the assumption the price was built on and invites the customer to correct it, which a filled-in note cannot do. The proposal behind the letter still carries `{{schedule_notes}}`, and the estimator can edit this paragraph in the document editor for a job that phases differently. |
 | `[OPTIONS - keep the lines that apply: ...]` | all | The proposal's priced options live in its own PRICE block; these are the unpriced "add for ..." notes from the source email, and there is no field behind them. |
 | `[SOUND MAT - state the mat thickness and where it goes ...]` | Gyp | No sound-mat field. |
 | `[NOTES - add the ones this job needs: spec thickness conflict / STC & IIC / excluded mat / GC storage]` | Gyp | Source template 4 lists four job-specific notes. Writing them as boilerplate would put claims about a spec nobody has read into a customer document, so they ship as one instruction line instead of four invented sentences. |
@@ -87,6 +93,48 @@ Same vocabulary as the proposal templates, filled by the same substitution pass
 `{{schedule_notes}}`, `{{estimator_name}}`, and the gyp set
 `{{gyp_soft_thickness}}` / `{{gyp_soft_sf}}` / `{{gyp_hard_thickness}}` /
 `{{gyp_hard_sf}}`.
+
+**Which letter uses which is no longer uniform.** Direct's epoxy letter states no
+square footage at all — Will's Materials / System line replaced the sentence that
+carried `{{epoxy_sf}}`, `{{cove_lf}}` and `{{texture}}`, so on a job where the
+estimator types real area words the SF figure appears only in the proposal behind
+the letter. That is his text and his call; it is recorded here because it is the
+kind of omission that looks like a bug six months from now.
+
+## The three Direct tokens are COMPUTED, and computed TWICE
+
+`{{greeting}}`, `{{work_areas}}` and `{{cover_system_line}}` are not draft fields
+copied through. Each is derived, and each is derived in **two** places that must
+agree:
+
+| Where | Serves |
+|---|---|
+| `computeTokenValues` in `frontend/js/proposal-review.js` | the cover-letter editor's on-screen preview (`clTokens()` borrows the function) |
+| `_ensure_cover_letter_values` in `backend/cover_letter_writer.py` | generate, **and** the portal's server-side replay of a pinned revision |
+
+A token resolved on only one side previews as a raw `{{token}}` over a correct PDF
+— exactly the bug PR #431 fixed for `{{proposal_date_short}}` — and an estimator
+proofreading on screen cannot tell that from a broken document. Change one side,
+change the other; a test asserts they agree.
+
+- **`{{greeting}}`** — the contact's first name and nothing else, `"Brandon,"`.
+  Falls back to `"Hello,"` rather than a bare comma, and treats an email address
+  or a lone initial in the contact box as *not* a first name. `"brandon"` is
+  capitalised; `"McDonald"` is left exactly as typed.
+- **`{{work_areas}}`** — the estimator's own words for what the floor covers
+  (`work_areas` on the intake form). Falls back to `area_description`, the SF
+  line, rather than printing an empty `Area:` — the letter's list items are
+  static paragraphs and `cover_letter_writer` deliberately does not port the
+  `{{#block}}` expansion that could drop one.
+- **`{{cover_system_line}}`** — `1/4" MACRO Flake Single Broadcast with 6"
+  Integral Cove Base`, composed from `system_thickness`, `system_name`,
+  `cove_lf` and `cove_height`. Two behaviours no template text can express:
+  the thickness prefix is **skipped when Kyle's system name already states one**
+  (three of his fifteen do, e.g. `3/16" Urethne Cement With Color Fast (SLB)` —
+  an inch fraction already in the name wins, so a disagreeing pick cannot print
+  two contradictory thicknesses), and the whole cove clause is **dropped on a
+  job with no cove** rather than printing the "0 LF" the proposal body still
+  does.
 
 `{{proposal_date}}` is the one the Proposal Review screen stamps at generate
 time. A server-side replay (the portal's on-demand PDF) may not carry it, so
