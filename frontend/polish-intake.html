@@ -92,6 +92,8 @@
       /* Between 1200 and 1540 the centred 1000px column would run under the rail, so the column
          shifts left by the rail's width. Above 1540 the gutter is already wider than the rail
          (1000 + 2x266), so the page is left exactly as it is and nothing moves for the widget. */
+      /* The header names the panel, so the inline label would say it twice. */
+      .vcheat .vc-inline{display:none}
       .wrap{padding-right:282px}
     }
     @media (min-width:1540px){ .wrap{padding-right:0} }
@@ -212,7 +214,7 @@
         <div class="sec-b">
           <div class="vcheat" id="verbal-cheat">
             <div class="vc-drag" title="Drag to move">Worth saying</div>
-            <b>Worth saying:</b> the job name, the street and town, when the bid is due, who to
+            <b class="vc-inline">Worth saying:</b> the job name, the street and town, when the bid is due, who to
             reply to - and, in your own words, whether it is a <b>hard bid</b>, <b>prevailing
             wage</b>, <b>tax exempt</b>, or a <b>remodel</b>.
           </div>
