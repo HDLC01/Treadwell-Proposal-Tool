@@ -258,11 +258,20 @@
         headers: authHeaders(),
         body: JSON.stringify({ data: blob }),
         keepalive: true,         // let it finish even if the tab is closing
-      }).then((res) => {
+      }).then(async (res) => {
+        // /api/draft/{id} answers a caught server-side exception with HTTP 200 and
+        // {"ok": false, "error": ...} — main.py:api_save_draft's own except branch. res.ok only
+        // sees the HTTP status, so that shape read as a success here while polish-sandbox.js's
+        // saveThenFileAsTest (the one other PUT to this route) already checked the body. Same
+        // check now applies to every autosave, not just the sandbox's one-off file-as-test call.
+        const body = res && res.ok
+          ? await res.json().catch(() => null)
+          : null;
+        const ok = !!(res && res.ok) && !(body && body.ok === false);
         // Only after the row exists: set_test_flag returns false on a missing draft, so filing
         // before the first save would be a silent no-op and the project would stay in Active.
-        if (res && res.ok) applyPendingTestIntent(id);
-        return !!(res && res.ok);
+        if (ok) applyPendingTestIntent(id);
+        return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
       return p;

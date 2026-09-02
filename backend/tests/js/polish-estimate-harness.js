@@ -349,7 +349,7 @@ function expectedChain(model, asms, items, remodelRate) {
 function build(opts) {
   opts = opts || {};
   const log = [];
-  const rec = { saves: [], fetches: [] };
+  const rec = { saves: [], fetches: [], flushed: 0 };
   const store = { blob: clone(opts.blob === undefined ? blob() : opts.blob),
                   id: opts.id || "proj-1" };
   const dom = makeDom(log);
@@ -370,6 +370,9 @@ function build(opts) {
     draftReady: Promise.resolve(),
     authHeaders: (hs) => Object.assign({}, hs || {}),
     resolveApiBase: () => "",
+    // The pagehide flush calls this after pushing the pending save through synchronously --
+    // counted separately from rec.saves so it does not masquerade as a second save.
+    flushState: () => { rec.flushed++; },
   };
 
   const S = {
@@ -388,11 +391,22 @@ function build(opts) {
     markNewProjectAsTest() { log.push("markTest"); },
   };
 
+  const winListeners = [];
   const win = {
     TWPolishBid: B, TWLib: L, TWPolishSandbox: S,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
+    // The page registers its own `pagehide` flush directly on window (mirrors shared.js's own
+    // net at shared.js:513) -- exposed so a test can fire it like a real tab close/switch.
+    listeners: winListeners,
+    addEventListener(type, handler) {
+      winListeners.push({ type, handler });
+      log.push("winlisten:" + type);
+    },
+    fire(type, event) {
+      winListeners.filter((l) => l.type === type).forEach((l) => l.handler(event));
+    },
   };
 
   const fetchStub = async function (url) {
@@ -407,7 +421,7 @@ function build(opts) {
   };
 
   const api = scope(win, doc, TW, fetchStub, clock);
-  return { api, dom, doc, TW, S, clock, log, rec, store };
+  return { api, dom, doc, win, TW, S, clock, log, rec, store };
 }
 
 // ── driving the page through its own markup ──────────────────────────────────
@@ -1167,6 +1181,34 @@ const rendered = [];      // every string the page put on screen, for the Labour
                                   .replace(/<style[\s\S]*?<\/style>/g, "")),
     renderedChars: rendered.join("\n").length,
   };
+
+  // ── Fault 3 on this page: nothing flushed the 600ms timer before a tab close/switch ──
+  //
+  // Same gap as the intake page: shared.js's OWN pagehide net (shared.js:513) only flushes a timer
+  // THIS page armed, and before the fix nothing here armed one from a takeoff edit soon enough to
+  // matter within the 600ms window. The page now pushes the pending save through synchronously and
+  // forces the network flush on pagehide, rather than trusting the debounce to survive a tab close.
+  {
+    const b = build();
+    await b.api.init();
+    typeInto(b, '[data-tk="0"][data-k="measurement"]', "12000");
+    const armedBeforeLeaving = b.clock.armed();
+    const before = b.rec.saves.length;
+    b.win.fire("pagehide");
+    out.pagehideFlush = {
+      wired: b.win.listeners.some((l) => l.type === "pagehide"),
+      armedBeforeLeaving,
+      savedSynchronously: b.rec.saves.length - before,   // save ran inline, not on the timer
+      armedAfterLeaving: b.clock.armed(),                // the timer it cleared
+      flushedTheNetwork: b.rec.flushed,                  // TW.flushState(), forcing the PUT now
+    };
+
+    // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.
+    const d = build();
+    await d.api.init();
+    d.win.fire("pagehide");
+    out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+  }
 
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });

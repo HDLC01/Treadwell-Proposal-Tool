@@ -252,6 +252,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onCountyKeydown")}
   ${fn("saveSoon")}
   ${fn("save")}
+  ${fn("paintSaveBlocked")}
   ${fn("hydrate")}
   ${fn("onClick")}
   ${fn("onSubmit")}
@@ -307,7 +308,7 @@ const FORM_VALUES = {
 function build(opts) {
   opts = opts || {};
   const log = [];
-  const rec = { saves: [], written: [], navigated: [], fetched: [] };
+  const rec = { saves: [], written: [], navigated: [], fetched: [], flushed: 0 };
   const store = { blob: JSON.parse(JSON.stringify(opts.blob === undefined ? blob() : opts.blob)),
                   id: opts.id || "proj-1" };
   const dom = makeDom(log, opts.formValues || FORM_VALUES);
@@ -328,6 +329,11 @@ function build(opts) {
     draftReady: Promise.resolve(),
     authHeaders: () => ({}),
     resolveApiBase: () => "",
+    // The pagehide flush in wire() calls both of these. saveBlocked defaults to "answered" (null)
+    // so every existing test keeps seeing a hidden #save-note unless a test opts into the
+    // foreign-blob case via opts.saveBlockedReason -- mirrors the real shared.js contract.
+    flushState: () => { rec.flushed++; },
+    saveBlocked: () => (opts.saveBlockedReason || null),
   };
 
   const SB = {
@@ -347,6 +353,7 @@ function build(opts) {
   };
 
   const clock = makeClock();
+  const winListeners = [];
   const win = {
     TWAuth: { ready: Promise.resolve() },
     // The REAL pricing core, under the real global name. The page's own
@@ -355,6 +362,11 @@ function build(opts) {
     TWPolishBid: P,
     location: { href: "https://x/polish-intake.html?d=proj-1",
                 assign: (u) => rec.navigated.push(u) },
+    // wire() registers its own pagehide flush directly on window (mirrors shared.js's own net
+    // at shared.js:513) -- exposed so a test can fire it like a real tab close/switch.
+    listeners: winListeners,
+    addEventListener(type, handler) { winListeners.push({ type, handler }); },
+    fire(type, event) { winListeners.filter((l) => l.type === type).forEach((l) => l.handler(event)); },
   };
   // The ONLY source of the county list. Nothing is seeded into the page, so a hardcoded table in
   // polish-intake.js would show up here as a search that works with the fetch never called.
@@ -371,7 +383,7 @@ function build(opts) {
     ? async function (url) { rec.fetched.push({ url: String(url), failed: true });
                              throw new Error("reference data is down"); }
     : fetchStub);
-  return { api, dom, doc, TW, SB, clock, log, rec, store };
+  return { api, dom, doc, win, TW, SB, clock, log, rec, store };
 }
 
 /** The switches as they were rendered: key, label, why, and whether the track is on. */
@@ -640,6 +652,89 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
       savedBeforeLeaving: b.rec.saves.length - n === 1,
       savedConditions: b.rec.saves.length > n
         ? !!b.rec.saves[b.rec.saves.length - 1].polish_estimate.conditions : false,
+    };
+  }
+
+  // ── Fault 1, the actual bug: typing must arm the debounce ──────────────────────
+  //
+  // wire() had no `input` listener at all -- see wire()'s own comment. NAMED fields only: the
+  // county box has no `name`, and its keystrokes are a search (onCountyInput), not a draft
+  // edit -- a listener that could not tell them apart would save on every character typed while
+  // searching for a county, which is not what the county note is supposed to govern.
+  {
+    const b = build();
+    await b.api.boot();
+    b.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "input")
+      .forEach((l) => l.handler({ target: { name: "project_name" } }));
+    const armedOnNamedField = b.clock.armed();
+    b.clock.fire();
+
+    const c = build();
+    await c.api.boot();
+    c.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "input")
+      .forEach((l) => l.handler({ target: c.dom.nodes["county-input"] }));  // the real element,
+                                                                             // no `name` attribute
+    out.typing = {
+      wired: b.dom.nodes["intake-form"].listeners.some((l) => l.type === "input"),
+      armedOnNamedField,
+      savedFromTyping: b.rec.saves.length,
+      quietOnCountyInput: c.clock.armed(),
+    };
+  }
+
+  // ── Fault 3: nothing flushed the 600ms timer before a tab close/switch ─────────────
+  //
+  // shared.js's OWN pagehide net only flushes a timer THIS page armed -- see shared.js:513 -- and
+  // before the fix nothing here ever armed one from typing at all. wire() now pushes a save
+  // through synchronously and forces the network flush, rather than trusting the 600ms window.
+  {
+    const b = build();
+    await b.api.boot();
+    b.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "input")
+      .forEach((l) => l.handler({ target: { name: "project_name" } }));
+    const armedBeforeLeaving = b.clock.armed();
+    b.win.fire("pagehide");
+    out.pagehideFlush = {
+      wired: b.win.listeners.some((l) => l.type === "pagehide"),
+      armedBeforeLeaving,
+      savedSynchronously: b.rec.saves.length,       // save() ran inline, not on the timer
+      armedAfterLeaving: b.clock.armed(),            // the timer it cleared
+      flushedTheNetwork: b.rec.flushed,              // TW.flushState(), forcing the PUT now
+    };
+
+    // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.
+    const d = build();
+    await d.api.boot();
+    d.win.fire("pagehide");
+    out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+  }
+
+  // ── Fault 2 made visible: a refused cross-tab write now says so ──────────────────
+  //
+  // shared.js silently refuses a write when another tab has re-stamped the shared blob onto a
+  // different draft -- a console.warn only, nothing an estimator can see. TW.saveBlocked() names
+  // the reason; paintSaveBlocked() is what now puts it on screen, in a note separate from
+  // #sandbox-note (the test-copy identity banner, which must never be clobbered by this).
+  {
+    const b = build({ saveBlockedReason: "foreign-blob" });
+    await b.api.boot();
+    clickSwitch(b, "taxable");
+    b.clock.fire();
+    const blocked = b.dom.nodes["save-note"];
+
+    const c = build();
+    await c.api.boot();
+    clickSwitch(c, "taxable");
+    c.clock.fire();
+    const clear = c.dom.nodes["save-note"];
+
+    out.saveBlockedNote = {
+      shownWhenBlocked: blocked.hidden === false,
+      textMentionsAnotherTab: /another tab/i.test(blocked.textContent),
+      hiddenWhenNotBlocked: clear.hidden === true,
     };
   }
 
