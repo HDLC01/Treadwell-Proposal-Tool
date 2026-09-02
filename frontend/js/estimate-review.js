@@ -3577,9 +3577,16 @@ function refreshActiveGridFromHF() {
 // is the label verbatim, so restoring a prior pick just replays it as-is
 // instead of guessing its shape back apart.
 function renderCountyPill(label, remodelRate) {
-  const remodelNote = remodelRate != null
-    ? ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> applied automatically`
-    : "";
+  // "applied automatically" is true of the county table and false of a rate the estimator
+  // typed, and this pill sits inches from a note that says "Typed in". Reads `state` rather
+  // than taking a new argument because every caller would have to be taught to pass it,
+  // and because a new callee inside this function would be unbound in the lifted copy the
+  // harness runs.
+  const remodelNote = remodelRate == null
+    ? ""
+    : state.remodel_rate_override != null
+      ? ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> (the % you typed)`
+      : ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> applied automatically`;
   countySelected.innerHTML = `
     <span class="county-pill">${escHtml(label)}${remodelNote}
       <span class="x" id="county-clear">×</span>
@@ -3588,14 +3595,33 @@ function renderCountyPill(label, remodelRate) {
   countyInput.value = "";
   countyResults.classList.remove("open");
   document.getElementById("county-clear").addEventListener("click", () => {
-    delete state.county; delete state.county_tax_rate; delete state.county_remodel_rate; delete state.county_notes;
-    TW.setState(state);
+    // Falsy values, not `delete`. TW.setState does Object.assign(cur, partial) against a
+    // blob freshly re-parsed from localStorage, so any key the partial LACKS keeps its
+    // stored value -- `delete` emptied the pill on screen and left the county sitting in
+    // the saved draft, which the next reload brought straight back. Cosmetic while the
+    // county was only a label; now that effectiveRemodelRate() falls back to it, a county
+    // that refuses to clear is a rate that refuses to clear. Empty string and null match
+    // the shape polish-intake.js already writes for a cleared county. These four
+    // assignments ARE the fix: the payload below names each of these keys and reads it
+    // back off `state`, so clearing them here is what puts them in the save.
+    state.county = "";
+    state.county_tax_rate = null;
+    state.county_remodel_rate = null;
+    state.county_notes = "";
     countySelected.innerHTML = "";
     // Clearing the COUNTY does not clear a typed %. That figure came off the
     // state's site for this address; dropping the county is not a retraction of
     // it. With neither, the template's own placeholder comes back.
     applyRemodelRateOverride(effectiveRemodelRate());
     renderRemodelRateField();
+    // Saved AFTER the revert, and carrying cell_values, for the reason pickCounty
+    // records above its own save: `cellValues` is a COPY of state.cell_values
+    // (:282), so spreading `...state` would carry the OLD map and leave the
+    // cleared county's rate formula sitting in the draft. Generate before the next
+    // reload and the workbook would bill a rate for a county that is gone.
+    TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate,
+                  county_remodel_rate: state.county_remodel_rate,
+                  county_notes: state.county_notes, cell_values: cellValues });
   });
 }
 

@@ -101,7 +101,15 @@ function harness(tabs, active, toggles) {
       return Object.prototype.hasOwnProperty.call(toggleValues, k) ? toggleValues[k] : null;
     },
   };
-  const TW = { setState: (p) => setStateCalls.push(p) };
+  // Records a SNAPSHOT, not the live object. The real setState hands the payload to
+  // writeBlob, which JSON.stringifies it synchronously (shared.js:52-54), so what gets
+  // persisted is the payload as it stood AT THE CALL. Pushing the live object instead let a
+  // later in-place mutation of `cellValues` appear in an earlier save, which made an
+  // ordering bug -- saving before the rate is reverted -- invisible to every assertion.
+  const TW = { setState: (p) => {
+    try { setStateCalls.push(JSON.parse(JSON.stringify(p))); }
+    catch { setStateCalls.push(p); }   // unserialisable payload: better the object than nothing
+  } };
   // The fixture's active tab — proves the grid-refresh path fires. Pass "Copy1" to sit on a
   // COPIED tab, which is where the discarded cache used to blank the grid.
   const activeSheet = active || "Epoxy";
@@ -206,11 +214,23 @@ out.gypSheetCount = GYP_SHEETS.length;
   h.pickCounty({ kind: "city", name: "Overland Park", state: "KS", rate: 0.0935, remodel_rate: 0.0935, notes: "" });
   const clear = h.clearListeners[h.clearListeners.length - 1];
   clear();
+  const cleanup = h.setStateCalls[h.setStateCalls.length - 1];
   out.cleared = {
     epoxy: h.cellValues["Epoxy!B81"],
-    stateHasCounty: "county" in h.state,
-    stateHasRemodelRate: "county_remodel_rate" in h.state,
+    // Whether a county is SET, not whether the key exists. The handler no longer uses
+    // `delete` -- it cannot work: setState is Object.assign(cur, partial) against a blob
+    // re-read from localStorage, so a key the partial LACKS keeps its stored value. The
+    // keys are now present and falsy, which is the shape polish-intake.js already writes.
+    stateHasCounty: !!h.state.county,
+    stateHasRemodelRate: h.state.county_remodel_rate != null,
     pillCleared: h.countySelected.innerHTML === "",
+    // ...and the clear has to SURVIVE a reload, which is what `delete` never did: the
+    // cleared keys must be present and falsy in the payload handed to setState.
+    payloadClearsCounty: cleanup.county === "" && cleanup.county_remodel_rate === null,
+    // The reverted formula has to be IN the save. `cellValues` is a copy of
+    // state.cell_values, so a payload without it leaves the cleared county's rate in the
+    // draft -- and /api/generate fills the workbook from the draft.
+    payloadCellValues: cleanup.cell_values && cleanup.cell_values["Epoxy!B81"],
   };
 }
 
@@ -388,10 +408,17 @@ out.gypSheetCount = GYP_SHEETS.length;
   h.rateBox.value = "7.975";
   h.commitRemodelRate();
   h.clearListeners.forEach(fn => fn());  // the pill's x
+  const lastSave = h.setStateCalls[h.setStateCalls.length - 1];
   out.clearCountyKeepsTyped = {
     epoxy: h.cellValues["Epoxy!B81"],
     effective: h.effectiveRemodelRate(),
-    countyGone: h.state.county === undefined,
+    countyGone: !h.state.county,
+    // What makes the clear STICK: setState merges the object it is handed onto a blob
+    // re-read from localStorage, so the cleared keys have to be present and falsy in the
+    // payload. A `delete` leaves them absent, the merge keeps the old values, and the
+    // county comes back on the next reload -- bringing its rate with it.
+    payloadClearsCounty: lastSave.county === "" && lastSave.county_remodel_rate === null,
+    payloadKeepsTyped: lastSave.remodel_rate_override,
   };
 }
 

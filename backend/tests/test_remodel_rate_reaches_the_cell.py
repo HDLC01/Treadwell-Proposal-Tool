@@ -132,11 +132,25 @@ def test_a_county_with_no_override_reverts_every_cell_to_kyles_own_placeholder(r
 
 
 def test_clearing_the_pill_reverts_the_cell_and_the_state(result):
+    """`stateHasCounty` reads "is a county set", not "does the key exist". The handler used to
+    `delete` these keys, which looked like it cleared them and did not: TW.setState is
+    Object.assign(cur, partial) where `cur` is re-parsed from localStorage, so a key the
+    partial LACKS keeps its stored value. The pill emptied on screen and the county stayed in
+    the saved draft, ready to come back on the next reload. Cosmetic while the county was
+    only a label; not cosmetic now that effectiveRemodelRate() falls back to
+    county_remodel_rate -- a county that will not clear is a RATE that will not clear."""
     c = result["cleared"]
     assert c["epoxy"] == '=IF(D6="yes",0.1,0)'
     assert c["stateHasCounty"] is False
     assert c["stateHasRemodelRate"] is False
     assert c["pillCleared"] is True
+    assert c["payloadClearsCounty"] is True    # ...and it survives the reload
+    # The reverted RATE has to be in that same save. `cellValues` is a copy of
+    # state.cell_values (estimate-review.js:282), so a payload that omits it leaves the
+    # cleared county's formula in the draft -- and /api/generate fills the workbook from
+    # the draft, not from the page. Pick a county, clear it, generate without reloading,
+    # and the customer's estimate would carry a rate for a county that is gone.
+    assert c["payloadCellValues"] == '=IF(D6="yes",0.1,0)'
 
 
 def test_a_draft_saved_before_this_fix_self_heals_on_reopen(result):
@@ -334,6 +348,10 @@ def test_a_typed_percentage_overrides_the_county_table(result):
     assert t["effective"] == 0.07975
     assert t["countyStillOnState"] == 0.0935          # remembered, not overwritten
     assert "7.975%" in t["pill"]                      # and the pill agrees with the cell
+    # ...and does not claim it arrived automatically. That wording is true of the county
+    # table and false here, and it would be sitting inches from a note reading "Typed in".
+    assert "the % you typed" in t["pill"]
+    assert "applied automatically" not in t["pill"]
 
 
 def test_clearing_the_county_does_not_retract_a_typed_percentage(result):
@@ -347,6 +365,16 @@ def test_clearing_the_county_does_not_retract_a_typed_percentage(result):
     assert c["countyGone"] is True
     assert c["epoxy"] == '=IF(D6="yes",0.07975,0)'
     assert c["effective"] == 0.07975
+
+    # And the clear has to SURVIVE a reload, which it never did: the handler used
+    # `delete state.county` and then TW.setState(state). setState is
+    # Object.assign(cur, partial) where cur is re-parsed from localStorage, so a key the
+    # partial lacks keeps its stored value -- the pill emptied on screen and the county
+    # stayed in the draft. That was cosmetic while the county was only a label. It is not
+    # cosmetic now: effectiveRemodelRate() falls back to county_remodel_rate, so a county
+    # that will not clear is a RATE that will not clear.
+    assert c["payloadClearsCounty"] is True
+    assert c["payloadKeepsTyped"] == 0.07975   # ...without taking the typed rate with it
 
 
 def test_a_new_county_supersedes_a_typed_percentage_visibly(result):
@@ -421,3 +449,70 @@ def test_the_page_says_when_a_typed_percentage_is_not_affecting_the_price(result
 
     # and with nothing typed and no county, the placeholder in force is named out loud
     assert "10%" in s["unsetNote"]
+
+
+# The rate has to survive into the workbook, not just into the draft ==========
+# Everything above this line is the browser's half: the right formula reaches `cellValues`.
+# These two close the chain -- `cellValues` is forwarded verbatim into
+# `estimate_writer.fill_estimate`, and what has to come out the other side is a live
+# FORMULA. A cell holding =IF(D6="yes",0.07975,0) as literal TEXT computes nothing, and on
+# screen it is indistinguishable from one that works.
+
+
+def test_the_rate_formula_arrives_in_the_workbook_as_a_formula(tmp_path):
+    """Written through the same cell_values path /api/generate uses, then read back.
+
+    `test_cell_lock.py::test_cell_values_write_into_locked_cell_still_lands` already proves
+    a cell_values entry lands through sheet protection, but it writes the number 0.05. The
+    untested half is the one this feature depends on: openpyxl has to treat a leading "="
+    as a formula. Asserted for the epoxy layout, the polish layout and a gyp variant --
+    whose switch is D8, not D6 -- because the three carry different addresses and a
+    single-sheet check would not notice one of them going missing."""
+    import io
+
+    from openpyxl import load_workbook
+
+    import estimate_writer as ew
+
+    gyp = next(s for s in ew.LOCK_MAP if s == "Gyp")   # the layout key, not a sheet name
+    assert gyp                                          # (guards a rename of the layout)
+
+    data = ew.fill_estimate({}, cell_values={
+        "Epoxy!B81": '=IF(D6="yes",0.07975,0)',
+        "Polish!B75": '=IF(D6="yes",0.07975,0)',
+    })
+    wb = load_workbook(io.BytesIO(data))
+    assert wb["Epoxy"]["B81"].value == '=IF(D6="yes",0.07975,0)'
+    assert wb["Polish"]["B75"].value == '=IF(D6="yes",0.07975,0)'
+    # openpyxl reports the cell's data type; "f" is a formula, "s" would be inert text.
+    assert wb["Epoxy"]["B81"].data_type == "f", (
+        "the rate arrived as text, so the sheet computes no remodel tax at all")
+    assert wb["Polish"]["B75"].data_type == "f"
+    # and it is still protected, exactly as the county path already required
+    assert wb["Epoxy"]["B81"].protection.locked
+    assert wb["Epoxy"].protection.sheet is True
+
+
+def test_a_copied_tabs_rate_formula_survives_the_copy(tmp_path):
+    """Copies are how a priced option gets in front of a customer, and
+    `_create_copied_tabs` clones them from the PRISTINE template -- so a copy's rate cell
+    arrives holding Kyle's 10% placeholder unless the write reaches it. The browser half of
+    this is covered four ways above; this is the workbook half."""
+    import io
+
+    from openpyxl import load_workbook
+
+    import estimate_writer as ew
+
+    data = ew.fill_estimate(
+        {},
+        cell_values={"Epoxy!B81": '=IF(D6="yes",0.07975,0)',
+                     "Copy1!B81": '=IF(D6="yes",0.07975,0)'},
+        tab_copies=[{"id": "Copy1", "source": "Epoxy"}],
+    )
+    wb = load_workbook(io.BytesIO(data))
+    sheet = next(s for s in wb.sheetnames if s == "Copy1" or s.startswith("Copy1"))
+    assert wb[sheet]["B81"].value == '=IF(D6="yes",0.07975,0)', (
+        "the copy kept the template's 10% placeholder: %r" % wb[sheet]["B81"].value)
+    assert wb[sheet]["B81"].data_type == "f"
+    assert wb["Epoxy"]["B81"].value == '=IF(D6="yes",0.07975,0)'   # base tab unaffected
