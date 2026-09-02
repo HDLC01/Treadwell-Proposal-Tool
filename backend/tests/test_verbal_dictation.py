@@ -109,3 +109,50 @@ def test_a_browser_with_no_speech_api_stays_quiet(ran):
     assert n["startAttempted"] == 0
     assert n["said"] == []
     assert n["state"] == {"listening": False, "recHeld": False}
+
+def test_every_error_code_gets_a_message_that_names_what_to_do(ran):
+    """The reported symptom, and the one that had no useful words: Brave.
+
+    "I am able to speak in the microphone but it does not write it." Brave ships without a speech
+    service — the Web Speech API does not transcribe locally, it streams to the vendor's own
+    service — so the recognizer connects to nothing and fails with `network` AFTER the estimator has
+    spoken a whole job description. Every visible sign said it was working until the text failed to
+    appear, and the message they got was the same "Dictation stopped. You can keep typing." that a
+    deliberate Stop produces. That is true and useless: it does not say the browser cannot do this.
+
+    So the assertion is about the words, not the branch. `network` has to name Brave and offer the
+    two real ways forward — type it, or use Chrome or Edge.
+    """
+    m = ran["messages"]
+
+    for code in ("network", "service-not-allowed"):
+        assert "Brave" in m[code], code
+        assert "no speech service" in m[code], code
+        assert "Chrome or Edge" in m[code], code
+
+    # A declined prompt is a CHOICE, and must not be dressed up as a failure or sent browser-hunting.
+    assert "No microphone, no problem" in m["not-allowed"]
+    assert "Brave" not in m["not-allowed"]
+
+    assert "No microphone was found" in m["audio-capture"]
+    assert "Did not catch anything" in m["no-speech"]
+    # Their own Stop: the plain sentence is right, and an unrecognised code keeps it too — but the
+    # code is printed so a stranger in the wild can be reported rather than guessed at.
+    assert m["aborted"] == "Dictation stopped. You can keep typing."
+    assert m["language-not-supported"] == (
+        "Dictation stopped (language-not-supported). You can keep typing.")
+    assert m["undefined"] == "Dictation stopped. You can keep typing."
+
+
+def test_the_message_table_is_actually_wired_to_onerror(ran):
+    """The table being right and the table being REACHED are two claims, and one test cannot make both.
+
+    A correct table wired to nothing leaves the product exactly as broken as it was. So this fires a
+    real `network` error through the lifted `onerror` and reads what landed on screen.
+    """
+    n = ran["networkAtRuntime"]
+    assert len(n["said"]) == 1
+    assert "Brave" in n["said"][0]["msg"]
+    assert n["said"][0]["kind"] == "warn"
+    # And it still tears down: a failed recognizer must not leave the button drawn as listening.
+    assert n["state"] == {"listening": False, "recHeld": False}
