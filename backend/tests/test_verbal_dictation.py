@@ -156,3 +156,71 @@ def test_the_message_table_is_actually_wired_to_onerror(ran):
     assert n["said"][0]["kind"] == "warn"
     # And it still tears down: a failed recognizer must not leave the button drawn as listening.
     assert n["state"] == {"listening": False, "recHeld": False}
+
+
+def test_brave_is_not_offered_the_button_at_all(ran):
+    """The report: "the speak voice still not working", after talking a whole job into it.
+
+    Brave ships `webkitSpeechRecognition` and deliberately does not pay for the speech service
+    behind it. There is no flag; Brave has tracked this since 2019. So the object exists, feature
+    detection passes, the mic light comes on, and the attempt fails with `network` having
+    transcribed nothing.
+
+    This used to warn and leave the button up, on the reasoning that it was the browser owner's
+    decision. In practice both messages land in the same #verbal-msg, so pressing Speak overwrote
+    the warning with the failure -- and a warning above a working-looking button reads as a caveat,
+    not a refusal. A control that cannot work should not be offered.
+
+    The tests above (5 and 6) prove that once dictation HAS failed the message names Brave. This is
+    the different and better claim: it never gets that far.
+    """
+    b = ran["braveMount"]
+    assert b["mic"] is True, "Brave was still offered the Speak button"
+    assert b["note"] is False, "the Chrome-or-Edge note stayed hidden, so nothing explains it"
+
+
+def test_the_button_is_briefly_visible_and_that_is_unavoidable(ran):
+    """Stated rather than hidden, because a future reader will see the flash and call it a bug.
+
+    `navigator.brave.isBrave()` returns a promise. mount() cannot know the answer synchronously
+    without blocking, so the button paints and then goes. Asserting it here means nobody "fixes"
+    the flash by moving the check somewhere it cannot work -- and if the API ever becomes
+    synchronous, this test is the one that says the flash may now be removed.
+    """
+    assert ran["braveMount"]["beforeFlush"] == {"mic": False, "note": True}
+
+
+def test_chrome_and_edge_keep_the_button(ran):
+    """The counterexample, without which every assertion above passes on `mic.hidden = true`.
+
+    Hiding the button unconditionally would satisfy the Brave test perfectly and delete the feature
+    for the two browsers it works in. This is the case that makes the other one mean something.
+    """
+    c = ran["chromeMount"]
+    assert c["mic"] is False, "a browser that CAN dictate lost its button"
+    assert c["note"] is True
+    assert c["micWired"] == ["click"], "the button is shown but nothing listens to it"
+
+
+def test_a_browser_that_will_not_say_whether_it_is_brave_keeps_the_button(ran):
+    """Two shapes that are not a Brave answer, and neither may cost a working browser its mic.
+
+    `isBrave()` can reject, and `navigator.brave` is simply absent on every non-Brave build. Guessing
+    "hide it" on silence would take the button off Chrome; guessing wrong the other way costs a Brave
+    user one failed attempt, which the `network` message in case 5 then explains. So silence keeps
+    the button and the error path stays the backstop.
+    """
+    for key in ("declinedToAnswerMount", "notBraveAtAllMount"):
+        assert ran[key]["mic"] is False, key
+        assert ran[key]["note"] is True, key
+
+
+def test_hiding_the_mic_says_nothing_in_the_message_line(ran):
+    """No warning text, on purpose -- #verbal-nomic is the explanation and it is static HTML.
+
+    The old code put its Brave warning in #verbal-msg, which is the same element dictationError()
+    writes to. Keeping it there would mean the next real message overwrites the explanation, which
+    is the exact mechanism that produced the report. The note lives outside that element so nothing
+    can clobber it.
+    """
+    assert ran["braveMount"]["said"] == []

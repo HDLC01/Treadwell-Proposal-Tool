@@ -639,6 +639,12 @@
     "epoxy_sf", "polish_sf", "cove_lf", "lf", "sqft", "area_description",
     "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf",
     "gyp_soft_sf_formatted", "gyp_hard_sf_formatted", "gyp_corridor_sf_formatted",
+    // The cover letter's derived Area and Materials / System lines. Both ride the base tab:
+    // work_areas falls back to area_description (already above), and cover_system_line is built
+    // from system_name and cove_lf. Left out, a sidebar base flip would leave the LETTER quoting
+    // the superseded system while the proposal behind it quoted the new one -- the same two-halves
+    // failure this whole file exists for, one document further along.
+    "work_areas", "cover_system_line",
   ];
 
   /** Patch the stored generate payload's PRICING slice from current state. Returns the patched
@@ -1381,6 +1387,62 @@
       tokenValues.epoxy_system_name = (a22 && !a22.includes("Options")) ? a22 : "Epoxy System";
     }
     if (!String(tokenValues.state_name || "").trim()) tokenValues.state_name = "Kansas";
+
+    // ── Cover-letter values (Will Buchanan's Direct text, 2026-09-03) ──────
+    // RESOLVED TWICE, ON PURPOSE. The cover-letter editor's clTokens() borrows this
+    // function for its on-screen preview; generate and the portal's server-side replay
+    // go through cover_letter_writer._ensure_cover_letter_values instead. A token added
+    // to only one side previews as a raw {{token}} over a correct PDF -- exactly the bug
+    // PR #431 fixed for {{proposal_date_short}}, and an estimator proofreading on screen
+    // cannot tell that from a broken document. The two must agree; a test asserts it.
+    //
+    // INLINE IIFEs, not named helpers -- matching base_tax_phrase above. Harnesses lift
+    // functions out of this file BY NAME, so a new free identifier inside a lifted
+    // function is an unbound reference in every one of them.
+    if (!String(tokenValues.greeting || "").trim()) {
+      tokenValues.greeting = (() => {
+        // Will's letter opens on the contact's first name and nothing else: "Brandon,".
+        // A blank contact box would put a bare comma at the top of a customer document,
+        // so fall back to something that reads as a choice, not as a missing value.
+        const first = String(mergedValues.contact_name || "").trim().split(/[\s,]+/)[0] || "";
+        // An email address or a lone initial in the name box is not a first name. Measure the
+        // name with an initial's own punctuation removed: "B." is one letter and must not greet
+        // a customer as "B.,", while "J.R." is two and is what that person is called. Stripping
+        // rather than counting [A-Za-z] keeps accented names working.
+        if (first.replace(/[.'-]/g, "").length < 2 || first.indexOf("@") >= 0) return "Hello,";
+        return (first === first.toLowerCase()
+          ? first.charAt(0).toUpperCase() + first.slice(1)   // "brandon" -> "Brandon"
+          : first) + ",";                                    // "McDonald" kept as typed
+      })();
+    }
+    // Area: the estimator's own words for what the floor covers ("Warehouse expansion
+    // and 4 offices"). Falls back to the SF line rather than printing an empty "Area:" --
+    // the letter's list items are static paragraphs and cover_letter_writer deliberately
+    // does not port the {{#block}} expansion that could drop one.
+    if (!String(tokenValues.work_areas || "").trim()) {
+      tokenValues.work_areas = String(tokenValues.area_description || "");
+    }
+    // Materials / System: '1/4" MACRO Flake Single Broadcast with 6" Integral Cove Base'.
+    if (!String(tokenValues.cover_system_line || "").trim()) {
+      tokenValues.cover_system_line = (() => {
+        const name  = String(mergedValues.system_name || "").trim();
+        const thick = String(mergedValues.system_thickness || "").trim();
+        // Three of Kyle's fifteen system names already state a thickness ('3/16" Urethne
+        // Cement With Color Fast (SLB)'). Prepending there prints two -- and where the
+        // estimator's pick disagrees with the name, two CONTRADICTORY ones. Any inch
+        // fraction already in the name wins: it is Kyle's spec, not ours.
+        let out = (thick && !/\d\s*\/\s*\d+\s*"/.test(name)) ? (name ? thick + " " + name : thick) : name;
+        // The cove clause is dropped on a job with no cove. The proposal's own body has
+        // always printed "with 0 LF of integral cove base" there; the letter does not
+        // inherit that.
+        const coveLF = Number(String(tokenValues.cove_lf || "0").replace(/[^0-9.]/g, "")) || 0;
+        if (coveLF > 0) {
+          const h = String(mergedValues.cove_height || "6").trim() || "6";
+          out = (out ? out + " with " : "") + h + '" Integral Cove Base';
+        }
+        return out;
+      })();
+    }
     return tokenValues;
   }
 

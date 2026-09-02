@@ -331,6 +331,135 @@ COPY = {
     },
 }
 
+# ── Direct: Will Buchanan's wording, 2026-09-03 ──────────────────────────────
+# He sent the Direct letter's text verbatim ("In addition to what Greg sent you
+# for GC projects please use the text template below for direct projects. The
+# highlighted text should be pulled from the intake form") and this is it, to the
+# comma. What is DELIBERATELY not here:
+#
+#   * GC KEEPS THE COPY ABOVE. Will's text is for Direct; Greg's GC text has not
+#     reached this repo. The module header's rule stands -- inventing
+#     contractor-flavoured sentences puts wording nobody approved in front of a
+#     customer -- so the two diverge here rather than both moving. This is the
+#     divergence the separate files were created for.
+#   * POLISH KEEPS ITS OWN SYSTEM SENTENCE. Will's Materials / System line is
+#     epoxy ('1/4" Flake Floor broadcast with 6" Integral Cove Base'); he wrote
+#     nothing about polished concrete, and the aggregate-exposure and sheen
+#     choices are real spec decisions. Polish takes his STRUCTURE -- the Area
+#     line, the fixed Schedule sentence, the closings -- and keeps its own
+#     system wording and its own placeholders.
+#   * THE THICKNESS AND SCHEDULE PLACEHOLDERS ARE GONE from Direct. They existed
+#     because nothing captured a thickness and the mobilization assumption was
+#     unmodelled; the intake form now asks for the thickness and Will has
+#     written the assumption out as a sentence. [OPTIONS] stays: it is Kyle's
+#     add-alternate checklist, not a hole.
+#   * THE "pages that follow" SENTENCE IS GONE from Direct. Will's text opens
+#     the list with "A few things to note:" alone. That sentence was added when
+#     this letter stopped being an email and became a page in front of the
+#     proposal; the red underlined title one line above already says which
+#     proposal follows, so it was saying it twice.
+DIRECT_GREETING = "{{greeting}}"
+DIRECT_THANKS = "Thank you for the opportunity to provide a quote for this project."
+DIRECT_INTRO = "A few things to note:"
+DIRECT_CLOSE_1 = "Feel free to reach out, if you have questions."
+
+# Fixed boilerplate, not {{schedule_notes}} -- Hanz's call, and Will spelled the
+# whole sentence out. It states the assumption the price was built on and invites
+# the customer to correct it, which a filled-in note cannot do. The proposal
+# behind the letter still carries {{schedule_notes}}, and the estimator can edit
+# this paragraph in the document editor on any job that phases differently.
+_DIRECT_SCHEDULE_ITEM = [
+    _seg("Schedule: ", bold=True),
+    _seg("This price is based on all work taking place in 1 phase/mobilization. "
+         "If this needs to be split into multiple phases and/or over weekends, "
+         "please let me know."),
+]
+
+# "Area: Warehouse expansion and 4 offices" -- the estimator's own words, off the
+# intake form. Falls back to the SF line when the box is empty (see
+# `cover_letter_writer._ensure_cover_letter_values`), so this never prints a bare
+# label and the square footage is what a job with no typed area shows.
+_DIRECT_AREA_ITEM = [
+    _seg("Area: ", bold=True),
+    _seg("{{work_areas}}"),
+]
+
+# '1/4" MACRO Flake Single Broadcast with 6" Integral Cove Base'. One token, not
+# four: the thickness is skipped when Kyle's system name already states one (three
+# of his fifteen do), and the cove clause is dropped entirely on a job with no
+# cove rather than printing "with 0 LF of integral cove base" the way the
+# proposal body still does. That composition cannot be expressed in template
+# text, so it lives in the writer -- resolved identically on both sides.
+_DIRECT_EPOXY_SYSTEM_ITEM = [
+    _seg("Materials / System: ", bold=True),
+    _seg("{{cover_system_line}}"),
+]
+
+DIRECT_COPY = {
+    "epoxy": {
+        "title": COPY["epoxy"]["title"],
+        "intro": DIRECT_INTRO,
+        "greeting": DIRECT_GREETING,
+        "thanks": DIRECT_THANKS,
+        "close_1": DIRECT_CLOSE_1,
+        "groups": [
+            (None, [_DIRECT_EPOXY_SYSTEM_ITEM, _DIRECT_AREA_ITEM,
+                    _DIRECT_SCHEDULE_ITEM, _OPTIONS_EPOXY]),
+        ],
+    },
+    "polish": {
+        "title": COPY["polish"]["title"],
+        "intro": DIRECT_INTRO,
+        "greeting": DIRECT_GREETING,
+        "thanks": DIRECT_THANKS,
+        "close_1": DIRECT_CLOSE_1,
+        "groups": [
+            (None, [
+                [
+                    _seg("System: ", bold=True),
+                    _seg("{{system_name}} over approximately {{polish_sf}} SF. "),
+                    _ph("[AGGREGATE EXPOSURE - pick one: Class A cream finish "
+                        "(no exposure) / Class B salt & pepper / Class C coarse, "
+                        "full exposure.] [SHEEN - pick one: Level 2 (400 grit) / "
+                        "Level 3 (800 grit).]"),
+                ],
+                _DIRECT_AREA_ITEM,
+                _DIRECT_SCHEDULE_ITEM,
+                _OPTIONS_POLISH,
+            ]),
+        ],
+    },
+    "combo": {
+        "title": COPY["combo"]["title"],
+        "intro": DIRECT_INTRO,
+        "greeting": DIRECT_GREETING,
+        "thanks": DIRECT_THANKS,
+        "close_1": DIRECT_CLOSE_1,
+        "groups": [
+            # The Area line sits under the FIRST heading only. It describes what
+            # the floor covers across the whole job, so repeating it verbatim
+            # under "Polished Concrete:" would read as a second, different area.
+            ("Epoxy / Resinous Flooring:", [
+                [
+                    _seg("Materials / System: ", bold=True),
+                    _seg("{{cover_system_line}}"),
+                ],
+                _DIRECT_AREA_ITEM,
+                _DIRECT_SCHEDULE_ITEM,
+                _OPTIONS_EPOXY,
+            ]),
+            ("Polished Concrete:", [
+                _POLISH_SYSTEM_ITEM,
+                _DIRECT_SCHEDULE_ITEM,
+                _OPTIONS_POLISH,
+            ]),
+        ],
+    },
+    # Gyp has no audience -- one file for both readers -- so there is no Direct
+    # variant of it to write. `spec_for` falls back to COPY for anything absent.
+}
+
+
 SIGNATURE = [
     [_seg("--")],
     [_seg("{{estimator_name}}", bold=True), _seg(" | Estimator")],
@@ -583,6 +712,14 @@ def _add(d, segments, *, font=BODY_FONT, size=BODY_PT, color=BODY_GREY,
     return p
 
 
+def spec_for(work_type: str, audience) -> dict:
+    """The copy for one variant. Direct diverged on 2026-09-03 (see DIRECT_COPY);
+    everything else -- GC, and gyp for either reader -- takes the shared copy."""
+    if audience == "Direct" and work_type in DIRECT_COPY:
+        return DIRECT_COPY[work_type]
+    return COPY[work_type]
+
+
 def build(work_type: str, spec: dict, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(LETTERHEAD, out_path)       # branding, byte-for-byte
@@ -609,9 +746,9 @@ def build(work_type: str, spec: dict, out_path: Path) -> None:
     _add(d, [_seg(spec["title"])], font=TITLE_FONT, color=TREADWELL_RED,
          underline=True, right_indent=None)
     _add(d, [])
-    _add(d, [_seg(GREETING)])
+    _add(d, [_seg(spec.get("greeting", GREETING))])
     _add(d, [])
-    _add(d, [_seg(THANKS)])
+    _add(d, [_seg(spec.get("thanks", THANKS))])
     # No air: Kyle runs the thank-you straight into the line that introduces the
     # proposal (measured at a 0.02pt gap in his render). They read as one pair.
     _add(d, [_seg(spec["intro"])])
@@ -631,7 +768,7 @@ def build(work_type: str, spec: dict, out_path: Path) -> None:
             for note in spec.get("sub_notes") or []:
                 _add(d, [_ph(note)], left_indent=Inches(1.0))
 
-    _add(d, [_seg(CLOSE_1)], space_before=GROUP_SPACE_BEFORE)
+    _add(d, [_seg(spec.get("close_1", CLOSE_1))], space_before=GROUP_SPACE_BEFORE)
     _add(d, [_seg(CLOSE_2)])
     # Blank line at the SIGNATURE's size, not the body's: an empty paragraph is
     # as tall as its paragraph mark, and a 12pt gap over a 10pt block reads wrong.
@@ -671,8 +808,8 @@ def main() -> int:
               "in before regenerating." % REF_DIR, file=sys.stderr)
         return 2
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    for work_type, _audience, rel in VARIANTS:
-        build(work_type, COPY[work_type], OUT_DIR / rel)
+    for work_type, audience, rel in VARIANTS:
+        build(work_type, spec_for(work_type, audience), OUT_DIR / rel)
     return 0
 
 

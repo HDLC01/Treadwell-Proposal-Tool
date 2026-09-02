@@ -19,7 +19,11 @@ Covers:
   (e) PortalPublishIn.has_cover_letter — the omitted-means-nothing-forwarded contract.
 """
 import io
+import json
 import os
+import pathlib
+import shutil
+import subprocess
 import zipfile
 
 import docx
@@ -67,6 +71,25 @@ def _generate(**extra):
     r = client.post("/api/generate", json={**BASE, **extra})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+# What the greeting paragraph says IN THE TEMPLATE, as opposed to in the rendered letter.
+# Direct moved to "{{greeting}}" on 2026-09-03 (Will's wording); GC and Gyp still say "Hello,"
+# literally. Five override tests below anchor on this paragraph to get a block id, and they broke
+# together the last time the copy moved -- so the string lives in one place now.
+_GREETING_SOURCE = {"Direct": "{{greeting}}", "GC": "Hello,", None: "Hello,"}
+
+
+def _greeting_block(body, audience="Direct"):
+    """The block id the document editor would use for the greeting paragraph."""
+    want = _GREETING_SOURCE[audience]
+    for b in body["blocks"]:
+        if b["text"].strip() == want:
+            return b
+    raise AssertionError(
+        "no %r paragraph in the %s letter -- if the greeting copy moved, update "
+        "_GREETING_SOURCE rather than loosening the match. Blocks: %r"
+        % (want, audience, [b["text"][:30] for b in body["blocks"]][:12]))
 
 
 def _template(work_type="epoxy", audience="Direct"):
@@ -221,7 +244,22 @@ def test_combo_numbering_restarts_for_the_second_system():
     what Word obeys."""
     _, blocks, _ = clw.describe_template("combo", "Direct")
     markers = [b["para"]["marker"] for b in blocks if b["para"]["marker"]]
-    assert markers == ["1.", "2.", "3.", "1.", "2.", "3."], markers
+    # DERIVED, not restated. Direct's first section gained an "Area:" item on 2026-09-03 (Will's
+    # wording), so the two sections are no longer the same length and a hard-coded 3+3 was
+    # asserting the copy rather than the numbering. The claim is that the count RESTARTS: two
+    # runs, each beginning at 1 and counting up by one.
+    runs, cur = [], []
+    for m in markers:
+        if m == "1." and cur:
+            runs.append(cur)
+            cur = []
+        cur.append(m)
+    if cur:
+        runs.append(cur)
+    assert len(runs) == 2, markers
+    for run in runs:
+        assert len(run) >= 3, markers        # an empty second run would satisfy "restarts"
+        assert run == ["%d." % (i + 1) for i in range(len(run))], markers
 
 
 @pytest.mark.parametrize("key", VARIANTS)
@@ -343,8 +381,12 @@ def test_the_thank_you_runs_straight_into_the_line_that_introduces_the_proposal(
     d = docx.Document(str(clw.pick_template(*key)))
     texts = ["".join(t.text or "" for t in p.iter(pw.qn("w:t"))).strip()
              for p in _generated_paragraphs(d)]
-    i = next(i for i, t in enumerate(texts) if t.startswith("Thanks for the opportunity"))
-    assert texts[i + 1].startswith("The pages that follow"), texts[i:i + 3]
+    # Two wordings per line since Direct took Will's text on 2026-09-03. The claim under test
+    # is ADJACENCY, not the copy -- so match either and assert nothing sits between them.
+    thanks = ("Thanks for the opportunity", "Thank you for the opportunity")
+    opens_the_list = ("The pages that follow", "A few things to note")
+    i = next(i for i, t in enumerate(texts) if t.startswith(thanks))
+    assert texts[i + 1].startswith(opens_the_list), texts[i:i + 3]
 
 
 @pytest.mark.parametrize("key", VARIANTS)
@@ -685,7 +727,7 @@ def test_the_letter_and_the_proposal_agree_on_the_job():
 
 def test_a_paragraph_override_reaches_the_letter():
     """The document editor's channel, keyed by the block id /api/coverletter-template hands out."""
-    greeting = next(b for b in _template()["blocks"] if b["text"].strip() == "Hello,")
+    greeting = _greeting_block(_template())
     out = _generate(cover_letter_enabled=True,
                     cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}})
     text = _rendered(client.get(out["cover_letter_download_url"]).content)
@@ -696,7 +738,7 @@ def test_a_stale_template_version_drops_the_overrides():
     """A block id is a position in a walk over ONE file. A regenerated template shifts every id
     after the changed paragraph, so a draft captured against the old one would rewrite the wrong
     sentence — silently, in a document a customer reads."""
-    greeting = next(b for b in _template()["blocks"] if b["text"].strip() == "Hello,")
+    greeting = _greeting_block(_template())
     out = _generate(cover_letter_enabled=True,
                     cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}},
                     cover_letter_template_version="not-the-current-version")
@@ -707,7 +749,7 @@ def test_a_stale_template_version_drops_the_overrides():
 def test_the_current_template_version_keeps_the_overrides():
     """The other half of the guard: matching versions must NOT drop an edit the estimator made."""
     body = _template()
-    greeting = next(b for b in body["blocks"] if b["text"].strip() == "Hello,")
+    greeting = _greeting_block(body)
     out = _generate(cover_letter_enabled=True,
                     cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}},
                     cover_letter_template_version=body["template_version"])
@@ -744,7 +786,7 @@ def test_an_override_captured_on_another_variant_is_dropped(identical_mtimes):
     assert direct["template_version"].split("@")[1] == gc["template_version"].split("@")[1], (
         "the fixture did not equalise the mtimes; this test would then pass for the wrong reason")
     assert direct["template_version"] != gc["template_version"]
-    greeting = next(b for b in direct["blocks"] if b["text"].strip() == "Hello,")
+    greeting = _greeting_block(direct)
     out = _generate(audience="GC", cover_letter_enabled=True,
                     cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}},
                     cover_letter_template_version=direct["template_version"])
@@ -987,3 +1029,206 @@ def test_has_cover_letter_is_forwarded_only_when_chosen(monkeypatch, sent, expec
     if sent is None:
         assert "has_cover_letter" not in cap["body"], (
             "an omitted flag was forwarded anyway — that overwrites the portal's stored value")
+
+
+# ── Will Buchanan's Direct wording (2026-09-03) ──────────────────────────────
+def test_the_direct_letter_carries_wills_text_and_not_the_first_draft():
+    """His email, verbatim: *"In addition to what Greg sent you for GC projects please use the
+    text template below for direct projects. The highlighted text should be pulled from the
+    intake form."* The three sentences he wrote out are fixed copy and must read exactly as he
+    sent them -- a paraphrase is a different letter going to a customer."""
+    d = docx.Document(str(clw.pick_template("epoxy", "Direct")))
+    texts = [p.text.strip() for p in d.paragraphs if p.text.strip()]
+    assert "Thank you for the opportunity to provide a quote for this project." in texts
+    assert "A few things to note:" in texts
+    assert ("Schedule: This price is based on all work taking place in 1 phase/mobilization. "
+            "If this needs to be split into multiple phases and/or over weekends, please let me "
+            "know.") in texts
+    assert "Feel free to reach out, if you have questions." in texts
+    assert "Looking forward to working with you!" in texts
+    body = "\n".join(texts)
+    assert "Materials / System: {{cover_system_line}}" in body
+    assert "Area: {{work_areas}}" in body
+
+
+def test_the_direct_letter_no_longer_asks_the_estimator_to_pick_a_thickness():
+    """Both placeholders it shipped with are answered now: the intake form asks for the thickness
+    and `{{cover_system_line}}` composes the cove height. An instruction left beside a filled
+    value is how a customer receives a document with "[COVE HEIGHT - pick one]" in it."""
+    for wt in ("epoxy", "combo"):
+        text = "\n".join(p.text for p in docx.Document(str(clw.pick_template(wt, "Direct"))).paragraphs)
+        assert "[THICKNESS" not in text and "[COVE HEIGHT" not in text, wt
+        assert "[SCHEDULE" not in text, wt
+
+
+def test_the_gc_letter_did_not_move():
+    """GC waits on Greg's text, which has not reached this repo. The module's standing rule --
+    inventing contractor-flavoured sentences puts wording nobody approved in front of a customer
+    -- is why Direct diverged alone rather than both letters moving together."""
+    text = "\n".join(p.text for p in docx.Document(str(clw.pick_template("epoxy", "GC"))).paragraphs)
+    assert "Thanks for the opportunity" in text
+    assert "The pages that follow" in text
+    assert "[THICKNESS" in text, "the GC letter lost its placeholder without Greg's wording"
+    assert "{{cover_system_line}}" not in text
+    assert prep.spec_for("epoxy", "GC") is prep.COPY["epoxy"]
+    assert prep.spec_for("epoxy", "Direct") is prep.DIRECT_COPY["epoxy"]
+    assert prep.spec_for("gyp", None) is prep.COPY["gyp"]
+
+
+def test_the_polish_direct_letter_keeps_its_own_system_wording():
+    """Will's Materials / System line is an epoxy one and he wrote nothing about polished
+    concrete. Aggregate exposure and sheen are real spec decisions; guessing them to make the two
+    letters look alike would put a spec claim in a customer document."""
+    text = "\n".join(p.text for p in docx.Document(str(clw.pick_template("polish", "Direct"))).paragraphs)
+    assert "{{cover_system_line}}" not in text
+    assert "[AGGREGATE EXPOSURE" in text and "[SHEEN" in text
+    assert "A few things to note:" in text            # his structure, though
+    assert "Area: {{work_areas}}" in text
+
+
+def test_the_area_line_appears_once_on_a_combo_letter():
+    """It describes what the floor covers across the whole job. Under "Polished Concrete:" as
+    well, the same words read as a second, different area."""
+    text = "\n".join(p.text for p in docx.Document(str(clw.pick_template("combo", "Direct"))).paragraphs)
+    assert text.count("Area: {{work_areas}}") == 1
+
+
+@pytest.mark.parametrize("values, expect", [
+    # Will's own example, end to end.
+    ({"contact_name": "Brandon Weller", "system_name": "MACRO Flake Single Broadcast",
+      "system_thickness": '1/4"', "cove_height": "6", "cove_lf": "420"},
+     '1/4" MACRO Flake Single Broadcast with 6" Integral Cove Base'),
+    # Three of Kyle's fifteen names already state a thickness. Prepending a DISAGREEING pick
+    # would print two contradictory thicknesses in a spec line, so the name wins.
+    ({"system_name": '3/16" Urethne Cement With Color Fast (SLB)', "system_thickness": '1/4"',
+      "cove_lf": "0"},
+     '3/16" Urethne Cement With Color Fast (SLB)'),
+    # No cove, no cove clause. The proposal body still prints "with 0 LF of integral cove base"
+    # on a no-cove job; the letter does not inherit that.
+    ({"system_name": "MACRO Flake", "system_thickness": '1/8"', "cove_lf": "0"},
+     '1/8" MACRO Flake'),
+    ({"system_name": "MACRO Flake", "cove_lf": "1,200", "cove_height": "4"},
+     'MACRO Flake with 4" Integral Cove Base'),      # thousands separator still reads as > 0
+    ({"system_name": "MACRO Flake", "cove_lf": "420"},
+     'MACRO Flake with 6" Integral Cove Base'),      # 6" is the default height
+    ({"system_name": "Treadwell Polished Concrete", "cove_lf": "0"},
+     "Treadwell Polished Concrete"),                 # polish: no thickness, no cove
+])
+def test_the_system_line_composes_what_no_template_text_could(values, expect):
+    assert clw._ensure_cover_letter_values(values)["cover_system_line"] == expect
+
+
+@pytest.mark.parametrize("contact, expect", [
+    ("Brandon Weller", "Brandon,"),
+    ("Brandon", "Brandon,"),
+    ("brandon weller", "Brandon,"),        # capitalised
+    ("McDonald Reyes", "McDonald,"),       # mixed case left as typed, never "Mcdonald,"
+    ("", "Hello,"),                        # a bare comma is not a greeting
+    (None, "Hello,"),
+    ("brandon@acme.com", "Hello,"),        # Kyle sometimes has only an email
+    # Found by this table, not confirmed by it: both sides greeted "B.," until the guard learned
+    # to measure a name with an initial's punctuation removed. Kyle types this shape whenever he
+    # has a surname and an initial and no more.
+    ("B. Weller", "Hello,"),               # a lone initial is not a first name
+    ("J.R. Weller", "J.R.,"),              # two real letters, and what that person is called
+])
+def test_the_greeting_is_a_first_name_or_an_honest_fallback(contact, expect):
+    """Will's letter opens on the contact's first name and nothing else. NOTE a known wart, left
+    alone on purpose: a contact typed "Weller, Brandon" greets "Weller," -- special-casing the
+    comma would misfire on "Brandon Weller, PE", which is the commoner shape in this database."""
+    assert clw._ensure_cover_letter_values({"contact_name": contact})["greeting"] == expect
+
+
+def test_a_blank_area_box_prints_the_square_footage_rather_than_a_bare_label():
+    """The letter's list items are static paragraphs -- `cover_letter_writer` deliberately does
+    not port the `{{#block}}` expansion that could drop one -- so "Area:" with nothing after it
+    is what an empty box would ship."""
+    out = clw._ensure_cover_letter_values({"area_description": "~18,000 sf of epoxy flooring"})
+    assert out["work_areas"] == "~18,000 sf of epoxy flooring"
+    typed = clw._ensure_cover_letter_values(
+        {"work_areas": "Warehouse expansion and 4 offices",
+         "area_description": "~18,000 sf of epoxy flooring"})
+    assert typed["work_areas"] == "Warehouse expansion and 4 offices"
+
+
+def test_the_letter_prints_no_raw_token_with_the_new_fields_supplied():
+    """The end-to-end shape: what the intake form now collects, through the real writer."""
+    values = dict(FULL_VALUES, contact_name="Brandon Weller",
+                  work_areas="Warehouse expansion and 4 offices", system_thickness='1/4"',
+                  cove_height="6")
+    for key in VARIANTS:
+        d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+            work_type=key[0], audience=key[1], values=values)))
+        assert clw.unfilled_tokens(d) == set(), key
+    text = _rendered(clw.fill_cover_letter(work_type="epoxy", audience="Direct", values=values))
+    assert "Brandon," in text
+    assert "Area: Warehouse expansion and 4 offices" in text
+    assert '1/4" Treadwell MACRO Flake with 6" Integral Cove Base' in text
+
+
+# ── the two resolutions must agree ───────────────────────────────────────────
+_HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "payload-sync-harness.js"
+_FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
+
+
+@pytest.fixture(scope="module")
+def js_tokens():
+    """What the BROWSER resolves, from the real `computeTokenValues` out of proposal-review.js.
+
+    Executed, not read. A source assertion that both files "look the same" cannot catch a
+    regex that behaves differently in the two languages, which is the whole risk here."""
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    proc = subprocess.run(["node", str(_HARNESS), str(_FRONTEND)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, (
+        "the harness itself failed — read this before assuming a product bug:\n" + proc.stderr)
+    cases = json.loads(proc.stdout.strip().splitlines()[-1])["coverLetterTokens"]
+    assert len(cases) >= 10, "the case table shrank; a thin table is how a fork survives"
+    return cases
+
+
+def test_the_screen_and_the_document_resolve_the_same_three_tokens(js_tokens):
+    """THE BUG THIS EXISTS FOR. `{{greeting}}`, `{{work_areas}}` and `{{cover_system_line}}` are
+    derived in two places: `computeTokenValues` (proposal-review.js) for the cover-letter editor's
+    on-screen preview, and `_ensure_cover_letter_values` here for generate and for the portal's
+    server-side replay of a pinned revision. A token resolved on only one side previews as a raw
+    `{{token}}` over a correct PDF — exactly what PR #431 fixed for `{{proposal_date_short}}` —
+    and an estimator proofreading on screen cannot tell that from a broken document.
+
+    Neither side's answers are written down here. The JS side is executed, its answers and the
+    upstream values it read are both returned, and Python is handed those same upstream values.
+    So this asserts AGREEMENT, which is the property that matters; the per-branch expectations
+    live in the parametrized tests above, where a literal is the point."""
+    disagreements = []
+    for case in js_tokens:
+        up = {k: v for k, v in case["upstream"].items() if v is not None}
+        out = clw._ensure_cover_letter_values(up)
+        for token in ("greeting", "work_areas", "cover_system_line"):
+            if out[token] != case[token]:
+                disagreements.append(
+                    "%s / %s: screen %r, document %r" % (case["name"], token, case[token], out[token]))
+    assert not disagreements, (
+        "the preview and the PDF have forked:\n  " + "\n  ".join(disagreements))
+
+
+def test_the_agreement_table_actually_exercises_every_branch(js_tokens):
+    """A green agreement test proves nothing if every row is the happy path — two identical
+    implementations agree on anything. These are the branches that can fork."""
+    lines = {c["name"]: c["cover_system_line"] for c in js_tokens}
+    greets = {c["name"]: c["greeting"] for c in js_tokens}
+    # a thickness prepended, and a thickness correctly NOT prepended
+    assert lines["wills_own_example"].startswith('1/4"')
+    assert lines["name_already_states_a_thickness"].startswith('3/16"'), lines
+    assert "1/4" not in lines["name_already_states_a_thickness"], (
+        "the estimator's pick was prepended onto a name that already states a different "
+        "thickness — the letter now claims two")
+    # the cove clause present and absent
+    assert "Integral Cove Base" in lines["wills_own_example"]
+    assert "Integral Cove Base" not in lines["no_cove_drops_the_clause"]
+    # both greeting outcomes
+    assert greets["wills_own_example"] == "Brandon,"
+    assert set(greets.values()) >= {"Brandon,", "Hello,", "McDonald,"}
+    # the fallback, and a typed value beating it
+    fallback = next(c for c in js_tokens if c["name"] == "blank_area_falls_back_to_the_sf_line")
+    assert "sf of" in fallback["work_areas"] and fallback["upstream"]["work_areas"] == ""

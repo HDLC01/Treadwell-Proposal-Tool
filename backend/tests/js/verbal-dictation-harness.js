@@ -170,4 +170,69 @@ const out = {};
   out.networkAtRuntime = { said: r.said, state: r.scope.state() };
 }
 
-process.stdout.write(JSON.stringify(out) + "\n");
+
+// -- 7. Brave: mount() must not OFFER the button ------------------------------
+// A different claim from cases 5 and 6, and the one the estimator actually feels. Those two
+// prove that once dictation has failed the message names Brave. This proves it never gets that
+// far: the button is gone before it can be pressed, so nobody speaks a job description into a
+// service that was never there. mount() is LIFTED AND RUN because the failure is an absent DOM
+// effect -- reading the source shows an isBrave() branch either way, and only running it can say
+// whether the branch reaches the button.
+//
+// isBrave() is a promise, so the assertion has to be made after a microtask flush. That is not a
+// test artefact, it is the product: the button really is visible for one tick.
+async function mountRun(brave) {
+  const nodes = {};
+  const $ = (id) => (nodes[id] = nodes[id] || {
+    id, value: "", hidden: true, disabled: false, textContent: "", className: "",
+    listeners: [], addEventListener(t, f) { this.listeners.push(t); },
+  });
+  ["verbal", "verbal-mic", "verbal-go", "verbal-nomic"].forEach($);
+
+  // `brave`: true / false = navigator.brave present and answering, "reject" = it declined to
+  // answer, null = not a Brave build, so the property is absent entirely.
+  const navStub = brave === null ? {} : {
+    brave: {
+      isBrave: () => (brave === "reject"
+        ? Promise.reject(new Error("nope"))
+        : Promise.resolve(brave)),
+    },
+  };
+
+  const scope = new Function("$", "Rec", "navigator", "said", `
+    "use strict";
+    var rec = null;
+    var listening = false;
+    function paintMic() { }
+    function initCheatDrag() { }
+    function say(msg, kind) { said.push({ msg: msg, kind: kind }); }
+    function run() { }
+    function startDictation() { }
+    function stopDictation() { }
+    ${fn("noMic")}
+    ${fn("mount")}
+    return { mount: mount };
+  `)($, function FakeRec() { }, navStub, []);
+
+  const said = [];
+  scope.mount();
+  const beforeFlush = { mic: $("verbal-mic").hidden, note: $("verbal-nomic").hidden };
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  return {
+    beforeFlush,
+    mic: $("verbal-mic").hidden,
+    note: $("verbal-nomic").hidden,
+    micWired: $("verbal-mic").listeners,
+    said,
+  };
+}
+
+(async () => {
+  out.braveMount = await mountRun(true);
+  out.chromeMount = await mountRun(false);
+  out.declinedToAnswerMount = await mountRun("reject");
+  out.notBraveAtAllMount = await mountRun(null);
+
+  process.stdout.write(JSON.stringify(out) + "\n");
+})();
