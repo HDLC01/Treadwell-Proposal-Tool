@@ -82,10 +82,12 @@ function run(behaviour, opts) {
     var listening = false;
     function paintMic() { paints.push(listening); }
     function say(msg, kind) { said.push({ msg: msg, kind: kind }); }
+    ${fn("dictationError")}
     ${fn("startDictation")}
     ${fn("stopDictation")}
     return {
       startDictation: startDictation,
+      dictationError: dictationError,
       // Read AFTER the call, so a claim about "listening" is about the closure the page uses and
       // not about a copy taken before it ran.
       state: function () { return { listening: listening, recHeld: rec !== null }; },
@@ -142,6 +144,30 @@ const out = {};
 {
   const r = run("none");
   out.noSupport = { said: r.said, startAttempted: r.started.length, state: r.scope.state() };
+}
+
+// -- 5. every error code the API can raise, through the real table --------------
+// The reported symptom -- "I am able to speak in the microphone but it does not write it" -- was
+// a Brave session getting the same "Dictation stopped. You can keep typing." that a deliberate
+// Stop gets. Brave has no speech service, so the recognizer connects to nothing and fails with
+// `network` after the estimator has already spoken a whole job description. The words matter more
+// than the branch here: a message that does not name the browser leaves them with no next move.
+{
+  const r = run("ok");
+  const codes = ["not-allowed", "network", "service-not-allowed", "audio-capture", "no-speech",
+                 "aborted", "language-not-supported", undefined];
+  out.messages = {};
+  codes.forEach((c) => { out.messages[String(c)] = r.scope.dictationError(c); });
+}
+
+// -- 6. onerror actually goes through that table -------------------------------
+// Case 5 proves the table is right; this proves the table is REACHED. A correct table wired to
+// nothing would leave the product exactly as broken as it was, and only one of these two cases
+// can see that.
+{
+  const r = run("ok");
+  r.scope.fireError("network");
+  out.networkAtRuntime = { said: r.said, state: r.scope.state() };
 }
 
 process.stdout.write(JSON.stringify(out) + "\n");

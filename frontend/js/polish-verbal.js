@@ -86,6 +86,44 @@
   }
 
   // ── dictation ──────────────────────────────────────────────────────────────
+  /** What to tell the estimator when dictation stops, by the reason it stopped.
+   *
+   *  This used to be one sentence — "Dictation stopped. You can keep typing." — for every cause
+   *  but a declined prompt, and that sentence is why the feature got reported as broken. Hanz,
+   *  2026-09-02: "I am able to speak in the microphone but it does not write it." He was on Brave.
+   *
+   *  BRAVE IS THE ONE THAT MATTERS, and it is not a fault in this panel. The Web Speech API does
+   *  not transcribe in the browser: it streams the audio to a service, and the service is the
+   *  vendor's own. Brave ships without one, so `webkitSpeechRecognition` EXISTS, the mic turns on,
+   *  the estimator talks for a minute — and the request fails with `network` and nothing is ever
+   *  written. Every visible sign says it is working right up until the moment there is no text, so
+   *  a generic "dictation stopped" leaves them to conclude the feature is broken. It is not; this
+   *  browser cannot do it, and only naming the browser makes that actionable.
+   *
+   *  `no-speech` and `aborted` are ordinary and get no alarm — the first is a pause, the second is
+   *  usually the estimator's own Stop, or a tab switch. */
+  function dictationError(code) {
+    switch (code) {
+      // Their own choice, so no fault is implied and the box still works.
+      case "not-allowed":
+        return "No microphone, no problem — type it in the box instead.";
+      // The Brave case, and any Chromium build with no speech service configured.
+      case "network":
+      case "service-not-allowed":
+        return "This browser recorded you but has no speech service to transcribe it — Brave and " +
+          "some Chromium builds ship without one. Type what you said into the box, or use Chrome " +
+          "or Edge if you would rather talk.";
+      case "audio-capture":
+        return "No microphone was found. Type it in the box instead.";
+      case "no-speech":
+        return "Did not catch anything — press Speak and talk, or type it in the box.";
+      case "aborted":
+        return "Dictation stopped. You can keep typing.";
+      default:
+        return "Dictation stopped" + (code ? " (" + code + ")" : "") + ". You can keep typing.";
+    }
+  }
+
   function startDictation() {
     if (!Rec) return;
     var box = $("verbal-text");
@@ -106,11 +144,7 @@
       box.value = settled + interim;
     };
     rec.onerror = function (e) {
-      // "not-allowed" is the estimator declining the microphone, which is a choice rather than a
-      // fault — the box still works, so say that instead of reporting an error.
-      say(e && e.error === "not-allowed"
-        ? "No microphone, no problem — type it in the box instead."
-        : "Dictation stopped. You can keep typing.", "warn");
+      say(dictationError(e && e.error), "warn");
       stopDictation();
     };
     rec.onend = function () { if (listening) stopDictation(); };
@@ -332,6 +366,18 @@
         if (listening) stopDictation(); else startDictation();
       });
       paintMic();
+      // SAY IT BEFORE THEY TALK, not after. dictationError() can only explain a Brave failure once
+      // it has already happened — by which point they have spoken a whole job description into a
+      // service that was never there and have to say all of it again. Brave will identify itself,
+      // so where we can know in advance, we do. The button stays (it is their browser's decision
+      // to make, and a later Brave may ship a service) but the warning is on screen first.
+      if (navigator.brave && typeof navigator.brave.isBrave === "function") {
+        navigator.brave.isBrave().then(function (yes) {
+          if (!yes) return;
+          say("Heads up: Brave has no speech service, so the microphone will record you and no " +
+            "words will come back. Type into the box, or use Chrome or Edge to talk.", "warn");
+        }).catch(function () { /* it declined to answer; the error path still covers it */ });
+      }
     } else if (mic) {
       // Hidden rather than disabled, and the note explains it. A greyed-out microphone reads as
       // something broken; a box to type in with no microphone reads as the feature working.
@@ -341,6 +387,60 @@
     }
     var go = $("verbal-go");
     if (go) go.addEventListener("click", run);
+    initCheatDrag();
+  }
+
+  /** The cheat sheet is a floating, movable widget above 1200px — drag its header to put it
+   *  wherever it is not in the way. Deliberately the same behaviour, and the same stored-position
+   *  idea, as the Pricing options rail on step 3 (proposal-review.js initOptionsPanelDrag): it is
+   *  the same kind of object, and a second, different way to move a panel would be worse than
+   *  either one on its own.
+   *
+   *  Its own storage key, not that panel's — they are different panels on different pages, and one
+   *  shared key would teleport each to wherever the other was last left. Below the breakpoint the
+   *  CSS makes the handle `display:none`, so a narrow screen never reaches any of this. */
+  function initCheatDrag() {
+    var panel = $("verbal-cheat");
+    if (!panel) return;
+    try {
+      var saved = JSON.parse(localStorage.getItem("tw_vcheat_pos") || "null");
+      if (saved && isFinite(saved.left) && isFinite(saved.top)) {
+        panel.style.left = saved.left + "px";
+        panel.style.top = saved.top + "px";
+        panel.style.right = "auto";
+      }
+    } catch (err) { /* a wiped or corrupt value just means it opens where the CSS put it */ }
+    var dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    panel.addEventListener("pointerdown", function (e) {
+      var h = e.target.closest && e.target.closest(".vc-drag");
+      if (!h || !panel.contains(h)) return;
+      var r = panel.getBoundingClientRect();
+      dragging = true; ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
+      panel.style.left = ox + "px"; panel.style.top = oy + "px"; panel.style.right = "auto";
+      panel.classList.add("vc-dragging");
+      try { h.setPointerCapture(e.pointerId); } catch (err) { /* older browsers still drag */ }
+      e.preventDefault();
+    });
+    panel.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      var w = panel.offsetWidth || 250;
+      var left = Math.max(4, Math.min(ox + (e.clientX - sx), window.innerWidth - w - 4));
+      // The header has to stay reachable: dragged off the bottom there would be nothing left to
+      // grab it by, and the panel could not be brought back without clearing storage.
+      var top = Math.max(4, Math.min(oy + (e.clientY - sy), window.innerHeight - 40));
+      panel.style.left = left + "px"; panel.style.top = top + "px";
+    });
+    var end = function () {
+      if (!dragging) return;
+      dragging = false;
+      panel.classList.remove("vc-dragging");
+      try {
+        localStorage.setItem("tw_vcheat_pos", JSON.stringify({
+          left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 }));
+      } catch (err) { /* private mode: it just will not be remembered */ }
+    };
+    panel.addEventListener("pointerup", end);
+    panel.addEventListener("pointercancel", end);
   }
 
   if (document.readyState === "loading") {

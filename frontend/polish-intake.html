@@ -66,6 +66,37 @@
     .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
     .vcheat{background:var(--surf-low);border:1px solid var(--line);border-radius:10px;
       padding:10px 12px;font-size:13px;line-height:1.5;margin:0 0 12px}
+    /* THE CHEAT SHEET IS A FLOATING, MOVABLE WIDGET on a wide screen -- the same kind of thing as
+       the Pricing options rail on step 3, and deliberately the same shape so the two read as one
+       pattern rather than two. Hanz, 2026-09-02: it "bothers when they are speaking", which is
+       exactly right -- it is a reference you glance at, and it was sitting in the reading path
+       between the heading and the box you are talking into, pushing that box down the page. Off to
+       the side it is still there to glance at and no longer in the way.
+
+       Below 1200px it falls back to the block it is today, in the same place in the DOM, because a
+       fixed 250px rail on a narrow screen is worse than a block -- it would sit on top of the
+       form. That is the same degradation .options-panel does at its own breakpoint. */
+    .vcheat .vc-drag{display:none}
+    @media (min-width:1200px){
+      .vcheat{position:fixed;right:16px;top:104px;width:250px;z-index:40;margin:0;
+        max-height:calc(100vh - 130px);overflow-y:auto;background:var(--card);
+        box-shadow:0 2px 10px rgba(0,0,0,.14)}
+      /* Drag handle, matching the step-3 rail's: a grip, the panel's name, and a sticky header so
+         it stays grabbable once the panel itself has scrolled. Position persists per browser. */
+      .vcheat .vc-drag{display:flex;align-items:center;gap:6px;cursor:move;user-select:none;
+        font:700 12px var(--sans);color:var(--red);margin:-10px -12px 8px;padding:7px 12px;
+        border-bottom:1px solid var(--line);border-radius:10px 10px 0 0;background:var(--surf-low);
+        position:sticky;top:-10px}
+      .vcheat .vc-drag::before{content:"\2630";font-size:12px;opacity:.7}
+      .vcheat.vc-dragging{opacity:.93;box-shadow:0 6px 20px rgba(0,0,0,.28)}
+      /* Between 1200 and 1540 the centred 1000px column would run under the rail, so the column
+         shifts left by the rail's width. Above 1540 the gutter is already wider than the rail
+         (1000 + 2x266), so the page is left exactly as it is and nothing moves for the widget. */
+      /* The header names the panel, so the inline label would say it twice. */
+      .vcheat .vc-inline{display:none}
+      .wrap{padding-right:282px}
+    }
+    @media (min-width:1540px){ .wrap{padding-right:0} }
     .vrow{display:flex;gap:10px;align-items:flex-start}
     .vrow textarea{flex:1;min-height:96px;font:inherit;line-height:1.5;padding:9px 11px;
       border:1px solid var(--line);border-radius:9px;background:var(--surf);color:var(--ink)}
@@ -181,8 +212,9 @@
             changes the price - those it asks you for.</p>
         </div>
         <div class="sec-b">
-          <div class="vcheat">
-            <b>Worth saying:</b> the job name, the street and town, when the bid is due, who to
+          <div class="vcheat" id="verbal-cheat">
+            <div class="vc-drag" title="Drag to move">Worth saying</div>
+            <b class="vc-inline">Worth saying:</b> the job name, the street and town, when the bid is due, who to
             reply to - and, in your own words, whether it is a <b>hard bid</b>, <b>prevailing
             wage</b>, <b>tax exempt</b>, or a <b>remodel</b>.
           </div>
@@ -192,10 +224,12 @@
             <button type="button" class="vmic" id="verbal-mic" aria-pressed="false"
                     hidden>Speak</button>
           </div>
-          <p class="hint" id="verbal-nomic" hidden>Your browser cannot do dictation - Chrome, Brave
-            and Edge can. Typing in the box works exactly the same.</p>
-          <p class="hint">Dictation is your browser's own. In Chrome that means the audio goes to
-            Google; type it instead if that is not right for this job.</p>
+          <p class="hint" id="verbal-nomic" hidden>Your browser cannot do dictation - Chrome and
+            Edge can. Typing in the box works exactly the same.</p>
+          <p class="hint">Dictation is your browser's own, and it needs a speech service to send the
+            audio to. Chrome and Edge have one - Chrome's is Google's, so type it instead if that is
+            not right for this job. Brave ships without one, so the button hears you and nothing
+            ever comes back.</p>
           <p class="vmsg" id="verbal-msg" role="status" aria-live="polite" hidden></p>
           <button type="button" class="btn" id="verbal-go">Fill the form</button>
           <div id="verbal-out" role="status" aria-live="polite" hidden></div>
