@@ -74,6 +74,51 @@
   // and the calculator cannot open a new project on two different sets of defaults.
   var DEFAULT_CONDITIONS = B.freshModel().conditions;
 
+  /** The spreadsheet cells these five conditions ARE, so this page and the live intake
+   *  cannot answer the same question two different ways.
+   *
+   *  WHY THIS EXISTS AT ALL. As of 2026-09-03 the five toggles also live on the live
+   *  intake form (js/index.js), which is now the beta's step 1 -- Hanz: "For the polish
+   *  beta we want to use the existing intake form v1 (not the beta). The v2 is just add
+   *  it with the toggle buttons." Until this page is retired it still asks the same five
+   *  questions one screen later, and without this it answered them from
+   *  polish_estimate.conditions -- which a fresh v1 project does not have -- so an
+   *  estimator who set Prevailing wage on intake arrived here to find it off.
+   *
+   *  DUPLICATED, NOT EXTRACTED, and deliberately. The obvious fix is one shared module,
+   *  but test_polish_intake_page.py asserts this page's <script src> list as an EXACT
+   *  seven-item sequence, so a sixth file here is a test move dressed up as a refactor.
+   *  Five rows against the day this page is deleted is the cheaper end of that trade.
+   *  The live intake's copy is the one to edit; this one follows it.
+   *
+   *  Only Epoxy!B4 and B5 are paired with a Polish cell: Polish!B4/B5 hold their own
+   *  Yes/No, while Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 /
+   *  =Epoxy!D6 and writing them would replace a live reference with a literal. */
+  var CONDITION_CELLS = {
+    local:           { cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
+    hard_bid:        { cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
+    prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
+    taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
+    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" }
+  };
+
+  /** cell_values with these five written into it, MERGED over what is already there.
+   *
+   *  Never a fresh object: cell_values also carries the AI autofill's flags and every
+   *  cell the estimator edited by hand on the estimate grid. And never a blank for
+   *  "off" -- both literals are written explicitly, because a blank Yes/No cell is not
+   *  "No" to Kyle's formulas, it is whatever the IF() defaults to. */
+  function conditionCells() {
+    var out = Object.assign({}, (TW.getState() || {}).cell_values || {});
+    for (var key in CONDITION_CELLS) {
+      if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
+      var spec = CONDITION_CELLS[key];
+      var lit = M.conditions[key] ? spec.on : spec.off;
+      for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
+    }
+    return out;
+  }
+
   // The draft this page is working ON, and the model derived from it. Reassigned together by
   // adoptModel(), because the page can switch drafts mid-boot: opening a real bid here works on a
   // test copy instead (see enterSandbox), and rendering the copy with the real project's values
@@ -81,6 +126,21 @@
   var state = {};
   var M = null;
   var form = null;
+
+  // WHICH OF THE FIVE THE ESTIMATOR SETTLED THEMSELVES. Hanz, 2026-08-27: the verbal panel must
+  // respect the human. The panel is allowed to fill an empty form; it is not allowed to argue with
+  // a person. A key that got here by a real click is REPORTED back on the next run ("you set this
+  // yourself — left alone") instead of being flipped a second time, because the estimator who
+  // corrected the AI once should not have to correct it again after every re-ask.
+  //
+  // Deliberately NOT persisted to the draft. It is one page visit's worth of "who touched this",
+  // and a stale flag on tomorrow's draft would block a fill nobody had objected to.
+  //
+  // There is deliberately NO matching ledger of what the panel itself set. Its own record is the
+  // `applied` list it returns, and a second run is allowed to correct its own first reading — so a
+  // stored copy would have had no reader, and freezing keys the AI had touched would make the
+  // re-ask pointless.
+  var humanConditions = {};
 
   /** Point the page at one draft's blob.
    *
@@ -93,6 +153,20 @@
     state = blob || {};
     M = B.migrateModel(state.polish_estimate);
     M.conditions = Object.assign({}, DEFAULT_CONDITIONS, M.conditions || {});
+    // THE CELL WINS WHERE THERE IS ONE. A project that came through the live intake has
+    // no polish_estimate yet, so migrateModel just handed back the defaults -- and the
+    // five choices the estimator actually made are sitting in cell_values. Reading them
+    // back here is what stops this screen contradicting the one before it. After this
+    // change every write to a condition writes its cell too (see save()), so the cell
+    // can never be the staler of the two.
+    var cv = (state.cell_values && typeof state.cell_values === "object") ? state.cell_values : {};
+    for (var ck in CONDITION_CELLS) {
+      if (!CONDITION_CELLS.hasOwnProperty(ck)) continue;
+      var cell = cv[CONDITION_CELLS[ck].cells[0]];
+      if (cell == null || cell === "") continue;
+      M.conditions[ck] =
+        String(cell).trim().toLowerCase() === String(CONDITION_CELLS[ck].on).toLowerCase();
+    }
   }
 
   function isCondition(key) {
@@ -127,8 +201,15 @@
     el.setAttribute("aria-checked", on ? "true" : "false");
   }
 
-  function toggleCondition(key) {
+  /** Flip one of the five, and record WHO flipped it.
+   *
+   *  `fromVerbal` is passed only by applyVerbal. Every other caller — the delegated click, the
+   *  keyboard, anything added later — counts as the estimator, which is the safe default in both
+   *  directions: forgetting the flag costs the panel one re-fill, while getting it wrong the other
+   *  way would let the AI overwrite a decision a person had already made. */
+  function toggleCondition(key, fromVerbal) {
     if (!isCondition(key)) return;          // only the five; a stray data-cond invents nothing
+    if (!fromVerbal) humanConditions[key] = true;
     M.conditions[key] = !M.conditions[key];
     paintCondition(key);
     // The county note quotes the Remodel tax toggle by name, so it is stale the moment one of these
@@ -137,6 +218,69 @@
     renderCountyNote();
     saveSoon();
   }
+
+  /** Fill this form from a verbal-intake extraction, and report what was actually applied.
+   *
+   *  PUBLISHED RATHER THAN REACHED INTO. js/polish-verbal.js owns the panel and the dictation; the
+   *  conditions live here, behind toggleCondition, which also repaints the switch, refreshes the
+   *  county note that quotes it by name, and schedules the save. A panel that flipped
+   *  M.conditions directly would leave all three of those undone and the screen disagreeing with
+   *  the model it just changed.
+   *
+   *  Only ever sets what the SERVER accepted. Everything it hands over has already cleared the
+   *  evidence gate in backend/verbal_intake.py; nothing here re-decides that, and nothing here
+   *  touches a county key — the picker below is the only thing allowed to write those four.
+   *
+   *  IT SAVES ITS OWN FILLS, AND STILL HAS TO. wire() now binds an `input` listener that saves any
+   *  named field a human types into — but setting `el.value` from script fires no `input` event, so
+   *  that listener does not see a single thing this function writes. Do not delete the saveSoon()
+   *  below on the grounds that typing is covered now; it is not the same path. Before either
+   *  existed, the eight text boxes this fills reached the draft only by accident, when a condition
+   *  happened to flip in the same run and its save swept them up.
+   *
+   *  Returns three lists, and the third one is the point: `respected` names the conditions the
+   *  estimator had already settled by hand, which this LEAVES ALONE and asks the panel to say so. */
+  function applyVerbal(res) {
+    var filled = [], applied = [], respected = [];
+    var fields = (res && res.fields) || {};
+    Object.keys(fields).forEach(function (key) {
+      var el = form ? form.querySelector('[name="' + key + '"]') : null;
+      if (!el) return;
+      el.value = fields[key];
+      // Fired because a programmatic fill should look like a keystroke to anything that IS
+      // listening — a later handler, an autofill extension, a test driving the page. It is not
+      // what saves the draft: see the note above.
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      filled.push(key);
+    });
+    var conditions = (res && res.conditions) || {};
+    Object.keys(conditions).forEach(function (key) {
+      if (!isCondition(key)) return;
+      var item = conditions[key];
+      if (!item || typeof item.value !== "boolean") return;
+      // THE HUMAN WINS. An estimator who corrected this switch after the first run is not asked to
+      // correct it again after the re-ask — the panel reports the disagreement instead of settling
+      // it. Reported rather than silently skipped, so the words the transcript rests on still
+      // reach the screen and the estimator can change their own mind on the evidence.
+      if (humanConditions[key]) { respected.push(key); return; }
+      // Toggled only when it DIFFERS. Calling toggleCondition unconditionally would flip a switch
+      // that was already right, which is the one way this could turn a correct form wrong.
+      if (!!M.conditions[key] !== item.value) toggleCondition(key, true);
+      applied.push(key);
+    });
+    if (filled.length) {
+      // The caption above the form names the project and the town, and both of those are boxes
+      // this just filled. Written in hydrate() and nowhere else until now, so a verbal fill left
+      // it reading "Untitled project" over a form with the name in it.
+      paintProjLine();
+      // One extra call, not one extra PUT: saveSoon clears its own pending timer, so this and any
+      // toggle in the same run land on the single 600ms save.
+      saveSoon();
+    }
+    return { filled: filled, applied: applied, respected: respected };
+  }
+
+  window.TWPolishIntake = { applyVerbal: applyVerbal };
 
   // ── the county, and the real remodel-tax rate ────────────────────────────────
   //
@@ -410,8 +554,15 @@
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
 
-  /** Debounced, same 600ms the calculator uses: a toggle is one click, but the text boxes above
-   *  are typed into and every save is a PUT of the whole blob. */
+  /** Debounced, same 600ms the calculator uses, because every save is a PUT of the WHOLE draft
+   *  blob and a run of the verbal panel schedules one per condition plus one for the fields.
+   *
+   *  WHO CALLS IT, exactly: toggleCondition, pickCounty, clearCounty, applyVerbal, and — since
+   *  the Sept 2026 data-loss fix — an `input` listener on any NAMED field in the form (wire()).
+   *  That listener is the whole of Will's bug: until it existed the eight text boxes were pure
+   *  DOM until Continue, so a step-nav click or a reload threw away everything typed. #county-input
+   *  is excluded by that `name` guard on purpose — its keystrokes are a live search, not a draft
+   *  edit, and saving per keystroke there would PUT the whole blob on every letter. */
   function saveSoon() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
@@ -450,10 +601,62 @@
       // reminders and the Dropbox folder date all read `deadline`.
       deadline: values.bid_date || cur.deadline || "",
       polish_estimate: model,
+      // Both homes, from one place. polish_estimate.conditions is what the beta
+      // calculator prices from; cell_values is what the generated .xlsx -- and so the
+      // customer's bid -- is filled from, and what the live intake and the estimate
+      // grid read. Writing only the first would price the beta correctly and hand out
+      // a workbook that disagreed with it.
+      cell_values: conditionCells(),
     }, countyKeys()));
+    paintSaveBlocked();
+  }
+
+  /** Fault 2 in the Sept 2026 "switches to a different tab and it doesn't save" report: one
+   *  global localStorage blob, and shared.js REFUSES a write silently (a console.warn only) when
+   *  another tab has re-stamped it onto a different draft. The toggle paints, the field fills --
+   *  nothing is written, locally or to the server -- and nobody is told. TW.saveBlocked() is a
+   *  read-only check built for exactly this; separate element from #sandbox-note, which is the
+   *  test-copy identity banner and must not be clobbered by a transient warning. */
+  function paintSaveBlocked() {
+    var el = $("save-note");
+    if (!el) return;
+    var reason = TW.saveBlocked ? TW.saveBlocked() : null;
+    if (reason === "foreign-blob") {
+      el.textContent = "This project is open in another tab, and that tab has taken over the " +
+        "shared draft. What you just entered here has NOT been saved -- switch back to the other " +
+        "tab, or reopen this project from Projects.";
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
   }
 
   // ── the form ────────────────────────────────────────────────────────────────
+
+  /** The caption above the form: which project this is, and where.
+   *
+   *  Its own function because TWO things change it now — hydrate on load, and a verbal fill that
+   *  types the name and the town into the boxes. While it lived inline in hydrate, the panel could
+   *  fill "Blue Valley West, Overland Park" into the form and leave the heading reading
+   *  "Untitled project" above it.
+   *
+   *  READS THE BOXES FIRST, then the draft. The boxes are what the estimator can see, and a verbal
+   *  fill reaches them 600ms before the save reaches `state`. On load the two agree, writeForm
+   *  having just put one into the other. */
+  function paintProjLine() {
+    var el = $("proj-line");
+    if (!el) return;
+    var boxed = function (name) {
+      var f = form ? form.querySelector('[name="' + name + '"]') : null;
+      return String((f && f.value) || "").trim();
+    };
+    var name = boxed("project_name") || state.project_name || "";
+    var city = boxed("city") || state.city || "";
+    var st = boxed("state") || state.state || "";
+    el.textContent = [name, city && st ? city + ", " + st : ""]
+      .filter(Boolean).join(" · ") || "Untitled project";
+  }
+
   function hydrate() {
     TW.writeForm(form, state);
     var bid = form.querySelector("[name='bid_date']");
@@ -467,8 +670,7 @@
     }
     renderConditions();
     hydrateCounty();                        // after the toggles: the note quotes Remodel tax
-    $("proj-line").textContent = [state.project_name, state.city && state.state
-      ? state.city + ", " + state.state : ""].filter(Boolean).join(" · ") || "Untitled project";
+    paintProjLine();
   }
 
   function onClick(e) {
@@ -508,11 +710,27 @@
   function wire() {
     document.addEventListener("click", onClick);
     if (form) form.addEventListener("submit", onSubmit);
+    // NAMED FIELDS ONLY. #county-input has no `name` -- its keystrokes are a search, not a draft
+    // edit, and onCountyInput below is what saves a PICKED county. Before this, nothing typed into
+    // the eight text boxes reached the draft until Continue: saveSoon()'s own docstring named this
+    // exact gap, and a step-nav tab or a reload in between silently lost everything typed.
+    if (form) form.addEventListener("input", function (e) {
+      if (e.target && e.target.name) saveSoon();
+    });
     var input = $("county-input");
     if (input) {
       input.addEventListener("input", onCountyInput);
       input.addEventListener("keydown", onCountyKeydown);
     }
+    // The 600ms debounce only reaches the server if something outlives it. Continue's onSubmit
+    // does that synchronously; leaving through a step-nav tab, closing the tab, or switching tabs
+    // did not -- and shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page
+    // armed, which before the listener above was never armed by typing at all.
+    window.addEventListener("pagehide", function () {
+      if (!saveTimer) return;
+      save();            // clears the 600ms timer, runs TW.setState synchronously
+      TW.flushState();   // fires the keepalive PUT now instead of waiting on the 2.5s debounce
+    });
   }
 
   // ── boot ────────────────────────────────────────────────────────────────────

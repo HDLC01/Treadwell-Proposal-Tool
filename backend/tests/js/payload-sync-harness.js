@@ -582,4 +582,96 @@ out.endToEnd = (() => {
   };
 })();
 
+// ── COVER-LETTER TOKENS (Will Buchanan's Direct text, 2026-09-03) ───────────
+// {{greeting}}, {{work_areas}} and {{cover_system_line}} are derived, and derived
+// TWICE: here for the cover-letter editor's on-screen preview, and in Python's
+// `_ensure_cover_letter_values` for generate and for the portal's replay of a
+// pinned revision. A token resolved on only one side previews as a raw {{token}}
+// over a correct PDF -- the bug PR #431 fixed for {{proposal_date_short}} -- and
+// an estimator proofreading on screen cannot tell that from a broken document.
+//
+// So this emits the JS answer AND the upstream values it derived from, and the
+// Python test feeds its own resolver those same upstream values. Neither side's
+// expected strings are written down twice: the test asserts the two AGREE, which
+// is the property that actually matters and the one a restated literal cannot
+// check. The table hits every branch, including the ones a happy-path fixture
+// would never reach.
+const COVER_LETTER_CASES = [
+  { name: "wills_own_example",
+    state: { system_name: "MACRO Flake Single Broadcast", system_thickness: '1/4"',
+             cove_height: "6", contact_name: "Brandon Weller",
+             work_areas: "Warehouse expansion and 4 offices",
+             sheet_area: { epoxy_sf: 18000, cove_lf: 420 } } },
+  // Three of Kyle's fifteen system names already state a thickness. A pick that
+  // DISAGREES with the name is the dangerous case: prepending would print two
+  // contradictory thicknesses in a spec line.
+  { name: "name_already_states_a_thickness",
+    state: { system_name: '3/16" Urethne Cement With Color Fast (SLB)',
+             system_thickness: '1/4"', cove_height: "6", contact_name: "Brandon",
+             work_areas: "Kitchen", sheet_area: { epoxy_sf: 4000, cove_lf: 120 } } },
+  { name: "no_cove_drops_the_clause",
+    state: { system_name: "MACRO Flake Single Broadcast", system_thickness: '1/8"',
+             cove_height: "6", contact_name: "Brandon",
+             work_areas: "Offices", sheet_area: { epoxy_sf: 4000, cove_lf: 0 } } },
+  { name: "no_thickness_picked",
+    state: { system_name: "MACRO Flake Single Broadcast", system_thickness: "",
+             cove_height: "4", contact_name: "Brandon",
+             work_areas: "Shop", sheet_area: { epoxy_sf: 4000, cove_lf: 90 } } },
+  { name: "blank_contact_gets_a_real_greeting",
+    state: { system_name: "MACRO Flake", system_thickness: '1/4"', contact_name: "",
+             work_areas: "Shop", sheet_area: { epoxy_sf: 4000, cove_lf: 0 } } },
+  { name: "lowercase_contact_is_capitalised",
+    state: { system_name: "MACRO Flake", contact_name: "brandon weller",
+             work_areas: "Shop", sheet_area: { epoxy_sf: 4000, cove_lf: 0 } } },
+  // Kyle sometimes has only an email address for a contact. "brandon@acme.com,"
+  // at the top of a customer letter is worse than "Hello,".
+  { name: "an_email_is_not_a_first_name",
+    state: { system_name: "MACRO Flake", contact_name: "brandon@acme.com",
+             work_areas: "Shop", sheet_area: { epoxy_sf: 4000, cove_lf: 0 } } },
+  { name: "an_initial_is_not_a_first_name",
+    state: { system_name: "MACRO Flake", contact_name: "B. Weller",
+             work_areas: "Shop", sheet_area: { epoxy_sf: 4000, cove_lf: 0 } } },
+  // Mixed case is left exactly as typed -- capitalising would print "Mcdonald,".
+  { name: "mixed_case_is_left_alone",
+    state: { system_name: "MACRO Flake", contact_name: "McDonald Reyes",
+             work_areas: "Shop", sheet_area: { epoxy_sf: 4000, cove_lf: 0 } } },
+  // An empty Area box must not print a bare "Area:" -- the letter's list items are
+  // static paragraphs, so there is nothing to drop.
+  { name: "blank_area_falls_back_to_the_sf_line",
+    state: { system_name: "MACRO Flake Single Broadcast", system_thickness: '1/4"',
+             cove_height: "6", contact_name: "Brandon", work_areas: "",
+             sheet_area: { epoxy_sf: 18000, cove_lf: 420 } } },
+  { name: "polish_has_no_thickness_and_no_cove",
+    state: { work_type: "polish", system_name: "Treadwell Polished Concrete",
+             contact_name: "Brandon", work_areas: "Showroom",
+             sheet_area: { polish_sf: 12400, epoxy_sf: 0, cove_lf: 0 } } },
+];
+
+out.coverLetterTokens = COVER_LETTER_CASES.map((c) => {
+  const s = { work_type: "epoxy", audience: "Direct", project_name: "Token QA",
+              base_tab_id: "Epoxy", proposal_lump_sum: 61162,
+              price_overrides: { lines: {} }, ...c.state };
+  // computeTokenValues takes the MERGED dict as its parameter -- the page builds it at
+  // proposal-review.js:6646 as Object.assign({}, state, TW.readForm(form)). There is no
+  // form on this bench, so state IS the merge.
+  const tv = scopeFor(s, { lumpText: "$61,162.00" }).computeTokenValues(Object.assign({}, s));
+  return {
+    name: c.name,
+    // What Python must be given: the upstream values this derivation read.
+    upstream: {
+      contact_name: s.contact_name === undefined ? null : s.contact_name,
+      system_name: s.system_name === undefined ? null : s.system_name,
+      system_thickness: s.system_thickness === undefined ? null : s.system_thickness,
+      cove_height: s.cove_height === undefined ? null : s.cove_height,
+      cove_lf: tv.cove_lf,
+      area_description: tv.area_description,
+      work_areas: s.work_areas === undefined ? null : s.work_areas,
+    },
+    // What the browser will show the estimator.
+    greeting: tv.greeting,
+    work_areas: tv.work_areas,
+    cover_system_line: tv.cover_system_line,
+  };
+});
+
 console.log(JSON.stringify(out));

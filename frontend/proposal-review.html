@@ -55,14 +55,27 @@
     gap: 18px;
     font-size: 12px;
   }
-  .word-ribbon .tabs { display: flex; gap: 14px; }
-  .word-ribbon .tab {
+  /* THE TAB, drawn once for both places it appears. These three rules were written for
+     .word-ribbon and then never mounted -- dormant vocabulary, purpose-built for a document
+     switch that had not been built yet. The cover letter is that switch, so it takes the same
+     rules by joining the selector rather than by growing a fifth way to draw a tab.
+
+     The reset below comes FIRST and stays first: #doc-tabs' tabs are <button>s (they switch a
+     view, they do not navigate), and a button arrives with a border and a background of its own.
+     The shared rule that follows re-states `border-bottom`, so the underline survives `border: 0`
+     on later-wins -- move this rule after it and the active tab loses its underline. */
+  .doc-tabs .tab {
+    appearance: none; -webkit-appearance: none;
+    background: none; border: 0; font: inherit; cursor: pointer;
+  }
+  .word-ribbon .tabs, .doc-tabs { display: flex; gap: 14px; }
+  .word-ribbon .tab, .doc-tabs .tab {
     padding: 4px 10px;
     color: #2b579a;
     text-decoration: none;
     border-bottom: 2px solid transparent;
   }
-  .word-ribbon .tab.active {
+  .word-ribbon .tab.active, .doc-tabs .tab.active {
     color: #2b579a;
     border-bottom-color: #2b579a;
     font-weight: 600;
@@ -83,6 +96,18 @@
     color: #2b579a;
   }
   .word-ribbon button:disabled { opacity: 0.55; cursor: wait; }
+  /* WHAT CTRL+S REPORTED, and nothing else. Plain text in a row of plain text -- the same 12px
+     the row already uses, the app's own ink and danger tokens, no pill and no border, because a
+     new chip shape here would be a new component for one sentence. It is a flex item of
+     .word-ribbon, which is page chrome OUTSIDE #doc-zoom's transform, so it cannot move the
+     to-scale preview by a pixel and it is not in the surface the generate payload is read from.
+
+     NO `display` DECLARATION, deliberately. The element is hidden with the `hidden` attribute, and
+     an author rule setting display would outrank the UA stylesheet's `[hidden] { display: none }`
+     -- this repo has shipped four elements that were "hidden" and still on screen for exactly that
+     reason. A flex child is blockified anyway, so the padding behaves without one. */
+  .save-state { font-size: 12px; color: var(--ink-variant, #5c403f); padding: 0 4px; }
+  .save-state[data-state="failed"] { color: var(--danger, #ba1a1a); font-weight: 600; }
 
   .word-canvas {
     flex: 1;
@@ -343,6 +368,68 @@
      removed (it has no inline equivalent + drives the price line). */
   .ribbon-tax { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px;
     font-size: 12px; color: #444; white-space: nowrap; }
+  /* "Include a cover letter" -- the same metrics as the tax control beside it, because it is the
+     same kind of thing: one small standing choice about the document, parked in the ribbon. A
+     checkbox and not a switch; this page has no switches and one control is not a reason to
+     introduce a component. */
+  .ribbon-cl { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px;
+    font-size: 12px; color: #444; white-space: nowrap; cursor: pointer; }
+  .ribbon-cl input { accent-color: var(--treadwell-red, #9e001f); margin: 0; cursor: pointer; }
+
+  /* THE DOCUMENT TABS SHARE THE FORMATTING RIBBON'S ROW. They are not page navigation -- the
+     step pills above are, and putting a within-step switch beside them would say the cover letter
+     is a fifth step. A row of their own was the other option and it was rejected for what it
+     costs: this canvas is a to-scale preview of a printed page, and every pixel of chrome is a
+     pixel of paper the estimator cannot see.
+
+     #fmt-ribbon becomes the flex row; .tw-fmtbar (mounted into it by proposal-review.js, which
+     this file does not touch) takes the rest of it. */
+  .fmt-ribbon { display: flex; align-items: stretch; }
+  #fmt-ribbon > .tw-fmtbar { flex: 1 1 auto; min-width: 0; }
+  #doc-tabs { align-items: center; gap: 4px; padding: 5px 0 5px 14px;
+    border-bottom: 1px solid #d2d0ce; background: var(--surface-lowest, #fff); font-size: 12px; }
+  /* Keyed on the CLASS, not on #doc-tabs. `.doc-tabs` is what sets `display: flex`, so the class
+     is what defeats the `hidden` attribute — and an id-scoped guard would only rescue this one
+     element while leaving the next `.doc-tabs` on the page broken in the way four elements in
+     this repo already have been. (0,2,0) beats the flex rule's (0,1,0), so it wins on rank.
+     test_hidden_is_actually_hidden asks for exactly this and caught the id version. */
+  .doc-tabs[hidden] { display: none; }
+  /* The hairline between the switch and the formatting controls -- the same 1px #d2d0ce the two
+     chrome rows already use, so it reads as part of the same ribbon. */
+  #doc-tabs::after { content: ""; align-self: center; width: 1px; height: 18px;
+    background: #d2d0ce; margin-left: 10px; }
+
+  /* THE DOCUMENT THAT IS NOT IN FRONT GOES OFF-SCREEN, NOT TO display:none.
+     The proposal's Terms pages are paginated by measuring real element heights, and everything
+     inside a display:none subtree measures zero -- so a repagination that fired while the
+     proposal was hidden would pack the Terms wrong, and there would be nothing on screen to
+     notice it by. Off-stage still lays out, so every measurement stays true whichever tab is in
+     front. `position: absolute` also keeps it out of #doc-zoom's height, so the scroller is
+     sized by the document you can actually see.
+     Written with BOTH ids so it scores (1,1,0). Nothing sets `position` on either surface today,
+     so (0,1,0) would be enough -- but this rule is load-bearing for a hidden document and the
+     house rule here is to win on specificity rather than on source order or on !important, both
+     of which the next stylesheet edit can quietly overturn. */
+  #doc-surface.cl-offstage, #cl-surface.cl-offstage { position: absolute; left: -100000px; top: 0; }
+
+  /* The letter's page. `.tw-page` already draws the sheet; this only says how the flow layout
+     breathes when the template has no artwork to register against. */
+  .cl-page.tw-flow { min-height: 792pt; }
+  .cl-body { position: relative; z-index: 1; }
+  .cl-txbx { outline: none; }
+
+  /* THE LETTER DID NOT LOAD -- AMBER, NOT RED. The proposal is unaffected and the bid can still
+     go out today, so this is a mistake to correct and not a failure to fear. Same palette as
+     .pr-inert-warn above, for that same reason and so the page keeps one meaning for one colour. */
+  .cl-warn { max-width: 612pt; margin: 0 auto; background: #fdf6e3; border: 1px solid #e8d9a8;
+    border-radius: 8px; padding: 14px 16px; color: #7a5c00; }
+  .cl-warn-text { margin: 0 0 10px; font-size: 13px; line-height: 1.45; }
+  .cl-warn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .cl-warn-btn { font: inherit; font-size: 12px; font-weight: 600; padding: 6px 12px;
+    border-radius: 6px; border: 1px solid #7a5c00; background: #7a5c00; color: #fff;
+    cursor: pointer; }
+  .cl-warn-btn-quiet { background: transparent; color: #7a5c00; }
+  .cl-warn-btn:hover { filter: brightness(1.08); }
   .ribbon-tax span { font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #777; }
   .ribbon-tax select { font-size: 12px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px;
     background: #fff; color: #222; }
@@ -432,11 +519,23 @@
     <a class="step" href="/done.html">4 · Files</a>
   </div>
   <div class="ribbon-spacer"></div>
+  <!-- Ctrl+S reports here. `role="status"` + `aria-live="polite"` is the standard idiom for a
+       readout that changes on its own; it costs nothing and it is what a screen reader needs to
+       hear "Saved" without the focus having to move. Empty and `hidden` until a key is pressed --
+       a permanent save badge would be a standing claim about a page that has already moved on. -->
+  <span id="save-state" class="save-state" role="status" aria-live="polite" hidden></span>
   <!-- Compact tax-treatment control. The full "Proposal fields" sidebar is
        hidden (redundant with inline editing), but tax treatment has no inline
        equivalent and drives the PRICE line + {{base_tax_phrase}}, so it stays
        here. Two-way synced with the hidden form's tax_inclusion field (see
        proposal-review.js) so readForm + the doc repaint keep working. -->
+  <!-- OPTIONAL, AND OFF UNTIL SOMEBODY ASKS FOR IT. Most bids do not want a cover letter, and a
+       customer-facing page that appeared without being asked for is a page nobody proofread.
+       Ticking it reveals the document tabs in the row below and loads the real template. -->
+  <label class="ribbon-cl" title="Adds a short letterhead page in front of the proposal. Off by default.">
+    <input type="checkbox" id="cl-toggle">
+    <span>Cover letter</span>
+  </label>
   <label class="ribbon-tax" title="Tax treatment on the base-bid price line">
     <span>Tax</span>
     <select id="tax-treatment-select">
@@ -461,7 +560,16 @@
        * It is OUTSIDE #doc-zoom, which is what the old bar's `position: fixed` was for: the
          document surface sits under a `scale()` transform and the ribbon must not be scaled with
          it. A normal-flow sibling of `.word-canvas` never enters that transform. -->
-<div id="fmt-ribbon" class="fmt-ribbon"></div>
+<div id="fmt-ribbon" class="fmt-ribbon"><!--
+  -- Which document you are editing. Hidden entirely while the cover letter is off, so a bid that
+  -- does not use one sees exactly the page it saw before this feature existed. `hidden` plus an
+  -- explicit `.doc-tabs[hidden] { display: none }` in the stylesheet above, because a class
+  -- `display` rule outranks the attribute and this repo has shipped four elements that were
+  -- "hidden" and still on screen for precisely that reason.
+--><div id="doc-tabs" class="doc-tabs" role="tablist" aria-label="Document" hidden>
+    <button type="button" class="tab active" data-doc="proposal" role="tab" aria-selected="true">Proposal</button>
+    <button type="button" class="tab" data-doc="cover" role="tab" aria-selected="false">Cover letter</button>
+  </div></div>
 
 <!-- WHY YOU ARE ON THIS PAGE. Shown only when the Files page sent the estimator here with
      `?resync=1` because the customer's PDF was older than the pricing, AND the two halves still
@@ -626,6 +734,12 @@
       <div id="doc-surface">
         <div id="doc-loading" class="tw-page" style="padding:72pt 90pt;">Loading the proposal template…</div>
       </div>
+      <!-- THE COVER LETTER GETS ITS OWN SURFACE, and never shares #doc-surface. That element is
+           owned by proposal-review.js: clearDocSurface() wipes it and reclaims the live price
+           preview islands that have been MOVED into it, and a second renderer writing there would
+           destroy them. A sibling inside #doc-zoom instead, so the letter is scaled by the same
+           transform and the same zoom maths without either editor knowing about the other. -->
+      <div id="cl-surface" class="cl-offstage"></div>
     </div>
   </div>
 </div>
@@ -695,7 +809,12 @@
      own script, which reads window.TWCrm as it runs. -->
 <script src="/js/crm-core.js"></script>
 <script src="/js/proposal-format-core.js?v=20260805-1"></script>
-<script src="/js/proposal-review.js?v=20260805-1"></script>
+<script src="/js/proposal-review.js?v=20260902-1"></script>
+<!-- AFTER proposal-review.js, always. The cover letter borrows that file's token resolver and its
+     "aim at nothing" call for the formatting ribbon, both of which are top-level functions in the
+     shared script scope; loaded first it would find neither. Every borrow is feature-detected, so
+     the letter still renders (with raw tokens) if that script threw. -->
+<script src="/js/coverletter-editor.js?v=20260828-1"></script>
 
 </body>
 </html>

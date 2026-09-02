@@ -1546,3 +1546,61 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   margin: 0 4px;
   background: var(--surface-dim);
 }
+
+/* ── Job-condition toggles (intake) ──────────────────────────────────────────
+   Ported from the polish beta's step 2 (polish-intake.html:144-165), where these
+   five switches were built. Same shape, six of the beta's own custom properties
+   remapped onto this file's tokens -- --red/--line/--line-2/--surf-low/--card/
+   --ink-3 are defined nowhere in styles.css, so a straight copy would have
+   rendered a colourless toggle on a transparent track.
+
+   TOGGLES, NOT CHECKBOXES. test_all_five_conditions_render_as_toggles pins the
+   switch shape, with the docstring "Hanz asked for toggle buttons by name". A
+   checkbox would round-trip through TW.readForm for free (shared.js:528) and is
+   the tempting rewrite; it fails that test on purpose. The round-trip is bought
+   here with a hidden input behind each switch instead. */
+.jc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px; }
+@media (max-width: 700px) { .jc-grid { grid-template-columns: 1fr; } }
+
+.sw {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--surface-dim);
+  cursor: pointer;
+}
+.sw:last-child { border-bottom: 0; }
+.track {
+  width: 38px;
+  height: 22px;
+  border-radius: 12px;
+  background: var(--surface-low);
+  border: 1px solid var(--surface-dim);
+  position: relative;
+  flex: none;
+  margin-top: 1px;
+}
+.track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-lowest);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
+  transition: left .13s;
+}
+.sw.on .track { background: var(--treadwell-red); border-color: transparent; }
+.sw.on .track::after { left: 18px; background: #fff; }
+.sw .t { font-weight: 600; font-size: 13px; }
+.sw .c { color: var(--ink-variant); font-size: 11.5px; margin-top: 2px; display: block; }
+
+/* Inert, not hidden. `remove_existing_jf` only moves money while `joint_filler`
+   is on (its sole consumer is Polish!A42, the joint-filler crew size), and the
+   county picker's own note is the precedent: say plainly that an input is not
+   affecting the price rather than hiding it and losing what was set. */
+.sw.inert { opacity: .55; }
+.sw.inert .c { font-style: italic; }

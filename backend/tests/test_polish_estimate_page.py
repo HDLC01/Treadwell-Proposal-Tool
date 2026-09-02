@@ -622,6 +622,26 @@ def test_two_rapid_edits_send_one_save(ran):
     assert s["coalescedTotal"] == s["coalescedExpected"]
 
 
+@needs_node
+def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
+    """Same gap as the intake page's Fault 3, on the calculator: shared.js's own pagehide net
+    (shared.js:513) only flushes a timer THIS page armed, and a takeoff number typed then left via
+    the step nav inside the 600ms window was silently lost. The page now runs the save synchronously
+    on pagehide and forces the network PUT via TW.flushState() rather than trusting the debounce to
+    survive a tab close or step-nav click.
+
+    Mutation: remove the pagehide handler (or its `if (!saveTimer) return;` guard so it fires a save
+    from nothing) and this fails either way."""
+    p = ran["pagehideFlush"]
+    assert p["wired"], "polish-estimate.js registers no pagehide handler at all"
+    assert p["armedBeforeLeaving"] == 1, "typing a takeoff number did not arm a timer for pagehide to catch"
+    assert p["savedSynchronously"] == 1, "pagehide did not push the pending save through"
+    assert p["armedAfterLeaving"] == 0, "pagehide left the 600ms timer armed behind it"
+    assert p["flushedTheNetwork"] == 1, "pagehide saved locally but never called TW.flushState()"
+    assert p["quietWhenNothingArmed"], (
+        "leaving with nothing typed must not manufacture a save or a flush out of thin air")
+
+
 # ── G. migration ─────────────────────────────────────────────────────────────
 @needs_node
 def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):

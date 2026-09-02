@@ -118,6 +118,17 @@
     function isInactive(p) { return !!p.archived; }
     function applyFilter(list) {
       if (CURRENT_FILTER === "test") return list.filter(isTest);
+      // BETA POLISH, and it has to sit above realOnly() for the same reason the test branch does.
+      // The sandbox files every beta copy with is_test: true (polish-sandbox.js) and renames it
+      // "<name> (beta test)", so realOnly would hide every beta project from its own tab. Reading
+      // the unfiltered list is the point, not an oversight.
+      //
+      // WHY THE TAB EXISTS. Until it did, beta work could only be found under Test, under a
+      // renamed title, mixed in with every demo and QA row in the database. An estimator who saved
+      // beta work and then looked where they normally look saw nothing, which reads as "it did not
+      // save" even when it did -- the perceived half of Will's report, sitting alongside the real
+      // autosave fault in polish-intake.js.
+      if (CURRENT_FILTER === "beta") return list.filter(p => p.polish_beta);
       const real = realOnly(list);            // test projects never show in active/inactive/all
       if (CURRENT_FILTER === "inactive") return real.filter(isInactive);
       if (CURRENT_FILTER === "all")      return real;
@@ -196,11 +207,14 @@
       const nActive = real.filter(isActive).length;
       const nInactive = real.filter(isInactive).length;
       const nTest = ALL_PROJECTS.filter(isTest).length;
+      // Off ALL_PROJECTS, not `real`, because beta rows ARE test rows -- see applyFilter.
+      const nBeta = ALL_PROJECTS.filter(p => p.polish_beta).length;
       const defs = [
         ["active",   "Active",   nActive],
         ["inactive", "Inactive", nInactive],
         ["all",      "All",      real.length],
         ["test",     "Test",     nTest],
+        ["beta",     "Beta Polish", nBeta],
       ];
       f.hidden = ALL_PROJECTS.length === 0;
       f.innerHTML = defs.map(([key,label,n]) =>
@@ -254,6 +268,7 @@
           : !chipSet.length
             ? (CURRENT_FILTER === "inactive" ? "No inactive projects."
                : CURRENT_FILTER === "test"   ? "No test projects."
+               : CURRENT_FILTER === "beta"   ? "No beta polish projects yet."
                : "No active projects.")
             : "No projects match your search.";   // tab has rows, but search/month filtered them out
         return;

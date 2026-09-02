@@ -526,6 +526,43 @@ def test_a_material_can_still_be_saved_under_its_own_name(store):
     assert library.update_item(it["id"], {"name": "Densifier XL"})["name"] == "Densifier XL"
 
 
+def test_a_name_made_only_of_punctuation_still_clashes_with_itself(store):
+    """THE ONE NAME THAT COULD BE ENTERED TWICE. `_item_key` drops every non-alphanumeric
+    character, so "---" normalises to "" — and an empty key was read as "nothing to compare, let
+    it through". validate_item accepts "---" (it is non-empty after _clean_text), so both rows
+    landed and the block that exists to stop one material having two entries was silent on the
+    only name where the two entries are indistinguishable even to a human.
+
+    Refused SERVER-SIDE, which is the half that matters: the page has its own hint, and a check
+    the client owns is a check anybody with the API can walk round."""
+    first = _mk_item(name="---")
+    assert first["name"] == "---", "the first one has to be allowed — nothing to clash with yet"
+    with pytest.raises(library.ValidationError) as e:
+        _mk_item(name="---")
+    assert "already in the library" in str(e.value)
+    assert [it["name"] for it in library.list_items()] == ["---"], (
+        "the refused material was inserted anyway")
+
+
+def test_a_rename_onto_a_punctuation_name_is_refused_too(store):
+    """create_item and update_item ask the same question, so they have to get the same answer —
+    the rename path is how a duplicate gets in when the create path is closed."""
+    _mk_item(name="***")
+    other = _mk_item(name="Densifier")
+    with pytest.raises(library.ValidationError):
+        library.update_item(other["id"], {"name": "***"})
+    assert library.get_item(other["id"])["name"] == "Densifier", "the failed rename was saved anyway"
+
+
+def test_two_different_punctuation_names_are_still_two_names(store):
+    """The fallback compares the cleaned text, so "---" and "***" are different materials. The
+    expensive direction of a check that BLOCKS is a false positive — it leaves the estimator
+    unable to enter what is in front of them, with no way round it (see _item_key)."""
+    _mk_item(name="---")
+    assert _mk_item(name="***")["name"] == "***"
+    assert _mk_item(name="- - -")["name"] == "- - -"
+
+
 def test_a_deleted_material_does_not_block_its_own_name(store):
     """_clashing_item reads list_items(), which is live rows only. A soft-deleted material holding
     its name hostage would be a name nobody can use and nobody can see to free up."""

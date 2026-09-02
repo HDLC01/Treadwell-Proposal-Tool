@@ -63,6 +63,18 @@
     margin-bottom:-1px; border-radius:8px 8px 0 0; transition:color .12s, background .12s; }
   .tab:hover { color:var(--ink); background:var(--surf-low); }
   .tab.sel { color:var(--red-dark); border-bottom-color:var(--red); background:none; }
+  /* Five tabs measure 486px, so at 375 they used to push the BODY sideways: measured on staging,
+     documentElement.scrollWidth 486 against clientWidth 375, which drags the whole page including
+     its heading out from under the viewport.
+     WRAP RATHER THAN SCROLL. A strip with overflow-x:auto is the usual answer and it is wrong here:
+     .tab carries margin-bottom:-1px so its underline sits ON the container's border, and any
+     overflow value on .tabs clips that 1px and adds a scrollbar for it. Wrapping keeps all five
+     reachable without a swipe, which is what a tab strip is for. flex:1 1 auto lets the rows fill
+     the width instead of leaving a ragged right edge. */
+  @media (max-width:767px) {
+    .tabs { flex-wrap:wrap; gap:2px 0; }
+    .tab { flex:1 1 auto; min-height:44px; padding:10px 12px 12px; white-space:nowrap; }
+  }
 
   /* ── filter bar ── */
   .filterbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:9px; }

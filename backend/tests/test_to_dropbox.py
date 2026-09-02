@@ -114,9 +114,17 @@ def _stub_route(monkeypatch, *, owner_subfolder=""):
     monkeypatch.setattr(main.drafts, "load_draft", lambda i: {"id": i, "data": data})
     monkeypatch.setattr(main.drafts, "save_draft", lambda i, d, **k: None)
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
-    monkeypatch.setattr(main, "_generate", lambda gi, request, persist=True: main.GenerateOut(
-        work_type=gi.work_type, audience=gi.audience, xlsx_download_url="/api/files/x",
-        docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={}))
+    # `want_cover_letter` is DECLARED, not absorbed by a **kw. A double that swallowed it would
+    # keep passing while the route quietly stopped opting out — and the route's own broad `except`
+    # turns a TypeError here into a 200 with a warning, so the miss surfaces as a baffling KeyError
+    # on some later assertion rather than as the signature mismatch it is.
+    def fake_generate(gi, request, persist=True, want_cover_letter=True):
+        captured["want_cover_letter"] = want_cover_letter
+        return main.GenerateOut(
+            work_type=gi.work_type, audience=gi.audience, xlsx_download_url="/api/files/x",
+            docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={})
+
+    monkeypatch.setattr(main, "_generate", fake_generate)
     monkeypatch.setitem(main._FILE_CACHE, "x", {"content": XLSX})
     monkeypatch.setitem(main._FILE_CACHE, "d", {"content": DOCX, "_pdf": PDF})
     monkeypatch.setattr(main.dropbox_client, "destination_path",

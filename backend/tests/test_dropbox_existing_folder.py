@@ -504,9 +504,14 @@ def _stub_to_dropbox(monkeypatch, draft_data, captured, saved=None):
     monkeypatch.setattr(main.drafts, "save_draft",
                         lambda i, d, **k: (saved if saved is not None else []).append(d))
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
-    monkeypatch.setattr(main, "_generate", lambda gi, request, persist=True: main.GenerateOut(
-        work_type="gyp", audience="Direct", xlsx_download_url="/api/files/x",
-        docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={}))
+    # Declares `want_cover_letter` rather than absorbing it: see the note in test_to_dropbox.py.
+    def fake_generate(gi, request, persist=True, want_cover_letter=True):
+        captured["want_cover_letter"] = want_cover_letter
+        return main.GenerateOut(
+            work_type="gyp", audience="Direct", xlsx_download_url="/api/files/x",
+            docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={})
+
+    monkeypatch.setattr(main, "_generate", fake_generate)
     monkeypatch.setitem(main._FILE_CACHE, "x", {"content": b"xlsx"})
     monkeypatch.setitem(main._FILE_CACHE, "d", {"content": b"docx", "_pdf": b"%PDF-1.4"})
     monkeypatch.setattr(main.dropbox_client, "destination_path",

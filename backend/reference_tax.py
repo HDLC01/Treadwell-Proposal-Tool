@@ -6,10 +6,22 @@ the Estimate Review. Used by `/api/reference/tax-rate` when the UI or
 the autofill flow needs to suggest a sales-tax rate for a given
 city/state.
 
+There are two city tables and they are NOT peers:
+
+- `CITIES` is authoritative. Every row was driven through the taxing
+  authority's own Address Tax Rate Locator and records the street address it
+  was verified at, so the check can be re-run. `lookup()` and
+  `list_tax_areas()` both read it. Kansas only, so far.
+- `TAX_RATES` is Missouri cities only, and is NOT locator-verified. It is a
+  ballpark from older compiled sources. Anything it holds that CITIES also
+  holds is a bug -- `test_reference_tax.py` fails on any overlap, because a
+  duplicated rate is a rate that will eventually disagree with itself. It
+  already had: seven of eleven KS rows were wrong here while CITIES was
+  right, and one endpoint served each.
+
 Sources:
-- Missouri DOR sales-tax-rate finder
-- Kansas DOR rate tables
-- City-specific add-ons compiled from Treadwell's recent jobs
+- Missouri DOR sales-tax-rate finder (TAX_RATES, MO only)
+- Kansas DOR Address Tax Rate Locator (CITIES + KS counties, per-row verified)
 
 Rates are total combined (state + county + city + special district)
 as a decimal (e.g. 0.0975 = 9.75%). Keep the precision the source
@@ -34,24 +46,16 @@ TAX_RATES: dict[tuple[str, str], float] = {
     ("raytown",         "MO"): 0.0935,
     ("grandview",       "MO"): 0.09975,
     ("belton",          "MO"): 0.0935,
-    # Kansas side
-    # Overland Park corrected 2026-09-02 (was 0.09125 — stale; Overland
-    # Park's own city add-on rose since this table was last populated).
-    # Verified against 2+ independent current sources: 6.5% state +
-    # 1.475% county + 1.375% city = 0.0935.
-    ("overland park",   "KS"): 0.0935,
-    ("olathe",          "KS"): 0.09475,
-    ("lenexa",          "KS"): 0.09475,
-    ("shawnee",         "KS"): 0.0975,
-    ("kansas city",     "KS"): 0.0975,
-    ("leawood",         "KS"): 0.095,
-    ("merriam",         "KS"): 0.0975,
-    ("mission",         "KS"): 0.0975,
-    ("prairie village", "KS"): 0.0935,
+    # KANSAS CITIES ARE NOT LISTED HERE. They live in CITIES below, which is the
+    # verified table: every KS row there was driven through KDOR's own Address Tax
+    # Rate Locator on 2026-09-02 and records the street address it was checked
+    # against. Eleven KS cities used to be duplicated up here and SEVEN of them
+    # disagreed with the verified number -- all seven overstating the tax, Kansas
+    # City KS by 0.625 of a point. That is not a data-entry slip; it is what two
+    # copies of one fact always come to. lookup() reads CITIES for KS now, so
+    # there is nothing left to drift.
     # Greater area
     ("st joseph",       "MO"): 0.08825,
-    ("topeka",          "KS"): 0.0935,
-    ("lawrence",        "KS"): 0.0935,
 }
 
 # State default if no city match (state base + average local)
@@ -265,6 +269,21 @@ def lookup(city_state: str | None) -> dict:
     city = m.group(1).strip().lower()
     state = m.group(2).strip().upper()
 
+    # The verified table first, whatever the state. These rows were each checked
+    # against the taxing authority's own locator and carry the address they were
+    # checked at, so where CITIES has a city it is the better answer by definition.
+    for row in CITIES:
+        if row["name"].lower() == city and row["state"] == state:
+            return {
+                "rate":   row["remodel_rate"],
+                "city":   row["name"],
+                "state":  state,
+                "source": "city",
+                "notes":  row.get("notes", ""),
+            }
+
+    # MO cities are still only here, and are NOT locator-verified -- see the
+    # header. Kept because a rate in the right ballpark beats a state average.
     if (city, state) in TAX_RATES:
         return {
             "rate":   TAX_RATES[(city, state)],

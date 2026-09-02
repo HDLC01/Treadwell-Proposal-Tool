@@ -30,7 +30,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cachetools
 
@@ -63,6 +63,7 @@ import analytics_export
 import audit
 import basisboard_client
 import calendar_events
+import cover_letter_writer
 import digest_worker
 import drafts
 import dropbox_client
@@ -81,6 +82,7 @@ import proposal_writer
 import pull_window
 import reference_tax
 import supabase_client
+import verbal_intake
 
 _SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
 
@@ -153,6 +155,9 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       # server-to-server (the customer portal renders the proposal
                       # PDF on demand); gated by SERVICE_TOKEN inside the handler.
                       "/api/admin/proposal-pdf",
+                      # the optional cover letter the portal shows AHEAD of the
+                      # proposal — same server-to-server render, same gate.
+                      "/api/admin/cover-letter-pdf",
                       # same deal for the deposit invoice — the portal owns deposits
                       # but has no LibreOffice, so it renders here.
                       "/api/admin/deposit-invoice"}
@@ -423,6 +428,51 @@ class GenerateIn(BaseModel):
     # Empty -> _build_epoxy_systems keeps its legacy Epoxy!-cell reads (stale
     # drafts / the To-Dropbox reconstruction path). Sanitized in api_generate.
     sheet_systems: list = Field(default_factory=list)
+    # ── Cover Letter (optional, shown to the customer BEFORE the proposal) ──
+    #
+    # OFF by default, and that default is what makes every existing draft safe:
+    # `GenerateIn(**proposal_payload)` is how the portal PDF, the revision replay
+    # and the To-Dropbox re-upload rebuild a frozen payload, and a payload saved
+    # before this feature simply carries none of these three keys.
+    #
+    # They also need NO new persistence. `proposal_payload` is the whole
+    # GenerateIn body, stored on the draft and copied verbatim into a revision
+    # when a proposal is sent — so the letter a customer sees is pinned to the
+    # revision exactly as the proposal is, for free. (Which is the point: a
+    # letter that quietly re-rendered from the live draft would contradict the
+    # pinned prices on the page below it.)
+    cover_letter_enabled: bool = False
+    # The cover-letter document editor's free-text paragraph edits:
+    #   {"<block id from /api/coverletter-template>": {text?, runs?, para?}}
+    #
+    # Its own channel rather than a bucket inside `paragraph_overrides`: those
+    # ids are positions in a walk over the PROPOSAL template, and mixing two
+    # documents' ids in one list is how an edit lands on the wrong paragraph.
+    #
+    # A DICT KEYED BY ID, like `box_overrides` and unlike the proposal's list of
+    # {id, text} — the entry cannot exist without its id, so there is no shape in
+    # which an override travels with no idea which paragraph it belongs to.
+    # Normalized back to the writer's list form (and validated entry by entry by
+    # the SAME sanitizer the proposal uses) in _sanitize_cover_letter_overrides.
+    cover_letter_paragraph_overrides: dict = Field(default_factory=dict)
+    # The cover-letter template version those ids were captured against, echoed
+    # from /api/coverletter-template. Same fail-safe as `template_version` above:
+    # non-empty and stale -> the overrides are DROPPED, because a regenerated
+    # template shifts every id after the changed paragraph.
+    #
+    # It is "<work_type>:<audience>@<mtime>", not a bare mtime, and that carries
+    # the frontend's per-template override keying (proposal-review.js's
+    # `overrideKey(wt, audience)`) onto the server. The seven cover-letter files
+    # are written by ONE generator run and can share an mtime, so mtime alone
+    # would let a Direct/Combo edit replay onto GC/Epoxy. See
+    # `_cover_letter_template_version`.
+    cover_letter_template_version: str = ""
+
+
+class VerbalIntakeIn(BaseModel):
+    """One spoken or typed account of a job, on its way to becoming intake fields."""
+
+    transcript: str | None = None
 
 
 class AutofillIn(BaseModel):
@@ -441,6 +491,11 @@ class GenerateOut(BaseModel):
     docx_download_url: str
     pdf_download_url: str       # on-demand LibreOffice render of the .docx
     totals: Dict[str, Any]     # Python-computed preview totals
+    # The optional Cover Letter .docx, cached under the same _FILE_CACHE token
+    # mechanism as the other two (so /api/file/{token} and /api/file/{token}/pdf
+    # both work on it). None — not a dead link — whenever the project has no
+    # cover letter, which is every project that didn't tick the box.
+    cover_letter_download_url: Optional[str] = None
 
 
 # ─── In-memory file cache for downloads ───────────────────────────────
@@ -1037,6 +1092,20 @@ def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
 # The portal owns the portal_* tables; here we just call its SERVICE_TOKEN-gated
 # admin API. PORTAL_ADMIN_URL + SERVICE_TOKEN live in the env (not committed).
+
+# The last pipeline the portal successfully gave us, and when. In-process only, exactly like the
+# download-token cache: two different services, two different uptimes, and the Active Projects
+# board is THIS app's page. Hanz, 2026-08-28, after staging's portal container auto-slept and the
+# board came up blank with every tab reading 0: "portal and proposal are two different services so
+# if portal is down it should still show the projects... if that happens live then we are cooked."
+#
+# Not persisted on purpose. A snapshot that survives a restart would also survive being wrong for
+# days; this one dies with the process, and the cold-start case degrades to local drafts instead
+# (see _sent_unknown_rows). `rows` stays None until the first success, which is how
+# api_portal_pipeline tells "stale" from "never had it".
+_PIPELINE_CACHE: Dict[str, Any] = {"rows": None, "fetched_at": None}
+
+
 def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     import httpx
     base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
@@ -1055,6 +1124,40 @@ def _portal(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = Non
             detail = None
         raise HTTPException(resp.status_code if resp.status_code < 500 else 502, detail or "Portal error.")
     return resp.json()
+
+
+def _pipeline_snapshot() -> Tuple[List[Dict[str, Any]], str]:
+    """Fetch /api/admin/pipeline, falling back to the shared cache on failure.
+
+    Shared by every reader of the pipeline — the Active Projects board, Follow-ups, and the
+    digest preview — so a portal outage degrades exactly one way instead of three different
+    ways depending which page you had open. Returns (rows, portal_status), status one of
+    "live" / "stale" / "offline"; see _PIPELINE_CACHE above for why the cache isn't persisted.
+
+    The try is deliberately tight — the portal call and nothing else. Widen it and a genuine
+    bug in a caller's own decoration starts reporting itself as "the portal is offline".
+
+    `Exception`, not just HTTPException: HTTPException is what _portal raises today (503
+    unconfigured, 502 unreachable), but a json decode on a half-written response or an httpx
+    surprise must not blank a page either. The point is that NOTHING about the other
+    service's health reaches the estimator as a broken page.
+    """
+    try:
+        data = _portal("/api/admin/pipeline", "GET") or {}
+        rows = data.get("proposals") or []
+        _PIPELINE_CACHE["rows"] = rows
+        _PIPELINE_CACHE["fetched_at"] = time.time()
+        return rows, "live"
+    except Exception as exc:  # noqa: BLE001 (the page matters more than the portal)
+        # Type AND message: "refused" on its own costs an SSH session to find out what refused.
+        log.warning("portal pipeline unreachable, degrading: %s: %s",
+                    type(exc).__name__, getattr(exc, "detail", None) or exc)
+        if _PIPELINE_CACHE["rows"] is not None:
+            # Tier 1. Full fidelity — real stages, real deposit and approval timestamps — just
+            # as of a few minutes ago. This is the common case: a blip, a redeploy, an auto-sleep.
+            return _PIPELINE_CACHE["rows"], "stale"
+        # Tier 2. Nothing cached — a fresh container that has never had a good answer.
+        return [], "offline"
 
 
 async def _portal_raw(path: str, method: str, blob: bytes, ctype: str) -> Response:
@@ -1155,6 +1258,13 @@ class PortalPublishIn(BaseModel):
     emails: list[str] = Field(default_factory=list)
     message: str = ""
     require_deposit: Optional[bool] = None
+    # Does this project have a Cover Letter for the portal to show FIRST, ahead
+    # of the proposal? Deliberately Optional/None on the SAME contract as
+    # `require_deposit` above: omitting it forwards nothing, so the portal keeps
+    # whatever it already had and a legacy caller's request body is unchanged
+    # byte for byte. The letter itself is rendered on demand from
+    # /api/admin/cover-letter-pdf; this flag only tells the portal to show it.
+    has_cover_letter: Optional[bool] = None
     assigned_estimator: str = ""
     # Which of those contacts should NOT receive the automated follow-ups — the per-contact
     # checkbox on the Files screen. An opt-OUT list rather than an opt-in one, so the default
@@ -1316,6 +1426,11 @@ def api_portal_publish(draft_id: str, request: Request,
     # a legacy caller should do.
     if payload is not None and payload.require_deposit is not None:
         body["require_deposit"] = bool(payload.require_deposit)
+    # Same rule, same reason (see the field's note on PortalPublishIn): only
+    # forwarded when the caller expressed a choice, so a re-send from an older
+    # page cannot switch a customer's cover letter off behind their back.
+    if payload is not None and payload.has_cover_letter is not None:
+        body["has_cover_letter"] = bool(payload.has_cover_letter)
     # Cleaned with the SAME helper as `emails`, so a malformed entry is refused rather than
     # dropped: silently ignoring one means somebody un-ticked a box and the contact is chased
     # anyway, which nobody would notice until a customer complained.
@@ -1620,7 +1735,18 @@ def api_draft_revision_files(draft_id: str, revision_no: int, request: Request) 
         raise HTTPException(422, "That revision has no generated documents to rebuild.")
     # persist=False: this replays a payload frozen at revision `revision_no`. Writing it back
     # would push an old revision's pricing over the live draft.
-    return _generate(GenerateIn(**payload), request, persist=False)
+    #
+    # want_cover_letter=False for the same reason as the other two replays: don't build what you
+    # don't serve. GenerateOut carries a cover_letter_download_url and this route returns it, but
+    # nothing reads it -- the two callers (done.js downloadRevision, portal.js) both pick from a
+    # hardcoded xlsx/docx/pdf list, so no button for it exists anywhere. The historic letter is
+    # already served by /api/admin/cover-letter-pdf?revision_no=, which resolves the same snapshot.
+    # Building one here only widens the blast radius: cover_letter_writer raises BEFORE the xlsx
+    # and docx are cached (see _generate), so a template this replay can't render 500s the whole
+    # revision download -- and CoverLetter/README.md documents re-running
+    # prepare_cover_letter_templates.py whenever Kyle edits the master, which is exactly how the
+    # letter templates break on their own while the estimate sheet and proposal templates are fine.
+    return _generate(GenerateIn(**payload), request, persist=False, want_cover_letter=False)
 
 
 @app.get("/api/portal/pipeline")
@@ -1644,8 +1770,8 @@ def api_portal_pipeline() -> Dict[str, Any]:
         "nobody has said" and keeps that heuristic in charge; writing False would claim every
         row we failed to look up had been confirmed a real bid.
     """
-    data = _portal("/api/admin/pipeline", "GET") or {}
-    rows = data.get("proposals") or []
+    rows, portal_status = _pipeline_snapshot()
+    data: Dict[str, Any] = {}
     summaries: List[Dict[str, Any]] = []
     try:
         summaries = drafts.list_drafts()
@@ -1691,7 +1817,16 @@ def api_portal_pipeline() -> Dict[str, Any]:
             row["won_at"] = wons[pid]
         if hands.get(pid):
             row["handed_off_at"] = hands[pid]
+    if portal_status == "offline":
+        # Only with a cold cache. With a warm one the real rows are right there, and inventing
+        # a second card for a project already on the board would double it.
+        rows = rows + _sent_unknown_rows(summaries, rows)
     data["proposals"] = rows + _not_sent_rows(summaries, rows)
+    # What the browser needs to say WHY the board looks the way it does. "live" is the normal
+    # answer; the banner only appears for the other two. fetched_at is the cache's stamp, so on
+    # "offline" it is null — there is nothing to date.
+    data["portal_status"] = portal_status
+    data["portal_fetched_at"] = _PIPELINE_CACHE["fetched_at"]
     return data
 
 
@@ -1786,6 +1921,84 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
     return out
 
 
+def _sent_unknown_rows(summaries: List[Dict[str, Any]],
+                       sent: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The other half of a cold-start outage: bids we KNOW went out, and nothing more.
+
+    Only ever called when `portal_status == "offline"` — no live rows and nothing cached, so the
+    board is being rebuilt from this app's own drafts alone. Without these rows, `_not_sent_rows`
+    below would sweep up every generated project (its `have` set is the portal's rows, and there
+    are none) and file six months of sent work under "Created but not sent". That is not a blank
+    board, it is a WRONG board, which is worse — a rep would start re-sending proposals customers
+    already have.
+
+    `sent_revision` is the local answer to the one question the portal is not here to answer.
+    `create_revision` runs on publish and is deleted again if the send fails (see api_publish), so
+    a project with a revision is a project the customer was given something. `has_files` is NOT
+    that question — it only means Generate has run, which is exactly why `_not_sent_rows` exists.
+
+    And that is where this stops. We know it left the door; we cannot know whether it was opened,
+    approved, or paid, so NOTHING sets `proposal_status` except a lost mark somebody typed here.
+    `stage()` falls back to "Sent" with none of the portal fields present, which is the honest
+    bucket. Inventing "viewed" to make the board look complete would be a lie with a timestamp on
+    it. `portal_unknown` is the only new field — the same discipline `not_sent` follows — so the
+    card can wear a muted "status unknown" chip and nobody mistakes it for a confirmed step.
+
+    On the full-blob fallback in `_build_summaries` there is no `sent_revision` at all, so this
+    returns nothing and the board degrades to exactly what it did before this function existed.
+    A missing field must not invent a send.
+    """
+    have = {r.get("proposal_id") for r in sent}
+    out: List[Dict[str, Any]] = []
+    for s in summaries:
+        if s["id"] in have or s.get("archived"):
+            continue
+        if not s.get("has_files") or int(s.get("sent_revision") or 0) <= 0:
+            continue
+        out.append({
+            "proposal_id": s["id"],
+            # NOT `not_sent`: this one was. The board reads it to draw the unknown-status chip.
+            "portal_unknown": True,
+            "project_name": s.get("project_name"),
+            "customer_email": s.get("contact_email") or "",
+            "is_test": s.get("is_test"),
+            "assigned_estimator": s.get("assigned_estimator"),
+            # Same fallback as the not-sent rows: with nobody assigned, the person who priced it
+            # is the person to ask about it.
+            "estimator_email": s.get("owner_email"),
+            # No `drafted_at` — that dates the "Created but not sent" column and would be a claim
+            # about a bid that HAS been sent. `last_activity_at` only sorts the card, so these
+            # land among real proposals by when somebody last touched them instead of piling up
+            # dateless at the bottom of whatever column they fall into.
+            "last_activity_at": s.get("updated_at"),
+            # NOT approved_total: nobody can tell us anybody approved this. cardTotal() reads both.
+            "bid_total": s.get("total"),
+            "work_type": s.get("work_type"),
+            # Marked won by hand — see drafts.set_won. Ours, so it survives the outage; carried
+            # unconditionally because a null here is the complete truth rather than a key invented
+            # over a portal field, and isWon reads the stamp's truthiness.
+            "won_at": s.get("won_at"),
+        })
+        # The one status we can still state, because somebody in this app typed it. Shaped as the
+        # portal's own closed_lost state for the same reason `_not_sent_rows` does it: isLost()
+        # reads proposal_status and lostReason() reads followup_state.closed_lost_reason, so the
+        # Lost tab, its reason columns, the chip and the counts all keep working with nothing new.
+        if s.get("closed_lost_reason"):
+            out[-1]["proposal_status"] = "closed_lost"
+            out[-1]["followup_state"] = {"closed_lost_reason": s["closed_lost_reason"],
+                                         "closed_at": s.get("closed_lost_at"),
+                                         "closed_lost_note": s.get("closed_lost_note")}
+        # Paused, not dead — Kyle's close-out list has two answers that keep the card on the live
+        # board. Writes no proposal_status, so the card still stages as "Sent" with a
+        # "Paused to ..." chip. `elif` for the same reason the sibling uses one: both branches
+        # write followup_state, and a hold must never overwrite a closed-lost mark.
+        elif s.get("on_hold_reason"):
+            out[-1]["followup_state"] = {"paused_until": s.get("on_hold_until"),
+                                         "on_hold_reason": s["on_hold_reason"],
+                                         "on_hold_note": s.get("on_hold_note")}
+    return out
+
+
 @app.get("/api/portal/followups")
 def api_portal_followups() -> Dict[str, Any]:
     """The Follow-ups page: every proposal ever sent, with where its chase stands.
@@ -1797,9 +2010,15 @@ def api_portal_followups() -> Dict[str, Any]:
 
     Deliberately uses the TEMPLATED reason, not the Claude one: this endpoint is hit on
     every page load and a poll, and an AI call per row per refresh would be absurd. The
-    written-out sentence stays in the digest, where it is worth the spend."""
-    data = _portal("/api/admin/pipeline", "GET") or {}
-    rows = data.get("proposals") or []
+    written-out sentence stays in the digest, where it is worth the spend.
+
+    Same portal-outage guard as api_portal_pipeline, and off the SAME cache — a portal blip
+    degrades the board and this page identically, because they're reading the same upstream
+    call. Unlike the board there is nothing here to rebuild offline: this page is entirely
+    ABOUT portal-side send/view history, so a cold cache is an honest empty list rather than
+    a synthesised one. Serving "stale" is the real win — a rep mid-review keeps their list
+    instead of it vanishing under them."""
+    rows, portal_status = _pipeline_snapshot()
     # Same stamp as api_portal_pipeline: the portal has no notion of a test project, `is_test`
     # lives in this app's `drafts` blob. Without it the Follow-ups page has no way to keep a
     # scratch project out of In play / Paused / Approved / Closed lost / All.
@@ -1835,7 +2054,9 @@ def api_portal_followups() -> Dict[str, Any]:
     # A column headed "needs attention" has to lead with what needs attention.
     out.sort(key=lambda x: (not x["eligible"], -x["followup_score"],
                             (x.get("project_name") or "").lower()))
-    return {"ok": True, "proposals": out}
+    return {"ok": True, "proposals": out,
+            "portal_status": portal_status,
+            "portal_fetched_at": _PIPELINE_CACHE["fetched_at"]}
 
 
 @app.get("/api/portal/proposal/{proposal_id}")
@@ -2186,14 +2407,20 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
     The scoring is arithmetic, so "why is this one first?" has an answer — this is
     where you read it. Returns each estimator's list with the score and the facts
     behind it, so a weight that ranks something wrongly is visible before a customer
-    ever gets phoned about it."""
+    ever gets phoned about it.
+
+    Same portal-outage guard, off the same cache as the board and Follow-ups: this is an
+    admin preview, not a daily surface, so "stale" is fine (it's a preview of what WOULD send,
+    a few minutes old costs nothing) and "offline" is an honest empty rather than a 502."""
     _require_admin(request)
     digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
-    rows = (_portal("/api/admin/pipeline", "GET") or {}).get("proposals") or []
+    rows, portal_status = _pipeline_snapshot()
     by = digest_worker.build(rows, state=digest_worker.load_state())
     return {"ok": True, "estimators": by,
             "considered": len(rows),
-            "would_send": sorted(by.keys())}
+            "would_send": sorted(by.keys()),
+            "portal_status": portal_status,
+            "portal_fetched_at": _PIPELINE_CACHE["fetched_at"]}
 
 
 # ─── Notification Sending: roster + per-project overrides (proxied to the portal) ─
@@ -2363,7 +2590,9 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     # persist=False — this is the CUSTOMER'S on-demand PDF render. It re-runs the payload frozen
     # in the (possibly pinned, possibly superseded) revision; a customer opening an old link must
     # never rewrite the estimator's draft.
-    out = _generate(GenerateIn(**pp), request, persist=False)  # reuse the full generate logic
+    # want_cover_letter=False — this endpoint renders the PROPOSAL only; a cover-letter fill
+    # failure on an unrelated draft must not 500 a proposal PDF the portal is waiting on.
+    out = _generate(GenerateIn(**pp), request, persist=False, want_cover_letter=False)
     tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
     entry = _FILE_CACHE.get(tok)
     if not entry:
@@ -2380,6 +2609,71 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     proj = re.sub(r"[^\x20-\x7e]", "_", str((row.get("data") or {}).get("project_name") or "Treadwell Proposal"))
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{proj} - Proposal.pdf"'})
+
+
+@app.get("/api/admin/cover-letter-pdf")
+def api_admin_cover_letter_pdf(draft_id: str, request: Request,
+                               revision_no: Optional[int] = None) -> Response:
+    """Render a draft's COVER LETTER to PDF, on demand. Called server-to-server
+    by the customer portal, which shows the letter ahead of the proposal.
+
+    Deliberately a near-copy of /api/admin/proposal-pdf, including the reason it
+    exists in that shape: `revision_no` renders the snapshot that was SENT, not
+    the live draft. The portal passes the revision it pinned, so a letter a
+    customer opens can never disagree with the proposal below it — the exact
+    problem that appeared when both were rendered from whatever the estimator
+    had most recently saved. The letter rides inside the same frozen
+    `proposal_payload`, so pinning it needs no separate storage.
+
+    Refuses, by name, when the project has no cover letter: a 404 saying so is
+    what lets the portal show "no cover letter" rather than a broken viewer."""
+    import hmac
+    presented = request.headers.get("x-service-token") or ""
+    token_env = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not token_env or not hmac.compare_digest(presented, token_env):
+        raise HTTPException(401, "unauthorized")
+    if revision_no is not None:
+        rev = drafts.get_revision(draft_id, revision_no)
+        if not rev:
+            raise HTTPException(404, "Revision not found")
+        row = {"data": rev.get("data") or {}}
+    else:
+        row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    pp = (row.get("data") or {}).get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        raise HTTPException(422, "This proposal hasn't been generated yet.")
+    if not pp.get("cover_letter_enabled"):
+        # NAMED refusal, not an empty 404 body: the portal shows this sentence.
+        raise HTTPException(404, "This proposal has no cover letter.")
+    # persist=False — the customer's on-demand render replays a payload frozen at
+    # an earlier moment; writing its values back would push that moment over the
+    # estimator's live draft. Same reasoning as the proposal PDF above.
+    out = _generate(GenerateIn(**pp), request, persist=False)
+    tok = (out.cover_letter_download_url or "").rsplit("/", 1)[-1]
+    entry = _FILE_CACHE.get(tok) if tok else None
+    if not entry:
+        # cover_letter_enabled was set, so this is a real failure, not a
+        # configuration choice — and _generate already raises on a fill error, so
+        # reaching here means the token went missing between the two.
+        log.warning("Cover letter PDF: no cached document for draft %s revision %s",
+                    draft_id, revision_no)
+        raise HTTPException(500, "Could not build the cover letter document.")
+    pdf_bytes = entry.get("_pdf")
+    if pdf_bytes is None:
+        try:
+            with _PDF_RENDER_SEM:   # cap concurrent LibreOffice renders
+                pdf_bytes = pdf_writer.docx_to_pdf(entry["content"])
+            entry["_pdf"] = pdf_bytes
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Cover letter PDF render failed (draft=%s): %s: %s",
+                          draft_id, type(exc).__name__, exc)
+            raise HTTPException(500, "Failed to render the cover letter PDF.") from exc
+    proj = re.sub(r"[^\x20-\x7e]", "_",
+                  str((row.get("data") or {}).get("project_name") or "Treadwell Proposal"))
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{proj} - Cover Letter.pdf"'})
 
 
 @app.post("/api/admin/deposit-invoice")
@@ -3014,15 +3308,88 @@ def api_autofill(payload: AutofillIn, request: Request) -> Any:
         return {"ok": False, "error": "Autofill failed. Please try again."}
 
 
-# NO VERBAL-INTAKE ROUTE ON PROD YET. It exists on staging (frontend/js/polish-verbal.js +
-# backend/verbal_intake.py) and is held back deliberately: adversarial review found three
-# defects that are still open -- the evidence gate accepts a cropped quote that inverts the
-# meaning it is supposed to prove, clean() can raise on malformed model output and burn a rate
-# slot as a 500, and the fields the panel reports as "Filled in" are never actually saved.
-#
-# The route is removed rather than left unreachable. Shipping a live authenticated endpoint with
-# a known 500 path, reachable by anyone with a staff token, to have no caller is not the same
-# thing as not shipping it.
+# The most a spoken account of one job can be worth reading. Matches leads._TEXT_CAP: nothing past
+# this point makes the extraction better, it just makes the paid CLI call longer and gives an
+# unbounded request body a way to cost real money.
+_VERBAL_TRANSCRIPT_CAP = 15_000
+
+
+@app.post("/api/polish/verbal-intake")
+def api_verbal_intake(payload: VerbalIntakeIn, request: Request) -> Any:
+    """Turn what an estimator just said about a job into intake fields.
+
+    THE FOURTH PROMPT ON THE ONE AI PATH. Every strict-JSON Claude call in this app goes through
+    `_autofill_via_cli`, so the subprocess flags, the fence stripping and the error handling exist
+    once. This adds a prompt and a route and nothing else — a second subprocess or a direct API
+    call would be the first break in that pattern.
+
+    IT RETURNS, IT DOES NOT WRITE. The extraction comes back to the page, which fills the form the
+    estimator is looking at and saves through the path that already owns the draft. A route that
+    wrote straight into `polish_estimate` would be a second writer for an object the intake screen
+    is mid-edit on, and the whole blob is PUT on every save.
+
+    The rate limit is the same three-per-five-minutes as every other AI button here, and it is
+    tight for this feature on purpose-of-design grounds worth stating: a first pass plus one
+    re-ask already spends two of the three. That is the budget the "ask ONCE" rule is built
+    around, not an accident to be worked round with retries."""
+    transcript = (payload.transcript or "").strip()
+    if len(transcript) < 20:
+        # Not an error worth a 4xx — the estimator has simply not said enough yet, and the page
+        # shows this as a prompt rather than a failure.
+        return {"ok": False, "too_short": True,
+                "error": "Say a bit more first — a name, a place, and when it is due."}
+
+    # Bounded BEFORE anything reads it, and the gate below runs on this same capped string — the
+    # one the model was actually sent — so a quote can only be supported by words the model saw.
+    # Same two lines as leads._cap, which is module-private on purpose; the shape of what gets
+    # truncated differs per caller and a shared helper would invite one caller's suffix into
+    # another's prompt.
+    if len(transcript) > _VERBAL_TRANSCRIPT_CAP:
+        transcript = transcript[:_VERBAL_TRANSCRIPT_CAP].rstrip() + "\n\n[truncated]"
+
+    # EMAIL ONLY — deliberately not `_autofill_bucket`, which mixes in the client-supplied
+    # `X-Project-Id` header. A caller who wants a fresh budget only has to send a new project id,
+    # so on this route the cap is keyed on the verified token's email and nothing else. Own
+    # prefix, like prequalify and leadest: this button's three runs are its own, not shared with
+    # whatever autofill spent on the same project.
+    bucket = "verbal|%s" % (_user_email(request) or "anon")
+    retry = _autofill_rate_retry(bucket)
+    if retry is not None:
+        return _ai_rate_limited(retry, "Verbal intake")
+    _autofill_rate_record(bucket)
+
+    # The date is GIVEN, never inferred. This box runs ~13 hours ahead of Central, so a model left
+    # to work out "next Thursday" from its own clock would put a bid date a day out.
+    today = datetime.now(leads._biz_tz()).date().isoformat()
+    user_input = (
+        f"Today's date is {today} (America/Chicago).\n\n"
+        f"TRANSCRIPT:\n{transcript}\n"
+    )
+
+    try:
+        ai = _autofill_via_cli(user_input, verbal_intake.SYSTEM_PROMPT)
+        # INSIDE the try, with the refund, exactly as the lead path keeps apply_ai_overlay inside
+        # its own. `clean()` is written not to raise, but "written not to raise" is not a
+        # mechanism: `{"missing": 3}` used to reach a TypeError here and the estimator got a 500
+        # with one of their three runs already spent. A cleaning step that fails now costs them a
+        # readable message and nothing else.
+        result = verbal_intake.clean(ai, transcript)
+    except FileNotFoundError:
+        _autofill_rate_refund(bucket)
+        return {"ok": False,
+                "error": "`claude` CLI not on PATH. Install it from "
+                         "https://claude.com/cli to enable verbal intake."}
+    except Exception as exc:  # noqa: BLE001
+        _autofill_rate_refund(bucket)
+        # Type AND message: "Verbal intake failed" on its own has cost an SSH session and a
+        # container probe before now.
+        log.warning("Verbal intake failed: %s: %s", type(exc).__name__, exc)
+        return {"ok": False, "error": "That didn't come back. Please try again."}
+
+    # The evidence gate ran on the SERVER's copy of the transcript — the one it actually sent — so
+    # a model cannot supply both the claim and the proof of it.
+    result["ok"] = True
+    return result
 
 
 def _fmt_usd(n, parens: bool = False) -> str:
@@ -3364,6 +3731,38 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
             entry_t["para"] = para
         out.append(entry_t)
     return out
+
+
+def _sanitize_cover_letter_overrides(overrides_in) -> list:
+    """`{"<block id>": {text?, runs?, para?}}` → the writer's list form.
+
+    The id-keyed dict is folded back into an `id` field and the ENTRY ITSELF is
+    then validated by `_sanitize_paragraph_overrides` — the very same rules the
+    proposal's overrides pass through. That delegation is the point: the two
+    documents are edited in one UI, and a second, subtly different idea of what a
+    legal override looks like is how the cover letter would start accepting a
+    3000-run paragraph the proposal refuses.
+
+    Defensive like its delegate — a non-dict, a key that isn't an integer, or a
+    malformed entry is skipped, never raised. A hand-built request body cannot
+    500 /api/generate."""
+    if not isinstance(overrides_in, dict):
+        return []
+    staged = []
+    for raw_id, entry in list(overrides_in.items())[:_PARAGRAPH_OVERRIDES_MAX]:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            pid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        one = dict(entry)
+        one["id"] = pid          # the key is authoritative; an `id` inside loses
+        staged.append(one)
+    # Stable by id so the applied order can't depend on dict insertion order (a
+    # re-serialized draft round-trips its keys in whatever order it was stored).
+    staged.sort(key=lambda o: o["id"])
+    return _sanitize_paragraph_overrides(staged)
 
 
 # Cap + coerce the doc editor's per-option system_overrides. UNLIKE
@@ -3825,6 +4224,111 @@ def api_proposal_template(request: Request, work_type: str = "epoxy", audience: 
                            version=f"{work_type}:{audience}:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
 
 
+def _cover_letter_template_version(work_type: str, audience: Optional[str]) -> str:
+    """The version string a cover-letter override id is pinned to:
+    `"<work_type>:<audience>@<mtime_ns>"`.
+
+    NOT the bare mtime the proposal uses, and the difference is load-bearing. A
+    block id is a position in a walk over ONE file; the proposal's templates are
+    eight files Kyle edits one at a time, so their mtimes distinguish them in
+    practice. The seven cover letters are written by ONE generator run, so two
+    variants can share an mtime — and a guard that only compared mtimes would
+    accept a Direct/Combo override set against GC/Epoxy and rewrite whichever
+    sentence happened to sit at that index, in a document a customer reads.
+
+    `cover_letter_writer.variant_key` resolves the pair the same way the picker
+    does (epoxy fallback, audience-agnostic gyp), so the stamp always names the
+    file that was actually opened."""
+    path = cover_letter_writer.pick_template(work_type, audience)
+    return (cover_letter_writer.variant_key(work_type, audience) + "@"
+            + _template_proposal_version(path))
+
+
+@app.get("/api/coverletter-template")
+def api_coverletter_template(request: Request, work_type: str = "epoxy",
+                             audience: str = "Direct") -> Response:
+    """The Cover Letter template for `(work_type, audience)`, as the same ordered
+    list of editable blocks `/api/proposal-template` returns — so the one
+    document editor can render either document.
+
+    Keyed on BOTH, exactly like the proposal: `cover_letter_writer` mirrors
+    `proposal_writer.TEMPLATE_PICKER`'s audience-first folders, including its
+    asymmetry (gyp ignores audience; sealer and budget have no letter and fall
+    back). An unmapped combination serves the fallback template rather than
+    404-ing, because an empty editor is a worse answer than the wrong-but-usable
+    one the proposal already gives.
+
+    `id` is the paragraph's index in `proposal_writer.iter_editable_blocks` over
+    THIS file — the walk `cover_letter_writer.fill_cover_letter` resolves
+    `cover_letter_paragraph_overrides` against. `template_version` is
+    `"<work_type>:<audience>@<mtime>"` (see `_cover_letter_template_version`), so
+    a stale cached id set is detectable after a deploy AND after an
+    audience/work-type switch; `_generate` drops overrides that no longer match.
+
+    Every block comes back with `in_block: null` — a letter has no
+    priced/repeatable regions, so every paragraph is freely editable. Exactly ONE
+    block, the floating date, comes back with `in_txbx: true` and a `txbx` index
+    into `geometry.boxes` (which therefore holds exactly one entry): Hanz's
+    example letter floats the date over the artwork rather than typing it on a
+    line, and the editor needs to know it cannot place that one freely. The
+    letterhead artwork arrives in `geometry.images`, served by
+    /api/coverletter-template/media."""
+    try:
+        template_path, blocks, geometry = cover_letter_writer.describe_template(
+            work_type, audience or None)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    payload = {
+        "work_type": work_type,
+        "audience": audience,
+        # Folder + file: `Epoxy.docx` alone does not say which of Direct/ and GC/
+        # the editor is showing, and those are two different documents.
+        "template_name": template_path.relative_to(
+            cover_letter_writer.TEMPLATES_ROOT / "CoverLetter").as_posix(),
+        "template_version": _cover_letter_template_version(work_type, audience or None),
+        "geometry": geometry,
+        "blocks": blocks,
+    }
+    return _versioned_json(
+        request, payload,
+        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+
+
+@app.get("/api/coverletter-template/media")
+def api_coverletter_template_media(request: Request, work_type: str = "epoxy",
+                                   audience: str = "Direct", name: str = "") -> Response:
+    """One media part (by basename) from the picked cover-letter template's
+    package — the letterhead artwork the editor draws the page on.
+
+    Same whitelist-against-the-package's-own-listing as
+    /api/proposal-template/media: a crafted `name` can't reach any other part
+    (no separators survive the basename match), and unknown names 404."""
+    import zipfile
+    template_path = cover_letter_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Cover letter template not found: {template_path.name}")
+    try:
+        with zipfile.ZipFile(str(template_path)) as z:
+            allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
+                       if n.startswith("word/media/") and "/" not in n[len("word/media/"):]}
+            part = allowed.get(name)
+            if not part:
+                raise HTTPException(404, "No such media in this template")
+            data = z.read(part)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(500, "Cover letter template package is unreadable.") from exc
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
+    version = (f"cl:{name}:"
+               + _cover_letter_template_version(work_type, audience or None))
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
+
+
 # Media (letterhead artwork) served straight out of the template package.
 # Kyle's templates bake the entire page design — buffalo logo, DATE:/JOB
 # NAME: labels, the red PROPOSAL stamp, the bordered WORK/PRICE/NOTES/
@@ -3905,7 +4409,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     return _generate(payload, request, persist=True)
 
 
-def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) -> GenerateOut:
+def _generate(payload: GenerateIn, request: Request, *, persist: bool = True,
+              want_cover_letter: bool = True) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -3913,7 +4418,15 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
     links, the To-Dropbox re-upload. Those re-run a payload that was frozen at some earlier
     moment; writing its values back would push that moment over the live draft (an old revision's
     replay is literally time travel). Only a browser POST, which carries the current state,
-    persists."""
+    persists.
+
+    `want_cover_letter=False` for a caller that only wants the PROPOSAL (xlsx/docx) and has no
+    interest in the letter — /api/admin/proposal-pdf and the To-Dropbox re-file, neither of which
+    ever reads cover_letter_bytes. The cover-letter block below refuses loudly (by design: a live
+    generate that silently drops the letter would let an estimator send a portal that promises one
+    and shows nothing), and that refusal must not leak into a caller whose whole job is the
+    proposal document. Without this gate, a cover-letter-only bug 500s the proposal PDF, or fails
+    a Dropbox filing that never touches the letter at all."""
     values = payload.values
     _ensure_state_name(values)
     # payload.work_type is authoritative; make sure it's in `values` so the
@@ -4353,6 +4866,55 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         log.exception("Proposal fill failed")
         raise HTTPException(500, "Failed to generate the proposal. Please try again.") from exc
 
+    # ── The optional Cover Letter ─────────────────────────────────────────────
+    #
+    # Built AFTER the proposal, from the SAME `values` dict — by this point
+    # _ensure_value_aliases and the epoxy_system_name / bid_date_formatted
+    # backfills have all run, so the letter and the proposal cannot disagree
+    # about the job name, the system or the date.
+    #
+    # AND IT REFUSES LOUDLY. A cover letter that failed to build cannot be
+    # allowed to return 200 with the proposal alone: the estimator would read
+    # "generated", press Send, and the customer would open a portal that
+    # promises a letter and shows nothing. This is the same failure as the
+    # publish that wrote the proposal row, refused the attachment, logged it and
+    # returned 200 — so the refusal is a 500 whose message names the cover
+    # letter, and the log carries the exception type and text.
+    cover_letter_bytes = None
+    if payload.cover_letter_enabled and want_cover_letter:
+        _cl_audience = payload.audience or None
+        _cl_path = cover_letter_writer.pick_template(payload.work_type, _cl_audience)
+        _cl_cur_version = _cover_letter_template_version(payload.work_type, _cl_audience)
+        _cl_overrides = payload.cover_letter_paragraph_overrides
+        if (payload.cover_letter_template_version
+                and payload.cover_letter_template_version != _cl_cur_version):
+            # Same fail-safe as the proposal's template_version guard, plus the
+            # variant: the ids are positions in a walk over a SPECIFIC file, so a
+            # regenerated template — or a switch between Direct and GC, or
+            # between work types — can land an edit on the wrong paragraph.
+            log.warning(
+                "Dropping %d cover-letter paragraph override(s): stale "
+                "cover_letter_template_version %r != current %r",
+                len(_cl_overrides or {}),
+                payload.cover_letter_template_version, _cl_cur_version)
+            _cl_overrides = {}
+        try:
+            cover_letter_bytes = cover_letter_writer.fill_cover_letter(
+                work_type=payload.work_type,
+                audience=_cl_audience,
+                values=values,
+                paragraph_overrides=_sanitize_cover_letter_overrides(_cl_overrides),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal below
+            log.exception("Cover letter fill failed (work_type=%s, audience=%s, "
+                          "template=%s): %s: %s",
+                          payload.work_type, _cl_audience, _cl_path.name,
+                          type(exc).__name__, exc)
+            raise HTTPException(
+                500, "Failed to generate the cover letter. Please try again.") from exc
+
     project_name = (values.get("project_name") or "Untitled Project").strip()
 
     # Cache files for download (Done screen download buttons hit /api/file/{token}).
@@ -4369,6 +4931,15 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         f"{safe_name}_proposal.docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+    # Same cache, same token mechanism — so /api/file/{token} downloads the .docx
+    # and /api/file/{token}/pdf renders it, with no second code path. Stays None
+    # when the project has no cover letter, and GenerateOut then carries None
+    # rather than a URL that 404s.
+    cover_letter_token = _cache_file(
+        cover_letter_bytes,
+        f"{safe_name}_cover_letter.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ) if cover_letter_bytes is not None else None
 
     # Audit trail: who generated this proposal, for what, and where it landed.
     fb = (payload.computed_bid or {}).get("full_bid") or {}
@@ -4429,6 +5000,8 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True) ->
         xlsx_download_url=f"/api/file/{xlsx_token}",
         docx_download_url=f"/api/file/{docx_token}",
         pdf_download_url=f"/api/file/{docx_token}/pdf",
+        cover_letter_download_url=(f"/api/file/{cover_letter_token}"
+                                   if cover_letter_token else None),
         # Authoritative totals from the 5.7-recipe engine (computed on
         # Screen 2 and passed through). Falls back to an empty dict if a
         # caller generated without first running the pricing engine.
@@ -5269,7 +5842,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
     try:
         # persist=False — the payload came OUT of this draft a moment ago; feeding its values back
         # in can only ever re-age it. Re-filing to Dropbox is not an edit.
-        out = _generate(gi, request, persist=False)         # reuse the full generate pipeline
+        # want_cover_letter=False — Dropbox gets the estimate + proposal only; a cover-letter
+        # fill failure on this draft must not block a filing that never reads the letter.
+        out = _generate(gi, request, persist=False, want_cover_letter=False)
         xlsx_entry = _FILE_CACHE.get((out.xlsx_download_url or "").rsplit("/", 1)[-1])
         docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
         if not xlsx_entry or not docx_entry:

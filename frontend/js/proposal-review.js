@@ -639,6 +639,12 @@
     "epoxy_sf", "polish_sf", "cove_lf", "lf", "sqft", "area_description",
     "gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf",
     "gyp_soft_sf_formatted", "gyp_hard_sf_formatted", "gyp_corridor_sf_formatted",
+    // The cover letter's derived Area and Materials / System lines. Both ride the base tab:
+    // work_areas falls back to area_description (already above), and cover_system_line is built
+    // from system_name and cove_lf. Left out, a sidebar base flip would leave the LETTER quoting
+    // the superseded system while the proposal behind it quoted the new one -- the same two-halves
+    // failure this whole file exists for, one document further along.
+    "work_areas", "cover_system_line",
   ];
 
   /** Patch the stored generate payload's PRICING slice from current state. Returns the patched
@@ -1381,6 +1387,62 @@
       tokenValues.epoxy_system_name = (a22 && !a22.includes("Options")) ? a22 : "Epoxy System";
     }
     if (!String(tokenValues.state_name || "").trim()) tokenValues.state_name = "Kansas";
+
+    // ── Cover-letter values (Will Buchanan's Direct text, 2026-09-03) ──────
+    // RESOLVED TWICE, ON PURPOSE. The cover-letter editor's clTokens() borrows this
+    // function for its on-screen preview; generate and the portal's server-side replay
+    // go through cover_letter_writer._ensure_cover_letter_values instead. A token added
+    // to only one side previews as a raw {{token}} over a correct PDF -- exactly the bug
+    // PR #431 fixed for {{proposal_date_short}}, and an estimator proofreading on screen
+    // cannot tell that from a broken document. The two must agree; a test asserts it.
+    //
+    // INLINE IIFEs, not named helpers -- matching base_tax_phrase above. Harnesses lift
+    // functions out of this file BY NAME, so a new free identifier inside a lifted
+    // function is an unbound reference in every one of them.
+    if (!String(tokenValues.greeting || "").trim()) {
+      tokenValues.greeting = (() => {
+        // Will's letter opens on the contact's first name and nothing else: "Brandon,".
+        // A blank contact box would put a bare comma at the top of a customer document,
+        // so fall back to something that reads as a choice, not as a missing value.
+        const first = String(mergedValues.contact_name || "").trim().split(/[\s,]+/)[0] || "";
+        // An email address or a lone initial in the name box is not a first name. Measure the
+        // name with an initial's own punctuation removed: "B." is one letter and must not greet
+        // a customer as "B.,", while "J.R." is two and is what that person is called. Stripping
+        // rather than counting [A-Za-z] keeps accented names working.
+        if (first.replace(/[.'-]/g, "").length < 2 || first.indexOf("@") >= 0) return "Hello,";
+        return (first === first.toLowerCase()
+          ? first.charAt(0).toUpperCase() + first.slice(1)   // "brandon" -> "Brandon"
+          : first) + ",";                                    // "McDonald" kept as typed
+      })();
+    }
+    // Area: the estimator's own words for what the floor covers ("Warehouse expansion
+    // and 4 offices"). Falls back to the SF line rather than printing an empty "Area:" --
+    // the letter's list items are static paragraphs and cover_letter_writer deliberately
+    // does not port the {{#block}} expansion that could drop one.
+    if (!String(tokenValues.work_areas || "").trim()) {
+      tokenValues.work_areas = String(tokenValues.area_description || "");
+    }
+    // Materials / System: '1/4" MACRO Flake Single Broadcast with 6" Integral Cove Base'.
+    if (!String(tokenValues.cover_system_line || "").trim()) {
+      tokenValues.cover_system_line = (() => {
+        const name  = String(mergedValues.system_name || "").trim();
+        const thick = String(mergedValues.system_thickness || "").trim();
+        // Three of Kyle's fifteen system names already state a thickness ('3/16" Urethne
+        // Cement With Color Fast (SLB)'). Prepending there prints two -- and where the
+        // estimator's pick disagrees with the name, two CONTRADICTORY ones. Any inch
+        // fraction already in the name wins: it is Kyle's spec, not ours.
+        let out = (thick && !/\d\s*\/\s*\d+\s*"/.test(name)) ? (name ? thick + " " + name : thick) : name;
+        // The cove clause is dropped on a job with no cove. The proposal's own body has
+        // always printed "with 0 LF of integral cove base" there; the letter does not
+        // inherit that.
+        const coveLF = Number(String(tokenValues.cove_lf || "0").replace(/[^0-9.]/g, "")) || 0;
+        if (coveLF > 0) {
+          const h = String(mergedValues.cove_height || "6").trim() || "6";
+          out = (out ? out + " with " : "") + h + '" Integral Cove Base';
+        }
+        return out;
+      })();
+    }
     return tokenValues;
   }
 
@@ -3045,7 +3107,12 @@
     // tw-dirty / tw-empty are not touched here: the caller (the delegated `input` handler)
     // recomputes both from the restored DOM on the very next line, and a paragraph that matches
     // the template again is not dirty. Two owners of one class is how a stale badge happens.
-    setBlockContent(el, blockById.get(id), computeTokenValues());
+    // computeTokenValues reads its argument (mergedValues.polish_sf, no default parameter), so
+    // the bare call this used to make threw a TypeError and took the restore down with it — the
+    // safety net failing in exactly the situation it exists for. Same merge as the other four
+    // call sites; TW.readForm tolerates a missing form and returns {}.
+    setBlockContent(el, blockById.get(id),
+                    computeTokenValues(Object.assign({}, state, TW.readForm(form))));
     el.classList.add("tw-clause-kept");
     el.title = _CLAUSE_KEPT_MSG;
     return true;
@@ -5923,18 +5990,48 @@
     if ((back && atStart) || (fwd && atEnd)) e.preventDefault();
   });
 
+  /** PASTE, for every editable family and not just the template paragraphs.
+   *
+   *  It used to bail on anything that was not a .tw-block -- an early return with no
+   *  preventDefault -- which handed the event straight back to the browser. So a paste into a price
+   *  row, a WORK system row or a notes bullet inserted the clipboard's own markup into a channel
+   *  that stores a string: Word's mso- spans, a font tag, a whole table. serializeBlock would read
+   *  the text out of it and store that, so the customer's document did not get the markup, but the
+   *  page did -- and the same paste in the same box did two different things depending on which
+   *  line the caret happened to be in.
+   *
+   *  A TEMPLATE PARAGRAPH STILL TAKES FORMATTING. runsFromHtml reduces the clipboard to the four
+   *  switches this editor can carry into the .docx, and that path is untouched.
+   *
+   *  THE OTHER THREE TAKE TEXT ONLY, and that is a refusal rather than an omission: their channels
+   *  store a string, so a bold word carried through would show on screen and reach the customer's
+   *  document as plain -- the formatting silently dropped somewhere between the two. It is the same
+   *  refusal the ribbon already makes for a box-wide format press. runsFromHtml is still used for
+   *  them, but only for its flattening: a source that offers HTML and no plain text still pastes. */
   docSurface.addEventListener("paste", (e) => {
-    const line = lineTarget(e);
-    const el = line && line.classList.contains("tw-block") ? line : null;
-    if (!el) return;
+    // INSIDE THE EDITOR AND ON NO LINE AT ALL: refuse. The caret can sit between two paragraphs of
+    // a box, and letting the browser paste there drops arbitrary markup into the box itself, where
+    // no channel can see it and no sweep can persist it. Refusing is what Enter already does with
+    // an unreadable caret, for the same reason.
+    if (!editingBox(e.target)) return;
+    const el = lineTarget(e);
     e.preventDefault();
+    if (!el) return;
+    const block = el.classList.contains("tw-block");
     const dt = e.clipboardData;
-    let ins = [];
     const html = dt ? dt.getData("text/html") : "";
-    if (html) ins = runsFromHtml(html);
-    if (!ins.length) {
-      const plain = String((dt && dt.getData("text/plain")) || "").replace(/\r\n?/g, "\n");
-      if (plain) ins = [{ text: plain, tok: null }];
+    const plainRaw = String((dt && dt.getData("text/plain")) || "");
+    let ins = [];
+    if (block) {
+      if (html) ins = runsFromHtml(html);
+      if (!ins.length) {
+        const plain = plainRaw.replace(/\r\n?/g, "\n");
+        if (plain) ins = [{ text: plain, tok: null }];
+      }
+    } else {
+      const flat = plainRaw || (html ? runsFromHtml(html).map(r => r.text).join("") : "");
+      const text = pastedTextFor(el, flat);
+      if (text) ins = [{ text: text, tok: null }];
     }
     if (!ins.length) return;
     const sel = selectionRange(el);
@@ -5944,18 +6041,172 @@
       // Pasted over several paragraphs at once: the content lands in the first and the rest are
       // emptied, every element intact. See spliceLines for why a merge is not an option.
       spliceLines(across, ins);
-      showFmtBar(el);
+      if (block) showFmtBar(el);
+      else if (el.classList.contains("tw-note-edit")) reflowNotesPaste(el, ins[0].text);
       return;
     }
     const merged = F.spliceRuns(editRuns(el), sel[0], sel[1], ins);
     renderRuns(el, merged);
     const caret = sel[0] + runsLength(ins);
     placeSelection(el, caret, caret);
-    // Only claim "formatted" when the pasted content actually carries formatting; a plain-text
-    // paste is an ordinary text edit and the text comparison already catches it.
-    markEdited(el, ins.some(r => RUN_KEYS.some(k => r[k] !== undefined)));
-    showFmtBar(el);
+    if (block) {
+      // Only claim "formatted" when the pasted content actually carries formatting; a plain-text
+      // paste is an ordinary text edit and the text comparison already catches it.
+      markEdited(el, ins.some(r => RUN_KEYS.some(k => r[k] !== undefined)));
+      showFmtBar(el);
+      return;
+    }
+    // THE COMPUTED FAMILIES HAVE NO DIRTY FLAG AND NO RUNS CHANNEL: the page's own input handler
+    // is the whole of their persistence -- it is what carries the new text into price_overrides,
+    // system_overrides and the notes textarea. renderRuns does not dispatch one, so this does.
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    if (el.classList.contains("tw-note-edit") && ins[0].text.indexOf("\n") >= 0) {
+      reflowNotesPaste(el, ins[0].text);
+    }
   });
+
+  /** WHAT THE CLIPBOARD MUST BECOME, for a line that is not a template paragraph.
+   *
+   *  All three computed families store PLAIN TEXT through their own channel, so the only question a
+   *  multi-line clipboard asks is what "one line" means to the family it landed in.
+   *
+   *  A PRICE ROW AND A SYSTEM ROW ARE ONE LINE, and not by convention: price_overrides.lines[key]
+   *  and system_overrides[i][field] each hold a single string, each is written into a single
+   *  paragraph, and the red frame around that paragraph is baked artwork this page is registered
+   *  against. So the newlines collapse -- each run of them, with whatever spaces hug it, becomes
+   *  one space. Every word the estimator copied arrives and the row still fits the row it is
+   *  registered against. The alternative that suggests itself first, keeping the first line and
+   *  dropping the rest, silently throws away customer-facing words, which is the worst of the
+   *  failures available here; the other, letting the line wrap onto a second, moves text on a
+   *  to-scale preview of a printed page.
+   *
+   *  SPACES AND TABS ARE LEFT EXACTLY AS THEY CAME. Kyle, 2026-08-20, on this editor: editing must
+   *  reflect 1 to 1 in the customer's copy, and syncPriceLinesIn stores what it is given with no
+   *  trim and no collapse. He aligns price rows with runs of spaces, so collapsing whitespace in
+   *  general -- the obvious one-liner -- would quietly undo his columns. Only the newlines, which
+   *  the row cannot carry at all, are touched.
+   *
+   *  A NOTES BULLET IS NOT ONE LINE. Its channel is the #notes-text textarea, one line per bullet,
+   *  so five pasted lines are five bullets -- which is also what pasting a list into a bulleted
+   *  list does everywhere else. The newlines are kept; reflowNotesPaste below makes them real. Only
+   *  the trailing ones go, because copying a line out of a document nearly always brings one and
+   *  the textarea's own sync drops trailing blanks anyway. */
+  function pastedTextFor(el, plain) {
+    const text = String(plain == null ? "" : plain).replace(/\r\n?/g, "\n");
+    if (el.classList.contains("tw-note-edit")) return text.replace(/\n+$/, "");
+    return text.replace(/^\n+|\n+$/g, "").replace(/[ \t]*\n+[ \t]*/g, " ");
+  }
+
+  /** A multi-line paste into a NOTES bullet, made real on screen.
+   *
+   *  The newlines have already reached the textarea by the time this runs -- syncNotesFromDom
+   *  splits a bullet on them, which is how Enter has always turned one bullet into two. What has
+   *  never happened before is FIVE lines arriving at once, and .tw-note-edit carries no
+   *  white-space declaration (see styles.css: .tw-line-edit and .tw-block are pre-wrap, the
+   *  bullets are not), so they render run together inside one bullet until the caret leaves the
+   *  box and renderNotesPreview rebuilds it. Showing five lines as one, on a to-scale preview, for
+   *  as long as somebody keeps typing, is a lie about what will print.
+   *
+   *  So the preview is rebuilt here. The selection is dropped first because renderNotesPreview
+   *  refuses while the caret is inside the bullets -- focusInside reads the caret, not just
+   *  activeElement -- and the caret then goes to the END of the last bullet the paste produced,
+   *  which is where the estimator is looking. Same order, and the same reason, as the undo restore.
+   *
+   *  The bullet index is counted forward from the one pasted into rather than searched for: a
+   *  bullet's own text can already hold a newline from an earlier Enter, so data-note-index and
+   *  the textarea's line numbers agree only just after a render. Clamped to the last bullet, so a
+   *  disagreement lands the caret at the end of the notes rather than nowhere. */
+  function reflowNotesPaste(el, added) {
+    if (!notesPreviewEl || !notesPreviewEl.querySelectorAll) return;
+    const grew = String(added || "").split("\n").length;
+    const idx = Number(el.dataset.noteIndex);
+    try { const s = window.getSelection(); if (s && s.removeAllRanges) s.removeAllRanges(); } catch {}
+    try { renderNotesPreview(); } catch {}
+    const bullets = notesPreviewEl.querySelectorAll("[data-note-index]");
+    if (!bullets.length) return;
+    const want = Number.isFinite(idx) ? Math.min(idx + grew - 1, bullets.length - 1) : bullets.length - 1;
+    const into = bullets[Math.max(0, want)];
+    const host = editingBox(into);
+    if (host && host.focus) { try { host.focus(); } catch {} }
+    const end = runsLength(editRuns(into));
+    placeSelection(into, end, end);
+  }
+
+
+  // ══ CTRL+S ═══════════════════════════════════════════════════════════════════════════════
+  /** A Word user presses Ctrl+S reflexively, and Chromium answered with its own Save Page sheet --
+   *  a dialog offering to write an .html copy of the app into Downloads, which is never what
+   *  anybody wanted on this screen. The page already autosaves (every TW.setState debounces a PUT
+   *  of the whole draft blob 2.5s after the last edit), so the key has a real meaning here: finish
+   *  that save now, and say what happened.
+   *
+   *  WHAT IT SHOWS IS THE RETURN VALUE OF A WRITE, never a claim about one. "Saved" appears only
+   *  where TW.flushState() resolved true, and that boolean is the PUT's own res.ok. "Saving..." is
+   *  what is on screen while the promise is pending, because that is all that is known then.
+   *
+   *  THE ONE THING flushState CANNOT SAY is that a save was refused before it left the browser --
+   *  an unverified draft, or a local blob stamped for a different project. It drops the pending
+   *  write and then reports an older in-flight promise, so it can answer true while the estimator's
+   *  last edit has just been discarded from the queue. TW.saveBlocked() is asked first for exactly
+   *  that reason, and where it answers, the readout says the honest thing: the work is here, it is
+   *  not there. A cheerful "Saved" that is not evidence of a save is worse than no feedback.
+   *
+   *  PAGE-WIDE, WHICH IS THE OPPOSITE OF WHERE CTRL+Z IS BOUND, and the difference is what the key
+   *  would otherwise do. Ctrl+Z in the notes textarea or a pricing field has a correct native
+   *  behaviour worth leaving alone, so the undo listener is scoped to the document surface. Ctrl+S
+   *  has none -- the browser's answer is wrong everywhere on this page -- and the notes textarea is
+   *  document content anyway: it is the bullets' single source of truth. So this one is on window.
+   *
+   *  NOTHING IS ADDED TO THE DOCUMENT. The readout is a span in .word-ribbon, the row that
+   *  already carries this page's own state: which step is active, the tax treatment, whether
+   *  Continue is busy. That row is chrome outside #doc-zoom's transform, so it cannot move the
+   *  to-scale preview by a pixel, and it is not in the surface readForm or the override sweeps read
+   *  from, so it cannot reach the .docx. */
+  const saveStateEl = document.getElementById("save-state");
+  let _saveStateTimer = null;
+  const SAVE_STATE_WORDS = {
+    saving: "Saving\u2026",
+    saved: "Saved",
+    failed: "Not saved \u2014 your work is still on this computer",
+  };
+
+  /** Put one of the three states on screen. The reason argument is diagnostic and rides the
+   *  title attribute: the estimator needs one sentence, whoever they show it to needs why. */
+  function showSaveState(kind, why) {
+    if (!saveStateEl) return false;
+    if (_saveStateTimer) { clearTimeout(_saveStateTimer); _saveStateTimer = null; }
+    const words = SAVE_STATE_WORDS[kind];
+    if (!words) return false;
+    saveStateEl.textContent = words;
+    saveStateEl.dataset.state = kind;
+    if (why) saveStateEl.title = String(why); else saveStateEl.removeAttribute("title");
+    saveStateEl.hidden = false;
+    // A RECEIPT FOR THE KEYPRESS, not a standing claim. "Saved" is true of the moment the write
+    // landed and says less about the page with every keystroke after it, so it goes. A failure
+    // stays on screen: it is the one of the three the estimator has to do something about.
+    if (kind === "saved") _saveStateTimer = setTimeout(() => { saveStateEl.hidden = true; }, 6000);
+    return true;
+  }
+
+  /** Ctrl+S / Cmd+S: save now, and report the outcome. Shift excluded -- Ctrl+Shift+S belongs to
+   *  the browser (Firefox's screenshot tool), and taking a key away is only justified where the
+   *  thing being taken away is wrong. */
+  function onSaveKey(e) {
+    if (String(e.key || "").toLowerCase() !== "s") return false;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return false;
+    e.preventDefault();
+    // The bare TW binding, not window.TW: it is what every other call on this page uses, and
+    // mixing the two made the guard skippable by anything that had one and not the other.
+    const blocked = (TW && TW.saveBlocked) ? TW.saveBlocked() : null;
+    if (blocked) { showSaveState("failed", blocked); return true; }
+    showSaveState("saving");
+    Promise.resolve(TW.flushState()).then(
+      (ok) => showSaveState(ok ? "saved" : "failed", ok ? "" : "the server did not take the write"),
+      () => showSaveState("failed", "the write threw"));
+    return true;
+  }
+  window.addEventListener("keydown", onSaveKey);
+
 
   /** THE MERGE GUARD, for every edit that does not arrive as a keystroke.
    *
@@ -6253,8 +6504,15 @@
     if (!panel) return;
     try {
       const p = JSON.parse(localStorage.getItem("tw_opts_pos") || "null");
-      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)) {
-        panel.style.left = p.left + "px"; panel.style.top = p.top + "px"; panel.style.right = "auto";
+      // Clamped on the way back in, not only during the drag -- TW.clampPanelPos. Dragged to the
+      // far side of a wide monitor and reopened on a laptop, this restored past the edge with
+      // .op-drag off screen: no handle to grab, and no way back without clearing site data. Found
+      // on the polish-intake cheat sheet, which copies this panel; it was the same hole here.
+      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)
+          && getComputedStyle(panel).position === "fixed") {
+        const at = TW.clampPanelPos(p.left, p.top, panel.offsetWidth);
+        panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
+        panel.style.right = "auto";
       }
     } catch {}
     let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
@@ -6497,6 +6755,18 @@
         // amount / tax phrase, option + manual line label/amount). Display-only —
         // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
         price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
+        // THE OPTIONAL COVER LETTER — the enabled flag, the estimator's edits, and the template
+        // version those edit ids were captured against.
+        //
+        // Inside proposal_payload, not merely on the POST body, because the payload is what gets
+        // FROZEN into a sent revision: the portal re-renders a customer's letter from the pinned
+        // copy (api_admin_cover_letter_pdf reads pp["cover_letter_enabled"]), so a letter that
+        // rode only the request would vanish the first time a customer re-opened their proposal.
+        //
+        // Read through the ONE helper on window, which the Files page's rebuild also reads, so the
+        // two cannot come to disagree about what the estimator asked for. An empty object when
+        // that script did not load — which the backend already treats as "no cover letter".
+        ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
