@@ -356,6 +356,23 @@
     }
   }
 
+  /** One place for "this browser is not going to dictate": hide the button, show the note.
+   *
+   *  Hidden rather than disabled. A greyed-out microphone reads as something broken; a box to
+   *  type in with no microphone beside it reads as the feature working, which it is -- typing has
+   *  always been the path that works everywhere.
+   *
+   *  TWO CALLERS, TWO DIFFERENT REASONS, and they must not drift apart: no
+   *  webkitSpeechRecognition at all (an old browser), and Brave, which has the constructor and no
+   *  service behind it. An estimator cannot act on the difference -- either way the answer is
+   *  Chrome or Edge -- so both get the one message #verbal-nomic already carries. */
+  function noMic() {
+    var mic = $("verbal-mic");
+    if (mic) mic.hidden = true;
+    var note = $("verbal-nomic");
+    if (note) note.hidden = false;
+  }
+
   function mount() {
     var panel = $("verbal");
     if (!panel) return;
@@ -366,24 +383,32 @@
         if (listening) stopDictation(); else startDictation();
       });
       paintMic();
-      // SAY IT BEFORE THEY TALK, not after. dictationError() can only explain a Brave failure once
-      // it has already happened — by which point they have spoken a whole job description into a
-      // service that was never there and have to say all of it again. Brave will identify itself,
-      // so where we can know in advance, we do. The button stays (it is their browser's decision
-      // to make, and a later Brave may ship a service) but the warning is on screen first.
+      // DO NOT OFFER A BUTTON THAT CANNOT WORK. Brave ships webkitSpeechRecognition but
+      // deliberately does not pay for the speech service behind it, so `Rec` is truthy, the mic
+      // light comes on, and every attempt fails with `network` having transcribed nothing. Brave
+      // has tracked this since 2019 and there is NO user-facing flag, so it is not a setting an
+      // estimator can go and fix -- it is a browser that does not do this. Feature detection
+      // cannot see it either, because the constructor is present.
+      //
+      // This used to warn and LEAVE THE BUTTON UP, reasoning that it was the browser's decision
+      // to make and a later Brave might ship a service. That was wrong in practice. Both messages
+      // land in the same #verbal-msg, so pressing Speak overwrote the warning with the failure,
+      // and a warning above a working-looking button reads as a caveat rather than a refusal.
+      // Reported by Hanz, 2026-09-03 -- "the speak voice still not working" -- after talking a
+      // whole job description into it. So take the same path as a browser with no API at all:
+      // hide the mic, show the note, let the typed box be the whole feature. If Brave ever ships
+      // a speech service, deleting this block puts the button back.
+      //
+      // ASYNCHRONOUS, and that is unavoidable -- isBrave() is a promise, so the button is briefly
+      // visible before it goes. Nothing can be done about that without blocking mount() on it.
       if (navigator.brave && typeof navigator.brave.isBrave === "function") {
         navigator.brave.isBrave().then(function (yes) {
           if (!yes) return;
-          say("Heads up: Brave has no speech service, so the microphone will record you and no " +
-            "words will come back. Type into the box, or use Chrome or Edge to talk.", "warn");
+          noMic();
         }).catch(function () { /* it declined to answer; the error path still covers it */ });
       }
-    } else if (mic) {
-      // Hidden rather than disabled, and the note explains it. A greyed-out microphone reads as
-      // something broken; a box to type in with no microphone reads as the feature working.
-      mic.hidden = true;
-      var note = $("verbal-nomic");
-      if (note) note.hidden = false;
+    } else {
+      noMic();
     }
     var go = $("verbal-go");
     if (go) go.addEventListener("click", run);
