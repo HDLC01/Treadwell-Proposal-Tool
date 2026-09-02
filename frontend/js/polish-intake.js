@@ -74,6 +74,51 @@
   // and the calculator cannot open a new project on two different sets of defaults.
   var DEFAULT_CONDITIONS = B.freshModel().conditions;
 
+  /** The spreadsheet cells these five conditions ARE, so this page and the live intake
+   *  cannot answer the same question two different ways.
+   *
+   *  WHY THIS EXISTS AT ALL. As of 2026-09-03 the five toggles also live on the live
+   *  intake form (js/index.js), which is now the beta's step 1 -- Hanz: "For the polish
+   *  beta we want to use the existing intake form v1 (not the beta). The v2 is just add
+   *  it with the toggle buttons." Until this page is retired it still asks the same five
+   *  questions one screen later, and without this it answered them from
+   *  polish_estimate.conditions -- which a fresh v1 project does not have -- so an
+   *  estimator who set Prevailing wage on intake arrived here to find it off.
+   *
+   *  DUPLICATED, NOT EXTRACTED, and deliberately. The obvious fix is one shared module,
+   *  but test_polish_intake_page.py asserts this page's <script src> list as an EXACT
+   *  seven-item sequence, so a sixth file here is a test move dressed up as a refactor.
+   *  Five rows against the day this page is deleted is the cheaper end of that trade.
+   *  The live intake's copy is the one to edit; this one follows it.
+   *
+   *  Only Epoxy!B4 and B5 are paired with a Polish cell: Polish!B4/B5 hold their own
+   *  Yes/No, while Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 /
+   *  =Epoxy!D6 and writing them would replace a live reference with a literal. */
+  var CONDITION_CELLS = {
+    local:           { cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
+    hard_bid:        { cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
+    prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
+    taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
+    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" }
+  };
+
+  /** cell_values with these five written into it, MERGED over what is already there.
+   *
+   *  Never a fresh object: cell_values also carries the AI autofill's flags and every
+   *  cell the estimator edited by hand on the estimate grid. And never a blank for
+   *  "off" -- both literals are written explicitly, because a blank Yes/No cell is not
+   *  "No" to Kyle's formulas, it is whatever the IF() defaults to. */
+  function conditionCells() {
+    var out = Object.assign({}, (TW.getState() || {}).cell_values || {});
+    for (var key in CONDITION_CELLS) {
+      if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
+      var spec = CONDITION_CELLS[key];
+      var lit = M.conditions[key] ? spec.on : spec.off;
+      for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
+    }
+    return out;
+  }
+
   // The draft this page is working ON, and the model derived from it. Reassigned together by
   // adoptModel(), because the page can switch drafts mid-boot: opening a real bid here works on a
   // test copy instead (see enterSandbox), and rendering the copy with the real project's values
@@ -108,6 +153,20 @@
     state = blob || {};
     M = B.migrateModel(state.polish_estimate);
     M.conditions = Object.assign({}, DEFAULT_CONDITIONS, M.conditions || {});
+    // THE CELL WINS WHERE THERE IS ONE. A project that came through the live intake has
+    // no polish_estimate yet, so migrateModel just handed back the defaults -- and the
+    // five choices the estimator actually made are sitting in cell_values. Reading them
+    // back here is what stops this screen contradicting the one before it. After this
+    // change every write to a condition writes its cell too (see save()), so the cell
+    // can never be the staler of the two.
+    var cv = (state.cell_values && typeof state.cell_values === "object") ? state.cell_values : {};
+    for (var ck in CONDITION_CELLS) {
+      if (!CONDITION_CELLS.hasOwnProperty(ck)) continue;
+      var cell = cv[CONDITION_CELLS[ck].cells[0]];
+      if (cell == null || cell === "") continue;
+      M.conditions[ck] =
+        String(cell).trim().toLowerCase() === String(CONDITION_CELLS[ck].on).toLowerCase();
+    }
   }
 
   function isCondition(key) {
@@ -172,10 +231,12 @@
    *  evidence gate in backend/verbal_intake.py; nothing here re-decides that, and nothing here
    *  touches a county key — the picker below is the only thing allowed to write those four.
    *
-   *  IT SAVES ITS OWN FILLS. Nothing on this page listens for `input` — see wire(), which binds a
-   *  delegated click, a submit and the county box, and that is the whole list. So the eight text
-   *  boxes this fills reached the draft only by accident, when a condition happened to flip in the
-   *  same run and its save swept them up. saveSoon() is called outright below.
+   *  IT SAVES ITS OWN FILLS, AND STILL HAS TO. wire() now binds an `input` listener that saves any
+   *  named field a human types into — but setting `el.value` from script fires no `input` event, so
+   *  that listener does not see a single thing this function writes. Do not delete the saveSoon()
+   *  below on the grounds that typing is covered now; it is not the same path. Before either
+   *  existed, the eight text boxes this fills reached the draft only by accident, when a condition
+   *  happened to flip in the same run and its save swept them up.
    *
    *  Returns three lists, and the third one is the point: `respected` names the conditions the
    *  estimator had already settled by hand, which this LEAVES ALONE and asks the panel to say so. */
@@ -496,9 +557,12 @@
   /** Debounced, same 600ms the calculator uses, because every save is a PUT of the WHOLE draft
    *  blob and a run of the verbal panel schedules one per condition plus one for the fields.
    *
-   *  WHO CALLS IT, exactly: toggleCondition, pickCounty, clearCounty, and applyVerbal. Typing in
-   *  the text boxes does NOT — no `input` listener exists on this page (see wire()) — so hand-typed
-   *  values reach the draft on Continue, through onSubmit's synchronous save(). */
+   *  WHO CALLS IT, exactly: toggleCondition, pickCounty, clearCounty, applyVerbal, and — since
+   *  the Sept 2026 data-loss fix — an `input` listener on any NAMED field in the form (wire()).
+   *  That listener is the whole of Will's bug: until it existed the eight text boxes were pure
+   *  DOM until Continue, so a step-nav click or a reload threw away everything typed. #county-input
+   *  is excluded by that `name` guard on purpose — its keystrokes are a live search, not a draft
+   *  edit, and saving per keystroke there would PUT the whole blob on every letter. */
   function saveSoon() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
@@ -537,6 +601,12 @@
       // reminders and the Dropbox folder date all read `deadline`.
       deadline: values.bid_date || cur.deadline || "",
       polish_estimate: model,
+      // Both homes, from one place. polish_estimate.conditions is what the beta
+      // calculator prices from; cell_values is what the generated .xlsx -- and so the
+      // customer's bid -- is filled from, and what the live intake and the estimate
+      // grid read. Writing only the first would price the beta correctly and hand out
+      // a workbook that disagreed with it.
+      cell_values: conditionCells(),
     }, countyKeys()));
     paintSaveBlocked();
   }

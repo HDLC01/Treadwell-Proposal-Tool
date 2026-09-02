@@ -215,6 +215,10 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${grab(/^  var B = window\.TWPolishBid;[^\n]*$/m, "the window.TWPolishBid binding")}
   ${grab(/^  var CONDITIONS = \[[\s\S]*?\n  \];$/m, "CONDITIONS")}
   ${grab(/^  var DEFAULT_CONDITIONS = [^\n]*;$/m, "DEFAULT_CONDITIONS")}
+  // Added 2026-09-03 with the cell map. adoptModel() and save() both reach for it now,
+  // and a const the lifted function cannot see is a ReferenceError at boot, not a
+  // product bug -- which is the whole reason grab() names what it is looking for.
+  ${grab(/^  var CONDITION_CELLS = \{[\s\S]*?\n  \};$/m, "CONDITION_CELLS")}
   ${grab(/^  var COUNTY_LIMIT = [^\n]*$/m, "COUNTY_LIMIT")}
   var state = {};
   var M = null;
@@ -228,6 +232,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   var countyHighlight = -1;
   var countyPick = null;
   ${fn("adoptModel")}
+  ${fn("conditionCells")}
   ${fn("isCondition")}
   ${fn("switchHtml")}
   ${fn("renderConditions")}
@@ -262,6 +267,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
            DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: COUNTY_LIMIT,
+           CONDITION_CELLS: CONDITION_CELLS, conditionCells: conditionCells,
            loadCounties: loadCounties, countyKeys: countyKeys,
            model: function () { return M; }, state: function () { return state; },
            countyPick: function () { return countyPick; } };
