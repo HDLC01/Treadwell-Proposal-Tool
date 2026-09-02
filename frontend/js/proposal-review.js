@@ -1239,6 +1239,20 @@
     // In particular, a previously saved `(tax exempt)` phrase or total must not
     // overwrite a newly selected "Sales tax broken out" preview.  The live
     // proposal must show the selected base bid, its sales-tax row, and Total.
+    // M/D/YY, computed ONCE and spent twice below. The proposal header and the
+    // cover letter's letterhead box print the same date in the same shape, and
+    // the backend derives `proposal_date_short` from `bid_date_formatted`
+    // (`cover_letter_writer._SHORT_DATE_SOURCES`) — so deriving both from one
+    // value here is what makes the on-screen preview and the generated document
+    // agree by construction rather than by two expressions staying in step.
+    const shortDate = (() => {
+      const raw = mergedValues.bid_date;
+      if (!raw) return new Date().toLocaleDateString("en-US", { month:"numeric", day:"numeric", year:"2-digit" });
+      const d = new Date(String(raw) + "T00:00:00");
+      if (isNaN(d)) return safe(raw);
+      return `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
+    })();
+
     const tokenValues = {
       ...mergedValues,
       job_name:           safe(mergedValues.project_name),
@@ -1253,13 +1267,13 @@
       proposal_date:      new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
       bid_date:           safe(mergedValues.bid_date),
       // M/D/YY for the header date that the template hardcoded as 1/1/26
-      bid_date_formatted: (() => {
-        const raw = mergedValues.bid_date;
-        if (!raw) return new Date().toLocaleDateString("en-US", { month:"numeric", day:"numeric", year:"2-digit" });
-        const d = new Date(String(raw) + "T00:00:00");
-        if (isNaN(d)) return safe(raw);
-        return `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
-      })(),
+      bid_date_formatted: shortDate,
+      // The ONLY thing the cover letter's letterhead date box prints. Without
+      // it the editor previewed the raw `{{proposal_date_short}}` — the
+      // generated PDF was always right, because the backend backfills it, but
+      // the estimator proofreading on screen saw a token where a date belongs
+      // and had no way to tell that from a broken document.
+      proposal_date_short: shortDate,
       site_visit_date:    safe(mergedValues.site_visit_date_display || mergedValues.bid_date),
       system_name:        safe(mergedValues.system_name),
       system_name_epoxy:  safe(mergedValues.system_name),

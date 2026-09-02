@@ -23,6 +23,23 @@ Executed, not grepped: the original bug was invisible to source reading — the 
 was internally consistent, it just never reached the one cell that mattered. Only running
 `pickCounty` for real and inspecting the resulting `cellValues`/HF writes can prove the fix
 actually lands.
+
+2026-09-02 — the same bug, one layer down. That fix wrote the rate to a hand-typed list of
+sheets: Epoxy, Polish and the five gyp variants. Reading the shipped workbook instead of the
+comment above that list turned up three more sheets carrying the identical
+`=IF(D6="yes",0.1,0)` placeholder — `Seal!B75`, `Leveling!B77` and `Epoxy blank!B78` — and a
+fourth hole with no sheet name at all: a COPIED tab. Copies are the ordinary way to put a priced
+option in front of a customer, and `estimate_writer._create_copied_tabs` clones them from the
+PRISTINE template, so a copy's rate cell arrives holding the 10% placeholder. Copying before
+picking the county, or changing the county after copying, shipped a 10% option line beside an
+otherwise correct base bid — while the pill overhead said the real rate was applied
+automatically. Cases 6-9 in the harness are those four holes.
+
+Case 10 is the regression cases 6-9 introduced, and it took a real browser to see it. Bringing
+copies in meant the override's own grid refresh reached a copied tab for the first time — and it
+refreshed by discarding the active sheet's cache and re-fetching it, which 404s for a copy and
+painted "Failed to load Copy1" over the tab. All nine cases above sit on a base tab, where that
+refetch happens to succeed, so all nine stayed green while staging carried the bug.
 """
 import json
 import pathlib
@@ -47,10 +64,14 @@ def result():
 
 
 def test_covers_every_sheet_with_a_remodel_tax_line(result):
-    """Epoxy + Polish + every Gyp variant = 7 cells. If a 6th Gyp variant is ever added to the
-    workbook, this must be the number that moves, not a hand-typed count staying stale."""
+    """Epoxy + Polish + Seal + Leveling + Epoxy blank + every Gyp variant = 10 cells.
+
+    This count was 7 until 2026-09-02, and the three missing sheets are the point: the list was
+    written from a comment asserting they had no remodel line, and the workbook says otherwise.
+    If a 6th Gyp variant is ever added, this is the number that must move — not a hand-typed
+    count going stale while a real customer's option line quotes 10%."""
     assert result["gypSheetCount"] == 5
-    assert result["pickedCity"]["cellCount"] == 7
+    assert result["pickedCity"]["cellCount"] == 10
 
 
 def test_picking_a_city_writes_the_real_rate_into_every_formula_cell(result):
@@ -64,16 +85,21 @@ def test_picking_a_city_writes_the_real_rate_into_every_formula_cell(result):
 def test_the_write_also_reaches_the_live_hf_engine(result):
     """So the on-screen total is right NOW, not just in the file the estimator downloads later."""
     p = result["pickedCity"]
-    assert p["hfCallCount"] == 7
+    assert p["hfCallCount"] == 10
     assert p["hfMatchesCellValues"] is True
 
 
 def test_the_active_sheets_grid_is_refreshed(result):
     """cellValues alone would be right in the generated file but stale on screen — the estimator
-    would see the old total until they clicked away and back."""
+    would see the old total until they clicked away and back.
+
+    HOW it refreshes matters, which is why the cache is asserted alongside. This used to
+    `delete sheetCache[activeSheet]` and re-run `showSheet` — a wasteful round trip on a base tab,
+    and outright data loss on a copy (see the last test in this file). It now
+    re-renders from the live HF engine and leaves the cache alone."""
     p = result["pickedCity"]
-    assert p["activeSheetCacheBusted"] is True
-    assert p["showSheetCalledWith"] == ["Epoxy"]
+    assert p["gridRefreshedFor"] == ["Epoxy"]
+    assert p["cachePreserved"] is True
 
 
 def test_state_still_carries_what_the_proposal_step_reads(result):
@@ -131,3 +157,71 @@ def test_the_toggle_reference_is_local_to_each_sheet(result):
     assert t["epoxy"].startswith('=IF(D6=')
     assert t["polish"].startswith('=IF(D6=')
     assert t["gyp"].startswith('=IF(D8=')
+
+
+# ─── The four sheets the first fix missed (2026-09-02) ─────────────────────
+
+
+def test_seal_leveling_and_epoxy_blank_get_the_picked_rate(result):
+    """Three sheets the previous target list left out, on the strength of a comment claiming they
+    had no remodel-tax line. All three hold `=IF(D6="yes",0.1,0)` in the shipped workbook, and
+    Seal is a priced role (`BASE_ROLE` via `SEAL_SHEETS`) whose number reaches the customer as a
+    proposal price line — so every sealer bid was taxed at Kyle's 10% placeholder instead of the
+    ~9.1-9.7% the picker had already looked up and displayed."""
+    p = result["previouslyMissedLayouts"]
+    assert p["seal"] == '=IF(D6="yes",0.0935,0)'
+    assert p["leveling"] == '=IF(D6="yes",0.0935,0)'
+    assert p["epoxyBlank"] == '=IF(D6="yes",0.0935,0)'
+
+
+def test_seal_with_joints_is_deliberately_left_as_a_mirror(result):
+    """`Seal (+Jnts)!B75` is `=Seal!B75`, so writing Seal already carries it. Writing a literal
+    there too would replace the mirror and let the two sheets drift apart independently — the
+    exact divergence found in Kyle's own filed workbooks. This absence is a decision, so it is
+    asserted rather than left to whoever next extends the list."""
+    assert result["sealJointsLeftAsMirror"]["written"] is False
+
+
+def test_a_tab_copied_before_the_county_was_picked_still_gets_the_rate(result):
+    """Copies are how a priced option gets in front of a customer, and the backend clones them
+    from the pristine template (`estimate_writer._create_copied_tabs`), so a copy's rate cell
+    arrives at 10%. `addCopy` replaying the source's `cellValues` covers "pick, then copy" as a
+    side effect — it can do nothing for "copy, then pick", which is this test. Before the fix
+    that sequence shipped a 10% option beside a correct base bid."""
+    c = result["copyThenPick"]
+    assert c["copy1"] == '=IF(D6="yes",0.0935,0)'    # copy of Epoxy  → its layout's B81
+    assert c["copy2"] == '=IF(D6="yes",0.0935,0)'    # copy of Polish → its layout's B75
+    assert c["base"] == '=IF(D6="yes",0.0935,0)'     # and the base tab is untouched by all this
+
+
+def test_a_copy_of_a_copy_resolves_through_the_chain_to_its_template_layout(result):
+    """The address depends on the LAYOUT, not the tab: B81 for an epoxy-derived tab, B75 for a
+    polish- or seal-derived one. A copy of a copy has to walk the chain (`layoutIdFor`) to find
+    it — the same resolution `test_cell_lock.py::test_copy_of_copy_resolves_through_chain`
+    already pins for cell protection."""
+    c = result["copyChain"]
+    assert c["copy2"] == '=IF(D6="yes",0.0935,0)'    # Copy2 → Copy1 → Epoxy → B81
+    assert c["copy3"] == '=IF(D6="yes",0.0935,0)'    # Copy3 → Seal → B75
+    # 10 template layouts + 3 copies, each written exactly once. A `seen` set guards the overlap:
+    # the base tabs in the tab bar are the same ids as the layouts, and writing one twice would
+    # be harmless here but would hide a double-write bug on a real structural translation.
+    assert c["targetCount"] == 13
+
+
+def test_picking_while_sitting_on_a_copied_tab_keeps_the_tab_on_screen(result):
+    """The regression the four tests above created, caught by a browser and not by any of them.
+
+    Once copies became rate targets, the override's own grid refresh reached a copied tab for the
+    first time — and it refreshed by discarding the active sheet's cache and re-fetching it. A copy
+    has no server-side worksheet (`addCopy` builds `sheetCache[newId]` client-side from its
+    source), so `GET /api/sheet/Copy1` 404s and `showSheet`'s `!r.ok` branch paints
+    "Failed to load Copy1" over a tab whose cache is now gone. Picking a county with a copy open —
+    an ordinary sequence — blanked the option the estimator was looking at.
+
+    For a client-side-only cache, a refetch is data loss, not a round trip. Every one of cases 1-9
+    sits on a base tab, where the refetch happens to succeed, which is exactly why they were all
+    green while staging carried the bug."""
+    c = result["pickedWhileOnACopy"]
+    assert c["copy1"] == '=IF(D6="yes",0.0935,0)'   # the rate still lands
+    assert c["cachePreserved"] is True              # ...without destroying the tab to deliver it
+    assert c["gridRefreshedFor"] == ["Copy1"]       # ...and the copy redraws with the new number
