@@ -31,12 +31,67 @@ def test_overland_park_lookup_is_corrected():
     assert result["source"] == "city"
 
 
-def test_overland_park_city_row_matches_lookup():
-    """The new CITIES-table row and the older TAX_RATES/lookup() path must
-    agree — they're two different data sources for the same number."""
-    rows = [c for c in reference_tax.CITIES if c["name"] == "Overland Park" and c["state"] == "KS"]
-    assert len(rows) == 1
-    assert rows[0]["remodel_rate"] == reference_tax.TAX_RATES[("overland park", "KS")]
+def test_no_city_is_defined_in_both_tables():
+    """The invariant the old version of this test only checked for ONE city.
+
+    It used to assert that Overland Park's CITIES row equalled its TAX_RATES row —
+    true, and the reason it stayed green while SEVEN other shared cities disagreed.
+    Overland Park was the one city anybody had corrected in both places, so pinning
+    it proved only that the row somebody had just fixed was fixed. Kansas City KS
+    was 9.75% here against a verified 9.125%, and `/api/reference/tax-rate` served
+    the wrong one.
+
+    A per-row assertion cannot express "these two tables must not disagree" — only
+    "this row does not disagree". So the check is now the whole overlap, and the
+    overlap is required to be EMPTY: there is exactly one place each city's rate is
+    written, which is the only version of this rule that cannot rot.
+    """
+    cities = {(c["name"].lower(), c["state"]) for c in reference_tax.CITIES}
+    overlap = sorted(k for k in reference_tax.TAX_RATES if k in cities)
+    assert overlap == [], (
+        "these cities are defined in both CITIES and TAX_RATES, so their rates can "
+        "drift apart silently: " + repr(overlap))
+
+
+def test_lookup_serves_the_verified_rate_for_every_kansas_city():
+    """`lookup()` and the dropdown must not be able to answer differently.
+
+    They read the same table now, but "they happen to agree today" is what was true
+    before. Every KS city in the verified table is checked through lookup() here, so
+    a future edit that reintroduces a second source fails on the city it disagrees
+    about rather than on whichever one a spot-check happened to name.
+    """
+    ks = [c for c in reference_tax.CITIES if c["state"] == "KS"]
+    assert len(ks) >= 15, "the verified KS table shrank — deliberate?"
+    for row in ks:
+        got = reference_tax.lookup(row["name"] + ", KS")
+        assert got["rate"] == row["remodel_rate"], row["name"]
+        assert got["source"] == "city", row["name"]
+
+
+def test_the_seven_rates_kdor_corrected_stay_corrected():
+    """Every rate KDOR's locator contradicted, locked at the verified value.
+
+    All seven overstated the tax, so a regression here does not read as a bug — it
+    reads as a slightly expensive bid that still wins or loses on its merits, and
+    nobody notices for months. Kansas City KS is the one to watch: 0.625 of a point.
+    """
+    for city, expected in [
+        ("Kansas City", 0.09125), ("Leawood", 0.091), ("Lenexa", 0.0935),
+        ("Merriam", 0.09475), ("Mission", 0.09725), ("Prairie Village", 0.08975),
+        ("Shawnee", 0.096),
+    ]:
+        assert reference_tax.lookup(city + ", KS")["rate"] == expected, city
+
+
+def test_missouri_cities_are_untouched_by_the_kansas_cleanup():
+    """Kansas City exists in both states at different rates, and only the KS row
+    moved. If the cleanup had matched on city name alone, Kansas City MO would now
+    quietly return the Kansas figure."""
+    assert reference_tax.lookup("Kansas City, MO")["rate"] == 0.0975
+    assert reference_tax.lookup("Kansas City, KS")["rate"] == 0.09125
+    assert reference_tax.lookup("Belton, MO")["rate"] == 0.0935
+    assert sum(1 for _, st in reference_tax.TAX_RATES if st == "KS") == 0
 
 
 # ─── list_tax_areas: ordering + kind tagging ───────────────────────────────
