@@ -167,11 +167,63 @@
           </label>
         </div>
       </div>
+      <!-- COVER-LETTER VALUES. Will Buchanan, 2026-09-03, sending the Direct letter's
+           text: it prints "Area: Warehouse expansion and 4 offices" and "Materials /
+           System: 1/4" Flake Floor broadcast with 6" Integral Cove Base", and both were to
+           come off the intake form.
+
+           Neither was captured ANYWHERE before this. Kyle's system dropdown bakes the
+           thickness into the urethane-cement entries only ('3/16" Urethne Cement ...'); every
+           flake and quartz entry has none, which is why the letter shipped an italic
+           "[THICKNESS - pick one]" instruction instead of a value. And no cell on Epoxy or
+           Polish describes the areas -- {{work_description}} defaults to the street address
+           and {{scope_notes}} is the demo/prep/install paragraph.
+
+           Named inputs and nothing else: BOTH Continue handlers spread TW.readForm(form), so
+           these travel with no handler edit and the two blobs stay byte-identical
+           (test_beta_intake_routing.py compares them key for key). -->
+      <label>Area &mdash; what the floor covers
+        <input type="text" name="work_areas"
+               placeholder="Warehouse expansion and 4 offices"
+               title="Prints on the cover letter as the Area line. Plain words, the way you would say it to the customer.">
+      </label>
+      <div class="row" id="thickness-row">
+        <label style="flex: 0 0 220px;">System thickness
+          <select name="system_thickness"
+                  title="Prints in front of the system name on the cover letter. Leave blank for a system whose name already states it.">
+            <option value="">&mdash;</option>
+            <option>1/8&quot;</option>
+            <option>3/16&quot;</option>
+            <option>1/4&quot;</option>
+          </select>
+        </label>
+      </div>
       <div class="row">
         <label>Approx. start date
           <input type="date" name="approx_start_date">
         </label>
       </div>
+    </fieldset>
+
+    <!-- JOB CONDITIONS -- ported from the polish beta's step 2, which is where these
+         toggles were built and where they are being retired from. Hanz, 2026-09-02:
+         "For the polish beta we want to use the existing intake form v1 (not the beta).
+         The v2 is just add it with the toggle buttons." So this is the beta's whole
+         contribution to the merged form.
+
+         EMPTY ON PURPOSE. Every switch, and the hidden input behind it, is rendered by
+         js/index.js from one CONDITIONS array -- the same data-not-markup shape the beta
+         used, which is what makes adding the four new questions four lines rather than
+         forty. The hidden inputs are what let TW.readForm/TW.writeForm round-trip these
+         for free, so the two Continue handlers pick them up without either one being
+         edited (test_beta_intake_routing.py compares the blobs they save key for key). -->
+    <fieldset id="job-conditions-box">
+      <legend>Job conditions</legend>
+      <p class="hint">
+        These set flags in the estimate sheet, and several of them move the price.
+        You can change any of them on the next screen.
+      </p>
+      <div id="conditions" class="jc-grid"></div>
     </fieldset>
 
     <fieldset>

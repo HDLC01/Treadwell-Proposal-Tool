@@ -63,6 +63,7 @@
   // The SECOND Continue — the one that goes to the polish beta calculator instead of the
   // spreadsheet. Shown for polish jobs only; see the comment on the button in index.html.
   const betaBtn = document.getElementById("beta-continue");
+  const thicknessRow = document.getElementById("thickness-row");
 
   // Which quantity fields belong to which work type. Cove is an epoxy detail, so a
   // polish-only job never shows it (Hanz, 2026-08-06).
@@ -100,9 +101,231 @@
     // all. Deliberately the LAST thing in this function — test_intake_work_type_scope.py reads
     // a fixed-length window from the top of it.
     if (betaBtn) betaBtn.style.display = wt === "polish" ? "" : "none";
+    // Thickness is a RESIN question. Polish has a grind and a sheen, not a thickness, and gyp
+    // carries its own three thicknesses on the proposal screen -- so asking here would put a
+    // number on the cover letter that describes neither job. Appended after the beta button
+    // rather than beside the gyp box for the reason the comment above gives: this function's
+    // opening is read as a fixed-length window by test_intake_work_type_scope.py.
+    if (thicknessRow) thicknessRow.style.display = (wt === "epoxy" || wt === "combo") ? "" : "none";
   }
   form.querySelectorAll("[name='work_type']").forEach(r => r.addEventListener("change", syncScopeToWorkType));
   syncScopeToWorkType();
+
+  // == Job conditions =========================================================
+  // The polish beta's step 2, moved onto the live intake and grown from five
+  // switches to ten. Hanz, 2026-09-02: "For the polish beta we want to use the
+  // existing intake form v1 (not the beta). The v2 is just add it with the
+  // toggle buttons."
+  //
+  // WHY THESE WRITE cell_values AND NOT polish_estimate. `polish_estimate.version
+  // == 2` is the ONLY flag that routes a project to the beta calculator
+  // (drafts.py:857 -> projects.js:538), so a form writing conditions in there faces
+  // a fork with no safe default: stamp the version and every spreadsheet polish bid
+  // starts resuming on the beta intake, or leave it off and migrateModel's
+  // unversioned branch discards the conditions on arrival. Writing cell_values
+  // sidesteps the fork entirely -- and it is where these flags already live: the AI
+  // autofill has written the same keys since it shipped (estimate-review.js:3601 ->
+  // main.py:4776), and estimate-review's grid reads and writes them. One store, and
+  // the sheet the customer is billed from is the thing being set rather than a copy.
+  //
+  // AND WHY NEITHER Continue HANDLER IS TOUCHED. Flipping a switch calls
+  // TW.setState({cell_values}) on the spot. setState merges by top-level key, so the
+  // two handlers' `TW.setState({...values, ...})` leaves cell_values alone without
+  // mentioning it. That matters more than it looks: test_beta_intake_routing.py runs
+  // BOTH handlers on one form and compares the saved blob key for key precisely
+  // because they are duplicated copies of one composition -- so the cheapest way to
+  // keep them identical is to give them nothing new to say.
+  //
+  // Data, not markup, exactly as the beta had it (polish-intake.js:59-70). Four of
+  // these are new questions, and that shape is why they cost four lines not forty.
+  //
+  // EVERY CONDITION WRITES BOTH STATES, never a blank for "off". Polish!C17 is
+  // IF(B10="New",0.05,0.15), so an empty B10 takes the Reno branch and triples the
+  // patch material rate with nothing on screen to show it. Same discipline applied
+  // to all ten so no future one gets it wrong.
+  const CONDITIONS = [
+    { key: "local", label: "Local job", scope: ["epoxy", "polish", "combo", "gyp"],
+      why: "Under 70 miles. Off means travel and lodging get added.",
+      def: true,  cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
+    { key: "hard_bid", label: "Hard bid", scope: ["epoxy", "polish", "combo", "gyp"],
+      why: "Competitive bid. Tightens the margin the sheet applies.",
+      def: false, cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
+    { key: "prevailing_wage", label: "Prevailing wage", scope: ["epoxy", "polish", "combo", "gyp"],
+      why: "Raises every labour line to the prevailing rate.",
+      def: false, cells: ["Epoxy!D5"], on: "Yes", off: "No" },
+    { key: "taxable", label: "Taxable", scope: ["epoxy", "polish", "combo", "gyp"],
+      why: "Adds sales tax. The bid you see already includes it.",
+      def: true,  cells: ["Epoxy!B6"], on: "Yes", off: "No" },
+    { key: "remodel_tax", label: "Remodel tax", scope: ["epoxy", "polish", "combo", "gyp"],
+      why: "Occupied remodel. Adds the county remodel rate; pick the county on the next screen.",
+      def: false, cells: ["Epoxy!D6"], on: "Yes", off: "No" },
+    { key: "reno", label: "Renovation", scope: ["epoxy", "polish", "combo"],
+      why: "Existing floor, not new construction. Triples the patch material rate.",
+      def: false, cells: ["Epoxy!B10", "Polish!B10"], on: "Reno", off: "New" },
+    { key: "dye", label: "Dye", scope: ["polish", "combo"],
+      why: "Two coats of dye across the polished area.",
+      def: false, cells: ["Polish!E25"], on: "Yes", off: "No" },
+    { key: "joint_filler", label: "Joint filler", scope: ["polish", "combo"],
+      why: "One kit per 3,500 sq ft. On by default, which is how the sheet ships.",
+      def: true,  cells: ["Polish!E29"], on: "Yes", off: "No" },
+    { key: "remove_existing_jf", label: "Remove existing joint filler", scope: ["polish", "combo"],
+      why: "Adds a fourth hand to the joint-filler crew.",
+      def: false, cells: ["Polish!F29"], on: "Yes", off: "No", needs: "joint_filler" },
+    { key: "bulk_discount", label: "Bulk material discount", scope: ["epoxy", "combo"],
+      why: "Swaps six epoxy material rows onto bulk pricing.",
+      def: false, cells: ["Epoxy!D41"], on: "BULK Discount ON", off: "Bulk Discount OFF" },
+  ];
+
+  // Four traps, all read out of the template rather than assumed:
+  //
+  //  * Polish!B4 and Polish!B5 hold their OWN Yes/No, so local and hard bid have to
+  //    be written to both tabs or the polish side keeps the template default.
+  //  * Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 / =Epoxy!D6.
+  //    Writing those three would replace a live reference with a literal and
+  //    decouple the tabs for good, so prevailing wage, taxable and remodel are
+  //    Epoxy-only ON PURPOSE and the polish tab follows on its own.
+  //  * Epoxy!D41 is compared against V136 / V137 by all six of its consumers
+  //    (IF($D$41=$V$136,...)), and those two cells read "BULK Discount ON" and
+  //    "Bulk Discount OFF" -- mixed case, and inconsistent with each other. Any
+  //    other casing silently takes the OFF branch, with no error anywhere.
+  //  * Polish!H36 is NOT the second dye switch it was taken for: it holds the label
+  //    "Dye?". Dye writes the material cell E25 only; the crew days stay the
+  //    estimator's call, which is the decision already recorded for this.
+  const condBox = document.getElementById("conditions");
+  const condState = {};
+
+  function condScope() {
+    return (form.querySelector("[name='work_type']:checked") || {}).value || "epoxy";
+  }
+  function condApplies(c) { return c.scope.indexOf(condScope()) !== -1; }
+
+  /** On means "the ON literal is sitting in the first cell". Read back off cell_values
+   *  rather than off a key of our own, so a flag set by the AI autofill or typed
+   *  straight into the estimate grid shows up here as the switch it is -- and a draft
+   *  returning through Back shows what the sheet actually says, not what this page
+   *  last thought. */
+  function hydrateConditions() {
+    const cv = (TW.getState() || {}).cell_values || {};
+    for (let i = 0; i < CONDITIONS.length; i++) {
+      const c = CONDITIONS[i];
+      const cell = cv[c.cells[0]];
+      condState[c.key] = (cell == null || cell === "")
+        ? c.def
+        : String(cell).trim().toLowerCase() === String(c.on).trim().toLowerCase();
+    }
+  }
+
+  function switchHtml(c) {
+    const on = !!condState[c.key];
+    const inert = !!(c.needs && !condState[c.needs]);
+    const why = inert
+      ? c.why + " Not affecting the price while Joint filler is off."
+      : c.why;
+    return '<div class="sw' + (on ? " on" : "") + (inert ? " inert" : "") +
+      '" id="cond-' + c.key + '" data-cond="' + c.key + '" role="switch" tabindex="0"' +
+      ' aria-checked="' + (on ? "true" : "false") + '">' +
+      '<span class="track"></span><span><span class="t">' + c.label + '</span>' +
+      '<span class="c">' + why + '</span></span></div>';
+  }
+
+  function renderConditions() {
+    if (!condBox) return;
+    condBox.innerHTML = CONDITIONS.filter(condApplies).map(switchHtml).join("");
+  }
+
+  /** The cells for the conditions ON SCREEN, merged over whatever cell_values holds.
+   *
+   *  MERGE, never replace. cell_values also carries the AI autofill's flags and every
+   *  cell the estimator edited by hand on the grid; a fresh object would drop all of it.
+   *
+   *  Out-of-scope cells are DELETED, not left behind. A job typed as polish and then
+   *  switched to epoxy would otherwise carry Polish!E25 = "Yes" into a bid with no
+   *  polish in it -- the same reasoning the two Continue handlers already apply to the
+   *  gyp SF buckets, and the reason this runs on a work-type change and not just a flip. */
+  function conditionCells() {
+    const out = Object.assign({}, (TW.getState() || {}).cell_values || {});
+    for (let i = 0; i < CONDITIONS.length; i++) {
+      const c = CONDITIONS[i];
+      const applies = condApplies(c);
+      for (let j = 0; j < c.cells.length; j++) {
+        if (applies) out[c.cells[j]] = condState[c.key] ? c.on : c.off;
+        else delete out[c.cells[j]];
+      }
+    }
+    return out;
+  }
+
+  function saveConditions() { TW.setState({ cell_values: conditionCells() }); }
+
+  /** Has anything written one of these cells yet -- this page, the grid, or the AI
+   *  autofill? Asked off cell_values rather than tracked in a flag of our own, so a
+   *  draft coming back through Back answers it correctly on the first render. */
+  function conditionsTouched() {
+    const cv = (TW.getState() || {}).cell_values || {};
+    for (let i = 0; i < CONDITIONS.length; i++) {
+      const cells = CONDITIONS[i].cells;
+      for (let j = 0; j < cells.length; j++) if (cells[j] in cv) return true;
+    }
+    return false;
+  }
+
+  function toggleCondition(key) {
+    let found = null;
+    for (let i = 0; i < CONDITIONS.length; i++) if (CONDITIONS[i].key === key) found = CONDITIONS[i];
+    if (!found || !condApplies(found)) return;   // a stray data-cond invents nothing
+    condState[key] = !condState[key];
+    // Re-render rather than repaint the one switch: turning Joint filler off has to
+    // grey out Remove existing joint filler and say why, and that is a second row.
+    renderConditions();
+    const again = document.getElementById("cond-" + key);
+    if (again && again.focus) again.focus();     // the re-render threw the caret away
+    saveConditions();
+  }
+
+  if (condBox) {
+    condBox.addEventListener("click", (e) => {
+      const sw = e.target.closest ? e.target.closest("[data-cond]") : null;
+      if (sw) toggleCondition(sw.getAttribute("data-cond"));
+    });
+    // KEYBOARD, which the beta advertised and never wired: its switches carried
+    // role="switch" tabindex="0" and a comment about being keyboard-reachable, and
+    // wire() bound a delegated click and nothing else -- so Space and Enter on a
+    // focused toggle did nothing at all. A control that announces itself to a screen
+    // reader as a switch and then ignores the two keys that operate one is worse
+    // than a plain checkbox would have been.
+    condBox.addEventListener("keydown", (e) => {
+      if (e.key !== " " && e.key !== "Enter" && e.key !== "Spacebar") return;
+      const sw = e.target.closest ? e.target.closest("[data-cond]") : null;
+      if (!sw) return;
+      e.preventDefault();                        // Space would scroll the page
+      toggleCondition(sw.getAttribute("data-cond"));
+    });
+  }
+
+  /** Work type changed, so a different set of questions applies.
+   *
+   *  Its own listener rather than a call inside syncScopeToWorkType(): that
+   *  function's last line is deliberately last because test_intake_work_type_scope.py
+   *  reads a fixed-length window from the top of it. Running second is also the
+   *  better failure order -- if this throws, the scope fields and the beta button
+   *  have already been set correctly. */
+  function syncConditionsToWorkType() {
+    renderConditions();
+    // Save ONLY if these cells are already in play -- because the alternative is
+    // that merely picking a work type on a blank form starts writing to the draft.
+    // Ten flags on a project with no name yet is a row nobody asked to create, and
+    // test_beta_intake_routing.py counts saves to prove the beta button is not a way
+    // round the required-field check; an ambient write from a radio would read as
+    // exactly that. Once anything HAS been written -- a switch flipped here, or the
+    // seven flags the AI autofill sets -- the cleanup has to run, or a job typed as
+    // polish and then switched to epoxy carries Polish!E25 = "Yes" into a bid with no
+    // polish in it.
+    if (conditionsTouched()) saveConditions();
+  }
+  hydrateConditions();
+  form.querySelectorAll("[name='work_type']").forEach(
+    r => r.addEventListener("change", syncConditionsToWorkType));
+  renderConditions();
 
   // Default the bid date to today so users don't have to think about it.
   const bidInput = form.querySelector("[name='bid_date']");

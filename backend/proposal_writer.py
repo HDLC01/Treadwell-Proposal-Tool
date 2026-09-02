@@ -2424,6 +2424,9 @@ def _move_txbx(txbx, x_off_pt=None, y_off_pt=None) -> int:
 _DEFAULT_MAX_BOX_PT = (432.0, 648.0)
 _DEFAULT_PAGE_PT = (612.0, 792.0)
 _MIN_BOX_PT = 12.0
+# 612-90-90 = 432 and 792-72-72 = 648, i.e. exactly `_DEFAULT_MAX_BOX_PT`. One dict so the
+# margin guess and the size-limit guess cannot come to describe two different sheets.
+_DEFAULT_MARGIN_PT = {"top": 72.0, "left": 90.0, "right": 90.0, "bottom": 72.0}
 
 
 def box_size_limits(d: Document) -> tuple:
@@ -2449,9 +2452,11 @@ def box_size_limits(d: Document) -> tuple:
     job, not this function's.
     """
     try:
-        sec = d.sections[0]
-        w = float(sec.page_width.pt) - float(sec.left_margin.pt) - float(sec.right_margin.pt)
-        h = float(sec.page_height.pt) - float(sec.top_margin.pt) - float(sec.bottom_margin.pt)
+        # The section the body text is in, not blindly the first — see `_body_section_ordinal`.
+        ordinal = _body_section_ordinal(d)
+        sec, m = d.sections[ordinal], _margins_of(d, ordinal)
+        w = float(sec.page_width.pt) - m["left"] - m["right"]
+        h = float(sec.page_height.pt) - m["top"] - m["bottom"]
     except Exception:  # noqa: BLE001 — a template with no usable sectPr falls back to Letter
         return _DEFAULT_MAX_BOX_PT
     # A section with absurd margins would otherwise produce a limit under the minimum, which
@@ -2475,8 +2480,9 @@ def page_size(d: Document) -> tuple:
     off the sheet, where its text would be silently gone from the customer's PDF.
     """
     try:
-        w = float(d.sections[0].page_width.pt)
-        h = float(d.sections[0].page_height.pt)
+        sec = d.sections[_body_section_ordinal(d)]   # the sheet the body text is printed on
+        w = float(sec.page_width.pt)
+        h = float(sec.page_height.pt)
     except Exception:  # noqa: BLE001 — a template with no usable sectPr falls back to Letter
         return _DEFAULT_PAGE_PT
     if not (math.isfinite(w) and math.isfinite(h)) or w <= 0 or h <= 0:
@@ -2561,7 +2567,7 @@ def _apply_box_overrides(d: Document, raw) -> int:
         # Read the box's CURRENT place before touching it — the move is a difference against
         # this reading, which is what makes the paragraph-relative estimate cancel out (see the
         # "Moving a floating text box" note above).
-        cur = _pos_of_anchor(anchor, page, top_ps, body) if anchor is not None else None
+        cur = _pos_of_anchor(anchor, page, top_ps, body, d) if anchor is not None else None
         # Asked for at all, before asked to do anything: `_resize_txbx` counts the sites it
         # VISITED, so calling it with two Nones reports a write that never happened — and this
         # count is what tells the caller (and the log line) whether the estimator's drag landed.
@@ -2766,7 +2772,99 @@ def _anchor_offset(anchor, tag: str) -> tuple:
             p.get("relativeFrom") or "page")
 
 
-def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
+def _section_break_indices(body) -> list:
+    """Body-child index of every paragraph that CLOSES a section, in document order.
+
+    A `w:sectPr` in a paragraph's `w:pPr` ends the section that paragraph belongs to; the one
+    hanging off `w:body` ends the last. So these indices, plus the implicit final section, are
+    the whole section map — and they line up 1:1 with `d.sections`, in the same order.
+    """
+    return [i for i, c in enumerate(body)
+            if c.tag == qn("w:p") and c.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None]
+
+
+def _section_ordinal(body, top_el) -> int:
+    """Index into `d.sections` of the section that GOVERNS top-level body child `top_el`.
+
+    The break that governs a child is the first one AT OR AFTER it — at, because the `sectPr`
+    lives in the last paragraph of its own section, not the first of the next. Off by one here
+    and every anchor is resolved against the following section's page setup.
+    """
+    breaks = _section_break_indices(body)
+    if not breaks:
+        return 0
+    try:
+        want = list(body).index(top_el)
+    except ValueError:      # not a top-level child (never seen): the same first-section guess
+        return 0            # the single-section path already makes
+    for ordinal, idx in enumerate(breaks):
+        if idx >= want:
+            return ordinal
+    return len(breaks)      # past the last break, so the body's own sectPr
+
+
+def _margins_of(d: Document, ordinal: int) -> dict:
+    """`{top,left,right,bottom}` in points for ONE section. THE margin reader. Never raises.
+
+    Per SIDE, and through python-docx's own `Length` conversion rather than a hand-parsed
+    `w:pgMar`: those attributes are `ST_TwipsMeasure`, which may be a bare twip count OR a
+    universal measure such as "2.475in", and one malformed side should cost that side alone
+    rather than silently dropping the whole page setup back to the Letter guess.
+    """
+    got = dict(_DEFAULT_MARGIN_PT)
+    try:
+        sec = d.sections[ordinal]
+    except Exception:  # noqa: BLE001 — no usable sectPr at all; the Letter fallback stands
+        return got
+    for side in ("top", "left", "right", "bottom"):
+        try:
+            length = getattr(sec, side + "_margin")
+            if length is not None:
+                got[side] = float(length.pt)
+        except Exception:  # noqa: BLE001 — keep the other three sides
+            pass
+    return got
+
+
+def _body_section_ordinal(d: Document) -> int:
+    """The section whose page setup the EDITOR should lay the document out in.
+
+    Everything the editor draws as one flowing text column — the margins it uses as that
+    column's padding, the sheet a drag is bounded by, the printable area a resize is bounded
+    by — needs a single answer per document, so a multi-section file has to be approximated by
+    one of its sections. The honest pick is the section the WORDS are in: whichever governs the
+    most content-bearing top-level children, ties going to the earlier section.
+
+    On the Treadwell letterhead that is not section 0. Section 0 is one empty paragraph holding
+    the break; every one of the letter's body paragraphs, and the artwork, live in section 1.
+    Reading `d.sections[0]` served the editor a 396pt-wide text column indented 171pt when the
+    real one is 522pt at 49.5pt — the letter's own words rendered in a squeezed, over-indented
+    ribbon. Single-section documents (all nine proposal templates) return 0, which is what
+    `d.sections[0]` always meant.
+    """
+    try:
+        body = d.element.body
+    except Exception:  # noqa: BLE001 — a stand-in document with no XML behind it
+        return 0
+    breaks = set(_section_break_indices(body))
+    if not breaks:
+        return 0
+    counts: dict = {}
+    ordinal = 0
+    for i, child in enumerate(body):
+        # Counted under the CURRENT ordinal and only then advanced, because the paragraph
+        # carrying a break belongs to the section it closes — the same rule `_section_ordinal`
+        # applies, and these two must not disagree about it.
+        if "".join(child.itertext()).strip():
+            counts[ordinal] = counts.get(ordinal, 0) + 1
+        if i in breaks:
+            ordinal += 1
+    if not counts:
+        return 0
+    return max(sorted(counts), key=lambda o: counts[o])
+
+
+def _pos_of_anchor(anchor, page: dict, top_ps: list, body, d: Document) -> tuple:
     """(x_pt, y_pt, w_pt, h_pt) of a floating drawing on its page.
 
     Word stores positionH/positionV relative to page/margin/column/paragraph;
@@ -2785,19 +2883,23 @@ def _pos_of_anchor(anchor, page: dict, top_ps: list, body) -> tuple:
     ox, rfx = _anchor_offset(anchor, "positionH")
     oy, rfy = _anchor_offset(anchor, "positionV")
 
-    x = ox + (page["margin"]["left"] if rfx in ("column", "margin") else 0.0)
-
     anc = anchor
     while anc is not None and anc.getparent() is not body:
         anc = anc.getparent()
+    # Resolved BEFORE x and y: which margin they are measured from depends on which SECTION
+    # this anchor sits in, not on the document's first one — see `_governing_margins`.
+    margin = _margins_of(d, _section_ordinal(body, anc))
     try:
         pidx = top_ps.index(anc)
     except ValueError:
         pidx = 0
+
+    x = ox + (margin["left"] if rfx in ("column", "margin") else 0.0)
+
     if rfy in ("paragraph", "line"):
-        y = page["margin"]["top"] + pidx * _ANCHOR_LINE_H_PT + oy
+        y = margin["top"] + pidx * _ANCHOR_LINE_H_PT + oy
     elif rfy == "margin":
-        y = page["margin"]["top"] + oy
+        y = margin["top"] + oy
     else:                                     # "page" and anything unmapped
         y = oy
     return x, y, w, h
@@ -2813,15 +2915,10 @@ def _page_metrics(d: Document) -> dict:
     """
     max_w, max_h = box_size_limits(d)
     page_w, page_h = page_size(d)
-    try:
-        sec = d.sections[0]
-        margin = {"top": sec.top_margin.pt, "left": sec.left_margin.pt,
-                  "right": sec.right_margin.pt, "bottom": sec.bottom_margin.pt}
-    except Exception:  # noqa: BLE001 — Kyle's own page setup, so the three fallbacks agree
-        # 612-90-90 = 432 and 792-72-72 = 648, i.e. exactly `_DEFAULT_MAX_BOX_PT`. Picking a
-        # different guess here would make the size limit and the margins describe two different
-        # sheets on the one template that ever reaches this branch.
-        margin = {"top": 72.0, "left": 90.0, "right": 90.0, "bottom": 72.0}
+    # Kyle's own page setup, and on a multi-section file the section the WORDS are in: this
+    # margin ships to the browser as `geometry.page.margin` and is used verbatim as the padding
+    # of the editor's flowing text column, so the wrong section re-indents the whole document.
+    margin = _margins_of(d, _body_section_ordinal(d))
     return {
         "w_pt": page_w, "h_pt": page_h, "margin": margin,
         # Stated rather than left for the editor to derive, so the drag handle stops exactly where
@@ -2859,7 +2956,7 @@ def template_geometry(d: Document) -> dict:
     for bi, txbx in enumerate(_iter_txbx(d)):
         anchor = enclosing_anchor(txbx)
         if anchor is not None:
-            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body)
+            x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d)
         else:
             x = y = w = h = None
         boxes.append({"id": bi, "x_pt": x, "y_pt": y, "w_pt": w, "h_pt": h})
@@ -2876,7 +2973,7 @@ def template_geometry(d: Document) -> dict:
             target = d.part.rels[rid].target_ref
         except (KeyError, AttributeError):
             continue
-        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body)
+        x, y, w, h = _pos_of_anchor(anchor, page, top_ps, body, d)
         anc = anchor
         while anc is not None and anc.getparent() is not body:
             anc = anc.getparent()

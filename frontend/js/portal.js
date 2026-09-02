@@ -211,6 +211,17 @@
       // have to say so. Only here: on the live tabs the tab itself is the label.
       if (isTest(p)) out.push('<span class="chip chip-test" title="A test or demo project — filed under Test before it was closed">Test</span>');
     } else {
+      // FIRST in this branch, because it is the explanation for everything else the card is NOT
+      // saying. A synthesised row (see _sent_unknown_rows in main.py) carries no proposal_status,
+      // so stage() rests it on "Sent" and the customer-side chips — viewed, approved, deposit —
+      // are all absent. Without this chip that reads as a project the customer has ignored, which
+      // is a worse lie than the blank board it replaced: a rep would chase somebody who has
+      // already approved.
+      //
+      // Deliberately not drawn on a lost row (this is inside the else): a dead deal's chip already
+      // says the only thing that still matters about it, and "we can't tell if they opened it" is
+      // noise on a bid nobody is working.
+      if (p.portal_unknown) out.push('<span class="chip chip-unknown" title="This was sent — but the customer portal isn\'t responding, so we can\'t tell whether the customer has opened it, approved it, or paid a deposit">Portal status unknown</span>');
       // WON. Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending
       // okay?" The Notification Sending page files these under a Won tab; same predicate, from
       // crm-core, one definition.
@@ -255,6 +266,36 @@
   // the filter <select> options, and rebuilding a <select> closes it under the cursor of anyone
   // who happened to have it open.
   let BOARD_SIG = "";
+
+  // Same reasoning as BOARD_SIG: load() polls every 25s, so an unchanged banner must not
+  // repaint (and can't blink) on every tick — only a real change in status or timestamp does.
+  let DEGRADED_SIG = "";
+
+  /** The banner above the board saying WHY it looks the way it does. Lives outside #board on
+   *  purpose (see .crm-degraded in portal.html) so renderBoard's full innerHTML replacement
+   *  never touches it and this never has to re-fire renderBoard to appear.
+   *
+   *  "live" is the normal case and hides the banner entirely — this only ever speaks up for
+   *  the other two, which is the same restraint chipsHtml() already uses for "Follow-up off"
+   *  (only worth saying when it's the exception). */
+  function renderDegraded(j) {
+    const status = j && j.portal_status;
+    const el = $("crm-degraded");
+    if (!el) return;
+    if (!status || status === "live") {
+      if (DEGRADED_SIG !== "live") { el.hidden = true; el.innerHTML = ""; DEGRADED_SIG = "live"; }
+      return;
+    }
+    const sig = status + ":" + (j.portal_fetched_at || "");
+    if (sig === DEGRADED_SIG) return;
+    DEGRADED_SIG = sig;
+    const msg = status === "stale"
+      ? "Showing the board as of " + esc(TW.fmtBizDateTime(new Date((j.portal_fetched_at || 0) * 1000).toISOString())) +
+        ". The customer portal isn't responding, so nothing here has changed since then."
+      : "The customer portal isn't responding. This is your own project list — anything a customer has done since isn't shown.";
+    el.innerHTML = '<span>⚠</span><span>' + msg + '</span>';
+    el.hidden = false;
+  }
 
   function renderBoard() {
     // The whole shaped dataset plus every piece of view state renderBoard draws from — a
@@ -771,6 +812,7 @@
       const j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       ALL = j.proposals || [];
+      renderDegraded(j);
       renderBoard();
     } catch (err) {
       // Only when there is nothing to keep. This runs on a 25s timer, so a single blip on a
@@ -912,6 +954,13 @@
     // raises, and hands over the one action that moves it along.
     const row = ALL.find((p) => p.proposal_id === pid);
     if (row && row.not_sent) { renderNotSent(pid, row); return; }
+
+    // Same shape, opposite reason. A not_sent row is one the portal has never heard of; a
+    // portal_unknown row is one it knows all about and cannot currently be asked. Either way the
+    // fetch below is the wrong thing to do — during an outage it is a 20s wait ending in
+    // "Error: Portal error..", on every card, which is the failure that made the board useless in
+    // the first place. Renders from the row instead.
+    if (row && row.portal_unknown) { renderPortalUnknown(pid, row); return; }
 
     // NEVER BLANK A DRAWER THAT IS ALREADY SHOWING SOMETHING.
     //
@@ -1195,6 +1244,114 @@
       renderNotSent(pid, row);
     });
     loadNotSentNotify(pid);
+  }
+
+  /** The drawer for a row the portal can't be asked about — synthesised by _sent_unknown_rows
+   *  while /api/admin/pipeline is unreachable.
+   *
+   *  A SIBLING of renderNotSent rather than a flag on it, and that is the deliberate choice. The
+   *  two drawers look alike and mean opposite things: renderNotSent's copy is "nothing reaches
+   *  them until you do", which is exactly backwards here — these WERE sent, and telling a rep
+   *  otherwise is how a customer gets the same proposal twice. Sharing one renderer would have
+   *  put that sentence one boolean away from being wrong.
+   *
+   *  READ-ONLY, which renderNotSent is not. Its assign / notify / won / lost controls all post to
+   *  the DRAFT, which is safe for a project the portal has never heard of and is NOT safe here:
+   *  the portal holds its own copy of every one of those fields for a sent project, and writing
+   *  ours while it is unreachable creates two answers with no rule for which wins. Queuing them
+   *  properly is the pending-outbox work; until that exists this drawer says so plainly rather
+   *  than offering a button whose effect nobody can predict. The three navigation buttons stay —
+   *  the files, the estimate and the info sheet are all ours and all still work. */
+  function renderPortalUnknown(pid, row) {
+    const sig = JSON.stringify(["portal_unknown", pid, row]);
+    if (sig === DRAWER_SIG) return;
+    DRAWER_SIG = sig;
+    const who = estimatorOf(row);
+    const total = cardTotal(row);
+    const d = $("drawer");
+    // Same five tabs as everywhere else, for the reason recorded in renderNotSent: the strip is
+    // the shape of a project, and a project does not change shape because a service is down.
+    const unTabs = `<div class="dtabs" role="tablist" aria-label="Project sections">` +
+      secTab("chat", "Chat", { val: "—", hint: "The conversation lives in the customer portal" }) +
+      secTab("proposal", "Proposal", { val: "Sent", hint: "What we hold locally about this bid" }) +
+      secTab("deposit", "Deposit", { val: "—", hint: "The customer portal isn't responding" }) +
+      secTab("contacts", "Contacts", { val: "—", hint: "The customer portal isn't responding" }) +
+      secTab("followup", "Follow-up", { val: "—", hint: "The customer portal isn't responding" }) +
+      `</div>`;
+    // The one sentence every panel but Proposal is here to say. Written once so four panels
+    // cannot drift into four different explanations of one outage.
+    const unavailable = (what) => `<p class="note">${esc(what)} lives in the customer portal, which
+      isn't responding. Nothing has been lost — it will be here again as soon as the portal is
+      back.</p>`;
+    NS_MODE = true;                  // suppresses the Proposal tab's two portal-backed fetches
+    d.innerHTML = `
+      ${drawerHead(row.project_name, "")}
+      ${unTabs}
+      <div class="dbody">
+       <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
+        <div class="sec" id="dsec-un-proposal">
+          <div class="lbl">Sent — customer side unavailable</div>
+          <p class="note">This proposal went out. The customer portal isn't responding, so whether
+          they have opened it, approved it or paid a deposit can't be shown right now. Everything
+          below is what we hold ourselves.</p>
+        </div>
+        <div class="sec">
+          <div class="facts">
+            ${row.customer_email ? fact("Sent to", esc(row.customer_email)) : ""}
+            ${fact("Estimator", who
+              ? avatar(who, !isAssigned(row)) + esc(nameOf(who)) + (isAssigned(row) ? "" : "?")
+              : '<span class="unassigned">Nobody is assigned</span>')}
+            ${total != null ? fact("Bid", `<span class="amt">${money(total)}</span>`) : ""}
+            ${row.last_activity_at ? fact("Last change here", esc(TW.fmtBizDate(row.last_activity_at))) : ""}
+          </div>
+        </div>
+        ${isLost(row) ? `
+        <div class="sec">
+          <div class="lbl">Closed lost</div>
+          <p class="note">This bid is closed lost${lostReason(row)
+            ? ' — <strong>' + esc(lostReason(row)) + '</strong>' : ""}. That much we hold ourselves,
+          so it is true whatever the portal says when it comes back.</p>
+        </div>` : ""}
+        <div class="sec row3">
+          <button type="button" class="btn btn-p" data-go-files>Open the files</button>
+          <button type="button" class="btn btn-s" data-go-edit>Edit the estimate</button>
+          <button type="button" class="btn btn-s" data-go-info>Info sheet</button>
+        </div>
+        <div class="sec" id="dsec-un-locked">
+          <div class="lbl">Changes are paused</div>
+          <p class="note">Assigning an estimator, marking this won or lost, and the notification
+          picks all have to reach the customer portal. Rather than save a change here that might
+          disagree with what it comes back holding, they are off until it answers again.</p>
+        </div>
+       </div>
+
+       <div class="dpanel" id="dpanel-deposit" role="tabpanel" aria-labelledby="dtab-deposit" tabindex="-1">
+        <div class="sec" id="dsec-un-deposit"><div class="lbl">Deposit</div>${unavailable("The deposit")}</div>
+       </div>
+       <div class="dpanel" id="dpanel-contacts" role="tabpanel" aria-labelledby="dtab-contacts" tabindex="-1">
+        <div class="sec" id="dsec-un-contacts"><div class="lbl">Contacts</div>${unavailable("The contacts the customer filled in")}</div>
+       </div>
+       <div class="dpanel" id="dpanel-chat" role="tabpanel" aria-labelledby="dtab-chat" tabindex="-1">
+        <div class="sec" id="dsec-un-chat"><div class="lbl">Chat</div>${unavailable("The conversation with the customer")}</div>
+       </div>
+       <div class="dpanel" id="dpanel-followup" role="tabpanel" aria-labelledby="dtab-followup" tabindex="-1">
+        <div class="sec" id="dsec-un-followup"><div class="lbl">Follow-up</div>${unavailable("The follow-up history")}
+          <p class="note">Chasing itself is unaffected — it runs on the server, not in this page.</p>
+        </div>
+       </div>
+      </div>`;
+    d.querySelector(".dclose").addEventListener("click", closeDrawer);
+    const go = (u) => window.location.assign(u);
+    d.querySelector("[data-go-files]").addEventListener("click",
+      () => go("/done.html?d=" + encodeURIComponent(pid) + "&files=1"));
+    d.querySelector("[data-go-edit]").addEventListener("click",
+      () => go("/?d=" + encodeURIComponent(pid) + "&edit=1"));
+    d.querySelector("[data-go-info]").addEventListener("click",
+      () => go("/info-sheet.html?d=" + encodeURIComponent(pid)));
+    // Proposal, for the same reason renderNotSent lands there: it is the only tab with anything
+    // in it. Written out rather than calling restingSection — see the note there.
+    if (!SEC_TABS[ACTIVE_SEC]) ACTIVE_SEC = "proposal";
+    applySecPanel();
   }
 
   /** Close an unsent bid lost, or put it back. Hanz, 2026-08-19: "Allow to mark a proposal as lost

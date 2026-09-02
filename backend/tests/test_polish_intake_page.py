@@ -236,6 +236,62 @@ def test_continue_saves_before_it_leaves(ran):
     assert c["savedConditions"], "the save on the way out carries no conditions"
 
 
+# ── Will's bug: switching tabs loses everything typed ───────────────────────
+@needs_node
+def test_typing_a_named_field_arms_the_save_but_the_county_search_box_does_not(ran):
+    """wire() bound a delegated click, the submit, and the county box -- and nothing else. The
+    eight named text fields were pure DOM until Continue, so a step-nav tab or a reload lost
+    every one of them. #county-input has no `name`: its keystrokes are a live search
+    (onCountyInput already saves the picked county on its own), and an input listener that could
+    not tell the two apart would fire a save on every character typed while searching.
+
+    Mutation: delete the `if (form) form.addEventListener("input", ...)` line from wire() (or
+    drop the `e.target && e.target.name` guard) and this fails — either nothing arms, or the
+    county box starts saving too."""
+    t = ran["typing"]
+    assert t["wired"], "wire() still has no input listener on the form"
+    assert t["armedOnNamedField"] == 1, "typing into a named field did not arm the 600ms debounce"
+    assert t["savedFromTyping"] == 1, "the armed save never actually reached TW.setState"
+    assert t["quietOnCountyInput"] == 0, (
+        "the county search box armed a save too — every keystroke while searching would save")
+
+
+@needs_node
+def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
+    """shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page armed -- and
+    before this fix, typing never armed one, so the net had nothing to catch. wire() now runs the
+    save synchronously and forces the network PUT via TW.flushState() rather than trusting the
+    600ms window to survive a tab close or step-nav click.
+
+    Mutation: remove the pagehide handler (or its `if (!saveTimer) return;` guard so it fires a
+    save from nothing) and this fails either way."""
+    p = ran["pagehideFlush"]
+    assert p["wired"], "polish-intake.js registers no pagehide handler at all"
+    assert p["armedBeforeLeaving"] == 1, "typing did not arm a timer for pagehide to catch"
+    assert p["savedSynchronously"] == 1, "pagehide did not push the pending save through"
+    assert p["armedAfterLeaving"] == 0, "pagehide left the 600ms timer armed behind it"
+    assert p["flushedTheNetwork"] == 1, "pagehide saved locally but never called TW.flushState()"
+    assert p["quietWhenNothingArmed"], (
+        "leaving with nothing typed must not manufacture a save or a flush out of thin air")
+
+
+@needs_node
+def test_a_refused_cross_tab_write_now_tells_the_estimator(ran):
+    """shared.js silently refuses a write when another browser tab has re-stamped the shared
+    localStorage blob onto a different draft — a console.warn only, invisible to an estimator, and
+    a literal match for "switches to a different tab and it doesn't save." paintSaveBlocked()
+    surfaces TW.saveBlocked() into its own #save-note element, deliberately separate from
+    #sandbox-note (the test-copy identity banner set once at boot, which this must never
+    overwrite).
+
+    Mutation: make paintSaveBlocked a no-op, or have it write into #sandbox-note instead, and this
+    fails."""
+    s = ran["saveBlockedNote"]
+    assert s["shownWhenBlocked"], "a refused save leaves no visible warning"
+    assert s["textMentionsAnotherTab"], "the warning doesn't explain what happened"
+    assert s["hiddenWhenNotBlocked"], "the warning stays shown even once a save actually lands"
+
+
 # ── the sandbox settles first ────────────────────────────────────────────────
 @needs_node
 def test_nothing_renders_before_the_sandbox_has_settled(ran):
@@ -665,9 +721,15 @@ def test_the_page_loads_no_formula_engine(html):
     assert "hyperformula" not in markup.lower(), "the beta intake form loads a formula engine"
     assert "xl-core.js" not in markup, "the beta intake form loads the workbook helpers"
     srcs = re.findall(r'<script[^>]*src="([^"]+)"', markup)
+    # polish-verbal.js joined the list on 2026-08-25 — the verbal intake panel. It is browser
+    # dictation (Web Speech API, no library) plus one fetch, and it loads AFTER polish-intake.js
+    # because it calls window.TWPolishIntake.applyVerbal, which that file publishes as it boots.
+    # The order is asserted, not just the membership: swapped, the panel would find no hook and
+    # silently fill nothing.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
                     "/auth.js", "/shared.js", "/js/polish-bid-core.js",
-                    "/js/polish-sandbox.js", "/js/polish-intake.js"], (
+                    "/js/polish-sandbox.js", "/js/polish-intake.js",
+                    "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)
     # polish-bid-core is the model's shape and the condition keys, NOT a formula engine: no CDN, no
     # workbook fetch. It is here because this page writes the model the calculator prices, and the

@@ -674,6 +674,152 @@ def test_the_not_sent_panel_does_not_wire_the_sent_drawers_cards(out):
     assert not unexpected, "it wires ids it never rendered: %s" % sorted(unexpected)
 
 
+# ── the drawer when the customer portal is down ─────────────────────────────
+# 2026-08-28: the portal container slept and the board — the page the sales meeting is run from —
+# showed a red box and every tab reading 0. Hanz: "portal and proposal are two different services so
+# if portal is down it should still show the projects... if that happens live then we are cooked."
+#
+# The board now falls back to our own drafts, and a row it rebuilt that way carries
+# `portal_unknown: true`. Clicking one has to open a drawer, which is what this section is about.
+# The route is the claim, so every assertion below runs through the REAL `openDetail` rather than
+# calling the renderer — a renderer that works but is never reached fails a rep exactly as hard.
+
+
+@needs_node
+def test_a_portal_unknown_card_opens_a_drawer_at_all(out):
+    """The whole point. Before this, `openDetail` fell through to the sent path, which fetches the
+    portal four ways — so during the very outage the fallback board exists for, clicking any card
+    spent twenty seconds failing and ended on an error.
+
+    EXECUTED. An unbound identifier in a brand-new hundred-line renderer is the 2026-08-12 failure
+    verbatim, and no source assertion sees it."""
+    assert "portalUnknown" not in out["errors"], out["errors"].get("portalUnknown")
+    assert out["portalUnknown"]["chars"] > 400, "the unknown drawer rendered almost nothing"
+    assert out["portalUnknown"]["openedOn"] == "proposal", (
+        "it opened on %r; Proposal is the only tab with anything in it"
+        % out["portalUnknown"]["openedOn"])
+
+
+@needs_node
+def test_the_unknown_drawer_asks_the_portal_for_nothing(out):
+    """THE load-bearing one. The portal is down; every request this panel makes is twenty seconds of
+    a rep's time spent arriving at the same answer the row already had.
+
+    Recorded off the fetch shim, not read out of the source: `applySecPanel` reaches for the
+    portal's notify chips and revisions lazily, from a tab handler rather than from the renderer, so
+    grepping this function for `api(` would have found nothing and proved nothing."""
+    assert out["portalUnknown"]["requests"] == [], (
+        "the unknown drawer called the portal: %s" % out["portalUnknown"]["requests"])
+
+
+@needs_node
+def test_the_unknown_drawer_does_not_blink_on_the_poll(out):
+    """Same 12s poll, same reasoning as every other drawer — and a fresh signature is easy to get
+    subtly wrong when it is written new."""
+    assert out["portalUnknown"]["repaintedOnIdenticalPayload"] is False, (
+        "the unknown drawer repaints on an unchanged payload")
+
+
+@needs_node
+def test_the_unknown_drawer_never_tells_a_rep_the_bid_was_not_sent(out):
+    """Why this is a sibling of `renderNotSent` and not a flag on it. That panel's copy is written
+    for a bid the customer has never seen — "nothing reaches them until you do" — and these rows are
+    the opposite: they are on the board BECAUSE we can prove locally that they went out
+    (`has_files` AND `sent_revision > 0`). One shared renderer would put that sentence one boolean
+    away from being shown about a proposal the customer is reading right now, and a rep who believes
+    it re-sends."""
+    html = out["portalUnknown"]["html"]
+    for phrase in ("Not sent yet", "Nothing reaches them until you do", "Send it"):
+        assert phrase not in html, "the unknown drawer reuses not-sent copy: %r" % phrase
+    assert "This proposal went out" in html, "it does not say the bid was sent"
+
+
+@needs_node
+def test_the_unknown_drawer_says_which_half_is_missing(out):
+    """Honest degradation, per the same rule the synthesised row follows on the backend: it sets no
+    `proposal_status` rather than guessing one. The panel has to say the customer half is unknown
+    instead of quietly showing four empty tabs, which read as a bug in us."""
+    html = out["portalUnknown"]["html"]
+    assert "Sent — customer side unavailable" in html
+    assert "isn't responding" in html, "it never names the portal as the reason"
+    # Every tab the portal owns says so, rather than rendering an empty box.
+    for key in ("deposit", "contacts", "chat", "followup"):
+        assert "isn't responding" in panel(html, key) or "lives in the customer portal" in panel(html, key), (
+            "the %s tab is blank rather than explained" % key)
+
+
+@needs_node
+def test_the_unknown_drawer_keeps_the_shape_of_a_project(out):
+    """Same five tabs and the same read-only jumps as everywhere else. A project does not change
+    shape because a service is down, and a drawer that loses two thirds of its strip reads as a
+    different feature — the reasoning Hanz gave for the not-sent panel on 2026-08-19."""
+    html = out["portalUnknown"]["html"]
+    for key in ("proposal", "deposit", "contacts", "chat", "followup"):
+        assert 'data-sec="%s"' % key in html, "the %s tab is missing" % key
+        assert 'id="dpanel-%s"' % key in html, "the %s tab has no panel to open" % key
+    for go in ("data-go-files", "data-go-edit", "data-go-info"):
+        assert go in html, "%s is missing; these read our own files and work fine offline" % go
+    assert 'class="dclose"' in html
+
+
+@needs_node
+def test_the_unknown_drawer_offers_no_write_a_rep_would_lose(out):
+    """Read-only, deliberately, and this is the assertion that keeps it that way.
+
+    Assign, won, lost and the notification picks are all fields the PORTAL holds for a sent project.
+    Saving ours during an outage creates two answers with no rule for which wins — the exact hazard
+    the pending outbox is being built to solve properly. Until then the panel says so in words
+    rather than presenting a control that silently does nothing."""
+    html = out["portalUnknown"]["html"]
+    for control in ("ns-assign", "fu-assign", "won-mark", "handoff-mark", "ns-lost", "fu-lost"):
+        assert 'id="%s"' % control not in html, (
+            "%s is offered on a drawer that cannot reach the portal" % control)
+    assert "Changes are paused" in html, "it disables the writes without explaining why"
+
+
+@needs_node
+def test_the_unknown_drawer_still_states_a_close_it_owns(out):
+    """The other side of the same coin. Closed-lost is mirrored into our own row, so it is a fact we
+    hold rather than one we are guessing at — and a rep must not see a dead deal drawn as a live one
+    just because the portal is down. The reason is rendered through `lostReason`, so it reads
+    "Price" and not the raw `price` key."""
+    lost = out["portalUnknown"]["lostHtml"]
+    assert "Closed lost" in lost
+    assert "<strong>Price</strong>" in lost, "the close reason is missing or unmapped"
+    assert "Sent — customer side unavailable" in lost, "the lost panel drops the outage notice"
+
+
+# Two ids this paint legitimately never renders, and neither belongs to it. Both are looked up by
+# an ASYNC continuation of an earlier scenario's assign fetch landing after this drawer replaced the
+# DOM, and both are written for exactly that (`if (!$("ns-assign")) return; // re-rendered
+# mid-fetch`, portal.js:1842 and 3719). Kept as their own set so widening it cannot relax the strict
+# pass the sent scenarios run.
+UNKNOWN_LATE_LOOKUPS = {
+    "ns-assign": "an earlier scenario's assign fetch resolving after this paint",
+    "fu-assign": "the same, from the sent drawer's assign control",
+}
+
+
+@needs_node
+def test_the_unknown_panel_does_not_wire_the_sent_drawers_cards(out):
+    """Same check the not-sent panel gets: a handler bound to an id nobody rendered is a control
+    that silently does nothing, which on this panel would be indistinguishable from the writes we
+    turned off on purpose."""
+    unexpected = (set(out["portalUnknown"]["missing"])
+                  - set(out["allSecCards"])
+                  - set(CONDITIONAL_IDS)
+                  - set(UNKNOWN_LATE_LOOKUPS))
+    assert not unexpected, "it wires ids it never rendered: %s" % sorted(unexpected)
+
+
+@needs_node
+def test_no_raw_token_or_undefined_reaches_the_unknown_panel(out):
+    """The two failures a hand-built template string produces most often, on the newest one."""
+    for key in ("html", "lostHtml"):
+        assert "${" not in out["portalUnknown"][key]
+        assert "undefined" not in text_of(out["portalUnknown"][key])
+
+
 # ── marking a project won, by hand ──────────────────────────────────────────
 # Hanz, 2026-08-19: "Is there any way to also mark as won for now other than after the deposit has
 # been received". Won was derived only (approved AND the deposit settled), so a bid won by phone on

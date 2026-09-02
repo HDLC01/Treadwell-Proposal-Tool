@@ -695,7 +695,26 @@
       });
       renderProjects();
     } catch (err) {
-      $("pp-list").innerHTML = '<span class="note">Could not load projects: ' + esc(err.message) + '</span>';
+      // DELIBERATELY NOT DEGRADED, unlike the Active Projects board next door.
+      //
+      // The board can fall back on our own drafts because a project is ours. A per-project
+      // override is not: it is a (proposal_id, email, mode) row that lives only in the portal, and
+      // there is nothing here to rebuild it from. Rendering the cards against the bare roster
+      // would draw somebody as ON who has been overridden OFF — and this page's chips are how a
+      // rep decides who to email, so a wrong chip is worse than no page. Same rule the board
+      // follows for a different reason: never show a confident answer we don't have.
+      //
+      // /api/portal/pipeline degrades and /api/portal/notify-overrides-all does not, so during an
+      // outage it is the second one that lands here. Named plainly instead of surfacing the raw
+      // proxy string, which said "Portal error.. Check that the portal is configured
+      // (PORTAL_ADMIN_URL / SERVICE_TOKEN)" — a configuration hint, on a system that is configured
+      // correctly and merely unreachable.
+      const down = /portal/i.test(String((err && err.message) || ""));
+      $("pp-list").innerHTML = down
+        ? '<span class="note">The customer portal isn\'t responding, so per-project notification' +
+          ' settings can\'t be shown or changed right now. The roster above still applies, and' +
+          ' nothing you set earlier has been lost. Try again in a few minutes.</span>'
+        : '<span class="note">Could not load projects: ' + esc(err.message) + '</span>';
     }
   }
 

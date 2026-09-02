@@ -220,9 +220,12 @@ def _wire(monkeypatch, dbx, draft_data, *, events=None, log_boom=False, saved=No
             raise RuntimeError("events table unreachable")
 
     monkeypatch.setattr(main.drafts, "log_event", log_event)
-    monkeypatch.setattr(main, "_generate", lambda gi, request, persist=True: main.GenerateOut(
-        work_type="gyp", audience="Direct", xlsx_download_url="/api/files/x",
-        docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={}))
+    # Declares `want_cover_letter` rather than absorbing it: see the note in test_to_dropbox.py.
+    monkeypatch.setattr(
+        main, "_generate",
+        lambda gi, request, persist=True, want_cover_letter=True: main.GenerateOut(
+            work_type="gyp", audience="Direct", xlsx_download_url="/api/files/x",
+            docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={}))
     monkeypatch.setitem(main._FILE_CACHE, "x", {"content": b"xlsx-bytes"})
     monkeypatch.setitem(main._FILE_CACHE, "d", {"content": b"docx-bytes", "_pdf": b"%PDF-1.4"})
     return TestClient(main.app)

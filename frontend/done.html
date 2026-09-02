@@ -402,7 +402,11 @@
   @media (max-width: 820px) {
     .fp-ready { flex-direction: column; align-items: flex-start; gap: 14px; }
     .fp-dl { width: 100%; }
-    .fp-dl .download-link { flex: 1 1 0; text-align: center; padding: 12px 10px; }
+    /* `1 1 140px`, not `1 1 0`. With three buttons a zero basis shared the row evenly; with a
+       fourth it squeezed all of them into one 380px line and "↓ Cover letter .docx" wrapped
+       mid-word. A real basis makes .fp-dl's own `flex-wrap: wrap` do the work -- two per row on a
+       phone, one row on anything wider -- instead of four unreadable columns. */
+    .fp-dl .download-link { flex: 1 1 140px; text-align: center; padding: 12px 10px; }
     .fp-2col { grid-template-columns: minmax(0, 1fr); }
     /* The pill drops under the text instead of stealing a fourth column from it. */
     .fp-dep { grid-template-columns: auto auto 1fr; gap: 10px 12px; }
@@ -496,6 +500,13 @@
         <button id="dl-xlsx" class="download-link secondary" type="button">↓ Estimate .xlsx</button>
         <button id="dl-docx" class="download-link secondary" type="button">↓ Proposal .docx</button>
         <button id="dl-pdf" class="download-link secondary" type="button">↓ Proposal PDF</button>
+        <!-- The cover letter, and ONLY when there is one. Hidden here rather than absent, because
+             done.js decides from the generate response: a project generated before the estimator
+             ticked the box has no letter in its result, and a button that 404s is worse than no
+             button. Same `.secondary` as its three neighbours -- a fourth solid-red control on
+             this row would compete with the send, which is the one irreversible thing here. -->
+        <button id="dl-cover" class="download-link secondary" type="button"
+                style="display:none;">↓ Cover letter .docx</button>
       </div>
     </div>
 
@@ -769,6 +780,12 @@
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->
 <script src="/js/crm-core.js"></script>
+<!-- ONE READER FOR THE COVER LETTER FIELDS, on both pages that build a generate payload. The
+     editor itself no-ops here (it looks for #cl-toggle, #doc-tabs and #cl-surface and returns when
+     they are absent); what this page needs is TWCoverLetter.payloadFields, so that the Proposal
+     step's Continue and this page's "View files" rebuild cannot come to disagree about what the
+     estimator asked for. Before done.js, which reads it. -->
+<script src="/js/coverletter-editor.js?v=20260828-1"></script>
 <script src="/js/done.js"></script>
 <!-- The Dropbox filing section (was step 5) now lives on this page. -->
 <script src="/js/dropbox.js"></script>

@@ -64,6 +64,73 @@
     .btn:hover{background:var(--red-dark)}
 
     .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+    .vcheat{background:var(--surf-low);border:1px solid var(--line);border-radius:10px;
+      padding:10px 12px;font-size:13px;line-height:1.5;margin:0 0 12px}
+    /* Same list spacing as .vgroup ul below -- there is no other list rule on this page and the
+       UA default 40px indent would look broken inside a 250px floating panel. */
+    .vcheat ul{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
+    /* THE CHEAT SHEET IS A FLOATING, MOVABLE WIDGET on a wide screen -- the same kind of thing as
+       the Pricing options rail on step 3, and deliberately the same shape so the two read as one
+       pattern rather than two. Hanz, 2026-09-02: it "bothers when they are speaking", which is
+       exactly right -- it is a reference you glance at, and it was sitting in the reading path
+       between the heading and the box you are talking into, pushing that box down the page. Off to
+       the side it is still there to glance at and no longer in the way.
+
+       Below 1400px it falls back to the block it is today, in the same place in the DOM, because a
+       fixed 250px rail on a narrow screen is worse than a block -- it would sit on top of the
+       form. That is the same degradation .options-panel does, at the same 1400px -- matched on
+       purpose after the first attempt shipped at 1200 and overlapped the form by 21px. */
+    .vcheat .vc-drag{display:none}
+    @media (min-width:1400px){
+      .vcheat{position:fixed;right:16px;top:104px;width:250px;z-index:40;margin:0;
+        max-height:calc(100vh - 130px);overflow-y:auto;background:var(--card);
+        box-shadow:0 2px 10px rgba(0,0,0,.14)}
+      /* Drag handle, matching the step-3 rail's: a grip, the panel's name, and a sticky header so
+         it stays grabbable once the panel itself has scrolled. Position persists per browser. */
+      .vcheat .vc-drag{display:flex;align-items:center;gap:6px;cursor:move;user-select:none;
+        font:700 12px var(--sans);color:var(--red);margin:-10px -12px 8px;padding:7px 12px;
+        border-bottom:1px solid var(--line);border-radius:10px 10px 0 0;background:var(--surf-low);
+        position:sticky;top:-10px}
+      .vcheat .vc-drag::before{content:"\2630";font-size:12px;opacity:.7}
+      .vcheat.vc-dragging{opacity:.93;box-shadow:0 6px 20px rgba(0,0,0,.28)}
+      /* The header names the panel, so the inline label would say it twice. */
+      .vcheat .vc-inline{display:none}
+      /* MOVE THE COLUMN, DO NOT NARROW IT. margin-right reserves the rail's lane while the column
+         keeps its full 1000px; padding-right would have squeezed the content to 718px and made the
+         textarea they are dictating into smaller, which is the opposite of the point.
+
+         There is NO wide-screen exception, and that was the bug in the first attempt: it dropped
+         the reservation above 1540px on the theory that the gutter was by then wider than the rail.
+         The gutter is not (1000 + 2x266) -- .wrap's containing block is BODY, which starts after a
+         ~240px left nav, so the right-hand gutter is far smaller than a centred-column calculation
+         predicts. At 1750px the rail landed at x=1465 and the column still ran to x=1486: a 21px
+         overlap, on exactly the text this widget was moved aside to stop covering. The step-3 rail
+         holds its reservation at every floating width, and so does this one. */
+      .wrap{margin-left:auto;margin-right:282px}
+    }
+    .vrow{display:flex;gap:10px;align-items:flex-start}
+    .vrow textarea{flex:1;min-height:96px;font:inherit;line-height:1.5;padding:9px 11px;
+      border:1px solid var(--line);border-radius:9px;background:var(--surf);color:var(--ink)}
+    .vmic{flex:none;min-width:84px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;
+      background:var(--surf);color:var(--ink);font-weight:600;cursor:pointer}
+    /* Listening is not colour alone: the label itself changes to "Stop", so the state survives a
+       greyscale screen and a screen reader gets it from the text rather than from the fill. */
+    .vmic.on{background:var(--treadwell-red,#9e001f);border-color:var(--treadwell-red,#9e001f);
+      color:#fff}
+    .vmsg{margin:10px 0 0;font-size:13px}
+    .vmsg.warn{color:var(--warn)}
+    #verbal-out{margin-top:14px;display:grid;gap:10px}
+    .vgroup{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+    .vgroup h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+      color:var(--ink-v)}
+    .vgroup ul{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
+    .vgroup p{margin:6px 0 0;font-size:13px;color:var(--ink-v)}
+    .vgroup.warn{border-color:var(--warn)}
+    .vgroup.ask textarea{width:100%;margin:6px 0 8px;font:inherit;padding:8px 10px;
+      border:1px solid var(--line);border-radius:8px;background:var(--surf);color:var(--ink)}
+    /* The words a price flag rests on, next to the flag. Its own line so a long sentence does not
+       push the switch name off the row. */
+    .vq{display:block;color:var(--ink-v);font-size:12px}
     .f label{display:flex;align-items:baseline;gap:6px;font:600 12.5px var(--sans);
              margin:0 0 5px;flex-wrap:wrap}
     .unit{font:600 10.5px var(--mono);color:var(--ink-3);background:var(--surf-low);
@@ -134,12 +201,62 @@
     </nav>
 
     <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
+    <!-- Separate from #sandbox-note above: that one is the test-copy identity banner, set
+         once at boot, and must not be overwritten by a transient save warning or the estimator
+         loses the "you are editing a test copy" notice. This one is only for a save that the
+         browser refused to send -- see TW.saveBlocked() in shared.js. -->
+    <p class="sandbox" id="save-note" role="status" aria-live="polite" hidden></p>
     <div class="loading" id="loading">Loading this project…</div>
 
     <div id="main" hidden>
       <p class="cap" style="margin:0 0 14px">This intake belongs to the <b>beta polish
         calculator</b> and is deliberately separate from the live intake form at
         <b>/</b> — beta work is filed under the Test tab and never touches a real bid.</p>
+
+      <!-- VERBAL INTAKE. Hanz, 2026-08-25: the estimator says or types what they have, a cheat
+           sheet says what is needed, the AI fills what it can and asks ONCE for what is missing.
+           Reaching the form below stays OPTIONAL - everything this fills is editable underneath,
+           and an estimator who would rather type straight into the form can ignore this entirely.
+
+           It sits OUTSIDE #intake-form on purpose: a <textarea> and two buttons inside the form
+           would be submitted with it, and the Speak button would default to type="submit" in the
+           one browser that forgets. -->
+      <section class="sec verbal" id="verbal">
+        <div class="sec-h">
+          <h2>Say it instead</h2>
+          <p>Tell it what you know and it fills in what it can. It never guesses anything that
+            changes the price - those it asks you for.</p>
+        </div>
+        <div class="sec-b">
+          <div class="vcheat" id="verbal-cheat">
+            <div class="vc-drag" title="Drag to move">Worth saying</div>
+            <b class="vc-inline">Worth saying:</b>
+            <ul>
+              <li>Job name</li>
+              <li>Street and town</li>
+              <li>When the bid is due</li>
+              <li>Who to reply to</li>
+              <li>In your own words: whether it is a <b>hard bid</b>, <b>prevailing wage</b>,
+                <b>tax exempt</b>, or a <b>remodel</b></li>
+            </ul>
+          </div>
+          <div class="vrow">
+            <textarea id="verbal-text" rows="5" aria-label="What you know about this job"
+              placeholder="Blue Valley West High School, 16200 Antioch Road, Overland Park Kansas. It's a hard bid through the district and they said it's prevailing wage. Due the third of September, contact is Dana Whitfield."></textarea>
+            <button type="button" class="vmic" id="verbal-mic" aria-pressed="false"
+                    hidden>Speak</button>
+          </div>
+          <p class="hint" id="verbal-nomic" hidden>Your browser cannot do dictation - Chrome and
+            Edge can. Typing in the box works exactly the same.</p>
+          <p class="hint">Dictation is your browser's own, and it needs a speech service to send the
+            audio to. Chrome and Edge have one - Chrome's is Google's, so type it instead if that is
+            not right for this job. Brave ships without one, so the button hears you and nothing
+            ever comes back.</p>
+          <p class="vmsg" id="verbal-msg" role="status" aria-live="polite" hidden></p>
+          <button type="button" class="btn" id="verbal-go">Fill the form</button>
+          <div id="verbal-out" role="status" aria-live="polite" hidden></div>
+        </div>
+      </section>
 
       <form id="intake-form">
         <section class="sec">
@@ -252,5 +369,8 @@
        nothing may be rendered until it has settled which draft this page may write to. -->
   <script src="/js/polish-sandbox.js"></script>
   <script src="/js/polish-intake.js"></script>
+  <!-- After polish-intake.js: the panel calls window.TWPolishIntake.applyVerbal, which that file
+       publishes as it boots. -->
+  <script src="/js/polish-verbal.js"></script>
 </body>
 </html>

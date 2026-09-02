@@ -106,6 +106,13 @@
     .fh-t { margin-left:auto; color:var(--ink-v); font-size:11.5px; white-space:nowrap;
       font-variant-numeric:tabular-nums; }
     .empty,.loading { color:var(--ink-v); text-align:center; padding:40px; }
+    /* Warm amber, the same tokens the board's degraded banner uses, so an outage reads the same
+       way on both pages rather than as two different problems. `[hidden]` re-asserted below the
+       display rule for the reason recorded beside the element itself. */
+    .fu-degraded { display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600;
+      background:#fdf6e3; border:1px solid #e8d9a8; color:#7a5c00; border-radius:8px;
+      padding:8px 12px; margin:0 0 10px; }
+    .fu-degraded[hidden] { display:none; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
     .alert:empty { display:none; }
     /* ── List | Board switcher ── */
@@ -238,6 +245,11 @@
       <span id="count" class="tw-count" aria-live="polite"></span>
     </div>
     <p id="alert" class="alert"></p>
+    <!-- Same banner, same tokens and the same [hidden] guard as the board's #crm-degraded: a class
+         `display:flex` outranks the hidden ATTRIBUTE, which this repo has shipped as a bug four
+         times (test_hidden_is_actually_hidden.py). Outside #list so a repaint of the list, in
+         either view, cannot take the explanation away with it. -->
+    <div id="fu-degraded" class="fu-degraded" hidden></div>
     <div id="list" class="loading">Loading follow-ups…</div>
   </div>
 

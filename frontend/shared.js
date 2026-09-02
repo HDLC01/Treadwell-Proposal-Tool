@@ -258,17 +258,53 @@
         headers: authHeaders(),
         body: JSON.stringify({ data: blob }),
         keepalive: true,         // let it finish even if the tab is closing
-      }).then((res) => {
+      }).then(async (res) => {
+        // /api/draft/{id} answers a caught server-side exception with HTTP 200 and
+        // {"ok": false, "error": ...} — main.py:api_save_draft's own except branch. res.ok only
+        // sees the HTTP status, so that shape read as a success here while polish-sandbox.js's
+        // saveThenFileAsTest (the one other PUT to this route) already checked the body. Same
+        // check now applies to every autosave, not just the sandbox's one-off file-as-test call.
+        const body = res && res.ok
+          ? await res.json().catch(() => null)
+          : null;
+        const ok = !!(res && res.ok) && !(body && body.ok === false);
         // Only after the row exists: set_test_flag returns false on a missing draft, so filing
         // before the first save would be a silent no-op and the project would stay in Active.
-        if (res && res.ok) applyPendingTestIntent(id);
-        return !!(res && res.ok);
+        if (ok) applyPendingTestIntent(id);
+        return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
       return p;
     } catch {
       return Promise.resolve(false);
     }
+  }
+
+  /** Why a server save would be REFUSED for this draft right now, or null when one would go
+   *  through. Read-only: it writes nothing, schedules nothing, and changes nothing about what
+   *  flushState does for the callers that gate on it.
+   *
+   *  IT EXISTS BECAUSE flushState CANNOT ANSWER THIS. flushState resolves TRUE when there was
+   *  nothing to do, which is the honest answer for a page already in sync -- but it resolves true
+   *  after DROPPING a pending save too: it clears the debounce timer, one of the three gates below
+   *  refuses the PUT, and it then awaits `_inFlight`, which is a promise belonging to an older and
+   *  possibly successful write. Anything that reports a save to the estimator has to be able to
+   *  tell "already in sync" from "refused before it left the browser", and this is the only way to
+   *  ask. Ctrl+S on the proposal editor asks it first, and says the honest thing when the answer is
+   *  not null: the work is here, it is not there.
+   *
+   *  The three gates are scheduleServerSave's own, in its own order. Kept as a mirror rather than
+   *  folded into it because the two have opposite jobs -- that one decides, this one only reports,
+   *  and a reporter that could refuse a save would be a second place for the rule to drift.
+   *
+   *  Returns "no-draft", "unverified", "foreign-blob", or null. */
+  function saveBlocked() {
+    const id = getDraftId();
+    if (!id) return "no-draft";
+    if (isUnverified(id)) return "unverified";
+    const stamp = getState()[STAMP];
+    if (stamp && stamp !== id) return "foreign-blob";
+    return null;
   }
 
   /** Wait until this draft's edits are on the server. Resolves true when the server holds
@@ -970,11 +1006,33 @@
   }
 
 
+  /** Keep a floating panel's REMEMBERED position on screen.
+   *
+   *  Two panels move and remember where they were put: the Pricing options rail on step 3 and the
+   *  polish-intake cheat sheet. Both clamped the position while dragging and then restored it
+   *  without clamping, which is only safe as long as the window never gets smaller. Drag either to
+   *  the far side of a 2560px monitor, reopen the page on a laptop, and it is restored past the
+   *  edge with its drag handle off screen -- nothing left to grab it by, and no way to bring it
+   *  back short of clearing site data. Found on the cheat sheet, fixed in both: the second one was
+   *  going to be found by whoever it happened to.
+   *
+   *  Same bounds the drags themselves use, so a restore cannot land somewhere a drag could not.
+   *  Bounded by `innerHeight - 40` rather than the panel's height on purpose -- a long panel may
+   *  hang off the bottom, provided its header stays reachable. */
+  function clampPanelPos(left, top, width) {
+    return {
+      left: Math.max(4, Math.min(left, window.innerWidth - (width || 250) - 4)),
+      top: Math.max(4, Math.min(top, window.innerHeight - 40)),
+    };
+  }
+
   // ─── Expose ───────────────────────────────────────────────────────
   window.TW = {
+    clampPanelPos,
     getState,
     setState,
     flushState,
+    saveBlocked,
     refreshServerOwned,
     clearState,
     readForm,
