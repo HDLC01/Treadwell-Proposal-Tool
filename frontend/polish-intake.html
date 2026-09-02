@@ -73,11 +73,12 @@
        between the heading and the box you are talking into, pushing that box down the page. Off to
        the side it is still there to glance at and no longer in the way.
 
-       Below 1200px it falls back to the block it is today, in the same place in the DOM, because a
+       Below 1400px it falls back to the block it is today, in the same place in the DOM, because a
        fixed 250px rail on a narrow screen is worse than a block -- it would sit on top of the
-       form. That is the same degradation .options-panel does at its own breakpoint. */
+       form. That is the same degradation .options-panel does, at the same 1400px -- matched on
+       purpose after the first attempt shipped at 1200 and overlapped the form by 21px. */
     .vcheat .vc-drag{display:none}
-    @media (min-width:1200px){
+    @media (min-width:1400px){
       .vcheat{position:fixed;right:16px;top:104px;width:250px;z-index:40;margin:0;
         max-height:calc(100vh - 130px);overflow-y:auto;background:var(--card);
         box-shadow:0 2px 10px rgba(0,0,0,.14)}
@@ -89,14 +90,21 @@
         position:sticky;top:-10px}
       .vcheat .vc-drag::before{content:"\2630";font-size:12px;opacity:.7}
       .vcheat.vc-dragging{opacity:.93;box-shadow:0 6px 20px rgba(0,0,0,.28)}
-      /* Between 1200 and 1540 the centred 1000px column would run under the rail, so the column
-         shifts left by the rail's width. Above 1540 the gutter is already wider than the rail
-         (1000 + 2x266), so the page is left exactly as it is and nothing moves for the widget. */
       /* The header names the panel, so the inline label would say it twice. */
       .vcheat .vc-inline{display:none}
-      .wrap{padding-right:282px}
+      /* MOVE THE COLUMN, DO NOT NARROW IT. margin-right reserves the rail's lane while the column
+         keeps its full 1000px; padding-right would have squeezed the content to 718px and made the
+         textarea they are dictating into smaller, which is the opposite of the point.
+
+         There is NO wide-screen exception, and that was the bug in the first attempt: it dropped
+         the reservation above 1540px on the theory that the gutter was by then wider than the rail.
+         The gutter is not (1000 + 2x266) -- .wrap's containing block is BODY, which starts after a
+         ~240px left nav, so the right-hand gutter is far smaller than a centred-column calculation
+         predicts. At 1750px the rail landed at x=1465 and the column still ran to x=1486: a 21px
+         overlap, on exactly the text this widget was moved aside to stop covering. The step-3 rail
+         holds its reservation at every floating width, and so does this one. */
+      .wrap{margin-left:auto;margin-right:282px}
     }
-    @media (min-width:1540px){ .wrap{padding-right:0} }
     .vrow{display:flex;gap:10px;align-items:flex-start}
     .vrow textarea{flex:1;min-height:96px;font:inherit;line-height:1.5;padding:9px 11px;
       border:1px solid var(--line);border-radius:9px;background:var(--surf);color:var(--ink)}

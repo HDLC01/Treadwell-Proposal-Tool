@@ -6442,8 +6442,15 @@
     if (!panel) return;
     try {
       const p = JSON.parse(localStorage.getItem("tw_opts_pos") || "null");
-      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)) {
-        panel.style.left = p.left + "px"; panel.style.top = p.top + "px"; panel.style.right = "auto";
+      // Clamped on the way back in, not only during the drag -- TW.clampPanelPos. Dragged to the
+      // far side of a wide monitor and reopened on a laptop, this restored past the edge with
+      // .op-drag off screen: no handle to grab, and no way back without clearing site data. Found
+      // on the polish-intake cheat sheet, which copies this panel; it was the same hole here.
+      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)
+          && getComputedStyle(panel).position === "fixed") {
+        const at = TW.clampPanelPos(p.left, p.top, panel.offsetWidth);
+        panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
+        panel.style.right = "auto";
       }
     } catch {}
     let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;

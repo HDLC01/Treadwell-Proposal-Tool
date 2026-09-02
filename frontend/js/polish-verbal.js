@@ -390,7 +390,7 @@
     initCheatDrag();
   }
 
-  /** The cheat sheet is a floating, movable widget above 1200px — drag its header to put it
+  /** The cheat sheet is a floating, movable widget above 1400px — drag its header to put it
    *  wherever it is not in the way. Deliberately the same behaviour, and the same stored-position
    *  idea, as the Pricing options rail on step 3 (proposal-review.js initOptionsPanelDrag): it is
    *  the same kind of object, and a second, different way to move a panel would be worse than
@@ -404,9 +404,18 @@
     if (!panel) return;
     try {
       var saved = JSON.parse(localStorage.getItem("tw_vcheat_pos") || "null");
-      if (saved && isFinite(saved.left) && isFinite(saved.top)) {
-        panel.style.left = saved.left + "px";
-        panel.style.top = saved.top + "px";
+      // Clamped on the way back IN, not just on the way out -- see TW.clampPanelPos. A position
+      // saved on a wide monitor restores off screen on a laptop, and the handle goes with it.
+      //
+      // Only while it is actually floating: below the breakpoint the CSS returns the panel to the
+      // flow, where left/top are inert and its width is the whole column, so clamping against that
+      // width would compute a lane for a panel four times too wide. Widen the window later and it
+      // simply opens where the CSS puts it, which is a fine place to be.
+      if (saved && isFinite(saved.left) && isFinite(saved.top)
+          && getComputedStyle(panel).position === "fixed") {
+        var at = TW.clampPanelPos(saved.left, saved.top, panel.offsetWidth);
+        panel.style.left = at.left + "px";
+        panel.style.top = at.top + "px";
         panel.style.right = "auto";
       }
     } catch (err) { /* a wiped or corrupt value just means it opens where the CSS put it */ }
