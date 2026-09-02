@@ -538,6 +538,27 @@
       deadline: values.bid_date || cur.deadline || "",
       polish_estimate: model,
     }, countyKeys()));
+    paintSaveBlocked();
+  }
+
+  /** Fault 2 in the Sept 2026 "switches to a different tab and it doesn't save" report: one
+   *  global localStorage blob, and shared.js REFUSES a write silently (a console.warn only) when
+   *  another tab has re-stamped it onto a different draft. The toggle paints, the field fills --
+   *  nothing is written, locally or to the server -- and nobody is told. TW.saveBlocked() is a
+   *  read-only check built for exactly this; separate element from #sandbox-note, which is the
+   *  test-copy identity banner and must not be clobbered by a transient warning. */
+  function paintSaveBlocked() {
+    var el = $("save-note");
+    if (!el) return;
+    var reason = TW.saveBlocked ? TW.saveBlocked() : null;
+    if (reason === "foreign-blob") {
+      el.textContent = "This project is open in another tab, and that tab has taken over the " +
+        "shared draft. What you just entered here has NOT been saved -- switch back to the other " +
+        "tab, or reopen this project from Projects.";
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
   }
 
   // ── the form ────────────────────────────────────────────────────────────────
@@ -619,11 +640,27 @@
   function wire() {
     document.addEventListener("click", onClick);
     if (form) form.addEventListener("submit", onSubmit);
+    // NAMED FIELDS ONLY. #county-input has no `name` -- its keystrokes are a search, not a draft
+    // edit, and onCountyInput below is what saves a PICKED county. Before this, nothing typed into
+    // the eight text boxes reached the draft until Continue: saveSoon()'s own docstring named this
+    // exact gap, and a step-nav tab or a reload in between silently lost everything typed.
+    if (form) form.addEventListener("input", function (e) {
+      if (e.target && e.target.name) saveSoon();
+    });
     var input = $("county-input");
     if (input) {
       input.addEventListener("input", onCountyInput);
       input.addEventListener("keydown", onCountyKeydown);
     }
+    // The 600ms debounce only reaches the server if something outlives it. Continue's onSubmit
+    // does that synchronously; leaving through a step-nav tab, closing the tab, or switching tabs
+    // did not -- and shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page
+    // armed, which before the listener above was never armed by typing at all.
+    window.addEventListener("pagehide", function () {
+      if (!saveTimer) return;
+      save();            // clears the 600ms timer, runs TW.setState synchronously
+      TW.flushState();   // fires the keepalive PUT now instead of waiting on the 2.5s debounce
+    });
   }
 
   // ── boot ────────────────────────────────────────────────────────────────────

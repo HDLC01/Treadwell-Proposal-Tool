@@ -66,6 +66,9 @@
     .grid{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
     .vcheat{background:var(--surf-low);border:1px solid var(--line);border-radius:10px;
       padding:10px 12px;font-size:13px;line-height:1.5;margin:0 0 12px}
+    /* Same list spacing as .vgroup ul below -- there is no other list rule on this page and the
+       UA default 40px indent would look broken inside a 250px floating panel. */
+    .vcheat ul{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
     /* THE CHEAT SHEET IS A FLOATING, MOVABLE WIDGET on a wide screen -- the same kind of thing as
        the Pricing options rail on step 3, and deliberately the same shape so the two read as one
        pattern rather than two. Hanz, 2026-09-02: it "bothers when they are speaking", which is
@@ -198,6 +201,11 @@
     </nav>
 
     <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
+    <!-- Separate from #sandbox-note above: that one is the test-copy identity banner, set
+         once at boot, and must not be overwritten by a transient save warning or the estimator
+         loses the "you are editing a test copy" notice. This one is only for a save that the
+         browser refused to send -- see TW.saveBlocked() in shared.js. -->
+    <p class="sandbox" id="save-note" role="status" aria-live="polite" hidden></p>
     <div class="loading" id="loading">Loading this project…</div>
 
     <div id="main" hidden>
@@ -222,9 +230,15 @@
         <div class="sec-b">
           <div class="vcheat" id="verbal-cheat">
             <div class="vc-drag" title="Drag to move">Worth saying</div>
-            <b class="vc-inline">Worth saying:</b> the job name, the street and town, when the bid is due, who to
-            reply to - and, in your own words, whether it is a <b>hard bid</b>, <b>prevailing
-            wage</b>, <b>tax exempt</b>, or a <b>remodel</b>.
+            <b class="vc-inline">Worth saying:</b>
+            <ul>
+              <li>Job name</li>
+              <li>Street and town</li>
+              <li>When the bid is due</li>
+              <li>Who to reply to</li>
+              <li>In your own words: whether it is a <b>hard bid</b>, <b>prevailing wage</b>,
+                <b>tax exempt</b>, or a <b>remodel</b></li>
+            </ul>
           </div>
           <div class="vrow">
             <textarea id="verbal-text" rows="5" aria-label="What you know about this job"

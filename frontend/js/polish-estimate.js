@@ -215,6 +215,32 @@
     }, 600);
   }
 
+  // Same gap as the intake page's Fault 3: nothing here flushed its own 600ms debounce before
+  // navigating away, and shared.js's pagehide net only flushes a timer THIS page armed. A takeoff
+  // number typed and then left via the step nav inside that window was silently lost.
+  window.addEventListener("pagehide", function () {
+    if (!saveTimer) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    var b = bid();
+    M.totals = b;
+    TW.setState(Object.assign({}, TW.getState(), {
+      polish_estimate: M,
+      polish_sf: b.sf,
+      computed_bid: {
+        lump_sum: b.total,
+        price_per_sf: b.per_sf,
+        polish_sf: b.sf,
+        full_bid: {
+          total_base_bid: b.total,
+          sales_tax: b.sales_tax,
+          remodel_tax: b.remodel_tax,
+        },
+      },
+    }));
+    TW.flushState();
+  });
+
   /** One place every edit funnels through, so nothing can change a value without the bid, the
    *  rail and the draft all catching up.
    *
