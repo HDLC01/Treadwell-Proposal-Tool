@@ -997,8 +997,29 @@
   }
 
 
+  /** Keep a floating panel's REMEMBERED position on screen.
+   *
+   *  Two panels move and remember where they were put: the Pricing options rail on step 3 and the
+   *  polish-intake cheat sheet. Both clamped the position while dragging and then restored it
+   *  without clamping, which is only safe as long as the window never gets smaller. Drag either to
+   *  the far side of a 2560px monitor, reopen the page on a laptop, and it is restored past the
+   *  edge with its drag handle off screen -- nothing left to grab it by, and no way to bring it
+   *  back short of clearing site data. Found on the cheat sheet, fixed in both: the second one was
+   *  going to be found by whoever it happened to.
+   *
+   *  Same bounds the drags themselves use, so a restore cannot land somewhere a drag could not.
+   *  Bounded by `innerHeight - 40` rather than the panel's height on purpose -- a long panel may
+   *  hang off the bottom, provided its header stays reachable. */
+  function clampPanelPos(left, top, width) {
+    return {
+      left: Math.max(4, Math.min(left, window.innerWidth - (width || 250) - 4)),
+      top: Math.max(4, Math.min(top, window.innerHeight - 40)),
+    };
+  }
+
   // ─── Expose ───────────────────────────────────────────────────────
   window.TW = {
+    clampPanelPos,
     getState,
     setState,
     flushState,
