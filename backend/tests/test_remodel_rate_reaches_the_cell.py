@@ -225,3 +225,199 @@ def test_picking_while_sitting_on_a_copied_tab_keeps_the_tab_on_screen(result):
     assert c["copy1"] == '=IF(D6="yes",0.0935,0)'   # the rate still lands
     assert c["cachePreserved"] is True              # ...without destroying the tab to deliver it
     assert c["gridRefreshedFor"] == ["Copy1"]       # ...and the copy redraws with the new number
+
+
+# The typed remodel tax % ======================================================
+# Everything above makes the COUNTY table reach the bid. Kyle's own words are that the
+# county table is not where he gets the number:
+#
+#   "we use the link within the original excel sheet to go to the website, enter the
+#    address, and get the tax % from there."
+#
+# An address is finer-grained than a county, so the table is a starting point and the
+# estimator needs to be able to type the figure the site actually returned. These tests
+# drive the real `commitRemodelRate` / `renderRemodelRateField` out of estimate-review.js
+# through the same harness, so the typed rate is held to the identical standard: it has to
+# land in the FORMULA cell of every base tab and every copy, or it is decoration.
+
+
+def test_the_percentage_reaches_the_rate_cell_without_arithmetic(result):
+    """Moving the decimal point through the TEXT, because dividing by 100 does not survive.
+
+    These rates carry three decimals. A plain /100 is wrong for real Kansas rates and a
+    plain *100 is wrong in the display direction, and the wrong value would go verbatim
+    into a spreadsheet formula where nothing would ever flag it:
+
+        8.775 / 100    ->  0.08775000000000001
+        9.975 / 100    ->  0.09974999999999999   (a hair LOW)
+        0.07975 * 100  ->  7.9750000000000005
+
+    Note that 7.975 / 100 is exact by luck, which is why the counterexamples below are
+    asserted as a set rather than spot-checked on one rate: a single lucky value would
+    make this whole test vacuous. The property that matters is that shifting there and
+    back is the identity for every one of them."""
+    e = result["exactness"]
+    assert e["shifted"] == "0.07975"
+    assert e["roundTrip"] == "0.07975"          # survives Number() without growing a tail
+
+    # the counterexamples: what arithmetic actually produces for these rates
+    naive = dict(e["naiveDivision"])
+    assert naive["8.775"] == "0.08775000000000001"
+    assert naive["9.975"] == "0.09974999999999999"
+    assert dict(e["naiveMultiply"])["0.07975"] == "7.9750000000000005"
+
+    # ...against what the shift produces for the same inputs
+    shifted = dict(e["cases"])
+    assert shifted["8.775"] == "0.08775"
+    assert shifted["9.975"] == "0.09975"
+    assert shifted["7.15"] == "0.0715"
+    # and the ordinary shapes, none of them rounded or padded
+    assert shifted["7.975"] == "0.07975"
+    assert shifted["10"] == "0.1"
+    assert shifted["6.5"] == "0.065"
+    assert shifted["0.5"] == "0.005"        # half a percent, not five percent
+    assert shifted[".5"] == "0.005"         # a leading dot is a number people type
+    assert shifted["7."] == "0.07"          # so is a trailing one
+    assert shifted["11.125"] == "0.11125"   # more decimals than any current rate
+    assert shifted["0"] == "0"              # zero is an answer, not an absence
+
+    # the identity property, over every rate that breaks under arithmetic
+    for typed, back in e["roundTripAll"]:
+        assert back == typed, "%s did not survive the round trip: %s" % (typed, back)
+
+    # painting the box is the same operation in reverse
+    back = dict(e["backToPct"])
+    assert back["0.07975"] == "7.975"
+    assert back["0.08775"] == "8.775"
+    assert back["0.07"] == "7"              # not 7.000000000000001
+
+    # anything that is not a plain number is REFUSED rather than coerced. A typo that
+    # becomes a price is the whole failure mode this feature could introduce.
+    assert all(v is None for _, v in e["refused"]), e["refused"]
+
+
+def test_a_typed_percentage_reaches_every_rate_cell_with_no_county_at_all(result):
+    """The typed figure is the answer on its own -- it does not need a county chosen first.
+
+    The rate came off the state's site for this address, so requiring a county pick before
+    it would take effect would mean the estimator has to enter a coarser number to make the
+    accurate one land. It writes to the same ten template layouts plus every copy, through
+    the same layout-keyed addressing the county path uses."""
+    t = result["typedNoCounty"]
+    assert t["epoxy"] == '=IF(D6="yes",0.07975,0)'
+    assert t["polish"] == '=IF(D6="yes",0.07975,0)'
+    assert t["copy1"] == '=IF(D6="yes",0.07975,0)'    # a copy of Epoxy, same as the county path
+    assert t["oneGyp"] == '=IF(D8="yes",0.07975,0)'   # gyp's switch is D8, not D6
+    assert t["effective"] == 0.07975
+    assert t["persisted"] == 0.07975                  # and it survives into the saved draft
+
+
+def test_only_the_rate_is_written_and_never_a_dollar_amount(result):
+    """Kyle's whole-dollar rounding stays Kyle's.
+
+    His cell is ROUNDUP(SUM(D53:D55,D62,D68,D73:D77,D83)*B81,0) -- the taxable base, the
+    multiply and the round to the dollar all live in his formula. This feature replaces one
+    input to it and nothing else, so the tax figure on the generated workbook is still
+    computed by the sheet rather than by us. Writing a dollar amount would mean two
+    implementations of the same arithmetic, and the .xlsx the customer sees would disagree
+    with the .xlsx Kyle opens the moment they drifted."""
+    assert result["typedNoCounty"]["dollarCellsWritten"] == []
+
+
+def test_a_typed_percentage_overrides_the_county_table(result):
+    """Kyle reads the rate off the site for the ADDRESS; the county table is coarser.
+
+    So when both exist the typed one wins, and the county's own figure stays on state
+    untouched -- clearing the typed number has to be able to fall back to it."""
+    t = result["typedBeatsCounty"]
+    assert t["epoxy"] == '=IF(D6="yes",0.07975,0)'    # not the county's 9.35%
+    assert t["effective"] == 0.07975
+    assert t["countyStillOnState"] == 0.0935          # remembered, not overwritten
+    assert "7.975%" in t["pill"]                      # and the pill agrees with the cell
+
+
+def test_clearing_the_county_does_not_retract_a_typed_percentage(result):
+    """Two different acts, and conflating them would silently move a price.
+
+    The estimator got that number off the state's site for this address. Dropping the
+    county -- because it was wrong, or picked by accident -- says nothing about the rate. If
+    clearing the pill also reverted the cell, the bid would quietly go back to Kyle's 10%
+    placeholder with no visible change anywhere on the page."""
+    c = result["clearCountyKeepsTyped"]
+    assert c["countyGone"] is True
+    assert c["epoxy"] == '=IF(D6="yes",0.07975,0)'
+    assert c["effective"] == 0.07975
+
+
+def test_a_new_county_supersedes_a_typed_percentage_visibly(result):
+    """The reverse direction, and the visibility is the point.
+
+    A new county means a new address, so a rate typed for the old one is stale and must not
+    survive. But it must not vanish silently either: the box is repainted with the new
+    county's own figure, so the number on screen is the number in the cell. Leaving 7.975
+    sitting in the box while 9.35 was in the workbook is exactly the class of bug this whole
+    file exists for."""
+    n = result["newCountyWins"]
+    assert n["effective"] == 0.0935
+    assert n["epoxy"] == '=IF(D6="yes",0.0935,0)'
+    assert n["boxRepainted"] == "9.35"
+
+
+def test_a_typo_is_refused_and_the_rate_in_force_does_not_move(result):
+    """Refusing is the safe failure. Coercing is not.
+
+    Number("seven point nine") is NaN, and NaN reaching the formula would produce a cell no
+    spreadsheet can evaluate -- or worse, a 0 that silently zeroes the tax. So a non-number
+    leaves the rate exactly as it was and says so in words, rather than in colour alone."""
+    t = result["typoRefused"]
+    assert t["epoxy"] == '=IF(D6="yes",0.0935,0)'     # still the county's rate
+    assert t["effective"] == 0.0935
+    assert t["override"] is None                      # nothing was persisted
+    assert "not a number" in t["note"]
+    assert "7.975" in t["note"]                       # and it shows the shape that works
+    assert "rate-note-bad" in t["noteClass"]
+
+
+def test_emptying_the_box_falls_back_rather_than_pinning_zero(result):
+    """An empty box is "I have no figure of my own", not "the tax rate is 0%".
+
+    Those differ by the whole tax line. Note this is why the state key is set to null and
+    not deleted: TW.setState MERGES the object it is handed, so a delete would leave the old
+    override sitting in the saved blob and the next reload would resurrect it."""
+    e = result["emptiedFallsBack"]
+    assert e["effective"] == 0.0935                   # back to the county
+    assert e["epoxy"] == '=IF(D6="yes",0.0935,0)'
+    assert e["override"] is None
+
+
+def test_the_box_is_not_overwritten_while_someone_is_typing_in_it(result):
+    """A re-render that repaints a focused field eats the digits half-typed into it.
+
+    Reached for the keyboard because no assertion about the rendered value can see this --
+    the field only loses its content while it has focus. Same class of defect as the
+    re-render-on-change focus theft found by a browser walk earlier this year."""
+    f = result["focusRespected"]
+    assert f["whileFocused"] == "7.9"     # mid-keystroke, left alone
+    assert f["afterBlur"] == "9.35"       # and repainted once it is no longer being typed in
+
+
+def test_the_page_says_when_a_typed_percentage_is_not_affecting_the_price(result):
+    """Kyle's cell is =IF(D6="yes",<rate>,0). With that switch off the tax is zero whatever
+    is typed, so a correctly-typed rate can sit there doing nothing.
+
+    Saying so is the difference between a tool and a trap: the estimator types the figure
+    the state gave them, sees it accepted, and would otherwise reasonably believe the bid
+    now carries that tax. The rate is still written to the cell in that case -- the switch,
+    not this feature, is what zeroes the tax, and flipping the switch on later must not need
+    the rate re-typed."""
+    s = result["switchNotes"]
+    assert s["onIsOn"] is True
+    assert "using" in s["onNote"]
+
+    assert s["offIsOn"] is False
+    assert "switched off" in s["offNote"]
+    assert "not changing the price" in s["offNote"]
+    assert s["offCell"] == '=IF(D6="yes",0.07975,0)'   # written anyway, ready for the switch
+
+    # and with nothing typed and no county, the placeholder in force is named out loud
+    assert "10%" in s["unsetNote"]
