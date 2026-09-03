@@ -987,8 +987,9 @@
   // ── assemblies ─────────────────────────────────────────────────────────────
   function renderList() {
     var area = $("area").value, out = "";
-    for (var i = 0; i < ASMS.length; i++) {
-      var a = ASMS[i], p = L.priceAssembly(a, ITEMS, area);
+    var shown = visibleAssemblies(area);
+    for (var i = 0; i < shown.length; i++) {
+      var a = shown[i], p = L.priceAssembly(a, ITEMS, area);
       var per = p.per_unit == null ? "not priced" : L.perUnit(p.per_unit) + "/" + esc(a.unit);
       out += '<button class="arow" type="button" data-open="' + esc(a.id) + '"' +
         (a.id === openId ? ' aria-current="true"' : "") + ">" +
@@ -1003,7 +1004,26 @@
     // so hiding just the inner list would leave a create button alone in an empty box while the
     // "No assemblies yet" panel offered a second one beside it.
     $("asm-rail").hidden = ASMS.length === 0;
+    // The badge stays the TOTAL, for the reason #n-items does: it says how many systems Treadwell
+    // has, and a number that fell as somebody typed would read as assemblies being deleted.
     $("n-asm").textContent = ASMS.length;
+
+    var filtering = anyAsmFilterActive();
+    var noMatch = filtering && ASMS.length > 0 && shown.length === 0;
+    if ($("asm-nomatch")) $("asm-nomatch").hidden = !noMatch;
+    if ($("asm-nomatch-why")) {
+      $("asm-nomatch-why").textContent = noMatch
+        ? "No assemblies " + asmFilterSummary() + "." : "";
+    }
+    // "+ New assembly" goes with the rows. Left up, a typo would be answered with an invitation to
+    // build the assembly the search just failed to find.
+    if ($("asm-addrow")) $("asm-addrow").hidden = noMatch;
+    if ($("asm-hits")) {
+      $("asm-hits").hidden = !filtering;
+      $("asm-hits").textContent = filtering
+        ? shown.length + " of " + ASMS.length + " shown" : "";
+    }
+    renderAsmFilterBar();
   }
 
   /** Does this item answer to `query`, whatever the searcher happened to remember about it?
@@ -1033,6 +1053,8 @@
    *  estimator actually asks is "epoxy OR gypsum", so it ORs within itself and ANDs against the
    *  other two, which is what every faceted list does and what nobody has to be told. */
   var FILTERS = { divisions: [], vendor: "", condition: "" };
+  var asmQuery = "";
+  var ASM_FILTERS = { unit: "", condition: "" };
 
   /** Is the tab showing a subset? Text, facets, or both.
    *
@@ -1228,6 +1250,102 @@
    *  Reuses itemMatches, so this box, the Items tab's box and the per-line picker cannot disagree
    *  about what "vendor:sherwin" or "-epoxy" finds. `F` is the MODAL's filter state, never the Items
    *  tab's FILTERS — see the note on matchesFilters. */
+  function anyAsmFilterActive() {
+    return !!String(asmQuery).trim() || !!ASM_FILTERS.unit || !!ASM_FILTERS.condition;
+  }
+
+  /** The three conditions this tab can answer, read off the price it already computes.
+   *
+   *  `p` is passed in rather than computed here because renderList prices every visible row
+   *  anyway and priceAssembly walks every line of every assembly: computing it twice per row
+   *  would double the cost of typing a letter. A caller with no condition filter passes null and
+   *  never reaches this. */
+  function asmConditionHits(a, c, p) {
+    if (c === "no_lines") return ((a || {}).lines || []).length === 0;
+    if (c === "unpriced") return !p || p.per_unit == null;
+    if (c === "broken") return !!(p && p.broken_lines > 0);
+    return true;
+  }
+
+  /** Takes the filter state as an ARGUMENT, for the reason matchesFilters does: nothing else on
+   *  this page may narrow the rail, and a shared module variable is how a control on one tab ends
+   *  up filtering another that the estimator cannot see.
+   *
+   *  Keyed on asmUnit(a), not a.unit. The raw field is what the rail PRINTS; asmUnit is what the
+   *  pricing and the polish beta believe, and a blank or "sf" would otherwise match neither
+   *  option in a two-option select. */
+  function asmMatchesFilters(a, F, p) {
+    F = F || ASM_FILTERS;
+    if (F.unit && asmUnit(a) !== F.unit) return false;
+    if (F.condition && !asmConditionHits(a, F.condition, p)) return false;
+    return true;
+  }
+
+  /** One term against an assembly: its own name and unit, OR any material inside it.
+   *
+   *  PER TERM rather than per haystack, which is what makes the grammar behave. Running
+   *  itemMatches over each haystack and OR-ing the answers would make `-epoxy` mean "some line
+   *  has no epoxy in it" - true of nearly every assembly. Asking each term separately makes it
+   *  mean "nothing in here mentions epoxy", which is what somebody typing it wants.
+   *
+   *  Reaching inside is the point. "Which assemblies use that primer?" is a question this tab
+   *  cannot otherwise answer without opening all of them, and it comes free: termHits is the same
+   *  function the three item boxes use, so `vendor:sherwin` and `cost:>200` work here too. */
+  function asmTermHits(a, term, items) {
+    if (termHits({ name: (a || {}).name, unit: asmUnit(a) }, term)) return true;
+    var lines = (a || {}).lines || [];
+    for (var i = 0; i < lines.length; i++) {
+      var it = L.findItem(items || [], lines[i].item_id);
+      if (it && termHits(it, term)) return true;
+    }
+    return false;
+  }
+
+  function asmMatches(a, query, items) {
+    var terms = parseQuery(query);
+    for (var i = 0; i < terms.length; i++) {
+      var hit = asmTermHits(a, terms[i], items || ITEMS);
+      if (terms[i].neg ? hit : !hit) return false;
+    }
+    return true;
+  }
+
+  /** Say what was asked for, so "nothing matches" does not make somebody reconstruct the query
+   *  out of two selects and a text box. */
+  function asmFilterSummary() {
+    var bits = [];
+    var q = String(asmQuery).trim();
+    if (q) bits.push("matching " + JSON.stringify(q));
+    if (ASM_FILTERS.unit) bits.push("priced per " +
+      (ASM_FILTERS.unit === "LF" ? "linear foot" : "square foot"));
+    if (ASM_FILTERS.condition) bits.push(
+      ASM_FILTERS.condition === "unpriced" ? "still without a price"
+      : ASM_FILTERS.condition === "broken" ? "with lines to fix"
+      : "with no lines yet");
+    return bits.join(", ");
+  }
+
+  function visibleAssemblies(area) {
+    if (!anyAsmFilterActive()) return ASMS;
+    return ASMS.filter(function (a) {
+      var p = ASM_FILTERS.condition ? L.priceAssembly(a, ITEMS, area) : null;
+      return asmMatchesFilters(a, ASM_FILTERS, p) && asmMatches(a, asmQuery, ITEMS);
+    });
+  }
+
+  /** Unlike renderFilterBar this never writes markup - both selects are static, because an
+   *  assembly's unit is a closed SF/LF domain and the three conditions are fixed. So there is
+   *  nothing to rebuild, nothing to rebuild AT, and no focus to lose. */
+  function renderAsmFilterBar() {
+    if ($("fa-unit")) $("fa-unit").value = ASM_FILTERS.unit;
+    if ($("fa-condition")) $("fa-condition").value = ASM_FILTERS.condition;
+    if ($("fa-clear")) $("fa-clear").hidden = !anyAsmFilterActive();
+    // Nothing to filter is not a filter bar. With no assemblies the rail is hidden and the "No
+    // assemblies yet" panel is doing the talking; a search box over it would offer to narrow
+    // nothing.
+    if ($("asm-filterbar")) $("asm-filterbar").hidden = ASMS.length === 0;
+  }
+
   function bulkCandidates(items, query, F) {
     return (items || []).filter(function (it) {
       return matchesFilters(it, F) && itemMatches(it, query);
@@ -1907,6 +2025,58 @@
     if ($("item-q")) $("item-q").focus();
   }
 
+  // ── the same three controls for the Assemblies tab ────────────────────────
+  // Only renderList() here, not renderPanel(): narrowing the rail must not close the assembly
+  // somebody is editing. openId is read off the unfiltered ASMS and renderList never writes it,
+  // so an open assembly that the filter excludes keeps its panel and simply loses its highlight.
+  //
+  // renderList calls renderAsmFilterBar itself, which is why none of these do.
+  if ($("asm-q")) {
+    $("asm-q").addEventListener("input", function (e) {
+      asmQuery = e.target.value;
+      renderList();
+    });
+    // Same key the item box answers, two tables over.
+    $("asm-q").addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !String(asmQuery).trim()) return;
+      e.preventDefault();
+      asmQuery = "";
+      e.target.value = "";
+      renderList();
+    });
+  }
+  // Bound to the selects themselves and not a container, unlike the item facets: both are static
+  // markup that renderAsmFilterBar only ever assigns `.value` on, so there is no element here that
+  // can be replaced out from under a listener.
+  if ($("fa-unit")) {
+    $("fa-unit").addEventListener("change", function (e) {
+      ASM_FILTERS.unit = e.target.value;
+      renderList();
+    });
+  }
+  if ($("fa-condition")) {
+    $("fa-condition").addEventListener("change", function (e) {
+      ASM_FILTERS.condition = e.target.value;
+      renderList();
+    });
+  }
+
+  /** The Assemblies tab's own clear, on its own attribute.
+   *
+   *  data-clear-asm-filters rather than reusing data-clear-filters, which is deliberately one
+   *  route for the Items tab's two buttons: sharing it would have the assemblies button silently
+   *  reset the item table instead, on a tab where the estimator cannot see it happen. */
+  function clearAsmFilters() {
+    asmQuery = "";
+    ASM_FILTERS.unit = "";
+    ASM_FILTERS.condition = "";
+    if ($("asm-q")) $("asm-q").value = "";
+    // The two selects are put back by renderAsmFilterBar, which renderList calls; unlike the item
+    // chips there is no markup here that survives a model change.
+    renderList();
+    if ($("asm-q")) $("asm-q").focus();
+  }
+
   $("items-body").addEventListener("input", onItemEdit);
   $("items-body").addEventListener("change", onItemEdit);
   // …and the event that actually triggers the save. `focusout` and not `blur`, because blur does
@@ -2096,6 +2266,7 @@
 
     // Both the bar's button and the empty state's, one handler.
     if (t.closest && t.closest("[data-clear-filters]")) { clearFilters(); return; }
+    if (t.closest && t.closest("[data-clear-asm-filters]")) { clearAsmFilters(); return; }
 
     var open = t.closest && t.closest("[data-open]");
     if (open) { openId = open.getAttribute("data-open"); paint(); return; }
