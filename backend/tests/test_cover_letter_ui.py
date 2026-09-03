@@ -564,7 +564,17 @@ def test_the_portal_is_told_the_proposal_has_a_letter():
     body = m.group(0)
     assert "has_cover_letter" in body, (
         "the publish body never tells the portal about the letter — the field is a no-op again")
-    assert "await TW.flushState()" in DONE_JS[max(0, m.start() - 4500):m.start()], (
+    # ORDER, not distance. This was a 4500-character lookback, which is a proxy for "the flush
+    # comes first" that shrinks every time a line is added between the two — and RJ's
+    # refused-save gate sits in exactly that gap, pushing it to 4572 and failing a test whose
+    # CLAIM was still true. Both strings are unique in the file, so comparing their positions says
+    # precisely what is meant and nothing more. Same lesson as the derived tab check in
+    # test_active_projects_board.py, which was rewritten because it broke on every addition.
+    assert DONE_JS.count("await TW.flushState()") == 1, (
+        "a second flush site appeared — position alone no longer says which one runs first")
+    assert DONE_JS.count("/api/portal/publish") == 1, (
+        "a second publish site appeared — this test is now checking the wrong one")
+    assert DONE_JS.index("await TW.flushState()") < m.start(), (
         "the publish call moved ahead of the flush — a fresh TW.getState() read here would no "
         "longer be guaranteed to match what create_revision is about to pin")
     # The value, not just the key. `generate_result` / its download url would be the stale copy.
