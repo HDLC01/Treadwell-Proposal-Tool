@@ -219,6 +219,35 @@ values
   ('default-bag', 'Bag')
 on conflict (id) do nothing;
 
+-- ── Markup rules ────────────────────────────────────────────────────────
+-- The markup chain's rates as editable expressions, one row per line per sheet LAYOUT. Mirrors
+-- supabase_schema.sql; see backend/markup.py for why the key is the TAB (Seal / Epoxy blank /
+-- Leveling are tabs no work type names), why there is no 'combo', and why `applies` is not the
+-- same as a zero formula (the Gyp tabs have NO hard-bid rate — the cell is empty).
+create table if not exists public.markup_rules (
+  id           text primary key,
+  layout       text not null,                 -- polish | seal | epoxy | leveling | gyp
+  line_key     text not null,                 -- gp | hard_bid | contingency | super_pto | …
+  -- An EXPRESSION, not a rate: Gyp's soft-costs cell is a whole IF(OR(...)) that returns the
+  -- string "error" rather than guess. NULL when the line does not apply.
+  formula      text,
+  applies      boolean not null default true, -- false = this tab has no such line at all
+  notes        text,
+  sort         integer not null default 0,    -- the chain order; it compounds
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz,
+  deleted_at   timestamptz                    -- soft delete: hand-typed rules that move a bid
+);
+-- One LIVE rule per (layout, line_key). Partial, so a soft-deleted row does not reserve the key.
+create unique index if not exists markup_rules_live_key_idx
+  on public.markup_rules (layout, line_key) where deleted_at is null;
+create index if not exists markup_rules_live_layout_idx
+  on public.markup_rules (layout, sort) where deleted_at is null;
+-- Beside the table, per the measured lesson above: the blanket grant only covers tables that
+-- exist when it runs, so a table added later reads fine and every write fails.
+grant select, insert, update, delete on public.markup_rules to service_role;
+
 grant select, insert, update, delete on public.library_items to service_role;
 grant select, insert, update, delete on public.library_assemblies to service_role;
 grant select, insert, update, delete on public.library_vendors to service_role;

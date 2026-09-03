@@ -338,6 +338,54 @@ values
   ('default-bag', 'Bag')
 on conflict (id) do nothing;
 
+-- ── Markup rules ──────────────────────────────────────────────────────────
+-- The markup chain's rates, as editable expressions, one row per line per sheet LAYOUT. Today
+-- those rates are hardcoded constants in frontend/js/polish-bid-core.js (RATES, GP_BANDS, and
+-- literals inside hardBidPct), transcribed by hand off Kyle's workbook. See backend/markup.py.
+--
+-- KEYED ON THE TAB, not on a work type: audited 2026-09-03, the workbook's markup column keys on
+-- the tab, and Seal / Epoxy blank / Leveling are tabs a bid can sit on that no work type names.
+-- There is deliberately no 'combo' — a combo job is two option lines, each priced off its own
+-- tab, so it has no markup of its own.
+create table if not exists public.markup_rules (
+  id           text primary key,
+  -- polish | seal | epoxy | leveling | gyp. Checked in markup.py rather than by a CHECK
+  -- constraint, for the reason the two-databases rule gives: an unapplied CHECK surfaces as a
+  -- 502 on whichever database missed it, and this list will grow when Kyle adds a tab.
+  layout       text not null,
+  -- gp | hard_bid | contingency | super_pto | soft_costs | remodel_tax | bond, in the order the
+  -- chain compounds — each line's base is the running sum above it.
+  line_key     text not null,
+  -- AN EXPRESSION, not a rate, and NULL when the line does not apply. Gyp's soft-costs cell is
+  --   IF(OR(B5="Yes",B5="No"), IF(B5="Yes",.09,.1) - IF(E69>334900,.05,IF(E69>234450,.035,0)),
+  --      "error")
+  -- so a numeric column could not hold it. The "error" string is Kyle's own
+  -- refuse-to-price-rather-than-guess behaviour and is kept verbatim.
+  formula      text,
+  -- NOT the same as a zero formula, and the difference is load-bearing. The Gyp tabs have NO
+  -- hard-bid rate — the cell is EMPTY. "this tab has no such line" (applies=false, formula null)
+  -- and "it has one and it prices to nothing" (applies=true, formula '0') are different facts and
+  -- the chain treats them differently.
+  applies      boolean not null default true,
+  notes        text,
+  -- The chain order. It compounds, so a chain read in a different order is a different price.
+  sort         integer not null default 0,
+  owner_email  text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz,
+  -- Soft delete, as everywhere else here. Removing a rule means "stop overriding this line", so
+  -- the chain falls back to its hardcoded constant — recoverable, because these are hand-typed
+  -- rules that move what a bid sells for.
+  deleted_at   timestamptz
+);
+-- ONE LIVE RULE PER (layout, line_key). Partial, so a soft-deleted row does not reserve the key —
+-- markup.py writes a NEW row on a later upsert rather than reviving a formula somebody removed.
+create unique index if not exists markup_rules_live_key_idx
+  on public.markup_rules (layout, line_key) where deleted_at is null;
+-- The module's only other query: one layout's chain, in order.
+create index if not exists markup_rules_live_layout_idx
+  on public.markup_rules (layout, sort) where deleted_at is null;
+
 -- Same posture as drafts/events/calendar_events: RLS on, no policies here; the proposal tool
 -- holds the service-role key.
 alter table public.library_items enable row level security;
@@ -345,8 +393,10 @@ alter table public.library_assemblies enable row level security;
 alter table public.library_vendors enable row level security;
 alter table public.library_divisions enable row level security;
 alter table public.library_units enable row level security;
+alter table public.markup_rules enable row level security;
 grant select, insert, update, delete on public.library_items to service_role;
 grant select, insert, update, delete on public.library_assemblies to service_role;
 grant select, insert, update, delete on public.library_vendors to service_role;
 grant select, insert, update, delete on public.library_divisions to service_role;
 grant select, insert, update, delete on public.library_units to service_role;
+grant select, insert, update, delete on public.markup_rules to service_role;
