@@ -120,3 +120,70 @@ def test_non_taxable_means_no_sales_tax():
     roll = pricing.roll_up(_two_systems(), patch_sf=16000)
     fb = pricing.compute_full_bid(roll["material_total"], 16000, taxable=False)
     assert fb["sales_tax"] == 0
+
+
+# ── the hard-bid discount (D74) ───────────────────────────────────────
+# Read off the cell on 2026-09-04, verbatim:
+#   Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+#   Epoxy!D74 = ROUNDUP(SUM(D70,D73)*B74, 0)
+# Two things in that pair had no test at all, and the engine got both wrong. B4 is the LOCAL
+# flag; it gates the -2.5% band and NOT the -4% one. And ROUNDUP rounds away from zero, which
+# for the one negative figure in the whole chain is not what math.ceil does.
+
+
+def _hb(*, hard_bid, local, material, sf=16000):
+    return pricing.compute_full_bid(material, sf, hard_bid=hard_bid, local=local,
+                                    taxable=False, remodel=False)
+
+
+def test_a_travelling_hard_bid_under_60k_gets_no_discount():
+    """The defect, stated as the sheet states it. B4="yes" guards the -2.5% band, so a hard bid
+    on a job the crew travels to is refused the discount. The engine handed it over anyway."""
+    assert _hb(hard_bid=True, local=False, material=12000)["hard_bid"] == 0
+
+
+def test_a_local_hard_bid_in_the_same_band_does_get_it():
+    """THE COUNTEREXAMPLE. Without this, deleting the discount outright would pass the test
+    above, and 'no discount for anyone' would look like a fix."""
+    assert _hb(hard_bid=True, local=True, material=12000)["hard_bid"] < 0
+
+
+def _implied_rate(fb):
+    """D74 back as the B74 percentage. The DOLLAR cannot be compared across local/non-local --
+    `local` also drives lodging and food (pricing.py:289), so the two jobs have different D70s
+    and would differ at an identical rate. My first draft of the test below compared dollars and
+    failed for exactly that reason: the fixture was wrong, not the engine."""
+    return fb["hard_bid"] / (fb["subtotal_costs"] + fb["gp_markup"])
+
+
+def test_the_4_percent_band_is_not_gated_on_local():
+    """Over-gating is the other way to get this wrong. The -4% branch sits OUTSIDE the B4 test
+    in the cell, so a big travelling job keeps it."""
+    far = _hb(hard_bid=True, local=False, material=70000)
+    near = _hb(hard_bid=True, local=True, material=70000)
+    assert approx(_implied_rate(far), -0.04, 0.0005)
+    assert approx(_implied_rate(near), -0.04, 0.0005)
+
+
+def test_the_two_bands_are_the_two_rates_the_cell_names():
+    """-4% over $60k of subtotal cost, -2.5% over $13k. Pins the rates themselves, so a typo in
+    either literal is caught rather than just 'some discount happened'."""
+    assert approx(_implied_rate(_hb(hard_bid=True, local=True, material=12000)), -0.025, 0.0005)
+    assert approx(_implied_rate(_hb(hard_bid=True, local=True, material=70000)), -0.04, 0.0005)
+
+
+def test_no_hard_bid_flag_means_no_discount_however_local():
+    assert _hb(hard_bid=False, local=True, material=70000)["hard_bid"] == 0
+
+
+def test_the_discount_rounds_away_from_zero_like_the_sheet():
+    """ROUNDUP, not ceil. D74 is the only negative ROUNDUP in the tab, so this is the only place
+    the two disagree -- and they disagree by rounding the discount toward zero, i.e. bidding the
+    job high. Derived from the engine's own D70/D73 so it cannot go stale against a rate change."""
+    fb = _hb(hard_bid=True, local=True, material=12000)
+    exact = (fb["subtotal_costs"] + fb["gp_markup"]) * -0.025
+    assert exact != math.ceil(exact), (
+        "this fixture no longer lands on a fraction, so it cannot tell ROUNDUP from ceil")
+    assert fb["hard_bid"] == -math.ceil(abs(exact))
+    assert fb["hard_bid"] < math.ceil(exact), "still rounding toward zero -- the discount is short"
+

@@ -67,6 +67,17 @@ def _ceil_to(value: float, multiple: float) -> float:
     return math.ceil(value / multiple) * multiple
 
 
+def _roundup(value: float) -> int:
+    """Excel ROUNDUP(value, 0) — rounds AWAY from zero, both directions.
+
+    math.ceil is only the same thing for POSITIVE numbers. Every ROUNDUP in the Epoxy tab
+    operates on a positive figure except one: D74, the hard-bid discount, which is a negative
+    number by construction. ROUNDUP(-100.4) is -101; ceil(-100.4) is -100, so ceil quietly
+    shaves a dollar off the discount and bids the job a dollar high.
+    """
+    return int(math.copysign(math.ceil(abs(value)), value)) if value else 0
+
+
 def list_systems() -> List[str]:
     """Epoxy system names (the System-Options dropdown)."""
     return list(_EPOXY.keys())
@@ -302,11 +313,17 @@ def compute_full_bid(material_total: float, sf: float, *,
     # GP markup (D73), hard-bid (D74), super (D75), soft (D76), contingency (D77)
     gp = _gp_pct(D70)
     D73 = ceil((D70 + D80 + D83) / (1 - gp)) - ceil(D70 + D80)
-    if hard_bid:
-        b74 = -0.04 if D70 >= 60000 else (-0.025 if D70 >= 13000 else 0)
+    # Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+    # B4 is the LOCAL flag, and it gates the -2.5% band only -- the -4% band above $60k is
+    # granted to local and non-local jobs alike. Dropping B4 handed a discount to travelling
+    # jobs that the sheet refuses them.
+    if hard_bid and D70 >= 60000:
+        b74 = -0.04
+    elif hard_bid and local and D70 >= 13000:
+        b74 = -0.025
     else:
         b74 = 0
-    D74 = ceil((D70 + D73) * b74)
+    D74 = _roundup((D70 + D73) * b74)   # ROUNDUP, not ceil: this one is negative
     D77 = ceil(contingency)
     D75 = ceil((D70 + D73 + D74 + D77 + D80 + D83) * super_pct)
     D76 = ceil((D70 + D73 + D74 + D75 + D77 + D80 + D83) * soft_pct)
