@@ -386,6 +386,7 @@
   .sd-fix { margin:12px 0 0; padding:9px 16px; font:inherit; font-size:13px; font-weight:700;
     color:#fff; background:#7a5c00; border:1px solid #5f4700; border-radius:6px;
     cursor:pointer; }
+  .sd-fix[hidden] { display:none; }
   .sd-fix:hover { background:#5f4700; }
   .sd-fix:focus-visible { outline:2px solid #5f4700; outline-offset:2px; }
 
@@ -622,10 +623,10 @@
             <path d="M12 9v4"/><path d="M12 17h.01"/>
           </svg>
           <div class="sd-body">
-            <p class="sd-title">The PDF has the old numbers</p>
+            <p class="sd-title" id="stale-doc-title">The PDF has the old numbers</p>
             <p class="sd-lede" id="stale-doc-lede"></p>
             <div class="sd-table" id="stale-doc-rows"></div>
-            <p class="sd-how">Update the PDF opens the Proposal step. Press Continue there and
+            <p class="sd-how" id="stale-doc-how">Update the PDF opens the Proposal step. Press Continue there and
               the document is rebuilt with these numbers, then you land back here to send.</p>
             <button type="button" class="sd-fix" id="stale-doc-fix">Update the PDF</button>
           </div>

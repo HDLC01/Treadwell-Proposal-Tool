@@ -307,6 +307,43 @@
     return null;
   }
 
+  /** The same three refusals, in the estimator's own words, with the way out of each.
+   *
+   *  THIS IS THE OTHER HALF OF RJ'S LOOP. The Files page found a document holding the old
+   *  numbers, refused the send, and sent him back here to press Continue -- which is the right
+   *  instruction, and it was the only instruction. Continue rebuilds the payload and calls
+   *  setState, setState REFUSES a write it cannot own and hands back the unchanged blob, and the
+   *  caller navigated on regardless. So the document never got rebuilt, the Files page found the
+   *  same drift, and around he went. Deterministic, and with no exit: he reported doing exactly
+   *  what the screen told him, repeatedly, and getting the same message back.
+   *
+   *  Both ends now ask BEFORE they act -- Continue before it writes, the send gate before it
+   *  blames the document -- and both say this, because a message that differs between the two
+   *  pages is how they would start describing the same refusal two ways. Returns null when a
+   *  save would go through, so a truthy answer always means STOP and say so.
+   *
+   *  `say` states the situation. `fix` is the one thing to do about it, and it is never "press
+   *  Continue again": that is the loop. */
+  function saveBlockedSay() {
+    const reason = saveBlocked();
+    if (!reason) return null;
+    if (reason === "foreign-blob") {
+      return { reason,
+        say: "This project is open in another tab, and that tab has the keys.",
+        fix: "Close the other tab (or reload this page), then come back to this step." };
+    }
+    if (reason === "no-draft") {
+      return { reason,
+        say: "This page has lost track of which project it is on, so nothing can be saved.",
+        fix: "Open the project again from the Projects page." };
+    }
+    // "unverified" -- set by markUnverified when a hydrate could not be trusted, so every
+    // server write for this draft is refused for the rest of the session.
+    return { reason,
+      say: "Your changes are not reaching the server, so the document cannot be rebuilt.",
+      fix: "Reload this page. If it says this again, tell Hanz before you send anything." };
+  }
+
   /** Wait until this draft's edits are on the server. Resolves true when the server holds
    *  what this page shows, false if the write failed or was refused.
    *
@@ -1033,6 +1070,7 @@
     setState,
     flushState,
     saveBlocked,
+    saveBlockedSay,
     refreshServerOwned,
     clearState,
     readForm,

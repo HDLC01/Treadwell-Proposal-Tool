@@ -41,6 +41,17 @@ const LIFTED = [
   // one: a stub would let these tests pass on figures in a format no estimator ever sees.
   grabFrom(SHARED, "shared.js", /function fmtUsd\(n\) \{[\s\S]*?\n  \}/, "fmtUsd"),
   grabFrom(SRC, "done.js", /function showStaleDoc\(rows, mode\) \{[\s\S]*?\n  \}/, "showStaleDoc"),
+  // showStaleDoc now calls this, and showSaveBlocked is the sibling that paints the same
+  // panel for a refused save. Lifting a caller without its callee is the ReferenceError this
+  // repo keeps re-learning -- here it would look like a panel that paints nothing.
+  grabFrom(SRC, "done.js", /function paintStaleDocChrome\(title, how, showFix\) \{[\s\S]*?\n  \}/, "paintStaleDocChrome"),
+  grabFrom(SRC, "done.js", /function showSaveBlocked\(\) \{[\s\S]*?\n  \}/, "showSaveBlocked"),
+  // saveBlockedSay is the ONE place the words for a refused save live, so the Files page and
+  // the Proposal step cannot describe one refusal two ways. Lift the real one, and the real
+  // saveBlocked under it, so the reason -> words mapping under test is the shipped mapping.
+  grabFrom(SHARED, "shared.js", /function saveBlockedSay\(\) \{[\s\S]*?\n  \}/, "saveBlockedSay"),
+  grabFrom(SHARED, "shared.js", /function saveBlocked\(\) \{[\s\S]*?\n  \}/, "saveBlocked"),
+  grabFrom(SHARED, "shared.js", /const STAMP = "[^"]+";/, "STAMP"),
   // The 409 parser, plus the module-scope constant it switches on. Lifting the function
   // without the constant is the ReferenceError this repo keeps re-learning.
   grabFrom(SRC, "done.js", /const STALE_DOCUMENT_CODE = "[^"]+";/, "STALE_DOCUMENT_CODE"),
@@ -62,16 +73,34 @@ function makeEl(id) {
   };
 }
 
-function load() {
+function load(env) {
   const nodes = { "stale-doc": makeEl("stale-doc"),
                   "stale-doc-lede": makeEl("stale-doc-lede"),
-                  "stale-doc-rows": makeEl("stale-doc-rows") };
+                  "stale-doc-rows": makeEl("stale-doc-rows"),
+                  "stale-doc-title": makeEl("stale-doc-title"),
+                  "stale-doc-how": makeEl("stale-doc-how"),
+                  "stale-doc-fix": makeEl("stale-doc-fix") };
   const doc = {
     getElementById: (id) => nodes[id] || null,
     createElement: () => makeEl(""),
   };
+  // saveBlocked is lifted for real, so only its three inputs are stubbed: the blob, the URL's
+  // draft id, and the unverified flag. Stubbing saveBlocked itself would make every
+  // reason -> words assertion below vacuous.
+  const e = env || {};
+  const shims = [
+    "function getState() { return " + JSON.stringify(e.state || {}) + "; }",
+    "function getDraftId() { return " + JSON.stringify(e.draftId || null) + "; }",
+    "function isUnverified() { return " + (e.unverified ? "true" : "false") + "; }",
+    // done.js reaches its words through TW, so the harness has to be the TW it reaches --
+    // wired to the REAL saveBlockedSay lifted below. Without this, TW is not defined, the
+    // try/catch in showSaveBlocked swallows the ReferenceError, and every assertion here
+    // passes on a function that returned false for the wrong reason.
+    "var TW = { saveBlockedSay: saveBlockedSay };",
+  ].join("\n");
   const fns = new Function("document", "window",
-    LIFTED + "; return { publishDigest, docDrift, showStaleDoc, staleDocRefusal, CODE: STALE_DOCUMENT_CODE };")(doc, {});
+    shims + "\n" + LIFTED + "; return { publishDigest, docDrift, showStaleDoc, showSaveBlocked,"
+    + " staleDocRefusal, saveBlocked, saveBlockedSay, CODE: STALE_DOCUMENT_CODE };")(doc, {});
   return Object.assign({ nodes: nodes }, fns);
 }
 
@@ -357,6 +386,159 @@ out.arrival = (() => {
     readsFreshState: !!block && /TW\.getState\(\)/.test(block[0]),
     // One comparison, shared with the gate. A local copy here is the original sin.
     usesTheSharedComparison: !!block && /TW\.docDrift\(TW\.publishDigest\(/.test(block[0]),
+  };
+})();
+
+// ── RJ's loop: a save this browser is not allowed to make ────────────────────
+// 2026-09-03, RJ: "I go back to the PDF and hit continue as the message says and everything
+// appears to be correct but I keep getting the error message." Both ends of that loop are here,
+// EXECUTED, because the fault was never visible in the source: setState refuses a write it
+// cannot own and returns the unchanged blob, so a source read of continueToDone shows a save and
+// a navigation and looks correct. Only running it against a foreign blob shows the hole.
+//
+// saveBlocked is lifted for real and only its three inputs are stubbed, so the reason the panel
+// names is derived the way the shipped page derives it. A stubbed saveBlocked would make every
+// assertion below true of nothing.
+const OWNED = { draftId: "d1", state: { __draft_id: "d1" } };
+const FOREIGN = { draftId: "d1", state: { __draft_id: "d2" } };
+
+out.blockedSave = (() => {
+  const blocked = (() => {
+    const h = load(FOREIGN);
+    const painted = h.showSaveBlocked();
+    return {
+      painted: painted,
+      reason: (h.saveBlockedSay() || {}).reason,
+      shown: !h.nodes["stale-doc"].hidden,
+      title: h.nodes["stale-doc-title"].textContent,
+      how: h.nodes["stale-doc-how"].textContent,
+      // The cure must not be "press Continue again": that IS the loop RJ was in.
+      howNamesContinue: /[Cc]ontinue/.test(h.nodes["stale-doc-how"].textContent),
+      // Update the PDF is the loop's own button. It has to go.
+      fixHidden: h.nodes["stale-doc-fix"].hidden,
+      // The drift figures are not the story here. Leaving them makes it look like the document
+      // is the problem, when the problem is that nothing can be written at all.
+      rows: h.nodes["stale-doc-rows"].textContent,
+      lede: h.nodes["stale-doc-lede"].textContent,
+    };
+  })();
+
+  // A page that CAN save must be left completely alone, or every ordinary send would be stopped
+  // and the assertions above would pass just as green.
+  const clean = (() => {
+    const h = load(OWNED);
+    const painted = h.showSaveBlocked();
+    return { painted: painted, reason: h.saveBlocked(),
+             stillHidden: h.nodes["stale-doc"].hidden,
+             title: h.nodes["stale-doc-title"].textContent };
+  })();
+
+  // All three refusals, through the real derivation, each with its own way out. Distinct words
+  // matter: "close the other tab" and "reload the page" are different actions.
+  const words = {};
+  [["foreign-blob", FOREIGN],
+   ["no-draft", { draftId: null, state: {} }],
+   ["unverified", { draftId: "d1", state: { __draft_id: "d1" }, unverified: true }],
+  ].forEach((pair) => {
+    const h = load(pair[1]);
+    const b = h.saveBlockedSay();
+    words[pair[0]] = { reason: h.saveBlocked(), say: b ? b.say : "", fix: b ? b.fix : "" };
+  });
+
+  // The panel is BORROWED. A real drift shown after a blocked repaint must get its own words
+  // back, or it tells the estimator to close a tab that is already closed.
+  const restored = (() => {
+    const h = load(FOREIGN);
+    h.showSaveBlocked();
+    h.showStaleDoc(h.docDrift(h.publishDigest(DRIFTED)), "blocked");
+    return { title: h.nodes["stale-doc-title"].textContent,
+             how: h.nodes["stale-doc-how"].textContent,
+             fixHidden: h.nodes["stale-doc-fix"].hidden,
+             rows: h.nodes["stale-doc-rows"].read() };
+  })();
+
+  return { blocked: blocked, clean: clean, words: words, restored: restored };
+})();
+
+// ── the Proposal step's own end of the loop ──────────────────────────────────
+// Executed: sayTheSaveIsBlocked repaints the arrival note in place, and the three ids it writes
+// into are what make the note stop naming Continue. The GUARD's position is a claim about a
+// handler that needs the whole editor to run, so that part is read off the source.
+out.proposalGuard = (() => {
+  const lift = (re, name) => {
+    const m = re.exec(PROPOSAL);
+    if (!m) throw new Error("function " + name + " is gone from proposal-review.js");
+    return m[0];
+  };
+  const nodes = {};
+  ["resync-note", "resync-note-head", "resync-note-what", "resync-note-do"]
+    .forEach((id) => { nodes[id] = makeEl(id); });
+  const doc = { getElementById: (id) => nodes[id] || null, createElement: () => makeEl("") };
+  const shims = [
+    "function getState() { return " + JSON.stringify(FOREIGN.state) + "; }",
+    "function getDraftId() { return " + JSON.stringify(FOREIGN.draftId) + "; }",
+    "function isUnverified() { return false; }",
+    "var TW = { saveBlockedSay: saveBlockedSay };",
+    grabFrom(SHARED, "shared.js", /function saveBlockedSay\(\) \{[\s\S]*?\n  \}/, "saveBlockedSay"),
+    grabFrom(SHARED, "shared.js", /function saveBlocked\(\) \{[\s\S]*?\n  \}/, "saveBlocked"),
+    grabFrom(SHARED, "shared.js", /const STAMP = "[^"]+";/, "STAMP"),
+    lift(/function repaintNote\([\s\S]*?\n  \}/, "repaintNote"),
+    lift(/function sayTheSaveIsBlocked\(\) \{[\s\S]*?\n  \}/, "sayTheSaveIsBlocked"),
+  ].join("\n");
+  const fns = new Function("document", "window",
+    shims + "; return { sayTheSaveIsBlocked: sayTheSaveIsBlocked, repaintNote: repaintNote };")(doc, {});
+  const said = fns.sayTheSaveIsBlocked();
+
+  const iGuard = PROPOSAL.indexOf("if (sayTheSaveIsBlocked()) return;");
+  const iWrite = PROPOSAL.indexOf("proposal_payload:", iGuard > 0 ? iGuard : 0);
+  const iLanded = PROPOSAL.indexOf("landed = !!(TW.getState() || {}).proposal_payload",
+                                   iWrite > 0 ? iWrite : 0);
+  const iGo = PROPOSAL.indexOf("window.location.assign(TW.withDraft(\"/done.html\"))",
+                               iWrite > 0 ? iWrite : 0);
+  return {
+    said: said,
+    head: nodes["resync-note-head"].textContent,
+    what: nodes["resync-note-what"].textContent,
+    doIt: nodes["resync-note-do"].textContent,
+    shown: !nodes["resync-note"].hidden,
+    // Nowhere in what it now says may it point back at the button that cannot work. The three
+    // parts are addressed separately for exactly this reason: painting only the middle span
+    // would leave "press Continue to Done" on screen under the reason it cannot work.
+    stillNamesContinue: /Continue/.test(nodes["resync-note-do"].textContent),
+    // ASKED BEFORE WRITING. A guard after the compose would still navigate on a refused save.
+    guardBeforeTheWrite: iGuard > 0 && iWrite > iGuard,
+    // And the belt-and-braces check sits between the write and the navigation, for the one
+    // refusal saveBlocked cannot see: writeBlob returning false on a full localStorage.
+    landedBetweenWriteAndGo: iLanded > iWrite && iGo > iLanded,
+    // It must LEAVE. Painting the note and navigating anyway is the bug wearing a fix.
+    landedReturns: iLanded > 0 && iGo > iLanded
+      && /\n\s*return;/.test(PROPOSAL.slice(iLanded, iGo)),
+    // And hand the button back, or a blocked Continue leaves a dead "Generating…" button.
+    landedRestoresButton: iLanded > 0 && iGo > iLanded
+      && /btn\.disabled = false/.test(PROPOSAL.slice(iLanded, iGo)),
+  };
+})();
+
+// ── the Files page's gate order ──────────────────────────────────────────────
+// Which question is asked first decides which cure the estimator is given. Asking "is the
+// document stale" first was correct and insufficient: the answer was yes, and the cure it named
+// could not be carried out.
+out.gateOrder = (() => {
+  const iStale = SRC.indexOf("const stale = TW.docDrift(TW.publishDigest(TW.getState()))");
+  const iBlocked = SRC.indexOf("stale.length && showSaveBlocked()", iStale > 0 ? iStale : 0);
+  const iShow = SRC.indexOf("showStaleDoc(stale, \"blocked\")", iStale > 0 ? iStale : 0);
+  const iPublish = SRC.indexOf("/api/portal/publish", iStale > 0 ? iStale : 0);
+  return {
+    asksBeforeBlamingTheDocument: iBlocked > 0 && iShow > iBlocked,
+    // Only when there IS drift: a page that cannot save but shows the right document has no
+    // business being stopped here, and stopping it would break every ordinary send.
+    onlyWhenThereIsDrift: iBlocked > 0,
+    bothBeforeThePost: iBlocked > 0 && iPublish > iBlocked,
+    // Nothing is posted. No portal row, no email.
+    returnsWithoutPosting: iBlocked > 0 && iPublish > iBlocked
+      && /\n\s*return;/.test(SRC.slice(iBlocked, iPublish)),
+    restoresButton: iBlocked > 0 && iShow > iBlocked
+      && /portalBtn\.disabled = false/.test(SRC.slice(iBlocked, iShow)),
   };
 })();
 
