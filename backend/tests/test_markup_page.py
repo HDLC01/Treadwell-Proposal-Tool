@@ -231,6 +231,69 @@ def test_an_absent_line_filed_by_hand_renders_the_same_way(ran):
     assert "not used on polished concrete" in r["formulaText"].lower()
 
 
+# -- the off row's one exit -------------------------------------------------
+# The presentation above is deliberate and stays. What was missing is the way OUT of it. An off
+# row has no box to type in, so the only control it can carry is the one that hands the line back
+# to its built-in -- and until 2026-09-04 it carried nothing. The only route home was the
+# transient on-but-unsaved row: flip the switch on, the button appears, blur the empty box, and
+# the row reverts to off and takes the button with it. A corner with a single exit that vanished
+# when touched, which is the shape of the send-gate loop RJ reported the day before.
+
+
+@needs_node
+def test_a_line_switched_off_keeps_the_one_control_that_undoes_it(ran):
+    """Both routes into the off state, because they are different code paths reaching one row.
+
+    `filedAbsent` arrives with `applies=false` already on the row; `switchedOff` gets there by an
+    admin flipping the switch on this page. Either way the row HAS a rule id, so there is
+    something to stop overriding -- and no input, so nothing else could offer it.
+
+    Mutation: stop calling dropBtnHtml from the ABSENT branch
+    (test_an_off_row_with_no_way_back_is_the_corner_this_undoes)."""
+    for name, line in (("filedAbsent", "hard_bid"), ("switchedOff", "soft_costs")):
+        r = row(ran[name], line)
+        assert r["absentClass"] is True, "%s/%s is not the off row this is about" % (name, line)
+        assert r["inputs"] == [], (
+            "%s/%s grew a box, so the row is no longer the one with no other exit" % (name, line))
+        assert [b["text"] for b in r["buttons"]] == ["Stop overriding this line"], (
+            "%s/%s offers no way back to the built-in: %r"
+            % (name, line, [b["text"] for b in r["buttons"]]))
+        assert r["buttons"][0]["drop"] == line, r["buttons"][0]
+
+
+@needs_node
+def test_a_line_that_was_never_overridden_offers_nothing_to_stop(ran):
+    """THE COUNTEREXAMPLE. Gyp's hard bid is absent because Kyle's workbook has no such cell --
+    `applies=false` as a built-in DEFAULT, with no filed rule and so no id. "Stop overriding this
+    line" there would be a button with nothing to remove, and pressing it could only fail.
+
+    Without this, the test above would pass just as green on a version that painted the button on
+    every absent row."""
+    r = row(ran["gyp"], "hard_bid")
+    assert r["absentClass"] is True
+    assert r["buttons"] == [], (
+        "a line nobody has overridden offers to stop overriding it: %r"
+        % [b["text"] for b in r["buttons"]])
+
+
+@needs_node
+def test_the_way_back_from_an_off_row_actually_removes_the_rule(ran):
+    """Clicked for real, through the page's own delegated [data-drop] handler. A button that
+    paints and does nothing would be a worse corner than no button -- so the DELETE, the words on
+    the confirm, and the state of the row afterwards are all asserted, not the markup alone."""
+    d = ran["filedAbsentDrop"]
+    assert d["deletes"] == ["/api/markup/rules/polish-hard_bid"], d["deletes"]
+    c = d["confirm"] or {}
+    assert c.get("name") == "Hard bid discount", c
+    # The expensive misreading, said out loud: removing a rule is not "charge nothing here".
+    assert "does not price the line at nothing" in c.get("detail", ""), c
+    after = row(d["after"], "hard_bid")
+    assert after["absentClass"] is False, "the row is still off after its rule was removed"
+    assert after["preview"] == "-4%-$4,857.16", (
+        "the line did not come back at its built-in rate: %r" % after["preview"])
+    assert after["buttons"] == [], "there is still an override to stop after the rule is gone"
+
+
 @needs_node
 def test_switching_a_line_off_files_applies_false_with_no_formula(ran):
     """The PUT body is the distinction, or the backend cannot store it.
@@ -620,6 +683,41 @@ def test_dropping_the_admin_gate_hands_a_non_admin_a_box(tmp_path):
     mutant = mutate(tmp_path, "    if (!ADMIN) {", "    if (false) {", expect_count=2)
     assert mutant["nonAdminPolish"]["inputCount"] > 0, "the mutation changed nothing"
     assert mutant["nonAdminPolish"]["switchCount"] > 0
+
+
+@needs_node
+def test_an_off_row_with_no_way_back_is_the_corner_this_undoes(tmp_path):
+    """Proves test_a_line_switched_off_keeps_the_one_control_that_undoes_it is not vacuous.
+
+    This mutation is not hypothetical -- it is the code as it shipped until 2026-09-04, so what
+    the mutant does IS the bug being fixed. Restore it and the off row goes back to having no
+    control of any kind, while the row's own rule still sits in the table."""
+    absent_tail = '(r.dirty ? " Unsaved." : "") + "</span></span>"'
+    mutant = mutate(tmp_path,
+                    absent_tail + " +" + chr(10) + "        dropBtnHtml(r);",
+                    absent_tail + ";")
+    for name, line in (("filedAbsent", "hard_bid"), ("switchedOff", "soft_costs")):
+        r = row(mutant[name], line)
+        assert r["buttons"] == [], "the mutation changed nothing for %s/%s" % (name, line)
+        assert r["inputs"] == [], (
+            "%s/%s has some other exit, so the assertion was never about the button" % (name, line))
+
+
+@needs_node
+def test_dropping_the_admin_half_of_the_gate_hands_a_non_admin_a_delete_button(tmp_path):
+    """Proves the ADMIN half of dropBtnHtml's one gate is load-bearing, and it is: the first
+    version of this fix gated only on `r.id` and handed a non-admin a delete button, because the
+    ABSENT branch returns above the `if (!ADMIN)` fork and never reaches it. One function, one
+    rule -- and a mutation to prove the rule is doing work.
+
+    `nonAdminRequests` is included so a page that renders the button is not excused by the server
+    refusing the DELETE. A button that 403s is a lie about what somebody may do."""
+    mutant = mutate(tmp_path, "if (!ADMIN || !r.id) return \"\";", "if (!r.id) return \"\";")
+    hit = [name for name in ("nonAdminPolish", "nonAdminGyp")
+           if mutant[name]["buttonCount"] > 0]
+    assert hit, "the mutation changed nothing -- the gate may already be somewhere else"
+    assert mutant["nonAdminPolish"]["inputCount"] == 0, (
+        "the mutant also grew boxes, so this proves nothing about the drop button specifically")
 
 
 @needs_node

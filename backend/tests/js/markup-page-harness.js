@@ -405,6 +405,16 @@ async function main() {
     const s = build({ rules: [rule("polish", "hard_bid", { applies: false, formula: null })] });
     await drain();
     out.filedAbsent = s.snap();
+
+    // AND THE WAY BACK MUST ACTUALLY WORK FROM HERE. An off row has no box to type in, so this
+    // button is its only exit -- one that painted and did nothing would be a worse corner than no
+    // button at all. Clicked for real, through the page's own delegated [data-drop] handler.
+    s.clickIn("d-hard_bid");
+    await drain();
+    out.filedAbsentDrop = { confirm: s.confirms[0] || null,
+                            deletes: s.requests.filter((r) => r.method === "DELETE")
+                              .map((r) => r.url),
+                            after: s.snap() };
   }
 
   // ═══ 5. an invalid formula: the cascade, and never a $0.00 ════════════════
