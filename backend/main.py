@@ -2984,8 +2984,16 @@ def api_counties(state: str = "") -> Dict[str, Any]:
     KDOR's destination-sourcing rule. Counties are the county-only floor
     rate, correct only for unincorporated land (see reference_tax.py).
     Key stays "counties" for backward compatibility with existing
-    frontend callers; each row now carries a `kind` ("city"|"county")."""
-    return {"counties": reference_tax.list_tax_areas(state)}
+    frontend callers; each row now carries a `kind` ("city"|"county").
+
+    `ks_state_rate` rides along so the pickers can say the fallback rate
+    out loud ("no county picked, so this falls back to the Kansas state
+    rate of 6.5%") without a third copy of the number. It already lives
+    in reference_tax.KS_STATE_RATE and in polish-bid-core.js RATES.KS_STATE;
+    serving it here is what let js/county-picker.js quote it while adding
+    no table of its own."""
+    return {"counties": reference_tax.list_tax_areas(state),
+            "ks_state_rate": reference_tax.KS_STATE_RATE}
 
 
 @app.get("/api/sheet/{sheet_name}")
