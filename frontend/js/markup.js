@@ -439,6 +439,27 @@
       '<span class="amt">' + esc(money(p.amount)) + "</span>";
   }
 
+  /** Soft delete, worded as what it does. "Delete" would read as "charge nothing"; the chain
+   *  falls back to its hardcoded constant for a line with no rule.
+   *
+   *  IT HAS TO BE REACHABLE FROM THE OFF ROW TOO, which is why this is a function and not three
+   *  lines at the bottom of the priced branch. Switching a line off files `applies=false`, so the
+   *  row HAS a rule id -- and it is the row that most needs a way back, because the off state has
+   *  no box to type in. Without this the only route home was the transient on-but-unsaved row:
+   *  flip the switch on and the button appears, blur the empty box and the row reverts to off and
+   *  takes the button with it. A corner with one exit, where the exit disappears when touched.
+   *  Same family as the send-gate loop of 2026-09-03 -- the cure the screen named could not be
+   *  carried out. */
+  function dropBtnHtml(r) {
+    // GATED HERE, not at the two call sites. The ABSENT branch returns before this function's
+    // other caller reaches the `if (!ADMIN)` fork, so a gate per call site would have to be
+    // remembered twice -- and the first version of this fix handed a non-admin a delete button on
+    // Gyp's empty hard-bid row. One function, one rule.
+    if (!ADMIN || !r.id) return "";
+    return '<button class="ghostlink" type="button" data-drop="' + esc(r.line_key) + '"' +
+      ' data-focus="d-' + esc(r.line_key) + '">Stop overriding this line</button>';
+  }
+
   function formulaCellHtml(r, p) {
     var k = r.line_key;
 
@@ -449,7 +470,8 @@
         " Not used on " + esc(nounFor(LAYOUT)) + "</span>" +
         '<span class="wbnote">' + icon("info") +
         "<span>The cell is empty on this tab, which is not the same as 0%." +
-        (r.dirty ? " Unsaved." : "") + "</span></span>";
+        (r.dirty ? " Unsaved." : "") + "</span></span>" +
+        dropBtnHtml(r);
     }
 
     // ── read-only chain lines ───────────────────────────────────────────────
@@ -505,12 +527,7 @@
         ". The tab cannot be priced until this is filed.</span></span>";
     }
 
-    // Soft delete, worded as what it does. "Delete" would read as "charge nothing"; the chain
-    // falls back to its hardcoded constant for a line with no rule.
-    if (r.id) {
-      out += '<button class="ghostlink" type="button" data-drop="' + esc(k) + '"' +
-        ' data-focus="d-' + esc(k) + '">Stop overriding this line</button>';
-    }
+    out += dropBtnHtml(r);
     return out;
   }
 
