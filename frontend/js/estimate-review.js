@@ -1098,7 +1098,7 @@ function copyTab(sourceId) {
   // override here means a priced option can never quote Kyle's 10% placeholder
   // while the pill overhead claims the real rate is applied automatically.
   // Runs after buildTabs() so `remodelRateTargets` can see the new tab.
-  applyRemodelRateOverride(state.county_remodel_rate != null ? state.county_remodel_rate : null);
+  applyRemodelRateOverride(effectiveRemodelRate());
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_order: state.tab_order, cell_values: cellValues });
   renderTabs();
@@ -3397,6 +3397,135 @@ function remodelRateTargets() {
   return out;
 }
 
+// ─── The remodel tax % the estimator read off the state's own site ──────────
+//
+// Kyle, on the bid he was working on: "the remodel tax calculator is not giving
+// correct tax %. I'm not sure how that works but we use the link within the
+// original excel sheet to go to the website, enter the address, and get the tax
+// % from there." The county picker above gets close, but the authoritative
+// figure is per-ADDRESS, not per-county, so there has to be somewhere to type
+// the exact one the site returned.
+//
+// Two things this deliberately does NOT do.
+//
+//  1. **It does not round, and it does not divide.** These rates carry three
+//     decimals, and in binary floating point a plain /100 or *100 does not
+//     survive them. Measured, not assumed:
+//
+//         8.775 / 100   ->  0.08775000000000001
+//         9.975 / 100   ->  0.09974999999999999      (a hair LOW)
+//         0.07975 * 100 ->  7.9750000000000005
+//
+//     The first two would go verbatim into a spreadsheet formula; the third is
+//     what the box would show the estimator. Note that 7.975 / 100 happens to
+//     be exact, so spot-checking one rate proves nothing -- which is why the
+//     decimal point is MOVED through the number's TEXT in both directions.
+//  2. **It does not work out any tax itself.** The dollar figure stays Kyle's
+//     own ROUNDUP(SUM(...)*B81,0); this only replaces the RATE that formula
+//     multiplies by. So the screen, the sheet and the downloaded .xlsx cannot
+//     disagree about how the tax was arrived at, and the whole-dollar rounding
+//     in the bid is still his rather than ours.
+
+// Move the decimal point through a number's TEXT. `places` is negative to shift
+// left (percent -> rate) and positive to shift right (rate -> percent).
+// Returns null for anything that is not a plain number, so a typo is refused
+// rather than quietly becoming a price.
+function shiftDecimalText(text, places) {
+  const s = String(text == null ? "" : text).trim();
+  if (!/^\d*\.?\d*$/.test(s)) return null;
+  const dot = s.indexOf(".");
+  const whole = dot >= 0 ? s.slice(0, dot) : s;
+  const frac = dot >= 0 ? s.slice(dot + 1) : "";
+  if (!(whole + frac).length) return null;      // "" and "." are not numbers
+  let d = whole + frac;
+  let point = whole.length + places;
+  while (point < 0) { d = "0" + d; point += 1; }
+  while (point > d.length) { d = d + "0"; }
+  const ip = d.slice(0, point).replace(/^0+(?=\d)/, "") || "0";
+  const fp = d.slice(point).replace(/0+$/, "");
+  return fp ? ip + "." + fp : ip;
+}
+
+// The rate actually in force, in Kyle's own decimal form. A typed percentage
+// beats the county table, which beats nothing at all -- and "nothing" means
+// applyRemodelRateOverride writes his 10% placeholder back, which is what the
+// untouched template already holds.
+function effectiveRemodelRate() {
+  if (state.remodel_rate_override != null) return state.remodel_rate_override;
+  if (state.county_remodel_rate != null) return state.county_remodel_rate;
+  return null;
+}
+
+// Is remodel tax switched on anywhere on this bid? Kyle's rate cell is
+// =IF(D6="yes",<rate>,0), so on a tab whose D6/D8 reads "no" the tax is zero no
+// matter what rate is typed. Saying so beats letting someone type 7.975 into a
+// bid that will price at 0 and trust it -- the same reason the county picker
+// states when it is not affecting the price.
+function remodelTaxIsOn() {
+  for (const t of remodelRateTargets()) {
+    const v = HF && HF.ready ? HF.getValue(t[0], t[2]) : null;
+    if (String(v == null ? "" : v).trim().toLowerCase() === "yes") return true;
+  }
+  return false;
+}
+
+// Paint the field and its note from whatever rate is in force.
+//
+// The value is NOT written back while the box has focus. This runs from the
+// commit handler and from a county pick, and overwriting a box mid-keystroke is
+// how a re-render steals the digits someone is still typing.
+function renderRemodelRateField() {
+  const input = document.getElementById("remodel-rate");
+  const note = document.getElementById("remodel-rate-note");
+  const rate = effectiveRemodelRate();
+  if (input && document.activeElement !== input) {
+    input.value = rate != null ? shiftDecimalText(String(rate), 2) || "" : "";
+  }
+  if (!note) return;
+  if (rate == null) {
+    note.textContent = "Not set — the sheet's own 10% placeholder is being used.";
+    note.className = "rate-note rate-note-warn";
+  } else if (!remodelTaxIsOn()) {
+    note.textContent = "Remodel tax is switched off on this bid, so this % is not changing the price.";
+    note.className = "rate-note rate-note-warn";
+  } else if (state.remodel_rate_override != null) {
+    note.textContent = "Typed in — this is the rate the bid is using.";
+    note.className = "rate-note";
+  } else {
+    note.textContent = "From the county list. Type over it with the % the site gives for this address.";
+    note.className = "rate-note";
+  }
+}
+
+// Commit what was typed: percent text -> exact decimal -> every rate cell.
+function commitRemodelRate() {
+  const input = document.getElementById("remodel-rate");
+  const note = document.getElementById("remodel-rate-note");
+  if (!input) return;
+  const typed = String(input.value == null ? "" : input.value).replace(/%/g, "").trim();
+  if (!typed) {
+    // Cleared, not deleted: TW.setState merges the object it is handed, so a
+    // delete would leave the old override sitting in the saved blob.
+    state.remodel_rate_override = null;
+  } else {
+    const asRate = shiftDecimalText(typed, -2);
+    if (asRate == null) {
+      if (note) {
+        note.textContent = "That is not a number. Type it like 7.975 — no % sign needed.";
+        note.className = "rate-note rate-note-bad";
+      }
+      return;                     // refuse it; the rate in force is unchanged
+    }
+    state.remodel_rate_override = Number(asRate);
+  }
+  const rate = effectiveRemodelRate();
+  applyRemodelRateOverride(rate);
+  TW.setState({ ...state, remodel_rate_override: state.remodel_rate_override,
+                cell_values: cellValues });
+  if (state.county) renderCountyPill(state.county, rate);
+  renderRemodelRateField();
+}
+
 // Writes `rate` (or, with none picked, Kyle's own 10% placeholder) into every
 // remodel-tax formula cell, keeping his own "$0 unless the toggle says yes"
 // shape so flipping D6/D8 off still zeroes it. Reaches the .xlsx through the
@@ -3448,9 +3577,16 @@ function refreshActiveGridFromHF() {
 // is the label verbatim, so restoring a prior pick just replays it as-is
 // instead of guessing its shape back apart.
 function renderCountyPill(label, remodelRate) {
-  const remodelNote = remodelRate != null
-    ? ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> applied automatically`
-    : "";
+  // "applied automatically" is true of the county table and false of a rate the estimator
+  // typed, and this pill sits inches from a note that says "Typed in". Reads `state` rather
+  // than taking a new argument because every caller would have to be taught to pass it,
+  // and because a new callee inside this function would be unbound in the lifted copy the
+  // harness runs.
+  const remodelNote = remodelRate == null
+    ? ""
+    : state.remodel_rate_override != null
+      ? ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> (the % you typed)`
+      : ` — remodel tax <b>${(remodelRate * 100).toFixed(3)}%</b> applied automatically`;
   countySelected.innerHTML = `
     <span class="county-pill">${escHtml(label)}${remodelNote}
       <span class="x" id="county-clear">×</span>
@@ -3459,23 +3595,62 @@ function renderCountyPill(label, remodelRate) {
   countyInput.value = "";
   countyResults.classList.remove("open");
   document.getElementById("county-clear").addEventListener("click", () => {
-    delete state.county; delete state.county_tax_rate; delete state.county_remodel_rate; delete state.county_notes;
-    TW.setState(state);
+    // Falsy values, not `delete`. TW.setState does Object.assign(cur, partial) against a
+    // blob freshly re-parsed from localStorage, so any key the partial LACKS keeps its
+    // stored value -- `delete` emptied the pill on screen and left the county sitting in
+    // the saved draft, which the next reload brought straight back. Cosmetic while the
+    // county was only a label; now that effectiveRemodelRate() falls back to it, a county
+    // that refuses to clear is a rate that refuses to clear. Empty string and null match
+    // the shape polish-intake.js already writes for a cleared county. These four
+    // assignments ARE the fix: the payload below names each of these keys and reads it
+    // back off `state`, so clearing them here is what puts them in the save.
+    state.county = "";
+    state.county_tax_rate = null;
+    state.county_remodel_rate = null;
+    state.county_notes = "";
     countySelected.innerHTML = "";
-    applyRemodelRateOverride(null);   // no county picked — revert to the template's own placeholder
+    // Clearing the COUNTY does not clear a typed %. That figure came off the
+    // state's site for this address; dropping the county is not a retraction of
+    // it. With neither, the template's own placeholder comes back.
+    applyRemodelRateOverride(effectiveRemodelRate());
+    renderRemodelRateField();
+    // Saved AFTER the revert, and carrying cell_values, for the reason pickCounty
+    // records above its own save: `cellValues` is a COPY of state.cell_values
+    // (:282), so spreading `...state` would carry the OLD map and leave the
+    // cleared county's rate formula sitting in the draft. Generate before the next
+    // reload and the workbook would bill a rate for a county that is gone.
+    TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate,
+                  county_remodel_rate: state.county_remodel_rate,
+                  county_notes: state.county_notes, cell_values: cellValues });
   });
 }
 
 function pickCounty(c) {
   const label = countyRowLabel(c);
-  renderCountyPill(label, c.remodel_rate != null ? c.remodel_rate : null);
-  applyRemodelRateOverride(c.remodel_rate != null ? c.remodel_rate : null);
-  // Persist to state so the proposal step can use it (token: {{county}})
+  // Persist to state FIRST (token: {{county}} on the proposal step).
+  //
+  // ORDER IS LOAD-BEARING. effectiveRemodelRate() and renderRemodelRateField()
+  // both read state, so writing the county after them resolves against the
+  // PREVIOUS county -- on a first pick, against nothing -- and writes Kyle's 10%
+  // placeholder into every rate cell while the pill overhead claims the real
+  // rate is applied automatically. That is the exact defect PR #432/#433 exists
+  // to kill, and it came straight back the moment this stopped being handed
+  // c.remodel_rate directly. Caught by remodel-rate-harness.js on its first run.
   state.county = label;
   state.county_tax_rate = c.rate;
   state.county_remodel_rate = c.remodel_rate != null ? c.remodel_rate : null;
   state.county_notes = c.notes;
-  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_remodel_rate: state.county_remodel_rate, county_notes: state.county_notes });
+  // A new county means a new address, so it supersedes a % typed for the old
+  // one -- and does so VISIBLY, because renderRemodelRateField repaints the box
+  // with the county's own figure rather than leaving a stale number sitting in it.
+  state.remodel_rate_override = null;
+  renderCountyPill(label, effectiveRemodelRate());
+  applyRemodelRateOverride(effectiveRemodelRate());
+  renderRemodelRateField();
+  // cell_values goes along now. Without it the formula writes above reached the
+  // engine but not the draft, which is why a reload needed the self-heal further
+  // down to re-apply them; carrying them makes the pick durable on its own.
+  TW.setState({ ...state, county: state.county, county_tax_rate: state.county_tax_rate, county_remodel_rate: state.county_remodel_rate, county_notes: state.county_notes, remodel_rate_override: state.remodel_rate_override, cell_values: cellValues });
 }
 
 countyInput.addEventListener("input", e => renderCountyResults(e.target.value));
@@ -3515,11 +3690,27 @@ document.addEventListener("click", e => {
 // County, KS") — replay it verbatim instead of re-deriving name/kind from
 // its shape, which a city label (no "County" substring) can't round-trip.
 if (state.county) {
-  renderCountyPill(state.county, state.county_remodel_rate != null ? state.county_remodel_rate : null);
-  // Self-heal drafts saved before the formula-cell fix: a prior pick only ever
-  // reached state.county_remodel_rate, never the actual B81/B75/B80 formula
-  // cell (see applyRemodelRateOverride above), so re-apply it now.
-  applyRemodelRateOverride(state.county_remodel_rate != null ? state.county_remodel_rate : null);
+  renderCountyPill(state.county, effectiveRemodelRate());
+}
+// Self-heal drafts saved before the formula-cell fix: a prior pick only ever
+// reached state.county_remodel_rate, never the actual B81/B75/B80 formula cell
+// (see applyRemodelRateOverride above), so re-apply it now.
+//
+// Outside the state.county guard on purpose -- a typed % needs no county, and
+// under that guard it would have been saved and then never applied. Skipped
+// entirely when nothing is in force, so an untouched draft does not collect
+// cell_values entries that only restate the template.
+if (effectiveRemodelRate() != null) applyRemodelRateOverride(effectiveRemodelRate());
+renderRemodelRateField();
+
+const _rateBox = document.getElementById("remodel-rate");
+if (_rateBox) {
+  _rateBox.addEventListener("change", commitRemodelRate);
+  _rateBox.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();                 // Enter in a toolbar box would submit
+    commitRemodelRate();
+  });
 }
 
 loadCounties();

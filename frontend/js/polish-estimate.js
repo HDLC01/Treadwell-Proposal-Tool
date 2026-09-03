@@ -156,15 +156,25 @@
     return sum;
   }
 
-  /** The county's REAL remodel-tax rate for this project, or 0 when nobody has picked a county.
+  /** This project's REAL remodel-tax rate, or 0 when nobody has picked a county.
    *
-   *  Read off the draft under the same keys the live estimate screen writes (`county_remodel_rate`,
-   *  set by its county picker and by the beta intake's), so a project that chose its county on
-   *  either screen prices the same on both. Kyle's sheet hardcodes 10% here; that is not a real
-   *  rate anywhere, and Hanz's instruction on 2026-08-18 was to use the actual one. When this
-   *  returns 0 the engine falls back to the Kansas state rate rather than to 10%. */
+   *  Read off the draft under the same two keys the live estimate screen writes:
+   *  `remodel_rate_override` (the % an estimator typed off the state's site for this address)
+   *  first, then `county_remodel_rate` (its county picker, and the beta intake's). Both, in
+   *  that order, so a project prices the same whichever screen answered the question. Kyle's
+   *  sheet hardcodes 10% here; that is not a real rate anywhere, and Hanz's instruction on
+   *  2026-08-18 was to use the actual one. When this returns 0 the engine falls back to the
+   *  Kansas state rate rather than to 10%. */
   function remodelRate() {
-    var r = state.county_remodel_rate;
+    // A rate TYPED on the live estimate screen wins over the county table, for the same
+    // reason it does there: the estimator read it off the state's own site for this
+    // address, and a county is coarser than an address. Without this the beta would show
+    // one rate while the workbook it generates carried another -- two sources of truth for
+    // one number, which is the defect the duplicate city tables already taught us to
+    // refuse. An explicit 0 is a real answer here (no remodel tax at this address) and is
+    // deliberately allowed through rather than treated as unset.
+    var r = state.remodel_rate_override;
+    if (r === null || r === undefined || r === "") r = state.county_remodel_rate;
     if (r !== null && r !== undefined && r !== "") return B.num(r);
     // A county IS chosen but carries no remodel rate — that is Missouri, where remodel labour is
     // generally exempt. Return a definite 0, not null: null would stand the Kansas state rate up
