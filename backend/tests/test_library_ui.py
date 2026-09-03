@@ -1680,6 +1680,214 @@ def test_the_filter_bar_is_not_a_sixth_card(ran):
         "a filter control is inside the tbody renderItems rebuilds, so it will lose its state")
 
 
+# ── the Assemblies tab gets the same box ─────────────────────────────────────
+# Hanz, 2026-09-03: "we need to apply filters in the assemblies tab like in the items tab."
+#
+# "Like the items tab" is the specification and it is read literally: the same grammar, the same
+# clear button, the same "N of M shown" count, the same badge-stays-total rule, the same distinction
+# between an empty library and a search that found nothing. What differs is only what an assembly
+# HAS to be filtered on - it owns a unit and a condition, and it has no division and no vendor of
+# its own - so this bar carries two facets where the items bar carries three.
+
+
+@needs_node
+def test_the_assemblies_tab_can_be_searched(ran):
+    """The rail is a list of names with no hint of how long it is, and Treadwell's real library is
+    heading past the point where finding "MACRO Flake" is a matter of looking.
+
+    Mutation: have renderList loop over ASMS again instead of visibleAssemblies(area)."""
+    g = ran["asmSearch"]
+    assert g["unfiltered"] == 4, g["unfiltered"]
+    assert g["filtered"] == ["a1"], g["filtered"]
+    assert g["missed"] == 0, "a search with no hits still drew rows"
+    assert g["hits"] == "1 of 4 shown", g["hits"]
+    assert g["hitsHiddenWhenNotFiltering"], "it counted hits when nothing was being filtered"
+    assert g["badgeWhileFiltering"], (
+        "the tab badge moved with the search, so filtering reads as assemblies being deleted")
+    assert int(g["badge"]) == 4, g["badge"]
+
+
+@needs_node
+def test_the_assembly_search_reaches_the_materials_inside_each_one(ran):
+    """"Which systems use that primer?" is the question this tab could not answer without opening
+    every assembly one at a time, and it comes free: asmTermHits runs the same `termHits` the three
+    item boxes use over each line's material, so `vendor:sherwin` and `cost:>200` reach in here too.
+
+    "primer" appears in no assembly NAME in this fixture. Only a1 contains it, two levels down.
+
+    Mutation: drop the line loop out of asmTermHits and match on the assembly's own name only."""
+    assert ran["asmSearch"]["reachesInside"] == ["a1"], (
+        "a material inside an assembly is not findable from the assembly list: %r"
+        % ran["asmSearch"]["reachesInside"])
+
+
+@needs_node
+def test_leaving_something_out_is_asked_per_term_not_per_haystack(ran):
+    """THE ONE DECISION IN THIS BAR THAT COULD HAVE GONE WRONG QUIETLY. The obvious implementation -
+    run the existing `itemMatches` over each haystack and OR the answers - inverts what a negated
+    term means. `-primer` would become "some line in here has no primer in it", which is true of a1
+    as well, since its first line is plain OPF. Asking each term separately makes it mean "nothing
+    in here mentions primer", which is what somebody typing it wants.
+
+    a1 is the only assembly containing OPF Primer, so it is the only one `-primer` may drop, and a
+    per-haystack implementation is the one that keeps it.
+
+    Mutation: change asmMatches to `if (itemMatches(...) || lines.some(...))`."""
+    assert ran["asmSearch"]["negationIsPerTerm"] == ["a2", "a3", "a4"], (
+        "-primer did not drop the assembly that contains the primer: %r"
+        % ran["asmSearch"]["negationIsPerTerm"])
+
+
+@needs_node
+def test_the_unit_facet_separates_the_two_ways_an_assembly_is_priced(ran):
+    """A per-linear-foot assembly and a per-square-foot one are not comparable and never appear in
+    the same takeoff row; cove base and a floor system sitting in one undifferentiated list is the
+    reason this facet exists.
+
+    Keyed on `asmUnit(a)`, not `a.unit`. The raw field is what the rail PRINTS; asmUnit is what the
+    pricing and the beta believe, and a blank or a lowercase "sf" would match neither option of a
+    two-option select and quietly filter to nothing.
+
+    Mutation: compare a.unit directly."""
+    assert ran["asmSearch"]["unitFacet"] == ["a2"], ran["asmSearch"]["unitFacet"]
+
+
+@needs_node
+def test_the_condition_facet_answers_the_three_states_a_row_can_be_in(ran):
+    """Read straight off the price renderList already computes for every visible row, because
+    priceAssembly walks every line of every assembly and computing it a second time per row would
+    double the cost of typing a letter.
+
+    THE THREE STATES ARE NOT THE SAME QUESTION. "No lines yet" is an assembly nobody has built;
+    "lines to fix" is one whose materials are broken - here a3's only material has no coverage, so
+    priceAssembly counts it as a fault; "not priced" is the union of anything without a per-unit
+    figure, which catches both. a3 answers both `broken` and `unpriced` deliberately.
+
+    An unfilled line is NOT a fault - priceLine's own comment records that distinction and five
+    surfaces once got it wrong - so a half-built assembly does not appear under "lines to fix".
+
+    Mutation: make asmConditionHits treat no_lines as broken, or drop a3 from unpriced."""
+    g = ran["asmSearch"]
+    assert g["brokenFacet"] == ["a3"], g["brokenFacet"]
+    assert g["noLinesFacet"] == ["a4"], g["noLinesFacet"]
+    assert g["unpricedFacet"] == ["a3", "a4"], (
+        "'not priced' should cover both the broken one and the empty one: %r" % g["unpricedFacet"])
+
+
+@needs_node
+def test_the_search_box_and_the_facets_narrow_together(ran):
+    """AND, the way the items tab reads. Anything else and a facet would widen a search, which is
+    the opposite of what a control called a filter does.
+
+    Mutation: make visibleAssemblies OR the two predicates."""
+    g = ran["asmSearch"]
+    assert g["queryAndUnitAgree"] == ["a1"], g["queryAndUnitAgree"]
+    assert g["queryAndUnitDisagree"] == 0, (
+        "a search hit survived a facet it does not match: %s rows" % g["queryAndUnitDisagree"])
+
+
+@needs_node
+def test_a_search_with_no_hits_says_what_was_asked_for(ran):
+    """Nothing matching is a legitimate answer, but only if it says what it was answering. Two
+    selects and a text box are three places to reconstruct a query from, and the estimator has
+    already stopped looking at them by the time the list is empty.
+
+    The wording is the assertion. Both selects and the box are read back in a fixed order into one
+    sentence, so the message reads as English rather than as a state dump.
+
+    Mutation: return the raw filter object from asmFilterSummary, or reorder the bits."""
+    g = ran["asmSearch"]
+    assert g["noMatchShown"], "a search with no hits showed nothing at all"
+    assert g["noMatchHiddenOnAHit"], "the no-match panel showed alongside results"
+    assert g["noMatchWhy"] == 'No assemblies matching "nothing like this".', g["noMatchWhy"]
+    assert g["combinedWhy"] == (
+        'No assemblies matching "zzz", priced per linear foot, with lines to fix.'
+    ), g["combinedWhy"]
+
+
+@needs_node
+def test_the_no_match_state_does_not_borrow_the_empty_panel(ran):
+    """The items tab hit this and it is worse here. `#asm-empty` is the LIBRARY being empty - "add
+    some materials first", "no assemblies yet" - and `renderPanel` owns it and re-captions it. A
+    filter that matched nothing is renderList's news, and renderList runs on its own from four call
+    sites. Two functions writing one caption is how a message ends up describing the wrong thing.
+
+    So the no-match state got a node of its own, and this asserts renderList never even reads the
+    other one: the harness's DOM stub creates a node the first time it is asked for, so an id that
+    was never created is proof the function did not touch it.
+
+    The rail STAYS OPEN - the message lives inside it, and hiding the card would hide the
+    explanation for why it is empty. "+ New assembly" goes with the rows: left up, a typo would be
+    answered with an invitation to build the assembly the search just failed to find.
+
+    Mutation: point the no-match branch at $("asm-empty")."""
+    g = ran["asmSearch"]
+    assert g["neverTouchesTheEmptyPanel"] is False, (
+        "renderList reached for #asm-empty, which renderPanel captions")
+    assert g["railStaysOpenOnNoMatch"] is False, (
+        "the rail hid itself, taking the message explaining why it is empty with it")
+    assert g["addRowHiddenOnNoMatch"], "a failed search offered to create what it could not find"
+    assert g["addRowShownOnAHit"] is False, "the add row went missing on an ordinary search"
+
+
+@needs_node
+def test_the_assemblies_bar_clears_on_its_own_attribute(ran):
+    """`data-clear-asm-filters`, not the `data-clear-filters` the Items tab's two buttons share.
+    Reusing it would have this button reset the item table instead - on a tab where the estimator
+    cannot see it happen, so the visible symptom would be a button that does nothing.
+
+    Shown only while something is filtered, for the reason the items one is: a permanently visible
+    Clear implies there is always state to clear.
+
+    Mutation: give the button data-clear-filters and watch this tab's filters survive the press."""
+    g = ran["asmSearch"]
+    assert g["clearShownWhileFiltering"] is False, "nothing offered to clear an active filter"
+    assert g["clearHiddenWhenNotFiltering"], "Clear filters stood there with nothing to clear"
+
+
+@needs_node
+def test_both_selects_come_back_showing_what_is_being_filtered(ran):
+    """A control whose value does not survive a re-render lies about the state of the list under it.
+
+    Unlike renderFilterBar this writes no markup at all - an assembly's unit is a closed SF/LF
+    domain and the three conditions are fixed, so both selects are static HTML and only their
+    `.value` is assigned. Nothing is rebuilt, so there is nothing for a re-render to steal focus
+    from, which is the failure the items bar needs its filterBarSig to avoid.
+
+    Mutation: drop the two assignments out of renderAsmFilterBar."""
+    g = ran["asmSearch"]
+    assert g["unitSelectSynced"] == "LF", g["unitSelectSynced"]
+    assert g["conditionSelectSynced"] == "broken", g["conditionSelectSynced"]
+
+
+@needs_node
+def test_nothing_to_filter_is_not_a_filter_bar(ran):
+    """With no assemblies the rail is hidden and the "No assemblies yet" panel is doing the talking.
+    A search box and two facets over that offer to narrow nothing, and read as controls that are
+    broken rather than as a library that is empty.
+
+    Mutation: leave #asm-filterbar visible unconditionally."""
+    g = ran["asmSearch"]
+    assert g["barShownWithAssemblies"] is False, "the bar hid itself with assemblies to filter"
+    assert g["barHiddenWithNoAssemblies"], "an empty library still drew a filter bar"
+
+
+@needs_node
+def test_narrowing_the_rail_does_not_close_the_assembly_being_edited(ran):
+    """The panel is renderPanel's business and the three listeners deliberately call renderList
+    ONLY. `openId` is read off the unfiltered ASMS and renderList never writes it, so an assembly
+    that the filter excludes keeps its panel and simply loses its highlight - which is honest, since
+    the row it would highlight is not on screen.
+
+    Losing the panel would be data loss with extra steps: the estimator would be mid-edit.
+
+    Mutation: add renderPanel() to the asm-q input listener."""
+    g = ran["asmSearch"]
+    assert g["currentMarkedWhenShown"], "the open assembly was not marked in the rail"
+    assert g["noCurrentWhenOpenOneIsFiltered"] is False, (
+        "a filtered-out assembly was still marked as the current row")
+
+
 # ── bulk add: a dozen materials in one go ────────────────────────────────────
 # Hanz, 2026-08-28: "Will wants to add items in bulk from the Items list, but still being able to
 # search and filter it out."

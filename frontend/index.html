@@ -224,6 +224,35 @@
         You can change any of them on the next screen.
       </p>
       <div id="conditions" class="jc-grid"></div>
+
+      <!-- WHY THE COUNTY IS A JOB CONDITION AND NOT A PROJECT FIELD.
+           It exists for one reason: the Remodel tax toggle directly above it. Kansas charges
+           sales tax on commercial remodel LABOUR at the state rate plus the county portion
+           (7.975% in Johnson County), and Kyle's workbook hardcodes a flat 10% that is not a
+           real rate anywhere. Hanz, 2026-08-18: "For the Remodel tax please use the real
+           state tax or city tax, DONT USE 10%".
+
+           The rows come from /api/reference/counties -- the same server table the live estimate
+           screen's picker reads -- and a pick writes the same four draft keys (county,
+           county_tax_rate, county_remodel_rate, county_notes), so a project that chose its county
+           on intake and one that chose it on the estimate screen price identically.
+
+           EVERYTHING BELOW THE LABEL IS FILLED BY js/county-picker.js, the shared control this
+           and the retiring beta step 1 both drive. The two [data-county-keep] nodes are the input
+           and the results box: a click inside the field you are typing in must not close the list
+           under your own cursor. #county-input carries NO name attribute on purpose -- TW.readForm
+           only sweeps named inputs, and these keystrokes are a live search, not a draft answer;
+           the four keys are written by the picker itself. -->
+      <div class="county" id="county-field" hidden>
+        <label for="county-input">County <span class="c-unit">remodel tax</span></label>
+        <div class="c-box">
+          <input type="text" id="county-input" autocomplete="off" data-county-keep
+                 placeholder="Search counties &mdash; Johnson, Wyandotte, Jackson&hellip;">
+          <button type="button" class="c-clear" id="county-clear" hidden>Clear</button>
+          <div class="c-results" id="county-results" data-county-keep hidden></div>
+        </div>
+        <p class="hint" id="county-note" role="status" aria-live="polite"></p>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -273,6 +302,10 @@
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->
 <script src="/js/crm-core.js"></script>
+<!-- The county picker, shared with the polish beta step 1 rather than copied into it.
+     Reads /api/reference/counties and writes the four county_* draft keys; must precede
+     the page script, which calls TWCounty.mount() as it boots. -->
+<script src="/js/county-picker.js"></script>
 <script src="/js/index.js"></script>
 
 </body>

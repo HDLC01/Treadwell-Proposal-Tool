@@ -191,6 +191,8 @@
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
     @media (max-width:1080px){ .work { grid-template-columns:1fr; } }
     .alist { padding:8px; display:flex; flex-direction:column; gap:3px; }
+    .anomatch { padding:14px 12px; display:grid; gap:10px; justify-items:start; }
+    .anomatch p { margin:0; font-size:12.5px; color:var(--ink-v); line-height:1.5; }
     .arow { text-align:left; background:none; border:0; cursor:pointer; width:100%;
       padding:9px 10px; border-radius:var(--r-md); font:inherit; color:var(--ink);
       display:grid; gap:2px; transition:background .12s ease; }
@@ -711,13 +713,70 @@
       <p class="paneintro"><b>Assemblies are how we estimate them.</b> Build a system out of the
         items - a primer, a body coat, a top coat - and see what it costs per square foot at a
         test area.</p>
+
+      <!-- Same bar as the Items tab, same vocabulary, and ABOVE `.work` rather than inside the
+           rail. The rail is 272px; `.searchbox` alone is max-width:360 and `.facets` wraps, so
+           putting this inside it would stack into four rows of chrome over the list it filters.
+           Out here it reads as narrowing the tab, which is what it does — the rail is the only
+           list on it.
+
+           TWO facets, not three. The Items tab has Division, Vendor and Condition because it has
+           three real columns; an assembly has a unit and a price, and no division of its own. The
+           division question is still reachable — the box searches the MATERIALS in an assembly, so
+           `division:epoxy` finds every assembly built out of epoxy items. -->
+      <div class="filterbar" id="asm-filterbar" hidden>
+        <div class="itemsearch">
+          <span class="searchbox">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                 focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+            <input id="asm-q" type="search" placeholder="Search assemblies or the materials in them"
+                   aria-label="Search assemblies" autocomplete="off" />
+          </span>
+          <span class="hits" id="asm-hits" hidden></span>
+        </div>
+        <div class="facets">
+          <span class="facet">
+            <label class="flabel" for="fa-unit">Unit</label>
+            <!-- A closed two-value domain: asmUnit() normalises anything else to SF, so this is a
+                 fixed select rather than a list derived from the data. -->
+            <select id="fa-unit">
+              <option value="">Any unit</option>
+              <option value="SF">Per square foot</option>
+              <option value="LF">Per linear foot</option>
+            </select>
+          </span>
+          <span class="facet">
+            <label class="flabel" for="fa-condition">Condition</label>
+            <!-- Read off the price this tab already computes for every row. "Not priced" is
+                 per_unit == null; "lines to fix" is priceAssembly's own broken_lines count. -->
+            <select id="fa-condition">
+              <option value="">Any condition</option>
+              <option value="unpriced">Not priced yet</option>
+              <option value="broken">Has lines to fix</option>
+              <option value="no_lines">No lines yet</option>
+            </select>
+          </span>
+          <button class="btn ghost sm" type="button" id="fa-clear" data-clear-asm-filters hidden>
+            Clear filters</button>
+        </div>
+      </div>
+
       <div class="work">
         <!-- The rail is the CARD, and the New assembly control is its last row. renderList fills
              the list above it and hides this whole card when there is nothing to list — hiding
              only the inner list would leave the button sitting in an empty box. -->
         <div class="card" id="asm-rail" hidden>
           <div class="alist" id="asm-list"></div>
-          <div class="addrow">
+          <!-- In the rail, not a panel of its own. `#asm-empty` below is the LIBRARY being empty
+               and renderPanel owns it; this is a filter that matched nothing, and renderList owns
+               it. Two functions fighting over one node is how a caption ends up wrong, and the two
+               are not always called together (renderList runs alone from four places). -->
+          <div class="anomatch" id="asm-nomatch" hidden>
+            <p id="asm-nomatch-why"></p>
+            <button class="btn ghost sm" type="button" data-clear-asm-filters>Clear filters</button>
+          </div>
+          <div class="addrow" id="asm-addrow">
             <button class="addbtn" type="button" id="asm-new-2">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"

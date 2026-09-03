@@ -415,7 +415,12 @@ def test_both_schema_files_declare_the_tables():
     root = pathlib.Path(__file__).resolve().parents[1]
     for path in (root / "supabase_schema.sql", root / "staging" / "schema_pg.sql"):
         sql = path.read_text(encoding="utf-8")
-        for table in ("library_items", "library_assemblies", "library_divisions", "library_units"):
+        # library_vendors was missing from this list until 2026-09-03, which is exactly the hole
+        # the test exists to close: the table shipped, and nothing here would have noticed if it
+        # had reached only one of the two databases. markup_rules joins it — same two databases,
+        # same failure mode (reads 200, writes a bare 404 on whichever missed the DDL).
+        for table in ("library_items", "library_assemblies", "library_divisions", "library_units",
+                      "library_vendors", "markup_rules"):
             assert ("create table if not exists public.%s" % table) in sql, (path.name, table)
         assert "add column if not exists divisions jsonb" in sql
 
