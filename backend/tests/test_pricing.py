@@ -8,6 +8,8 @@ ON, one $825 extra material, Johnson County remodel (7.975%).
 """
 import math
 
+import pytest
+
 import pricing
 
 
@@ -237,3 +239,70 @@ def test_the_guard_did_not_cost_the_away_from_zero_rounding():
     assert pricing._roundup(-1475.4) == -1476, "no longer rounding away from zero"
     assert pricing._roundup(-1475.000000000002) == -1475, "dust is not swallowed on the negative side"
     assert pricing._roundup(0) == 0
+
+
+# -- the same dust, in the MATERIAL functions ---------------------------------
+# The guard went into _roundup for the markup chain. It was not reaching the material figures that
+# FEED that chain, which turned out to be the worse half: a sweep on 2026-09-04 found the guard
+# changing compute_polish's material on 1008 of 22,572 (sf, dye, joint-filler) combinations -- 4.5%,
+# four times the rate in compute_full_bid -- and roll_up's on 272 of 59,999. compute_system (81,300
+# cases) and compute_cove (23,928) showed none, so only two functions were actually paying.
+#
+# It is the dye. Kyle's sheet prices it as TWO rows of sf x $0.14 (Polish D25 and D26), and 0.14 is
+# not exact in binary, so the material subtotal lands a hair above an integer and a bare ceil buys a
+# dollar. Every site touched here was read off the workbook first rather than trusted to the code's
+# own comments: Polish D31/D32, Epoxy D40/D42, Polish B29, the liquids tables' ROUNDUP(sf/coverage),
+# and the cove pair ROUNDUP(C/8)+ROUNDUP(C/4). All of them say ROUNDUP.
+
+
+def test_polish_material_is_not_a_dollar_high_because_of_the_dye():
+    """The defect through the real engine. 724 sq ft with dye puts the material subtotal on
+    362.00000000000006 -- 362 to Excel, to Kyle, and to anyone reading the sheet. A bare ceil calls
+    it 363, and that dollar then gets marked up on the way to the bid."""
+    r = pricing.compute_polish(724, dye=True)
+
+    # The raw sum the engine rounds. ORDER AND ROUNDING BOTH MATTER, and both are easy to get
+    # wrong here: r["detail"] cannot be used because `line()` rounds each cost to 2dp for display
+    # (summing those gives a clean 362.0), and folding the rates together first -- sf * (a+b+c+d)
+    # -- also gives 362.0. The dust exists only in the engine's own shape: four separate products
+    # accumulated one at a time, where 36.2 + 50.68 + 72.4 is already 159.28000000000003.
+    P = pricing._POLISH
+    raw = 0.0
+    raw += 724 * P["patch_new"]
+    raw += 724 * P["densifier"]
+    raw += 724 * P["sealer"]
+    raw += 724 * P["dye_per_coat"] * P["dye_coats"]
+    # Self-check: if a rate ever moves this fixture off the dust, the assertion below would pass
+    # against a bare ceil too and would be defending nothing.
+    assert math.ceil(raw) != round(raw), "this fixture no longer lands on dust"
+    assert abs(raw - round(raw)) < 1e-6, "that is a real fraction, not dust"
+
+    assert r["subtotal"] == 362, "the material subtotal bought a dollar off a rounding error"
+    assert r["material"] == 370
+
+
+def test_the_material_roll_up_does_not_round_dust_either():
+    """Epoxy D40 = ROUNDUP(SUM(D18:D39),0). The polish total arriving here is itself a sum of
+    products, so it carries the same dust -- and D40 feeds D42's shipping, so one bad dollar
+    arrives twice."""
+    r = pricing.roll_up([], polish_total=300 * 1.37)   # 411.00000000000006
+    assert r["material_sub"] == 411, "the material subtotal rounded binary dust up"
+
+
+@pytest.mark.parametrize("fn,kw,want", [
+    (pricing.compute_polish, {"sf": 1001}, 221),        # raw 220.22000000000003
+    (pricing.compute_polish, {"sf": 1006}, 222),        # raw 221.32
+])
+def test_a_real_fraction_of_material_still_rounds_all_the_way_up(fn, kw, want):
+    """THE COUNTEREXAMPLE, and the only real risk in this change. Guard too hard and a genuine
+    $220.22 of material becomes $220 -- Treadwell under-buying on every job to fix a problem worth
+    a dollar. Both fractions sit well above the integer, and both deliberately BELOW .5, so
+    nearest-rounding would take them DOWN and this test would name it. sf=1007 was tried first and
+    dropped: its raw is 221.54, which rounds up anyway, so it would have stayed green against a
+    guard that had gone too far -- a passing test proving nothing."""
+    assert fn(**kw)["subtotal"] == want
+
+
+def test_roll_up_rounds_a_genuine_fraction_up_as_well():
+    """The same counterexample on the other function. 410.40 is real money, not dust."""
+    assert pricing.roll_up([], polish_total=410.4)["material_sub"] == 411
