@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Markup · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Styles itself, like library.html, calendar.html and followups.html, so it needs the same
+       opt-out: without it Chromium synthesizes a dark theme and flattens the amber notes into the
+       ordinary row background. There is no dark theme in this app. -->
+  <meta name="color-scheme" content="only light" />
+  <style>
+    /* ── TOKENS ─────────────────────────────────────────────────────────────
+       THE APP'S OWN, copied from frontend/library.html, which is this page's nearest sibling and
+       the page the approved mockup was built from. Nothing new is coined here: the warm neutral
+       cast and the brand's #9e001f are what make a screen look like this product's, and a fifth
+       radius scale is the drift this repo has been paying down. Three sizes, same names as
+       library.html: --r-lg containers, --r-md controls, --r-sm small controls. */
+    :root { color-scheme: only light;
+      --red:#9e001f; --red-dark:#6c0015; --red-tint:#ffdad8;
+      --ink:#1a1a1a; --ink-v:#5c403f;
+      --surf:#fbf9f8; --card:#ffffff; --surf-low:#f3eeed; --surf-dim:#dbdad9;
+      --line:rgba(92,64,63,.16); --line-soft:rgba(92,64,63,.11);
+      --ok:#0f7b34; --warn:#7a5c00; --warn-bg:#fdf6e3;
+      --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+      --mono:Consolas,'SF Mono',ui-monospace,SFMono-Regular,Menlo,'Roboto Mono',monospace;
+      --r-lg:12px; --r-md:8px; --r-sm:6px; }
+    * { box-sizing:border-box; }
+    .mono { font-family:var(--mono); }
+    body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
+      font:400 14px/1.55 var(--ui); }
+    a { color:var(--red-dark); }
+    a:hover { color:var(--red); }
+
+    .top { display:flex; align-items:center; gap:14px; max-width:1180px; margin:0 auto 4px; }
+    .logo { width:54px; height:34px; display:block; flex:none; }
+    h1 { font-size:20px; letter-spacing:-.01em; margin:0; text-wrap:balance; }
+    .wrap { max-width:1180px; margin:0 auto; }
+    /* Beta marker beside the title rather than a dismissible banner, for library.html's reason:
+       somebody arriving from the sidebar in three weeks should still be told before they rely on
+       a number this page produced. */
+    .beta { font:700 10px var(--ui); letter-spacing:.07em; text-transform:uppercase;
+      background:var(--red-tint); color:var(--red-dark); border:1px solid rgba(158,0,31,.24);
+      border-radius:999px; padding:4px 10px; white-space:nowrap; cursor:help; }
+    .hint { color:var(--ink-v); font-size:13px; margin:0 0 14px; max-width:80ch; }
+    .hint b { color:var(--ink); font-weight:600; }
+    .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
+    .alert:empty { display:none; }
+
+    /* Polish | Seal | Epoxy | Leveling | Gyp — the five SHEET LAYOUTS, rendered from the API's
+       own `layouts` array. There is deliberately no Combo tab: a combo job is two option lines,
+       each priced off its own tab, and backend/markup.py refuses the string by name. */
+    .views { display:flex; gap:2px; background:var(--surf-low); border-radius:var(--r-lg);
+      padding:3px; margin:0 0 16px; width:max-content; max-width:100%; flex-wrap:wrap; }
+    .views button { border:0; background:none; padding:7px 18px; border-radius:var(--r-md);
+      cursor:pointer; font:600 13px var(--ui); color:var(--ink-v);
+      transition:background .15s ease, color .15s ease; }
+    .views button:hover { color:var(--red-dark); }
+    .views button:focus-visible { outline:2px solid var(--red); outline-offset:1px; }
+    .views button:active { color:var(--ink); }
+    .views button[aria-selected="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(92,64,63,.14); }
+
+    /* The read-only note a non-admin gets, and the day-one "nothing is filed yet" note. Same
+       component as library.html's #vendors-ro — one way to say "you can look, not touch". */
+    .ronote { background:var(--warn-bg); border:1px solid rgba(122,92,0,.25); color:var(--warn);
+      border-radius:var(--r-md); padding:9px 12px; font-size:12.5px; margin:0 0 12px;
+      max-width:84ch; }
+    .ronote b { color:var(--ink); font-weight:600; }
+    .ronote[hidden] { display:none; }
+
+    .banner { display:flex; gap:10px; align-items:flex-start; background:var(--warn-bg);
+      border:1px solid rgba(122,92,0,.25); color:var(--warn); border-radius:var(--r-md);
+      padding:12px 14px; font-size:13px; margin:0 0 14px; max-width:900px; }
+    .banner svg { flex:none; margin-top:1px; stroke:var(--warn); }
+    .banner b { color:var(--ink); }
+    /* `hidden` LOSES to any class rule that sets display, and this repo has shipped four of
+       those. Both banners are flex when shown, so each one restates the attribute. */
+    .banner[hidden] { display:none; }
+
+    /* The chain is 940px of columns before it starts lying about what fits. It scrolls in its
+       OWN box rather than making the page scroll sideways. */
+    .cardwrap { overflow-x:auto; padding-bottom:2px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
+      overflow:hidden; min-width:940px; }
+
+    /* Line | Formula | Applies | What it does | Preview.
+       The APPLIES column is its own column and not a checkbox tucked into the formula cell,
+       because "this line does not exist on this tab" is a fact about the line, not about the
+       expression — see the .absent rules below. */
+    .mkrow { display:grid;
+      grid-template-columns:186px minmax(250px,1fr) 104px minmax(230px,1.05fr) 150px; }
+    .mkrow > div { padding:13px 16px; border-top:1px solid var(--line-soft); display:flex;
+      flex-direction:column; justify-content:center; }
+    .mkrow.head { background:var(--surf-low); }
+    .mkrow.head > div { border-top:0; font:700 10.5px var(--ui); letter-spacing:.06em;
+      text-transform:uppercase; color:var(--ink-v); padding:14px 16px 10px; }
+    .mkrow .line { font-weight:600; font-size:13.5px; color:var(--ink); }
+    .mkrow .line .sub { display:block; font-weight:400; color:var(--ink-v); font-size:11px;
+      margin-top:2px; }
+
+    .finput { width:100%; font:13px var(--mono); color:var(--ink); background:var(--card);
+      border:1px solid var(--line); border-radius:var(--r-sm); padding:8px 10px; }
+    .finput:hover { border-color:var(--red); }
+    .finput:focus-visible { outline:2px solid var(--red); outline-offset:1px; }
+    .finput::placeholder { color:var(--ink-v); opacity:.7; }
+    /* Validated on BLUR, never on a keystroke — nobody gets scolded mid-word. */
+    .finput.err { border:1.5px solid var(--red-dark); background:var(--red-tint); }
+    .errmsg { color:var(--red-dark); font-size:11.5px; margin-top:6px; font-weight:600; }
+    .errmsg[hidden] { display:none; }
+
+    /* READ-ONLY is not DISABLED and must not look like it. Full contrast, no affordance —
+       these are the values you are allowed to read but not to type over. */
+    .ftext { font:13px var(--mono); color:var(--ink); padding:8px 0; word-break:break-word; }
+    .ftext.locked { color:var(--ink-v); font-family:var(--ui); }
+    .ftext.dim { color:var(--ink-v); }
+
+    /* ── THE ABSENT STATE ────────────────────────────────────────────────────
+       Gyp has NO hard-bid rate: the workbook cell is EMPTY, not 0. This is the third row state,
+       and it exists because the other two both lie about it — an empty editable box invites
+       somebody to fill it in, and "0%" reads as a discount that was declined. So: no box at all,
+       a tinted row, and a caption naming the tab.
+
+       Deliberately NOT done with opacity. The house rule puts disabled at .38–.5 and keeps
+       read-only at full contrast, and this cell is neither a dead control nor a value — it is a
+       sentence somebody has to be able to read. The greying is a colour (--ink-v) and a row
+       tint, so contrast holds. */
+    .mkrow.absent { background:var(--surf-low); }
+    .mkrow.absent .line { color:var(--ink-v); }
+    .absent-note { font:400 12.5px var(--ui); color:var(--ink-v); }
+    .absent-note b { font-weight:600; color:var(--ink-v); }
+
+    .explain { color:var(--ink-v); font-size:12.5px; line-height:1.5; }
+
+    /* A real <button role="switch">, styled. Native tab order, native Space/Enter, aria-checked
+       as the single source of truth — no keydown handler to forget. */
+    .swwrap { display:flex; align-items:center; gap:8px; }
+    .sw { position:relative; width:38px; height:22px; flex:none; padding:0; cursor:pointer;
+      border:1px solid var(--line); border-radius:999px; background:var(--surf-dim);
+      transition:background .15s ease, border-color .15s ease; }
+    .sw::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+      border-radius:50%; background:var(--card); box-shadow:0 1px 2px rgba(92,64,63,.32);
+      transition:transform .15s ease; }
+    .sw[aria-checked="true"] { background:var(--ok); border-color:var(--ok); }
+    .sw[aria-checked="true"]::after { transform:translateX(16px); }
+    .sw:hover { border-color:var(--red); }
+    .sw:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    /* Pressed. A control with only a resting state is unfinished, and a switch that does not
+       acknowledge the press is the one people click twice. */
+    .sw:active::after { width:18px; }
+    .swl { font-size:12px; color:var(--ink-v); }
+    .swro { font-size:12.5px; color:var(--ink-v); }
+
+    /* "Stop overriding" — a soft delete that means "fall back to the built-in constant", NOT
+       "charge nothing". The wording is the whole point, so it is not a bin icon. */
+    .ghostlink { align-self:flex-start; margin-top:7px; border:0; background:none; padding:0;
+      cursor:pointer; font:600 11.5px var(--ui); color:var(--red-dark);
+      text-decoration:underline; text-underline-offset:2px; }
+    .ghostlink:hover { color:var(--red); }
+    .ghostlink:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .ghostlink:active { color:var(--ink); }
+
+    .prev { align-items:flex-end !important; text-align:right; }
+    /* Money and quantities line up down the column or the tool is lying about its own figures. */
+    .prev .pct { font:600 11px var(--mono); color:var(--ink-v);
+      font-variant-numeric:tabular-nums; }
+    .prev .amt { font:700 14px var(--mono); color:var(--ink);
+      font-variant-numeric:tabular-nums; margin-top:2px; }
+    /* NEVER $0.00. A line that cannot be priced says so. */
+    .prev .unpriced { font:700 12.5px var(--ui); color:var(--red-dark); }
+    .prev .nodash { font:700 13px var(--mono); color:var(--ink-v); }
+
+    .wbnote { display:flex; align-items:flex-start; gap:5px; margin-top:6px; font-size:10.5px;
+      color:var(--ink-v); }
+    .wbnote svg { flex:none; margin-top:1px; stroke:var(--ink-v); }
+
+    .mkrow.grand { background:var(--red-tint); }
+    .mkrow.grand .line { color:var(--red-dark); font-weight:700; }
+    .mkrow.grand .explain { color:var(--red-dark); }
+    .mkrow.grand .amt { color:var(--red-dark); font:700 20px var(--mono);
+      font-variant-numeric:tabular-nums; }
+    .mkrow.grand .pct { color:var(--red-dark); }
+    .mkrow.grand .unpriced { font:700 15px var(--ui); color:var(--red-dark); }
+
+    /* Loading, empty and failed all get a designed state; none of them defaults. */
+    .state { padding:46px 24px; text-align:center; color:var(--ink-v); font-size:13px; }
+    .state b { display:block; color:var(--ink); font-size:14px; margin-bottom:4px; }
+    .btn { border:1px solid var(--red); background:var(--red); color:#fff; border-radius:var(--r-md);
+      padding:8px 16px; font:600 13px var(--ui); cursor:pointer; margin-top:12px; }
+    .btn:hover { background:var(--red-dark); border-color:var(--red-dark); }
+    .btn:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .btn:active { background:var(--red-dark); border-color:var(--red-dark);
+      transform:translateY(1px); }
+
+    .foot { color:var(--ink-v); font-size:11.5px; margin:14px 0 0; max-width:84ch; }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { transition-duration:0.01ms !important; animation-duration:0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
+    <h1>Markup</h1>
+    <span class="beta" title="Being tested. These rows override the constants hardcoded in the Polish beta's pricing engine; a line with no row here keeps using its built-in constant.">Beta test</span>
+  </div>
+  <div class="wrap">
+    <p class="hint"><b>Kyle's markup chain, per sheet layout.</b> The tabs are the five sheet
+      tabs a bid can sit on — not work types, and there is no Combo, because a combo job is two
+      option lines each priced off its own tab. The rows run in the order the chain compounds:
+      each line's base is the running total of everything above it. A formula evaluates to a
+      <b>rate</b> applied to that base; <span class="mono">MARKUP()</span> and a typed figure
+      return dollars instead.</p>
+    <p class="alert" id="alert" role="status" aria-live="polite"></p>
+
+    <div class="views" role="tablist" aria-label="Sheet layouts" id="mk-tabs"></div>
+
+    <!-- Both notes start hidden and are shown by the page script. -->
+    <p class="ronote" id="mk-ro" hidden>You can see these formulas and how they price a job.
+      Changing them is admin-only - ask Hanz or Kyle.</p>
+    <p class="ronote" id="mk-fallback" hidden></p>
+
+    <div class="banner" id="mk-broken" role="status" aria-live="polite" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+           focusable="false"><path d="M12 2 22 20H2Z"></path><path d="M12 9v5M12 17.5v.01"></path></svg>
+      <div><b id="mk-broken-line"></b> <span id="mk-broken-rest"></span></div>
+    </div>
+
+    <div class="cardwrap">
+      <div class="card" id="mk-chain" role="tabpanel">
+        <p class="state"><b>Loading the chain…</b>Reading the rates filed for this tab.</p>
+      </div>
+    </div>
+
+    <p class="foot" id="mk-foot"></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <!-- The expression engine. Must precede the page script, which reads window.TWMarkup as it
+       runs. Hand-rolled parser, not eval: prod's CSP has no unsafe-eval. -->
+  <script src="/js/markup-core.js"></script>
+  <script src="/js/markup.js"></script>
+</body>
+</html>

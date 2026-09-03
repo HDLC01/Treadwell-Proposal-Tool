@@ -180,6 +180,16 @@ TABS: Dict[str, Dict[str, Any]] = {
         "pages": ("/library.html",),
         "api": (),
     },
+    "/markup.html": {
+        "label": "Markup",
+        # api: () DELIBERATELY — gating /api/markup would stop the Polish beta's pricing
+        # halfway through a bid the moment a non-admin's read failed, silently. Reads stay open
+        # to anyone signed in; writes are refused by _require_admin in main.py instead, which is
+        # a separate mechanism from nav access. See the identical reasoning on /library.html
+        # (Vendors) and /polish-intake.html above.
+        "pages": ("/markup.html",),
+        "api": (),
+    },
     "/history.html": {
         "label": "History",
         "pages": ("/history.html",),
