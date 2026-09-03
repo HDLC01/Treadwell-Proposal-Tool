@@ -57,7 +57,10 @@ const REMODEL_RATE_BY_LAYOUT = new Function(
   "return REMODEL_RATE_BY_LAYOUT;"
 )(GYP_SHEETS);
 
-function harness(tabs, active) {
+// `toggles` is the {"<sheet>!<addr>": value} the sheet's own D6/D8 remodel switches read.
+// It matters because Kyle's rate cell is =IF(D6="yes",<rate>,0): with the switch off the
+// tax is zero whatever rate is typed, and remodelTaxIsOn has to be able to say so.
+function harness(tabs, active, toggles) {
   const cellValues = {};
   // A warm cache for every sheet a fixture might sit on. It is asserted to SURVIVE: the override
   // used to delete the active sheet's entry and re-fetch it, which 404s on a copy (a copy has no
@@ -76,13 +79,37 @@ function harness(tabs, active) {
   const countyInput = { value: "should-be-cleared" };
   const countyResults = { classList: { removed: false, remove() { this.removed = true; }, add() {} } };
   const countyClearEl = { addEventListener: (t, fn) => clearListeners.push(fn) };
-  const document = { getElementById: (id) => (id === "county-clear" ? countyClearEl : null) };
+  // The typed-% box and its note. `activeElement` is real state, not decoration:
+  // renderRemodelRateField must not write over a box someone is still typing in, and
+  // the only way to test that is to actually focus it.
+  const rateBox = { value: "", addEventListener: () => {} };
+  const rateNote = { textContent: "", className: "" };
+  const document = {
+    activeElement: null,
+    getElementById: (id) => (id === "county-clear" ? countyClearEl
+      : id === "remodel-rate" ? rateBox
+      : id === "remodel-rate-note" ? rateNote
+      : null),
+  };
 
+  const toggleValues = toggles || {};
   const HF = {
     ready: true,
     setCellValue(sheet, addr, v) { hfCalls.push([sheet, addr, v]); },
+    getValue(sheet, addr) {
+      const k = sheet + "!" + addr;
+      return Object.prototype.hasOwnProperty.call(toggleValues, k) ? toggleValues[k] : null;
+    },
   };
-  const TW = { setState: (p) => setStateCalls.push(p) };
+  // Records a SNAPSHOT, not the live object. The real setState hands the payload to
+  // writeBlob, which JSON.stringifies it synchronously (shared.js:52-54), so what gets
+  // persisted is the payload as it stood AT THE CALL. Pushing the live object instead let a
+  // later in-place mutation of `cellValues` appear in an earlier save, which made an
+  // ordering bug -- saving before the rate is reverted -- invisible to every assertion.
+  const TW = { setState: (p) => {
+    try { setStateCalls.push(JSON.parse(JSON.stringify(p))); }
+    catch { setStateCalls.push(p); }   // unserialisable payload: better the object than nothing
+  } };
   // The fixture's active tab — proves the grid-refresh path fires. Pass "Copy1" to sit on a
   // COPIED tab, which is where the discarded cache used to blank the grid.
   const activeSheet = active || "Epoxy";
@@ -114,12 +141,25 @@ function harness(tabs, active) {
   deps.remodelRateTargets = lift("remodelRateTargets", deps);
   deps.refreshActiveGridFromHF = lift("refreshActiveGridFromHF", deps);
   deps.applyRemodelRateOverride = lift("applyRemodelRateOverride", deps);
+  // Dependency order matters: `lift` passes deps BY NAME into new Function, so a callee
+  // absent from deps at lift time is an unbound identifier inside the lifted copy.
+  deps.shiftDecimalText = lift("shiftDecimalText", deps);
+  deps.effectiveRemodelRate = lift("effectiveRemodelRate", deps);
+  deps.remodelTaxIsOn = lift("remodelTaxIsOn", deps);
+  deps.renderRemodelRateField = lift("renderRemodelRateField", deps);
   deps.renderCountyPill = lift("renderCountyPill", deps);
+  deps.commitRemodelRate = lift("commitRemodelRate", deps);
   const pickCounty = lift("pickCounty", deps);
 
   return {
     state, cellValues, sheetCache, refreshCalls, setStateCalls, hfCalls, tabs: tabList,
     countySelected, countyInput, countyResults, clearListeners,
+    rateBox, rateNote, document,
+    shiftDecimalText: deps.shiftDecimalText,
+    effectiveRemodelRate: deps.effectiveRemodelRate,
+    remodelTaxIsOn: deps.remodelTaxIsOn,
+    renderRemodelRateField: deps.renderRemodelRateField,
+    commitRemodelRate: deps.commitRemodelRate,
     pickCounty, applyRemodelRateOverride: deps.applyRemodelRateOverride,
     remodelRateTargets: deps.remodelRateTargets,
     renderCountyPill: deps.renderCountyPill,
@@ -174,11 +214,23 @@ out.gypSheetCount = GYP_SHEETS.length;
   h.pickCounty({ kind: "city", name: "Overland Park", state: "KS", rate: 0.0935, remodel_rate: 0.0935, notes: "" });
   const clear = h.clearListeners[h.clearListeners.length - 1];
   clear();
+  const cleanup = h.setStateCalls[h.setStateCalls.length - 1];
   out.cleared = {
     epoxy: h.cellValues["Epoxy!B81"],
-    stateHasCounty: "county" in h.state,
-    stateHasRemodelRate: "county_remodel_rate" in h.state,
+    // Whether a county is SET, not whether the key exists. The handler no longer uses
+    // `delete` -- it cannot work: setState is Object.assign(cur, partial) against a blob
+    // re-read from localStorage, so a key the partial LACKS keeps its stored value. The
+    // keys are now present and falsy, which is the shape polish-intake.js already writes.
+    stateHasCounty: !!h.state.county,
+    stateHasRemodelRate: h.state.county_remodel_rate != null,
     pillCleared: h.countySelected.innerHTML === "",
+    // ...and the clear has to SURVIVE a reload, which is what `delete` never did: the
+    // cleared keys must be present and falsy in the payload handed to setState.
+    payloadClearsCounty: cleanup.county === "" && cleanup.county_remodel_rate === null,
+    // The reverted formula has to be IN the save. `cellValues` is a copy of
+    // state.cell_values, so a payload without it leaves the cleared county's rate in the
+    // draft -- and /api/generate fills the workbook from the draft.
+    payloadCellValues: cleanup.cell_values && cleanup.cell_values["Epoxy!B81"],
   };
 }
 
@@ -278,6 +330,177 @@ out.gypSheetCount = GYP_SHEETS.length;
     copy1: h.cellValues["Copy1!B81"],
     cachePreserved: "Copy1" in h.sheetCache,
     gridRefreshedFor: h.refreshCalls,
+  };
+}
+
+
+// ═══ The typed remodel tax % ══════════════════════════════════════════════════
+// Kyle reads the rate off the state's own site for the job's address, so the county
+// table is a starting point rather than the answer. Everything below drives the real
+// commitRemodelRate / renderRemodelRateField out of estimate-review.js.
+
+// ── 11. the decimal shift is exact, and arithmetic is not ────────────────────
+// These rates carry three decimals, which a binary double does not divide or
+// multiply cleanly. 7.975 / 100 is exact BY LUCK -- 8.775 and 9.975 are not, and
+// the display direction (rate * 100) is worse still. Both directions are listed
+// so a green test here cannot be satisfied by a single lucky rate.
+{
+  const h = harness();
+  const shifted = h.shiftDecimalText("7.975", -2);
+  out.exactness = {
+    shifted: shifted,                                   // "0.07975"
+    roundTrip: String(Number(shifted)),                 // still "0.07975"
+    // the counterexamples: what a plain /100 and *100 actually produce
+    naiveDivision: ["8.775", "9.975", "6.975", "7.15"].map(s => [s, String(Number(s) / 100)]),
+    naiveMultiply: ["0.07975", "0.07"].map(s => [s, String(Number(s) * 100)]),
+    // a spread of shapes, none of them rounded
+    cases: ["7.975", "8.775", "9.975", "7.15", "10", "6.5", "0.5", ".5", "7.", "11.125", "0"]
+      .map(s => [s, h.shiftDecimalText(s, -2)]),
+    // and back the other way, for painting the box
+    backToPct: ["0.07975", "0.08775", "0.09975", "0.1", "0.065", "0.005", "0.07"]
+      .map(s => [s, h.shiftDecimalText(s, 2)]),
+    // the property that matters: shifting there and back is the identity
+    roundTripAll: ["7.975", "8.775", "9.975", "7.15", "6.5", "10", "0.5"]
+      .map(s => [s, h.shiftDecimalText(h.shiftDecimalText(s, -2), 2)]),
+    refused: ["abc", "7,975", "", ".", "7.9.5", "-3", "7%"].map(s => [s, h.shiftDecimalText(s, -2)]),
+  };
+}
+
+// ── 12. a typed % with no county at all reaches every rate cell ──────────────
+{
+  const h = harness([{ id: "Epoxy" }, { id: "Copy1", source: "Epoxy" }]);
+  h.rateBox.value = "7.975";
+  h.commitRemodelRate();
+  out.typedNoCounty = {
+    epoxy: h.cellValues["Epoxy!B81"],
+    polish: h.cellValues["Polish!B75"],
+    copy1: h.cellValues["Copy1!B81"],
+    oneGyp: h.cellValues[`${GYP_SHEETS[0]}!B80`],
+    effective: h.effectiveRemodelRate(),
+    persisted: h.setStateCalls[h.setStateCalls.length - 1].remodel_rate_override,
+    // the DOLLAR cells are never touched: the whole-dollar rounding stays Kyle's
+    // own ROUNDUP(SUM(...)*B81,0) rather than becoming ours.
+    dollarCellsWritten: Object.keys(h.cellValues).filter(k =>
+      /!(D81|D75|E80|D77|D78)$/.test(k)),
+  };
+}
+
+// ── 13. a typed % beats the county table ─────────────────────────────────────
+{
+  const h = harness();
+  h.pickCounty(OP);                       // Overland Park, 9.35%
+  h.rateBox.value = "7.975";
+  h.commitRemodelRate();
+  out.typedBeatsCounty = {
+    epoxy: h.cellValues["Epoxy!B81"],
+    effective: h.effectiveRemodelRate(),
+    countyStillOnState: h.state.county_remodel_rate,
+    pill: h.countySelected.innerHTML,
+  };
+}
+
+// ── 14. clearing the COUNTY does not retract the typed % ─────────────────────
+// The estimator got that figure off the site for this address; dropping the county
+// is a different act.
+{
+  const h = harness();
+  h.pickCounty(OP);
+  h.rateBox.value = "7.975";
+  h.commitRemodelRate();
+  h.clearListeners.forEach(fn => fn());  // the pill's x
+  const lastSave = h.setStateCalls[h.setStateCalls.length - 1];
+  out.clearCountyKeepsTyped = {
+    epoxy: h.cellValues["Epoxy!B81"],
+    effective: h.effectiveRemodelRate(),
+    countyGone: !h.state.county,
+    // What makes the clear STICK: setState merges the object it is handed onto a blob
+    // re-read from localStorage, so the cleared keys have to be present and falsy in the
+    // payload. A `delete` leaves them absent, the merge keeps the old values, and the
+    // county comes back on the next reload -- bringing its rate with it.
+    payloadClearsCounty: lastSave.county === "" && lastSave.county_remodel_rate === null,
+    payloadKeepsTyped: lastSave.remodel_rate_override,
+  };
+}
+
+// ── 15. a NEW county supersedes the typed %, visibly ─────────────────────────
+{
+  const h = harness();
+  h.rateBox.value = "7.975";
+  h.commitRemodelRate();
+  h.pickCounty(OP);                       // a new address
+  out.newCountyWins = {
+    epoxy: h.cellValues["Epoxy!B81"],
+    effective: h.effectiveRemodelRate(),
+    boxRepainted: h.rateBox.value,        // must show the county's own figure, not 7.975
+  };
+}
+
+// ── 16. a typo is refused, and the rate in force does not move ───────────────
+{
+  const h = harness();
+  h.pickCounty(OP);
+  h.rateBox.value = "seven point nine";
+  h.commitRemodelRate();
+  out.typoRefused = {
+    epoxy: h.cellValues["Epoxy!B81"],     // still the county's 9.35%
+    effective: h.effectiveRemodelRate(),
+    override: h.state.remodel_rate_override,
+    note: h.rateNote.textContent,
+    noteClass: h.rateNote.className,
+  };
+}
+
+// ── 17. emptying the box falls back, rather than pinning 0% ──────────────────
+{
+  const h = harness();
+  h.pickCounty(OP);
+  h.rateBox.value = "7.975";
+  h.commitRemodelRate();
+  h.rateBox.value = "";
+  h.commitRemodelRate();
+  out.emptiedFallsBack = {
+    epoxy: h.cellValues["Epoxy!B81"],     // back to the county's 9.35%
+    effective: h.effectiveRemodelRate(),
+    override: h.state.remodel_rate_override,
+  };
+}
+
+// ── 18. the box is not overwritten while someone is typing in it ─────────────
+// A re-render that repaints a focused field steals the digits half-typed into it.
+{
+  const h = harness();
+  h.pickCounty(OP);
+  h.document.activeElement = h.rateBox;
+  h.rateBox.value = "7.9";               // mid-keystroke
+  h.renderRemodelRateField();
+  const whileFocused = h.rateBox.value;
+  h.document.activeElement = null;
+  h.renderRemodelRateField();
+  out.focusRespected = { whileFocused: whileFocused, afterBlur: h.rateBox.value };
+}
+
+// ── 19. with the sheet's own remodel switch off, say so ──────────────────────
+// Kyle's cell is =IF(D6="yes",<rate>,0): off means zero tax whatever is typed.
+{
+  const on = harness([{ id: "Epoxy" }], "Epoxy", { "Epoxy!D6": "yes" });
+  on.rateBox.value = "7.975";
+  on.commitRemodelRate();
+
+  const off = harness([{ id: "Epoxy" }], "Epoxy", { "Epoxy!D6": "no" });
+  off.rateBox.value = "7.975";
+  off.commitRemodelRate();
+
+  const none = harness([{ id: "Epoxy" }], "Epoxy", { "Epoxy!D6": "yes" });
+  none.renderRemodelRateField();         // nothing typed, no county
+
+  out.switchNotes = {
+    onNote: on.rateNote.textContent,
+    onIsOn: on.remodelTaxIsOn(),
+    offNote: off.rateNote.textContent,
+    offIsOn: off.remodelTaxIsOn(),
+    // refused or not, the cell still carries the rate -- the switch, not us, zeroes it
+    offCell: off.cellValues["Epoxy!B81"],
+    unsetNote: none.rateNote.textContent,
   };
 }
 
