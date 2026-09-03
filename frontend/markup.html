@@ -203,7 +203,7 @@
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
     <h1>Markup</h1>
-    <span class="beta" title="Being tested. These rows override the constants hardcoded in the Polish beta's pricing engine; a line with no row here keeps using its built-in constant.">Beta test</span>
+    <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. They are not wired into the Polish beta's price yet — its engine still runs on its own hardcoded constants.">Beta test</span>
   </div>
   <div class="wrap">
     <p class="hint"><b>Kyle's markup chain, per sheet layout.</b> The tabs are the five sheet
@@ -212,6 +212,19 @@
       each line's base is the running total of everything above it. A formula evaluates to a
       <b>rate</b> applied to that base; <span class="mono">MARKUP()</span> and a typed figure
       return dollars instead.</p>
+    <!-- SAY WHAT AN EDIT DOES TODAY. The badge used to claim these rows "override the constants
+         hardcoded in the Polish beta's pricing engine" in the present tense, and nothing has ever
+         read them: markup-core.js is loaded by this page alone, and polish-bid-core.js still owns
+         its own RATES and GP_BANDS. An admin could change a rate, see it saved, and no price
+         anywhere would move. Same call as the county picker's "remodel tax is off, so the county
+         is not affecting the price yet" line -- a number that quietly does nothing is how people
+         come to distrust the whole form. Delete this paragraph in the change that wires the chain
+         up, not before. -->
+    <p class="hint"><b>Filed rates are not pricing anything yet.</b> This table stores them and
+      shows what each one would do. The Polish beta still prices off the constants built into its
+      own engine, and the estimate workbook prices off Kyle's formulas, so editing a row here
+      changes neither number today. It is safe to get the rates right in advance; it is not yet a
+      way to change a bid.</p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
 
     <div class="views" role="tablist" aria-label="Sheet layouts" id="mk-tabs"></div>
