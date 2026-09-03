@@ -786,10 +786,62 @@
    *  `mode` only changes the opening line, and the opening line is the whole point: the same
    *  three numbers mean "do not send this" before a send and "the customer already has this"
    *  after one, and an estimator reading it at 11pm should not have to work out which. */
+  /** The stale-document panel's fixed furniture: its heading, its how-to line, and whether the
+   *  Update the PDF button applies at all. Two callers set it, so it is set in one place. */
+  function paintStaleDocChrome(title, how, showFix) {
+    const t = document.getElementById("stale-doc-title");
+    const h = document.getElementById("stale-doc-how");
+    const f = document.getElementById("stale-doc-fix");
+    if (t) t.textContent = title;
+    if (h) h.textContent = how;
+    if (f) f.hidden = !showFix;
+  }
+
+  /** Stop the send because this browser cannot save, and say which one it is.
+   *
+   *  RJ, 2026-09-03: "I keep getting the below error message. I go back to the PDF and hit
+   *  continue as the message says and everything appears to be correct but I keep getting the
+   *  error message." He was right, and the screen was wrong. The drift it showed him was real,
+   *  but the cure it named could not work: TW.setState refuses a write when the local blob
+   *  belongs to a different draft than the page is on -- another tab of this tool -- and it
+   *  refuses it silently, handing the caller back the unchanged blob. So Continue rebuilt a
+   *  payload that went nowhere, this page found the same drift, and it pointed at Continue again.
+   *
+   *  flushState cannot tell us this: it resolves TRUE after dropping a save it was not allowed
+   *  to make (see shared.js saveBlocked's own docstring). So ask saveBlocked directly, and ask it
+   *  BEFORE blaming the document, because a document that cannot be rebuilt is a symptom here,
+   *  not the fault. The words come from TW.saveBlockedSay, the same ones the Proposal step
+   *  paints, so the two pages cannot come to describe one refusal two ways.
+   *
+   *  Returns true when it painted, i.e. when the caller must NOT send. */
+  function showSaveBlocked() {
+    let b = null;
+    try { b = TW.saveBlockedSay ? TW.saveBlockedSay() : null; } catch { b = null; }
+    if (!b) return false;
+    const box = document.getElementById("stale-doc");
+    if (!box) return false;
+    // No Update the PDF button: pressing it is the loop.
+    paintStaleDocChrome(b.say, b.fix, false);
+    const lede = document.getElementById("stale-doc-lede");
+    if (lede) lede.textContent = "Nothing was sent. Until this is sorted out, changes made on this tab are not being saved, so the document cannot be rebuilt from them.";
+    const tab = document.getElementById("stale-doc-rows");
+    if (tab) tab.textContent = "";   // the drift figures are not the story
+    box.hidden = false;
+    try { box.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
+    return true;
+  }
   function showStaleDoc(rows, mode) {
     const box = document.getElementById("stale-doc");
     if (!box) return;
     if (!rows || !rows.length) { box.hidden = true; return; }
+    // Put the panel's OWN words back first. showSaveBlocked below borrows this same box and
+    // rewrites its title, its how-to and its button, so a drift shown after one of those would
+    // otherwise inherit the wrong cure -- the panel would name the drift and then tell the
+    // estimator to close a tab he has already closed.
+    paintStaleDocChrome(
+      "The PDF has the old numbers",
+      "Update the PDF opens the Proposal step. Press Continue there and the document is rebuilt with these numbers, then you land back here to send.",
+      true);
     const lede = document.getElementById("stale-doc-lede");
     if (lede) {
       lede.textContent =
@@ -1025,9 +1077,10 @@
         // second copy of the token mapping, which is how the two halves drifted in the first
         // place. So this takes them there, one press, carrying the draft id.
         //
-        // `resync=1` is the hook for making that step's Continue run by itself, so this becomes
-        // one press end to end. Nothing reads it yet: it is a query parameter proposal-review
-        // ignores, and it costs nothing to send until that half is approved.
+        // `resync=1` tells that page WHY the estimator arrived: it repaints the same drift in
+        // the same words above the document (proposal-review.js explainWhyYouAreHere). It does
+        // NOT press Continue for them, deliberately -- auto-submitting would send a document
+        // nobody had looked at, which is the failure this whole gate exists to stop.
         window.location.assign(TW.withDraft("/proposal-review.html?resync=1"));
       });
     }
@@ -1085,6 +1138,15 @@
           // was an apology with a four-step manual dance attached. Refusing costs a send
           // that was going to be wrong anyway.
           const stale = TW.docDrift(TW.publishDigest(TW.getState()));
+          // Asked BEFORE the drift is blamed on the document. A refused save is a different
+          // problem with a different cure, and it is the one that produces a drift that cannot
+          // be cleared: RJ pressed Update the PDF, pressed Continue, came back, and got this
+          // panel again, because his Continue never landed. Send is refused either way.
+          if (stale.length && showSaveBlocked()) {
+            portalBtn.disabled = false; portalBtn.textContent = orig;
+            if (portalRecip.setBusy) portalRecip.setBusy(false);
+            return;                          // NOTHING is posted. No portal row, no email.
+          }
           if (stale.length) {
             showStaleDoc(stale, "blocked");
             portalBtn.disabled = false; portalBtn.textContent = orig;
