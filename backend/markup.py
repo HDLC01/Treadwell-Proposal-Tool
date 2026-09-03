@@ -335,11 +335,14 @@ def find_rule(layout: str, line_key: str) -> Optional[Dict[str, Any]]:
 
     Both halves are validated first, so only values from the closed vocabularies ever reach a
     PostgREST filter — the same posture `_clashing_vendor` takes about user text in a filter
-    string, arrived at from the other end."""
+    string, arrived at from the other end. Validating before touching the client also means a
+    lookup for a name that can never exist is refused without a data store configured at all."""
+    layout = _check_layout(layout)
+    line_key = _check_line_key(line_key)
     sb = get_client()
     res = (sb.table(RULES).select("*")
-           .eq("layout", _check_layout(layout))
-           .eq("line_key", _check_line_key(line_key))
+           .eq("layout", layout)
+           .eq("line_key", line_key)
            .is_("deleted_at", "null").limit(1).execute())
     rows = res.data or []
     return _shape_rule(rows[0]) if rows else None
