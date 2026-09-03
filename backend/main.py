@@ -73,6 +73,7 @@ import invoice_writer
 import leads
 import leads_worker
 import library
+import markup
 import nav_access
 import notifications
 import pdf_writer
@@ -1087,6 +1088,66 @@ def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
     if not library.delete_ref(library.UNIT_REFS, unit_id):
         raise HTTPException(404, "That unit is no longer on the list.")
     return {"ok": True, "deleted": unit_id}
+
+
+# ── Markup rules ──────────────────────────────────────────────────────────────
+# The markup chain's rates as editable expressions, per sheet layout. See backend/markup.py for
+# why the key is the TAB and why `applies=false` is not the same as a zero formula.
+#
+# GATED LIKE VENDORS, NOT LIKE ITEMS. WRITING is admin-only: these rows decide what a bid sells
+# for. READING is open to every signed-in user, because the page shows a non-admin the formulas
+# read-only and the pricing path has to read them — a gate on the read would stop a bid halfway
+# through, which is the same reasoning the empty `api` tuple for /library.html records in
+# nav_access.py.
+class MarkupRuleIn(BaseModel):
+    """Loose on purpose — markup.validate_rule() is the single authority on what is acceptable,
+    so the rules can't drift between a Pydantic model and the writer.
+
+    `applies` is `Any` rather than `bool` for the same reason: a checkbox posts the STRING
+    "false", and Pydantic coercing that to a bool here would hide it from _boolean(), which is
+    the one place that knows `bool("false")` is True."""
+    layout: Optional[str] = None
+    line_key: Optional[str] = None
+    formula: Optional[str] = None
+    applies: Optional[Any] = None
+    notes: Optional[str] = None
+    sort: Optional[Any] = None
+
+
+@app.get("/api/markup/rules")
+def api_markup_rules(layout: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        rows = markup.list_rules(layout)
+    except markup.ValidationError as exc:
+        # A 400, not an empty list: day one has no rows and the caller falls back to its
+        # constants on [], so a typo'd layout answered with [] would look like "nothing
+        # configured" and quietly price off the hardcoded numbers this table replaces.
+        raise HTTPException(400, str(exc))
+    # The vocabularies ride along so the editor doesn't keep a second copy of them to drift.
+    return {"ok": True, "rules": rows,
+            "layouts": list(markup.LAYOUTS), "line_keys": list(markup.LINE_KEYS)}
+
+
+@app.put("/api/markup/rules")
+def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        row = markup.upsert_rule(payload.model_dump(exclude_unset=True), _user_email(request))
+    except markup.ValidationError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "rule": row}
+
+
+@app.delete("/api/markup/rules/{rule_id}")
+def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    if not markup.delete_rule(rule_id):
+        # 404 rather than a cheerful 200: the rule may have gone in another tab, and reporting a
+        # successful delete of nothing is how somebody believes a rate was removed when it wasn't.
+        raise HTTPException(404, "That markup rule no longer exists.")
+    # Soft — the chain falls back to its hardcoded constant for a line with no rule, so this is
+    # "stop overriding" rather than "charge nothing", and it has to be recoverable.
+    return {"ok": True, "deleted": rule_id}
 
 
 # ─── Customer Portal integration (server-side proxy to the portal admin API) ───
