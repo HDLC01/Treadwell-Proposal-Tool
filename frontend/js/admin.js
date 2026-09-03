@@ -265,11 +265,13 @@
             admin-gated: any signed-in member may rewrite the four recurring customer emails, and
             the save replaces the settings row with no history. The sidebar and the server agree
             here — it is the permission itself that is broader than the ones above.</p>
-          <p>Three tabs everybody can open still gate controls <em>inside</em> the page on role:
+          <p>Four tabs everybody can open still gate controls <em>inside</em> the page on role:
             <strong>Items and Assemblies</strong> (only an admin edits vendors, divisions and
-            units; everyone may pick from them), <strong>Notification Sending</strong> (only an
-            admin adds, removes or toggles anyone but themselves) and <strong>Active
-            Projects</strong> (only an admin reassigns someone else's project).</p>
+            units; everyone may pick from them), <strong>Markup</strong> (only an admin edits a
+            rate or a formula; everyone reads them and sees how a job is priced),
+            <strong>Notification Sending</strong> (only an admin adds, removes or toggles anyone
+            but themselves) and <strong>Active Projects</strong> (only an admin reassigns someone
+            else's project).</p>
         </div></div>`;
     }
 
