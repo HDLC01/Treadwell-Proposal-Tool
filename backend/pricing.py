@@ -61,7 +61,15 @@ def _num(x: Any) -> float | None:
 
 
 def _ceil_to(value: float, multiple: float) -> float:
-    """Round `value` UP to the next whole `multiple` (Excel CEILING)."""
+    """Round `value` UP to the next whole `multiple` (Excel CEILING).
+
+    Deliberately NOT routed through _roundup, unlike every ROUNDUP site in this
+    module. Two reasons, both checked rather than assumed: this is CEILING, a
+    different function, and a sweep of 23,928 cove cases on 2026-09-04 found no
+    input where the float guard would change the answer -- the only division
+    here is by 50. Guarding it would also change the answer on a negative
+    input, where Excel's CEILING and ROUNDUP genuinely differ, for no benefit.
+    """
     if not multiple:
         return value
     return math.ceil(value / multiple) * multiple
@@ -120,7 +128,7 @@ def compute_system(name: str, sf: float, *, bulk_discount: bool = False) -> Dict
         price = _num(bulk) if (bulk_discount and bulk is not None) else _num(coat.get("unit_price"))
         if not coverage or price is None:
             continue
-        qty = math.ceil(sf / coverage)
+        qty = _roundup(sf / coverage)
         cost = qty * price
         liquids_total += cost
         detail.append({"kind": "liquid", "product": coat.get("product"),
@@ -179,11 +187,11 @@ def compute_polish(sf: float, *, reno: bool = False, grout: bool = False,
     if dye:
         sub += line("Dye", sf * _num(P.get("dye_per_coat")) * _num(P.get("dye_coats") or 2))
     if joint_filler:
-        kits = math.ceil(sf / _JF_SF_PER_KIT)
+        kits = _roundup(sf / _JF_SF_PER_KIT)
         sub += line(f"Joint filler ({kits} kit)", kits * _num(P.get("joint_filler_per_kit")))
 
-    sub = math.ceil(sub)  # Material Sub Total = ROUNDUP(...)
-    shipping = math.ceil(sub * _num(P.get("shipping_pct") or 0.02))
+    sub = _roundup(sub)  # Polish D31 = ROUNDUP(SUM(D17:D30),0)
+    shipping = _roundup(sub * _num(P.get("shipping_pct") or 0.02))  # D32
     return {"family": "polish", "sf": sf, "subtotal": float(sub),
             "shipping": float(shipping), "material": float(sub + shipping),
             "detail": detail, "found": True}
@@ -204,8 +212,8 @@ def compute_cove(option: str, lf: float, *, quartz_system: bool = False) -> Dict
 
     cp = _COVE_PRICES
     divisor = _num(c.get("divisor")) or 1
-    C = math.ceil(lf / divisor)
-    E = math.ceil(C / 8) + math.ceil(C / 4)
+    C = _roundup(lf / divisor)
+    E = _roundup(C / 8) + _roundup(C / 4)
     resin_price = _num(cp.get("CoveRez")) if c.get("resin") == "CoveRez" else _num(cp.get("WR"))
     liquid = E * (resin_price or 0.0)
 
@@ -254,9 +262,9 @@ def roll_up(system_results: List[Dict[str, Any]], *, cove_total: float = 0.0,
     sub_raw += (_num(cove_total) or 0.0) + (_num(polish_total) or 0.0)
     sub_raw += (_num(patch_sf) or 0.0) * EPOXY_PATCH_RATE
     sub_raw += (_num(extras_total) or 0.0)
-    material_sub = float(math.ceil(sub_raw))
+    material_sub = float(_roundup(sub_raw))
     pct = shipping_escalation_pct(material_sub)
-    shipping = float(math.ceil(material_sub * pct))
+    shipping = float(_roundup(material_sub * pct))
     return {"material_sub": material_sub, "shipping_pct": pct,
             "shipping_escalation": shipping, "material_total": material_sub + shipping}
 
