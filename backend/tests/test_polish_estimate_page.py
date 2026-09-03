@@ -1032,6 +1032,30 @@ def test_with_no_county_it_falls_back_to_the_state_rate_and_says_so(ran):
 
 
 @needs_node
+def test_a_percentage_typed_on_the_estimate_screen_beats_the_county_on_the_draft(ran):
+    """One number, one source. Kyle gets the rate from the state's site for the ADDRESS:
+
+        "we use the link within the original excel sheet to go to the website, enter the
+         address, and get the tax % from there."
+
+    So the live estimate screen lets him type it, and it overrides the county table there.
+    This page reads the same draft, and its whole reason for reading `county_remodel_rate`
+    is that "a project that chose its county on either screen prices the same on both". A
+    typed rate has to be honoured for exactly that reason -- otherwise the beta would show
+    the county's rate while the workbook it generates carried the typed one, which is the
+    two-disagreeing-tables defect all over again.
+
+    The fixture deliberately carries BOTH: Wyandotte County at 9.35% on the draft and
+    7.975% typed. Asserting the county's figure separately means this cannot pass by
+    accident if the two ever happened to price the same."""
+    t = ran["remodelRate"]["typed"]
+    assert t["pct"] == t["expectedPct"]
+    assert t["money"] == t["expectedMoneyText"]
+    assert t["expectedMoney"] != t["whatTheCountyWouldBe"], (
+        "fixture is vacuous: the typed rate and the county rate price identically")
+
+
+@needs_node
 def test_a_county_rate_on_the_draft_does_not_switch_the_remodel_tax_on(ran):
     """The toggle decides WHETHER, the county decides HOW MUCH. A project that recorded its county
     for the sales-tax lookup must not acquire a remodel tax it was never marked for."""

@@ -1088,6 +1088,29 @@ const rendered = [];      // every string the page put on screen, for the Labour
       },
     };
 
+    // A rate TYPED on the live estimate screen, with a DIFFERENT county also on the draft.
+    // The beta and the workbook it generates have to quote the same number, so the typed
+    // one has to win here too -- otherwise picking Johnson County and then typing the
+    // figure the state's site actually returned would price two different jobs.
+    const typed = build({ blob: blob({ polish_estimate: clone(REMODEL_ON),
+                                       county: "Wyandotte County, KS",
+                                       county_remodel_rate: 0.0935,
+                                       remodel_rate_override: 0.07975 }) });
+    await typed.api.init();
+    typed.api.go(2);
+    const typedChain = expectedChain(REMODEL_ON, ASMS, ITEMS, 0.07975);
+    out.remodelRate.typed = {
+      pct: txt(typed, '[data-mkpct="remodel_pct"]'),
+      money: txt(typed, '[data-mk="remodel_tax"]'),
+      expectedPct: B.pct(typedChain.remodel_pct),
+      expectedMoney: typedChain.remodel_tax,
+      // Formatted through the same helper the page renders with, so the test compares a
+      // string to a string instead of pinning a dollar figure by hand.
+      expectedMoneyText: B.money(typedChain.remodel_tax),
+      // what the COUNTY on the same draft would have charged, so the two cannot be confused
+      whatTheCountyWouldBe: expectedChain(REMODEL_ON, ASMS, ITEMS, 0.0935).remodel_tax,
+    };
+
     // No county picked: the Kansas state rate, and the row says to go and pick one.
     const none = build({ blob: blob({ polish_estimate: clone(REMODEL_ON) }) });
     await none.api.init();

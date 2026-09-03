@@ -93,6 +93,33 @@
     border: 1px solid var(--surface-dim);
     border-radius: 4px;
   }
+  /* The typed remodel % sits beside the county picker it overrides, so it
+     reuses .inline-county's row layout and only adds its own box + note. */
+  .top-toolbar .remodel-rate {
+    width: 72px;
+    padding: 5px 8px;
+    font-size: 12px;
+    min-height: 28px;
+    border: 1px solid var(--surface-dim);
+    border-radius: 4px;
+    text-align: right;
+  }
+  .top-toolbar .remodel-rate:focus {
+    outline: 2px solid var(--treadwell-red-light);
+    border-color: var(--treadwell-red);
+  }
+  .top-toolbar .rate-note {
+    font-size: 10px;
+    line-height: 1.3;
+    max-width: 190px;
+    color: var(--ink-variant);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+  /* Words, not colour alone: each note already says which case it is. */
+  .top-toolbar .rate-note-warn { color: #8a5a00; font-weight: 600; }
+  .top-toolbar .rate-note-bad  { color: var(--treadwell-red); font-weight: 700; }
   .top-toolbar .btn-ai {
     padding: 5px 12px;
     font-size: 12px;
@@ -644,6 +671,8 @@
     .top-toolbar .field-inline input.sysname { width: 100%; }
     .top-toolbar .field-inline input.tex     { width: 100%; }
     .top-toolbar .county-input { width: 100%; }
+    .top-toolbar .remodel-rate { width: 90px; }
+    .top-toolbar .rate-note { max-width: none; flex: 1 1 100%; }
     .top-toolbar .spacer { display: none; }
     .top-toolbar #back-btn,
     .top-toolbar #continue-btn { flex: 1 1 0; }
@@ -720,6 +749,13 @@
       <input type="text" id="county-input" class="county-input" placeholder="Search counties…">
       <span id="county-selected"></span>
       <div id="county-results" class="county-results"></div>
+    </div>
+    <div class="inline-county remodel-rate-field">
+      <label for="remodel-rate">Remodel Tax %</label>
+      <input type="text" id="remodel-rate" class="remodel-rate" inputmode="decimal"
+             autocomplete="off" placeholder="7.975"
+             title="The rate the state's site gives for this address. Typed exactly, not rounded.">
+      <span id="remodel-rate-note" class="rate-note"></span>
     </div>
     <div class="field-inline">
       <label for="sys-name">System Name <span style="font-weight:400;opacity:.55;font-size:11px;">(auto from System 1/2)</span></label>
