@@ -762,3 +762,52 @@ def test_a_typoed_element_id_stops_the_page_dead_here(tmp_path):
     assert proc.returncode != 0, "a typoed element id ran clean, so the id guard proves nothing"
     assert "mk-brokn" in proc.stderr
     assert "markup.html does not declare" in proc.stderr
+
+
+# -- what a filed rate actually does today ----------------------------------
+# The page shipped claiming, in the present tense, that these rows "override the constants
+# hardcoded in the Polish beta's pricing engine". Nothing has ever read them. The test below is
+# deliberately two-directional so it retires itself: it fails today if the note goes missing, and
+# it fails the day the chain is wired if the note is still there.
+
+
+def test_the_page_only_claims_a_filed_rate_prices_nothing_while_that_is_true():
+    """The words on the screen and the state of the code, asserted against each other.
+
+    A one-directional copy pin would be worse than nothing here. It would hold this paragraph in
+    place through the very change that makes it false, and the page would go back to lying --
+    just in the other direction, and with a green suite vouching for it.
+
+    "Wired" is read off two concrete signals rather than a comment: some page other than the admin
+    page loading the expression engine, or some script other than the admin page's fetching the
+    rules. Either one means a filed rate can reach a price, and the moment either appears this
+    test tells whoever did it to delete the paragraph."""
+    html = (FRONTEND / "markup.html").read_text(encoding="utf-8")
+    note = "Filed rates are not pricing anything yet." in html
+
+    engine_pages = {f.name for f in FRONTEND.glob("*.html")
+                    if "markup-core.js" in f.read_text(encoding="utf-8")} - {"markup.html"}
+    fetchers = {f.name for f in FRONTEND.glob("js/*.js")
+                if "api/markup" in f.read_text(encoding="utf-8")} - {"markup.js"}
+    wired = engine_pages | fetchers
+
+    if wired:
+        assert not note, (
+            "the chain is wired up now (%s), so the page's 'not pricing anything yet' paragraph "
+            "is false -- delete it, and this test with it" % ", ".join(sorted(wired)))
+    else:
+        assert note, (
+            "nothing consumes these rules -- markup-core.js is loaded by markup.html alone and "
+            "polish-bid-core.js still owns its own RATES -- so an admin can edit a rate, watch it "
+            "save, and move no price at all. The page has to say so.")
+
+
+def test_the_badge_does_not_promise_an_override_that_does_not_happen():
+    """The specific false sentence, kept out by name.
+
+    Narrower than the test above on purpose: the tooltip is the one place that made a positive
+    claim about what an edit DOES, and it is the sentence an admin reads just before deciding
+    this page is safe to use."""
+    html = (FRONTEND / "markup.html").read_text(encoding="utf-8")
+    assert "rows override the constants" not in html, (
+        "the Beta test badge is promising an override no code performs")
