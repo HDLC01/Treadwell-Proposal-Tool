@@ -68,14 +68,25 @@ def _ceil_to(value: float, multiple: float) -> float:
 
 
 def _roundup(value: float) -> int:
-    """Excel ROUNDUP(value, 0) — rounds AWAY from zero, both directions.
+    """Excel ROUNDUP(value, 0). Two things math.ceil does not do.
 
-    math.ceil is only the same thing for POSITIVE numbers. Every ROUNDUP in the Epoxy tab
-    operates on a positive figure except one: D74, the hard-bid discount, which is a negative
-    number by construction. ROUNDUP(-100.4) is -101; ceil(-100.4) is -100, so ceil quietly
-    shaves a dollar off the discount and bids the job a dollar high.
+    ROUNDS AWAY FROM ZERO, both directions. ceil is the same function only for POSITIVE
+    numbers. Every ROUNDUP in the Epoxy tab operates on a positive figure except one: D74, the
+    hard-bid discount, which is negative by construction. ROUNDUP(-100.4) is -101; ceil(-100.4)
+    is -100, so ceil shaves a dollar off the discount and bids the job a dollar high.
+
+    AND IT DOES NOT ROUND UP FLOAT DUST. Excel keeps 15 significant digits, so a value only a
+    binary artefact above an integer is that integer to Excel. In IEEE-754 1 - 0.32 is
+    0.6799999999999999, so 1003 / (1 - 0.32) is 1475.0000000000002 -- and a bare ceil buys a
+    whole extra dollar off the back of the error. 1.3% of the (cost, GP) pairs in the range this
+    tool bids land on it. polish-bid-core.js has guarded this since it was written and names the
+    same hazard in its own comment; 12 significant digits is that engine's figure, kept so the
+    two agree exactly rather than merely closely.
     """
-    return int(math.copysign(math.ceil(abs(value)), value)) if value else 0
+    if not value:
+        return 0
+    g = float("%.12g" % value)
+    return int(math.copysign(math.ceil(abs(g)), g)) if g else 0
 
 
 def list_systems() -> List[str]:
@@ -277,7 +288,11 @@ def compute_full_bid(material_total: float, sf: float, *,
     Note: the sheet hardcodes remodel at 10%; pass remodel_rate to use the
     accurate state+county rate instead.
     """
-    ceil = math.ceil
+    # Every ROUNDUP in this chain goes through _roundup, not math.ceil. Checked cell by cell on
+    # 2026-09-04: all 18 D-column formulas below say ROUNDUP except D68 (a bare SUM of D65/D66,
+    # which are themselves ROUNDUP and are rounded individually here) and D77 (the sheet
+    # hardcodes 0). Excel's rounding, at every site the sheet rounds.
+    ceil = _roundup
     crews = crews if crews is not None else [(3, 5)]
     D43 = _num(material_total) or 0.0
     sf = _num(sf) or 0.0

@@ -187,3 +187,53 @@ def test_the_discount_rounds_away_from_zero_like_the_sheet():
     assert fb["hard_bid"] == -math.ceil(abs(exact))
     assert fb["hard_bid"] < math.ceil(exact), "still rounding toward zero -- the discount is short"
 
+
+# -- binary float dust in the ROUNDUP chain ----------------------------------
+# Excel keeps 15 significant digits, so a figure that is only a binary artefact above an integer
+# IS that integer to Excel. Python's float keeps all 17 and math.ceil believes every one of them.
+# The gap costs a dollar, and it compounds: D73 feeds D75 and D76, so one bad dollar of GP comes
+# out as two on the bid. polish-bid-core.js has guarded this since it was written; pricing.py had
+# not, so the two engines disagreed on 320 of the 22,000 material figures swept on 2026-09-04.
+# Every one of those sits in the 0.32 GP band, because 1 - 0.32 is the only band edge that is not
+# exact in binary: 0.6799999999999999.
+
+
+def test_a_bid_is_not_a_dollar_high_because_of_binary_dust():
+    """The defect, through the real engine on real inputs. $18,248 of material puts D70 on 27,064,
+    and 27064 / (1 - 0.32) is 39800.00000000001 -- 39,800 to Excel and to any human. A bare ceil
+    calls it 39,801 and bids the job high for no reason anyone could ever explain to a customer."""
+    fb = pricing.compute_full_bid(18248, 12000, taxable=False, remodel=False)
+    base = fb["subtotal_costs"]
+    assert fb["sales_tax"] == 0 and fb["fees"] == 0, (
+        "D73's base is D70+D80+D83; this fixture assumes the latter two are zero")
+
+    quotient = base / (1 - fb["gp_pct"])
+    # Self-check: if a rate change ever moves this fixture off the dust, the test below would
+    # pass against a bare ceil too and would be proving nothing at all.
+    assert math.ceil(quotient) != round(quotient), (
+        "this fixture no longer lands on float dust, so it cannot tell the guard from a ceil")
+    assert abs(quotient - round(quotient)) < 1e-6, (
+        "that is a real fraction, not dust -- it SHOULD round up, and this fixture is wrong")
+
+    assert fb["gp_markup"] == round(quotient) - base, (
+        "the GP markup bought a dollar off the back of a rounding error")
+    assert fb["gp_markup"] < math.ceil(quotient) - base, "still rounding the dust up"
+
+
+def test_a_genuine_fraction_still_rounds_all_the_way_up():
+    """THE COUNTEREXAMPLE, and the only real risk in this change. The guard has to swallow binary
+    dust and NOTHING else. Round to too few digits -- or reach for a plain epsilon -- and a real
+    $1,475.40 of cost becomes $1,475 of bid, which is Treadwell quietly under-charging every job
+    to fix a problem that costs a dollar. A returned cent is still a billed dollar."""
+    assert pricing._roundup(1475.4) == 1476
+    assert pricing._roundup(1475.000000000002) == 1475
+    assert pricing._roundup(0.0001) == 1
+    assert pricing._roundup(9999999.4) == 10000000, "12 digits must not blunt a real seven-figure bid"
+
+
+def test_the_guard_did_not_cost_the_away_from_zero_rounding():
+    """_roundup does two jobs now. The dust guard must not undo the one it was written for -- the
+    negative hard-bid discount that PR #449 fixed. Both directions, both properties, one function."""
+    assert pricing._roundup(-1475.4) == -1476, "no longer rounding away from zero"
+    assert pricing._roundup(-1475.000000000002) == -1475, "dust is not swallowed on the negative side"
+    assert pricing._roundup(0) == 0
