@@ -454,6 +454,9 @@
       // live bid does.) The brick rather than another shaded square: the geometric set is low-distinction
       // enough without two rows sharing a glyph, and a brick says "materials" at a glance.
       navItem("/library.html", "🧱", "Items and Assemblies", "BETA") +
+      // The admin-editable rate table behind the polish beta's markup line, third because it
+      // is reference data the same way the library is, not a page an estimator opens daily.
+      navItem("/markup.html", "%", "Markup", "BETA") +
       '<div class="tw-section">Settings</div>' +
       navItem("/notifications.html", "✉", "Notification Sending") +
       // Kept at Hanz's request on 2026-08-11 after the Follow-ups board came out; the full

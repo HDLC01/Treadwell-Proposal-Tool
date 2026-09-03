@@ -280,7 +280,14 @@ def test_the_sidebar_has_exactly_three_headings(sidebar):
     Active: a beta leaking into the daily list is the one mistake here that changes what an
     estimator trusts on a live bid. Permissions key on href in nav_access.py and never on the
     heading, so no arrangement of these can change who sees what — which is exactly why this needs
-    a test of its own instead of being caught by a permissions failure somewhere else."""
+    a test of its own instead of being caught by a permissions failure somewhere else.
+
+    THE BETA MEMBERSHIP IS DERIVED, NOT TYPED. It used to be a literal two-item list and needed
+    retyping the day a third beta shipped — the same chore `test_active_projects_board.py:325`
+    documents for the tab set. Read instead which hrefs are tagged "BETA" in the same navItem calls,
+    and require the Beta heading's rows to be exactly that set. A beta added under the wrong heading,
+    or a heading row that forgot its BETA tag, both fail; a fourth beta arriving with its tag intact
+    does not."""
     import re as _re
     order = [m.group(1) for m in _re.finditer(r'tw-section">([^<]+)</div>', sidebar)]
     assert order == ["Active", "Beta", "Settings"], order
@@ -290,11 +297,15 @@ def test_the_sidebar_has_exactly_three_headings(sidebar):
             cur = m.group(1)
         else:
             grouped.setdefault(cur, []).append(m.group(2))
-    assert grouped["Beta"] == ["/polish-intake.html", "/library.html"], grouped["Beta"]
+    beta_hrefs = _re.findall(r'navItem\("([^"]+)"[^)]*"BETA"\)', sidebar)
+    assert beta_hrefs, "no BETA-tagged nav rows found — the tag itself may have been renamed"
+    assert grouped["Beta"] == beta_hrefs, (
+        "the Beta heading's rows and the BETA-tagged navItem calls have drifted apart: "
+        "heading has %r, BETA-tagged calls are %r" % (grouped["Beta"], beta_hrefs))
     assert grouped["Settings"] == ["/notifications.html", "/followup-settings.html",
                                    "/admin.html"], grouped["Settings"]
     assert len(grouped["Active"]) == 9, grouped["Active"]
-    for beta in ("/polish-intake.html", "/library.html"):
+    for beta in beta_hrefs:
         assert beta not in grouped["Active"], "%s leaked into the daily list" % beta
 
 

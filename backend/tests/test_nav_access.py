@@ -293,7 +293,7 @@ def test_the_page_refusal_only_tabs_own_no_api():
     screen. If one of them ever gains a private route, this fails and the wording changes with it."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
         "/portal.html", "/polish-intake.html", "/projects.html", "/library.html",
-        "/notifications.html", "/admin.html"], (
+        "/markup.html", "/notifications.html", "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
 
