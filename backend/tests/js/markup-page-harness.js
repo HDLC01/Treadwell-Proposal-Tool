@@ -8,7 +8,8 @@
  * names the page itself binds in scope, against a DOM stub, and reports the DOM that came out.
  *
  * WHAT IS REAL. markup-core.js (required, not stubbed) — the preview figures below are the real
- * engine's, so nothing here can pass against a stand-in that disagrees with what prices a bid.
+ * engine's, AND so is the parse the simple controls are built on: `simpleFrom` reads that
+ * parser's AST, so a band editor that misreads a formula fails here rather than on a bid.
  * markup.html too: the element ids the stub answers to are read OUT OF THE PAGE, so a renderer
  * reaching for an id the markup does not declare throws instead of quietly writing to nothing.
  *
@@ -20,6 +21,11 @@
  * line does not exist on this tab" — Gyp's hard-bid cell is EMPTY) apart from `formula='0'` ("it
  * exists and prices to nothing"), and this harness renders both on one page so a collapse of the
  * two fails here rather than on a bid.
+ *
+ * AND SO IS THE KEYBOARD. The page is now mostly number boxes: a ladder of five bands is ten of
+ * them in one cell. A repaint on the way out of one steals the focus the person just tabbed into
+ * — a bug this repo has shipped — so `fire()` carries a `relatedTarget` and the walks below tab
+ * across a real ladder and type into it.
  *
  * Usage: node markup-page-harness.js <frontend-dir>   →   one line of JSON
  */
@@ -48,9 +54,9 @@ const PAGE_IDS = new Set(
 // which silently slid the row's cells one column left and made the assertions read the wrong cell.
 const VOID = new Set(["input", "br", "img", "hr", "meta", "link"]);
 const ENT = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'",
-              "&mdash;": "—", "&nbsp;": " " };
+              "&mdash;": "—", "&rarr;": "→", "&nbsp;": " " };
 const unesc = (s) =>
-  String(s).replace(/&(?:amp|lt|gt|quot|#39|mdash|nbsp);/g, (m) => ENT[m]);
+  String(s).replace(/&(?:amp|lt|gt|quot|#39|mdash|rarr|nbsp);/g, (m) => ENT[m]);
 
 function attrsOf(raw) {
   const out = {};
@@ -71,14 +77,19 @@ function node(tag, attrs) {
     setAttribute(k, v) { this.attrs[k] = String(v); },
     get hidden() { return Object.prototype.hasOwnProperty.call(this.attrs, "hidden"); },
     set hidden(v) { if (v) this.attrs.hidden = ""; else delete this.attrs.hidden; },
+    /** A bare `checked` on the tag, the way a browser reports it. The ladder's local-jobs-only
+     *  rule is a real checkbox and recompose() reads it back through this. */
+    get checked() { return Object.prototype.hasOwnProperty.call(this.attrs, "checked"); },
+    set checked(v) { if (v) this.attrs.checked = ""; else delete this.attrs.checked; },
+    get open() { return Object.prototype.hasOwnProperty.call(this.attrs, "open"); },
     classList: {
       add(c) { const s = new Set(n.classes); s.add(c); n.attrs.class = [...s].join(" "); },
       remove(c) { n.attrs.class = n.classes.filter((x) => x !== c).join(" "); },
       contains(c) { return n.hasClass(c); },
     },
     /** The element's own text, entities decoded, whitespace collapsed. The decode matters: the
-     *  absent and downstream previews render an `&mdash;`, and a test looking for "no figure"
-     *  has to see the same character a reader would. */
+     *  absent and downstream previews render an `&mdash;` and the running total an `&rarr;`, and
+     *  a test looking for "no figure" has to see the same character a reader would. */
     get text() {
       let out = "";
       const walk = (x) => {
@@ -90,6 +101,10 @@ function node(tag, attrs) {
     },
     get value() { return this.attrs.value === undefined ? "" : this.attrs.value; },
     set value(v) { this.attrs.value = String(v); },
+    /** A REAL textContent, because showRowError writes one WITHOUT a repaint -- that is the
+     *  whole point of it, so a stub that swallowed the write would hide a blank error message. */
+    get textContent() { return this.text; },
+    set textContent(v) { this.children = [String(v)]; },
     /** Only the two selector shapes markup.js's handlers use. Anything else is a harness bug and
      *  says so rather than silently matching nothing. */
     closest(sel) {
@@ -161,6 +176,8 @@ const byTag = (root, t) => all(root, (n) => n.tag === t);
 const byAttr = (root, a, v) =>
   all(root, (n) => Object.prototype.hasOwnProperty.call(n.attrs, a) &&
                    (v === undefined || n.attrs[a] === v));
+const first = (list) => (list.length ? list[0] : null);
+const textOf = (n) => (n ? n.text : "");
 
 // ── the DOM stub ─────────────────────────────────────────────────────────────
 let DOC = null;
@@ -180,7 +197,12 @@ function makeDoc() {
       set hidden(v) { this._hidden = !!v; },
       get innerHTML() { return this._html; },
       set innerHTML(v) { this._html = String(v); this.tree = parse(this._html); },
-      fire(k, target) { (this.listeners[k] || []).forEach((f) => f({ target })); },
+      /** `related` is the node the focus is HEADED for — `ev.relatedTarget`. markup.js's
+       *  focusout handler reads it to decide what the repaint should focus, because during
+       *  focusout document.activeElement is still the box being left. */
+      fire(k, target, related) {
+        (this.listeners[k] || []).forEach((f) => f({ target, relatedTarget: related || null }));
+      },
     };
     containers[id] = el;
     return el;
@@ -215,6 +237,13 @@ function makeDoc() {
 // ── the run ──────────────────────────────────────────────────────────────────
 const LAYOUTS = ["polish", "seal", "epoxy", "leveling", "gyp"];
 const LINE_KEYS = ["gp", "hard_bid", "super_pto", "soft_costs", "bond"];
+
+// The two built-ins the simple controls have to round-trip byte for byte, written here
+// INDEPENDENTLY of markup.js so a change on either side is a failing test rather than a rate
+// nobody chose. If simpleTo(simpleFrom(x)) !== x, tabbing across a row rewrites the stored rule.
+const GP_BANDS = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))";
+const HARD_BID =
+  "IF(hard_bid_on, IF(subtotal>=60000, -4%, IF(local, IF(subtotal>=13000, -2.5%, 0), 0)), 0)";
 
 const tick = () => new Promise((r) => setImmediate(r));
 const drain = async () => { for (let i = 0; i < 16; i++) await tick(); };
@@ -286,32 +315,72 @@ function build(opts) {
   const chain = () => doc.containers["mk-chain"];
   const tabs = () => doc.containers["mk-tabs"];
 
-  /** One row's whole rendered shape — every assertion in test_markup_page.py reads this. */
+  /** One row's whole rendered shape — every assertion in test_markup_page.py reads this.
+   *
+   *  READ BY CLASS, not by column index. The grid lost its WHAT IT DOES column in the redesign,
+   *  and a positional read would have silently slid every assertion one cell left. */
   const rowSnap = (r) => {
-    const cells = r.children.filter((c) => typeof c !== "string");
-    const formula = cells[1], applies = cells[2], explain = cells[3], prev = cells[4];
+    const line = first(byClass(r, "line"));
+    const rate = first(byClass(r, "rate"));
+    const applies = first(byClass(r, "applies"));
+    const prev = first(byClass(r, "prev"));
+    const texts = rate ? byTag(rate, "input") : [];
     return {
       line: r.getAttribute("data-row"),
       absentClass: r.hasClass("absent"),
-      label: cells[0] ? cells[0].text : "",
-      // The formula cell, in full: what it says, whether it is an editable box, and the caption.
-      formulaText: formula ? formula.text : "",
-      inputs: formula ? byTag(formula, "input").map((i) => ({
+      ctxClass: r.hasClass("ctx"),
+      // The name, the free one-line caption, and the chip — the LINE cell, which is now where a
+      // line explains itself.
+      label: textOf(first(byClass(r, "nm"))),
+      sub: textOf(first(byClass(r, "sub"))),
+      chip: textOf(first(byClass(r, "chip"))),
+      // The explanation, which lives in a per-row <details> instead of a column of prose.
+      explain: textOf(first(byClass(r, "explain"))),
+      helpLabel: textOf(first(byTag(r, "summary"))),
+      helpOpen: byTag(r, "details").some((d) => d.open),
+      // The RATE cell, in full: what it says, which controls it grew, and the captions under it.
+      rateText: rate ? rate.text : "",
+      inputs: texts.filter((i) => i.attrs.type !== "checkbox").map((i) => ({
         value: i.value, placeholder: i.attrs.placeholder || "",
         cls: i.className, focusKey: i.attrs["data-focus"] || "",
-        ariaLabel: i.attrs["aria-label"] || "",
+        part: i.attrs["data-part"] || "", ariaLabel: i.attrs["aria-label"] || "",
+      })),
+      checks: texts.filter((i) => i.attrs.type === "checkbox").map((i) => ({
+        part: i.attrs["data-part"] || "", checked: i.checked,
+        focusKey: i.attrs["data-focus"] || "", ariaLabel: i.attrs["aria-label"] || "",
+      })),
+      // The ladder, row by row, so its SHAPE can be asserted and not just its text.
+      bands: rate ? byClass(rate, "band").map((b) => ({
+        label: textOf(first(byClass(b, "edgelbl"))),
+        text: b.text,
+        values: byTag(b, "input").map((i) => i.value),
+        keys: byTag(b, "input").map((i) => i.attrs["data-focus"] || ""),
+        del: byAttr(b, "data-del").length > 0,
       })) : [],
-      errmsg: formula ? byClass(formula, "errmsg").map((e) => ({ text: e.text, hidden: e.hidden })) : [],
-      buttons: formula ? byTag(formula, "button").map((b) => ({
-        text: b.text, drop: b.attrs["data-drop"] || "", type: b.attrs.type || "" })) : [],
+      bandsText: rate ? textOf(first(byClass(rate, "bands"))) : "",
+      notes: rate ? byClass(rate, "wbnote").map((n) => n.text) : [],
+      errmsg: rate ? byClass(rate, "errmsg").map((e) => ({ text: e.text, hidden: e.hidden })) : [],
+      buttons: rate ? byTag(rate, "button").map((b) => ({
+        text: b.text, drop: b.attrs["data-drop"] || "", adv: b.attrs["data-adv"] || "",
+        add: b.attrs["data-add"] || "", del: b.attrs["data-del"] || "",
+        type: b.attrs.type || "" })) : [],
+      // The one control the drop-button tests are actually about, apart from the rest.
+      drops: rate ? byAttr(rate, "data-drop").map((b) => b.text) : [],
+      // Whether this row is showing the expression box rather than a simple control.
+      advanced: rate ? byAttr(rate, "data-formula").length > 0 : false,
       appliesText: applies ? applies.text : "",
       switches: applies ? byAttr(applies, "role", "switch").map((s) => ({
         tag: s.tag, type: s.attrs.type || "", checked: s.attrs["aria-checked"],
         tabindex: s.attrs.tabindex === undefined ? null : s.attrs.tabindex,
         ariaLabel: s.attrs["aria-label"] || "", focusKey: s.attrs["data-focus"] || "",
       })) : [],
-      explain: explain ? explain.text : "",
+      // The preview, split: the figure, the percentage chip when the formula returned a rate,
+      // and the running total through the line.
       preview: prev ? prev.text : "",
+      figure: prev ? textOf(first(byClass(prev, "amt")) || first(byClass(prev, "unpriced")) ||
+                            first(byClass(prev, "nodash"))) : "",
+      rate: prev ? textOf(first(byClass(prev, "pct"))) : "",
+      run: prev ? textOf(first(byClass(prev, "run"))) : "",
       previewClasses: prev ? prev.children.filter((c) => typeof c !== "string")
         .map((c) => c.className) : [],
     };
@@ -320,7 +389,7 @@ function build(opts) {
   const snap = () => {
     const t = chain().tree;
     const rows = byClass(t, "mkrow").filter((r) => r.getAttribute("data-row"));
-    const grand = byClass(t, "grand")[0] || null;
+    const grand = first(byClass(t, "grand"));
     return {
       tabs: byTag(tabs().tree, "button").map((b) => ({
         layout: b.attrs["data-layout"], label: b.text, selected: b.attrs["aria-selected"],
@@ -328,8 +397,9 @@ function build(opts) {
       })),
       rows: rows.map(rowSnap),
       rowOrder: rows.map((r) => r.getAttribute("data-row")),
-      grand: grand ? { explain: byClass(grand, "explain").map((e) => e.text)[0] || "",
-                       preview: byClass(grand, "prev").map((p) => p.text)[0] || "",
+      head: byClass(t, "head").map((h) => h.text)[0] || "",
+      grand: grand ? { sub: textOf(first(byClass(grand, "sub"))),
+                       preview: textOf(first(byClass(grand, "prev"))),
                        classes: byClass(grand, "prev").length
                          ? byClass(grand, "prev")[0].children.filter((c) => typeof c !== "string")
                              .map((c) => c.className) : [] } : null,
@@ -362,10 +432,34 @@ function build(opts) {
     }
     return null;
   };
-  const clickTab = (layout) => tabs().fire("click", find('[data-focus="tab-' + layout + '"]'));
-  const clickIn = (focusKey, type) => chain().fire(type || "click", find('[data-focus="' + focusKey + '"]'));
+  const at = (focusKey) => find('[data-focus="' + focusKey + '"]');
+  const clickTab = (layout) => tabs().fire("click", at("tab-" + layout));
+  const clickIn = (focusKey, type) => chain().fire(type || "click", at(focusKey));
+  /** Type into a control and LEAVE it the way a keyboard does — with somewhere to go. */
+  const typeAndLeave = (focusKey, value, nextKey) => {
+    const box = at(focusKey);
+    box.value = String(value);
+    chain().fire("input", box);
+    chain().fire("focusout", box, nextKey ? at(nextKey) : null);
+    return box;
+  };
+  /** Tab out of a control WITHOUT touching it. */
+  const leave = (focusKey, nextKey) =>
+    chain().fire("focusout", at(focusKey), nextKey ? at(nextKey) : null);
+  const tick2 = (focusKey) => {
+    const box = at(focusKey);
+    box.checked = !box.checked;
+    chain().fire("change", box);
+    return box;
+  };
+  const active = () =>
+    doc.activeElement ? doc.activeElement.getAttribute("data-focus") : null;
 
-  return { doc, requests, confirms, snap, find, byId, clickTab, clickIn, chain, tabs };
+  return { doc, requests, confirms, snap, find, byId, at, clickTab, clickIn, typeAndLeave,
+           leave, tick2, active, chain, tabs,
+           puts: () => requests.filter((r) => r.method === "PUT"),
+           gets: () => requests.filter((r) => r.method === "GET"),
+           dels: () => requests.filter((r) => r.method === "DELETE") };
 }
 
 async function main() {
@@ -386,6 +480,12 @@ async function main() {
                       line_keys: LINE_KEYS.concat(["escalation"]) });
     await drain();
     out.poisoned = s.snap();
+
+    // A line with NOTHING on record still has a simple control available -- an empty rate box --
+    // so Advanced must not be a trapdoor on it.
+    s.clickIn("adv-escalation");
+    await drain();
+    out.escalationAdvanced = s.snap().rows.find((r) => r.line === "escalation");
   }
 
   // ═══ 3. Gyp: hard_bid ABSENT (the built-in default) beside a genuine ZERO
@@ -412,8 +512,7 @@ async function main() {
     s.clickIn("d-hard_bid");
     await drain();
     out.filedAbsentDrop = { confirm: s.confirms[0] || null,
-                            deletes: s.requests.filter((r) => r.method === "DELETE")
-                              .map((r) => r.url),
+                            deletes: s.dels().map((r) => r.url),
                             after: s.snap() };
   }
 
@@ -450,27 +549,23 @@ async function main() {
   {
     const s = build({ rules: [] });
     await drain();
-    const box = s.find('[data-focus="f-soft_costs"]');
-    box.value = "16";                                  // mid-word
+    const box = s.at("s-soft_costs-value");
+    box.value = "1";                                   // mid-word
     s.chain().fire("input", box);
     out.midWord = { errmsg: s.snap().rows.find((r) => r.line === "soft_costs").errmsg,
-                    puts: s.requests.filter((r) => r.method === "PUT").length };
+                    puts: s.puts().length };
 
-    // …now leave the box with something unreadable.
-    const bad = s.find('[data-focus="f-soft_costs"]');
-    bad.value = "16% *";
-    s.chain().fire("focusout", bad);
+    // …now leave the box with something that is not a number at all.
+    s.typeAndLeave("s-soft_costs-value", "sixteen", null);
     await drain();
-    out.badOnBlur = s.snap();
-    out.badOnBlurPuts = s.requests.filter((r) => r.method === "PUT").length;
+    out.badNumber = s.snap();
+    out.badNumberPuts = s.puts().length;
 
-    // …and again with a formula that reads.
-    const good = s.find('[data-focus="f-soft_costs"]');
-    good.value = "18%";
-    s.chain().fire("focusout", good);
+    // …and again with a rate that reads. One number, and the row files `16%`.
+    s.typeAndLeave("s-soft_costs-value", "18", null);
     await drain();
-    out.goodOnBlur = s.snap();
-    out.goodOnBlurBody = (s.requests.filter((r) => r.method === "PUT")[0] || {}).body || null;
+    out.goodNumber = s.snap();
+    out.goodNumberBody = (s.puts()[0] || {}).body || null;
   }
 
   // ═══ 9. the switch: off files applies=false with NO formula, and switching back ON
@@ -481,26 +576,22 @@ async function main() {
     s.clickIn("a-soft_costs");
     await drain();
     out.switchedOff = s.snap();
-    out.switchedOffBody = (s.requests.filter((r) => r.method === "PUT")[0] || {}).body || null;
+    out.switchedOffBody = (s.puts()[0] || {}).body || null;
 
     // …and back on. The row is now ABSENT with no formula stored, so there is nothing to run.
     s.clickIn("a-soft_costs");
     await drain();
     out.switchedBackOn = s.snap();
-    out.switchOnEmpty = {
-      puts: s.requests.filter((r) => r.method === "PUT").length,
-      alert: s.snap().alert,
-      focused: s.doc.activeElement ? s.doc.activeElement.getAttribute("data-focus") : null,
-    };
+    out.switchOnEmpty = { puts: s.puts().length, alert: s.snap().alert, focused: s.active() };
   }
 
   // ═══ 10. focus survives a re-render ══════════════════════════════════════
   {
     const s = build({ rules: [rule("polish", "gp", { formula: "MARKUP(30%)" })] });
     await drain();
-    const box = s.find('[data-focus="f-gp"]');
+    const box = s.at("s-gp-value");
     box.focus();
-    box.setSelectionRange(3, 5);
+    box.setSelectionRange(1, 2);
     const before = s.doc.activeElement;
     // A save on a DIFFERENT row repaints the whole table under the caret.
     s.clickIn("a-soft_costs");
@@ -512,6 +603,9 @@ async function main() {
       sameNode: before === after,
       selection: after ? [after.selectionStart, after.selectionEnd] : null,
     };
+    // …and a MARKUP()-wrapped flat rate is still one number box, because GP being a divide-up is
+    // a fact about the arithmetic, not about how many numbers the answer has.
+    out.markupFlat = s.snap().rows.find((r) => r.line === "gp");
   }
 
   // ═══ 11. stop overriding: the wording, and the request ═══════════════════
@@ -520,32 +614,28 @@ async function main() {
     await drain();
     s.clickIn("d-soft_costs");
     await drain();
-    out.drop = { confirm: s.confirms[0] || null,
-                 deletes: s.requests.filter((r) => r.method === "DELETE").map((r) => r.url),
+    out.drop = { confirm: s.confirms[0] || null, deletes: s.dels().map((r) => r.url),
                  after: s.snap() };
 
     const n = build({ rules: [rule("polish", "soft_costs", { formula: "16%" })], confirm: false });
     await drain();
     n.clickIn("d-soft_costs");
     await drain();
-    out.dropCancelled = { deletes: n.requests.filter((r) => r.method === "DELETE").length };
+    out.dropCancelled = { deletes: n.dels().length };
 
     const g = build({ rules: [rule("polish", "soft_costs", { formula: "16%" })],
                       deleteStatus: 404 });
     await drain();
     g.clickIn("d-soft_costs");
     await drain();
-    out.dropGone = { alert: g.snap().alert,
-                     gets: g.requests.filter((r) => r.method === "GET").length };
+    out.dropGone = { alert: g.snap().alert, gets: g.gets().length };
   }
 
   // ═══ 12. a 403 from the server locks the page rather than lying ══════════
   {
     const s = build({ rules: [], putStatus: 403 });
     await drain();
-    const box = s.find('[data-focus="f-soft_costs"]');
-    box.value = "18%";
-    s.chain().fire("focusout", box);
+    s.typeAndLeave("s-soft_costs-value", "18", null);
     await drain();
     out.forbidden = s.snap();
   }
@@ -560,8 +650,175 @@ async function main() {
     if (retry) {
       s.chain().fire("click", retry);
       await drain();
-      out.loadFailedRetryGets = s.requests.filter((r) => r.method === "GET").length;
+      out.loadFailedRetryGets = s.gets().length;
     }
+  }
+
+  // ═══ 14. THE BAND LADDER, walked with the keyboard ════════════════════════
+  //   GP's built-in is the five-band ladder, and this is the walk the redesign exists for:
+  //   tab across it, type one number, and end up where the keyboard was going.
+  {
+    const s = build({ rules: [] });
+    await drain();
+    out.ladder = { gp: s.snap().rows.find((r) => r.line === "gp"),
+                   hard_bid: s.snap().rows.find((r) => r.line === "hard_bid") };
+
+    // Tab from the first band's ceiling to its rate WITHOUT typing. Nothing is saved and — the
+    // point — nothing is repainted, so the box the browser is moving into still exists.
+    const wasRate = s.at("s-gp-rate-0");
+    s.at("s-gp-edge-0").focus();
+    s.leave("s-gp-edge-0", "s-gp-rate-0");
+    await drain();
+    out.tabNoEdit = { puts: s.puts().length, sameNode: s.at("s-gp-rate-0") === wasRate };
+
+    // Now type a rate and tab on. The row repaints (it has a new value to show) and the caret
+    // ends up in the box the keyboard was heading for, not back in the one it left.
+    const beforeNext = s.at("s-gp-edge-1");
+    s.typeAndLeave("s-gp-rate-0", "50", "s-gp-edge-1");
+    await drain();
+    out.bandEdit = {
+      body: (s.puts()[0] || {}).body || null,
+      focused: s.active(),
+      repainted: s.at("s-gp-edge-1") !== beforeNext,
+      after: s.snap().rows.find((r) => r.line === "gp"),
+    };
+
+    // A job size typed with the separators a person actually types.
+    s.typeAndLeave("s-gp-edge-1", "$16,000", null);
+    await drain();
+    out.commaEdit = { body: (s.puts()[1] || {}).body || null };
+  }
+
+  // ═══ 15. the ladder round-trips byte for byte ════════════════════════════
+  //   Tab through every box of both built-in ladders, touching nothing. Not one PUT: a control
+  //   seeded from a built-in must not file that built-in as an override just because somebody
+  //   looked at it, and simpleTo(simpleFrom(x)) must equal x for it to know that.
+  {
+    const s = build({ rules: [] });
+    await drain();
+    for (const p of ["edge-0", "rate-0", "edge-1", "rate-1", "edge-2", "rate-2",
+                     "edge-3", "rate-3", "rate-4"]) {
+      s.leave("s-gp-" + p, null);
+    }
+    for (const p of ["edge-0", "rate-0", "edge-1", "rate-1"]) {
+      s.leave("s-hard_bid-" + p, null);
+    }
+    await drain();
+    out.roundTripPuts = s.puts().map((r) => r.body);
+
+    // And the same for every flat box, whose baseline is EMPTY rather than the built-in.
+    for (const k of ["super_pto", "soft_costs", "bond"]) s.leave("s-" + k + "-value", null);
+    await drain();
+    out.roundTripPutsAfterFlat = s.puts().map((r) => r.body);
+  }
+
+  // ═══ 16. Advanced: the expression box never goes away, and it round-trips ═
+  {
+    const s = build({ rules: [] });
+    await drain();
+    s.clickIn("adv-gp");
+    await drain();
+    out.advOpened = s.snap().rows.find((r) => r.line === "gp");
+    out.advFocused = s.active();
+
+    s.clickIn("adv-gp");
+    await drain();
+    out.advClosed = s.snap().rows.find((r) => r.line === "gp");
+
+    // The expression box still refuses what it cannot read, and still does not send it.
+    s.clickIn("adv-soft_costs");
+    await drain();
+    s.typeAndLeave("f-soft_costs", "16% *", null);
+    await drain();
+    out.badOnBlur = s.snap();
+    out.badOnBlurPuts = s.puts().length;
+
+    // …and still saves what it can.
+    s.typeAndLeave("f-soft_costs", "18%", null);
+    await drain();
+    out.goodOnBlur = s.snap();
+    out.goodOnBlurBody = (s.puts()[0] || {}).body || null;
+  }
+
+  // ═══ 17. a formula no simple control can hold opens in Advanced BY ITSELF ═
+  {
+    const s = build({ rules: [rule("polish", "soft_costs",
+      { formula: 'IF(taxable, 16%, 13%)' })] });
+    await drain();
+    out.forcedAdvanced = s.snap().rows.find((r) => r.line === "soft_costs");
+
+    // Gyp's soft-costs BUILT-IN is a whole expression, sentinel and all, so an unconfigured Gyp
+    // tab opens that row in Advanced too — with nothing filed in it.
+    const g = build({ rules: [] });
+    await drain();
+    g.clickTab("gyp");
+    await drain();
+    out.gypSoftCosts = g.snap().rows.find((r) => r.line === "soft_costs");
+  }
+
+  // ═══ 18. adding and removing a band ══════════════════════════════════════
+  {
+    const s = build({ rules: [] });
+    await drain();
+    s.clickIn("add-gp");
+    await drain();
+    out.bandAdded = { row: s.snap().rows.find((r) => r.line === "gp"),
+                      alert: s.snap().alert, focused: s.active(),
+                      puts: s.puts().length };
+
+    // Half of it filled in is not saved, and the message says which half is missing.
+    s.typeAndLeave("s-gp-edge-4", "45000", null);
+    await drain();
+    out.bandHalfFilled = { row: s.snap().rows.find((r) => r.line === "gp"),
+                           puts: s.puts().length };
+
+    // Filled in, it saves — and the new band lands BEFORE the default, because a band above the
+    // default could never be reached.
+    s.typeAndLeave("s-gp-rate-4", "31", null);
+    await drain();
+    out.bandFilled = { body: (s.puts()[0] || {}).body || null,
+                       row: s.snap().rows.find((r) => r.line === "gp") };
+
+    // And taken back out again.
+    s.clickIn("del-gp-4");
+    await drain();
+    out.bandRemoved = { body: (s.puts()[1] || {}).body || null,
+                        row: s.snap().rows.find((r) => r.line === "gp") };
+  }
+
+  // ═══ 19. the hard bid's local-jobs-only rule is a checkbox ═══════════════
+  {
+    const s = build({ rules: [] });
+    await drain();
+    out.localBefore = s.snap().rows.find((r) => r.line === "hard_bid");
+    s.tick2("s-hard_bid-local-0");
+    await drain();
+    out.localTicked = { body: (s.puts()[0] || {}).body || null, focused: s.active(),
+                        row: s.snap().rows.find((r) => r.line === "hard_bid") };
+  }
+
+  // ═══ 20. a typed DOLLAR figure, which is the other affordance ════════════
+  //   A bond filed as a flat `750` is dollars, not a rate -- the same reading priceChain makes
+  //   off the same number, so the box and the figure beside it cannot describe different money.
+  {
+    const s = build({ rules: [rule("polish", "bond", { formula: "750" })] });
+    await drain();
+    out.dollars = s.snap().rows.find((r) => r.line === "bond");
+    s.typeAndLeave("s-bond-value", "1,250", null);
+    await drain();
+    out.dollarsEdited = { body: (s.puts()[0] || {}).body || null,
+                          row: s.snap().rows.find((r) => r.line === "bond") };
+  }
+
+  // ═══ 21. the per-row explanation survives a repaint ══════════════════════
+  {
+    const s = build({ rules: [] });
+    await drain();
+    out.helpClosed = s.snap().rows.find((r) => r.line === "gp").helpOpen;
+    s.clickIn("h-gp");
+    s.typeAndLeave("s-soft_costs-value", "17", null);       // any repaint at all
+    await drain();
+    out.helpOpen = s.snap().rows.find((r) => r.line === "gp").helpOpen;
   }
 
   console.log(JSON.stringify(out));

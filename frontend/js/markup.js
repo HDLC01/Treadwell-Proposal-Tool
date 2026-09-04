@@ -1,4 +1,4 @@
-// Markup page — the markup chain's rates, as editable formula strings, per sheet LAYOUT.
+// Markup page — the markup chain's rates, per sheet LAYOUT, as the numbers they actually are.
 // Externalized (CSP: no inline scripts). Do not add inline scripts.
 //
 // WHAT THIS PAGE IS. backend/markup.py's module docstring is the authority on the domain; read it
@@ -7,22 +7,44 @@
 // being the running sum ABOVE it. Those rates are hardcoded constants in polish-bid-core.js. The
 // markup_rules table is where an admin overrides them, and this is that table's screen.
 //
+// A LINE WHOSE ANSWER IS ONE NUMBER GETS ONE NUMBER BOX. This page used to ask an estimator to
+// read three paragraphs and then hand-author
+// `MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))` in a text field to
+// answer what is, for six of the eight lines, a one-number question: what is our rate? So there
+// are now three controls instead of one, and which one a row gets is READ OFF THE STORED FORMULA
+// rather than assumed:
+//
+//   flat     `2.7%`, `16%`, `MARKUP(30%)`, `500`  → one number box and a % or $ affordance
+//   bands    `MARKUP(BAND(subtotal, 6500,52%, …))` → a short editable ladder, one row per band
+//   ladder   `IF(hard_bid_on, IF(subtotal>=60000, -4%, IF(local, …)))` → the same, stepping up,
+//            with Kyle's local-jobs-only rule as a checkbox on the step it belongs to
+//
+// and anything else — Gyp's soft-costs expression, a hand-written formula — opens in ADVANCED, the
+// original expression box, which is still reachable on every row and still round-trips. A row the
+// simple control cannot represent opens in Advanced BY ITSELF rather than misrepresenting what is
+// stored. That is the whole contract; simpleFrom/simpleTo below are where it lives.
+//
 // NO eval, NO new Function. Every formula is parsed and evaluated by markup-core.js, a hand-rolled
 // tokenizer + recursive-descent parser, because prod's CSP is `script-src 'self'
 // https://cdn.jsdelivr.net` with no unsafe-eval. A dynamic-code shortcut here would work locally
-// and die silently in production.
+// and die silently in production. The simple controls are built on that same parser: they read the
+// AST, never a second looser regex of the same grammar.
 //
 // THREE ROW STATES, and keeping them apart is the whole job:
 //
-//   filed / built-in   a formula applies and prices the line. An empty box means "no override
-//                      filed yet, the chain uses its built-in constant" — the placeholder shows
-//                      which constant.
+//   filed / built-in   a rate applies and prices the line. An empty ONE-NUMBER box means "no
+//                      override filed yet, the chain uses its built-in constant" — the
+//                      placeholder shows which. A ladder cannot be empty (ten blank boxes would
+//                      mean filling all ten to change one), so it is seeded from the built-in and
+//                      says so — and an untouched seeded ladder saves nothing.
 //   ABSENT             `applies === false`, `formula === null`. Gyp has NO hard-bid rate: the
 //                      workbook cell is EMPTY, not 0. Rendered as a greyed row with a caption
-//                      naming the tab and NO input at all — an empty editable box invites
+//                      naming the tab and NO control at all — an empty editable box invites
 //                      somebody to fill it in, and "0%" reads as a discount that was declined.
-//   read-only          `contingency` and `remodel_tax`. In CHAIN, excluded from LINE_KEYS,
-//                      refused by name if posted. markup.py's own sentences say why.
+//   context            `contingency` and `remodel_tax`. In CHAIN, excluded from LINE_KEYS,
+//                      refused by name if posted. They are context the chain includes, not
+//                      markup rules: tinted, chipped "Set elsewhere", no control, and
+//                      markup.py's own sentences say why.
 //
 // A BROKEN LINE NEVER READS AS $0.00. An unparseable formula, or one that evaluates to Kyle's own
 // "error" sentinel, makes its own line and every line below it read "Unpriceable" — which is
@@ -32,9 +54,11 @@
 
   /** The engine. markup-core.js is loaded ahead of this file; if it is missing the page
    *  must refuse to price rather than pretend, so the stand-in reports every formula as
-   *  unreadable instead of quietly returning a number. */
+   *  unreadable instead of quietly returning a number — and `parse` throws, which makes every
+   *  row fall back to the expression box rather than to a simple control built on a guess. */
   var M = window.TWMarkup || {
     validate: function () { return { ok: false, error: "the formula engine did not load" }; },
+    parse: function () { throw new Error("the formula engine did not load"); },
     run: function () { throw new Error("the formula engine did not load"); }
   };
   var $ = function (id) { return document.getElementById(id); };
@@ -75,18 +99,38 @@
     bond: "Bond"
   };
 
-  var SUBS = { contingency: "typed per job", remodel_tax: "set by the county table" };
+  /** The one-line caption under a line's name. Free to read — it is the half of the old WHAT IT
+   *  DOES column that was worth having in the grid. */
+  var SUBS = {
+    gp: "steps down as the job gets bigger",
+    hard_bid: "money given back to win a competitive bid",
+    contingency: "typed per job, on the bid",
+    super_pto: "a flat rate on everything above",
+    soft_costs: "overhead the field never sees",
+    remodel_tax: "set by the county table",
+    bond: "the workbook ships this at zero"
+  };
 
+  /** The rest of it, behind the row's own disclosure. Good writing, and it does not belong
+   *  repeated in every row of a table of eight numbers. */
   var EXPLAIN = {
     gp: "Divide-up margin, not a mark-on: the base is divided up by (1 - rate) and the base " +
-      "taken back off. Kyle's tab steps the rate down in bands as the job gets bigger.",
-    hard_bid: "Money given back to win a competitive bid, so the rate is negative. A job that " +
-      "is neither big enough nor local gets nothing taken off.",
-    super_pto: "Supervision and paid time off, as a flat rate on everything above.",
-    soft_costs: "Overhead the field never sees. On the Gyp tab this line is a whole expression, " +
-      "not a rate.",
-    bond: "Bond premium on the running total. The workbook ships this line at zero."
+      "taken back off. That is why the preview shows dollars and no percentage — $36,429 on " +
+      "$85,000 back-derives to 42.858%, a number nobody typed.",
+    hard_bid: "Only applied when the bid is marked hard bid, so the rate is negative. A job " +
+      "that is neither big enough nor local gets nothing taken off.",
+    super_pto: "Supervision and paid time off, charged as one rate on the running total above " +
+      "this line.",
+    soft_costs: "Overhead the field never sees. On the Gyp tab this line is a whole expression " +
+      "rather than a rate, so Gyp opens it in Advanced.",
+    bond: "Bond premium on the running total. The workbook ships this line at zero, and zero " +
+      "is a real answer here — it is not the same as switching the line off."
   };
+
+  /** A chip beside the name, for the lines an admin does not set. Short, and it says the one
+   *  thing a reader needs before they look for a box that is not there. */
+  var CHIPS = { contingency: "Set elsewhere", remodel_tax: "Set elsewhere" };
+  var HELP_LABEL = { contingency: "Why it isn't here", remodel_tax: "Why it isn't here" };
 
   /** The prose name of a tab, for the ABSENT caption. A layout with no entry gets "this tab",
    *  so a sixth layout added on the backend still produces a readable sentence. */
@@ -106,8 +150,8 @@
   // WHERE A NUMBER IS NOT ON RECORD, THERE IS NO ENTRY. markup.py's audit says Seal has a SIXTH
   // GP tier topping out at 0.28 and Gyp has SEVEN tiers on different edges, but it does not give
   // those edges — and inventing a band edge to fill a column would be inventing pricing. Those
-  // two cells render "no built-in on this page" instead, and the tab's total says Unpriceable
-  // until a formula is filed, which is the same refusal Kyle's own `"error"` sentinel makes.
+  // two cells render an empty rate box instead, and the tab's total says Unpriceable until a rate
+  // is filed, which is the same refusal Kyle's own `"error"` sentinel makes.
 
   /** B67 as a BAND: `=IF(D64<6500,0.52,IF(D64<15000,0.45,IF(D64<22500,0.35,IF(D64<32500,0.32,
    *  0.3))))`, wrapped in MARKUP because GP is a divide-up (D67), not a rate on the base. */
@@ -145,7 +189,7 @@
   };
 
   // ── the sample job the preview prices ──────────────────────────────────────
-  // A formula's effect has to be visible the moment it is typed, and nothing real may be at
+  // A rate's effect has to be visible the moment it is typed, and nothing real may be at
   // stake in that. These figures price NOTHING: they are the mockup's own sample job, and the
   // footnote on the page says so.
   var SAMPLE_SUBTOTAL = 85000;
@@ -163,10 +207,20 @@
   var LINE_KEYS = [];
   var RULES = [];                  // every live rule, all layouts
   var LAYOUT = "";                 // the tab on screen
-  /** Typed-but-unsaved edits, keyed "<layout>/<line_key>". A formula the admin is still working
+  /** Typed-but-unsaved edits, keyed "<layout>/<line_key>". A rate the admin is still working
    *  on outlives a re-render; nothing here is sent until it is valid. */
   var LOCAL = {};
-  var ERRORS = {};                 // same key → the message under the box
+  var ERRORS = {};                 // same key → the message under the control
+  var EPARTS = {};                 // same key → which control the message is about
+  /** Which rows the admin has opened in Advanced, keyed the same way. A row whose stored formula
+   *  no simple control can represent is forced open regardless — see rowState. */
+  var ADV = {};
+  /** A ladder mid-structural-edit: a band just added with nothing in it yet, or one just removed.
+   *  Only bands and ladders ever have one — a single number box has no structure to draft. */
+  var SDRAFT = {};
+  /** Which per-row disclosures are open, by line key, so a re-render does not snap them shut.
+   *  Not per layout: somebody who opened "What this does" on GP wants it open on the next tab. */
+  var HELP = {};
   var LOADED = false;
   var LOADFAIL = "";
   var rendering = false;           // re-entrancy guard: render() blurs, and blur triggers a save
@@ -192,15 +246,20 @@
   /** One inline SVG glyph, Lucide-shaped: 24x24 box, no fill, currentColor stroke, width 2,
    *  round caps. NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take
    *  the row's colour, and ignores every size token on the page. */
-  function icon(name) {
+  function icon(name, size) {
     var d = name === "info"
         ? '<circle cx="12" cy="12" r="9.5"></circle><path d="M12 8v.01M11 11h1.5v5.5H11"></path>'
       : name === "slash"
         ? '<circle cx="12" cy="12" r="9.5"></circle><path d="M5.5 5.5l13 13"></path>'
+      : name === "arrow" ? '<path d="M5 12h13M13 7l5 5-5 5"></path>'
+      : name === "plus" ? '<path d="M12 5v14M5 12h14"></path>'
+      : name === "x" ? '<path d="M6 6l12 12M18 6L6 18"></path>'
+      : name === "chev" ? '<path d="M9 5l7 7-7 7"></path>'
       : "";
-    return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ' +
-      'focusable="false">' + d + "</svg>";
+    var px = size || 12;
+    return '<svg viewBox="0 0 24 24" width="' + px + '" height="' + px + '" fill="none" ' +
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+      'aria-hidden="true" focusable="false">' + d + "</svg>";
   }
 
   function money(n) {
@@ -220,6 +279,233 @@
   function nounFor(layout) { return LAYOUT_NOUN[layout] || "this tab"; }
   function labelFor(layout) {
     return String(layout || "").charAt(0).toUpperCase() + String(layout || "").slice(1);
+  }
+
+  // ── numbers, in and out of a box ───────────────────────────────────────────
+
+  /** Float dust, at 12 significant figures — the same guard markup-core's excelRoundUp uses, for
+   *  the same reason: `0.027 * 100` is 2.7000000000000006 and nobody typed that. */
+  function round12(n) { return parseFloat(Number(n).toPrecision(12)); }
+
+  function trimNum(n) {
+    if (n === null || n === undefined || n === "" || !isFinite(Number(n))) return "";
+    return String(round12(n));
+  }
+
+  /** A job size, with separators, because a threshold is money: 6500 → "6,500". Read back by
+   *  parseNum, which strips them again. */
+  function fmtEdge(n) {
+    if (n === null || n === undefined || !isFinite(Number(n))) return "";
+    return Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
+
+  /** What somebody typed, as a number, or null. Lenient about the things a person types into a
+   *  money or percent box — "$15,000", "2.7%", " 45 " — and refuses everything else rather than
+   *  guessing, because the wrong guess here is a rate. */
+  function parseNum(raw) {
+    var t = String(raw == null ? "" : raw).replace(/[$,%\s]/g, "");
+    if (t === "" || !/^[-+]?(\d+\.?\d*|\.\d+)$/.test(t)) return null;
+    var n = Number(t);
+    return isFinite(n) ? n : null;
+  }
+
+  // ── the simple model ───────────────────────────────────────────────────────
+  // What a line's answer actually is, when it is one number or a short ladder — and NOTHING when
+  // it is not. Two functions, and the contract between them is the safety property:
+  //
+  //     simpleTo(simpleFrom(text)) reproduces `text` for every shape simpleFrom accepts.
+  //
+  // Byte for byte, for all five built-ins. If it did not, tabbing through a row would rewrite a
+  // stored formula into a "normalised" one nobody asked for. Where an exact reproduction is
+  // impossible — `.09` and `0.09` are the same rate written two ways — nothing is saved anyway,
+  // because an edit is compared against the render's OWN serialization (rowState's `baseline`),
+  // not against the stored string.
+  //
+  // READ OFF THE AST, not off a regex. markup-core.js's parser is already the authority on what
+  // these strings mean, and a second, looser reader of the same grammar is how the two come to
+  // disagree about a formula that prices a job.
+
+  function isCall(n, name) {
+    return !!n && n.type === "Call" && String(n.name).toUpperCase() === name;
+  }
+  function isIdent(n, name) {
+    return !!n && n.type === "Ident" &&
+      String(n.name).replace(/\$/g, "").toLowerCase() === name;
+  }
+  /** A literal nothing: the terminator of a give-back ladder. `0` and `0%` both count — being
+   *  generous about what is READ is safe; being generous about what is WRITTEN is not. */
+  function isZero(n) {
+    if (!n) return false;
+    if (n.type === "Num") return n.value === 0;
+    return n.type === "Percent" && n.operand && n.operand.type === "Num" &&
+      n.operand.value === 0;
+  }
+
+  /** A rate node as the number a person types plus the way it was written. `52%` and `.52` are
+   *  the same rate; which one comes back out has to match which one went in. */
+  function nodeRate(n) {
+    if (!n) return null;
+    if (n.type === "Unary" && (n.op === "-" || n.op === "+")) {
+      var inner = nodeRate(n.operand);
+      if (!inner) return null;
+      return { value: n.op === "-" ? -inner.value : inner.value, style: inner.style };
+    }
+    if (n.type === "Percent" && n.operand && n.operand.type === "Num") {
+      return { value: n.operand.value, style: "pct" };
+    }
+    if (n.type === "Num") return { value: round12(n.value * 100), style: "bare" };
+    return null;
+  }
+
+  function rateText(rate) {
+    if (!rate || rate.value === null || rate.value === undefined) return "";
+    if (rate.style === "bare") return trimNum(round12(rate.value / 100));
+    return trimNum(rate.value) + "%";
+  }
+
+  /** One flat rate or dollar figure: `2.7%`, `16%`, `MARKUP(30%)`, `.52`, `500`. */
+  function flatFrom(ast) {
+    var markup = false, node = ast;
+    if (isCall(node, "MARKUP") && node.args.length === 1) { markup = true; node = node.args[0]; }
+    var r = nodeRate(node);
+    if (!r) return null;
+    // A BARE number of 1 or more is DOLLARS, not a rate — the same reading priceChain makes, and
+    // it has to be the same reading or the box and the figure beside it describe different money.
+    // A MARKUP() rate is never dollars: markup-core refuses a rate of 1 or more outright.
+    if (!markup && r.style === "bare" && Math.abs(r.value) >= 100) {
+      return { kind: "flat", markup: false, unit: "$", value: round12(r.value / 100),
+               style: "dollars" };
+    }
+    return { kind: "flat", markup: markup, unit: "%", value: r.value, style: r.style };
+  }
+
+  function flatTo(m) {
+    var s = m.style === "dollars" ? trimNum(m.value)
+      : m.style === "bare" ? trimNum(round12(m.value / 100))
+      : trimNum(m.value) + "%";
+    return m.markup ? "MARKUP(" + s + ")" : s;
+  }
+
+  /** `MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))` — Kyle's GP column.
+   *  The steps are CEILINGS ("up to $6,500"), first match wins, and the last one has no ceiling:
+   *  it is what everything above the top band gets. */
+  function bandsFrom(ast) {
+    var markup = false, node = ast;
+    if (isCall(node, "MARKUP") && node.args.length === 1) { markup = true; node = node.args[0]; }
+    if (!isCall(node, "BAND")) return null;
+    var args = node.args;
+    if (args.length < 2 || (args.length % 2) !== 0) return null;
+    if (!isIdent(args[0], "subtotal")) return null;
+    var steps = [];
+    for (var i = 1; i < args.length - 1; i += 2) {
+      if (!args[i] || args[i].type !== "Num") return null;
+      var rate = nodeRate(args[i + 1]);
+      if (!rate) return null;
+      steps.push({ edge: args[i].value, rate: rate, localOnly: false });
+    }
+    var dflt = nodeRate(args[args.length - 1]);
+    if (!dflt) return null;
+    steps.push({ edge: null, rate: dflt, localOnly: false });
+    return { kind: "bands", markup: markup, steps: steps };
+  }
+
+  function bandsTo(m) {
+    var parts = [];
+    for (var i = 0; i < m.steps.length - 1; i++) {
+      parts.push(trimNum(m.steps[i].edge) + "," + rateText(m.steps[i].rate));
+    }
+    parts.push(rateText(m.steps[m.steps.length - 1].rate));
+    var inner = "BAND(subtotal, " + parts.join(", ") + ")";
+    return m.markup ? "MARKUP(" + inner + ")" : inner;
+  }
+
+  /** `IF(hard_bid_on, IF(subtotal>=60000, -4%, IF(local, IF(subtotal>=13000, -2.5%, 0), 0)), 0)`
+   *  — a give-back that steps UP with job size, gated on the bid being a hard bid, with Kyle's
+   *  local-jobs-only rule on the smaller step. The steps are FLOORS ("from $60,000") and the
+   *  terminator is always nothing-off, which is why it is not editable. */
+  function ladderFrom(ast) {
+    if (!isCall(ast, "IF") || ast.args.length !== 3) return null;
+    if (!isIdent(ast.args[0], "hard_bid_on")) return null;
+    if (!isZero(ast.args[2])) return null;
+    var steps = [];
+    if (!walkLadder(ast.args[1], false, steps)) return null;
+    if (!steps.length) return null;
+    return { kind: "ladder", markup: false, steps: steps };
+  }
+
+  function walkLadder(node, localOnly, steps) {
+    if (isZero(node)) return true;                     // the terminator: nothing off
+    if (!isCall(node, "IF") || node.args.length !== 3) return false;
+    var cond = node.args[0];
+    if (isIdent(cond, "local")) {
+      // Everything inside the gate is local-jobs-only. ONE gate, not a nest of them, and its own
+      // else has to be a zero or the shape means something this editor cannot show.
+      if (localOnly) return false;
+      return isZero(node.args[2]) && walkLadder(node.args[1], true, steps);
+    }
+    if (cond && cond.type === "Compare" && cond.op === ">=" && isIdent(cond.left, "subtotal") &&
+        cond.right && cond.right.type === "Num") {
+      var rate = nodeRate(node.args[1]);
+      if (!rate) return false;
+      steps.push({ edge: cond.right.value, rate: rate, localOnly: localOnly });
+      return walkLadder(node.args[2], localOnly, steps);
+    }
+    return false;
+  }
+
+  function ladderTo(m) {
+    var open = [], near = [];
+    for (var i = 0; i < m.steps.length; i++) {
+      (m.steps[i].localOnly ? near : open).push(m.steps[i]);
+    }
+    var tail = near.length ? "IF(local, " + ladderChain(near, "0") + ", 0)" : "0";
+    return "IF(hard_bid_on, " + ladderChain(open, tail) + ", 0)";
+  }
+
+  function ladderChain(steps, tail) {
+    var out = tail;
+    for (var i = steps.length - 1; i >= 0; i--) {
+      out = "IF(subtotal>=" + trimNum(steps[i].edge) + ", " + rateText(steps[i].rate) + ", " +
+        out + ")";
+    }
+    return out;
+  }
+
+  function simpleFrom(text) {
+    if (typeof text !== "string" || !text.trim()) return null;
+    var ast;
+    try { ast = M.parse(text); } catch (e) { return null; }
+    return flatFrom(ast) || bandsFrom(ast) || ladderFrom(ast);
+  }
+
+  function simpleTo(m) {
+    if (!m) return "";
+    if (m.kind === "flat") return flatTo(m);
+    if (m.kind === "bands") return bandsTo(m);
+    if (m.kind === "ladder") return ladderTo(m);
+    return "";
+  }
+
+  /** The control a line with NOTHING on record gets. Seal's GP tiers and Gyp's are not in this
+   *  file (inventing a band edge would be inventing pricing), and the question those cells are
+   *  asking is still "what is our rate?" — so they get the one-number box, and Advanced is one
+   *  click away for a tab whose answer really is a ladder.
+   *
+   *  GP IS A DIVIDE-UP. A bare `30%` on that line would be a mark-on: the wrong arithmetic, on
+   *  the one line whose arithmetic already misleads people. So a blank GP box writes MARKUP(). */
+  function blankFlat(lineKey) {
+    return { kind: "flat", markup: lineKey === "gp", unit: "%", value: null, style: "pct" };
+  }
+
+  function cloneModel(m) {
+    var out = { kind: m.kind, markup: !!m.markup, unit: m.unit, value: m.value, style: m.style };
+    if (m.steps) {
+      out.steps = m.steps.map(function (s) {
+        return { edge: s.edge, localOnly: !!s.localOnly,
+                 rate: s.rate ? { value: s.rate.value, style: s.rate.style } : null };
+      });
+    }
+    return out;
   }
 
   // ── the row model ──────────────────────────────────────────────────────────
@@ -243,9 +529,9 @@
     return null;
   }
 
-  /** One row's whole truth: is it editable, does it apply, what prices it, and where that came
-   *  from. `source` is what the caption reads off — "filed" (a row in the table), "builtin" (the
-   *  hardcoded constant), "unknown" (no row and no constant on record). */
+  /** One row's whole truth: is it editable, does it apply, what prices it, which control it gets,
+   *  and where the numbers in that control came from. `source` is what the note reads off —
+   *  "filed" (a row in the table), "builtin" (the hardcoded constant), "unknown" (neither). */
   function rowState(lineKey) {
     var editable = LINE_KEYS.indexOf(lineKey) >= 0;
     var readOnlyWhy = NOT_EDITABLE[lineKey] || (editable ? "" : "Not editable on this page.");
@@ -253,11 +539,15 @@
       line_key: lineKey,
       label: LABELS[lineKey] || labelFor(lineKey),
       sub: SUBS[lineKey] || "",
+      chip: CHIPS[lineKey] || "",
+      helpLabel: HELP_LABEL[lineKey] || "What this does",
       explain: NOT_EDITABLE[lineKey] || EXPLAIN[lineKey] || "",
       editable: editable && !NOT_EDITABLE[lineKey],
       readOnlyWhy: readOnlyWhy,
       rule: null, id: null, notes: "",
-      applies: true, formula: "", builtin: "", source: "unknown", dirty: false
+      applies: true, formula: "", builtin: "", source: "unknown", dirty: false,
+      filedText: "", simple: null, simpleFiled: false, canSimple: false, sdraft: false,
+      advanced: false, baseline: ""
     };
     if (!st.editable) return st;
 
@@ -288,6 +578,35 @@
       st.dirty = true;
     }
     st.effective = st.applies ? (st.formula || st.builtin) : "";
+
+    // ── which control, and what is in it ────────────────────────────────────
+    st.filedText = st.applies ? (st.formula || "") : "";
+    var src = st.applies ? (st.filedText || st.builtin) : "";
+    var srcModel = src ? simpleFrom(src) : null;
+    st.simpleFiled = !!(st.filedText && srcModel);
+    if (!srcModel && st.applies && !src) srcModel = blankFlat(lineKey);
+    // AFTER the blank fallback, or Advanced is a trapdoor. A line with nothing on record has a
+    // simple control available (an empty rate box), so the door back out of the expression box
+    // has to be offered on it -- the same corner as the off row that lost its only exit when
+    // touched. `false` here means one thing only: a formula is stored that no box can hold.
+    st.canSimple = !!srcModel;
+
+    // WHAT AN UNTOUCHED CONTROL RECOMPOSES TO, and the reason there are two answers.
+    // A one-number box for a line with nothing filed is EMPTY with the built-in as its
+    // placeholder — prefilling a value that is not stored is a lie about state. A ladder cannot
+    // do that: ten blank boxes with placeholders would mean filling all ten in to change one, so
+    // it is SEEDED from the built-in and its note says the numbers are not yet overridden. Either
+    // way, tabbing through it without typing recomposes to exactly this string and saves nothing.
+    st.baseline = !srcModel ? ""
+      : (st.simpleFiled || srcModel.kind !== "flat") ? simpleTo(srcModel)
+      : "";
+
+    var draft = SDRAFT[key(lineKey)];
+    st.sdraft = !!draft;
+    st.simple = draft || srcModel;
+    // A stored formula no simple control can represent opens in Advanced BY ITSELF, rather than
+    // being misrepresented by a box that cannot hold it.
+    st.advanced = ADV[key(lineKey)] === true || (st.applies && !st.simple);
     return st;
   }
 
@@ -322,6 +641,9 @@
    *  chain reaches 100% (GP tops out at 52%) and no dollar line is under a dollar, so the two
    *  cannot collide on any real row — and the preview is explicitly not the pricing path.
    *
+   *  `running` is the total THROUGH that line, which is the next line's base. It is printed under
+   *  each amount so the compounding is visible on the screen instead of asserted in a paragraph.
+   *
    *  ONE BROKEN LINE STOPS THE CHAIN. Everything below it reads "—, depends on <line>" and the
    *  total reads "Unpriceable". It never reads $0.00: a markup line that silently drops to zero
    *  is a bid that is wrong in the customer's favour and nobody notices. */
@@ -349,16 +671,16 @@
       }
 
       if (k === "contingency") {
-        out[k] = { state: "ok", amount: SAMPLE_CONTINGENCY, rate: null };
-        amounts[k] = SAMPLE_CONTINGENCY;
         base += SAMPLE_CONTINGENCY;
+        out[k] = { state: "ok", amount: SAMPLE_CONTINGENCY, rate: null, running: base };
+        amounts[k] = SAMPLE_CONTINGENCY;
         continue;
       }
       if (k === "remodel_tax") {
         var tax = base * SAMPLE_COUNTY_RATE;
-        out[k] = { state: "ok", amount: tax, rate: SAMPLE_COUNTY_RATE };
-        amounts[k] = tax;
         base += tax;
+        out[k] = { state: "ok", amount: tax, rate: SAMPLE_COUNTY_RATE, running: base };
+        amounts[k] = tax;
         continue;
       }
 
@@ -395,12 +717,12 @@
 
       var isRate = Math.abs(value) < 1;
       var amount = isRate ? value * base : value;
+      base += amount;
       // The percentage chip is shown only when the formula RETURNED a rate. A divide-up GP hands
       // back dollars, and back-deriving a percentage from them prints 42.858% beside a 30% band —
       // a number nobody typed, on the one line whose arithmetic already misleads people.
-      out[k] = { state: "ok", amount: amount, rate: isRate ? value : null };
+      out[k] = { state: "ok", amount: amount, rate: isRate ? value : null, running: base };
       amounts[k] = amount;
-      base += amount;
     }
 
     out.__total = broken
@@ -432,11 +754,19 @@
     if (p.state === "invalid" || p.state === "nobuiltin") {
       return '<span class="unpriced">Unpriceable</span>';
     }
-    if (p.state === "downstream" || p.state === "unknownline") {
+    if (p.state === "downstream") {
+      // The reason sits WHERE THE FIGURE IS MISSING rather than behind the row's disclosure: it
+      // is the one line of explanation on this page that is about right now.
+      return '<span class="nodash" aria-label="not priced">&mdash;</span>' +
+        '<span class="run">depends on ' + esc(p.dependsOn) + "</span>";
+    }
+    if (p.state === "unknownline") {
       return '<span class="nodash" aria-label="not priced">&mdash;</span>';
     }
     return (p.rate == null ? "" : '<span class="pct">' + esc(pct(p.rate)) + "</span>") +
-      '<span class="amt">' + esc(money(p.amount)) + "</span>";
+      '<span class="amt">' + esc(money(p.amount)) + "</span>" +
+      (p.running == null ? "" : '<span class="run" title="running total through this line">' +
+        "&rarr; " + esc(money(p.running)) + "</span>");
   }
 
   /** Soft delete, worded as what it does. "Delete" would read as "charge nothing"; the chain
@@ -451,30 +781,208 @@
    *  Same family as the send-gate loop of 2026-09-03 -- the cure the screen named could not be
    *  carried out. */
   function dropBtnHtml(r) {
-    // GATED HERE, not at the two call sites. The ABSENT branch returns before this function's
-    // other caller reaches the `if (!ADMIN)` fork, so a gate per call site would have to be
-    // remembered twice -- and the first version of this fix handed a non-admin a delete button on
-    // Gyp's empty hard-bid row. One function, one rule.
+    // GATED HERE, not at the call sites. The ABSENT branch returns before the other caller
+    // reaches its own `if (!ADMIN)` fork, so a gate per call site would have to be remembered
+    // twice -- and the first version of this fix handed a non-admin a delete button on Gyp's
+    // empty hard-bid row. One function, one rule.
     if (!ADMIN || !r.id) return "";
     return '<button class="ghostlink" type="button" data-drop="' + esc(r.line_key) + '"' +
       ' data-focus="d-' + esc(r.line_key) + '">Stop overriding this line</button>';
   }
 
-  function formulaCellHtml(r, p) {
+  /** The message under a control. `err` is passed IN rather than read out of ERRORS, because a
+   *  filed formula that cannot be parsed has to account for itself too — and a renderer that
+   *  wrote that into ERRORS would make it stick after the formula was fixed. */
+  function errHtml(k, err) {
+    var msg = err || "";
+    return '<div class="errmsg" data-err="' + esc(k) + '"' + (msg ? "" : " hidden") + ">" +
+      esc(msg) + "</div>";
+  }
+
+  /** A ghost-link row, or nothing. One place, so an empty one never renders an empty box. */
+  function btnsHtml(inner) {
+    return inner ? '<div class="rowbtns">' + inner + "</div>" : "";
+  }
+
+  function noteHtml(r) {
+    var parts = [];
+    // DIRTY IS CHECKED FIRST. A row switched back on with an empty box is both unsaved AND
+    // showing its built-in placeholder, and "Built in — not overridden yet" would be flatly
+    // untrue there: what is stored is `applies=false`. The unsaved state is the one that changes
+    // what the person should do next, so it is the one that gets said.
+    if (r.dirty && ADMIN) {
+      parts.push("Not saved yet — " + (r.filedText ? "leave the box to save it."
+        : "type a rate, or switch the line back off."));
+    } else if (!r.filedText && r.builtin) {
+      // `filedText`, NOT `simpleFiled`. "Not overridden yet" is a fact about the TABLE: a filed
+      // formula the simple control cannot hold is still an override, and telling somebody their
+      // own stored rule is the built-in is the kind of wrong that gets typed over.
+      parts.push("Built in — not overridden yet." + (!ADMIN ? ""
+        : r.advanced ? " Typing here overrides it." : " Changing a number here overrides it."));
+    } else if (!r.filedText && !r.builtin) {
+      parts.push("No built-in on this page for " + labelFor(LAYOUT) +
+        ". The tab cannot be priced until a rate is filed.");
+    }
+    // Said out loud, because the alternative is somebody hunting for a simple editor that this
+    // row will never have. Gyp's soft-costs cell is a whole expression, sentinel and all.
+    if (ADMIN && r.advanced && !r.canSimple) {
+      parts.push(r.filedText
+        ? "This isn't a plain rate or a ladder, so there's no simple editor for it."
+        : "This tab's built-in is a whole expression, so there's no simple editor for it.");
+    }
+    var out = "";
+    for (var i = 0; i < parts.length; i++) {
+      out += '<span class="wbnote">' + icon("info") + "<span>" + esc(parts[i]) + "</span></span>";
+    }
+    return out;
+  }
+
+  /** Add-a-step, stop-overriding, and the Advanced door. Admin only — every one of them writes. */
+  function rowBtnsHtml(r) {
+    if (!ADMIN) return "";
+    var out = "";
+    if (!r.advanced && r.simple && r.simple.kind !== "flat") {
+      out += '<button class="ghostlink" type="button" data-add="' + esc(r.line_key) + '"' +
+        ' data-focus="add-' + esc(r.line_key) + '">' + icon("plus") + " " +
+        (r.simple.kind === "bands" ? "Add a band" : "Add a step") + "</button>";
+    }
+    out += dropBtnHtml(r);
+    // The expression box never goes away, and the way back out of it only appears when there is
+    // something to go back TO: a formula no simple control can hold has no simple editor to open.
+    if (r.advanced) {
+      if (r.canSimple) {
+        out += '<button class="ghostlink" type="button" data-adv="' + esc(r.line_key) + '"' +
+          ' data-adv-to="off" data-focus="adv-' + esc(r.line_key) +
+          '">Use the simple editor</button>';
+      }
+    } else {
+      out += '<button class="ghostlink" type="button" data-adv="' + esc(r.line_key) + '"' +
+        ' data-adv-to="on" data-focus="adv-' + esc(r.line_key) + '">Advanced</button>';
+    }
+    return btnsHtml(out);
+  }
+
+  function ariaFor(r, part) {
+    var m = /^(edge|rate|local)-(\d+)$/.exec(part);
+    if (!m) return r.label + " rate for " + labelFor(LAYOUT);
+    var idx = Number(m[2]);
+    var kind = r.simple ? r.simple.kind : "";
+    var isDefault = kind === "bands" && r.simple && idx === r.simple.steps.length - 1;
+    var noun = kind === "ladder" ? "step " + (idx + 1)
+      : isDefault ? "rate above the last band" : "band " + (idx + 1);
+    if (m[1] === "edge") return r.label + " " + noun + " job size on " + labelFor(LAYOUT);
+    if (m[1] === "local") {
+      return r.label + " " + noun + " is for local jobs only, on " + labelFor(LAYOUT);
+    }
+    return r.label + " " + noun + (isDefault ? "" : " rate") + " on " + labelFor(LAYOUT);
+  }
+
+  /** One number, with its unit. `.finput` carries the interaction states and `.num` narrows it,
+   *  so there is one input component on this page rather than two drifting apart. */
+  function numHtml(r, part, value, opts) {
+    var o = opts || {};
+    var k = r.line_key;
+    var text = o.money ? fmtEdge(value) : trimNum(value);
+    var pre = o.money ? '<span class="unit pre">$</span>' : "";
+    var post = o.money ? "" : '<span class="unit">%</span>';
+    if (o.readonly) {
+      return '<span class="numwrap">' + pre + '<span class="ftext mono">' +
+        esc(text || "—") + "</span>" + post + "</span>";
+    }
+    var bad = ERRORS[key(k)] && EPARTS[key(k)] === part;
+    return '<span class="numwrap">' + pre +
+      '<input class="finput num' + (bad ? " err" : "") + '" type="text" inputmode="decimal"' +
+      ' spellcheck="false" autocomplete="off" data-simple="' + esc(k) + '"' +
+      ' data-part="' + esc(part) + '" data-focus="s-' + esc(k) + "-" + esc(part) + '"' +
+      ' aria-label="' + esc(o.aria || ariaFor(r, part)) + '"' +
+      ' value="' + esc(text) + '" placeholder="' + esc(o.placeholder || "") + '" />' +
+      post + "</span>";
+  }
+
+  function localHtml(r, i, s, readonly) {
+    if (readonly) return s.localOnly ? '<span class="bandnote">local jobs only</span>' : "";
+    return '<label class="bandnote"><input type="checkbox" data-simple="' + esc(r.line_key) +
+      '" data-part="local-' + i + '" data-focus="s-' + esc(r.line_key) + "-local-" + i + '"' +
+      ' aria-label="' + esc(ariaFor(r, "local-" + i)) + '"' +
+      (s.localOnly ? " checked" : "") + " /> local jobs only</label>";
+  }
+
+  /** The ladder. Fixed tracks, one row per step, every threshold and every rate a number you can
+   *  type — because the SHAPE is the information, and a text box holding
+   *  MARKUP(BAND(subtotal, 6500,52%, …)) hides it completely. */
+  function bandsHtml(r, m, readonly) {
+    var ladder = m.kind === "ladder";
+    var n = m.steps.length;
+    var out = '<div class="bands">';
+    for (var i = 0; i < n; i++) {
+      var s = m.steps[i];
+      var isDefault = !ladder && i === n - 1;
+      out += '<div class="band' + (isDefault ? " last" : "") + '">' +
+        '<span class="edgelbl">' +
+        (isDefault ? "above that" : (ladder ? "from" : "up to")) + "</span>" +
+        (isDefault ? "<span></span>"
+          : numHtml(r, "edge-" + i, s.edge, { money: true, readonly: readonly })) +
+        '<span class="arrow">' + icon("arrow", 14) + "</span>" +
+        numHtml(r, "rate-" + i, s.rate ? s.rate.value : null, { readonly: readonly }) +
+        ((readonly || isDefault) ? "<span></span>" : delBtnHtml(r, i)) +
+        "</div>";
+      if (ladder) out += localHtml(r, i, s, readonly);
+    }
+    if (ladder) {
+      // The terminator is not editable, and saying so out loud beats a zero in a box: a give-back
+      // that does not apply is nothing off, not a rate of nothing.
+      out += '<div class="band last"><span class="edgelbl">otherwise</span><span></span>' +
+        '<span class="arrow">' + icon("arrow", 14) + "</span>" +
+        '<span class="ftext locked">nothing off</span><span></span></div>';
+    }
+    return out + "</div>";
+  }
+
+  function delBtnHtml(r, i) {
+    var noun = r.simple && r.simple.kind === "bands" ? "band" : "step";
+    return '<button class="bdel" type="button" data-del="' + esc(r.line_key) + '"' +
+      ' data-idx="' + i + '" data-focus="del-' + esc(r.line_key) + "-" + i + '"' +
+      ' aria-label="Remove ' + esc(r.label) + " " + noun + " " + (i + 1) + " on " +
+      esc(labelFor(LAYOUT)) + '">' + icon("x", 13) + "</button>";
+  }
+
+  function flatHtml(r, m) {
+    // The box is EMPTY when nothing is filed, and the placeholder shows the constant the chain is
+    // using instead. Prefilling the box with a value that is not stored would be a lie about
+    // state, and it is only safe on a ladder because a ladder's numbers cannot be shown any
+    // other way.
+    var filed = r.simpleFiled;
+    return numHtml(r, "value", filed ? m.value : null, {
+      money: m.unit === "$",
+      placeholder: filed ? "" : (m.unit === "$" ? fmtEdge(m.value) : trimNum(m.value)),
+      aria: r.label + " rate for " + labelFor(LAYOUT)
+    });
+  }
+
+  function advancedHtml(r, err) {
+    return '<input class="finput' + (err && !EPARTS[key(r.line_key)] ? " err" : "") +
+      '" type="text" spellcheck="false" autocomplete="off"' +
+      ' data-formula="' + esc(r.line_key) + '" data-focus="f-' + esc(r.line_key) + '"' +
+      ' aria-label="' + esc(r.label) + ' formula for ' + esc(labelFor(LAYOUT)) + '"' +
+      ' value="' + esc(r.filedText) + '"' +
+      ' placeholder="' + esc(r.builtin || "no built-in — type a formula") + '" />';
+  }
+
+  function rateCellHtml(r, p) {
     var k = r.line_key;
 
     // ── ABSENT ──────────────────────────────────────────────────────────────
-    // No input, no empty box, no zero. A caption that names the tab, and nothing to type into.
+    // No control, no empty box, no zero. A caption that names the tab, and nothing to type into.
     if (r.editable && !r.applies) {
-      return '<span class="absent-note">' + icon("slash") +
+      return '<span class="absent-note">' + icon("slash", 13) +
         " Not used on " + esc(nounFor(LAYOUT)) + "</span>" +
         '<span class="wbnote">' + icon("info") +
         "<span>The cell is empty on this tab, which is not the same as 0%." +
         (r.dirty ? " Unsaved." : "") + "</span></span>" +
-        dropBtnHtml(r);
+        btnsHtml(dropBtnHtml(r));
     }
 
-    // ── read-only chain lines ───────────────────────────────────────────────
+    // ── context: in the chain, set somewhere else ───────────────────────────
     if (!r.editable) {
       var text = k === "contingency" ? "Typed on the bid"
         : k === "remodel_tax" ? "Typed % → county table → 6.5% floor"
@@ -484,51 +992,25 @@
 
     // A message the admin earned by typing wins, but a formula that was ALREADY filed and cannot
     // be read has to account for itself too — otherwise the row reads "Unpriceable" and the only
-    // way to find out why is to retype it.
+    // way to find out why is to retype it. Computed here rather than written into ERRORS: a
+    // renderer that filed its own message would leave it stuck on the row after the fix.
     var err = ERRORS[key(k)] || (p && p.state === "invalid" ? p.error : "") || "";
-    var shown = r.formula;
 
     // ── a non-admin reads it ────────────────────────────────────────────────
+    // Read-only is not a redaction: the rate, the ladder and the preview are all here, and only
+    // the controls are gone.
     if (!ADMIN) {
-      var ro = shown || r.builtin;
-      return '<span class="ftext' + (shown ? "" : " dim") + '">' +
-        esc(ro || "No built-in on this page for " + labelFor(LAYOUT)) + "</span>" +
-        (shown ? "" : '<span class="wbnote">' + icon("info") +
-          "<span>" + (r.builtin ? "Built in — not overridden yet." : "Nothing prices this line " +
-            "until a formula is filed.") + "</span></span>");
+      if (r.simple && r.simple.kind !== "flat") return bandsHtml(r, r.simple, true) + noteHtml(r);
+      var ro = r.filedText || (r.simple ? simpleTo(r.simple) : "") || r.builtin;
+      return '<span class="ftext mono' + (r.filedText ? "" : " dim") + '">' +
+        esc(ro || "No built-in on this page for " + labelFor(LAYOUT)) + "</span>" + noteHtml(r);
     }
 
     // ── an admin edits it ───────────────────────────────────────────────────
-    // The box is EMPTY when nothing is filed, and the placeholder shows the constant the chain is
-    // using instead. Prefilling the box with a value that is not stored would be a lie about
-    // state, and the first blur would save it as though somebody had chosen it.
-    var out = '<input class="finput' + (err ? " err" : "") + '" type="text" spellcheck="false"' +
-      ' autocomplete="off" data-formula="' + esc(k) + '" data-focus="f-' + esc(k) + '"' +
-      ' aria-label="' + esc(r.label) + ' formula for ' + esc(labelFor(LAYOUT)) + '"' +
-      ' value="' + esc(shown) + '"' +
-      ' placeholder="' + esc(r.builtin || "no built-in — type a formula") + '" />' +
-      '<div class="errmsg" data-err="' + esc(k) + '"' + (err ? "" : " hidden") + ">" +
-      esc(err) + "</div>";
-
-    // DIRTY IS CHECKED FIRST. A row switched back on with an empty box is both unsaved AND
-    // showing its built-in placeholder, and "Built in — not overridden yet" would be flatly
-    // untrue there: what is stored is `applies=false`. The unsaved state is the one that changes
-    // what the person should do next, so it is the one that gets said.
-    if (r.dirty) {
-      out += '<span class="wbnote">' + icon("info") +
-        "<span>Not saved yet — " + (shown ? "leave the box to save it."
-          : "type a formula, or switch the line back off.") + "</span></span>";
-    } else if (!shown && r.builtin) {
-      out += '<span class="wbnote">' + icon("info") +
-        "<span>Built in — not overridden yet. Typing here overrides it.</span></span>";
-    } else if (!shown && !r.builtin) {
-      out += '<span class="wbnote">' + icon("info") +
-        "<span>No built-in on this page for " + esc(labelFor(LAYOUT)) +
-        ". The tab cannot be priced until this is filed.</span></span>";
-    }
-
-    out += dropBtnHtml(r);
-    return out;
+    var ctl = r.advanced ? advancedHtml(r, err)
+      : r.simple.kind === "flat" ? flatHtml(r, r.simple)
+      : bandsHtml(r, r.simple, false);
+    return ctl + errHtml(k, err) + noteHtml(r) + rowBtnsHtml(r);
   }
 
   function appliesCellHtml(r) {
@@ -547,21 +1029,27 @@
       '<span class="swl">' + (r.applies ? "Yes" : "Not used") + "</span></span>";
   }
 
+  /** Name, chip, one-line caption, and the disclosure the old WHAT IT DOES column became. */
+  function lineCellHtml(r) {
+    var out = '<span class="nm">' + esc(r.label) +
+      (r.chip ? '<span class="chip">' + esc(r.chip) + "</span>" : "") + "</span>";
+    if (r.sub) out += '<span class="sub">' + esc(r.sub) + "</span>";
+    if (r.explain) {
+      out += '<details class="help"' + (HELP[r.line_key] ? " open" : "") + ">" +
+        '<summary data-help="' + esc(r.line_key) + '" data-focus="h-' + esc(r.line_key) + '">' +
+        icon("chev") + " " + esc(r.helpLabel) + "</summary>" +
+        '<p class="explain">' + esc(r.explain) + "</p></details>";
+    }
+    return out;
+  }
+
   function rowHtml(r, p) {
     var absent = r.editable && !r.applies;
-    var explain = r.explain;
-    if (p && p.state === "downstream") explain = "Depends on " + p.dependsOn + ", above.";
-    if (p && p.state === "nobuiltin") {
-      explain = "No formula filed and no built-in on this page for " + labelFor(LAYOUT) + ".";
-    }
-    return '<div class="mkrow' + (absent ? " absent" : "") + '" data-row="' + esc(r.line_key) +
-      '">' +
-      '<div class="line">' + esc(r.label) +
-      (r.sub ? '<span class="sub">' + esc(r.sub) + "</span>" : "") + "</div>" +
-      "<div>" + formulaCellHtml(r, p) + "</div>" +
-      "<div>" + appliesCellHtml(r) + "</div>" +
-      '<div class="explain' + (p && p.state === "downstream" ? " dim" : "") + '">' +
-      esc(explain) + "</div>" +
+    var cls = "mkrow" + (absent ? " absent" : "") + (r.editable ? "" : " ctx");
+    return '<div class="' + cls + '" data-row="' + esc(r.line_key) + '">' +
+      '<div class="line">' + lineCellHtml(r) + "</div>" +
+      '<div class="rate">' + rateCellHtml(r, p) + "</div>" +
+      '<div class="applies">' + appliesCellHtml(r) + "</div>" +
       '<div class="prev">' + previewHtml(p) + "</div>" +
       "</div>";
   }
@@ -584,27 +1072,27 @@
     var priced = priceChain(rows);
 
     var out = '<div class="mkrow head">' +
-      "<div>Line</div><div>Formula</div><div>Applies</div><div>What it does</div>" +
-      '<div style="text-align:right">Preview</div></div>';
+      "<div>Line</div><div>Rate</div><div>Applies</div>" +
+      '<div class="prev">Preview</div></div>';
 
-    out += '<div class="mkrow"><div class="line">Sub-total costs' +
-      '<span class="sub">the base</span></div>' +
-      '<div><span class="ftext locked">material + labour + escalation + burden</span></div>' +
-      '<div><span class="swro">Always</span></div>' +
-      '<div class="explain">The base every line below builds on. Not a formula — it comes off ' +
-      'the takeoff and labour tabs.</div>' +
+    out += '<div class="mkrow ctx"><div class="line">' +
+      '<span class="nm">Sub-total costs<span class="chip">The base</span></span>' +
+      '<span class="sub">material + labour + escalation + burden</span></div>' +
+      '<div class="rate"><span class="ftext locked">Comes off the takeoff and labour tabs' +
+      "</span></div>" +
+      '<div class="applies"><span class="swro">Always</span></div>' +
       '<div class="prev"><span class="amt">' + esc(money(SAMPLE_SUBTOTAL)) +
       "</span></div></div>";
 
     for (var i = 0; i < rows.length; i++) out += rowHtml(rows[i], priced[rows[i].line_key]);
 
     var total = priced.__total;
-    out += '<div class="mkrow grand"><div class="line">Total lump sum</div><div></div>' +
-      '<div></div><div class="explain">' +
+    out += '<div class="mkrow grand"><div class="line">' +
+      '<span class="nm">Total lump sum</span><span class="sub">' +
       (total.state === "ok"
         ? esc("on a " + money(SAMPLE_SUBTOTAL) + " sub-total")
         : esc("can't price this tab — fix " + total.dependsOn)) +
-      '</div><div class="prev">' +
+      '</span></div><div class="rate"></div><div class="applies"></div><div class="prev">' +
       (total.state === "ok"
         ? '<span class="amt">' + esc(money(total.amount)) + "</span>"
         : '<span class="unpriced">Unpriceable</span>') +
@@ -618,18 +1106,34 @@
    *  has shipped before, so the restore is deliberate rather than hoped for: every control
    *  carries a stable `data-focus` key, and the caret position rides along with it. */
   function render(opts) {
-    // `focus: false` on the way OUT of a box. During `focusout` the browser is mid-transition:
-    // document.activeElement is still the control being left, so "restoring" it would yank the
-    // caret back out of the cell the person just tabbed into. That is the exact bug this repo
-    // keeps re-finding, and it is a one-word argument rather than a comment asking for care.
-    var wantFocus = !(opts && opts.focus === false);
+    var o = opts || {};
     rendering = true;
     try {
-      var active = wantFocus ? document.activeElement : null;
-      var focusKey = (active && active.getAttribute) ? active.getAttribute("data-focus") : null;
+      // THREE WAYS IN, and the difference between them is the whole keyboard story:
+      //
+      //   render()                    keep whatever has the focus now — a click somewhere else
+      //                               repainted the table under an open caret.
+      //   render({ focus: false })     take the focus nowhere. The person left for the page.
+      //   render({ focusKey: k })     put it on `k`. Used on the way OUT of a box, because during
+      //                               `focusout` document.activeElement is still the control
+      //                               being LEFT: "restoring" that would yank the caret back out
+      //                               of the box the person just tabbed INTO. `ev.relatedTarget`
+      //                               is where the focus is really going, and on a ladder of ten
+      //                               boxes this is the difference between tabbing across a row
+      //                               and being thrown out of it at every field.
+      var focusKey = null;
+      if (Object.prototype.hasOwnProperty.call(o, "focusKey")) {
+        focusKey = o.focusKey || null;
+      } else if (o.focus !== false) {
+        var active = document.activeElement;
+        focusKey = (active && active.getAttribute) ? active.getAttribute("data-focus") : null;
+      }
       var selStart = null, selEnd = null;
       if (focusKey) {
-        try { selStart = active.selectionStart; selEnd = active.selectionEnd; } catch (e) {}
+        var from = document.querySelector('[data-focus="' + focusKey + '"]');
+        if (from) {
+          try { selStart = from.selectionStart; selEnd = from.selectionEnd; } catch (e) {}
+        }
       }
 
       $("mk-tabs").innerHTML = tabsHtml();
@@ -652,9 +1156,8 @@
 
   /** The three notes above the table: read-only, day-one fallback, and the broken banner.
    *
-   *  All three toggle with `el.hidden` and every one of them has an attribute rule in the
-   *  stylesheet, because a class that sets `display` beats the attribute and this repo has
-   *  shipped four of those. */
+   *  All three toggle with `el.hidden`, which markup.html makes win outright — a class that sets
+   *  `display` beats the attribute and this repo has shipped four of those. */
   function paintNotes() {
     $("mk-ro").hidden = ADMIN;
 
@@ -667,7 +1170,7 @@
       fallback.hidden = false;
       fallback.textContent = "Nothing is filed for " + labelFor(LAYOUT) + " yet, and that is " +
         "the normal first state — every line below is priced by the constant built into the " +
-        "estimator. Typing a formula here overrides one; removing it hands the line back.";
+        "estimator. Changing a rate here overrides one; removing it hands the line back.";
     } else {
       fallback.hidden = false;
       fallback.textContent = overrides.length + " of " + rows.filter(function (r) {
@@ -687,8 +1190,197 @@
 
     $("mk-foot").textContent = "Preview figures are computed against a sample " +
       money(SAMPLE_SUBTOTAL) + " job with a " + pct(SAMPLE_COUNTY_RATE) + " county remodel " +
-      "rate, so a formula's effect is visible the moment it's typed — they price nothing real. " +
-      "The chain that prices a bid reads these same rows.";
+      "rate, so a rate's effect is visible the moment it's typed — they price nothing real. " +
+      "The arrow under each amount is the running total through that line, which is the next " +
+      "line's base. The chain that prices a bid reads these same rows.";
+  }
+
+  // ── errors on a row, without a repaint ─────────────────────────────────────
+
+  /** Say what is wrong WITHOUT re-rendering.
+   *
+   *  A repaint here would throw away the half-typed characters that caused the message and move
+   *  the caret out of the box being corrected. The message element is already in the row, so it
+   *  is written to directly — the same thing the `input` handler does in reverse. */
+  function showRowError(lineKey, msg, part) {
+    ERRORS[key(lineKey)] = msg;
+    if (part) EPARTS[key(lineKey)] = part; else delete EPARTS[key(lineKey)];
+    var box = document.querySelector('[data-err="' + lineKey + '"]');
+    if (box) { box.textContent = msg; box.hidden = false; }
+    var ctl = part ? document.querySelector('[data-focus="s-' + lineKey + "-" + part + '"]') : null;
+    if (ctl && ctl.classList) ctl.classList.add("err");
+    say(msg);
+  }
+
+  function clearRowError(lineKey) {
+    if (!ERRORS[key(lineKey)]) return;
+    delete ERRORS[key(lineKey)];
+    delete EPARTS[key(lineKey)];
+    var box = document.querySelector('[data-err="' + lineKey + '"]');
+    if (box) { box.textContent = ""; box.hidden = true; }
+  }
+
+  // ── reading the simple controls back ───────────────────────────────────────
+
+  function ctlOf(lineKey, part) {
+    return document.querySelector('[data-focus="s-' + lineKey + "-" + part + '"]');
+  }
+  function readCtl(lineKey, part) {
+    var el = ctlOf(lineKey, part);
+    return el ? String(el.value == null ? "" : el.value).trim() : "";
+  }
+  function readChecked(lineKey, part) {
+    var el = ctlOf(lineKey, part);
+    return !!(el && el.checked);
+  }
+
+  /** Read one row's simple controls back out of the DOM and rebuild the formula string.
+   *
+   *  FROM THE DOM, not from a model kept in step with every keystroke. The DOM is what the person
+   *  is looking at, and this page judges a box on the way OUT of it rather than on every
+   *  character — so there is nothing to keep in step, and no half-typed value can be lost to a
+   *  model that refused it.
+   *
+   *  Returns { text } or { error, part }. An empty one-number box is `{ text: "" }`, which is
+   *  "nothing filed" and NOT an error. */
+  function recompose(lineKey) {
+    var r = rowState(lineKey);
+    if (!r.simple) return { error: "There is no simple rate to read on this line." };
+    var kind = r.simple.kind;
+
+    if (kind === "flat") {
+      var raw = readCtl(lineKey, "value");
+      if (!raw) return { text: "" };
+      var n = parseNum(raw);
+      if (n === null) {
+        return { error: "“" + raw + "” isn't a number — type a rate like 2.7.",
+                 part: "value" };
+      }
+      return { text: simpleTo({ kind: "flat", markup: r.simple.markup, unit: r.simple.unit,
+                                value: n, style: r.simple.style }) };
+    }
+
+    var steps = [];
+    var n2 = r.simple.steps.length;
+    for (var i = 0; i < n2; i++) {
+      var s = r.simple.steps[i];
+      // A ladder's steps ALL have a threshold; a band's last one is the default and has none.
+      var wantEdge = kind === "ladder" || i < n2 - 1;
+      var rateRaw = readCtl(lineKey, "rate-" + i);
+      var rateVal = parseNum(rateRaw);
+      if (rateVal === null) {
+        return { error: rateRaw
+          ? "“" + rateRaw + "” isn't a rate — type a number like 45 or -2.5."
+          : "Every step needs a rate.", part: "rate-" + i };
+      }
+      var step = { edge: null, localOnly: false,
+                   rate: { value: rateVal, style: (s.rate && s.rate.style) || "pct" } };
+      if (wantEdge) {
+        var edgeRaw = readCtl(lineKey, "edge-" + i);
+        var edgeVal = parseNum(edgeRaw);
+        if (edgeVal === null) {
+          return { error: edgeRaw
+            ? "“" + edgeRaw + "” isn't a job size — type a number like 15000."
+            : "Every step needs a job size.", part: "edge-" + i };
+        }
+        step.edge = edgeVal;
+      }
+      if (kind === "ladder") step.localOnly = readChecked(lineKey, "local-" + i);
+      steps.push(step);
+    }
+    return { text: simpleTo({ kind: kind, markup: r.simple.markup, steps: steps }) };
+  }
+
+  /** Recompose one row, and save it if it changed into something readable.
+   *
+   *  `focusKey` is where the focus is going, not where it was — see render(). */
+  function commitSimple(lineKey, focusKey) {
+    var r = rowState(lineKey);
+    var res = recompose(lineKey);
+
+    if (res.error) { showRowError(lineKey, res.error, res.part); return; }
+
+    if (res.text === r.baseline) {
+      // Tabbed through and changed nothing. THE CASE THAT MATTERS: a ladder is ten boxes, and a
+      // repaint per blur would replace the box the browser is moving the focus into. It also
+      // means a control seeded from a built-in never files that built-in as an override just
+      // because somebody looked at it.
+      clearRowError(lineKey);
+      if (r.sdraft) { delete SDRAFT[key(lineKey)]; render({ focusKey: focusKey }); }
+      return;
+    }
+
+    if (!res.text) {
+      // The one-number box, emptied. Same rule as the expression box: emptying is not how a rule
+      // is removed — that would leave `applies=true` with nothing to run, which markup.py refuses.
+      if (r.id) {
+        say("Emptying the box doesn't remove the rate. Use “Stop overriding this line”.");
+      }
+      delete LOCAL[key(lineKey)];
+      delete SDRAFT[key(lineKey)];
+      clearRowError(lineKey);
+      render({ focusKey: focusKey });
+      return;
+    }
+
+    // Belt and braces. The serializers above write the grammar, so this cannot fail today — and
+    // if a future shape ever makes it fail, the person hears about it here instead of the server
+    // storing a rate nothing can read.
+    var checked = M.validate(res.text);
+    if (!checked.ok) {
+      showRowError(lineKey, "That came out as something the engine can't read: " + checked.error,
+                   res.part);
+      return;
+    }
+
+    LOCAL[key(lineKey)] = { applies: true, formula: res.text };
+    delete SDRAFT[key(lineKey)];
+    clearRowError(lineKey);
+    say("");
+    render({ focusKey: focusKey });
+    save(lineKey);
+  }
+
+  function addStep(lineKey) {
+    var r = rowState(lineKey);
+    if (!r.simple || r.simple.kind === "flat") return;
+    var model = cloneModel(r.simple);
+    var blank = { edge: null, rate: null, localOnly: false };
+    var at;
+    if (model.kind === "bands") {
+      // BEFORE the default. A band is a ceiling and the default is what everything above the top
+      // ceiling gets, so a new band appended after it could never be reached.
+      at = model.steps.length - 1;
+      model.steps.splice(at, 0, blank);
+    } else {
+      at = model.steps.length;
+      model.steps.push(blank);
+    }
+    SDRAFT[key(lineKey)] = model;
+    clearRowError(lineKey);
+    say("Fill in the new " + (model.kind === "bands" ? "band" : "step") +
+        "'s job size and rate to save it.");
+    render({ focusKey: "s-" + lineKey + "-edge-" + at });
+  }
+
+  function dropStep(lineKey, idx) {
+    var r = rowState(lineKey);
+    if (!r.simple || !r.simple.steps || !r.simple.steps[idx]) return;
+    if (r.simple.kind === "bands" && idx === r.simple.steps.length - 1) return;
+    if (r.simple.kind === "ladder" && r.simple.steps.length === 1) {
+      say("A give-back needs at least one step. Switch the line off instead.");
+      return;
+    }
+    var model = cloneModel(r.simple);
+    model.steps.splice(idx, 1);
+    SDRAFT[key(lineKey)] = model;
+    clearRowError(lineKey);
+    // Painted first, so the recompose below reads the ladder the person is now looking at. A
+    // removal is a decision rather than half a word, so it saves straight away when it can. The
+    // focus lands on the step above the one that went, because the button it was on is gone.
+    var back = "s-" + lineKey + "-rate-" + Math.max(0, idx - 1);
+    render({ focusKey: back });
+    commitSimple(lineKey, back);
   }
 
   // ── saving ─────────────────────────────────────────────────────────────────
@@ -716,7 +1408,7 @@
     if (r.applies && !r.formula) {
       // The backend would refuse this, correctly: an empty formula on a line that applies would
       // price the job to nothing without saying so. Say it here instead of collecting a 400.
-      say("Type a formula for " + r.label + ", or switch it off.");
+      say("Type a rate for " + r.label + ", or switch it off.");
       return;
     }
     say("");
@@ -733,6 +1425,7 @@
       var json = await res.json().catch(function () { return {}; });
       if (!res.ok) {
         ERRORS[key(lineKey)] = json.detail || ("HTTP " + res.status);
+        delete EPARTS[key(lineKey)];
         say(json.detail || "That didn't save.");
         render();
         return;
@@ -740,9 +1433,11 @@
       replaceRule(json.rule);
       delete LOCAL[key(lineKey)];
       delete ERRORS[key(lineKey)];
+      delete EPARTS[key(lineKey)];
       render();
     } catch (err) {
       ERRORS[key(lineKey)] = "Couldn't reach the server.";
+      delete EPARTS[key(lineKey)];
       say("Couldn't save that. " + (err && err.message ? err.message : ""));
       render();
     }
@@ -780,11 +1475,25 @@
       if (!res.ok) { say("That didn't save. HTTP " + res.status); return; }
       RULES = RULES.filter(function (x) { return x.id !== r.id; });
       delete LOCAL[key(lineKey)];
+      delete SDRAFT[key(lineKey)];
       delete ERRORS[key(lineKey)];
+      delete EPARTS[key(lineKey)];
       render();
     } catch (err) {
       say("Couldn't remove that. " + (err && err.message ? err.message : ""));
     }
+  }
+
+  /** The first control on a row, whichever kind it turned out to be. Used when the page needs to
+   *  put somebody's next keystroke where it will do some good. */
+  function firstControl(lineKey) {
+    var tries = ["s-" + lineKey + "-value", "s-" + lineKey + "-edge-0",
+                 "s-" + lineKey + "-rate-0", "f-" + lineKey];
+    for (var i = 0; i < tries.length; i++) {
+      var el = document.querySelector('[data-focus="' + tries[i] + '"]');
+      if (el) return el;
+    }
+    return null;
   }
 
   // ── events ─────────────────────────────────────────────────────────────────
@@ -807,20 +1516,51 @@
     var retry = t.closest("#mk-retry");
     if (retry) { reload(); return; }
 
+    // Recorded, not performed: <details> opens itself, and this only remembers which ones are
+    // open so the next repaint does not snap them shut.
+    var help = t.closest("[data-help]");
+    if (help) {
+      var hk = help.getAttribute("data-help");
+      HELP[hk] = !HELP[hk];
+      return;
+    }
+
+    var adv = t.closest("[data-adv]");
+    if (adv) {
+      var ak = adv.getAttribute("data-adv");
+      ADV[key(ak)] = adv.getAttribute("data-adv-to") === "on";
+      delete SDRAFT[key(ak)];
+      clearRowError(ak);
+      say("");
+      render();
+      var box = firstControl(ak);
+      if (box && box.focus) box.focus();
+      return;
+    }
+
+    var addBtn = t.closest("[data-add]");
+    if (addBtn) { addStep(addBtn.getAttribute("data-add")); return; }
+
+    var delBtn = t.closest("[data-del]");
+    if (delBtn) {
+      dropStep(delBtn.getAttribute("data-del"), Number(delBtn.getAttribute("data-idx")));
+      return;
+    }
+
     var sw = t.closest("[data-applies]");
     if (sw) {
       var swKey = sw.getAttribute("data-applies");
       var cur = rowState(swKey);
       var next = !cur.applies;
       LOCAL[key(swKey)] = { applies: next, formula: cur.formula };
-      delete ERRORS[key(swKey)];
+      clearRowError(swKey);
       if (next && !cur.formula) {
         // Switched ON with nothing to run. Do not post a save the backend must refuse — show the
-        // box and say what it needs.
-        say("Type a formula for " + cur.label + " and leave the box to save it.");
+        // control and say what it needs.
+        say("Type a rate for " + cur.label + " and leave the box to save it.");
         render();
-        var box = document.querySelector('[data-focus="f-' + swKey + '"]');
-        if (box && box.focus) box.focus();
+        var ctl = firstControl(swKey);
+        if (ctl && ctl.focus) ctl.focus();
         return;
       }
       render();
@@ -834,19 +1574,33 @@
 
   /** Typing clears a message it has already been given; it never earns a new one.
    *
-   *  Validation happens on the way OUT of the box, not on every keystroke — half a formula is
+   *  Validation happens on the way OUT of the box, not on every keystroke — half a rate is
    *  always invalid, and being told so mid-word teaches somebody to ignore the message. */
   $("mk-chain").addEventListener("input", function (ev) {
     var t = ev.target;
     if (!t || !t.getAttribute) return;
-    var k = t.getAttribute("data-formula");
+    var k = t.getAttribute("data-formula") || t.getAttribute("data-simple");
     if (!k) return;
     if (ERRORS[key(k)]) {
       delete ERRORS[key(k)];
-      t.classList.remove("err");
+      delete EPARTS[key(k)];
+      if (t.classList) t.classList.remove("err");
       var msg = document.querySelector('[data-err="' + k + '"]');
       if (msg) { msg.textContent = ""; msg.hidden = true; }
     }
+  });
+
+  /** A checkbox is a decision, not half a word, so it commits on `change` — and the focus is put
+   *  straight back on the box that was just ticked. A repaint on `change` that steals the focus
+   *  somebody tabbed into is the exact bug this repo has shipped before. */
+  $("mk-chain").addEventListener("change", function (ev) {
+    if (rendering) return;
+    var t = ev.target;
+    if (!t || !t.getAttribute) return;
+    var k = t.getAttribute("data-simple");
+    var part = t.getAttribute("data-part") || "";
+    if (!k || part.indexOf("local-") !== 0) return;
+    commitSimple(k, t.getAttribute("data-focus"));
   });
 
   /** `focusout` rather than `blur`, because blur does not bubble and these boxes are replaced by
@@ -855,6 +1609,19 @@
     if (rendering) return;
     var t = ev.target;
     if (!t || !t.getAttribute) return;
+
+    // Where the focus is HEADED. During focusout document.activeElement is still this box, so
+    // this is the only honest answer to "what should the repaint focus?".
+    var rel = ev.relatedTarget;
+    var goingTo = (rel && rel.getAttribute) ? rel.getAttribute("data-focus") : null;
+
+    var sk = t.getAttribute("data-simple");
+    if (sk) {
+      if ((t.getAttribute("data-part") || "").indexOf("local-") === 0) return;   // handled above
+      commitSimple(sk, goingTo);
+      return;
+    }
+
     var k = t.getAttribute("data-formula");
     if (!k) return;
 
@@ -869,7 +1636,7 @@
         say("Emptying the box doesn't remove the rule. Use “Stop overriding this line”.");
       }
       delete LOCAL[key(k)];
-      render({ focus: false });
+      render({ focusKey: goingTo });
       return;
     }
 
@@ -879,12 +1646,15 @@
     if (!checked.ok) {
       LOCAL[key(k)] = { applies: true, formula: typed };
       ERRORS[key(k)] = checked.error;
+      delete EPARTS[key(k)];
       say("That formula can't be read, so it wasn't saved.");
-      render({ focus: false });
+      render({ focusKey: goingTo });
       return;
     }
     LOCAL[key(k)] = { applies: true, formula: typed };
-    render({ focus: false });
+    delete ERRORS[key(k)];
+    delete EPARTS[key(k)];
+    render({ focusKey: goingTo });
     save(k);
   });
 

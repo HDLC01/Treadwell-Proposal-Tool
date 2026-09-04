@@ -26,13 +26,23 @@
       --mono:Consolas,'SF Mono',ui-monospace,SFMono-Regular,Menlo,'Roboto Mono',monospace;
       --r-lg:12px; --r-md:8px; --r-sm:6px; }
     * { box-sizing:border-box; }
+
+    /* THE `hidden` CASCADE, cured in one place instead of four.
+       A class rule that sets `display` beats the `hidden` attribute, and this repo has shipped
+       four live instances of exactly that bug — an element the page believes it hid, still on
+       screen, still taking clicks. Every note and every disclosure on this page toggles with
+       `el.hidden`, so the attribute is made to win outright here rather than being restated per
+       component (`.banner[hidden]`, `.ronote[hidden]`, `.errmsg[hidden]` … each one a thing to
+       remember on the next component somebody adds). */
+    [hidden] { display:none !important; }
+
     .mono { font-family:var(--mono); }
     body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
       font:400 14px/1.55 var(--ui); }
     a { color:var(--red-dark); }
     a:hover { color:var(--red); }
 
-    .top { display:flex; align-items:center; gap:14px; max-width:1180px; margin:0 auto 4px; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1180px; margin:0 auto 6px; }
     .logo { width:54px; height:34px; display:block; flex:none; }
     h1 { font-size:20px; letter-spacing:-.01em; margin:0; text-wrap:balance; }
     .wrap { max-width:1180px; margin:0 auto; }
@@ -42,10 +52,32 @@
     .beta { font:700 10px var(--ui); letter-spacing:.07em; text-transform:uppercase;
       background:var(--red-tint); color:var(--red-dark); border:1px solid rgba(158,0,31,.24);
       border-radius:999px; padding:4px 10px; white-space:nowrap; cursor:help; }
-    .hint { color:var(--ink-v); font-size:13px; margin:0 0 14px; max-width:80ch; }
+    .hint { color:var(--ink-v); font-size:13px; margin:0 0 4px; max-width:80ch; }
     .hint b { color:var(--ink); font-weight:600; }
     .alert { color:var(--red-dark); font-size:12.5px; margin:0 0 10px; min-height:1em; }
     .alert:empty { display:none; }
+
+    /* ── THE DISCLOSURE: one component, two jobs ────────────────────────────
+       "How the chain works" above the table and "What this does" on every row are the same
+       control. The prose it holds is true and worth keeping — it was just being printed in every
+       single row of a five-column grid, which is what made a table of eight numbers read as an
+       essay. Native <details>: no JS to toggle it, native keyboard, and nothing to get out of
+       step with a class. */
+    .help { margin:0; }
+    .help > summary { display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+      list-style:none; font:600 11.5px var(--ui); color:var(--red-dark); padding:2px 0;
+      border-radius:var(--r-sm); }
+    .help > summary::-webkit-details-marker { display:none; }
+    .help > summary:hover { color:var(--red); }
+    .help > summary:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .help > summary:active { color:var(--ink); }
+    .help > summary svg { flex:none; transition:transform .15s ease; }
+    .help[open] > summary svg { transform:rotate(90deg); }
+    .help .explain { color:var(--ink-v); font-size:12.5px; line-height:1.5; margin:5px 0 0;
+      max-width:60ch; }
+    .how { margin:6px 0 16px; }
+    .how .explain { max-width:78ch; }
+    .how .explain + .explain { margin-top:7px; }
 
     /* Polish | Seal | Epoxy | Leveling | Gyp — the five SHEET LAYOUTS, rendered from the API's
        own `layouts` array. There is deliberately no Combo tab: a combo job is two option lines,
@@ -67,38 +99,79 @@
       border-radius:var(--r-md); padding:9px 12px; font-size:12.5px; margin:0 0 12px;
       max-width:84ch; }
     .ronote b { color:var(--ink); font-weight:600; }
-    .ronote[hidden] { display:none; }
 
     .banner { display:flex; gap:10px; align-items:flex-start; background:var(--warn-bg);
       border:1px solid rgba(122,92,0,.25); color:var(--warn); border-radius:var(--r-md);
       padding:12px 14px; font-size:13px; margin:0 0 14px; max-width:900px; }
     .banner svg { flex:none; margin-top:1px; stroke:var(--warn); }
     .banner b { color:var(--ink); }
-    /* `hidden` LOSES to any class rule that sets display, and this repo has shipped four of
-       those. Both banners are flex when shown, so each one restates the attribute. */
-    .banner[hidden] { display:none; }
 
-    /* The chain is 940px of columns before it starts lying about what fits. It scrolls in its
+    /* The chain is 900px of columns before it starts lying about what fits. It scrolls in its
        OWN box rather than making the page scroll sideways. */
     .cardwrap { overflow-x:auto; padding-bottom:2px; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
-      overflow:hidden; min-width:940px; }
+      overflow:hidden; min-width:900px; }
 
-    /* Line | Formula | Applies | What it does | Preview.
-       The APPLIES column is its own column and not a checkbox tucked into the formula cell,
-       because "this line does not exist on this tab" is a fact about the line, not about the
-       expression — see the .absent rules below. */
+    /* ── THE GRID ───────────────────────────────────────────────────────────
+       Line | Rate | Applies | Preview.
+
+       WHAT IT DOES is gone as a column. It held a paragraph of prose in every single row, so the
+       table was mostly text — the thing that made a page of eight numbers read as three essays.
+       Each line's explanation moved into the per-row disclosure above, and the one-line version
+       of it sits under the line's name where it is read for free.
+
+       The column that was FORMULA is now RATE, because for six of the eight lines the answer is
+       one number and it now takes one number box. APPLIES stays its own column: "this line does
+       not exist on this tab" is a fact about the line, not about the expression. */
     .mkrow { display:grid;
-      grid-template-columns:186px minmax(250px,1fr) 104px minmax(230px,1.05fr) 150px; }
-    .mkrow > div { padding:13px 16px; border-top:1px solid var(--line-soft); display:flex;
-      flex-direction:column; justify-content:center; }
+      grid-template-columns:232px minmax(300px,1fr) 108px 190px; }
+    .mkrow > div { padding:12px 16px; border-top:1px solid var(--line-soft); display:flex;
+      flex-direction:column; justify-content:center; gap:7px; }
     .mkrow.head { background:var(--surf-low); }
     .mkrow.head > div { border-top:0; font:700 10.5px var(--ui); letter-spacing:.06em;
       text-transform:uppercase; color:var(--ink-v); padding:14px 16px 10px; }
-    .mkrow .line { font-weight:600; font-size:13.5px; color:var(--ink); }
-    .mkrow .line .sub { display:block; font-weight:400; color:var(--ink-v); font-size:11px;
-      margin-top:2px; }
+    .mkrow .line { gap:3px; }
+    .mkrow .line .nm { font-weight:600; font-size:13.5px; color:var(--ink); display:flex;
+      align-items:center; gap:7px; flex-wrap:wrap; }
+    .mkrow .line .sub { font-weight:400; color:var(--ink-v); font-size:11.5px; }
+    .mkrow .line .help { margin-top:2px; }
 
+    /* ── THE TWO STATES AN ADMIN DOES NOT SET ───────────────────────────────
+       `.ctx`     a line the chain INCLUDES but something else sets — contingency is typed per job,
+                  the remodel rate comes off the county table. Not markup rules, and markup.py
+                  refuses both BY NAME, so a box here would only ever collect a 400.
+       `.absent`  a line that does not exist on this tab at all. Gyp has NO hard-bid rate: the
+                  workbook cell is EMPTY, not 0, and the two are stored differently on purpose.
+
+       Both are tinted, because "not yours to type in" is the fact a reader needs first and it is
+       true of both. What separates them is the caption and the chip, not the colour — one says
+       where the number comes from instead, the other says the cell is empty and that this is not
+       the same as 0%.
+
+       Deliberately NOT done with opacity. The house rule puts disabled at .38–.5 and keeps
+       read-only at full contrast, and neither of these is a dead control: each is a sentence
+       somebody has to be able to read. The greying is a colour (--ink-v) and a row tint, so
+       contrast holds. */
+    .mkrow.ctx, .mkrow.absent { background:var(--surf-low); }
+    .mkrow.ctx .line .nm, .mkrow.absent .line .nm { color:var(--ink-v); }
+    .chip { font:700 9.5px var(--ui); letter-spacing:.07em; text-transform:uppercase;
+      color:var(--ink-v); background:var(--surf-dim); border:1px solid var(--line-soft);
+      border-radius:999px; padding:2px 7px; white-space:nowrap; }
+    .absent-note { display:flex; align-items:center; gap:6px; font:400 12.5px var(--ui);
+      color:var(--ink-v); }
+
+    /* READ-ONLY is not DISABLED and must not look like it. Full contrast, no affordance —
+       these are the values you are allowed to read but not to type over. */
+    .ftext { font:13px var(--ui); color:var(--ink); }
+    .ftext.locked { color:var(--ink-v); }
+    .ftext.mono { font-size:12.5px; word-break:break-word; }
+    .ftext.dim { color:var(--ink-v); }
+
+    /* ── THE EXPRESSION BOX, and THE ONE-NUMBER BOX ─────────────────────────
+       `.finput` is the expression box and it is unchanged; it now lives behind a per-row
+       Advanced. `.num` is the same control narrowed to one number and lined up on its digits, so
+       the interaction states (hover, focus-visible, the error state) come from one place instead
+       of a second input component drifting away from the first. */
     .finput { width:100%; font:13px var(--mono); color:var(--ink); background:var(--card);
       border:1px solid var(--line); border-radius:var(--r-sm); padding:8px 10px; }
     .finput:hover { border-color:var(--red); }
@@ -106,31 +179,55 @@
     .finput::placeholder { color:var(--ink-v); opacity:.7; }
     /* Validated on BLUR, never on a keystroke — nobody gets scolded mid-word. */
     .finput.err { border:1.5px solid var(--red-dark); background:var(--red-tint); }
-    .errmsg { color:var(--red-dark); font-size:11.5px; margin-top:6px; font-weight:600; }
-    .errmsg[hidden] { display:none; }
+    .num { width:7.5ch; text-align:right; font:600 13px var(--ui);
+      font-variant-numeric:tabular-nums; padding:7px 8px; }
+    .numwrap { display:flex; align-items:center; gap:6px; }
+    .unit { font:600 13px var(--ui); color:var(--ink-v); }
+    .unit.pre { margin-right:-2px; }
+    .errmsg { color:var(--red-dark); font-size:11.5px; font-weight:600; }
 
-    /* READ-ONLY is not DISABLED and must not look like it. Full contrast, no affordance —
-       these are the values you are allowed to read but not to type over. */
-    .ftext { font:13px var(--mono); color:var(--ink); padding:8px 0; word-break:break-word; }
-    .ftext.locked { color:var(--ink-v); font-family:var(--ui); }
-    .ftext.dim { color:var(--ink-v); }
+    /* ── THE LADDER ─────────────────────────────────────────────────────────
+       GP and the hard-bid give-back genuinely step by job size, and
+       MARKUP(BAND(subtotal, 6500,52%, 15000,45%, …)) in a text box is the single most
+       complicated thing that was on this page. Drawn instead as a few short rows where every
+       threshold and every rate is a number you can type, so the SHAPE is visible.
 
-    /* ── THE ABSENT STATE ────────────────────────────────────────────────────
-       Gyp has NO hard-bid rate: the workbook cell is EMPTY, not 0. This is the third row state,
-       and it exists because the other two both lie about it — an empty editable box invites
-       somebody to fill it in, and "0%" reads as a discount that was declined. So: no box at all,
-       a tinted row, and a caption naming the tab.
+       Fixed tracks, because the alignment is the information: five rows of drifting boxes are not
+       a ladder. The inputs fill their track rather than carrying a width of their own — a width
+       per input is the inline-style mess this repo is paying down, not the model. */
+    .bands { display:flex; flex-direction:column; gap:5px; }
+    .band { display:grid; grid-template-columns:58px 96px 18px 76px 22px; align-items:center;
+      gap:7px; }
+    .band .num { width:100%; }
+    .band .edgelbl { font:400 11.5px var(--ui); color:var(--ink-v); text-align:right;
+      white-space:nowrap; }
+    .band .arrow { color:var(--ink-v); display:flex; justify-content:center; }
+    .band.last .edgelbl { font-weight:600; color:var(--ink); }
+    .bdel { border:0; background:none; padding:3px; cursor:pointer; color:var(--ink-v);
+      border-radius:var(--r-sm); display:flex; }
+    .bdel:hover { color:var(--red-dark); background:var(--red-tint); }
+    .bdel:focus-visible { outline:2px solid var(--red); outline-offset:1px; }
+    .bdel:active { color:var(--ink); }
+    /* The one per-step condition Kyle's own hard-bid cell carries: the smaller give-back is for
+       local jobs only. A real checkbox, so it tabs and toggles natively. */
+    .bandnote { display:flex; align-items:center; gap:6px; margin-left:60px;
+      font:400 11.5px var(--ui); color:var(--ink-v); cursor:pointer; }
+    .bandnote input { accent-color:var(--red); width:14px; height:14px; margin:0; }
+    .bandnote input:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
 
-       Deliberately NOT done with opacity. The house rule puts disabled at .38–.5 and keeps
-       read-only at full contrast, and this cell is neither a dead control nor a value — it is a
-       sentence somebody has to be able to read. The greying is a colour (--ink-v) and a row
-       tint, so contrast holds. */
-    .mkrow.absent { background:var(--surf-low); }
-    .mkrow.absent .line { color:var(--ink-v); }
-    .absent-note { font:400 12.5px var(--ui); color:var(--ink-v); }
-    .absent-note b { font-weight:600; color:var(--ink-v); }
+    .rowbtns { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+    /* "Stop overriding" — a soft delete that means "fall back to the built-in constant", NOT
+       "charge nothing". The wording is the whole point, so it is not a bin icon. */
+    .ghostlink { border:0; background:none; padding:0; cursor:pointer; font:600 11.5px var(--ui);
+      color:var(--red-dark); text-decoration:underline; text-underline-offset:2px;
+      display:inline-flex; align-items:center; gap:4px; }
+    .ghostlink:hover { color:var(--red); }
+    .ghostlink:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .ghostlink:active { color:var(--ink); }
 
-    .explain { color:var(--ink-v); font-size:12.5px; line-height:1.5; }
+    .wbnote { display:flex; align-items:flex-start; gap:5px; font-size:11px; color:var(--ink-v);
+      max-width:56ch; }
+    .wbnote svg { flex:none; margin-top:1.5px; stroke:var(--ink-v); }
 
     /* A real <button role="switch">, styled. Native tab order, native Space/Enter, aria-checked
        as the single source of truth — no keydown handler to forget. */
@@ -151,35 +248,30 @@
     .swl { font-size:12px; color:var(--ink-v); }
     .swro { font-size:12.5px; color:var(--ink-v); }
 
-    /* "Stop overriding" — a soft delete that means "fall back to the built-in constant", NOT
-       "charge nothing". The wording is the whole point, so it is not a bin icon. */
-    .ghostlink { align-self:flex-start; margin-top:7px; border:0; background:none; padding:0;
-      cursor:pointer; font:600 11.5px var(--ui); color:var(--red-dark);
-      text-decoration:underline; text-underline-offset:2px; }
-    .ghostlink:hover { color:var(--red); }
-    .ghostlink:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
-    .ghostlink:active { color:var(--ink); }
+    /* ── PREVIEW ────────────────────────────────────────────────────────────
+       The dollar figure per line is the most useful thing on the page: it is the only thing that
+       tells you your typing was right. So it stays, and it stays prominent.
 
-    .prev { align-items:flex-end !important; text-align:right; }
+       The arrow line is the running total THROUGH that line, which is what makes "each line's
+       base is the running total of everything above it" visible instead of a sentence in the
+       intro. The last one equals the grand total, on purpose. */
+    .prev { align-items:flex-end !important; text-align:right; gap:2px !important; }
     /* Money and quantities line up down the column or the tool is lying about its own figures. */
     .prev .pct { font:600 11px var(--mono); color:var(--ink-v);
       font-variant-numeric:tabular-nums; }
     .prev .amt { font:700 14px var(--mono); color:var(--ink);
-      font-variant-numeric:tabular-nums; margin-top:2px; }
+      font-variant-numeric:tabular-nums; }
+    .prev .run { font:400 10.5px var(--mono); color:var(--ink-v);
+      font-variant-numeric:tabular-nums; }
     /* NEVER $0.00. A line that cannot be priced says so. */
     .prev .unpriced { font:700 12.5px var(--ui); color:var(--red-dark); }
     .prev .nodash { font:700 13px var(--mono); color:var(--ink-v); }
 
-    .wbnote { display:flex; align-items:flex-start; gap:5px; margin-top:6px; font-size:10.5px;
-      color:var(--ink-v); }
-    .wbnote svg { flex:none; margin-top:1px; stroke:var(--ink-v); }
-
     .mkrow.grand { background:var(--red-tint); }
-    .mkrow.grand .line { color:var(--red-dark); font-weight:700; }
-    .mkrow.grand .explain { color:var(--red-dark); }
+    .mkrow.grand .line .nm { color:var(--red-dark); font-weight:700; }
+    .mkrow.grand .line .sub { color:var(--red-dark); }
     .mkrow.grand .amt { color:var(--red-dark); font:700 20px var(--mono);
       font-variant-numeric:tabular-nums; }
-    .mkrow.grand .pct { color:var(--red-dark); }
     .mkrow.grand .unpriced { font:700 15px var(--ui); color:var(--red-dark); }
 
     /* Loading, empty and failed all get a designed state; none of them defaults. */
@@ -206,31 +298,47 @@
     <span class="beta" title="Being tested. These rows are where the chain's rates are edited by an admin instead of a developer. They are not wired into the Polish beta's price yet — its engine still runs on its own hardcoded constants.">Beta test</span>
   </div>
   <div class="wrap">
-    <p class="hint"><b>Kyle's markup chain, per sheet layout.</b> The tabs are the five sheet
-      tabs a bid can sit on — not work types, and there is no Combo, because a combo job is two
-      option lines each priced off its own tab. The rows run in the order the chain compounds:
-      each line's base is the running total of everything above it. A formula evaluates to a
-      <b>rate</b> applied to that base; <span class="mono">MARKUP()</span> and a typed figure
-      return dollars instead.</p>
-    <!-- SAY WHAT AN EDIT DOES TODAY. The badge used to claim these rows "override the constants
+    <!-- ONE SENTENCE, then the honest one. What used to stand here was two paragraphs of prose
+         before any control, and the reason for that prose is real — but a disclosure holds it
+         better than the top of the page does.
+
+         SAY WHAT AN EDIT DOES TODAY. The badge used to claim these rows "override the constants
          hardcoded in the Polish beta's pricing engine" in the present tense, and nothing has ever
          read them: markup-core.js is loaded by this page alone, and polish-bid-core.js still owns
          its own RATES and GP_BANDS. An admin could change a rate, see it saved, and no price
          anywhere would move. Same call as the county picker's "remodel tax is off, so the county
          is not affecting the price yet" line -- a number that quietly does nothing is how people
-         come to distrust the whole form. Delete this paragraph in the change that wires the chain
+         come to distrust the whole form. Delete that sentence in the change that wires the chain
          up, not before. -->
-    <p class="hint"><b>Filed rates are not pricing anything yet.</b> This table stores them and
-      shows what each one would do. The Polish beta still prices off the constants built into its
-      own engine, and the estimate workbook prices off Kyle's formulas, so editing a row here
-      changes neither number today. It is safe to get the rates right in advance; it is not yet a
-      way to change a bid.</p>
+    <p class="hint"><b>Kyle's markup rates, per sheet tab.</b>
+      Filed rates are not pricing anything yet — this table stores them and shows what each
+      one would do.</p>
+
+    <details class="help how">
+      <summary>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+             focusable="false"><path d="M9 5l7 7-7 7"></path></svg>
+        How the chain works
+      </summary>
+      <p class="explain">The tabs are the five <b>sheet layouts</b> a bid can sit on — not work
+        types. There is no Combo: a combo job is two option lines, each priced off its own tab.</p>
+      <p class="explain">The rows run in the order the chain compounds, and each line's base is the
+        <b>running total of everything above it</b> — the small figure under each amount. A rate is
+        applied to that base; GP and a typed dollar figure return dollars instead.</p>
+      <p class="explain">Nothing here changes a price today. The Polish beta still prices off the
+        constants built into its own engine and the estimate workbook prices off Kyle's formulas,
+        so it is safe to get these rates right in advance.</p>
+    </details>
+
+    <!-- Above the controls, not under the table. A save that was refused has to be readable
+         without scrolling past eight rows to find out. -->
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
 
     <div class="views" role="tablist" aria-label="Sheet layouts" id="mk-tabs"></div>
 
     <!-- Both notes start hidden and are shown by the page script. -->
-    <p class="ronote" id="mk-ro" hidden>You can see these formulas and how they price a job.
+    <p class="ronote" id="mk-ro" hidden>You can see these rates and how they price a job.
       Changing them is admin-only - ask Hanz or Kyle.</p>
     <p class="ronote" id="mk-fallback" hidden></p>
 
