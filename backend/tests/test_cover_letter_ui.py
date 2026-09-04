@@ -781,3 +781,28 @@ def test_a_saved_format_comes_back_tomorrow(ran):
         "the replayed paragraph is not marked format-edited, so the NEXT collect() drops the "
         "format — the estimator's bold survives one visit and disappears on the one after")
     assert d["recollected"] == [True]
+
+
+def test_ctrl_b_reaches_the_letter_too(ran):
+    """The keyboard is a second, separate wiring, and an estimator formatting a letter is far more
+    likely to reach for Ctrl+B than for the ribbon.
+
+    The ribbon buttons are bound by `clWireRibbon`; Ctrl+B is bound by `clWireSurface`, and the
+    proposal's own Ctrl+B handler is scoped to `#doc-surface`, so it never fires for the letter at
+    all. Delete the letter's keydown listener and every other test in this file stays green.
+
+    `prevented` is the second half and is not decoration. An unhandled Ctrl+B inside a
+    contenteditable is not inert — it is the BROWSER applying its own bold, which writes a raw
+    <b> element that `collect()` cannot see. The estimator would watch the text go bold on screen
+    and find it plain in the finished PDF, which is the exact complaint this whole change answers."""
+    d = ran["keyboardApplies"]
+    assert d["bold"] == [True], "Ctrl+B on the letter saved nothing"
+    assert d["italic"] == [True], "Ctrl+I on the letter saved nothing"
+    assert d["prevented"] is True, (
+        "the letter handled Ctrl+B but let the browser have it as well — the browser's own bold "
+        "writes markup the collector cannot read, so the screen and the PDF disagree")
+    assert d["text"] == "Thank you for the opportunity to bid Olathe Fire Station 4.", (
+        "the keyboard press changed the wording as well as the formatting")
+    assert d["plainPrevented"] is False, (
+        "a bare 'b' with no Ctrl was swallowed as a command — the estimator cannot type the "
+        "letter b")

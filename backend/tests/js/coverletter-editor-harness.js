@@ -504,6 +504,14 @@ function makePage(seed, opts) {
     press(key) {
       fmtButtons[key].dispatchEvent(new Ev("click", { bubbles: true }));
     },
+    /** The same request made with the keyboard, from the surface, where the letter listens.
+     *  Returns the event so the caller can read whether the default was prevented -- an unhandled
+     *  Ctrl+B is not inert in a contenteditable, it is the browser applying its OWN bold. */
+    key(k, opts) {
+      const e = new Ev("keydown", Object.assign({ bubbles: true, ctrlKey: true, key: k }, opts || {}));
+      surface.dispatchEvent(e);
+      return e;
+    },
     /** Is a block's stored override formatted, and how? Reads what collect() actually emits. */
     override(id) {
       const all = win.TWCoverLetter.collect();
@@ -1007,6 +1015,44 @@ const out = {};
       replayedFmtClass: back ? back.classList.contains("tw-fmt") : null,
       // ...and it must still be collectable, or the second visit would silently drop the format.
       recollected: q.override(2) ? q.override(2).runs.map((r) => r.bold) : null,
+    };
+  }
+
+  /* ── 16 · Ctrl+B reaches the letter, and the browser is told to keep its hands off ───────────
+   *
+   * A second, entirely separate wiring. The ribbon buttons are bound by `clWireRibbon`; the
+   * keyboard is bound by `clWireSurface`, and the proposal's own Ctrl+B is scoped to
+   * `#doc-surface` so it never fires for the letter at all. Delete the keydown listener and every
+   * other scenario in this file stays green while an estimator who reaches for Ctrl+B gets
+   * nothing -- or worse, gets the BROWSER's bold, which writes a raw <b> the collector cannot see.
+   *
+   * Hence two readings, not one: the override has to land, and the default has to be prevented. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" }, { geometry: GEO_FLOW, blocks: BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+
+    const el = p.caretIn(2);
+    const ev = p.key("b");
+    const kbBold = p.override(2);
+
+    p.key("i");
+    const kbItalic = p.override(2);
+
+    // A bare "b" with no modifier is a letter being typed, not a command. If this ever comes back
+    // formatted, the guard has been dropped and the estimator cannot type the letter b.
+    const plain = p.key("b", { ctrlKey: false });
+
+    out.keyboardApplies = {
+      bold: kbBold ? kbBold.runs.map((r) => r.bold) : null,
+      italic: kbItalic ? kbItalic.runs.map((r) => r.italic) : null,
+      // ...and the same paragraph, not a new one, and its text untouched.
+      text: el.textContent,
+      prevented: ev.defaultPrevented,
+      plainPrevented: plain.defaultPrevented,
     };
   }
 
