@@ -59,34 +59,27 @@ exactly why Hanz's own example letter shows up as two blocks instead of
 twenty-two. Anything the estimator must be able to edit therefore has to be a
 direct body child.
 
-THE ONE EXCEPTION IS THE DATE, AND IT IS A TEXT BOX.
+THERE ARE NO TEXT BOXES, AND THERE IS NO TITLE LINE.
 
-`Treadwell Cover Letter - Example1.docx` does not put the date on a text line: it
-floats it in a small centred text box anchored over the letterhead artwork
-(`wp:anchor` + `wps:txbx`, with the usual `mc:AlternateContent` VML fallback
-beside it). Hanz wants the generated letters to match the real example, so
-`_install_date_box` lifts that whole run out of the example and drops it into the
-same paragraph the artwork lives in, with its offsets untouched, and swaps the
-six runs that spell "8/26/26" for one `{{proposal_date_short}}` — the SHORT date,
-because the box is 63pt wide and Word clips it rather than growing it. See
-`DATE_TOKEN`.
-
-That box IS reachable by every shared helper, with no new machinery:
-`_iter_all_paragraphs` (the token fill) and `_iter_txbx` / `_iter_body_editable`
-(the block ids and `template_geometry`) both descend into `w:txbxContent`, so the
-date arrives as the last editable block, honestly marked `in_txbx: true` with a
-`txbx` index the editor can look up in `geometry.boxes`. It is still the only box
-in the document, which is why `cover_letter_writer` carries no box-OVERRIDE
-machinery: the estimator never moves or resizes it.
+Both used to be here. Kyle's example letter floats the date in a small
+anchored box over the artwork and opens with a red underlined heading, and
+these templates copied both faithfully. On 2026-09-04 Hanz asked for both to
+come off EVERY format: the proposal behind the letter already carries the job
+name and the date, and repeating them on the cover page is two more things to
+keep true. So a generated letter is now nothing but flowing body paragraphs,
+which is the simplest shape this file can produce and the one the rule above
+wants: every block is a direct body child, `template_geometry`'s `boxes` is
+empty, and the editor takes the no-box layout branch it already had.
+`{{proposal_date_short}}` is still resolved server-side for the proposal; no
+letter prints it.
 
 Source files (Hanz, 2026-08-28), kept OUT of the image — they are reference
 material, not runtime inputs:
     docs/Cover Letter/Treadwell Letterhead.docx        — branding, page setup
     docs/Cover Letter/Treadwell Cover Letter - Example1.docx
                                                        — the finished-page model,
-                                                         and the source of both
-                                                         the decimal list and the
-                                                         floating date box
+                                                         and the source of the
+                                                         decimal list
     docs/Cover Letter/1 Treadwell Proposal Cover Letter Templates.pdf
                                                        — the copy, as 6 EMAIL drafts
 
@@ -119,12 +112,11 @@ OUT_DIR = Path(__file__).resolve().parent / "templates" / "CoverLetter"
 # ── House formatting, read off Hanz's example letter ──────────────────────────
 # Body: Zetta Serif Book, 40% grey, with a 1.625" right indent so the column
 # stops short of the page edge (the example's `w:ind w:right="2340"`).
-# Heading: Century Gothic, bold, underlined, Treadwell red A91120.
 # Signature: Arial 10pt.
+# The heading face (Century Gothic, Treadwell red A91120) is gone with the
+# title line it set — see `build`.
 BODY_FONT = "Zetta Serif Book"
 BODY_GREY = RGBColor(0x40, 0x40, 0x40)
-TITLE_FONT = "Century Gothic"
-TREADWELL_RED = RGBColor(0xA9, 0x11, 0x20)
 SIG_FONT = "Arial"
 SIG_GREY = RGBColor(0x59, 0x59, 0x59)
 
@@ -533,109 +525,15 @@ def _install_decimal_numbering(d) -> None:
         anchor = num
 
 
-# `{{proposal_date_short}}` — `M/D/YY` — and NOT the long-form `{{proposal_date}}`
-# the proposal's header prints. Kyle drew this box 63.0pt x 18.0pt around his own
-# `8/26/26`, and Word CLIPS an anchored text box at its edge rather than growing
-# it: "August 27, 2026" rendered as the single word "August" on every letter, and
-# the clipped characters were not in the PDF at all. Matching his format is the
-# fix; widening his box is not. `cover_letter_writer._short_date` derives it.
-DATE_TOKEN = "{{proposal_date_short}}"
-
-# python-docx's `qn` only knows a dozen prefixes and `mc` is not one of them, so
-# the Markup Compatibility element is spelled out. (`w`, `wp` and `xml` ARE known
-# and go through `qn` as everywhere else in this repo.)
-_MC_ALTERNATE_CONTENT = (
-    "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent")
-
-
-def _install_date_box(d) -> None:
-    """Lift Example1's floating DATE text box into `d`, reading `{{proposal_date}}`.
-
-    Hanz's real cover letter floats the date in a small centred text box over the
-    letterhead artwork rather than typing it on a line, and the new templates are
-    to match it. Recreating that box by hand from `OxmlElement` calls would mean
-    re-deriving the anchor offsets, the wrap mode, the shape style and the VML
-    fallback — four chances to get a customer-facing page subtly wrong — so the
-    whole `<w:r>` that carries it is deep-copied out of the example instead, and
-    only its TEXT is changed.
-
-    Where it goes: the example anchors the box in the same paragraph as the
-    letterhead artwork (the first paragraph inside the `w:sdt`), with
-    `positionV relativeFrom="paragraph"` at -45pt. The letterhead has that exact
-    paragraph, holding that exact artwork, so appending the run there reproduces
-    the example's placement with the offsets untouched. Anchoring it to one of
-    OUR body paragraphs instead would move it by however tall the letterhead
-    block renders — a number that is a layout result and is not in the XML.
-
-    BOTH copies of the text are rewritten. `mc:AlternateContent` stores the box
-    twice: `mc:Choice` (the modern `wps` shape, what Word and LibreOffice read)
-    and `mc:Fallback` (VML, for consumers that do not understand `wps`). The
-    token substitution pass walks every `w:txbxContent` and so fills both, but
-    only the Choice copy is an editable block — `_is_fallback_paragraph` hides
-    the other from the id walk on purpose. Leaving the fallback spelling out
-    "8/26/26" would therefore print August 2026 on any renderer that used it.
-
-    The box's SIZE is Kyle's and is not touched: 63.0pt x 18.0pt, drawn around
-    `8/26/26`. Word clips an anchored box, so the token it carries is the short
-    date — see `DATE_TOKEN`.
-
-    Refuses loudly if the example ever stops carrying the box: a silently
-    date-less letterhead is a customer-facing hole nobody would notice in
-    review."""
-    src = docx.Document(str(EXAMPLE))
-    run = None
-    for alt in src.element.body.iter(_MC_ALTERNATE_CONTENT):
-        if alt.find(".//" + qn("w:txbxContent")) is None:
-            continue
-        parent = alt.getparent()
-        if parent is not None and parent.tag == qn("w:r"):
-            run = parent
-            break
-    if run is None:
-        raise SystemExit(
-            "No floating text box found in %s — the cover letter's date box is "
-            "copied from it, so it cannot be built without one." % EXAMPLE.name)
-
-    run = copy.deepcopy(run)
-
-    # One run per text box, carrying the token, keeping the example's own rPr
-    # (Zetta Serif Book, 40% grey) and the paragraph's centring.
-    boxes = list(run.iter(qn("w:txbxContent")))
-    if not boxes:
-        raise SystemExit("The copied date box has no w:txbxContent.")
-    for txbx in boxes:
-        for para in list(txbx.iter(qn("w:p"))):
-            runs = para.findall(qn("w:r"))
-            if not runs:
-                continue
-            keep = runs[0]
-            for extra in runs[1:]:
-                para.remove(extra)
-            for t in list(keep.findall(qn("w:t"))):
-                keep.remove(t)
-            t = OxmlElement("w:t")
-            t.text = DATE_TOKEN
-            t.set(qn("xml:space"), "preserve")
-            keep.append(t)
-
-    # Unique drawing id. The letterhead's artwork already owns one, and two
-    # `wp:docPr` sharing an id is a file Word repairs on open (dropping a shape).
-    taken = {e.get("id") for e in d.element.body.iter(qn("wp:docPr"))}
-    for doc_pr in run.iter(qn("wp:docPr")):
-        new_id = 1
-        while str(new_id) in taken:
-            new_id += 1
-        doc_pr.set("id", str(new_id))
-        taken.add(str(new_id))
-
-    sdt = d.element.body.find(qn("w:sdt"))
-    content = sdt.find(qn("w:sdtContent")) if sdt is not None else None
-    host = content.find(qn("w:p")) if content is not None else None
-    if host is None:
-        raise SystemExit(
-            "The letterhead has no w:sdt/w:sdtContent paragraph to anchor the "
-            "date box to; its structure changed and this script needs updating.")
-    host.append(run)
+# THE DATE BOX IS GONE, AND ON PURPOSE. Kyle's example letter floats the date in a
+# small anchored text box over the letterhead artwork, and these templates copied it
+# faithfully until 2026-09-04, when Hanz asked for it to come off every format: a
+# proposal already carries its own dates, and a second one on the letter is one more
+# thing to be wrong. Removing it also takes the ONLY text box out of these documents,
+# so a generated letter is now pure flowing body -- `template_geometry`'s `boxes` is
+# empty, every block is a direct body child, and the editor renders the no-box layout
+# it already had for exactly this case. `{{proposal_date_short}}` still resolves in
+# `cover_letter_writer` (the proposal uses it); nothing in a letter prints it.
 
 
 def _set_numbering(p, num_id: int) -> None:
@@ -725,12 +623,6 @@ def build(work_type: str, spec: dict, out_path: Path) -> None:
     shutil.copyfile(LETTERHEAD, out_path)       # branding, byte-for-byte
     d = docx.Document(str(out_path))
     _install_decimal_numbering(d)
-    # The date is a FLOATING BOX over the artwork, not a text line — see
-    # `_install_date_box`. It prints `{{proposal_date_short}}`, which
-    # `cover_letter_writer._ensure_cover_letter_values` derives from the bid date
-    # so a server-side replay can never print the raw token.
-    _install_date_box(d)
-
     # The paragraph sequence is Example1's, measured off its render rather than
     # eyeballed (see GROUP_SPACE_BEFORE). Where Kyle has a blank LINE there is a
     # blank paragraph here; where his air comes from paragraph spacing, so does
@@ -739,13 +631,17 @@ def build(work_type: str, spec: dict, out_path: Path) -> None:
     # "Feel free…". Blank paragraphs in those three places were this generator's
     # invention, cost ~42pt, and are what pushed Combo's sign-off onto a second,
     # letterhead-less page.
-    # The title runs the FULL section measure: Example1's `w:ind w:right="2340"`
-    # is on its body paragraphs and not on its title (paragraph 4 carries no
-    # `w:ind` at all). Indenting it was this generator's own doing and it cost
-    # Combo a second title line, since that heading is the longest in the set.
-    _add(d, [_seg(spec["title"])], font=TITLE_FONT, color=TREADWELL_RED,
-         underline=True, right_indent=None)
-    _add(d, [])
+    # NO TITLE LINE. Every letter used to open with a red underlined heading —
+    # "Epoxy / Resinous Flooring Proposal - {{job_name}}" and its siblings —
+    # because Kyle's own example letter opens with one. Hanz took it off every
+    # format on 2026-09-04: the proposal stapled behind the letter says which
+    # system it is and whose job it is, on its own front page, and a heading that
+    # repeats it is a second place for the job name to go stale. The greeting is
+    # now the first line on the page.
+    #
+    # `spec["title"]` is deliberately LEFT IN the copy tables. It is the one
+    # human-readable name each variant has, it costs nothing, and putting it back
+    # is one `_add` call rather than seven rewritten dictionaries.
     _add(d, [_seg(spec.get("greeting", GREETING))])
     _add(d, [])
     _add(d, [_seg(spec.get("thanks", THANKS))])
@@ -777,7 +673,7 @@ def build(work_type: str, spec: dict, out_path: Path) -> None:
         _add(d, line, font=SIG_FONT, size=SIG_PT, color=SIG_GREY)
 
     d.save(str(out_path))
-    print("wrote %s (%d body paragraphs + 1 date box)"
+    print("wrote %s (%d body paragraphs, no text boxes)"
           % (out_path.relative_to(OUT_DIR).as_posix(), len(d.paragraphs)))
 
 
