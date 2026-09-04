@@ -124,17 +124,31 @@ def test_no_template_ships_a_box_off_the_paper():
 
 def test_every_template_puts_boxes_outside_the_printable_area():
     """Which is why the move bound is the sheet and not the printable area. Stated out loud
-    because "keep it inside the margins" is the obvious rule and it would refuse every drag."""
+    because "keep it inside the margins" is the obvious rule and it would refuse every drag.
+
+    A template with no boxes at all is not a counterexample — it simply has nothing to say about
+    where a box may be dragged. The seven cover letters became exactly that on 2026-09-04, when
+    the floating date box came off every format and left them pure flow. So boxless templates are
+    skipped, and the count of templates that DID speak is asserted afterwards: without that second
+    assertion the skip would quietly hollow this test out the day the last box disappeared."""
+    spoke = 0
     for path in sorted(TEMPLATES.rglob("*.docx")):
         d = docx.Document(str(path))
+        boxes = [b for b in pw.template_geometry(d)["boxes"] if b["x_pt"] is not None]
+        if not boxes:
+            continue
+        spoke += 1
         page = pw._page_metrics(d)
         m = page["margin"]
-        outside = [b["id"] for b in pw.template_geometry(d)["boxes"]
-                   if b["x_pt"] is not None and (
-                       b["x_pt"] < m["left"] or b["y_pt"] < m["top"]
+        outside = [b["id"] for b in boxes
+                   if (b["x_pt"] < m["left"] or b["y_pt"] < m["top"]
                        or b["x_pt"] + b["w_pt"] > page["w_pt"] - m["right"]
                        or b["y_pt"] + b["h_pt"] > page["h_pt"] - m["bottom"])]
         assert outside, "%s keeps every box inside the margins — re-read the bound" % path.name
+    assert spoke >= 9, (
+        "only %d templates still carry a box, so this test has stopped proving the bound. "
+        "If boxes are genuinely going away, delete the move bound too — don't leave a green "
+        "test standing over nothing." % spoke)
 
 
 # ── the move lands exactly where it was asked to ──────────────────────────
