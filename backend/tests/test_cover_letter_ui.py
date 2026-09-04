@@ -806,3 +806,470 @@ def test_ctrl_b_reaches_the_letter_too(ran):
     assert d["plainPrevented"] is False, (
         "a bare 'b' with no Ctrl was swallowed as a command — the estimator cannot type the "
         "letter b")
+
+
+# == only the label is bold ===================================================
+# Hanz, 2026-09-04, on the bulleted section of the letter: "Then on the bulleted. Only those words
+# before and including the colon should be default bold. The other details should not be. So,
+# material/system, area, schedule, options should be the only ones bold."
+#
+# He was looking at a rendering fault, not at the document. Kyle's templates already bold the label
+# run and leave the detail run plain. The editor had no way to show that: it drew every paragraph
+# from `b.text` alone, so the only weight available to it was the paragraph-level `tw-bold` class,
+# and `b.style.bold` is `any(r.bold for r in p.runs if r.bold is not None)` on the server -- true
+# the moment ONE run is bold. Every labelled line therefore reported itself as a wholly bold
+# PARAGRAPH, asked for that class, and got it.
+#
+# TWO FIXES, NEITHER OF ANY USE ALONE, which is why the readings below are split the way they are.
+# The renderer now emits the template's own run segments carrying their own weights, AND the
+# paragraph class became a run-less fallback. Leave the class on and every run that states no
+# weight of its own -- which is every plain detail -- inherits 700 from it again; drop the per-run
+# pass and there is nothing left to state a weight at all.
+#
+# THE FIXTURES ARE DUMPED FROM THE SHIPPED .docx, not agreed in prose: the harness header lists
+# which template and which block id each one came from, and the weights, slants, sizes, markers and
+# indents are transcribed from running the real `proposal_writer._block_runs` and `para_props` over
+# `backend/templates/CoverLetter/`. That dump also corrected the brief this was written from: "A few
+# things to note:" is not bold in any of the seven letters, and the wholly bold paragraph a careless
+# fix would flatten is the Combo system heading.
+
+
+def test_only_the_label_up_to_the_colon_is_bold_on_a_line(ran):
+    """The defect, in the words it was reported in, on the real Direct/Epoxy bullets.
+
+    Read as PAINTED TEXT rather than as spans (see `painted` in the harness): the failure mode is
+    text with no inline weight above it inheriting the paragraph class, so a reading that only
+    inspected the spans it could find would call this fixed while every detail half stayed bold."""
+    d = ran["labelBullets"]
+    assert d["bulletBold"] == ["Materials / System: "], (
+        "the bold part of the line is not the label alone, which is the fault as reported: %r"
+        % (d["bulletBold"],))
+    assert d["bulletPlain"] == ["Epoxy, orange-peel texture"], (
+        "the detail half is still being weighted; the paragraph is treated as one run again")
+    assert d["bulletCls"] is False, (
+        "the paragraph still carries tw-bold. Every detail run that states no weight of its own "
+        "inherits 700 from that class, so the per-run pass changes nothing an estimator can see")
+    assert d["areaBold"] == ["Area: "] and d["areaPlain"] == ["12,000 SF of warehouse"], (
+        "the Area line is still bold end to end")
+    assert d["optionsBold"] == ["Options: "], (
+        "the Options line's instruction half is still bold: %r" % (d["optionsBold"],))
+    assert d["bodyBold"] == [], (
+        "a body sentence with no bold run anywhere came out bold, so weight is arriving from "
+        "somewhere other than the runs")
+    assert d["footerBold"] == ["TREADWELL"] and d["footerPlain"] == [
+        " | 913.396.6216 | Olathe, KS"], (
+        "the signature footer is bold past the company name: %r" % (d["footerBold"],))
+
+
+def test_a_line_that_is_bold_all_through_stays_bold_all_through(ran):
+    """The other half of the same requirement, and the half a careless fix breaks.
+
+    Direct/Combo's system heading is one wholly bold run with no detail half and nothing to split;
+    the second fixture is the same heading after an edit has split its run in two, which is what
+    Word leaves behind. Both are bold in every character of the document. The change is "prefer
+    what the runs say", not "stop bolding paragraphs" -- a fix that only ever removed weight would
+    read as green on the labelled lines above and quietly flatten these instead."""
+    d = ran["labelBullets"]
+    assert d["headingBold"] == ["Epoxy / Resinous Flooring:"] and d["headingPlain"] == [], (
+        "the wholly bold system heading lost its weight; the class is being dropped without the "
+        "runs putting it back")
+    assert d["splitHeadingBold"] == ["Polished ", "Concrete:"] and d["splitHeadingPlain"] == [], (
+        "a heading Word had split into two runs came out half bold: %r" % (d["splitHeadingBold"],))
+
+
+def test_the_italic_instruction_half_is_italic_and_is_not_bolded_by_association(ran):
+    """Asked directly: does the bold bug have a sibling? It does not. There is no `.tw-italic` or
+    `.tw-underline` class anywhere in this repo -- neither editor has ever flattened those onto the
+    paragraph, so there was nothing of the same shape to fix.
+
+    Italic is pinned here because the per-run pass is where it reaches the screen for the first
+    time, and it is not hypothetical: Kyle italicises the bracketed instructions he leaves for the
+    estimator, so the Options line's whole detail half is italic in all seven templates and has
+    been rendering upright since the letter shipped. Underline goes through the identical line of
+    `clRunCss` and is already exercised by the estimator-press scenario; no template underlines
+    anything, so there is nothing real to pin it against here."""
+    d = ran["labelBullets"]
+    assert d["optionsItalic"] == ["[OPTIONS - keep the lines that apply]"], (
+        "the template's italic instruction is not italic on screen: %r" % (d["optionsItalic"],))
+    assert "[OPTIONS - keep the lines that apply]" not in d["optionsBold"], (
+        "the italic half was bolded as well -- the switches are being read off one another")
+
+
+def test_the_letter_does_not_restate_the_templates_own_point_size(ran):
+    """A DELIBERATE OMISSION, recorded so that it is not "fixed" later by accident.
+
+    Every run record carries a `size_pt` and the proposal's renderer emits it. This page must not.
+    It is a to-scale preview of a printed sheet registered against baked letterhead artwork, so a
+    point size is geometry -- and this is not theoretical: the templates really do mix an 11pt body
+    with a 10pt signature block, so restating them as inline CSS would visibly re-flow that footer.
+    Leaving it out costs nothing, because an absent size means "inherit the template's own" and
+    that is exactly what is happening. `clFmtAt` reads inline styles straight back, so emitting one
+    would also pin 11pt onto every run of the first paragraph anybody pressed a button on."""
+    assert ran["labelBullets"]["inlineSizes"] == [], (
+        "the letter emitted inline point sizes %r -- the 10pt footer will now re-flow against the "
+        "11pt body it has always been drawn with"
+        % (ran["labelBullets"]["inlineSizes"],))
+    d = ran["composeProperty"]
+    assert d["sizeBoxAfterAim"] == "", (
+        "the ribbon's size box filled itself in from the template's own runs, so the letter is "
+        "now claiming a size nobody chose -- and the next press will pin it")
+    assert d["pressedSizes"] == ["absent"], (
+        "a bold press pinned an explicit point size onto the paragraph: %r" % (d["pressedSizes"],))
+
+
+def test_drawing_the_runs_does_not_make_a_paragraph_look_edited(ran):
+    """The quiet way this change could have gone wrong.
+
+    `pristine` is still the flat token fill of `b.text`, and an edit is detected by comparing the
+    serialized DOM against it. A per-run render that disagreed with it by one character -- a lost
+    space at a run boundary, a stray newline from a wrapper element -- would mark every line of the
+    letter dirty, ship the whole template back as the estimator's own overrides, and pin wording
+    nobody typed into the revision the customer is sent."""
+    d = ran["labelBullets"]
+    assert d["bulletText"] == "Materials / System: Epoxy, orange-peel texture", (
+        "the per-run render does not spell the paragraph out the way the flat one did: %r"
+        % (d["bulletText"],))
+    assert d["virgin"] == 0, (
+        "an untouched letter is shipping overrides now that its runs are on screen")
+    assert d["dirty"] == 0, "%d paragraph(s) were marked edited merely by being drawn" % d["dirty"]
+
+
+# == a numbered line shows its number ========================================
+# The second live fault on the same two lines of the same function, found by a mapping pass and
+# then measured here rather than taken on trust. `b.list` only says the paragraph carries Word
+# numbering, which is true of a bulleted row and a numbered one alike -- so `if (b.list)
+# el.classList.add("tw-li")` drew a red Wingdings square in front of lines the customer's PDF
+# prints "1." to "4." on.
+#
+# MEASURED ACROSS ALL SEVEN FILES in backend/templates/CoverLetter, via proposal_writer.para_props:
+#
+#   Direct/Epoxy  [5-8]        marker 1. 2. 3. 4.   bullet=False locked=True ind 720 hanging 360
+#   Direct/Polish [5-8]        marker 1. 2. 3. 4.   same
+#   Direct/Combo  [6-9, 11-13] marker 1.-4. then 1.-3., restarting for the second system
+#   GC/Epoxy      [5-7]        marker 1. 2. 3.
+#   GC/Polish     [5-7]        marker 1. 2. 3.
+#   GC/Combo      [6-8, 10-12] marker 1.-3. twice
+#   Gyp/Gyp       [5-7]        marker 1. 2. 3.
+#
+# NOT ONE bulleted paragraph exists in any of them. So the square was not merely possible, it was
+# what every estimator has proofread on every letter since the feature shipped, on every labelled
+# line, while the file printed numbers.
+#
+# It is the same fault, the same fix and the same two classes as the proposal's 27 numbered Terms
+# clauses, which is recorded in the note above `.tw-block.tw-empty.tw-li::before` in styles.css:
+# "a numbered Terms clause was ALSO drawn as `.tw-li`, so emptying one hid its red square here
+# while Word printed a bare clause number."
+
+
+def test_a_numbered_line_shows_its_number_and_not_a_red_square(ran):
+    """What the estimator proofreads has to be what the customer receives. `.tw-li::before` is a
+    red Wingdings square; `.tw-num::before` prints `attr(data-marker)`, the number the level
+    actually prints, resolved server-side by `_para_marker` because `w:numFmt` says "decimal" while
+    it is the trailing period that makes it look like the document.
+
+    The markers here are the real ones, including Direct/Epoxy's "4." on the Options line -- so a
+    renderer that invented its own sequence, or that numbered from the position on screen, would
+    disagree with the file on any letter whose numbering restarts (Combo does, per system)."""
+    rows = {r["id"]: r for r in ran["labelBullets"]["lists"]}
+    for bid, marker in ((1, "1."), (2, "2."), (3, "4."), (6, "3.")):
+        r = rows[bid]
+        assert r["li"] is False, (
+            "block %d is still drawn as a red square while the .docx prints %r -- this is what "
+            "every estimator has been proofreading on every letter" % (bid, marker))
+        assert r["num"] is True, "block %d lost its list treatment altogether" % bid
+        assert r["marker"] == marker, (
+            "block %d carries marker %r, the file says %r. `.tw-num::before` renders the "
+            "attribute, so a wrong or missing one is a numbered line with the wrong number on it"
+            % (bid, r["marker"], marker))
+
+
+def test_a_paragraph_that_is_not_a_list_is_not_given_a_marker(ran):
+    """The other side of it, and the reason the branch reads `b.list && b.para && b.para.marker`
+    rather than just the marker: the system heading and the signature footer are ordinary
+    paragraphs. Numbering either of them would put a "1." in front of a heading."""
+    rows = {r["id"]: r for r in ran["labelBullets"]["lists"]}
+    for bid in (4, 7):
+        r = rows[bid]
+        assert r["num"] is False and r["li"] is False and r["marker"] is None, (
+            "block %d is not a list paragraph and was given list treatment anyway: %r" % (bid, r))
+
+
+def test_the_number_sits_at_the_levels_own_geometry(ran):
+    """`.tw-num`'s own `margin-left: 9pt; padding-left: 18pt` was measured off the PROPOSAL's Terms
+    level (`w:ind left=540 hanging=360`). The cover letters use `left=720 hanging=360`, so the
+    class alone would put every number and every line of text 9pt to the left of where the sheet
+    prints them. `applyGeom` writes the record's own numbers as INLINE styles, which outrank the
+    class -- and this is a to-scale preview of a printed page, so that is the difference between a
+    registered preview and a decorative one."""
+    g = ran["labelBullets"]["numGeom"]
+    assert g == {"ml": "18pt", "pl": "18pt"}, (
+        "the numbered line is not at the template's own indent (left 720, hanging 360 twips = "
+        "18pt margin + 18pt padding): %r" % (g,))
+
+
+def test_the_red_square_is_still_there_for_a_line_that_really_is_a_bullet(ran):
+    """The fix must not become the opposite bug. No cover-letter template contains a bullet today,
+    but the branch stays: a list level whose definition cannot be read reports no marker, and a
+    square is the best guess left for a line we know is a list and cannot number."""
+    r = ran["runGuards"]["realBullet"]
+    assert r["li"] is True and r["num"] is False and r["marker"] is None, (
+        "a genuine Word bullet no longer draws a square: %r" % (r,))
+
+
+def test_a_replay_does_not_take_the_number_off_the_line(ran):
+    """`restoreSaved` rewrites a paragraph's children -- `clRenderRuns` or `textContent`. The list
+    treatment is a class and a data attribute on the paragraph ITSELF, so it has to survive that,
+    and the neighbouring lines have to keep their own numbers while one of them is replayed."""
+    d = ran["savedRunsOverRuns"]
+    assert d["neighbourList"] == {"num": True, "li": False, "list": False, "marker": "1."}, (
+        "replaying one paragraph's override changed another paragraph's number: %r"
+        % (d["neighbourList"],))
+
+
+def test_run_records_that_cannot_be_trusted_fall_back_with_their_class_intact(ran):
+    """Rendering a paragraph one run at a time is only safe while the runs describe the paragraph,
+    and `_block_runs` states two invariants for exactly that reason -- the first of which it asks
+    the frontend by name to verify, because hyperlink runs are not direct `w:r` children and the
+    walk that built the segments then saw less text than the paragraph has.
+
+    Such a paragraph goes back down the flat walk, and the paragraph class has to come BACK with
+    it: a guard that refused the runs and dropped the class as well would leave those lines with no
+    weight at all, which is the fix overshooting into a new bug."""
+    d = ran["runGuards"]
+    assert d["unjoinableCls"] is True, (
+        "runs that do not rejoin to the text were used anyway, or the class was dropped without "
+        "them -- either way this paragraph has lost the only weight available to it")
+    assert d["unjoinableBold"] == ["Terms: see our website for the full conditions."], (
+        "the flat fallback no longer paints the whole paragraph, so a paragraph whose runs cannot "
+        "be trusted now shows no bold at all")
+    assert d["unjoinableText"] == "Terms: see our website for the full conditions.", (
+        "the fallback dropped text: the runs covered only part of the paragraph and the render "
+        "followed them instead of `b.text`")
+
+
+def test_a_token_split_across_two_runs_still_shows_its_value(ran):
+    """The one new way a per-run render can fail, and it is a fault Hanz has reported once already.
+
+    Filling tokens a run at a time means a `{{token}}` cut in half matches in neither half and
+    prints its own braces at the estimator -- "nothing on the cover letter was substituted", which
+    is what scenario twelve exists for. The backend promises this cannot happen (`_block_runs`
+    invariant 2: every token is its own segment) and a promise worth leaning on is worth checking,
+    so such a paragraph is sent flat. The value lands and only the per-run weights are lost, which
+    is much the better half to lose."""
+    d = ran["runGuards"]
+    assert "{{" not in d["straddledText"], (
+        "a token split across two runs printed raw at the estimator: %r" % (d["straddledText"],))
+    assert d["straddledText"] == "Bid for Olathe Fire Station 4 today.", (
+        "the straddled token did not resolve to its value")
+    assert d["straddledToken"] == "job_name", (
+        "the value is on screen but not marked as a fill, so an estimate value reads as typing")
+    assert d["straddledCls"] is True, (
+        "the paragraph went flat and lost its class with it, so it has no weight at all now")
+
+
+def test_a_token_inside_a_longer_run_is_still_marked_as_a_value(ran):
+    """Invariant 2 broken WITHOUT a straddle -- a token sitting inside a longer run. That paragraph
+    is still usable, so it keeps its per-run weights, which is why every run goes through the same
+    token walk the flat path uses rather than being tested for BEING a whole token. Test for the
+    whole token instead and the yellow fill disappears in precisely the paragraphs where the
+    backend's promise slipped."""
+    d = ran["runGuards"]
+    assert d["innerBold"] == ["Attn:"] and d["innerCls"] is False, (
+        "a paragraph with a token inside a longer run lost its per-run weights")
+    assert d["innerToken"] == "job_name", (
+        "the token inside the run was not filled or not marked: %r" % (d["innerText"],))
+    assert d["innerText"] == "Attn: Olathe Fire Station 4 team"
+    assert ran["labelBullets"]["bulletToken"] == "cover_system_line", (
+        "the fill on the label line did not survive being rendered a run at a time either")
+
+
+# == who gets the last word on the label =====================================
+# The backend grew a label-split of its own for the same complaint: handed a PLAIN-TEXT override it
+# bolds the label and leaves the details alone. That is what rescues a draft saved before this fix,
+# and what the portal's server-side replay of a pinned revision goes through. It stands aside the
+# moment an override carries `runs`, because an explicit press by the estimator has to outrank a
+# guess about where a label ends.
+#
+# So the risk in rendering runs was never the rendering. It is what `collect()` reads back
+# afterwards: `clFmtAt` measures inline styles, and the template's own `font-weight:700` is now one
+# of them. Had a paragraph nobody touched serialised its runs, every letter in the product would
+# quietly have become an explicit-runs override and the backend's safety net would have been
+# switched off for everybody -- a fix for the screen that breaks the print.
+
+
+def test_a_paragraph_nobody_formatted_still_saves_as_plain_text(ran):
+    """THE PROPERTY THIS WHOLE CHANGE HANGS ON.
+
+    `collect()` reads runs only from a block carrying `tw-fmt`, and only a real press
+    (`clApplyFormat`) or the replay of an override that already had runs (`restoreSaved`) ever sets
+    it. So a line the estimator merely retyped saves `{text}` and nothing else, and the backend
+    still splits its label.
+
+    A `runs` key in this reading is the regression, and it would be invisible in the editor: the
+    letter would look right on screen and print with no bold label at all."""
+    d = ran["composeProperty"]
+    assert d["untouched"] == 0, (
+        "an untouched letter shipped overrides the moment its runs went on screen -- the version "
+        "gate and the whole 'a letter nobody edited carries nothing' promise are gone")
+    assert d["retypedKeys"] == ["text"], (
+        "a retyped paragraph now saves %r. The backend's label split stands aside whenever an "
+        "override carries runs, so this line would print with no bold label at all"
+        % (d["retypedKeys"],))
+    assert d["retypedText"] == "Area: 14,500 SF", "the retyped wording is not what was saved"
+
+
+def test_a_press_is_what_opts_one_paragraph_into_explicit_runs(ran):
+    """The other side of it. The estimator's own press has to reach the document and has to outrank
+    the backend's guess -- and it does that for the paragraph they pressed on, not for the letter.
+    `touched` is the whole store, so a press leaking into its neighbours shows up here."""
+    d = ran["composeProperty"]
+    assert d["pressedKeys"] == ["runs", "text"], (
+        "a formatting press did not save runs, so it never reaches the .docx: %r"
+        % (d["pressedKeys"],))
+    assert d["pressedRuns"] == [
+        {"t": "Materials / System: Epoxy, orange-peel texture", "b": True}], (
+        "the saved runs do not spell the pressed paragraph back out: %r" % (d["pressedRuns"],))
+    assert d["touched"] == ["1", "2"], (
+        "the store holds %r -- a press or a retype reached a paragraph nobody was on"
+        % (d["touched"],))
+
+
+def test_a_retyped_line_comes_back_unformatted_and_that_is_the_deliberate_answer(ran):
+    """RECORDED, NOT ASSERTED AWAY, because it is the one place the two halves of this fix disagree.
+
+    `restoreSaved` replays a text-only override as `textContent`, which carries no formatting at
+    all. So a line the estimator retyped comes back with no bold label on screen tomorrow, while
+    the generated .docx bolds it through the backend's split -- the editor and the print disagreeing
+    about that one paragraph.
+
+    It is the lesser of the two available wrongs. Before this change the same paragraph came back
+    bold from end to end, which is further from what was asked for. The only way to make the screen
+    agree would be to re-split the label in the browser, and that is a second copy of a rule the
+    backend already owns: the next person to change where a label ends would change one of the two.
+    If the screen has to agree, the answer is for the editor to render what the backend would
+    produce -- asked for once, from one place -- not for both of them to guess separately."""
+    d = ran["composeProperty"]["retypedOnReload"]
+    assert d["cls"] is False and d["bold"] == [], (
+        "a retyped line came back bold end to end, which is the fault this change was for")
+    assert d["plain"] == ["Area: 14,500 SF"], (
+        "the retyped wording did not come back at all: %r" % (d["plain"],))
+
+
+def test_ctrl_b_on_a_labelled_line_bolds_all_of_it_and_a_second_press_undoes_it(ran):
+    """A press on a labelled line is the first press this editor has ever had MIXED runs underneath,
+    and that changes what it does: `summarize` reports `undefined` for a part-bold selection and
+    `nextToggle` turns THAT on, so Ctrl+B bolds the whole line rather than un-bolding the label.
+    That is the right answer -- dragging across a partly bold line and watching it go plain is the
+    classic word-processor annoyance -- and it is newly reachable, so it is pinned.
+
+    The second press is the one that catches a re-render stealing the caret. `clApplyFormat`
+    rewrites the paragraph's innerHTML, which destroys every text node the caret could have been
+    sitting in; what keeps the ribbon aimed is that the BLOCK element is never replaced, only its
+    children, so `clTargetBlock()` still names a paragraph the surface contains. No click-only test
+    reaches for this, and this repo has already had a re-render steal the focus somebody had just
+    tabbed into."""
+    d = ran["keyboardOnALabelBullet"]
+    assert d["prevented"] is True, (
+        "the letter let the browser have Ctrl+B, which writes a raw tag the collector cannot see")
+    assert d["firstRuns"] == [
+        {"t": "Materials / System: Epoxy, orange-peel texture", "b": True}], (
+        "Ctrl+B on a part-bold line did not bold the whole line: %r" % (d["firstRuns"],))
+    assert d["wholeLineBold"] is True, "the line is saved bold but does not paint bold"
+    assert d["textAfter"] == "Materials / System: Epoxy, orange-peel texture", (
+        "the keyboard press rewrote the wording as well as the weight")
+    assert d["fillSurvived"] == "cover_system_line", "the press destroyed the token fill"
+    assert d["secondPrevented"] is True and d["secondRuns"] == [
+        {"t": "Materials / System: Epoxy, orange-peel texture", "b": False}], (
+        "the second Ctrl+B did not land: the first press rewrote the paragraph's children and the "
+        "ribbon lost its aim with them, so the estimator cannot undo what they just did")
+    assert d["sameElement"] is True, (
+        "the press replaced the paragraph element rather than its children -- the caret, the "
+        "ribbon's target and every listener on it go with it")
+    assert d["ids"] == ["1"], "the keyboard press reached more than the paragraph it was aimed at"
+
+
+def test_a_saved_format_still_beats_the_templates_own_runs(ran):
+    """`false` is not absent, now tested against a template that really does say bold.
+
+    The estimator turned Direct/Combo's wholly bold system heading off. On the next visit the
+    paragraph renders its template runs FIRST and the saved override goes over the top, so what
+    shows is what they chose. A replay that lost to the template would silently undo that edit
+    every single time the page was opened, and the estimator would have no way to make it stick."""
+    d = ran["savedRunsOverRuns"]
+    assert d["storedRuns"] == [{"t": "Epoxy / Resinous Flooring:", "b": False}], (
+        "turning a bold template line off did not save bold=false: %r" % (d["storedRuns"],))
+    assert d["replayedBold"] == [] and d["replayedPlain"] == ["Epoxy / Resinous Flooring:"], (
+        "the template's own bold run won on reload and undid the estimator's edit")
+    assert d["replayedFmtClass"] is True, (
+        "the replayed paragraph is not marked format-edited, so the NEXT collect() drops it and "
+        "the edit survives one visit and vanishes on the one after")
+    assert d["recollected"] == [False]
+    assert d["neighbourBold"] == ["Materials / System: "], (
+        "replaying one paragraph's override changed the weights of another")
+
+
+def test_the_two_classes_the_harness_models_are_still_the_rules_in_the_stylesheet():
+    """The one thing an executed DOM test cannot see, and it would fail silently.
+
+    The harness's `painted` reader resolves any text with no inline weight above it to
+    `.tw-block.tw-bold`, because that is the cascade the whole defect lived in. It models that rule
+    as `font-weight: 700` with no `!important`, which is what lets a run's own inline weight
+    outrank it. Add `!important` to that one rule and every assertion above stays green while every
+    detail half of every labelled line goes bold again in the browser.
+
+    `.tw-num::before` is the other half: `listLook` reports the class and the `data-marker`
+    attribute, and it is the CSS that turns that attribute into a visible number. A `.tw-num` with
+    no `content: attr(data-marker)` behind it is a numbered line with nothing in front of it, and
+    no DOM reading can tell."""
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    bold = re.search(r"\.tw-block\.tw-bold\s*\{([^}]*)\}", css)
+    assert bold, ("`.tw-block.tw-bold` is gone from styles.css. The cover letter's run-less "
+                  "fallback now paints nothing, and the harness models a rule that is not there")
+    assert "font-weight" in bold.group(1), "the paragraph fallback rule no longer sets a weight"
+    assert "!important" not in bold.group(1), (
+        "the paragraph class is now !important, so a run's own inline font-weight can no longer "
+        "override it -- every detail half of every labelled line is bold again")
+    num = re.search(r"\.tw-num::before\s*\{([^}]*)\}", css)
+    assert num, "`.tw-num::before` is gone, so a numbered line now shows no number at all"
+    assert "attr(data-marker)" in num.group(1), (
+        "`.tw-num::before` no longer prints the data-marker attribute the renderer sets, so the "
+        "number the .docx prints is not the number on screen")
+
+
+def test_an_emptied_numbered_line_keeps_its_number_and_is_not_put_back(ran):
+    """The `locked` question, answered by execution rather than by reading the source.
+
+    `para.locked` is true on every labelled line in all seven templates, and this editor reads it
+    nowhere. That is correct, not an oversight: the only thing `locked` refuses in the proposal is a
+    press on the bullet/indent controls, and `clRenderFmtBar` hides the whole `[data-para]` group
+    whenever the letter is on stage -- both readings below -- so no control exists here that could
+    drop a line's numbering. Nothing to gate.
+
+    What the proposal ALSO does with a numbered paragraph is refuse to let it be emptied
+    (`restoreEmptiedClause`), because Word prints a bare clause number into a signed contract. The
+    letter must not copy that: its Options line literally reads "keep the lines that apply", so
+    deleting one the job does not need is a thing the estimator is meant to do, and putting the
+    wording back would be answering another document's problem.
+
+    THE REMAINDER IS REAL AND IS RECORDED HERE, NOT HIDDEN: an emptied numbered line keeps its
+    number, on screen and in the .docx, so the file prints "4." with nothing after it.
+    `.tw-block.tw-empty.tw-li::before` drops the red square for an emptied BULLET and there is no
+    `.tw-num` equivalent -- which, now that these lines render as numbers, means the estimator sees
+    exactly the bare number the file prints. Before this change the square vanished on screen and
+    gave a false all-clear. Making the number go away as well would need the numbering stripped in
+    `proposal_writer` on a blank override, the way `_strip_bullet` already does it for bullets;
+    that is a backend change and it is raised, not built."""
+    d = ran["emptiedNumberedLine"]
+    assert d["empty"] is True and d["dirty"] is True, (
+        "emptying a line was not registered as an edit at all")
+    assert d["text"] == "", (
+        "the wording was put back. That is the proposal's rule for a numbered Terms clause and it "
+        "is the wrong answer here -- an Options line the job does not need must be deletable")
+    assert d["saved"] == {"text": ""}, (
+        "an emptied line did not save as empty text: %r" % (d["saved"],))
+    assert d["list"] == {"num": True, "li": False, "list": False, "marker": "4."}, (
+        "the emptied line lost its number on screen while the .docx still prints one -- the screen "
+        "would be giving a false all-clear again: %r" % (d["list"],))
+    assert d["paraControlsHidden"] == "hidden" and d["paraControlsDisabled"] is True, (
+        "the bullet/indent controls are reachable on the letter, so `locked` now has something to "
+        "refuse and nothing is reading it")
