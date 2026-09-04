@@ -32,6 +32,12 @@ const FRONTEND = process.argv[2];
 // shipped source, which is the one thing a harness must never allow.
 const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const CL_SRC = read(path.join(FRONTEND, "js", "coverletter-editor.js"));
+/* The shared run maths. coverletter-editor.js reads it as `window.TWFmt` and, when it is absent,
+ * every formatting press becomes a silent no-op -- the ribbon still lights up and nothing happens,
+ * which is precisely the bug under test in scenario 13. proposal-review.html loads this first
+ * (`:811`, before `:817`), so the harness has to as well or it would "prove" the fix on a page
+ * that could not work. */
+const FMT_SRC = read(path.join(FRONTEND, "js", "proposal-format-core.js"));
 const PR_SRC = read(path.join(FRONTEND, "js", "proposal-review.js"));
 
 function liftFn(src, name, where) {
@@ -198,24 +204,67 @@ class El {
   contains(other) { let el = other; while (el) { if (el === this) return true; el = el.parentNode; } return false; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return this.attrs[k] === undefined ? null : this.attrs[k]; }
-  addEventListener(type, f) { (this._listeners[type] = this._listeners[type] || []).push(f); }
+  /* A REAL capture-then-bubble walk, honouring stopPropagation. Both halves are load-bearing:
+   * the cover-letter interceptor sits on `#fmt-ribbon`, which is the PARENT of the formatting row
+   * AND of the document tabs, and it works by catching a press on the way DOWN, before the
+   * proposal's own handlers on the row. A harness that only bubbles runs those handlers first and
+   * can never see the difference; a harness whose stopPropagation is a no-op can never see an
+   * over-broad interceptor eat the Proposal | Cover letter tab click. Both are real bugs this
+   * file exists to catch, so the walk has to be real. */
+  addEventListener(type, f, capture) {
+    const k = capture === true || (capture && capture.capture === true) ? "!" + type : type;
+    (this._listeners[k] = this._listeners[k] || []).push(f);
+  }
   dispatchEvent(e) {
-    let cur = this;
     e.target = this;
-    while (cur) { for (const f of (cur._listeners[e.type] || []).slice()) f(e); cur = cur.parentNode; }
+    const path = [];
+    for (let cur = this; cur; cur = cur.parentNode) path.push(cur);
+    // Down the tree first, outermost node inward, then back out again. stopPropagation ends the
+    // walk after the CURRENT node's listeners have all run, not part-way through them.
+    const fire = (node, key) => {
+      for (const f of (node._listeners[key] || []).slice()) f(e);
+      return !e._stopped;
+    };
+    for (let i = path.length - 1; i >= 0; i--) if (!fire(path[i], "!" + e.type)) return true;
+    for (let i = 0; i < path.length; i++) if (!fire(path[i], e.type)) return true;
     return true;
   }
 }
 
 class Ev {
-  constructor(type, opts) { this.type = String(type); this.bubbles = !!(opts && opts.bubbles); this.target = null; }
+  // `preventDefault` and `stopPropagation` are no-ops that must EXIST: the ribbon interceptor
+  // calls both on every press it takes, so an Ev without them throws a TypeError inside the
+  // handler and the press looks like it was ignored -- which is the very bug under test.
+  constructor(type, opts) {
+    this.type = String(type);
+    this.bubbles = !!(opts && opts.bubbles);
+    this.target = null;
+    this.defaultPrevented = false;
+    this.key = (opts && opts.key) || undefined;
+    this.ctrlKey = !!(opts && opts.ctrlKey);
+    this.metaKey = !!(opts && opts.metaKey);
+    this.altKey = !!(opts && opts.altKey);
+  }
+  preventDefault() { this.defaultPrevented = true; }
+  // Honoured for real by dispatchEvent above: a handler that calls this ends the walk, so an
+  // over-broad interceptor really does swallow the click it should have left alone.
+  stopPropagation() { this._stopped = true; }
 }
 
 // ── the fixtures ─────────────────────────────────────────────────────────────
-/* A cover letter as the endpoint describes it: the DATE anchored in its own text box over the
- * letterhead artwork (block 0, txbx 0), the body flowing beneath (blocks 1..3). This is Kyle's
- * real shape — `docs/Cover Letter/Treadwell Cover Letter - Example1.docx` carries exactly one
- * anchored box and it holds the date. */
+/* A letter with the DATE anchored in its own text box over the letterhead artwork (block 0,
+ * txbx 0), the body flowing beneath (blocks 1..3).
+ *
+ * THIS IS NO LONGER A SHAPE THE ENDPOINT SERVES. It was Kyle's — his example letter floats the
+ * date in one anchored box — and the seven templates copied it verbatim until 2026-09-04, when
+ * Hanz asked for the date off every format. Removing it took the only text box out of the
+ * letters, so `describe_template` now returns `boxes: []` for all seven (asserted at the file by
+ * `test_cover_letter::test_a_letter_is_pure_flow_with_no_floating_box`).
+ *
+ * It is kept, and kept as the default, on purpose: the editor's box branch is still live code,
+ * and it is the branch a template REGAINS the moment Kyle's letterhead changes or a box is added
+ * back. Deleting the fixture would delete the only coverage of it — including the z-order bug
+ * below, which only a click found. `GEO_FLOW` + `BODY` is the shape a real letter has today. */
 const DATE_BLOCK = { id: 0, text: "{{proposal_date}}", txbx: 0, in_txbx: true, in_block: null,
                      style: { name: null, bold: false }, align: null, list: false, para: null, runs: [] };
 const BODY = [
@@ -231,8 +280,10 @@ const PAGE = { w_pt: 612, h_pt: 792, margin: { top: 72, left: 90, right: 90, bot
 const ART = [{ name: "image1.png", para_index: 0, x_pt: 0, y_pt: 0, w_pt: 612, h_pt: 792 }];
 
 const GEO_POSITIONED = { page: PAGE, images: ART, boxes: [{ id: 0, x_pt: 396, y_pt: 158.4, w_pt: 144, h_pt: 18 }] };
-// What the endpoint served BEFORE the date box was baked into the templates: a letter with no
-// boxes at all. Still a first-class layout, not a failure mode.
+// A letter with no boxes at all — which is what every one of the seven templates is since
+// 2026-09-04. Still a first-class layout, not a failure mode: see
+// `test_a_template_with_no_boxes_is_a_layout_and_not_a_failure`, which is now the scenario that
+// matches production rather than a defensive edge case.
 const GEO_FLOW = { page: PAGE, images: ART, boxes: [] };
 
 const TOKENS = { proposal_date: "8/26/26", job_name: "Olathe Fire Station 4" };
@@ -257,6 +308,15 @@ function makePage(seed, opts) {
   doc.body = new El("body", doc);
   doc.body._isRoot = true;
   doc.querySelectorAll = (sel) => doc.body.querySelectorAll(sel);
+  doc.querySelector = (sel) => doc.body.querySelector(sel);
+  doc.createTextNode = (v) => new Text(v);
+  // A Range that can be built and set but NOT cloned, on purpose. `clSelectionRange` measures a
+  // real selection by cloning the live range and dropping two marker characters at its ends; a
+  // fake DOM cannot honestly do that, so the honest thing is to let it throw inside its own try
+  // and come back null. That is the collapsed-caret path -- "the caret is resting in this line,
+  // so the press means the whole line" -- which is what an estimator who clicks and presses B
+  // actually does, and it is the path a stubbed-out cloneRange would quietly skip.
+  doc.createRange = () => ({ setStart: () => {}, setEnd: () => {} });
 
   // The three elements the page provides. Real, and mounted in the body, so `isConnected` and
   // the class toggles mean what they mean in the browser.
@@ -264,7 +324,16 @@ function makePage(seed, opts) {
   const docSurface = mk("doc-surface");
   const surface = mk("cl-surface");
   surface.classList.add("cl-offstage");
-  const tabs = mk("doc-tabs");
+  // #fmt-ribbon is the HOST: the formatting row AND the Proposal | Cover letter tabs both live
+  // inside it. That containment is the whole reason the letter can intercept presses on the host
+  // -- and the whole reason the interceptor has to scope itself to `.tw-fmtbar`, because an
+  // unscoped one would swallow the tab clicks and strand the estimator on one document. Both
+  // halves are only testable if the tabs really are children of the ribbon here.
+  const ribbon = mk("fmt-ribbon");
+  const tabs = new El("div", doc);
+  tabs.attrs.id = "doc-tabs";
+  byId.set("doc-tabs", tabs);
+  ribbon.appendChild(tabs);
   tabs.hidden = true;
   const proposalTab = new El("button", doc);
   proposalTab.className = "tab active";
@@ -277,12 +346,48 @@ function makePage(seed, opts) {
   const toggle = mk("cl-toggle", "input");
   toggle.type = "checkbox";
   toggle.checked = false;
+  // The formatting row itself, in the state the proposal leaves it in the moment it lets go of
+  // its paragraph: idle, and every control DISABLED. That disabled flag is not decoration -- a
+  // disabled button dispatches no click at all, so interception alone could never have fixed
+  // this. Starting them enabled here would hide exactly the half that was missing.
+  const fmtBar = new El("div", doc);
+  fmtBar.className = "tw-fmtbar tw-fmtbar-idle";
+  const fmtButtons = {};
+  ["bold", "italic", "underline", "reset"].forEach((k) => {
+    const b = new El("button", doc);
+    b.dataset.fmt = k;
+    b.disabled = true;
+    fmtBar.appendChild(b);
+    fmtButtons[k] = b;
+  });
+  const sizeBox = new El("input", doc);
+  sizeBox.dataset.fmt = "size";
+  sizeBox.disabled = true;
+  sizeBox.value = "";
+  fmtBar.appendChild(sizeBox);
+  // A paragraph control, which a cover-letter block has no equivalent of. It must end up hidden
+  // rather than enabled-and-inert.
+  const paraBtn = new El("button", doc);
+  paraBtn.dataset.para = "bullet";
+  fmtBar.appendChild(paraBtn);
+  ribbon.appendChild(fmtBar);
+
+  // The caret, as a text node. `null` means "nothing selected anywhere", which is what the page
+  // looks like before anyone has clicked into a paragraph.
+  let caret = null;
 
   const win = {
     Node, console, JSON, Promise, Map, Set, Array, Object, String, Number, Boolean, Error,
     RegExp, Date, Math, FileReader: null,
     document: doc,
     Event: Ev,
+    // Deliberately WITHOUT cloneRange -- see doc.createRange above.
+    getSelection: () => ({
+      rangeCount: caret ? 1 : 0,
+      getRangeAt: () => ({ startContainer: caret, endContainer: caret }),
+      removeAllRanges: () => {},
+      addRange: () => {},
+    }),
     setTimeout: (f, ms) => { const id = nextTimer++; timers.set(id, f); return id; },
     clearTimeout: (id) => { timers.delete(id); },
     // The draft store. getState hands back a COPY and setState merges into the store without
@@ -346,6 +451,7 @@ function makePage(seed, opts) {
   win.window = win;
   win.globalThis = win;
   vm.createContext(win);
+  vm.runInContext(FMT_SRC, win, { filename: "proposal-format-core.js" });
   vm.runInContext(CL_SRC, win, { filename: "coverletter-editor.js" });
 
   const flushMicro = async () => {
@@ -373,6 +479,43 @@ function makePage(seed, opts) {
       el.textContent = text;
       el.dispatchEvent(new Ev("input", { bubbles: true }));
       return el;
+    },
+    ribbon, fmtBar, fmtButtons, sizeBox, paraBtn,
+    /** Put the caret in a paragraph the way a click does, and let the page hear about it. There
+     *  is no focus event to lean on here: the editing host is the page, not the paragraph, so
+     *  `selectionchange` is the only signal that the ribbon should re-aim. */
+    caretIn(id) {
+      const el = surface.querySelector('.tw-block[data-id="' + id + '"]');
+      if (!el) throw new Error("no block " + id + " on screen");
+      const firstText = (n) => {
+        for (const c of n.childNodes) {
+          if (c.nodeType === Node.TEXT_NODE) return c;
+          const deep = firstText(c);
+          if (deep) return deep;
+        }
+        return null;
+      };
+      caret = firstText(el);
+      if (!caret) { caret = new Text(""); el.appendChild(caret); }
+      (doc._listeners.selectionchange || []).slice().forEach((f) => f());
+      return el;
+    },
+    /** Press one ribbon button, from the button, so the whole listener chain runs. */
+    press(key) {
+      fmtButtons[key].dispatchEvent(new Ev("click", { bubbles: true }));
+    },
+    /** The same request made with the keyboard, from the surface, where the letter listens.
+     *  Returns the event so the caller can read whether the default was prevented -- an unhandled
+     *  Ctrl+B is not inert in a contenteditable, it is the browser applying its OWN bold. */
+    key(k, opts) {
+      const e = new Ev("keydown", Object.assign({ bubbles: true, ctrlKey: true, key: k }, opts || {}));
+      surface.dispatchEvent(e);
+      return e;
+    },
+    /** Is a block's stored override formatted, and how? Reads what collect() actually emits. */
+    override(id) {
+      const all = win.TWCoverLetter.collect();
+      return all[String(id)] || null;
     },
     look(id) {
       const el = surface.querySelector('.tw-block[data-id="' + id + '"]');
@@ -716,6 +859,200 @@ const out = {};
     out.resolverGetsTheDraft = {
       jobNameBlock: block ? block.text : null,
       stillRaw: block ? block.text.indexOf("{{") >= 0 : null,
+    };
+  }
+
+  // == 13 - Bold, Italic, Underline actually apply to the LETTER =============
+  /* THE BUG HANZ REPORTED, executed: "These options to edit the text to make it bold does not
+   * apply." Three independent things had to be true for a press to reach a cover-letter
+   * paragraph, and all three are asserted here rather than read out of the source:
+   *
+   *   1. the ribbon must be AIMED at a letter paragraph -- switching to the letter hands the bar
+   *      back to the proposal, which aims it at nothing;
+   *   2. the buttons must be RE-ENABLED, because a disabled button dispatches no click at all,
+   *      so interception on its own could never have fixed this;
+   *   3. collect() must be able to SEE a format-only edit -- bolding a word changes no
+   *      character, so a reader that compares text alone finds nothing to save and the press
+   *      vanishes on the way out.
+   *
+   * Block 2 is the one under test on purpose: it carries a {{job_name}} fill in the middle of
+   * its sentence, so it also proves a press does not destroy the token highlighting. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" }, { geometry: GEO_FLOW, blocks: BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    const virgin = Object.keys(p.CL().collect()).length;   // an untouched letter ships nothing
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    const disabledBeforeAim = p.fmtButtons.bold.disabled;
+    const el = p.caretIn(2);
+    const textBefore = el.textContent;
+    const disabledAfterAim = p.fmtButtons.bold.disabled;
+    /* `disabledAfterAim` is the ONLY assertion that can see the re-enable, and it has to be
+     * asserted on its own rather than inferred from the press landing. This fake DOM dispatches a
+     * click from a disabled button; a real browser does not. So deleting the re-enable line leaves
+     * every other reading here green and breaks the feature completely in the product. */
+
+    p.press("bold");
+    const bolded = p.override(2);
+    const boldFill = el.querySelector(".tw-fill");
+    const pressedAfterBold = p.fmtButtons.bold.getAttribute("aria-pressed");
+    const fmtAfterBold = el.classList.contains("tw-fmt");
+    const dirtyAfterBold = el.classList.contains("tw-dirty");
+    const textAfterBold = el.textContent;
+
+    p.press("bold");                                       // ...and off again
+    const unbolded = p.override(2);
+
+    p.press("reset");                                      // back to what the template says
+    const afterReset = p.override(2);
+
+    out.boldApplies = {
+      virgin: virgin,
+      disabledBeforeAim: disabledBeforeAim,
+      disabledAfterAim: disabledAfterAim,
+      // The tabs live inside #fmt-ribbon, so an unscoped interceptor would have eaten that click
+      // and left us on the proposal. Reaching the letter at all is the assertion.
+      onCover: p.surface.classList.contains("cl-offstage") === false,
+      paraHidden: p.paraBtn.style.visibility,
+      pressedAfterBold: pressedAfterBold,
+      // ...and back to false once Reset has put the paragraph back to the template's own runs.
+      pressedAfterReset: p.fmtButtons.bold.getAttribute("aria-pressed"),
+      fmtClass: fmtAfterBold,
+      dirty: dirtyAfterBold,
+      textUnchanged: textAfterBold === textBefore,
+      fillSurvived: !!boldFill,
+      fillToken: boldFill ? boldFill.attrs["data-token"] : null,
+      boldSaved: bolded ? bolded.runs.map((r) => r.bold) : null,
+      boldText: bolded ? bolded.runs.map((r) => r.text).join("") : null,
+      // `false` is not the same as absent. Absent means "inherit the template's own run"; false
+      // means the estimator turned it off and the .docx has to say so out loud.
+      unboldSaved: unbolded ? unbolded.runs.map((r) => r.bold) : null,
+      // Reset is the only thing that puts a paragraph back to carrying no override at all, which
+      // is what keeps "an untouched letter ships nothing" true after a press-and-undo.
+      afterReset: afterReset,
+    };
+  }
+
+  // == 14 - italic, underline and a typed size, and the guard that scopes them ==========
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" }, { geometry: GEO_FLOW, blocks: BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    p.caretIn(3);
+    p.press("italic");
+    p.press("underline");
+    const both = p.override(3);
+    p.sizeBox.value = "14";
+    p.sizeBox.dispatchEvent(new Ev("change", { bubbles: true }));
+    const sized = p.override(3);
+
+    /* Back to the proposal. TWO separate things have to happen here and each has its own reading
+     * below, because the ribbon interceptor sits on `#fmt-ribbon` -- the PARENT of both the
+     * formatting row and the document tabs -- and takes presses in the CAPTURE phase.
+     *
+     * The dangerous click is this one, not the one that opened the letter. Going TO the letter,
+     * `activeTab` is still "proposal" and the interceptor returns on its first line. Coming BACK,
+     * `activeTab` is "cover", so the interceptor runs -- and if it called stopPropagation before
+     * checking that the press was a `button[data-fmt]` inside `.tw-fmtbar`, it would swallow the
+     * estimator's own tab click and strand them on the letter with no way out. */
+    let proposalHeard = 0;
+    p.fmtBar.addEventListener("click", () => { proposalHeard++; });
+    p.proposalTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    const backOnProposal = p.surface.classList.contains("cl-offstage");
+    p.press("bold");
+    const afterSwitchAway = p.override(3);
+
+    out.italicUnderlineSize = {
+      italic: both ? both.runs.map((r) => r.italic) : null,
+      underline: both ? both.runs.map((r) => r.underline) : null,
+      size: sized ? sized.runs.map((r) => r.size_pt) : null,
+      boxValue: p.sizeBox.value,
+      // Identical to `sized`: the press on the proposal tab must have changed nothing here.
+      boldLeakedIn: afterSwitchAway ? afterSwitchAway.runs.some((r) => r.bold === true) : null,
+      // The estimator got out of the letter. False means the tab click was eaten on the way down.
+      backOnProposal: backOnProposal,
+      // ...and the proposal's own bubble-phase handler still hears its own presses. The letter
+      // going quiet is only half the requirement; the interceptor also has to stop INTERCEPTING,
+      // or bold would be dead on the proposal for the rest of the session.
+      proposalHeard: proposalHeard,
+    };
+  }
+
+  // == 15 - a saved format comes BACK, and survives a reload =================
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" }, { geometry: GEO_FLOW, blocks: BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    p.caretIn(2);
+    p.press("bold");
+    p.flush();
+    const stored = p.STORE.blob.cover_letter_paragraph_overrides;
+
+    // A fresh page over the same draft -- the estimator coming back tomorrow.
+    const q = makePage(p.STORE.blob, { geometry: GEO_FLOW, blocks: BODY });
+    await q.settle();
+    await q.tick(true);
+    await q.settle();
+    const back = q.surface.querySelector('.tw-block[data-id="2"]');
+
+    out.formatSurvivesReload = {
+      storedRuns: stored && stored["2"] ? stored["2"].runs.map((r) => ({ t: r.text, b: r.bold })) : null,
+      // The backend prefers `runs` and skips `text` when it has them, so BOTH must be sent --
+      // `text` alone is what a paragraph that was merely retyped saves, and a reader that only
+      // ever saw text is what made a press vanish in the first place.
+      storedHasText: !!(stored && stored["2"] && typeof stored["2"].text === "string"),
+      replayedText: back ? back.textContent : null,
+      replayedBold: back ? back.querySelectorAll("span").some((s) => String(s.style.fontWeight) === "700") : null,
+      replayedFmtClass: back ? back.classList.contains("tw-fmt") : null,
+      // ...and it must still be collectable, or the second visit would silently drop the format.
+      recollected: q.override(2) ? q.override(2).runs.map((r) => r.bold) : null,
+    };
+  }
+
+  /* ── 16 · Ctrl+B reaches the letter, and the browser is told to keep its hands off ───────────
+   *
+   * A second, entirely separate wiring. The ribbon buttons are bound by `clWireRibbon`; the
+   * keyboard is bound by `clWireSurface`, and the proposal's own Ctrl+B is scoped to
+   * `#doc-surface` so it never fires for the letter at all. Delete the keydown listener and every
+   * other scenario in this file stays green while an estimator who reaches for Ctrl+B gets
+   * nothing -- or worse, gets the BROWSER's bold, which writes a raw <b> the collector cannot see.
+   *
+   * Hence two readings, not one: the override has to land, and the default has to be prevented. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" }, { geometry: GEO_FLOW, blocks: BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+
+    const el = p.caretIn(2);
+    const ev = p.key("b");
+    const kbBold = p.override(2);
+
+    p.key("i");
+    const kbItalic = p.override(2);
+
+    // A bare "b" with no modifier is a letter being typed, not a command. If this ever comes back
+    // formatted, the guard has been dropped and the estimator cannot type the letter b.
+    const plain = p.key("b", { ctrlKey: false });
+
+    out.keyboardApplies = {
+      bold: kbBold ? kbBold.runs.map((r) => r.bold) : null,
+      italic: kbItalic ? kbItalic.runs.map((r) => r.italic) : null,
+      // ...and the same paragraph, not a new one, and its text untouched.
+      text: el.textContent,
+      prevented: ev.defaultPrevented,
+      plainPrevented: plain.defaultPrevented,
     };
   }
 

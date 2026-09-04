@@ -388,7 +388,14 @@
       if (!entry || typeof entry.text !== "string") continue;
       const el = surface.querySelector(`.tw-block[data-id="${Number(rawId)}"]`);
       if (!el) continue;
-      el.textContent = entry.text;          // pre-wrap renders the \n line breaks
+      // RUNS FIRST, and only when there are any. A paragraph the estimator merely retyped
+      // saves as text alone, and putting text back is both cheaper and exactly what it saved.
+      if (Array.isArray(entry.runs) && entry.runs.length && clF()) {
+        clRenderRuns(el, entry.runs);
+        el.classList.add("tw-fmt");       // so collect() picks it up again next time round
+      } else {
+        el.textContent = entry.text;      // pre-wrap renders the line breaks
+      }
       el.classList.add("tw-dirty");
       el.classList.toggle("tw-empty", !entry.text.trim());
     }
@@ -411,8 +418,15 @@
     surface.querySelectorAll(".tw-block").forEach((el) => {
       const id = Number(el.dataset.id);
       const cur = serialize(el);
-      if (cur === pristine.get(id)) return;
-      out[String(id)] = { text: cur };
+      const textChanged = cur !== pristine.get(id);
+      // BOLDING A WORD CHANGES NO CHARACTER. Reading text alone is what made every B/I/U
+      // press vanish on the way out, so a block carrying `tw-fmt` is examined even when its
+      // text is untouched -- and then dropped anyway if the runs turn out plain, which is
+      // what a bold-then-unbold leaves behind. An untouched letter still ships no overrides.
+      const runs = el.classList.contains("tw-fmt") ? clStoredRuns(el) : [];
+      const formatted = runs.length > 0 && !clRunsArePlain(runs);
+      if (!textChanged && !formatted) return;
+      out[String(id)] = formatted ? { text: cur, runs: runs } : { text: cur };
     });
     return out;
   }
@@ -454,7 +468,9 @@
     if (el) {
       const id = Number(el.dataset.id);
       const cur = serialize(el);
-      el.classList.toggle("tw-dirty", cur !== pristine.get(id));
+      // `|| tw-fmt` for the same reason collect() looks at it: the text of a bolded paragraph
+      // is identical to the template's, and without this it would repaint as untouched.
+      el.classList.toggle("tw-dirty", cur !== pristine.get(id) || el.classList.contains("tw-fmt"));
       el.classList.toggle("tw-empty", !cur.trim());
     }
     schedulePersist();
@@ -554,6 +570,499 @@
     }
   }
 
+  // ── RUN FORMATTING ON THE LETTER: Bold / Italic / Underline / Size ─────────────────────────
+  //
+  // Hanz, 2026-09-03, with a screenshot of the Cover letter tab: "These options to edit the text
+  // to make it bold does not apply".
+  //
+  // He is right, and every part of it was behaving as written. THREE separate things had to be
+  // true for a press to do nothing, and all three were:
+  //
+  //   1. `showTab("cover")` calls the proposal's `idleFmtBar()` deliberately — the ribbon has to
+  //      let go of the paragraph behind the letter, or a press would format a document nobody can
+  //      see. Nothing then re-aimed it, and nothing could: `fmtTargetBlock()` returns a block only
+  //      when `#doc-surface` contains it, so a `.tw-block` living in `#cl-surface` is unreachable
+  //      to that ribbon by construction.
+  //   2. With no target, `renderFmtBar()` sets `disabled` on every button, select and input in the
+  //      bar. A disabled button dispatches no click at all — so intercepting the press is
+  //      necessary but NOT sufficient; the controls have to be re-enabled as well.
+  //   3. Even a press that landed would have been thrown away on the way out. `collect()` compares
+  //      the serialized TEXT of each block against its pristine copy, and bolding a word does not
+  //      change one character of it, so the override was computed as "unchanged" and dropped.
+  //
+  // The letter therefore BORROWS the ribbon rather than growing a second one — same buttons, same
+  // keystrokes, one place to look — and owns those three things for as long as it is on stage: it
+  // aims at its own paragraphs, it repaints and re-enables the bar itself, and it intercepts the
+  // press in the CAPTURE phase, before the proposal's own bubble-phase handlers on `.tw-fmtbar`
+  // ever see it. On the way back to the proposal it hands the bar over untouched, which costs
+  // nothing: `renderFmtBar()`'s idle branch resets every button, the size box and the paragraph
+  // group itself.
+  //
+  // WHAT IT DOES NOT DO is call into proposal-review.js. Everything below is a local copy of that
+  // file's pattern, for the reason recorded at the top of this file: those functions are lifted by
+  // name into the Node harnesses, and a second caller makes each one a shared dependency that any
+  // harness can then break. The three that ARE borrowed through `g()` — ensureFmtBar,
+  // renderFmtBar, idleFmtBar — are the ones that build and hand back the shared chrome, which is
+  // precisely the thing that must not be duplicated. (They are reachable because
+  // proposal-review.js has no wrapper of its own: its top-level function declarations are on
+  // window.)
+  //
+  // The run ALGEBRA is not copied. `window.TWFmt` (proposal-format-core.js) is already a
+  // standalone module written to have two consumers, so patch/summarize/toggle come from there.
+  // Absent it, every function below degrades to a no-op and the editor behaves as it does today.
+  //
+  // NEVER `document.execCommand`. It writes <b>/<i>/<u> TAGS, and the reader below — like the
+  // proposal's — measures inline STYLES. The words would look bold on screen and reach the .docx
+  // as nothing at all, which is worse than a button that visibly does nothing.
+
+  const CL_RUN_KEYS = ["bold", "italic", "underline", "size_pt"];
+  const CL_MARK_A = "\u0001", CL_MARK_B = "\u0002";   // never occur in a cover-letter template
+  let clFmtBlock = null;    // the paragraph the ribbon is aimed at, ours alone
+  let clFmtRange = null;    // the last real selection in it, for a press made after focus moved
+  let clFmtBusy = false;    // re-entrancy guard: clSelectionRange moves the caret on purpose
+  let clRibbonWired = false;
+  let clSurfaceWired = false;
+
+  const clF = () => (window.TWFmt && typeof window.TWFmt.patchRuns === "function") ? window.TWFmt : null;
+
+  /** The computed run format at a node, walking up to (not past) the block.
+   *  Inline styles only — a `tw-bold` CLASS on the block is the template's own weight, not an
+   *  estimator's edit, and reading it would make the first press look like a no-op. */
+  function clFmtAt(node, stop) {
+    const out = { bold: null, italic: null, underline: null, size_pt: null };
+    let el = node && node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    while (el && el !== stop && el !== document.body) {
+      const s = el.style;
+      if (out.bold === null && s.fontWeight) out.bold = Number(s.fontWeight) >= 600;
+      if (out.italic === null && s.fontStyle) out.italic = s.fontStyle === "italic";
+      if (out.underline === null && s.textDecorationLine) {
+        out.underline = s.textDecorationLine.includes("underline");
+      }
+      // The shorthand too, exactly as the proposal's reader does it. `text-decoration:underline`
+      // is what clRunCss writes, and a browser fills the longhand in from it -- but a value that
+      // only ever arrives as the shorthand (a paste, a hand-written style) would read as "not
+      // underlined" if this branch were missing, and the button would show the wrong state.
+      if (out.underline === null && s.textDecoration) {
+        out.underline = String(s.textDecoration).includes("underline");
+      }
+      if (out.size_pt === null && s.fontSize && s.fontSize.endsWith("pt")) {
+        out.size_pt = parseFloat(s.fontSize);
+      }
+      el = el.parentElement;
+    }
+    return out;
+  }
+
+  const clSameFmt = (a, b) => CL_RUN_KEYS.every((k) => a[k] === b[k]);
+
+  /** One walk over the block, producing the text runs and where each one sits. Everything else
+   *  here — the stored runs, the toolbar's character offsets, the caret restore — is derived from
+   *  this single walker, so the offsets a press acts on and the offsets that get saved cannot
+   *  disagree. `serialize()` above stays the plain-text answer for the same content. */
+  function clSegments(el) {
+    const segs = [];
+    const push = (text, node, n2) => {
+      if (!text) return;
+      const fill = n2 && n2.parentElement ? n2.parentElement.closest(".tw-fill[data-token]") : null;
+      segs.push({ text: text, fmt: clFmtAt(n2, el), node: node,
+                  tok: fill && el.contains(fill) ? fill.dataset.token : null });
+    };
+    const walk = (node) => {
+      node.childNodes.forEach((n) => {
+        if (n.nodeType === Node.TEXT_NODE) {
+          push(String(n.nodeValue).replace(/\u00a0/g, " "), n, n);
+          return;
+        }
+        if (n.nodeType !== Node.ELEMENT_NODE) return;
+        if (n.tagName === "BR") { push("\n", null, n); return; }
+        if (/^(DIV|P)$/.test(n.tagName)) {
+          const last = segs[segs.length - 1];
+          if (last && !last.text.endsWith("\n")) push("\n", null, n);
+        }
+        walk(n);
+      });
+    };
+    walk(el);
+    return segs;
+  }
+
+  /** The editing view: runs split at both format and token boundaries, so a re-render after a
+   *  press can put the `.tw-fill` spans back exactly where they were. */
+  function clEditRuns(el) {
+    const merged = [];
+    for (const s of clSegments(el)) {
+      const prev = merged[merged.length - 1];
+      if (prev && clSameFmt(prev._f, s.fmt) && prev.tok === s.tok) { prev.text += s.text; continue; }
+      merged.push({ text: s.text, tok: s.tok, _f: s.fmt });
+    }
+    return merged.map((r) => {
+      const out = { text: r.text, tok: r.tok };
+      for (const k of CL_RUN_KEYS) if (r._f[k] !== null) out[k] = r._f[k];
+      return out;
+    });
+  }
+
+  /** What gets SAVED. No `tok`: `restoreSaved` replays a saved paragraph as text, so the fill
+   *  spans are already not round-tripped, and carrying the token here would only invite the
+   *  proposal's whole token-safety analysis into a file that has no use for it. It is stripped
+   *  BEFORE coalescing, because coalesce compares tok as well as the four run keys — leave it on
+   *  and plain text stays split into one run per token, which reads as formatting that isn't. */
+  function clStoredRuns(el) {
+    const F = clF();
+    if (!F) return [];
+    return F.coalesce(clEditRuns(el).map((r) => {
+      const out = { text: r.text };
+      for (const k of CL_RUN_KEYS) if (r[k] !== undefined) out[k] = r[k];
+      return out;
+    }));
+  }
+
+  function clRunsArePlain(runs) {
+    return runs.length <= 1 && (!runs[0] || CL_RUN_KEYS.every((k) => runs[0][k] === undefined));
+  }
+
+  function clRunsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (String(a[i].text) !== String(b[i].text)) return false;
+      if ((a[i].tok || null) !== (b[i].tok || null)) return false;
+      for (const k of CL_RUN_KEYS) if (a[i][k] !== b[i][k]) return false;
+    }
+    return true;
+  }
+
+  /** `false` is not the same as absent: absent means "inherit the template's own run", `false`
+   *  means the estimator turned it off and the .docx must say so explicitly. */
+  function clRunCss(s) {
+    let css = "";
+    if (s.bold === true) css += "font-weight:700;";
+    else if (s.bold === false) css += "font-weight:400;";
+    if (s.italic === true) css += "font-style:italic;";
+    else if (s.italic === false) css += "font-style:normal;";
+    if (s.underline === true) css += "text-decoration:underline;";
+    else if (s.underline === false) css += "text-decoration-line:none;";
+    if (s.size_pt) css += `font-size:${Number(s.size_pt)}pt;`;
+    return css;
+  }
+
+  function clRenderRuns(el, runs) {
+    let html = "";
+    for (const r of runs) {
+      let inner = esc(String(r.text));
+      if (r.tok) inner = `<span class="tw-fill" data-token="${esc(r.tok)}">${inner}</span>`;
+      const css = clRunCss(r);
+      html += css ? `<span style="${css}">${inner}</span>` : inner;
+    }
+    el.innerHTML = html || "<br>";
+  }
+
+  /** A character offset back to a caret position, skipping the synthetic newlines (they have no
+   *  text node of their own to sit in). */
+  function clPointAt(el, offset) {
+    let pos = 0, last = null;
+    for (const s of clSegments(el)) {
+      if (s.node) {
+        if (offset <= pos + s.text.length) return { node: s.node, offset: offset - pos };
+        last = { node: s.node, offset: s.text.length };
+      }
+      pos += s.text.length;
+    }
+    return last;
+  }
+
+  function clPlaceSelection(el, start, end) {
+    const a = clPointAt(el, start), b = clPointAt(el, end);
+    if (!a || !b) return;
+    const r = document.createRange();
+    try {
+      r.setStart(a.node, Math.max(0, Math.min(a.offset, a.node.length)));
+      r.setEnd(b.node, Math.max(0, Math.min(b.offset, b.node.length)));
+    } catch { return; }
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  /** The live selection as character offsets into the block. Measured by dropping two marker
+   *  characters at the range's ends and reading them back out of the same walker every other
+   *  offset here comes from — so a DOM the walker flattens differently than the browser does
+   *  cannot put the press on the wrong words. The markers are removed and the caret is put back
+   *  before returning. */
+  function clSelectionRange(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    if (!el.contains(r.startContainer) || !el.contains(r.endContainer)) return null;
+    const prev = clFmtBusy;
+    clFmtBusy = true;
+    try {
+      const a = document.createTextNode(CL_MARK_A), b = document.createTextNode(CL_MARK_B);
+      const rb = r.cloneRange(); rb.collapse(false); rb.insertNode(b);
+      const ra = r.cloneRange(); ra.collapse(true); ra.insertNode(a);
+      const text = clSegments(el).map((s) => s.text).join("");
+      a.remove(); b.remove();
+      el.normalize();
+      let i = text.indexOf(CL_MARK_A), j = text.indexOf(CL_MARK_B);
+      if (i < 0 || j < 0) return null;
+      if (j > i) j -= 1;                      // MARK_A shifted everything after it along by one
+      const out = [Math.min(i, j), Math.max(i, j)];
+      clPlaceSelection(el, out[0], out[1]);   // put back what the markers disturbed
+      return out;
+    } catch {
+      return null;
+    } finally {
+      clFmtBusy = prev;
+    }
+  }
+
+  /** What the buttons should show, and what a press would act on. A collapsed caret means "this
+   *  whole paragraph" — pressing B with the cursor resting in a line is a request to bold the
+   *  line, not to bold nothing. */
+  function clSelectionFormat(el, fallback) {
+    const F = clF();
+    const runs = clEditRuns(el);
+    const total = F ? F.runsLength(runs) : 0;
+    const live = clSelectionRange(el);
+    const sel = live || fallback || null;
+    let start = sel ? sel[0] : 0, end = sel ? sel[1] : total;
+    start = Math.max(0, Math.min(start, total));
+    end = Math.max(start, Math.min(end, total));
+    if (start === end) { start = 0; end = total; }
+    const f = (F && total) ? F.summarize(runs, start, end) : {};
+    return { bold: f.bold, italic: f.italic, underline: f.underline, size_pt: f.size_pt,
+             range: [start, end], empty: total === 0, live: !!live };
+  }
+
+  /** The paragraph the ribbon is aimed at, or null. Re-checked against the live DOM every time:
+   *  `render()` rebuilds the whole surface on a work-type switch, and a remembered block from the
+   *  previous template is a paragraph that no longer exists. */
+  function clTargetBlock() {
+    if (clFmtBlock && (!surface || !surface.contains(clFmtBlock))) {
+      clFmtBlock = null;
+      clFmtRange = null;
+    }
+    return clFmtBlock;
+  }
+
+  function clAimAt(el) {
+    if (el !== clFmtBlock) clFmtRange = null;
+    if (clFmtBlock && clFmtBlock !== el) clFmtBlock.classList.remove("tw-fmt-target");
+    if (el) el.classList.add("tw-fmt-target");
+    clFmtBlock = el || null;
+    clRenderFmtBar();
+  }
+
+  function clAimClear() {
+    if (clFmtBlock) clFmtBlock.classList.remove("tw-fmt-target");
+    clFmtBlock = null;
+    clFmtRange = null;
+  }
+
+  function clBlockAtSelection() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !surface) return null;
+    const n = sel.getRangeAt(0).startContainer;
+    const el = n && n.nodeType === Node.TEXT_NODE ? n.parentElement : n;
+    if (!el || !el.closest || !surface.contains(el)) return null;
+    return el.closest(".tw-block");
+  }
+
+  const clBar = () => {
+    const make = g("ensureFmtBar");
+    if (make) { try { return make(); } catch { /* fall through to the DOM */ } }
+    return document.querySelector(".tw-fmtbar");
+  };
+
+  /** Paint the shared ribbon for the LETTER. Only ever while the letter is on stage — the
+   *  proposal owns the bar the rest of the time and `renderFmtBar()` is what gives it back. */
+  function clRenderFmtBar() {
+    if (activeTab !== "cover") return;
+    const bar = clBar();
+    if (!bar) return;
+    const el = clTargetBlock();
+    bar.classList.toggle("tw-fmtbar-idle", !el);
+    // RE-ENABLE. This is the half a capture-phase interceptor cannot do for itself: the proposal
+    // disabled these when it let go of its paragraph, and a disabled button fires no click for
+    // anyone to intercept.
+    bar.querySelectorAll("button[data-fmt],input[data-fmt]").forEach((n) => { n.disabled = !el; });
+    // The paragraph group stays out of the way. Bullets and indents are properties of a proposal
+    // block record; a cover-letter block has neither, so the honest thing is to show no control
+    // rather than one that reads as available and does nothing.
+    bar.querySelectorAll("[data-para]").forEach((n) => {
+      n.style.visibility = "hidden";
+      if (n.tagName === "BUTTON") n.disabled = true;
+    });
+    const f = el ? clSelectionFormat(el, clFmtRange) : null;
+    if (f && f.live) clFmtRange = f.range;
+    bar.querySelectorAll("button[data-fmt]").forEach((b) => {
+      const k = b.dataset.fmt;
+      const on = !!(f && k !== "reset" && f[k] === true);
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+    const size = bar.querySelector("input[data-fmt='size']");
+    if (size && document.activeElement !== size) {
+      size.value = (f && f.size_pt) ? String(f.size_pt) : "";
+    }
+  }
+
+  /** Hand the ribbon back. `renderFmtBar()`'s own idle branch clears the buttons, empties the
+   *  size box and restores the paragraph group's visibility, so there is nothing to undo here. */
+  function clReleaseFmtBar() {
+    clAimClear();
+    const f = g("renderFmtBar");
+    if (f) { try { f(); } catch { /* the proposal's ribbon is the proposal's problem */ } }
+  }
+
+  /** Apply one patch to the current selection. Returns true if the document actually changed. */
+  function clApplyFormat(el, patch, range) {
+    const F = clF();
+    if (!F) return false;
+    const runs = clEditRuns(el);
+    const start = range[0], end = range[1];
+    if (end <= start) return false;
+    const next = F.patchRuns(runs, start, end, patch);
+    // A PRESS THAT CHANGES NOTHING IS NOT AN EDIT. Without this, Reset on an untouched paragraph
+    // would mark it edited and ship an override that says exactly what the template already says
+    // — and "an untouched letter carries no overrides", which the version gate leans on, would
+    // quietly stop being true.
+    if (clRunsEqual(runs, next)) return false;
+    const sel = window.getSelection();
+    const inSurface = !!(sel && sel.rangeCount && surface &&
+                         surface.contains(sel.getRangeAt(0).startContainer));
+    clRenderRuns(el, next);
+    if (inSurface) clPlaceSelection(el, start, end);
+    clFmtRange = [start, end];
+    // `tw-fmt` is what makes a format-only edit survive collect(). The synthetic input event then
+    // takes the ordinary path — dirty/empty classes, the 800ms persist — rather than a second one.
+    // Neither innerHTML nor a Range fires input on its own, which is why it is dispatched here.
+    el.classList.add("tw-fmt");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+
+  function clPress(key) {
+    const F = clF();
+    const el = clTargetBlock();
+    if (!F || !el) return;
+    const f = clSelectionFormat(el, clFmtRange);
+    if (f.empty) return;
+    if (key === "reset") {
+      clApplyFormat(el, { bold: null, italic: null, underline: null, size_pt: null }, f.range);
+    } else {
+      const patch = {};
+      patch[key] = F.nextToggle(f[key]);
+      clApplyFormat(el, patch, f.range);
+    }
+    clRenderFmtBar();
+  }
+
+  /** Half-points, the writer's real granularity; empty means "back to the template's own size". */
+  function clTypedSize(raw) {
+    const t = String(raw == null ? "" : raw).trim().replace(/\s*pt$/i, "");
+    if (t === "") return null;
+    const n = Number(t);
+    if (!Number.isFinite(n)) return undefined;
+    const half = Math.round(n * 2) / 2;
+    if (half < 1 || half > 200) return undefined;
+    return half;
+  }
+
+  function clCommitSize(box) {
+    const el = clTargetBlock();
+    if (!el) return;
+    const v = clTypedSize(box.value);
+    const f = clSelectionFormat(el, clFmtRange);
+    if (v === undefined) {                       // unreadable — put back what is actually there
+      box.value = f.size_pt ? String(f.size_pt) : "";
+      return;
+    }
+    clApplyFormat(el, { size_pt: v }, f.range);
+    clRenderFmtBar();
+  }
+
+  /** Take the press before the proposal does.
+   *
+   *  On `#fmt-ribbon` and in the CAPTURE phase: the ribbon is the PARENT of both `.tw-fmtbar` and
+   *  `#doc-tabs`, so capture here runs before the bar's own bubble-phase click, change and keydown
+   *  handlers and before the button itself. Scoped to `.tw-fmtbar` targets for the other half of
+   *  that fact — an unscoped stopPropagation here would swallow the Proposal | Cover letter tab
+   *  clicks and strand the estimator on whichever document was in front.
+   *
+   *  Only `button[data-fmt]` is taken. A click on the size box must reach it and focus it; the
+   *  proposal's own click handler returns early on anything that is not a button[data-fmt], so
+   *  letting it through costs nothing. The bar's mousedown preventDefault — which is what keeps
+   *  the estimator's selection alive across a press — is left exactly as it is. */
+  function clWireRibbon() {
+    const host = document.getElementById("fmt-ribbon");
+    if (!host || clRibbonWired) return;
+    clRibbonWired = true;
+
+    host.addEventListener("click", (e) => {
+      if (activeTab !== "cover") return;
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t || !t.closest(".tw-fmtbar")) return;
+      const btn = t.closest("button[data-fmt]");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clPress(btn.dataset.fmt);
+    }, true);
+
+    host.addEventListener("change", (e) => {
+      if (activeTab !== "cover") return;
+      const t = e.target && e.target.closest ? e.target : null;
+      const box = t ? t.closest("input[data-fmt='size']") : null;
+      if (!box || !box.closest(".tw-fmtbar")) return;
+      e.stopPropagation();
+      clCommitSize(box);
+    }, true);
+
+    host.addEventListener("keydown", (e) => {
+      if (activeTab !== "cover") return;
+      const t = e.target && e.target.closest ? e.target : null;
+      const box = t ? t.closest("input[data-fmt='size']") : null;
+      if (!box || !box.closest(".tw-fmtbar")) return;
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); clCommitSize(box); }
+      else if (e.key === "Escape") {
+        e.preventDefault(); e.stopPropagation();
+        const el = clTargetBlock();
+        const f = el ? clSelectionFormat(el, clFmtRange) : null;
+        box.value = (f && f.size_pt) ? String(f.size_pt) : "";
+        box.blur();
+      }
+    }, true);
+  }
+
+  /** Keep the ribbon aimed as the caret moves, and give the letter its own Ctrl+B/I/U.
+   *
+   *  Both are needed because the proposal's equivalents are scoped to `#doc-surface`: its
+   *  selectionchange only re-aims for a line that surface contains, and its Ctrl+B keydown is
+   *  bound to that surface, so neither ever fires for the letter. The selectionchange below is
+   *  the only thing that can aim at a cover-letter paragraph at all — the editing host is the
+   *  page or the box, not the paragraph, so moving between paragraphs raises no focus event. */
+  function clWireSurface() {
+    if (!surface || clSurfaceWired) return;
+    clSurfaceWired = true;
+
+    document.addEventListener("selectionchange", () => {
+      if (clFmtBusy || activeTab !== "cover") return;
+      const el = clBlockAtSelection();
+      if (el) clAimAt(el);
+    });
+
+    surface.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = String(e.key).toLowerCase();
+      if (k !== "b" && k !== "i" && k !== "u") return;
+      const el = clBlockAtSelection();
+      if (!el) return;
+      e.preventDefault();
+      if (el !== clTargetBlock()) clAimAt(el);
+      clPress(k === "b" ? "bold" : k === "i" ? "italic" : "underline");
+    });
+  }
+
   // ── the switch ────────────────────────────────────────────────────────────────────────────
   /** Show one document, hide the other.
    *
@@ -581,6 +1090,10 @@
     // proposal paragraph that is not on screen. `idleFmtBar` is the existing way to say "aimed at
     // nothing"; it clears the target, the range and the buttons in one call.
     if (activeTab === "cover") { const f = g("idleFmtBar"); if (f) { try { f(); } catch {} } }
+    // ...and then take it over. The hand-off above is what leaves the bar idle and disabled;
+    // this is what re-enables it against a cover-letter paragraph. Order matters: idleFmtBar()
+    // first, so the proposal has genuinely let go before the letter aims.
+    if (activeTab === "cover") { clWireSurface(); clRenderFmtBar(); } else { clReleaseFmtBar(); }
     if (activeTab === "cover") load(false);
   }
 
@@ -603,6 +1116,7 @@
     tabsEl = document.getElementById("doc-tabs");
     surface = document.getElementById("cl-surface");
     if (!toggleEl || !tabsEl || !surface) return;   // not this page
+    clWireRibbon();
 
     toggleEl.checked = !!live("cover_letter_enabled");
     // REVEAL ON A TICK, NOT ON A RELOAD. Ticking the box is a request to see the thing, and a

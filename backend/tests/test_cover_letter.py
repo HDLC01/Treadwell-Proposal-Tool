@@ -80,6 +80,22 @@ def _generate(**extra):
 _GREETING_SOURCE = {"Direct": "{{greeting}}", "GC": "Hello,", None: "Hello,"}
 
 
+# Which letters print the job name in their own body copy.
+#
+# Until 2026-09-04 every variant did, because every variant opened with the red heading
+# "<System> Proposal - {{job_name}}". Hanz took that heading off all seven, and the two copy sets
+# behind them do not agree about what is left: the SHARED copy (GC and Gyp) still opens "Thanks
+# for the opportunity to bid on this {{job_name}} project!", while Will's DIRECT copy says "Thank
+# you for the opportunity to provide a quote for this project." and names nobody. So a Direct
+# letter now identifies the job nowhere on its own page — the greeting names the PERSON — and the
+# proposal stapled behind it is what carries the job name.
+#
+# That is a copy decision, not a bug, and it is recorded here rather than papered over: the
+# assertion below is two-sided, so restoring the job name to Will's wording (or losing it from
+# GC's on a copy pass) goes red here and has to be a deliberate edit.
+_NAMES_THE_JOB = {"Direct": False, "GC": True, None: True}
+
+
 def _greeting_block(body, audience="Direct"):
     """The block id the document editor would use for the greeting paragraph."""
     want = _GREETING_SOURCE[audience]
@@ -164,9 +180,8 @@ def test_a_filled_letter_leaves_no_raw_token(key):
     blob = clw.fill_cover_letter(work_type=work_type, audience=audience, values=FULL_VALUES)
     assert clw.unfilled_tokens(docx.Document(io.BytesIO(blob))) == set()
     text = _rendered(blob)
-    assert "Cover Letter QA" in text          # {{job_name}} reached the page
     assert "Kyle Loseke" in text              # {{estimator_name}} signed it
-    assert "8/26/26" in text                  # {{proposal_date_short}}, in the floating box
+    assert ("Cover Letter QA" in text) is _NAMES_THE_JOB[audience]
 
 
 @pytest.mark.parametrize("key", VARIANTS)
@@ -182,55 +197,55 @@ def test_the_letterhead_survives(key):
 
 
 @pytest.mark.parametrize("key", VARIANTS)
-def test_the_date_is_the_one_floating_box_and_everything_else_is_flow(key):
-    """Hanz's example letter floats the date over the artwork instead of typing it on a line, and
-    the templates copy that box verbatim. Two things the editor reads off this response:
+def test_a_letter_is_pure_flow_with_no_floating_box(key):
+    """Kyle's example letter floats the date over the artwork in a small anchored box, and these
+    templates copied that box verbatim until 2026-09-04, when Hanz asked for the date off every
+    format. Removing it took the ONLY text box out of these documents, so a letter is now nothing
+    but flowing body paragraphs. Two things the editor reads off this response:
 
       * `in_block` is None everywhere — a letter has no priced/repeatable region, so every
         paragraph is freely editable and nothing is engine-owned;
-      * EXACTLY ONE block is positioned. Reporting the date as flow text (which is what the
-        paragraphs-only first build produced) would let the editor offer to place it like a
-        sentence, and reporting everything as positioned would be the same lie pointed the other
-        way.
+      * NOTHING is positioned. The editor already had a no-box layout branch (a template with no
+        boxes is a layout, not a failure — see `test_cover_letter_ui`); this is the assertion that
+        says the letter takes it, and that a stray box re-appearing on a copy pass goes red here
+        rather than on a customer's screen.
     """
     _, blocks, geometry = clw.describe_template(*key)
     assert len(blocks) > 5
     assert all(b["in_block"] is None for b in blocks)
-
-    boxed = [b for b in blocks if b["in_txbx"]]
-    assert len(boxed) == 1, [b["text"] for b in boxed]
-    assert boxed[0]["text"].strip() == "{{proposal_date_short}}"
-    assert boxed[0]["txbx"] == 0
-    # ...and it is the LAST id: _iter_body_editable walks body paragraphs before text boxes, so
-    # adding body copy can never renumber it out from under a saved override.
-    assert boxed[0]["id"] == len(blocks) - 1
-
-    assert len(geometry["boxes"]) == 1
-    box = geometry["boxes"][0]
-    assert box["id"] == boxed[0]["txbx"]
-    # A real position on the page, not a null placeholder the editor would drop at 0,0.
-    assert all(isinstance(box[k], float) for k in ("x_pt", "y_pt", "w_pt", "h_pt"))
-    assert 0 < box["y_pt"] < geometry["page"]["h_pt"]
+    assert [b["text"] for b in blocks if b["in_txbx"]] == []
+    assert geometry["boxes"] == []
+    # The letterhead artwork is still drawn — it is an image, not a box.
+    assert geometry["images"]
 
 
 @pytest.mark.parametrize("key", VARIANTS)
-def test_the_date_box_carries_the_token_in_both_alternate_content_copies(key):
-    """`mc:AlternateContent` stores the box twice — the modern `wps` shape and a VML fallback for
-    consumers that cannot read it. The example spells the date across six runs ("8","/","26",...);
-    replacing only the Choice copy would leave any fallback renderer printing August 2026 forever.
+def test_no_variant_prints_a_date_or_the_old_heading(key):
+    """The two things Hanz took off, asserted at the FILE, for every format at once.
+
+    Read from the raw XML rather than the paragraph text because the date lived inside
+    `mc:AlternateContent` — stored twice, once as the modern `wps` shape and once as a VML
+    fallback — and `d.paragraphs` sees neither copy. A half-removal that left the fallback behind
+    would print the date on any consumer that reads VML, and every paragraph-level assertion in
+    this file would stay green.
     """
     xml = zipfile.ZipFile(str(clw.pick_template(*key))).read("word/document.xml").decode("utf8")
-    assert xml.count("{{proposal_date_short}}") == 2
-    assert ">8<" not in xml and ">26<" not in xml
+    assert "{{proposal_date_short}}" not in xml, "the date box survived in this variant"
+    assert "txbxContent" not in xml, "a text box survived in this variant"
+    # The heading was "<System> Proposal - {{job_name}}". Match on the connective rather than one
+    # variant's system name, so Polish and Combo are covered by the same line.
+    assert "Proposal - " not in xml, "the red title line survived in this variant"
 
 
 @pytest.mark.parametrize("key", VARIANTS)
-def test_the_date_box_does_not_collide_with_the_letterhead_artwork(key):
+def test_the_letterhead_artwork_is_the_only_drawing_left(key):
     """Two `wp:docPr` sharing an id is a file Word 'repairs' on open by dropping a shape — and the
-    shape it drops is silent. The letterhead's artwork already owns one."""
+    shape it drops is silent. There used to be two (the artwork and the date box); with the box
+    gone there is exactly one, which is also a second, independent check that the box is really
+    out of the file rather than merely emptied of its text."""
     d = docx.Document(str(clw.pick_template(*key)))
     ids = [e.get("id") for e in d.element.body.iter(pw.qn("wp:docPr"))]
-    assert len(ids) == len(set(ids)) == 2, ids
+    assert len(ids) == len(set(ids)) == 1, ids
 
 
 def test_combo_numbering_restarts_for_the_second_system():
@@ -419,23 +434,30 @@ def test_the_numbered_items_run_together_with_air_only_around_the_list(key):
 
 
 @pytest.mark.parametrize("key", VARIANTS)
-def test_the_title_runs_the_full_column_the_way_the_example_sets_it(key):
-    """Cause 4. Example1's `w:ind w:right="2340"` (117pt) is on its BODY paragraphs and not on its
-    title — paragraph 4 of his file carries no `w:ind` at all. Indenting the title was this
-    generator's doing, and it wrapped Combo's heading, the longest in the set, onto a second
-    line."""
+def test_there_is_no_title_line_and_the_body_keeps_kyles_right_indent(key):
+    """Every letter used to open with a red underlined heading — "Epoxy / Resinous Flooring
+    Proposal - {{job_name}}" and its siblings. Hanz took it off every format on 2026-09-04: the
+    proposal stapled behind the letter names the system and the job on its own front page, and a
+    heading that repeats it is a second place for the job name to go stale. The greeting is now
+    the first line on the page.
+
+    The second half is the part that is easy to lose while deleting the first. Kyle's example
+    carries `w:ind w:right="2340"` (117pt) on its BODY paragraphs — that is what keeps the text
+    off the letterhead's right-hand artwork — and it was the TITLE that was the exception. Delete
+    the title carelessly and the indent goes with it, which no reader of the diff would notice
+    and every printed letter would show.
+    """
     d = docx.Document(str(clw.pick_template(*key)))
     paras = _generated_paragraphs(d)
-    title, body = paras[0], paras[1:]
-    assert "Proposal" in "".join(t.text or "" for t in title.iter(pw.qn("w:t")))
+    first = "".join(t.text or "" for t in paras[0].iter(pw.qn("w:t")))
+    assert "Proposal - " not in first, "the title line is still the first thing on the page"
+    assert first.strip() in ("{{greeting}}", "Hello,"), first
 
     def right_tw(p):
         ind = p.find(pw.qn("w:pPr") + "/" + pw.qn("w:ind"))
         return ind.get(pw.qn("w:right")) if ind is not None else None
 
-    assert right_tw(title) is None, "the title is indented away from the full measure"
-    assert all(right_tw(p) == "2340" for p in body), \
-        "the body lost Kyle's 117pt right indent"
+    assert all(right_tw(p) == "2340" for p in paras),         "the body lost Kyle's 117pt right indent"
 
 
 def test_the_letter_does_not_read_like_an_email():
@@ -450,90 +472,21 @@ def test_the_letter_does_not_read_like_an_email():
 
 
 def test_the_date_is_backfilled_from_the_bid_date_not_a_clock():
-    """This box runs ~13 hours ahead of Central, so a letter dated off `datetime.now()` would be a
-    day out. A replayed payload that predates the field must still print a real date."""
+    """No letter PRINTS a date any more (the letterhead box came off on 2026-09-04), but
+    `_ensure_cover_letter_values` still resolves `{{proposal_date_short}}` because the same values
+    dict fills the PROPOSAL in the same request. This box runs ~13 hours ahead of Central, so a
+    date taken off `datetime.now()` would be a day out; a replayed payload that predates the field
+    must still resolve to a real date rather than to today."""
     values = {k: v for k, v in FULL_VALUES.items() if k != "proposal_date"}
     values["bid_date_formatted"] = "8/26/26"
-    assert "8/26/26" in _rendered(
-        clw.fill_cover_letter(work_type="epoxy", audience="Direct", values=values))
+    assert clw._ensure_cover_letter_values(values)["proposal_date_short"] == "8/26/26"
 
 
-# ── (a2) the letterhead date box is 63pt wide, and Word clips ────────────────
-# Word does not grow an anchored text box to fit its text; it clips at the edge, and clipped
-# characters are not in the PDF at all. Kyle drew this box around his own "8/26/26"
-# (`Treadwell Cover Letter - Example1.docx`), so a long-form date printed as the single word
-# "August" on all seven letters — a customer-facing document with half a date on it, under a
-# fully green suite. These are the assertions that make that impossible.
-_DEFAULT_DOC_PT = 12.0
-
-
-def _box_run_pt(d) -> float:
-    """The size the date box's run actually prints at, resolved the way a renderer resolves it:
-    direct run size, else the paragraph mark's, else the document default. The template sets none
-    of the first two, so it is the `w:docDefaults` 24 half-points = 12pt — and a test that assumed
-    12pt instead of reading it would stop measuring the day someone styles the box."""
-    txbx = next(d.element.body.iter(pw.qn("w:txbxContent")))
-    for scope in (txbx.find(".//" + pw.qn("w:r")), txbx.find(".//" + pw.qn("w:p"))):
-        sz = scope.find(".//" + pw.qn("w:sz")) if scope is not None else None
-        if sz is not None:
-            return int(sz.get(pw.qn("w:val"))) / 2.0
-    sz = d.styles.element.find(".//" + pw.qn("w:docDefaults") + "//" + pw.qn("w:sz"))
-    return int(sz.get(pw.qn("w:val"))) / 2.0 if sz is not None else _DEFAULT_DOC_PT
-
-
-def _box_text(d) -> str:
-    txbx = next(d.element.body.iter(pw.qn("w:txbxContent")))
-    return "".join(t.text or "" for t in txbx.iter(pw.qn("w:t")))
-
-
-@pytest.mark.parametrize("key", VARIANTS)
-def test_a_long_date_still_prints_in_full_inside_the_box(key):
-    """Feed the long form the Proposal Review screen stamps, and every character must survive.
-
-    Two halves, because either alone would have passed over the broken letter:
-
-      * the INFORMATION round-trips — the box parses back to the same year/month/day it was
-        given, so shortening the format is allowed and losing a field is not. Asserting the
-        literal "August 27, 2026" would have forbidden the fix; asserting only "not empty" would
-        have accepted "August".
-      * it FITS — measured with the same glyph metric the proposal's own overflow shrink trusts
-        (`pw._TXBX_GLYPH_W`, ~0.5em for Carlito/Calibri, which LibreOffice substitutes in the
-        container) against the box's real `wp:extent` less its real `bodyPr` insets. "August 27,
-        2026" at 12pt needs ~90pt of a 48.6pt usable width; "8/27/26" needs ~42pt.
-
-    The other short-date sources are CLEARED, deliberately. This test is about one long date
-    surviving the narrowing, not about which source outranks which — leaving `bid_date_formatted`
-    populated made it a second, accidental assertion on the priority ladder, and it failed the day
-    that ladder was corrected. Priority has its own two tests below.
-    """
-    work_type, audience = key
-    values = dict(FULL_VALUES, proposal_date="August 27, 2026",
-                  bid_date_formatted="", bid_date="", site_visit_date="")
-    d = docx.Document(io.BytesIO(
-        clw.fill_cover_letter(work_type=work_type, audience=audience, values=values)))
-
-    printed = _box_text(d).strip()
-    assert printed, "the letterhead date box came out empty"
-    assert clw._short_date(printed) == "8/27/26", printed
-
-    _, _, geometry = clw.describe_template(work_type, audience)
-    box = geometry["boxes"][0]
-    lIns, rIns, _, _ = pw._txbx_insets(next(d.element.body.iter(pw.qn("w:txbxContent"))))
-    usable = box["w_pt"] - (lIns + rIns) / pw._EMU_PER_PT
-    needed = len(printed) * pw._TXBX_GLYPH_W * _box_run_pt(d)
-    assert needed <= usable, (
-        "%r needs ~%.1fpt in a %.1fpt box: Word clips it and the customer sees the first word"
-        % (printed, needed, usable))
-
-
-@pytest.mark.parametrize("key", VARIANTS)
-def test_the_date_box_is_still_the_size_kyle_drew_it(key):
-    """The fix for the clipping was to match his date FORMAT, not to widen his box. This is the
-    guard on the other direction: 63.0pt x 18.0pt is the letterhead's design, positioned against
-    artwork, and growing it to fit a long date would push the date over the bison."""
-    _, _, geometry = clw.describe_template(*key)
-    box = geometry["boxes"][0]
-    assert (round(box["w_pt"], 1), round(box["h_pt"], 1)) == (63.0, 18.0), box
+# ── (a2) the short date still has to PARSE, even though no letter prints it ──
+# Kyle drew a 63pt date box on his letterhead and Word clips rather than grows, so a long-form
+# date once printed as the single word "August" on all seven letters. The box is gone (2026-09-04)
+# and with it the clipping, but `{{proposal_date_short}}` is still resolved from the same values
+# dict — the PROPOSAL uses it — so the parsing ladder below still has to hold.
 
 
 def test_the_long_date_is_not_narrowed_for_the_proposal_too():
@@ -580,17 +533,19 @@ def test_the_short_date_reads_every_shape_the_payload_arrives_in(raw, expect):
     assert clw._short_date(raw) == expect
 
 
-def test_an_undatable_payload_leaves_the_box_empty_rather_than_clipped():
-    """Empty beats half a date on a customer's letterhead. The refusal is logged naming the value
-    that failed to parse — see `_ensure_cover_letter_values` — and nothing else on the page moves.
-    """
+def test_an_undatable_payload_resolves_to_blank_rather_than_to_garbage():
+    """Empty beats a half-parsed date. The refusal is logged naming the value that failed to parse
+    — see `_ensure_cover_letter_values` — and nothing else moves. Asserted at the values pass
+    because the letter no longer prints this token; a caller that DOES print it must be handed a
+    blank string rather than the literal "TBD"."""
     values = {k: v for k, v in FULL_VALUES.items()
               if k not in ("proposal_date", "bid_date_formatted", "bid_date", "site_visit_date")}
     values["proposal_date"] = "TBD"
+    assert clw._ensure_cover_letter_values(values)["proposal_date_short"] == ""
+    # And the letter itself is still clean — blank, never a raw {{token}}.
     d = docx.Document(io.BytesIO(
         clw.fill_cover_letter(work_type="epoxy", audience="Direct", values=values)))
-    assert _box_text(d).strip() == ""
-    assert clw.unfilled_tokens(d) == set()      # blank, not a raw {{token}}
+    assert clw.unfilled_tokens(d) == set()
 
 
 def test_filling_the_letter_does_not_mutate_the_caller_s_values():
@@ -627,8 +582,11 @@ def test_enabled_returns_a_real_downloadable_letter():
     assert url and url != out["docx_download_url"], (
         "the cover letter url must be its own cache token, not the proposal's")
     text = _rendered(client.get(url).content)
-    assert "Cover Letter QA" in text
-    assert "Epoxy / Resinous Flooring Proposal" in text
+    # BASE is a Direct bid, and a Direct letter names neither the job nor the system since the
+    # heading came off (see _NAMES_THE_JOB) — so assert on what a Direct letter DOES carry: the
+    # estimator's signature and a resolved {{cover_system_line}}.
+    assert "Kyle Loseke | Estimator" in text
+    assert "Materials / System: Treadwell MACRO Flake" in text
     # And it is a DIFFERENT document from the proposal, not a second copy of it.
     assert "TERMS AND CONDITIONS" not in text.upper()
 
@@ -713,16 +671,32 @@ def test_the_audience_on_the_generate_body_picks_the_letter(monkeypatch, audienc
     out = _generate(audience=audience, cover_letter_enabled=True)
     assert seen["audience"] == audience
     assert seen["path"].parent.name == audience
-    assert "Cover Letter QA" in _rendered(client.get(out["cover_letter_download_url"]).content)
+    text = _rendered(client.get(out["cover_letter_download_url"]).content)
+    assert "Kyle Loseke" in text
+    assert ("Cover Letter QA" in text) is _NAMES_THE_JOB[audience]
 
 
 def test_the_letter_and_the_proposal_agree_on_the_job():
     """Built from the same `values` dict, after the same alias/backfill pass. Two documents that
-    disagree about the job name is what a second values path would produce."""
+    disagree about the job name is what a second values path would produce.
+
+    The comparand is no longer the job name, and the reason is worth writing down because the
+    obvious substitutes are both wrong. Since the title line came off (2026-09-04) a DIRECT letter
+    names the job nowhere, so `{{job_name}}` cannot be checked against a Direct proposal; and
+    swapping the whole test to GC — whose letter DOES still say "this {{job_name}} project" — only
+    moves the hole, because the GC proposal template carries its job name inside the page artwork
+    and no text assertion can see it. So the check runs on two values that both documents really
+    print from the same dict: the system name and the estimator. A second values path would still
+    be caught, which is the whole point of the test.
+    """
     out = _generate(cover_letter_enabled=True)
     letter = _rendered(client.get(out["cover_letter_download_url"]).content)
     proposal = _rendered(client.get(out["docx_download_url"]).content)
-    assert "Cover Letter QA" in letter and "Cover Letter QA" in proposal
+    for shared in ("Treadwell MACRO Flake", "Kyle Loseke"):
+        assert shared in letter and shared in proposal, shared
+    # And the job name still round-trips into the proposal, which is now the only document in the
+    # pair that prints it on a Direct bid.
+    assert "Cover Letter QA" in proposal
 
 
 def test_a_paragraph_override_reaches_the_letter():
