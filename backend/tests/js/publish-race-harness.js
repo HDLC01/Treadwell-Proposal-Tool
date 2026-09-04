@@ -75,7 +75,7 @@ out.exportsFlushState = (() => {
 out.putDraftReturnsAPromise = (() => {
   // The root cause: putDraft was fire-and-forget, so nothing could be awaited.
   const src = fs.readFileSync(path.join(ROOT, "shared.js"), "utf8");
-  const m = /function putDraft\(id, blob\) \{[\s\S]*?\n  \}/.exec(src);
+  const m = /function putDraft\(id, blob(?:, keepalive[^)]*)?\) \{[\s\S]*?\n  \}/.exec(src);
   return !!m && /return p;/.test(m[0]);
 })();
 

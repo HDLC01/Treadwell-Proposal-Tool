@@ -251,13 +251,18 @@
   // resend of "Hanz Company 123" pinned revision 2 to a draft two minutes older than the
   // base-bid change the estimator had just made, so the portal showed Epoxy as the base
   // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
-  function putDraft(id, blob) {
+  function putDraft(id, blob, keepalive = false) {
     try {
       const p = fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
         method: "PUT",
         headers: authHeaders(),
         body: JSON.stringify({ data: blob }),
-        keepalive: true,         // let it finish even if the tab is closing
+        // Chromium caps a keepalive request body at ~64KiB combined per origin — a
+        // large draft (Gerson Company measured ~89KB) blows that cap and fails
+        // SYNCHRONOUSLY with "TypeError: Failed to fetch", swallowed below with no
+        // visible error. keepalive is only for a save racing page teardown
+        // (pagehide); the routine in-tab autosave must NOT set it.
+        keepalive: keepalive,
       }).then(async (res) => {
         // /api/draft/{id} answers a caught server-side exception with HTTP 200 and
         // {"ok": false, "error": ...} — main.py:api_save_draft's own except branch. res.ok only
@@ -562,7 +567,7 @@
     const id = getDraftId();
     const blob = getState();
     if (!id || (blob[STAMP] && blob[STAMP] !== id)) return;
-    putDraft(id, blob);
+    putDraft(id, blob, true);   // only call site that legitimately needs keepalive
   });
 
   // ─── Form helpers ─────────────────────────────────────────────────
