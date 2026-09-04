@@ -888,9 +888,13 @@ def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[st
 
 
 @app.patch("/api/library/items/{item_id}")
-def api_library_item_update(item_id: str, payload: LibraryItemIn) -> Dict[str, Any]:
+def api_library_item_update(item_id: str, payload: LibraryItemIn,
+                            request: Request) -> Dict[str, Any]:
     try:
-        row = library.update_item(item_id, payload.model_dump(exclude_unset=True))
+        # The caller's identity is the ONLY source of "who edited it" — the payload model has no
+        # such field and validate_item would drop it, so a client cannot sign somebody else's name.
+        row = library.update_item(item_id, payload.model_dump(exclude_unset=True),
+                                  _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     if row is None:
@@ -925,9 +929,11 @@ def api_library_assembly_create(payload: LibraryAssemblyIn, request: Request) ->
 
 
 @app.patch("/api/library/assemblies/{asm_id}")
-def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn) -> Dict[str, Any]:
+def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn,
+                                request: Request) -> Dict[str, Any]:
     try:
-        row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True))
+        row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True),
+                                      _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     except library.StaleWrite as exc:

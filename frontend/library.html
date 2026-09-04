@@ -144,16 +144,29 @@
     td.derived, th.derived { background:rgba(243,238,237,.6); }
     tbody tr:hover td.derived { background:rgba(243,238,237,.9); }
 
-    /* THE CREATE CONTROL SITS AT THE FOOT OF THE LIST IT ADDS TO.
+    /* THE CREATE CONTROL SITS IN THE SAME CONTAINER AS THE LIST IT ADDS TO.
        Hanz, 2026-08-27: "I dont like the New assembly button up top." It was parked at the far
        right of the tab strip, beside Administration and about thirteen hundred pixels from the
        rail it appends a row to, so the thing you pressed and the thing that appeared had no
        relationship on screen.
 
-       ONE RULE, FOUR PLACES: materials, assemblies, and the three administration lists all end
-       with a full-width row in the same container, drawn like the rows above it and reading as
-       the next one. Press it and the new row appears exactly where the control was. That is also
-       why it is not a fifth card idiom — it is a table row that happens to be a button. */
+       READ THAT OBJECTION CAREFULLY BEFORE MOVING ANYTHING BACK. What it was about was the PAGE
+       HEADER — the distance — not the word "top". Adjacency to the list is the property this rule
+       protects, and it is satisfied at either end of the same container.
+
+       ONE RULE, FIVE PLACES: materials, assemblies, and the three administration lists each keep
+       their create control inside the container that holds their rows, drawn like those rows.
+       Press it and the new row appears next to the control. That is also why it is not a fifth
+       card idiom — it is a table row that happens to be a button.
+
+       WHICH END, per list, and each one was asked for:
+         * the three administration lists — the FOOT, unchanged, reading as "the next row";
+         * materials — the TOP (2026-08-28), see the #items-addrow note below;
+         * assemblies — the TOP (Hanz, 2026-09-04: "Move the assembly button up top and when a
+           new assembly is added it should append up top not below"). The rail is a 272px column
+           of short rows with no scrollbar of its own to hide behind, so the button is adjacent to
+           the list at either end; up top it is also adjacent to the ROW THAT APPEARS, which is
+           now unshifted to the front. See the comment on the unshift in library.js. */
     .addrow { border-top:1px solid var(--line-soft); background:var(--card); }
     /* Hanz, 2026-08-28: "the buttons are easier to see" — these read as muted body text next
        to the rows they add to. Red by default, not just on hover, is the smallest change that
@@ -186,6 +199,22 @@
       transition:background .12s ease, color .12s ease, border-color .12s ease; }
     #items-addrow .addbtn:hover { border-color:var(--red); background:var(--surf-low); }
     #items-addrow .addbtn:focus-visible { outline-offset:2px; }
+
+    /* THE RULE ABOVE FLIPS ITS OWN HAIRLINE WHEN THE ROW MOVES TO THE TOP. `.addrow` draws a
+       border-TOP, which is what separates it from the rows above it at the foot of a list; at the
+       head of the rail that line would sit against the card's own top edge and the row would then
+       bleed into the first assembly underneath it. Bottom, so the separator is still between the
+       button and the list — which is the only thing the hairline is for.
+
+       Scoped by ID for the reason #items-addrow is, and note that its warning covers THIS comment
+       too: the harness counts the addrow and addbtn class attributes as exact literal strings, so
+       neither a modifier class alongside either name nor a comment quoting one of those
+       attributes in full can be written here — the first drops an element out of the count and
+       the second adds a phantom to it. Unlike materials, the row idiom itself is KEPT here — the
+       rail's rows are full-bleed and 272px wide, so a full-width tinted row still reads as one of
+       them rather than as a second table header, which is what it read as above the materials
+       TABLE. */
+    #asm-addrow { border-top:0; border-bottom:1px solid var(--line-soft); }
 
     /* assemblies workspace */
     .work { display:grid; grid-template-columns:272px 1fr; gap:16px; align-items:start; }
@@ -272,7 +301,13 @@
     /* Two dates, both muted: when the material was added, and when its price last moved. The
        second is the one an estimator actually asks about. */
     .dates { font-size:11px; color:var(--ink-v); line-height:1.45; white-space:nowrap; }
-    .dates b { font-weight:600; color:var(--ink); }
+    /* THE LINE MAY BREAK; THE VALUES MAY NOT. Hanz asked for the name of who created and who
+       edited each material, which made the Added and Edited lines long enough that the nowrap
+       above would have widened the whole column to fit "Added 8/15/26, 2:30 PM by Hanz" on one
+       line. So each line wraps as a unit, while a date and a name each stay unbroken — a
+       timestamp split across two lines is unreadable in a way a wrapped line is not. */
+    .dates > div { white-space:normal; }
+    .dates b { font-weight:600; color:var(--ink); white-space:nowrap; }
     .dates .never { font-style:italic; }
 
     /* The duplicate hint. Not a block — the same product legitimately appears twice at different
@@ -528,8 +563,14 @@
               aria-controls="pane-vendors">Administration</button>
       <!-- "+ New assembly" USED TO SIT HERE, in a .tabaction wrapper pinned to the right-hand end
            of this strip. Hanz, 2026-08-27: "I dont like the New assembly button up top." It now
-           lives at the foot of the assembly rail, which is the list it actually appends to — see
-           the .addrow note in the stylesheet. -->
+           lives at the TOP OF THE ASSEMBLY RAIL, which is the list it actually appends to — see
+           the .addrow note in the stylesheet.
+
+           IT IS NOT COMING BACK HERE. Hanz asked for it "up top" again on 2026-09-04, and the
+           answer to that was the top of the RAIL, not the top of the page: what he objected to in
+           August was thirteen hundred pixels between the button and the row it creates, and this
+           strip is where that distance came from. Inside the rail the button and the new row are
+           the same two centimetres of screen whichever end it sits at. -->
     </div>
 
     <!-- ── Items ──────────────────────────────────────────────────────── -->
@@ -600,7 +641,10 @@
               <tr>
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th><th class="n">Order Quantity</th><th>Unit</th>
-                <th class="n">Cost</th><th>Vendor</th><th>Dates</th><th class="w-act"></th>
+                <!-- "Dates" until 2026-09-04. The cell now names who added the material and who
+                     last changed it, not only when, so the heading had to stop promising only
+                     dates. No test pinned the old string. -->
+                <th class="n">Cost</th><th>Vendor</th><th>History</th><th class="w-act"></th>
               </tr>
             </thead>
             <tbody id="items-body"></tbody>
@@ -759,29 +803,70 @@
           </span>
           <button class="btn ghost sm" type="button" id="fa-clear" data-clear-asm-filters hidden>
             Clear filters</button>
+
+          <!-- SORT, and it is not a filter. Hanz, 2026-09-04: "in the assemblies we must be able
+               to sort by vendor, scope or worktype, unit, who created it."
+
+               BESIDE the facets and in the same `.facet` shape, because it answers the same kind
+               of question about the same list and a second row of chrome over a 272px rail would
+               cost more than it explains. AFTER the Clear button on purpose: Clear resets the box
+               and the two facets and deliberately leaves the sort alone — an ordering is not
+               state you are "stuck in", and a Clear that silently reshuffled the list would be
+               the more surprising of the two behaviours.
+
+               ITS STATE IS A PLAIN VARIABLE (ASM_SORT), never a field on an assembly. Same rule
+               as ASM_FILTERS and for the same scar: the dropdown filters deleted on 2026-08-19
+               kept their state on the line object, so every debounced save shipped the
+               estimator's view to the server.
+
+               Two of these six are DERIVED rather than read off a column — see asmVendorTally
+               and asmOwnerName in library.js. An assembly has no vendor field at all. -->
+          <span class="facet">
+            <label class="flabel" for="fa-sort">Sort</label>
+            <select id="fa-sort">
+              <option value="name">Name A–Z</option>
+              <option value="new">Newest first</option>
+              <option value="scope">Scope or work type</option>
+              <option value="unit">Unit</option>
+              <option value="vendor">Vendor</option>
+              <option value="owner">Who created it</option>
+            </select>
+          </span>
         </div>
       </div>
 
       <div class="work">
-        <!-- The rail is the CARD, and the New assembly control is its last row. renderList fills
-             the list above it and hides this whole card when there is nothing to list — hiding
-             only the inner list would leave the button sitting in an empty box. -->
+        <!-- The rail is the CARD, and the New assembly control is its FIRST row. renderList fills
+             the list below it and hides this whole card when there is nothing to list — hiding
+             only the inner list would leave the button sitting in an empty box.
+
+             FIRST, not last, since 2026-09-04. Hanz: "Move the assembly button up top and when a
+             new assembly is added it should append up top not below." The two halves of that go
+             together — the button and the row it creates are now the same place on screen, which
+             is the property the August move into this card was protecting in the first place. The
+             row a press produces is unshifted to the front of the rail; see the comment on the
+             unshift in library.js for how long that placement lasts and which sort makes it
+             permanent. -->
         <div class="card" id="asm-rail" hidden>
-          <div class="alist" id="asm-list"></div>
-          <!-- In the rail, not a panel of its own. `#asm-empty` below is the LIBRARY being empty
-               and renderPanel owns it; this is a filter that matched nothing, and renderList owns
-               it. Two functions fighting over one node is how a caption ends up wrong, and the two
-               are not always called together (renderList runs alone from four places). -->
-          <div class="anomatch" id="asm-nomatch" hidden>
-            <p id="asm-nomatch-why"></p>
-            <button class="btn ghost sm" type="button" data-clear-asm-filters>Clear filters</button>
-          </div>
           <div class="addrow" id="asm-addrow">
             <button class="addbtn" type="button" id="asm-new-2">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                    aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
               New assembly</button>
+          </div>
+          <div class="alist" id="asm-list"></div>
+          <!-- In the rail, not a panel of its own. `#asm-empty` below is the LIBRARY being empty
+               and renderPanel owns it; this is a filter that matched nothing, and renderList owns
+               it. Two functions fighting over one node is how a caption ends up wrong, and the two
+               are not always called together (renderList runs alone from four places).
+
+               STILL BELOW THE LIST even though the create control moved above it: this is a
+               caption about the rows that are not there, so it belongs where they would have
+               been. -->
+          <div class="anomatch" id="asm-nomatch" hidden>
+            <p id="asm-nomatch-why"></p>
+            <button class="btn ghost sm" type="button" data-clear-asm-filters>Clear filters</button>
           </div>
         </div>
 
@@ -957,6 +1042,13 @@
   <script src="/shared.js"></script>
   <!-- The pricing maths. Must precede the page script, which reads window.TWLib as it runs. -->
   <script src="/js/library-core.js"></script>
+  <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is
+       the app's single email→display-name convention ("kyle.loseke@…" → "Kyle Loseke"). The
+       Assemblies rail sorts and labels by who created an assembly, and the alternative was a
+       second spelling of the same rule on the one page that does not already have the first.
+       Pure functions, no DOM and no fetch, so it is inert here beyond the one call; and it must
+       precede the page script, which reads window.TWCrm as it runs. -->
+  <script src="/js/crm-core.js"></script>
   <script src="/js/library.js"></script>
 </body>
 </html>
