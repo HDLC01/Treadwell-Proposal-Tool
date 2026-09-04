@@ -240,6 +240,7 @@ const CAPS = [
   { href: "/analytics.html", label: "Analytics", api: ["/api/analytics/"], locked: false },
   { href: "/projects.html", label: "Proposals Database", api: [], locked: false },
   { href: "/library.html", label: "Items and Assemblies", api: [], locked: false },
+  { href: "/markup.html", label: "Markup", api: [], locked: false },
   { href: "/history.html", label: "History", api: ["/api/history"], locked: false },
   { href: "/trash.html", label: "Trash", api: ["/api/trash"], locked: false },
   { href: "/notifications.html", label: "Notification Sending", api: [], locked: false },

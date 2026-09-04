@@ -254,6 +254,26 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("newMaterialName")}
   ${fn("newRefName")}
   ${fn("itemMatches")}
+  // The Assemblies tab's search and its two facets. Lifted here rather than beside renderList
+  // because they are the SAME grammar the item box uses - asmTermHits calls termHits, asmMatches
+  // calls parseQuery - and this is where that grammar is already in scope.
+  //
+  // EVERY ONE OF THESE IS REACHED FROM renderList, lifted at the bottom of this block:
+  // visibleAssemblies asks asmMatchesFilters (asks asmConditionHits, asmUnit) and asmMatches
+  // (asks asmTermHits, parseQuery, termHits, L.findItem); the tail asks anyAsmFilterActive,
+  // asmFilterSummary and renderAsmFilterBar. Miss one and every test in test_library_ui.py dies
+  // on a ReferenceError with nothing pointing at the cause.
+  var asmQuery = state.asmQuery === undefined ? "" : state.asmQuery;
+  ${grab(/^  var ASM_FILTERS = \{[^}]*\};$/m, "the ASM_FILTERS declaration")}
+  if (state.ASM_FILTERS) ASM_FILTERS = Object.assign(ASM_FILTERS, state.ASM_FILTERS);
+  ${fn("anyAsmFilterActive")}
+  ${fn("asmConditionHits")}
+  ${fn("asmMatchesFilters")}
+  ${fn("asmTermHits")}
+  ${fn("asmMatches")}
+  ${fn("asmFilterSummary")}
+  ${fn("visibleAssemblies")}
+  ${fn("renderAsmFilterBar")}
   // BULK ADD. The modal itself is out of reach here — this DOM stub has no createElement, no focus
   // and no checkbox — so every decision it makes lives in one of these four and is tested directly.
   // Same position this harness already takes with confirmDanger.
@@ -297,6 +317,9 @@ const scope = new Function("L", "$", "TW", "state", "document", `
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
            onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
+           asmQuery, ASM_FILTERS, anyAsmFilterActive, asmMatches, asmMatchesFilters,
+           asmConditionHits, asmTermHits, asmFilterSummary, visibleAssemblies,
+           renderAsmFilterBar,
            newMaterialName, newRefName,
            bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
            snapshotOf: function (id) { return itemBefore[id]; } };
@@ -1665,6 +1688,123 @@ async function conflictChecks() {
     sameMatcherAsThePicker:
       JSON.stringify(hit.api.visibleItems().map((x) => x.id))
       === JSON.stringify(all.api.ITEMS.filter((x) => all.api.itemMatches(x, "opf primer")).map((x) => x.id)),
+  };
+}
+
+// ── B2. the Assemblies tab: the same box, plus a unit and a condition ───────
+// Four assemblies and a third material, LOCAL to this block: the module fixtures are two items
+// and one assembly, and growing them would move the row counts, the badge and the datalist that
+// every scenario above asserts on.
+//
+// The set is chosen so each control has something to be wrong about — a2 is the only LF one, a3 is
+// the only broken one (its material has no coverage), a4 is the only empty one, and a1 is the only
+// one that contains "OPF Primer".
+{
+  const ITEMS4 = [
+    { id: "i1", name: "OPF", category: "Epoxy", unit: "Gal", buy_qty: 1, unit_cost: 85.3827,
+      coverage: 275, vendor: "Sherwin-Williams", notes: "" },
+    { id: "i2", name: "OPF Primer", category: "Polished Concrete", unit: "Gallon", buy_qty: 5,
+      unit_cost: 426.91, coverage: 275, vendor: "Gone Supply Co", notes: "" },
+    { id: "i3", name: "Joint Filler", category: "Polished Concrete", unit: "Kit", buy_qty: 1,
+      unit_cost: 500, coverage: null, vendor: "Sika", notes: "" },
+  ];
+  const ASMS4 = [
+    { id: "a1", name: "MACRO Flake", unit: "SF", lines: [
+      { role: "1st BC", item_id: "i1", coverage: 275, waste_pct: 5, roundup: true, note: "" },
+      { role: "", item_id: "i2", coverage: 275, waste_pct: 0, roundup: false, note: "" }] },
+    { id: "a2", name: "Cove Base", unit: "LF", lines: [
+      { role: "", item_id: "i1", coverage: 275, waste_pct: 0, roundup: true, note: "" }] },
+    // Its only material has no coverage and the line does not supply one, so priceAssembly counts
+    // it as a fault: this is the row the "Has lines to fix" facet has to find.
+    { id: "a3", name: "Saw Cut Fill", unit: "SF", lines: [
+      { role: "", item_id: "i3", coverage: null, waste_pct: 0, roundup: true, note: "" }] },
+    { id: "a4", name: "Densify Only", unit: "SF", lines: [] },
+  ];
+  const four = (over) => {
+    const b = build(Object.assign({
+      ITEMS: JSON.parse(JSON.stringify(ITEMS4)),
+      ASMS: JSON.parse(JSON.stringify(ASMS4)),
+    }, over || {}));
+    b.api.renderList();
+    return b;
+  };
+  // Read every node through these, never off .nodes directly. makeDom creates a node the first
+  // time it is ASKED for, so a render that skips a node leaves it absent - and `.hidden` on
+  // undefined throws a TypeError out of the harness, which reports a broken invariant as a broken
+  // harness. Absent comes back as null instead, and the assertion that cares fails with its own
+  // message. (Reading .nodes[id] does not create it; only el(id) does.)
+  const has = (d, id) => Object.prototype.hasOwnProperty.call(d.nodes, id);
+  const hid = (d, id) => (has(d, id) ? d.nodes[id].hidden : null);
+  const txt = (d, id) => (has(d, id) ? d.nodes[id].textContent : null);
+  const val = (d, id) => (has(d, id) ? d.nodes[id].value : null);
+  const html = (d, id) => (has(d, id) ? d.nodes[id].innerHTML : "");
+  const rowsIn = (d) => (html(d, "asm-list").match(/data-open=/g) || []).length;
+  const idsIn = (d) => (html(d, "asm-list").match(/data-open="([^"]+)"/g) || [])
+    .map((m) => m.slice(11, -1));
+
+  const all = four();
+  const hit = four({ asmQuery: "macro" });
+  const inside = four({ asmQuery: "primer" });
+  const negated = four({ asmQuery: "-primer" });
+  const miss = four({ asmQuery: "nothing like this" });
+  const lf = four({ ASM_FILTERS: { unit: "LF" } });
+  const broken = four({ ASM_FILTERS: { condition: "broken" } });
+  const unpriced = four({ ASM_FILTERS: { condition: "unpriced" } });
+  const noLines = four({ ASM_FILTERS: { condition: "no_lines" } });
+  const agree = four({ asmQuery: "flake", ASM_FILTERS: { unit: "SF" } });
+  const disagree = four({ asmQuery: "flake", ASM_FILTERS: { unit: "LF" } });
+  const combined = four({ asmQuery: "zzz", ASM_FILTERS: { unit: "LF", condition: "broken" } });
+  const none = four({ ASMS: [] });
+
+  out.asmSearch = {
+    unfiltered: rowsIn(all.dom),
+    filtered: idsIn(hit.dom),
+    missed: rowsIn(miss.dom),
+    // The point of this box over the item one: it searches the MATERIALS inside each assembly, so
+    // "which systems use that primer?" is answerable without opening all of them.
+    reachesInside: idsIn(inside.dom),
+    // Per TERM, not per haystack. OR-ing the haystacks would make `-primer` mean "some line has no
+    // primer in it" — true of a1 — and a1 is exactly the one it has to drop.
+    negationIsPerTerm: idsIn(negated.dom),
+    unitFacet: idsIn(lf.dom),
+    brokenFacet: idsIn(broken.dom),
+    unpricedFacet: idsIn(unpriced.dom),
+    noLinesFacet: idsIn(noLines.dom),
+    // AND across controls, the way the items tab reads.
+    queryAndUnitAgree: idsIn(agree.dom),
+    queryAndUnitDisagree: rowsIn(disagree.dom),
+    // The badge counts what Treadwell HAS. A number that fell as somebody typed would read as
+    // assemblies being deleted.
+    badgeWhileFiltering: txt(all.dom, "n-asm") === txt(hit.dom, "n-asm"),
+    badge: txt(all.dom, "n-asm"),
+    hits: txt(hit.dom, "asm-hits"),
+    hitsHiddenWhenNotFiltering: hid(all.dom, "asm-hits"),
+    noMatchShown: hid(miss.dom, "asm-nomatch") === false,
+    noMatchHiddenOnAHit: hid(hit.dom, "asm-nomatch"),
+    noMatchWhy: txt(miss.dom, "asm-nomatch-why"),
+    combinedWhy: txt(combined.dom, "asm-nomatch-why"),
+    // The rail STAYS — the no-match state lives inside it, so hiding the card would hide the
+    // message explaining why it is empty.
+    railStaysOpenOnNoMatch: hid(miss.dom, "asm-rail"),
+    // "+ New assembly" goes with the rows: left up, a typo is answered with an invitation to build
+    // the assembly the search just failed to find.
+    addRowHiddenOnNoMatch: hid(miss.dom, "asm-addrow"),
+    addRowShownOnAHit: hid(hit.dom, "asm-addrow"),
+    // THE REASON the no-match state got a node of its own. `#asm-empty` is "add some items first"
+    // / "no assemblies yet" and renderPanel owns it; renderList must not touch it, or the two
+    // fight over one caption. Untouched means the id was never even created in the stub.
+    neverTouchesTheEmptyPanel: has(miss.dom, "asm-empty"),
+    clearShownWhileFiltering: hid(hit.dom, "fa-clear"),
+    clearHiddenWhenNotFiltering: hid(all.dom, "fa-clear"),
+    unitSelectSynced: val(lf.dom, "fa-unit"),
+    conditionSelectSynced: val(broken.dom, "fa-condition"),
+    barShownWithAssemblies: hid(all.dom, "asm-filterbar"),
+    // Nothing to filter is not a filter bar.
+    barHiddenWithNoAssemblies: hid(none.dom, "asm-filterbar"),
+    // A filtered-out row cannot be the highlighted one, but the PANEL is renderPanel's business —
+    // narrowing the rail must not close the assembly somebody is editing.
+    currentMarkedWhenShown: /aria-current/.test(html(all.dom, "asm-list")),
+    noCurrentWhenOpenOneIsFiltered: /aria-current/.test(html(lf.dom, "asm-list")),
   };
 }
 

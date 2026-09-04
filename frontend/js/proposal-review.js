@@ -64,6 +64,42 @@
     try { if (TW.draftReady && TW.draftReady.then) TW.draftReady.then(paint).catch(() => {}); }
     catch {}
   })();
+  /** Repaint the SAME warning strip to say a save is being refused, and stop.
+   *
+   *  RJ's loop ran through this strip. The Files page refused a send because the document held
+   *  the old numbers, sent him here, and this strip told him to press Continue -- correct advice,
+   *  and the only advice on offer. Continue then rebuilt the payload and handed it to setState,
+   *  which silently refuses a write it cannot own (shared.js: blob stamped by another draft) and
+   *  returns the unchanged blob, indistinguishable from success. It navigated anyway, Files found
+   *  the same drift, and the strip said the same thing. He pressed it repeatedly and reported it.
+   *
+   *  So the heading, the detail AND the instruction are all replaced. Leaving 'press Continue to
+   *  Done' under a new heading would be the same dead end in different words. The wording comes
+   *  from TW.saveBlockedSay so the Files page's own refusal reads identically -- one refusal,
+   *  one description, the same reason docDrift is shared rather than copied.
+   *
+   *  Returns true when it painted, i.e. when the caller must NOT proceed. */
+  function repaintNote(say, fix) {
+    const note = document.getElementById("resync-note");
+    const head = document.getElementById("resync-note-head");
+    const what = document.getElementById("resync-note-what");
+    const doIt = document.getElementById("resync-note-do");
+    if (head) head.textContent = say;
+    if (what) what.textContent = "";
+    if (doIt) doIt.textContent = fix;
+    if (note) {
+      note.hidden = false;
+      try { note.scrollIntoView({ block: "nearest" }); } catch {}
+    }
+    return true;
+  }
+
+  function sayTheSaveIsBlocked() {
+    let b = null;
+    try { b = TW.saveBlockedSay ? TW.saveBlockedSay() : null; } catch { b = null; }
+    if (!b) return false;
+    return repaintNote(b.say, b.fix);
+  }
 
   // The "Proposal fields" sidebar is hidden (redundant with inline editing), but
   // tax treatment has no inline equivalent and drives the price line, so a
@@ -6645,6 +6681,12 @@
   // is still mounting. Keep the form listener too for keyboard submission.
   async function continueToDone(e) {
     e?.preventDefault();
+    // ASK BEFORE WRITING. Everything below composes a fresh proposal_payload and hands it to
+    // TW.setState -- which refuses a write it cannot own, returns the unchanged blob, and gives
+    // the caller no way to tell that apart from a success. Navigating on a refused write is what
+    // closed RJ's loop: the document was never rebuilt, so the Files page refused the send again
+    // and sent him back here. Say why, and go nowhere.
+    if (sayTheSaveIsBlocked()) return;
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";
@@ -6772,6 +6814,26 @@
       // re-reading from HF (which lives on the Estimate Review page).
       lump_sum_display: lumpSumText,
     });
+    // Belt and braces on the same failure. The guard above covers the three refusals setState
+    // knows about; this covers the one it does not -- writeBlob returning false on a full or
+    // locked localStorage (private mode, quota), which setState ignores. Either way the payload
+    // this function just built is not in state, so Files would rebuild the SAME warning out of
+    // the SAME stale document. Checking for its presence, not comparing its money: a false
+    // "it did not save" would send an estimator hunting a problem that is not there, and the
+    // payload is written as one object, so it is there or it is not.
+    let landed = false;
+    try { landed = !!(TW.getState() || {}).proposal_payload; } catch {}
+    if (!landed) {
+      // Never fall through to the navigation. A refused save has a known reason and a known way
+      // out; a full localStorage has neither, and going to Files anyway would put the estimator
+      // back in front of the same warning with nothing new to try.
+      btn.disabled = false; btn.textContent = "Continue to Done →";   // never leave it stuck on "Generating…"
+      if (!sayTheSaveIsBlocked()) {
+        repaintNote("Your changes could not be saved, so the document was not rebuilt.",
+                    "Reload this page and press Continue to Done again. If it says this a second time, tell Hanz before you send anything.");
+      }
+      return;
+    }
     window.location.assign(TW.withDraft("/done.html"));
   }
 

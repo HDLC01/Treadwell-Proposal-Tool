@@ -510,3 +510,138 @@ def test_a_refusal_with_nothing_readable_still_reaches_the_estimator(ran):
     the whole page to run. What it guards is that a refusal the panel cannot render falls back to
     the server's own sentence instead of leaving a Send button that does nothing when pressed."""
     assert ran["wiring"]["refusalFallsBackToTheServersSentence"]
+
+
+# ── RJ's loop, 2026-09-03 ────────────────────────────────────────────────────
+# "I had to go back and revise and resend an estimate based on the job changes. I keep getting
+#  the below error message. I go back to the PDF and hit continue as the message says and
+#  everything appears to be correct but I keep getting the error message."
+#
+# Every word of that is accurate, and every part of the screen he was reading was telling the
+# truth. The drift was real, the send was correctly refused, and the cure the panel named --
+# press Continue on the Proposal step -- could not be carried out. TW.setState refuses a write
+# when the local blob belongs to a different draft than the page is on (a second tab of this
+# tool), and it refuses it SILENTLY, handing the caller back the unchanged blob. So Continue
+# rebuilt the payload, wrote nothing, navigated anyway, and the Files page found the same drift
+# and pointed him back at Continue. Deterministic, and with no exit.
+#
+# The gate above was necessary and is not the bug. What was missing is that neither end ever
+# asked whether a save was possible before telling somebody to make one. Both now do, and both
+# say the same words, from one function.
+
+
+@needs_node
+def test_a_send_blocked_by_a_refused_save_says_so_instead_of_blaming_the_document(ran):
+    """The whole of RJ's report, executed. With the blob owned by another draft, the Files page
+    must name THAT, not the drift -- and must not offer Update the PDF, because pressing it is
+    the loop he was in."""
+    b = ran["blockedSave"]["blocked"]
+    assert b["painted"] is True, "the send was not stopped for the reason it could not succeed"
+    assert b["reason"] == "foreign-blob"
+    assert b["shown"] is True, "the panel never appeared"
+    assert "another tab" in b["title"], b["title"]
+    assert b["fixHidden"] is True, (
+        "Update the PDF is still offered -- pressing it is the loop RJ was in")
+    assert b["howNamesContinue"] is False, (
+        "the cure still names Continue, which is the instruction that could not work")
+    assert b["rows"] == "", (
+        "the drift figures are still on screen, which reads as 'the document is the problem'")
+    assert "Nothing was sent" in b["lede"], b["lede"]
+
+
+@needs_node
+def test_a_page_that_can_save_is_left_completely_alone(ran):
+    """THE COUNTEREXAMPLE. If showSaveBlocked painted regardless, every assertion above would be
+    just as green and every ordinary send in the building would be refused. Same lifted code,
+    same panel, a blob this page owns."""
+    c = ran["blockedSave"]["clean"]
+    assert c["reason"] is None, "a page on its own draft was reported as blocked"
+    assert c["painted"] is False
+    assert c["stillHidden"] is True, "the panel was shown on a page with nothing wrong"
+    assert c["title"] == "", "the panel's chrome was rewritten on a healthy page"
+
+
+@needs_node
+@pytest.mark.parametrize("reason,in_say,in_fix", [
+    ("foreign-blob", "another tab", "Close the other tab"),
+    ("no-draft", "lost track of which project", "Projects page"),
+    ("unverified", "not reaching the server", "Reload"),
+])
+def test_each_refusal_gets_its_own_words_and_its_own_way_out(ran, reason, in_say, in_fix):
+    """Three different problems with three different cures: close a tab, reopen the project,
+    reload. One shared "something went wrong" would put the estimator back where RJ was --
+    reading a true statement he cannot act on. Derived through the REAL saveBlocked, so the
+    mapping under test is the shipped mapping."""
+    w = ran["blockedSave"]["words"][reason]
+    assert w["reason"] == reason
+    assert in_say in w["say"], w["say"]
+    assert in_fix in w["fix"], w["fix"]
+    assert "Continue" not in w["fix"], (
+        "%s tells them to press Continue, which is the loop" % reason)
+
+
+@needs_node
+def test_the_words_for_the_three_refusals_are_actually_different(ran):
+    """A guard against the cheapest way to pass the test above: one sentence containing all
+    three phrases."""
+    says = {r["say"] for r in ran["blockedSave"]["words"].values()}
+    fixes = {r["fix"] for r in ran["blockedSave"]["words"].values()}
+    assert len(says) == 3 and len(fixes) == 3
+
+
+@needs_node
+def test_a_real_drift_shown_afterwards_gets_its_own_words_back(ran):
+    """The two states share one panel. Without a restore, an estimator who closes the second tab
+    and comes back to a genuine drift is told to close a tab he has already closed, with no
+    Update the PDF button to press -- a second dead end built by the fix for the first."""
+    r = ran["blockedSave"]["restored"]
+    assert r["title"] == "The PDF has the old numbers", r["title"]
+    assert "Update the PDF" in r["how"] and "Continue" in r["how"], r["how"]
+    assert r["fixHidden"] is False, "the fix button never came back"
+    assert "$13,265" in r["rows"] and "$18,670" in r["rows"], r["rows"]
+
+
+@needs_node
+def test_the_files_page_asks_before_it_blames_the_document(ran):
+    """Order is the whole fix. "Is the document stale" was asked first and answered correctly;
+    it is the wrong FIRST question when the reason it is stale is that this browser cannot save.
+    Nothing may be posted either way -- no portal row, no email."""
+    g = ran["gateOrder"]
+    assert g["asksBeforeBlamingTheDocument"], (
+        "showStaleDoc runs first, so the estimator is given the cure that cannot work")
+    assert g["onlyWhenThereIsDrift"], (
+        "the question is asked on every send, not only on a send that is being refused")
+    assert g["bothBeforeThePost"] and g["returnsWithoutPosting"], (
+        "a blocked send falls through to /api/portal/publish")
+    assert g["restoresButton"], "a blocked send leaves a dead Sending… button"
+
+
+@needs_node
+def test_the_proposal_step_asks_BEFORE_it_writes(ran):
+    """The other end. continueToDone composes a fresh payload and hands it to setState, which
+    refuses a write it cannot own and returns the unchanged blob -- indistinguishable from
+    success. Navigating on that is what closed the loop, so the question is asked before the
+    write and the answer sends nobody anywhere."""
+    p = ran["proposalGuard"]
+    assert p["said"] is True, "the Proposal step still navigates on a save it cannot make"
+    assert p["shown"] is True
+    assert "another tab" in p["head"], p["head"]
+    assert p["stillNamesContinue"] is False, (
+        "the note still says press Continue -- the three parts are addressed separately so that "
+        "the instruction can be replaced, not just prefixed")
+    assert p["guardBeforeTheWrite"], "the guard sits after the payload is composed"
+
+
+@needs_node
+def test_a_save_that_fails_for_a_reason_nobody_can_ask_about_also_stops(ran):
+    """saveBlocked knows three refusals. writeBlob returning false -- a full or locked
+    localStorage, private mode, quota -- is a fourth, and setState ignores its return value. So
+    presence of the payload is checked after the write, between it and the navigation, and that
+    branch never falls through. A first draft of this fix said `if (!landed && blocked) return`,
+    which would have navigated on exactly this case: the bug wearing a fix."""
+    p = ran["proposalGuard"]
+    assert p["landedBetweenWriteAndGo"], (
+        "the check is not between the write and the navigation, so it proves nothing")
+    assert p["landedReturns"], "it paints and then navigates anyway"
+    assert p["landedRestoresButton"], (
+        "the button is left on Generating… with no way forward")

@@ -157,7 +157,7 @@
       why: "Adds sales tax. The bid you see already includes it.",
       def: true,  cells: ["Epoxy!B6"], on: "Yes", off: "No" },
     { key: "remodel_tax", label: "Remodel tax", scope: ["epoxy", "polish", "combo", "gyp"],
-      why: "Occupied remodel. Adds the county remodel rate; pick the county on the next screen.",
+      why: "Occupied remodel. Taxed at the county rate — pick the county below.",
       def: false, cells: ["Epoxy!D6"], on: "Yes", off: "No" },
     { key: "reno", label: "Renovation", scope: ["epoxy", "polish", "combo"],
       why: "Existing floor, not new construction. Triples the patch material rate.",
@@ -229,8 +229,12 @@
   }
 
   function renderConditions() {
-    if (!condBox) return;
-    condBox.innerHTML = CONDITIONS.filter(condApplies).map(switchHtml).join("");
+    if (condBox) condBox.innerHTML = CONDITIONS.filter(condApplies).map(switchHtml).join("");
+    // Painted from here rather than from its own listeners: every caller of this
+    // function -- a toggle flip, a work-type change, the boot -- is a moment the
+    // county's own sentence can have stopped being true, since it quotes the Remodel
+    // tax toggle by name. One choke point, so the two cannot disagree.
+    paintCounty();
   }
 
   /** The cells for the conditions ON SCREEN, merged over whatever cell_values holds.
@@ -322,10 +326,61 @@
     // polish in it.
     if (conditionsTouched()) saveConditions();
   }
+  // ── The county, which is a job condition because Remodel tax is ────────────
+  //
+  //  Kyle's workbook charges a flat 10% for remodel tax, which is not a real rate
+  //  anywhere. Kansas charges the state 6.5% plus the county portion -- 7.975% in
+  //  Johnson County -- so the bid has to know WHICH county. Hanz, 2026-08-18:
+  //  "For the Remodel tax please use the real state tax or city tax, DONT USE 10%".
+  //
+  //  SHARED, NOT COPIED. js/county-picker.js is the polish beta's own picker lifted
+  //  out of a page that is being retired; the estimate screen has a third copy welded
+  //  to the workbook-cell machinery, deliberately left alone. This mount is what stops
+  //  a fourth being written.
+  //
+  //  A pick writes the four top-level draft keys the estimate screen already reads, so
+  //  neither Continue handler is touched: TW.setState merges at the top level, and
+  //  #county-input carries no `name`, so TW.readForm never sweeps the search text into
+  //  the answers. test_beta_intake_routing.py compares what the two handlers save key
+  //  for key, and this change is invisible to both of them.
+  const county = window.TWCounty ? window.TWCounty.mount({
+    remodelTaxOn: () => !!condState.remodel_tax,
+    // The picker owns the four keys; the page owns when they are saved. Same discipline
+    // as saveConditions(): setState merges, so nothing else in the draft moves.
+    //
+    // Repainted here as well, because choose() and clear() are the two moments hasPick()
+    // changes -- and hasPick() is half of what decides whether the field is on screen.
+    // Without this, clearing a county while Remodel tax is off would leave the field
+    // showing an empty search box with nothing left to account for.
+    onChange: () => { TW.setState(county.keys()); paintCounty(); },
+  }) : null;
+
+  /** Show the field when it can matter, and when it already holds an answer.
+   *
+   *  The second half is the one that is easy to miss: hiding a picked county because
+   *  somebody turned Remodel tax off would leave a rate in the draft with nothing on
+   *  screen to show it, which is how a bid gets a county nobody remembers choosing.
+   *  So a set county stays visible and the note says plainly that it is not affecting
+   *  the price -- the same rule the picker's own wording follows. */
+  function paintCounty() {
+    const field = document.getElementById("county-field");
+    if (!field) return;
+    // No module means the script did not load; the field stays hidden rather than
+    // showing an inert search box that can never return a row.
+    field.hidden = !county || !(condState.remodel_tax || county.hasPick());
+    if (county) county.renderNote();
+  }
+
   hydrateConditions();
   form.querySelectorAll("[name='work_type']").forEach(
     r => r.addEventListener("change", syncConditionsToWorkType));
   renderConditions();
+  if (county) {
+    county.hydrate(TW.getState() || {});   // a county chosen on the estimate screen shows here
+    county.wire(true);                     // true: this page has no delegated click router
+    county.load();                         // async; a failed fetch costs the rows, not the form
+    paintCounty();                         // hydrate() may have found a pick to reveal
+  }
 
   // Default the bid date to today so users don't have to think about it.
   const bidInput = form.querySelector("[name='bid_date']");

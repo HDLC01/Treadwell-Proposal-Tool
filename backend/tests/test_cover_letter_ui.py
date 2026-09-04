@@ -564,7 +564,17 @@ def test_the_portal_is_told_the_proposal_has_a_letter():
     body = m.group(0)
     assert "has_cover_letter" in body, (
         "the publish body never tells the portal about the letter — the field is a no-op again")
-    assert "await TW.flushState()" in DONE_JS[max(0, m.start() - 4500):m.start()], (
+    # ORDER, not distance. This was a 4500-character lookback, which is a proxy for "the flush
+    # comes first" that shrinks every time a line is added between the two — and RJ's
+    # refused-save gate sits in exactly that gap, pushing it to 4572 and failing a test whose
+    # CLAIM was still true. Both strings are unique in the file, so comparing their positions says
+    # precisely what is meant and nothing more. Same lesson as the derived tab check in
+    # test_active_projects_board.py, which was rewritten because it broke on every addition.
+    assert DONE_JS.count("await TW.flushState()") == 1, (
+        "a second flush site appeared — position alone no longer says which one runs first")
+    assert DONE_JS.count("/api/portal/publish") == 1, (
+        "a second publish site appeared — this test is now checking the wrong one")
+    assert DONE_JS.index("await TW.flushState()") < m.start(), (
         "the publish call moved ahead of the flush — a fresh TW.getState() read here would no "
         "longer be guaranteed to match what create_revision is about to pin")
     # The value, not just the key. `generate_result` / its download url would be the stale copy.
@@ -649,3 +659,150 @@ def test_no_emoji_reached_the_interface():
     for name, src in (("coverletter-editor.js", CL_CODE),):
         found = emoji.findall(src)
         assert not found, "%s carries emoji in the UI: %r" % (name, found)
+
+
+# == bold, italic and underline actually apply to the letter ==================
+# Hanz, on the cover-letter tab: "These options to edit the text to make it bold does not apply."
+# Three separate things had to be true for a press to reach a letter paragraph, and each of the
+# three is asserted here on its own reading, because two of them leave the other two looking fine.
+
+
+def test_switching_to_the_letter_leaves_the_ribbon_aimed_at_nothing(ran):
+    """The starting state, and it is correct rather than broken. The proposal owns the formatting
+    row; handing the letter the tab hands the row back to the proposal's idle renderer, which
+    disables every control because there is no paragraph under the caret yet. A ribbon that stayed
+    lit while pointing at nothing would be the worse bug."""
+    d = ran["boldApplies"]
+    assert d["virgin"] == 0, "an untouched letter shipped an override before anyone pressed anything"
+    assert d["disabledBeforeAim"] is True, (
+        "the formatting buttons were live before the caret was anywhere — a press then has no "
+        "paragraph to act on and does nothing, silently")
+    assert d["onCover"] is True, "the tab click never put the letter in front"
+
+
+def test_putting_the_caret_in_a_line_turns_the_buttons_back_on(ran):
+    """The half that interception could never have done for itself: a disabled button dispatches
+    no click at all, so there was nothing to intercept. This is the assertion that catches the
+    re-enable going missing — the fake DOM in the harness will happily dispatch from a disabled
+    button, so nothing else here would notice."""
+    assert ran["boldApplies"]["disabledAfterAim"] is False, (
+        "the caret is in a paragraph and the buttons are still disabled — nothing an estimator "
+        "presses can reach the letter")
+
+
+def test_pressing_bold_changes_the_letter_and_not_its_words(ran):
+    """What Hanz pressed. The paragraph under test carries a {{job_name}} fill mid-sentence, so
+    this also pins that a press does not flatten the token highlighting or rewrite a character of
+    the sentence — bold is a property of the run, not an edit to the text."""
+    d = ran["boldApplies"]
+    assert d["pressedAfterBold"] == "true", "the button did not even light up"
+    assert d["fmtClass"] is True, (
+        "the paragraph is not marked as format-edited, and collect() only examines runs on a "
+        "block carrying tw-fmt — the press would be dropped on the way out")
+    assert d["dirty"] is True, "a formatted paragraph was not counted as changed, so it never saves"
+    assert d["textUnchanged"] is True, "bolding a line rewrote the line"
+    assert d["fillSurvived"] is True and d["fillToken"] == "job_name", (
+        "the {{job_name}} fill was destroyed by a formatting press")
+    assert d["boldSaved"] == [True], (
+        "the press did not survive collect(). This is the fault Hanz reported: bolding a word "
+        "changes no character, so a reader that compares text alone finds nothing to save")
+    assert d["boldText"] == "Thank you for the opportunity to bid Olathe Fire Station 4.", (
+        "the saved runs do not spell the paragraph back out")
+
+
+def test_turning_bold_off_says_so_out_loud_and_reset_is_what_clears_it(ran):
+    """`false` is not the same as absent. Absent means "use whatever the template's own run says";
+    false means the estimator turned it off and the .docx has to carry that. So un-pressing bold
+    leaves an override behind on purpose, and Reset — not a second press — is the thing that puts
+    the paragraph back to carrying no override at all."""
+    d = ran["boldApplies"]
+    assert d["unboldSaved"] == [False], (
+        "un-bolding dropped the override instead of recording bold=false; on a template whose own "
+        "run is bold, the letter would come out bold anyway")
+    assert d["afterReset"] is None, (
+        "Reset left an override saying exactly what the template already says — 'an untouched "
+        "letter carries no overrides', which the version gate leans on, stops being true")
+    assert d["pressedAfterReset"] == "false"
+    assert d["paraHidden"] == "hidden", (
+        "the bullet/indent group is offered on the letter. Those are properties of a proposal "
+        "block record; a letter paragraph has neither, so the control would do nothing")
+
+
+def test_italic_underline_and_a_typed_size_all_reach_the_letter(ran):
+    """Bold was the one reported, but it was never bold-specific — all four controls go through
+    one press path, and the size box goes through a `change` rather than a click."""
+    d = ran["italicUnderlineSize"]
+    assert d["italic"] == [True], "italic does not apply"
+    assert d["underline"] == [True], "underline does not apply"
+    assert d["size"] == [14], "a typed point size does not apply"
+    assert d["boxValue"] == "14", "the size box did not keep what was typed into it"
+
+
+def test_the_letter_stops_listening_the_moment_the_proposal_is_back_in_front(ran):
+    """The other edge of the same interception, and the click that is actually dangerous.
+
+    Going TO the letter is safe by accident: the ribbon interceptor's first line returns while the
+    proposal is still the active tab, so it cannot eat that press however badly it is written.
+    Coming BACK is the trap. The interceptor lives on #fmt-ribbon, which is the PARENT of both the
+    formatting row and the tab strip, and it takes presses in the capture phase — so if it stopped
+    propagation before checking that the target was a formatting button, it would swallow the
+    estimator's own tab click and leave them on the letter with no way back to the proposal.
+
+    Three readings, because three different things have to be true and each fails on its own:
+    the estimator gets out, the proposal's own handler starts hearing its presses again, and the
+    letter stops taking them."""
+    d = ran["italicUnderlineSize"]
+    assert d["backOnProposal"] is True, (
+        "pressing the Proposal tab left the letter in front — the tab click was eaten on its way "
+        "down the ribbon, which is the estimator stranded on a document they asked to leave")
+    assert d["proposalHeard"] == 1, (
+        "the proposal's own click handler never heard the press. The letter going quiet is only "
+        "half of it: the interceptor has to stop intercepting too, or bold is dead on the "
+        "proposal for the rest of the session")
+    assert d["boldLeakedIn"] is False, (
+        "a press made on the proposal tab landed on a cover-letter paragraph")
+
+
+def test_a_saved_format_comes_back_tomorrow(ran):
+    """The last place a format-only edit can vanish: the round trip. The backend prefers `runs`
+    and skips `text` when it has them, so both have to be sent — `text` alone is what a merely
+    retyped paragraph saves, and a reader that only ever saw text is what made the press disappear
+    in the first place."""
+    d = ran["formatSurvivesReload"]
+    assert d["storedRuns"] == [
+        {"t": "Thank you for the opportunity to bid Olathe Fire Station 4.", "b": True}], (
+        "the bold press did not reach the draft blob")
+    assert d["storedHasText"] is True, (
+        "the override carries runs but no text; anything reading the plain wording of a paragraph "
+        "now reads nothing")
+    assert d["replayedText"] == "Thank you for the opportunity to bid Olathe Fire Station 4."
+    assert d["replayedBold"] is True, "the letter came back unformatted on the second visit"
+    assert d["replayedFmtClass"] is True, (
+        "the replayed paragraph is not marked format-edited, so the NEXT collect() drops the "
+        "format — the estimator's bold survives one visit and disappears on the one after")
+    assert d["recollected"] == [True]
+
+
+def test_ctrl_b_reaches_the_letter_too(ran):
+    """The keyboard is a second, separate wiring, and an estimator formatting a letter is far more
+    likely to reach for Ctrl+B than for the ribbon.
+
+    The ribbon buttons are bound by `clWireRibbon`; Ctrl+B is bound by `clWireSurface`, and the
+    proposal's own Ctrl+B handler is scoped to `#doc-surface`, so it never fires for the letter at
+    all. Delete the letter's keydown listener and every other test in this file stays green.
+
+    `prevented` is the second half and is not decoration. An unhandled Ctrl+B inside a
+    contenteditable is not inert — it is the BROWSER applying its own bold, which writes a raw
+    <b> element that `collect()` cannot see. The estimator would watch the text go bold on screen
+    and find it plain in the finished PDF, which is the exact complaint this whole change answers."""
+    d = ran["keyboardApplies"]
+    assert d["bold"] == [True], "Ctrl+B on the letter saved nothing"
+    assert d["italic"] == [True], "Ctrl+I on the letter saved nothing"
+    assert d["prevented"] is True, (
+        "the letter handled Ctrl+B but let the browser have it as well — the browser's own bold "
+        "writes markup the collector cannot read, so the screen and the PDF disagree")
+    assert d["text"] == "Thank you for the opportunity to bid Olathe Fire Station 4.", (
+        "the keyboard press changed the wording as well as the formatting")
+    assert d["plainPrevented"] is False, (
+        "a bare 'b' with no Ctrl was swallowed as a command — the estimator cannot type the "
+        "letter b")

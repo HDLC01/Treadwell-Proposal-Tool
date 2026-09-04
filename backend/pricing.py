@@ -61,10 +61,40 @@ def _num(x: Any) -> float | None:
 
 
 def _ceil_to(value: float, multiple: float) -> float:
-    """Round `value` UP to the next whole `multiple` (Excel CEILING)."""
+    """Round `value` UP to the next whole `multiple` (Excel CEILING).
+
+    Deliberately NOT routed through _roundup, unlike every ROUNDUP site in this
+    module. Two reasons, both checked rather than assumed: this is CEILING, a
+    different function, and a sweep of 23,928 cove cases on 2026-09-04 found no
+    input where the float guard would change the answer -- the only division
+    here is by 50. Guarding it would also change the answer on a negative
+    input, where Excel's CEILING and ROUNDUP genuinely differ, for no benefit.
+    """
     if not multiple:
         return value
     return math.ceil(value / multiple) * multiple
+
+
+def _roundup(value: float) -> int:
+    """Excel ROUNDUP(value, 0). Two things math.ceil does not do.
+
+    ROUNDS AWAY FROM ZERO, both directions. ceil is the same function only for POSITIVE
+    numbers. Every ROUNDUP in the Epoxy tab operates on a positive figure except one: D74, the
+    hard-bid discount, which is negative by construction. ROUNDUP(-100.4) is -101; ceil(-100.4)
+    is -100, so ceil shaves a dollar off the discount and bids the job a dollar high.
+
+    AND IT DOES NOT ROUND UP FLOAT DUST. Excel keeps 15 significant digits, so a value only a
+    binary artefact above an integer is that integer to Excel. In IEEE-754 1 - 0.32 is
+    0.6799999999999999, so 1003 / (1 - 0.32) is 1475.0000000000002 -- and a bare ceil buys a
+    whole extra dollar off the back of the error. 1.3% of the (cost, GP) pairs in the range this
+    tool bids land on it. polish-bid-core.js has guarded this since it was written and names the
+    same hazard in its own comment; 12 significant digits is that engine's figure, kept so the
+    two agree exactly rather than merely closely.
+    """
+    if not value:
+        return 0
+    g = float("%.12g" % value)
+    return int(math.copysign(math.ceil(abs(g)), g)) if g else 0
 
 
 def list_systems() -> List[str]:
@@ -98,7 +128,7 @@ def compute_system(name: str, sf: float, *, bulk_discount: bool = False) -> Dict
         price = _num(bulk) if (bulk_discount and bulk is not None) else _num(coat.get("unit_price"))
         if not coverage or price is None:
             continue
-        qty = math.ceil(sf / coverage)
+        qty = _roundup(sf / coverage)
         cost = qty * price
         liquids_total += cost
         detail.append({"kind": "liquid", "product": coat.get("product"),
@@ -157,11 +187,11 @@ def compute_polish(sf: float, *, reno: bool = False, grout: bool = False,
     if dye:
         sub += line("Dye", sf * _num(P.get("dye_per_coat")) * _num(P.get("dye_coats") or 2))
     if joint_filler:
-        kits = math.ceil(sf / _JF_SF_PER_KIT)
+        kits = _roundup(sf / _JF_SF_PER_KIT)
         sub += line(f"Joint filler ({kits} kit)", kits * _num(P.get("joint_filler_per_kit")))
 
-    sub = math.ceil(sub)  # Material Sub Total = ROUNDUP(...)
-    shipping = math.ceil(sub * _num(P.get("shipping_pct") or 0.02))
+    sub = _roundup(sub)  # Polish D31 = ROUNDUP(SUM(D17:D30),0)
+    shipping = _roundup(sub * _num(P.get("shipping_pct") or 0.02))  # D32
     return {"family": "polish", "sf": sf, "subtotal": float(sub),
             "shipping": float(shipping), "material": float(sub + shipping),
             "detail": detail, "found": True}
@@ -182,8 +212,8 @@ def compute_cove(option: str, lf: float, *, quartz_system: bool = False) -> Dict
 
     cp = _COVE_PRICES
     divisor = _num(c.get("divisor")) or 1
-    C = math.ceil(lf / divisor)
-    E = math.ceil(C / 8) + math.ceil(C / 4)
+    C = _roundup(lf / divisor)
+    E = _roundup(C / 8) + _roundup(C / 4)
     resin_price = _num(cp.get("CoveRez")) if c.get("resin") == "CoveRez" else _num(cp.get("WR"))
     liquid = E * (resin_price or 0.0)
 
@@ -232,9 +262,9 @@ def roll_up(system_results: List[Dict[str, Any]], *, cove_total: float = 0.0,
     sub_raw += (_num(cove_total) or 0.0) + (_num(polish_total) or 0.0)
     sub_raw += (_num(patch_sf) or 0.0) * EPOXY_PATCH_RATE
     sub_raw += (_num(extras_total) or 0.0)
-    material_sub = float(math.ceil(sub_raw))
+    material_sub = float(_roundup(sub_raw))
     pct = shipping_escalation_pct(material_sub)
-    shipping = float(math.ceil(material_sub * pct))
+    shipping = float(_roundup(material_sub * pct))
     return {"material_sub": material_sub, "shipping_pct": pct,
             "shipping_escalation": shipping, "material_total": material_sub + shipping}
 
@@ -266,7 +296,11 @@ def compute_full_bid(material_total: float, sf: float, *,
     Note: the sheet hardcodes remodel at 10%; pass remodel_rate to use the
     accurate state+county rate instead.
     """
-    ceil = math.ceil
+    # Every ROUNDUP in this chain goes through _roundup, not math.ceil. Checked cell by cell on
+    # 2026-09-04: all 18 D-column formulas below say ROUNDUP except D68 (a bare SUM of D65/D66,
+    # which are themselves ROUNDUP and are rounded individually here) and D77 (the sheet
+    # hardcodes 0). Excel's rounding, at every site the sheet rounds.
+    ceil = _roundup
     crews = crews if crews is not None else [(3, 5)]
     D43 = _num(material_total) or 0.0
     sf = _num(sf) or 0.0
@@ -302,11 +336,17 @@ def compute_full_bid(material_total: float, sf: float, *,
     # GP markup (D73), hard-bid (D74), super (D75), soft (D76), contingency (D77)
     gp = _gp_pct(D70)
     D73 = ceil((D70 + D80 + D83) / (1 - gp)) - ceil(D70 + D80)
-    if hard_bid:
-        b74 = -0.04 if D70 >= 60000 else (-0.025 if D70 >= 13000 else 0)
+    # Epoxy!B74 = IF(B5="yes", IF(D70>=60000, -0.04, IF(B4="yes", IF(D70>=13000, -0.025, 0))))
+    # B4 is the LOCAL flag, and it gates the -2.5% band only -- the -4% band above $60k is
+    # granted to local and non-local jobs alike. Dropping B4 handed a discount to travelling
+    # jobs that the sheet refuses them.
+    if hard_bid and D70 >= 60000:
+        b74 = -0.04
+    elif hard_bid and local and D70 >= 13000:
+        b74 = -0.025
     else:
         b74 = 0
-    D74 = ceil((D70 + D73) * b74)
+    D74 = _roundup((D70 + D73) * b74)   # ROUNDUP, not ceil: this one is negative
     D77 = ceil(contingency)
     D75 = ceil((D70 + D73 + D74 + D77 + D80 + D83) * super_pct)
     D76 = ceil((D70 + D73 + D74 + D75 + D77 + D80 + D83) * soft_pct)
