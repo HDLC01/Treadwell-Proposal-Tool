@@ -447,6 +447,34 @@ GYP_CELL_MAP: Dict[str, str] = {          # base sheet only (offset +1 row vs Ep
 GYP_SF_MAP: Dict[str, str] = {            # written to ALL 5 gyp sheets
     "gyp_soft_sf": "G9", "gyp_hard_sf": "I9", "gyp_corridor_sf": "K9",
 }
+
+# Every sheet that holds the "Taxable?" answer as its OWN literal.
+#
+# The sales-tax rate cell is SHEET-relative on all eleven priced sheets --
+# `=IF($B$6="no",0,0.09475)` on Epoxy/Polish/Seal/Seal (+Jnts)/Epoxy blank/Leveling
+# and `=IF($B$8="no",0,0.09475)` on all five gyp variants. `$B$6` is column- and
+# row-absolute but sheet-relative, so each sheet reads its OWN flag. Seven of those
+# flag cells are mirrors (`=Epoxy!B6`, `=Polish!B6`, `='Gyp (USG 1-8")'!B8`) and
+# follow whatever the master says; the four below are independent literals.
+#
+# EPOXY_CELL_MAP already carries "taxable" -> Epoxy!B6, which is right for the
+# mirrors and unreachable for the other three -- so a tax-exempt gypsum or Leveling
+# bid was quoted carrying 9.475% it should not have. This map is the superset;
+# Epoxy is listed again so the whole rule reads in one place.
+#
+# NOT the mirrors. A literal written into Polish/Seal/Seal (+Jnts)/Epoxy blank or
+# the three mirroring gyp variants replaces a live reference and forks the sheets
+# apart permanently -- the divergence found in Kyle's own filed workbooks, and the
+# one PR #432 deliberately refused to introduce for the remodel rate.
+#
+# `remodel_tax` needs no equivalent: Epoxy!D6 is its ONLY literal. Every other
+# sheet's toggle, including Leveling!D6 and all five gyp D8, is `=Epoxy!D6`.
+TAXABLE_FLAG_CELLS: Dict[str, str] = {
+    "Epoxy":      "B6",
+    "Leveling":   "B6",
+    GYP_SHEET:    "B8",
+    "Gyp (FR)":   "B8",
+}
 GYP_TOTALS: Dict[str, str] = {
     "material_total":  "E41",
     "labor_install":   "E52",
@@ -924,6 +952,17 @@ def fill_estimate(
                 for name in GYP_SHEETS:
                     if name in wb.sheetnames:
                         wb[name][coord] = _coerce(values[field])
+
+    # 1.4 The Taxable? answer reaches every sheet that holds it as a literal, not
+    # just Epoxy!B6. See TAXABLE_FLAG_CELLS: each priced sheet's sales-tax rate reads
+    # its OWN flag cell, and Leveling / the gyp base / 'Gyp (FR)' hold theirs
+    # independently -- so writing Epoxy alone left a tax-exempt gypsum or Leveling
+    # bid billing 9.475%. Written here, with the other named fields, so the values
+    # ride the structural-edit shift below; `cell_values` still wins over all of it.
+    if values.get("taxable") not in (None, ""):
+        for name, coord in TAXABLE_FLAG_CELLS.items():
+            if name in wb.sheetnames:
+                wb[name][coord] = _coerce(values["taxable"])
 
     # 1.5 Duplicated worksheets: clone each {id, source} BEFORE the cell_values
     # loop (which skips sheets not yet in wb.sheetnames), so the copy's

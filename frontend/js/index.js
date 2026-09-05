@@ -155,7 +155,18 @@
       def: false, cells: ["Epoxy!D5"], on: "Yes", off: "No" },
     { key: "taxable", label: "Taxable", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Adds sales tax. The bid you see already includes it.",
-      def: true,  cells: ["Epoxy!B6"], on: "Yes", off: "No" },
+      // FOUR cells, not one, and this is the whole of Kyle's tax-exempt bug on the
+      // base tabs. The sales-tax rate is `=IF($B$6="no",0,0.09475)` on every priced
+      // sheet — SHEET-relative, so each sheet reads its OWN flag. Polish, Seal,
+      // 'Seal (+Jnts)' and 'Epoxy blank' mirror Epoxy!B6 and are handled by writing
+      // it; Leveling!B6, 'Gyp (USG 1-8")'!B8 and 'Gyp (FR)'!B8 are independent
+      // LITERALS and were never written at all, so every tax-exempt gypsum and
+      // Leveling bid carried 9.475% it should not have. The other three gyp variants
+      // mirror the gyp base, so writing that one carries them — and they stay out of
+      // this list for the same reason Polish!B6 does. Epoxy!B6 stays FIRST:
+      // hydrateConditions reads cells[0] to paint the switch.
+      def: true,  cells: ["Epoxy!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"],
+      on: "Yes", off: "No" },
     { key: "remodel_tax", label: "Remodel tax", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Occupied remodel. Taxed at the county rate — pick the county below.",
       def: false, cells: ["Epoxy!D6"], on: "Yes", off: "No" },
@@ -182,8 +193,13 @@
   //    be written to both tabs or the polish side keeps the template default.
   //  * Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 / =Epoxy!D6.
   //    Writing those three would replace a live reference with a literal and
-  //    decouple the tabs for good, so prevailing wage, taxable and remodel are
-  //    Epoxy-only ON PURPOSE and the polish tab follows on its own.
+  //    decouple the tabs for good, so the POLISH tab is never written for them and
+  //    follows on its own. That is not the same as "Epoxy-only": Taxable is a
+  //    literal on Leveling!B6, 'Gyp (USG 1-8")'!B8 and 'Gyp (FR)'!B8 as well, and
+  //    writing Epoxy alone left every tax-exempt gyp and Leveling bid carrying
+  //    9.475%. See the taxable row above. Prevailing wage and remodel tax really are
+  //    Epoxy-only: Epoxy!D5 / Epoxy!D6 are the only literals either one has, and
+  //    every other sheet's — including both gyp D7/D8 and Leveling's — is =Epoxy!.
   //  * Epoxy!D41 is compared against V136 / V137 by all six of its consumers
   //    (IF($D$41=$V$136,...)), and those two cells read "BULK Discount ON" and
   //    "Bulk Discount OFF" -- mixed case, and inconsistent with each other. Any
