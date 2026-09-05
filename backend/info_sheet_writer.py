@@ -429,6 +429,17 @@ def _flag(data: Dict[str, Any], flag: str) -> Optional[str]:
 
     An untouched gyp Taxable cell means the template default stands (taxable), so
     returning None here leaves B66 alone rather than inventing an exemption.
+
+    2026-09-05: the tool now fans the estimator's Taxable answer out to all four
+    cells that hold it as a literal -- Epoxy!B6, Leveling!B6, the gyp base's B8 and
+    'Gyp (FR)'!B8 -- so on a NEW gyp draft the cell read above is populated and this
+    returns a real answer instead of None. Two things follow. The fall-through is
+    still refused, because a draft made before that fix carries the epoxy answer
+    alone and the gyp bid it priced was not taxed by it. And the value in that cell
+    is a WORD: if anyone ever writes a mirror FORMULA there instead, `_yn` reads the
+    non-empty string as "not yes", B66 flips to 'Y' and every gypsum job tells
+    Foundation to chase an exemption certificate. Pinned by
+    test_taxable_flag_reaches_every_sheet.py.
     """
     cells = data.get("cell_values") if isinstance(data.get("cell_values"), dict) else {}
     epoxy_addr, gyp_addr = _FLAG_CELLS[flag]

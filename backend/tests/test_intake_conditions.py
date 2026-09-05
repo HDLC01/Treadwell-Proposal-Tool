@@ -184,14 +184,25 @@ def test_local_and_hard_bid_reach_both_tabs(cond, sheet):
 
 
 @needs_node
-def test_the_three_mirrored_flags_are_written_to_epoxy_only(cond, sheet):
+def test_the_three_flags_polish_mirrors_are_never_written_to_the_polish_tab(cond, sheet):
     """And the workbook says why.
 
     `Polish!D5`, `B6` and `D6` are the formulas ``=Epoxy!D5`` / ``=Epoxy!B6`` / ``=Epoxy!D6``.
     Writing a literal into one of those replaces a live reference and decouples the two tabs
     permanently -- from then on a prevailing-wage job would be prevailing wage on the epoxy side
-    and not on the polish side, with nothing on screen to show it. So they are Epoxy-only ON
-    PURPOSE, and the polish tab follows on its own.
+    and not on the polish side, with nothing on screen to show it. So the polish tab follows on
+    its own for all three.
+
+    RULE CHANGED 2026-09-05, deliberately, and this test used to be called
+    ``..._are_written_to_epoxy_only``. "Not written to Polish" was true; "Epoxy-only" was not.
+    ``Taxable?`` is an independent LITERAL on ``Leveling!B6``, ``'Gyp (USG 1-8")'!B8`` and
+    ``'Gyp (FR)'!B8`` as well, each read by its own sheet's ``=IF($B$6="no",0,0.09475)``, and
+    writing Epoxy alone left every tax-exempt gypsum and Leveling bid carrying 9.475%. The four
+    cells are pinned against the workbook in
+    ``test_taxable_flag_reaches_every_sheet.py::test_the_intake_writes_the_answer_to_all_four_literal_cells``.
+
+    Prevailing wage and remodel tax are still genuinely Epoxy-only: ``Epoxy!D5`` and ``Epoxy!D6``
+    are the only literals either one has anywhere in the workbook.
     """
     p = sheet["Polish"]
     for addr, ref in (("D5", "=Epoxy!D5"), ("B6", "=Epoxy!B6"), ("D6", "=Epoxy!D6")):
@@ -204,6 +215,17 @@ def test_the_three_mirrored_flags_are_written_to_epoxy_only(cond, sheet):
     assert cells["Epoxy!D5"] == "No"
     assert cells["Epoxy!B6"] == "Yes"
     assert cells["Epoxy!D6"] == "No"
+    # Prevailing wage and remodel really are one cell each -- every other sheet's is =Epoxy!.
+    for addr in cells:
+        assert not addr.endswith("!D5") or addr == "Epoxy!D5", addr
+        assert not addr.endswith("!D6") or addr == "Epoxy!D6", addr
+    # ...while Taxable now reaches all four of the cells that hold it independently.
+    assert cells["Leveling!B6"] == "Yes"
+    assert cells['Gyp (USG 1-8")!B8'] == "Yes"
+    assert cells["Gyp (FR)!B8"] == "Yes"
+    for addr in ("Gyp (USG N12ULTRA)!B8", 'Gyp (USG N25 1-4")!B8', "Gyp (GWorx SC190)!B8",
+                 "Seal!B6", "Seal (+Jnts)!B6", "Epoxy blank!B6"):
+        assert addr not in cells, addr + " must never be written -- it is a formula"
 
 
 @needs_node
@@ -379,5 +401,8 @@ def test_none_of_these_cells_are_locked_against_the_estimator(sheet):
         for a in addrs:
             locked.add("%s!%s" % (tab, a))
     ours = {"Epoxy!B4", "Epoxy!B5", "Epoxy!D5", "Epoxy!B6", "Epoxy!D6", "Epoxy!B10", "Epoxy!D41",
-            "Polish!B4", "Polish!B5", "Polish!B10", "Polish!E25", "Polish!E29", "Polish!F29"}
+            "Polish!B4", "Polish!B5", "Polish!B10", "Polish!E25", "Polish!E29", "Polish!F29",
+            # The three Taxable cells added 2026-09-05. Same rule, same reason: the estimator has
+            # to be able to change a tax answer in the workbook after it is downloaded.
+            "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8"}
     assert not (ours & locked), sorted(ours & locked)
