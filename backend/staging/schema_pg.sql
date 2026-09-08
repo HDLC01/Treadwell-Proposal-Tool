@@ -219,6 +219,15 @@ values
   ('default-bag', 'Bag')
 on conflict (id) do nothing;
 
+-- Who edited it, 2026-09-04 (Hanz: "in the items tab we must put the name of who created it and
+-- who edited it"). Mirrors supabase_schema.sql; owner_email already answered who created it.
+-- NULLABLE and never backfilled — a row predating this column was changed by somebody nobody
+-- recorded, and the tab shows that as "—" rather than naming the creator. Server-set from the
+-- authenticated request, never from the body. Not cost_updated_at, which is a PRICE revision;
+-- this moves on any edit, an assembly LINE change included.
+alter table public.library_items add column if not exists updated_by text;
+alter table public.library_assemblies add column if not exists updated_by text;
+
 -- ── Markup rules ────────────────────────────────────────────────────────
 -- The markup chain's rates as editable expressions, one row per line per sheet LAYOUT. Mirrors
 -- supabase_schema.sql; see backend/markup.py for why the key is the TAB (Seal / Epoxy blank /

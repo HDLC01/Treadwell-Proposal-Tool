@@ -1331,6 +1331,21 @@ button {
   top: 0;
 }
 
+/* …BUT NOT ON THE COVER LETTER, whose numbering level is a different level in a different file.
+   The rule above is right for the Terms clauses and its comment says why: numId 5 carries
+   `w:rPr><w:b/`, so a plain marker there would contradict the document.
+
+   The letter's labelled lines are `numId` 33/34 -> `abstractNum` 32, `lvlText` "%1." — and that
+   level has NO `w:rPr` element at all, measured across all seven templates in
+   backend/templates/CoverLetter/. So its number prints at the paragraph's own weight, and 700
+   here would make the screen one step heavier than the .docx.
+
+   Scoped to `#cl-surface`, which is the letter's own surface and never `#doc-surface`
+   (frontend/proposal-review.html:742) — so this cannot reach a Terms clause. `inherit` rather
+   than `400`, because the number should follow whatever weight its paragraph is actually in
+   rather than asserting a second fixed answer one file over. */
+#cl-surface .tw-num::before { font-weight: inherit; }
+
 /* "You cannot empty a numbered clause" — said where it happened, at the moment it happened.
    Emptying a clause used to be accepted on screen and printed as a lone "1." in a signed
    contract; the wording is now put back (proposal-review.js restoreEmptiedClause) and refused at
