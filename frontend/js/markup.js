@@ -85,7 +85,9 @@
     super_pto: "Supervision and paid time off, as a flat rate on everything above.",
     soft_costs: "Overhead the field never sees. On the Gyp tab this line is a whole expression, " +
       "not a rate.",
-    bond: "Bond premium on the running total. The workbook ships this line at zero."
+    bond: "Bond premium on the running total. The workbook ships this line at zero, and a " +
+      "rate filed here does not reach it yet: Kyle's own bond row counts the two tax lines " +
+      "twice, so any rate would over-charge until he corrects the sheet."
   };
 
   /** The prose name of a tab, for the ABSENT caption. A layout with no entry gets "this tab",
@@ -143,6 +145,91 @@
     gyp: { hard_bid: NOT_ON_TAB, super_pto: F("4.1%"), soft_costs: F(GYP_SOFT_COSTS),
            bond: F("0%") }
   };
+
+  // ── which rows actually reach the estimate workbook ────────────────────────
+  //
+  // WHY THIS IS ON THE SCREEN AND NOT ONLY IN A COMMENT. Until 2026-09-08 this page
+  // carried a paragraph saying filed rates priced nothing at all, and it was there
+  // because "a number that quietly does nothing is how people come to distrust the whole
+  // form". Wiring two of the seven lines up does not retire that problem, it RELOCATES
+  // it: an admin can now file a GP ladder, watch it save with a green tick, and move no
+  // price — with a page that no longer warns them. So every row says for itself.
+  //
+  // THE SAME SOURCE OF TRUTH AS THE WRITER, and the drift is caught by execution rather
+  // than by hoping: this is the (layout -> line_keys) projection of MARKUP_RATE_TARGETS in
+  // frontend/js/estimate-review.js, and backend/tests/test_markup_rate_reaches_the_bid.py
+  // lifts BOTH out of the real sources and asserts them equal. The estimate page cannot
+  // simply import this — markup.js is not loaded there, and loading it would run this
+  // whole IIFE against a DOM it does not have.
+  //
+  // gp and hard_bid are on NO layout: gp's built-in returns dollars from a tier ladder and
+  // hard_bid keys on a frozen "No" on four of seven layouts. soft_costs is missing from gyp
+  // alone, where Kyle's cell is an expression with a local/away branch, a job-size taper and
+  // his own "error" sentinel. estimate-review.js explains each exclusion in full.
+  // MUST MIRROR estimate-review.js's MARKUP_RATE_TARGETS, and a test asserts the two
+  // agree key for key. If this list claims a line prices the bid when the writer has
+  // no address for it, the page tells an admin their rate took effect and it did not.
+  //
+  // `bond` is absent from BOTH on purpose: Kyle's bond row multiplies a range that
+  // contains its own tax subtotal, so sales and remodel tax are counted twice in the
+  // bond base on all eleven sheets. Bond is 0 in the template, so filing a rate is
+  // what would first expose it — as an over-charge. His formula, his fix; see the
+  // note over MARKUP_RATE_TARGETS.
+  var PRICES_THE_BID = {
+    polish:   ["super_pto", "soft_costs"],
+    seal:     ["super_pto", "soft_costs"],
+    epoxy:    ["super_pto", "soft_costs"],
+    leveling: ["super_pto", "soft_costs"],
+    gyp:      ["super_pto"]
+  };
+
+  /** Does this formula reach the workbook, and at what percent?
+   *
+   *  The TWIN of rateTextFrom in estimate-review.js, and deliberately answering in PERCENT
+   *  rather than in Kyle's decimal: the admin typed a percent, so echoing "2.7%" needs no
+   *  arithmetic at all — the digits go back out as they came in. The writer does the decimal
+   *  shift on its own side, through the same captured group.
+   *
+   *  Same regex, same >= 100% ceiling, same refusal of a bare decimal with no % sign — and
+   *  the agreement is asserted by executing both against one adversarial input table, not by
+   *  reading them side by side. Returns null when the workbook would keep its own rate. */
+  var _RATE_LITERAL_RE = /^\s*(\d*\.?\d*)\s*%\s*$/;
+  function ratePctFrom(formula) {
+    var m = _RATE_LITERAL_RE.exec(String(formula == null ? "" : formula));
+    if (!m || !m[1] || m[1] === ".") return null;
+    var n = Number(m[1]);
+    if (!isFinite(n) || n >= 100) return null;
+    return m[1] + "%";
+  }
+
+  /** One plain sentence about whether THIS row moves a bid. Appended to the row's "What it
+   *  does" cell, which is where somebody already is when they decide this page is worth
+   *  trusting. Editable rows only: `contingency` and `remodel_tax` carry markup.py's own
+   *  wording verbatim and test_markup_page.py compares them character for character.
+   *
+   *  Five states, and they are genuinely five different things to do next. The one that
+   *  reads worst is deliberate: a line switched OFF here is still charged by the workbook,
+   *  because "not used on this tab" is not a zero and this tool will not silently turn it
+   *  into one. */
+  function reachSentence(r) {
+    if (!r.editable) return "";
+    var keys = PRICES_THE_BID[LAYOUT] || [];
+    if (keys.indexOf(r.line_key) < 0) {
+      return " The estimate workbook does not read this line yet, so a rate filed here " +
+        "changes no bid.";
+    }
+    if (!r.applies) {
+      return " Switched off here — but the workbook still charges its own rate for this " +
+        "line on this tab.";
+    }
+    if (!r.formula) return " The workbook keeps its own rate until a percent is filed here.";
+    var pct = ratePctFrom(r.formula);
+    if (pct === null) {
+      return " Only a plain percent like 2.7% reaches the workbook, so this one does not — " +
+        "the bid keeps the sheet's own rate.";
+    }
+    return " Prices the bid: every " + nounFor(LAYOUT) + " tab is charged " + pct + ".";
+  }
 
   // ── the sample job the preview prices ──────────────────────────────────────
   // A formula's effect has to be visible the moment it is typed, and nothing real may be at
@@ -554,6 +641,9 @@
     if (p && p.state === "nobuiltin") {
       explain = "No formula filed and no built-in on this page for " + labelFor(LAYOUT) + ".";
     }
+    // Appended AFTER the two preview-driven rewrites above, because whether a row reaches the
+    // workbook is true independently of whether the sample job could be priced.
+    explain += reachSentence(r);
     return '<div class="mkrow' + (absent ? " absent" : "") + '" data-row="' + esc(r.line_key) +
       '">' +
       '<div class="line">' + esc(r.label) +

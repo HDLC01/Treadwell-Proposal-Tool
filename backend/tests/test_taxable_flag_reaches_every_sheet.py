@@ -738,7 +738,13 @@ def test_the_self_heal_runs_after_the_copies_exist_and_before_the_first_paint():
     replay = body.index("// Apply saved overrides")
     heal = body.index("applyJobFlags()")
     paint = body.index("showSheet(initialSheet)")
-    save = body.index("if (_flagsHealed) persistTabState()")
+    # Anchored on the CONDITION, not on the whole line: the filed-markup-rate apply added
+    # `|| _ratesApplied` to it (2026-09-08), and it belongs there for the same reason
+    # `_flagsHealed` does -- /api/generate fills the workbook from the STORED draft. What this
+    # test is about is the ORDER, and the flags' own half of the condition still has to be in it.
+    save = body.index("if (_flagsHealed")
+    assert "persistTabState()" in body[save:save + 80], (
+        "the flags' load-time save no longer calls persistTabState: %r" % body[save:save + 80])
     assert replay < heal < paint < save, (
         "the load-time self-heal moved: replay=%d heal=%d paint=%d save=%d"
         % (replay, heal, paint, save))

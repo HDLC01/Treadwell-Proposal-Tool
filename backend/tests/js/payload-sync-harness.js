@@ -59,6 +59,8 @@ const UNITS = [
   grab(/^  const fmtSF = .*$/m, "fmtSF"),
   fn("effectiveWorkType"),
   fn("taxTreatmentMode"),
+  fn("printedTaxRows"),
+  fn("baseBidFigure"),
   fn("lineOverride"),
   fn("comboSystemLines"),
   fn("comboLinesForPayload"),
@@ -66,6 +68,24 @@ const UNITS = [
   grab(/^  const PAYLOAD_PRICING_KEYS = \[[\s\S]*?\];$/m, "PAYLOAD_PRICING_KEYS"),
   fn("syncPayloadPricing"),
 ].join(NL);
+
+/* The PRICE-block paragraphs of a DIRECT template, as /api/proposal-template serves them —
+ * which is the template `baseState()` models (polish/Direct, and epoxy/Direct after the flip).
+ * `printedTaxRows` reads the shape off exactly this: the Material Sales Tax and Remodel rows sit
+ * INSIDE {{#tax_breakout}} / {{#remodel}}, so a fill strips them unless the estimator picks
+ * "Sales tax broken out" — and the base line therefore carries the whole tax-inclusive bid in
+ * the default layout.
+ *
+ * A LITERAL HERE, THE REAL FILES THERE: test_price_block_reconciles.py drives this same code off
+ * the actual .docx shapes (including the GC/Gyp files, whose rows are free paragraphs), so this
+ * fixture cannot quietly become the only definition of what a template looks like. */
+const DIRECT_TAX_ROWS_GATED = [
+  { id: 124, in_block: null,
+    text: "{{base_bid_formatted}} – Polished Concrete Flooring as described above {{base_tax_phrase}}" },
+  { id: 126, in_block: "tax_breakout", text: "{{material_tax_formatted}} – Material Sales Tax" },
+  { id: 129, in_block: "remodel", text: "{{remodel.amount_formatted}} – Remodel Tax" },
+  { id: 132, in_block: "tax_breakout", text: "{{total_label}}" },
+];
 
 /** Build a page scope around one state object and return handles into the real functions. */
 function scopeFor(state, opts) {
@@ -111,12 +131,16 @@ function scopeFor(state, opts) {
   const body = UNITS + NL +
     "return { syncPayloadPricing, computeTokenValues, comboLinesForPayload, PAYLOAD_PRICING_KEYS };";
   const api = new Function("state", "document", "form", "TW", "window", "templateVersion",
-                           "collectOverrides", "collectBoxOverrides", "sheetSystems", body)(
+                           "collectOverrides", "collectBoxOverrides", "sheetSystems",
+                           "templateBlocks", body)(
     // `?? "tpl-v9"`, not `|| "tpl-v9"`: an explicit "" is the page-init case under test, and a
     // truthiness default would silently substitute a loaded template for it.
     state, doc, form, TW, { TWAuth: null },
     o.templateVersion === undefined ? "tpl-v9" : o.templateVersion,
-    collectOverrides, collectBoxOverrides, sheetSystems);
+    collectOverrides, collectBoxOverrides, sheetSystems,
+    // Same `=== undefined` care: `null` is "the template has not loaded yet", a real state
+    // printedTaxRows has an answer for, and `||` would replace it with a loaded template.
+    o.templateBlocks === undefined ? DIRECT_TAX_ROWS_GATED : o.templateBlocks);
   api.calls = calls;
   return api;
 }
@@ -377,8 +401,9 @@ out.computeThrows = (() => {
   const sc = (() => {
     const body = UNITS + NL + "return { syncPayloadPricing };";
     const doc = { querySelector: () => { throw new Error("boom"); }, getElementById: () => null };
-    return new Function("state", "document", "form", "TW", "window", body)(
-      s, doc, { querySelector: () => null }, { readForm: () => ({}) }, {});
+    return new Function("state", "document", "form", "TW", "window", "templateBlocks", body)(
+      s, doc, { querySelector: () => null }, { readForm: () => ({}) }, {},
+      DIRECT_TAX_ROWS_GATED);
   })();
   let threw = false, result;
   try { result = sc.syncPayloadPricing(); } catch { threw = true; }
@@ -399,7 +424,14 @@ out.taxFlip = (() => {
     res[mode] = { base_tax_phrase: pp.values.base_tax_phrase,
                   tax_phrase: pp.values.tax_phrase,
                   sales_tax_handling: pp.values.sales_tax_handling,
-                  remodelLines: pp.remodel };
+                  remodelLines: pp.remodel,
+                  // The mode decides whether the tax rows print, and therefore what the base
+                  // line is: the whole bid when they are stripped, the ex-tax remainder when
+                  // they are not. $13,265 total, $420 sales tax, $900 remodel.
+                  base_bid_formatted: pp.values.base_bid_formatted,
+                  material_tax_formatted: pp.values.material_tax_formatted,
+                  tax_amount_formatted: pp.values.tax_amount_formatted,
+                  total_formatted: pp.values.total_formatted };
   }
   return res;
 })();
@@ -555,13 +587,14 @@ out.endToEnd = (() => {
   // The real sync, over the real snapshot, with the page's own TW.
   const body = UNITS + NL + "return { syncPayloadPricing };";
   const sc = new Function("state", "document", "form", "TW", "window", "templateVersion",
-                          "collectOverrides", "collectBoxOverrides", "sheetSystems", body)(
+                          "collectOverrides", "collectBoxOverrides", "sheetSystems",
+                          "templateBlocks", body)(
     snapshot,
     { querySelector: (s) => (s === "#tb-total" ? { textContent: "$18,670.00" } : null),
       getElementById: () => null },
     { querySelector: () => null },
     { readForm: () => ({}) }, { TWAuth: null }, "tpl-v9",
-    () => [], () => ({}), () => []);
+    () => [], () => ({}), () => [], DIRECT_TAX_ROWS_GATED);
   const _pp = sc.syncPayloadPricing();
 
   // rebuildPricing's exact persist.

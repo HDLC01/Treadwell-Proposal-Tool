@@ -37,8 +37,13 @@ def test_broken_out_tax_preview_uses_current_total_and_total_label():
     # Draft values are only defaults. The current calculation must overwrite
     # them, so a saved '(tax exempt)' phrase cannot survive broken-out tax.
     assert values.index("...mergedValues,") < values.index("total_label:")
-    assert "total_label:        `${fmtUSD(lumpSumNumber)} – Total`" in values
-    assert "if (m.broken) return \"\";" in values
+    assert "total_label:        `${fmtUSDdoc(lumpSumNumber)} – Total`" in values
+    # The tax phrase drops the "(… INCLUDED)" claim as soon as the tax rows print — whether the
+    # estimator asked for the breakout or the template prints them regardless (`taxRowsPrint`,
+    # from baseBidFigure). This is the SOURCE half; the executed proof that flipping the dropdown
+    # moves the phrase is test_payload_sync.py::test_the_tax_treatment_reaches_the_document, which
+    # runs the real computeTokenValues in all three modes.
+    assert 'if (taxRowsPrint) return "";' in values
 
 
 def test_broken_out_tax_can_change_before_template_rows_mount():

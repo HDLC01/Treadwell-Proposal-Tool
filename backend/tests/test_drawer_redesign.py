@@ -240,7 +240,7 @@ def test_an_unchanged_price_is_demoted_and_the_current_one_never_is(out):
         "%s of the seven folded rows are demoted; five repeat the row below them and two are the "
         "rows where the price moved" % rows.count(" same"))
     # Demoted means regular weight, not hidden: the figure is still there.
-    assert folded.count("$90,885.00") + folded.count("$84,200.00") == 7
+    assert folded.count("$90,885") + folded.count("$84,200") == 7
 
 
 @needs_node
