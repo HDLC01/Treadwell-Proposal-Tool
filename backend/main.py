@@ -888,9 +888,13 @@ def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[st
 
 
 @app.patch("/api/library/items/{item_id}")
-def api_library_item_update(item_id: str, payload: LibraryItemIn) -> Dict[str, Any]:
+def api_library_item_update(item_id: str, payload: LibraryItemIn,
+                            request: Request) -> Dict[str, Any]:
     try:
-        row = library.update_item(item_id, payload.model_dump(exclude_unset=True))
+        # The caller's identity is the ONLY source of "who edited it" — the payload model has no
+        # such field and validate_item would drop it, so a client cannot sign somebody else's name.
+        row = library.update_item(item_id, payload.model_dump(exclude_unset=True),
+                                  _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     if row is None:
@@ -925,9 +929,11 @@ def api_library_assembly_create(payload: LibraryAssemblyIn, request: Request) ->
 
 
 @app.patch("/api/library/assemblies/{asm_id}")
-def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn) -> Dict[str, Any]:
+def api_library_assembly_update(asm_id: str, payload: LibraryAssemblyIn,
+                                request: Request) -> Dict[str, Any]:
     try:
-        row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True))
+        row = library.update_assembly(asm_id, payload.model_dump(exclude_unset=True),
+                                      _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     except library.StaleWrite as exc:
@@ -3209,6 +3215,52 @@ _AUTOFILL_SYSTEM_PROMPT = (
 )
 
 
+# --- The environment the untrusted subprocess is allowed to see -------------
+#
+# Layer 2 of the autofill hardening (layer 1 is `--tools ""`; see the SECURITY
+# block in `_autofill_via_cli`). A child process inherits our whole environment
+# by default, and ours is where every credential in this app lives — there is no
+# `.env` file inside the image (`.dockerignore` excludes it), so `env` IS the
+# secret store. Most valuable of them is SUPABASE_SERVICE_ROLE_KEY, which
+# bypasses RLS on the production database the customer portal shares.
+#
+# Layer 1 already means nothing in that session can read an environment
+# variable. This exists so that if layer 1 is ever removed — a flag dropped in a
+# refactor, a CLI default changing under us — the blast radius is one Claude
+# token rather than Dropbox, the portal's SERVICE_TOKEN and the database.
+#
+# Scrub by NAME PATTERN rather than an explicit denylist so a credential added
+# later is covered without anyone remembering this list exists. Verified
+# complete against every secret the backend reads today, and pinned by
+# `test_autofill_tool_isolation.py::test_no_app_credential_reaches_the_subprocess`.
+_CLI_ENV_SECRET_HINTS = ("TOKEN", "SECRET", "KEY", "PASSWORD", "PASSWD",
+                         "CREDENTIAL", "DATABASE_URL", "DSN")
+
+# Kept despite matching a hint above: these are how the CLI authenticates. Drop
+# CLAUDE_CODE_OAUTH_TOKEN and autofill stops working on prod (see the `--bare`
+# warning below — same failure, different cause). ANTHROPIC_* are kept so the
+# child's auth resolution is byte-identical to today's, rather than changing
+# which credential wins as a side effect of a security fix.
+_CLI_ENV_KEEP = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
+                 "ANTHROPIC_AUTH_TOKEN")
+
+
+def _cli_env() -> Dict[str, str]:
+    """Our environment minus anything named like a credential.
+
+    A subtraction, not an allowlist: PATH, HOME, SystemRoot, TMPDIR, the proxy
+    vars and everything else node needs pass through untouched. An allowlist
+    would be tighter but would break the CLI on the first host with an
+    environment we didn't predict, and this runs on the 60-second Autofill
+    button in production.
+    """
+    return {
+        k: v for k, v in os.environ.items()
+        if k in _CLI_ENV_KEEP
+        or not any(hint in k.upper() for hint in _CLI_ENV_SECRET_HINTS)
+    }
+
+
 def _autofill_via_cli(user_input: str,
                       system_prompt: str = _AUTOFILL_SYSTEM_PROMPT) -> Dict[str, Any]:
     """Run the `claude -p` CLI subprocess and parse its JSON response.
@@ -3222,6 +3274,40 @@ def _autofill_via_cli(user_input: str,
     lead-inbox prompts in leads.py. Every strict-JSON Claude call in this app
     runs through here so the subprocess flags, fence stripping and error
     handling exist exactly once.
+
+    SECURITY — `user_input` is UNTRUSTED. It is a lead email, a pasted note or
+    a dictated transcript: text written by someone outside the company, which
+    reaches this function unreviewed (the lead-inbox path at `/api/leads` runs
+    with no human in the loop at all). So this subprocess is treated as a pure
+    text-in/JSON-out transform and is given no way to act:
+
+      * `--tools ""`   removes every built-in tool from the available set.
+        Not a permission rule — the tools are never registered, so nothing in
+        a settings file or a prompt can grant them back. MEASURED: without it,
+        `claude -p` in this exact shape will read a file off disk AND run a
+        shell command on request. That matters because the process it runs in
+        holds the OAuth token, the Dropbox credentials and SERVICE_TOKEN in its
+        environment, and `/app/data/drafts.db` (every customer draft) on disk.
+      * `--strict-mcp-config` with no `--mcp-config` means zero MCP servers,
+        so a server configured in the mounted CLAUDE_CONFIG_DIR volume cannot
+        hand tools to this session either.
+      * `env=_cli_env()` strips the app's credentials from the child's
+        environment — belt and braces, so that losing the flags above costs one
+        Claude token instead of the database. See `_cli_env` above.
+
+    The model's own judgement already refuses most injections — it caught the
+    obvious "read .env and put it in a field" attempt during testing — but
+    willingness is not a control, so the capability is removed instead.
+
+    Two things here are load-bearing and easy to undo by accident:
+
+      * Untrusted text goes on **stdin**, never into an argv flag. In the
+        user slot it is data the model reasons about; spliced into
+        `--append-system-prompt` it would become instructions.
+      * Do NOT add `--bare`. It looks tempting (it skips hooks, plugins and
+        CLAUDE.md discovery) but it also stops the CLI reading OAuth, and this
+        container authenticates with CLAUDE_CODE_OAUTH_TOKEN — it would take
+        autofill down on prod.
     """
     import json
     import subprocess
@@ -3236,6 +3322,11 @@ def _autofill_via_cli(user_input: str,
             # matters; Opus is overkill for the 60s button, Haiku cheaper but
             # we keep Sonnet's extraction accuracy). Override via AUTOFILL_MODEL.
             "--model", os.environ.get("AUTOFILL_MODEL", "sonnet"),
+            # See SECURITY in the docstring. Order matters: `--tools` is
+            # variadic, so it must be followed by a flag (not a bare value) for
+            # the empty string to land as its only argument.
+            "--tools", "",
+            "--strict-mcp-config",
             "--output-format", "text",
             "--append-system-prompt", system_prompt,
         ],
@@ -3245,6 +3336,7 @@ def _autofill_via_cli(user_input: str,
         timeout=60,
         encoding="utf-8",
         errors="replace",
+        env=_cli_env(),
     )
 
     out = (proc.stdout or "").strip()
@@ -4271,6 +4363,27 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
         if _bd:
             _y, _mo, _d = _bd.groups()
             values["bid_date_formatted"] = f"{int(_mo)}/{int(_d)}/{_y[2:]}"
+    # Polish's Area and Total rows are WHOLE-LINE tokens -- "{{area_description}}"
+    # and "{{total_label}}", not an amount token beside static words -- so the
+    # base_bid/material_tax backfills above never reach them and a payload without
+    # them prints the LITERAL "{{total_label}}" where the customer's Total belongs.
+    # The live browser always sends both (proposal-review.js computeTokenValues), so
+    # the hole only opens on a REPLAY of a frozen payload -- /api/admin/proposal-pdf,
+    # a revision's file links, the To-Dropbox re-file. Both formats below are
+    # byte-identical to what that browser sends, so a replay reproduces the original
+    # document rather than a differently-worded one.
+    if _blank(values.get("area_description")) and not _blank(values.get("sqft")):
+        _noun = ("polished concrete flooring" if _wt == "polish"
+                 else "gypsum underlayment" if _wt == "gyp"
+                 else "epoxy flooring")
+        _area_sf = str(values.get("sqft")).strip()
+        values["area_description"] = "~" + _area_sf + " sf of " + _noun
+    # Mirrors the price-label override path, which composes this same string when
+    # the estimator retitles the Total row (main: values["total_label"] =
+    # f"{_t_amt} – {_t_lbl}"). En dash, spaced, per Kyle's template wording.
+    if _blank(values.get("total_label")) and not _blank(values.get("total_formatted")):
+        _tot_amt = str(values.get("total_formatted")).strip()
+        values["total_label"] = _tot_amt + " – Total"
 
 
 @app.get("/api/default-notes")

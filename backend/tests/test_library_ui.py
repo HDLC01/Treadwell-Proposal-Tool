@@ -367,13 +367,106 @@ def test_the_price_date_appears_without_a_reload(ran):
 
 
 @needs_node
-def test_a_patch_that_did_not_touch_the_cost_repaints_nothing(ran):
-    """Repainting on every save would be harmless-looking and wrong: it would put a date on a
-    material whose price has never moved. It also costs a DOM write while somebody is typing."""
+def test_a_patch_that_did_not_touch_the_cost_still_repaints_the_history_cell(ran):
+    """REVERSED on 2026-09-04. This test previously asserted the opposite — that a cost-less patch
+    repaints nothing — and that was correct for as long as the cell held only `created_at` and
+    `cost_updated_at`: `updated_at` moved on every write and changed nothing on screen, so a
+    repaint was pure churn during typing.
+
+    The cell now carries "Edited <updated_at> by <updated_by>", so `updated_at` is what one of its
+    three lines quotes. Keeping the old behaviour would leave the Edited line showing the previous
+    edit time and the previous editor until F5 — which is the exact failure
+    `test_the_price_date_appears_without_a_reload` above exists to prevent, one column over.
+
+    The old test's real concern was that a repaint must be DRIVEN BY A CHANGE. That is still
+    asserted, by `sameStampNoRepaint`."""
     p = ran["priceDate"]
-    assert p["quietPatchNoRepaint"], "a name edit repainted the price date"
+    assert p["costlessPatchStillRepaints"], (
+        "an edit that moved updated_at did not repaint, so the Edited line is stale until F5")
+    assert p["costlessRepaintKeepsNeverLine"], (
+        "the repaint invented a price date for a material whose cost never moved — the thing the "
+        "pre-2026-09-04 version of this test was protecting")
+    assert p["sameStampNoRepaint"], (
+        "a reply that changed nothing still repainted; the repaint is now unconditional")
+    assert p["missingEditorDoesNotBlankIt"], (
+        "a reply without updated_by wiped the editor we already knew about")
     assert p["quietPatchStillBumpedVersion"], "the version stamp stopped being adopted"
     assert p["assemblySaveDoesNotRepaintItems"]
+
+
+@needs_node
+def test_the_history_cell_names_who_created_and_who_edited_each_material(ran):
+    """Hanz, 2026-09-04: "In the items tab we must put the name of who created it and who edited
+    it". Both are real columns — `owner_email` always existed, `updated_by` was added the same day
+    — and both render through CRM.nameOf, the app's one email→display-name convention, so a person
+    reads identically here and on the Assemblies rail."""
+    a = ran["authorship"]
+    assert a["creatorReadsAsAName"], "the Added line does not name who filed the material"
+    assert a["creatorIsNotAnEmail"], "the raw address is on screen instead of the name"
+    assert a["editorReadsAsAName"], "the Edited line does not name who last changed it"
+    assert a["editorDateShown"], "the edit time is missing or not in business time"
+
+
+@needs_node
+def test_an_unedited_material_is_not_credited_as_an_edit_by_its_creator(ran):
+    """A create stamps `created_at` and `updated_at` in the same write, so equal stamps mean
+    nothing has happened since the row was filed. Reading that as an edit would tell every
+    estimator that Kyle edited all 40 materials at the moment he added them."""
+    a = ran["authorship"]
+    assert a["untouchedSaysNotEdited"]
+    assert a["untouchedNamesNoEditor"], "an untouched row named an editor"
+    assert a["untouchedStillNamesCreator"], (
+        "'not edited' also blanked the creator, so the row names nobody at all")
+
+
+@needs_node
+def test_a_row_older_than_the_column_says_unknown_rather_than_guessing(ran):
+    """`updated_by` landed on 2026-09-04, so every row edited before that carries no editor and
+    never will. A bare date there reads as a name that failed to load, and falling back to
+    `owner_email` would attribute somebody else's edit to whoever filed it."""
+    a = ran["authorship"]
+    assert a["legacyEditSaysUnknown"]
+    assert a["legacyDoesNotInventAnEditor"], "the creator was credited with an edit they may not "\
+        "have made"
+
+
+@needs_node
+def test_the_price_line_takes_no_author(ran):
+    """`cost_updated_at` is decided server-side when the cost really moved, and no column records
+    who moved it. Pairing it with `updated_by` would attribute a price change to whoever last
+    fixed a spelling — a wrong name against a number, which is worse than no name."""
+    assert ran["authorship"]["priceLineHasNoAuthor"]
+
+
+@needs_node
+def test_the_editor_is_adopted_off_the_reply_not_left_until_a_reload(ran):
+    """The same failure the price date had, one column over: `updated_by` is stamped from the
+    bearer token, so the reply is the only place the client can learn it."""
+    e = ran["adoptEditor"]
+    assert e["editorAdopted"], "the reply's editor was thrown away"
+    assert e["repainted"], "nothing was repainted, so the cell still shows the old editor"
+    assert e["repaintNamesTheEditor"], "the repaint did not carry the new name"
+    assert e["repaintDroppedNotEditedSince"], (
+        "the row still claims it was never edited after an edit landed")
+    # The editor branch on its own, both dates held still. Without this the branch is invisible:
+    # a mutation deleting its repaint trigger passed every other test here, because they all move
+    # `updated_at` in the same reply and the repaint fired on that instead.
+    assert e["editorAloneRepaints"], (
+        "a reply that changed only updated_by did not repaint, so the branch that adopts it is "
+        "not driving anything")
+    assert e["editorAloneNamesTheEditor"]
+
+
+@needs_node
+def test_the_editor_is_a_server_owned_field_so_cancel_cannot_put_a_stale_one_back(ran):
+    """`updated_by` is stamped server-side from the bearer token, so it belongs on the list Cancel
+    refuses to restore — alongside `updated_at` and `cost_updated_at`. Restoring the whole
+    pre-edit snapshot would put back an editor the database has already replaced, with nothing on
+    screen marking it.
+
+    This assertion exists because a mutation run caught nothing when `updated_by` was dropped from
+    the list: the name still rendered, and the only symptom was a Cancel quietly reverting it."""
+    assert ran["serverOwnedItemFields"] == ["updated_at", "cost_updated_at", "updated_by"]
 
 
 @needs_node
@@ -1166,6 +1259,10 @@ def test_new_assembly_left_the_page_header(ran):
     pressed and the row that appeared had no relationship on screen. Nothing is left in the strip
     now except the three tabs.
 
+    STILL TRUE AFTER 2026-09-04, when he asked for the button "up top" again. The answer to that
+    was the top of the RAIL, and the distance is the thing this test guards - not the word "top".
+    See test_the_create_control_sits_in_the_container_it_adds_rows_to.
+
     Mutation: put any non-tab button back inside the tablist."""
     c = ran["createAction"]
     assert c["goneFromTheTabStrip"], "a control that is not a tab is still in the tab strip"
@@ -1174,27 +1271,44 @@ def test_new_assembly_left_the_page_header(ran):
 
 
 @needs_node
-def test_the_create_control_sits_at_the_foot_of_the_list_it_adds_to(ran):
-    """The rule that replaced it, in four places: assemblies and the three administration lists
-    all end with a full-width row inside the same container, drawn like the rows above it. Press
-    it and the new row appears where the control was.
+def test_the_create_control_sits_in_the_container_it_adds_rows_to(ran):
+    """WAS test_the_create_control_sits_at_the_foot_of_the_list_it_adds_to, and it asserted
+    "#asm-list before #asm-new-2". RENAMED AND FLIPPED rather than deleted, so the next reader
+    finds a decision instead of a gap.
 
-    AFTER the list, not before: it has to read as the next row rather than as a header over the
-    ones that already exist.
+    THE RULE THAT SURVIVES is containment, not which end: assemblies, materials and the three
+    administration lists each keep their create control inside the container holding their rows,
+    drawn like those rows. Press it and the new row appears next to the control.
 
-    Materials is the exception (Hanz, 2026-08-28): its add row moved to the TOP of the card,
-    because at the foot it was getting lost below the horizontal scrollbar and a full table of
-    rows. New materials are unshifted to the front of the list to match, so pressing the button
-    and seeing the result are still the same spot on screen — see
-    test_the_materials_add_row_follows_its_table for the rest of that behaviour.
+    WHICH END, per list, and each was asked for by name:
+      * the three administration lists - the foot, unchanged, reading as "the next row";
+      * materials - the top (Hanz, 2026-08-28), because at the foot it was getting lost below the
+        horizontal scrollbar and a full table of rows;
+      * assemblies - the top (Hanz, 2026-09-04): "Move the assembly button up top and when a new
+        assembly is added it should append up top not below."
 
-    Mutation: move #asm-new-2 above #asm-list."""
+    THE AUGUST OBJECTION IS NOT BEING REVERSED. What "I dont like the New assembly button up top"
+    was about was the PAGE HEADER - thirteen hundred pixels between the button and the row it
+    creates - and test_new_assembly_left_the_page_header still pins that. Inside a 272px rail the
+    two are adjacent at either end, and up top the button is adjacent to the row that actually
+    appears, since a new assembly is unshifted to the front. Both halves of one instruction.
+
+    Mutation: move #asm-new-2 back below #asm-list, or drop the border-bottom override."""
     c = ran["createAction"]
-    assert c["inTheRail"], "New assembly is not at the foot of the assembly rail"
+    assert c["inTheRail"], "New assembly is not inside the assembly rail card"
+    assert c["atTheTopOfTheRail"], "New assembly is not the rail's first row"
+    assert c["noMatchStillUnderTheList"], (
+        "the no-match caption came up with the button - it is a sentence about the rows that are "
+        "not there, so it belongs where they would have been")
+    assert c["railAddRowFlipsItsBorder"], (
+        "#asm-addrow still draws .addrow's border-TOP, which at the head of the card lands on the "
+        "card's own edge and lets the button bleed into the first assembly under it")
     assert c["materialsAddRowInTheCard"], "Add material is not above the materials table"
     assert c["adminAddRows"], "an administration list has no add row of its own"
     # One shape, five uses (materials, assemblies, and three lists) - not a fifth way to draw a
-    # card, which is the failure this page has form for.
+    # card, which is the failure this page has form for. Moving a row must not change the count,
+    # and neither may a COMMENT: quoting either attribute in full adds a phantom to it, which is
+    # exactly what the note beside #asm-addrow now warns about because it happened writing it.
     assert c["addRowCount"] == c["addBtnCount"] == 5, (
         "the add rows disagree in number: %s wrappers, %s buttons"
         % (c["addRowCount"], c["addBtnCount"]))
@@ -1886,6 +2000,409 @@ def test_narrowing_the_rail_does_not_close_the_assembly_being_edited(ran):
     assert g["currentMarkedWhenShown"], "the open assembly was not marked in the rail"
     assert g["noCurrentWhenOpenOneIsFiltered"] is False, (
         "a filtered-out assembly was still marked as the current row")
+
+
+# ── sorting the rail: six keys, two of them derived ──────────────────────────
+# Hanz, 2026-09-04: "in the assemblies we must be able to sort by vendor, scope or worktype, unit,
+# who created it."
+#
+# EXECUTED through the real renderList and read off the real rendered rows, because "does it sort"
+# is behaviour and every interesting way it can be wrong is invisible to a source assertion:
+# an assembly has NO vendor column, so that key is derived from the materials on its lines; the
+# author key has to order by a person's name rather than by their email address; and the default
+# has to be a pass-through of the server's order rather than a client-side name sort, or the
+# newly-created-assembly-at-the-top that Hanz asked for in the same sentence is undone by the very
+# next render.
+#
+# The fixtures are six local assemblies and five local materials; the comment on the harness block
+# says what each one is there to make visible.
+
+
+@needs_node
+def test_the_rail_still_arrives_in_the_order_the_server_sent_it(ran):
+    """THE DEFAULT IS A PASS-THROUGH, and that is a decision, not an omission.
+
+    `list_assemblies()` does `.order("name")`, so the order the page receives IS name A-Z and the
+    default view is what this tab showed before a Sort control existed - which is the whole point:
+    nobody's list silently reorders itself because a feature shipped.
+
+    IT ALSO CANNOT BE A CLIENT-SIDE NAME SORT, which is the half a reviewer will want to "fix". A
+    brand-new assembly is unshifted to the FRONT of the rail (Hanz: "when a new assembly is added
+    it should append up top not below") and an active name sort would drop it straight back under
+    N for "New assembly", on the very next render, with the estimator still typing its real name.
+    So: the default respects the array it was given, including this session's prepend, and "Newest
+    first" is the option that makes new-work-on-top survive a reload.
+
+    The fixture is deliberately NOT in name order, or a pass-through and a name sort would be
+    indistinguishable here.
+
+    Mutation: make sortAssemblies sort by name for the "name" key."""
+    g = ran["asmSort"]
+    assert g["defaultKey"] == "name", g["defaultKey"]
+    assert g["defaultIsTheArrayOrder"] == ["s1", "s2", "s3", "s4", "s5", "s6"], (
+        "the default view reordered a list nobody asked it to: %r" % g["defaultIsTheArrayOrder"])
+    assert g["namePassesTheArrayThrough"], (
+        "the default key returned a copy rather than the array it was given, so a prepended "
+        "assembly cannot stay where it was put")
+
+
+@needs_node
+def test_a_new_assembly_appears_at_the_top_of_the_rail(ran):
+    """Hanz, 2026-09-04: "Move the assembly button up top and when a new assembly is added it
+    should append up top not below." Both halves of that, in one scenario.
+
+    EXECUTED AGAINST THE REAL MODEL. placeNewAssembly puts the row into the ASMS array renderList
+    reads, and then the rail is rendered - so this fails for a `push` and it also fails if the
+    default sort ever becomes a real client-side name sort, which would drop "New assembly" back
+    under N with the estimator still typing over it.
+
+    WHY placeNewAssembly EXISTS AT ALL: the create path lives inside the page's anonymous
+    `document.addEventListener("click", ...)`, which this harness cannot lift, so an inline
+    `ASMS.unshift(...)` would be a behaviour change with no test able to fail without it. The two
+    ITEMS.unshift calls in that same listener are still browser-verified only.
+
+    IT IS NOT PERMANENT, and that is deliberate rather than a hole: `list_assemblies()` orders by
+    name, so on the next load it goes back where it belongs. "Newest first" is the option that
+    makes it stick, and it agrees here because the server stamps created_at on create.
+
+    Mutation: `list.push(asm)` in placeNewAssembly, or move #asm-addrow back below #asm-list."""
+    g = ran["asmSort"]
+    assert g["newAssemblyIsFirst"][0] == "new1", (
+        "a just-created assembly is not the first row in the rail: %r" % g["newAssemblyIsFirst"])
+    assert g["newAssemblyIsFirst"] == ["new1", "s1", "s2", "s3", "s4", "s5", "s6"], (
+        "the prepend disturbed the rest of the order: %r" % g["newAssemblyIsFirst"])
+    assert g["newAssemblyIsFirstUnderNewest"][0] == "new1", (
+        "Newest first did not put the newest one first: %r" % g["newAssemblyIsFirstUnderNewest"])
+    assert g["buttonIsAboveTheRowItCreates"], (
+        "the create button is not above the list it prepends to, so the press and the new row are "
+        "at opposite ends of the rail")
+
+
+@needs_node
+def test_newest_first_is_the_answer_for_wanting_new_work_on_top(ran):
+    """The honest permanent version of the prepend: ordered on `created_at`, descending, so it
+    survives the reload that puts the server's name order back.
+
+    Compared as ISO STRINGS, never parsed. Same instant ordering, no timezone in the middle of it
+    - and this box's clock runs about thirteen hours ahead of Central, so a Date round-trip here is
+    a bug waiting for a date near midnight.
+
+    Mutation: drop the `desc` flag, or parse the timestamps."""
+    assert ran["asmSort"]["newest"] == ["s2", "s3", "s4", "s6", "s5", "s1"], (
+        "newest-first is not in created_at order: %r" % ran["asmSort"]["newest"])
+
+
+@needs_node
+def test_scope_and_unit_order_on_the_fields_the_assembly_actually_has(ran):
+    """Two of the four keys Hanz named are plain columns: `category` is the scope or work type, and
+    `unit` is SF or LF.
+
+    UNIT IS KEYED ON asmUnit(), not on the raw field, for the reason the unit FACET is: the column
+    is free text to 24 characters and a legacy row may hold "sqft" or a blank, which would sort
+    into a third group of its own between LF and SF.
+
+    A BLANK CATEGORY SORTS LAST. s2 has none, and an ordering that opens with the rows that cannot
+    answer the question is one nobody trusts a second time. Nothing on this page can SET a category
+    yet, so on today's real data every row is blank and this key is a no-op that changes no order -
+    it is wired for the editor that comes next, and the sort is not the thing to hold up for it.
+
+    Ties fall through to the name in both, so the three Epoxy assemblies and the five per-SF ones
+    come out stable rather than in whatever order the array held.
+
+    Mutation: compare a.unit directly, or move blanks to the front."""
+    g = ran["asmSort"]
+    assert g["scope"] == ["s6", "s1", "s5", "s4", "s3", "s2"], (
+        "scope order wrong, or the assembly with no category did not sort last: %r" % g["scope"])
+    assert g["unit"] == ["s2", "s4", "s6", "s3", "s1", "s5"], g["unit"]
+
+
+@needs_node
+def test_an_assemblys_vendor_is_the_supplier_most_of_its_lines_come_from(ran):
+    """THERE IS NO VENDOR COLUMN ON AN ASSEMBLY, and there should not be: a vendor is a fact about
+    a material, and an assembly is a recipe over several of them. So Hanz's "sort by vendor" is
+    derived, and the rule he settled is the most frequent vendor among the lines, ties broken
+    alphabetically.
+
+    FREQUENCY HAS TO BEAT ALPHABET. s1 is three Sherwin-Williams lines and one Ardex patch;
+    picking alphabetically over the distinct set files it under Ardex, which is the answer nobody
+    wants.
+
+    ALPHABET HAS TO BREAK THE TIE. s5 is one Sika line and then one Sherwin line, in that order,
+    so "the first line's vendor" and "whatever the tally happened to iterate first" both answer
+    Sika and only the stated rule answers Sherwin-Williams.
+
+    THE VOTE IS CASE-FOLDED. `vendor` is free text on an item: s6 holds "Sherwin-Williams",
+    "sherwin-williams" and one Sika, and counting the spellings separately splits that supplier's
+    two lines into a three-way tie - which then reports the lowercase spelling and "+2 more".
+
+    SILENCE IS NOT A VENDOR CALLED "". s3 has no lines at all and s4 has one line whose material
+    has no supplier recorded; both are "No vendor" and both sort last.
+
+    Mutation: sort the distinct vendors alphabetically and take the first; or drop the
+    toLowerCase() from the tally key; or count an item with vendor "" as a vendor."""
+    g = ran["asmSort"]
+    assert g["tallyFrequencyBeatsAlphabet"] == {"primary": "Sherwin-Williams", "others": 1}, (
+        "three Sherwin lines and one Ardex did not file under Sherwin: %r"
+        % g["tallyFrequencyBeatsAlphabet"])
+    assert g["tallyTieGoesAlphabetical"] == {"primary": "Sherwin-Williams", "others": 1}, (
+        "a 1-1 tie was not broken alphabetically: %r" % g["tallyTieGoesAlphabetical"])
+    assert g["tallyFoldsTheSpelling"] == {"primary": "Sherwin-Williams", "others": 1}, (
+        "two spellings of one supplier split its vote: %r" % g["tallyFoldsTheSpelling"])
+    assert g["tallyNoLines"] == {"primary": "", "others": 0}, g["tallyNoLines"]
+    assert g["tallyItemWithNoVendor"] == {"primary": "", "others": 0}, (
+        "a material with no supplier recorded voted anyway: %r" % g["tallyItemWithNoVendor"])
+    assert g["vendor"] == ["s6", "s1", "s5", "s2", "s4", "s3"], (
+        "vendor order wrong, or the two No-vendor rows did not sort last: %r" % g["vendor"])
+
+
+@needs_node
+def test_a_multi_supplier_assembly_says_so_rather_than_looking_single_sourced(ran):
+    """The "+N more" is the honest half of the rule above. An assembly filed under Sherwin-Williams
+    that is also buying Sika product has been filed under ONE of its suppliers, and a row that
+    said only "Sherwin-Williams" would be a claim about the whole recipe that is not true.
+
+    Read off the rendered rail, and only under the vendor sort - see
+    test_the_row_says_what_it_was_ordered_by.
+
+    Mutation: return just `primary` from asmVendorLabel."""
+    v = ran["asmSort"]["vendorLabels"]
+    assert v["s1"][1] == "Sherwin-Williams +1 more", v["s1"]
+    assert v["s6"][1] == "Sherwin-Williams +1 more", v["s6"]
+    # One supplier, so nothing to disclose. A bare "+0 more" on every single-vendor row is the
+    # other way this goes wrong.
+    assert v["s2"][1] == "Sika", v["s2"]
+    assert v["s3"][1] == "No vendor", v["s3"]
+    assert v["s4"][1] == "No vendor", v["s4"]
+
+
+@needs_node
+def test_who_created_it_reads_as_a_name_and_sorts_as_one(ran):
+    """Hanz asked for "who created it", and the answer is a person, not an address. `owner_email`
+    is what the API returns, so both halves of this are conversions:
+
+    IT IS RENDERED as a name - through TWCrm.nameOf, which is the app's ONE email-to-display-name
+    convention and already renders people on the CRM board, the trash list and the admin table.
+    That function is why library.html now loads crm-core.js: the alternative was a second spelling
+    of the same rule on the one page that did not already have the first. Asserting no "@" survives
+    anywhere in the rail is what a per-row label check cannot promise on its own.
+
+    IT IS ORDERED by that name too, and this fixture is built so the two answers differ. s2 is
+    `will@` and s6 is `will.baker@`: raw addresses put "will.baker@" first, because "." sorts
+    before "@"; the names put "Will" before "Will Baker", because it is shorter. So sorting the raw
+    field - the obvious implementation, and the one that needs no helper at all - produces a
+    different order here and fails.
+
+    An assembly with no owner recorded sorts last and says so, rather than showing an empty gap
+    where a person should be.
+
+    Mutation: sort on a.owner_email, or print it."""
+    g = ran["asmSort"]
+    assert g["owner"] == ["s4", "s1", "s5", "s2", "s6", "s3"], (
+        "the author sort is in raw-address order, not name order: %r" % g["owner"])
+    o = g["ownerLabels"]
+    assert o["s1"][1] == "Kyle Loseke", o["s1"]
+    assert o["s2"][1] == "Will", o["s2"]
+    assert o["s6"][1] == "Will Baker", o["s6"]
+    assert o["s3"][1] == "No creator recorded", o["s3"]
+    assert g["noAddressInTheRail"] is False, (
+        "an email address reached the rail where a person's name belongs")
+    # THE ONE THING THE ASSERTIONS ABOVE CANNOT SEE. The harness requires crm-core.js straight off
+    # disk, so all of them stay green on a page that never loads it. And the failure would be a
+    # LATE one, which is worse than a loud one: `var CRM = window.TWCrm` leaves CRM undefined
+    # without complaining, so the tab renders fine and throws a TypeError the first time somebody
+    # picks "Who created it". Nothing executable can see a missing <script>; only the markup can.
+    assert g["crmCoreLoadedBeforeThePageScript"], (
+        "library.html does not load /js/crm-core.js before /js/library.js, so window.TWCrm is "
+        "undefined when the page script runs")
+
+
+@needs_node
+def test_the_row_says_what_it_was_ordered_by(ran):
+    """A sort whose result cannot be read off the rows is a list that just reshuffled itself. So
+    each row gains the value the rail is currently ordered on.
+
+    ON ITS OWN LINE, which is the second thing a browser had to teach this. The first version
+    appended it to the meta line, and on a 272px rail "3 lines · $1.499/SF · Sherwin-Williams +1
+    more" wraps - so the rows with a long vendor came out a line taller than their neighbours and
+    the rail read as ragged. No DOM assertion can see a wrap. Truncating with an ellipsis was the
+    alternative and it is worse: the first thing to disappear off that line is the price.
+
+    That is why these are asserted per LINE. A one-element list means the sort adds nothing, which
+    is a claim about layout that counting separators inside one string could not make.
+
+    ONLY UNDER THE SORT IT BELONGS TO. The default view is unchanged: printing the vendor and the
+    author on every row would put a second line of small grey text under all forty of them, and
+    neither is what somebody scanning for "MACRO Flake" is reading.
+
+    UNIT IS THE ONE EXCEPTION and prints only on a row with no price. The unit is already the
+    denominator of the "$1.497/SF" the row shows, so saying it twice is noise - but an unpriced row
+    says "not priced" and would otherwise show nothing at all about the thing it was just ordered
+    by. s3 is the only unpriced one.
+
+    Mutation: print the label unconditionally, put it back on the meta line, or drop the unpriced
+    branch from asmSortLabel."""
+    g = ran["asmSort"]
+    # The default adds no second line at all.
+    assert all(len(v) == 1 for v in g["nameLabels"].values()), g["nameLabels"]
+    assert g["scopeLabels"]["s1"][1] == "Epoxy", g["scopeLabels"]["s1"]
+    assert g["scopeLabels"]["s2"][1] == "No scope", g["scopeLabels"]["s2"]
+    # The unit sort: the five priced rows say nothing extra, and the unpriced one says it.
+    assert g["unitLabels"]["s3"][1] == "per SF", g["unitLabels"]["s3"]
+    assert g["unitLabels"]["s2"] == ["1 line · $0.696/LF"], (
+        "the unit was printed twice on a row that already prices per unit: %r"
+        % g["unitLabels"]["s2"])
+    # Every label is its OWN line, never a suffix. One row is enough to pin the shape; the wrap
+    # this prevents is invisible to everything else in this file.
+    assert len(g["vendorLabels"]["s1"]) == 2 and "·" not in g["vendorLabels"]["s1"][1], (
+        "the sort label was folded back onto the meta line, where a long vendor wraps: %r"
+        % g["vendorLabels"]["s1"])
+
+
+@needs_node
+def test_the_added_date_is_rendered_in_business_time(ran):
+    """Through TW.fmtBizDate, like every other project date on this app. The dev box runs about
+    thirteen hours ahead of Central, so a date formatted off the viewer's locale is a day out for
+    anything created after about eleven in the morning.
+
+    The harness stubs that helper with a MARKER rather than a real format, so this cannot pass by
+    accident on a timestamp that happens to read the same in UTC and in Chicago - a
+    `new Date(iso).toLocaleDateString()` produces a date, and a date is not the marker.
+
+    Mutation: format the timestamp with anything else."""
+    n = ran["asmSort"]["newLabels"]
+    assert n["s2"][1] == "added BIZDAY(2026-08-20T09:00:00Z)", n["s2"]
+    assert n["s1"][1] == "added BIZDAY(2026-08-01T14:30:00Z)", n["s1"]
+
+
+@needs_node
+def test_a_sort_composes_with_the_filters_and_is_not_one_of_them(ran):
+    """FILTER FIRST, THEN SORT. The narrowed set is what gets ordered, so the hits count and the
+    no-match panel keep describing the same list the rows came from.
+
+    AND A SORT IS NOT A FILTER, which is the half with somewhere to go wrong. It narrows nothing,
+    so it must not light up the "N of M shown" count, must not raise the no-match panel, and must
+    not put a Clear filters button on screen with nothing to clear - all three of which read as
+    "your list is hiding something" when it is not. That is why ASM_SORT is deliberately outside
+    anyAsmFilterActive().
+
+    The badge stays the total for the same reason it does under a search: it says how many systems
+    Treadwell has.
+
+    Mutation: add ASM_SORT to anyAsmFilterActive(), or sort before filtering and count the
+    unsorted set."""
+    g = ran["asmSort"]
+    assert g["filteredThenSorted"] == ["s6", "s1", "s5", "s4", "s3"], (
+        "the per-LF assembly survived a unit facet, or the survivors are unsorted: %r"
+        % g["filteredThenSorted"])
+    assert g["hitsWhileSortedAndFiltered"] == "5 of 6 shown", g["hitsWhileSortedAndFiltered"]
+    assert g["hitsHiddenWhenOnlySorted"], "sorting alone claimed the list was being narrowed"
+    assert g["noMatchHiddenWhenOnlySorted"], "sorting alone raised the no-match panel"
+    assert g["clearHiddenWhenOnlySorted"], (
+        "Clear filters appeared for a sort, which it deliberately does not reset")
+    assert g["railShownWhenOnlySorted"] is False, "the rail hid itself when it was merely sorted"
+    assert int(g["badgeUnmovedBySorting"]) == 6, g["badgeUnmovedBySorting"]
+
+
+@needs_node
+def test_clear_filters_does_not_reshuffle_the_list(ran):
+    """Clear filters undoes the NARROWING - it exists so somebody looking at an empty rail can get
+    all of it back in one press. A sort hides nothing, so there is nothing to get back, and
+    reordering the list as a side effect of a button labelled Clear filters would be the least
+    predictable thing on this tab.
+
+    It is also the reason the sort listener calls renderList() and nothing else: clearAsmFilters
+    puts the caret in the search box on its way out, which would be wrong for a control the
+    estimator is still standing in - see test_sorting_the_rail_does_not_move_the_caret.
+
+    Mutation: add `ASM_SORT = "name";` to clearAsmFilters."""
+    assert ran["asmSort"]["clearDoesNotResetTheSort"], (
+        "clearAsmFilters writes ASM_SORT, so clearing a search silently reorders the rail")
+
+
+@needs_node
+def test_the_sort_control_comes_back_showing_the_key_it_is_on(ran):
+    """A control whose value does not survive a re-render lies about the list under it, and this
+    one is re-rendered on every keystroke in the search box beside it.
+
+    Written back by renderAsmFilterBar, which writes no markup at all - the six keys are a closed
+    set, so the select is static HTML and only its `.value` is assigned. Nothing is rebuilt, so
+    there is nothing for a re-render to steal focus from.
+
+    Mutation: drop the assignment out of renderAsmFilterBar."""
+    g = ran["asmSort"]
+    assert g["sortSelectSynced"] == "vendor", g["sortSelectSynced"]
+    assert g["sortSelectSyncedToDefault"] == "name", g["sortSelectSyncedToDefault"]
+    assert g["optionValues"] == ["name", "new", "scope", "unit", "vendor", "owner"], (
+        "the markup offers different keys from the ones sortAssemblies answers: %r"
+        % g["optionValues"])
+    # The four Hanz named, plus the default and the honest answer to the prepend.
+    assert g["optionLabels"] == ["Name A–Z", "Newest first", "Scope or work type", "Unit",
+                                "Vendor", "Who created it"], g["optionLabels"]
+    assert g["hiddenBeatsAnyDisplayRule"], (
+        "nothing makes the hidden attribute beat a class display rule, so hiding the filter bar "
+        "would leave the Sort select on screen over an empty tab")
+
+
+@needs_node
+def test_sorting_the_rail_does_not_move_the_caret(ran):
+    """REACHING FOR THE KEYBOARD, because no test that only clicks will ever find this one. An
+    estimator tabs Unit, Condition, Sort, picks a key with the arrows and carries on tabbing; a
+    renderer that focuses something of its own has thrown them out of the pass they were making,
+    and it is invisible to anybody driving the page with a mouse.
+
+    It is a live hazard on this exact tab and not a hypothetical: clearAsmFilters legitimately ends
+    with `$("asm-q").focus()`, and routing the sort through it - the obvious way to share the
+    re-render - would yank the caret into the search box every time somebody changed the order.
+
+    TWO HALVES, AND ONLY ONE OF THEM IS EXECUTED. Say which, because the first draft of this test
+    claimed both and a mutation proved otherwise:
+
+      * EXECUTED - the DOM stub records every focus() any renderer calls, and rendering the sorted
+        rail must record none. An empty list is the assertion; the probe beside it proves the
+        recorder is not simply broken, since a focus() that IS called does land in it. This half
+        catches a focus call added to renderList.
+      * READ FROM SOURCE - the listener itself. It is top-level wiring inside the page's IIFE, so
+        no scenario in that harness can reach it, and the executed half measures renderList rather
+        than the listener. Since the mistake in question is which function gets called, the call
+        is the thing to look at.
+
+    Mutation: end the fa-sort listener with clearAsmFilters() - the source half turns red; add a
+    focus call to renderList - the executed half does."""
+    g = ran["asmSort"]
+    assert g["renderTouchesNoFocus"] == [], (
+        "rendering the sorted rail moved the caret to %r" % g["renderTouchesNoFocus"])
+    assert g["focusProbeWorks"] == ["asm-q"], (
+        "the focus recorder is broken, so the assertion above proves nothing: %r"
+        % g["focusProbeWorks"])
+    body = g["sortListenerBody"]
+    assert "renderList()" in body, (
+        "the sort listener does not repaint the rail: %r" % body)
+    assert "clearAsmFilters" not in body, (
+        "the sort listener routes through clearAsmFilters, which resets the two facets and then "
+        "puts the caret in the search box: %r" % body)
+    assert ".focus(" not in body, (
+        "the sort listener moves the focus off the control the estimator is in: %r" % body)
+
+
+@needs_node
+def test_sorting_never_reorders_the_model_itself(ran):
+    """visibleAssemblies hands ASMS ITSELF back when nothing is filtered - that is deliberate, it
+    is the common case and copying the array on every keystroke would be waste - so a sort in place
+    would silently reorder the array the rest of the page reads.
+
+    WHAT WOULD BREAK, none of it visibly: `current()` walks ASMS for openId; `load()` picks
+    ASMS[0].id when nothing is open; deleting the open assembly falls back to ASMS[0].id. All three
+    would start answering off whatever the estimator last sorted by, and the last of them is a
+    delete.
+
+    Mutation: `return list.sort(...)` instead of `list.slice().sort(...)`."""
+    g = ran["asmSort"]
+    assert g["doesNotMutateTheModel"] == "z,a", (
+        "sortAssemblies reordered the array it was handed: %r" % g["doesNotMutateTheModel"])
+    assert g["returnsANewArray"], "the sorted result is the same array object as the input"
+    assert g["reorderedCopy"] == "a,z", (
+        "the copy came back unsorted, so the test above passes for the wrong reason: %r"
+        % g["reorderedCopy"])
 
 
 # ── bulk add: a dozen materials in one go ────────────────────────────────────
