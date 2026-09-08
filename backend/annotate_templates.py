@@ -117,13 +117,16 @@ BUDGET_DIRECT_RULES: list[tuple[str, str]] = [
 # date, area SF, and the Base Bid / tax / Total price block. The GC-specific
 # system menu, scope, exclusions, notes, and the GC/project addresses stay as
 # boilerplate the estimator finishes in Word (that's the GC format). The "–" is
-# an en dash; "&amp;" matches the escaped ampersand in the docx XML.
+# an en dash; "&amp;" matches the escaped ampersand in the docx XML -- in a
+# SEARCH string only. Replacements are xml_escape()d on the way in, so a
+# replacement carries a PLAIN "&"; "&amp;" there double-escapes to
+# "&amp;amp;" and the customer reads a literal "&amp;" on the proposal.
 GC_POLISH_RULES: list[tuple[str, str]] = [
     ("Greg Ingebretson",                            "{{estimator_name}}"),
     ("5/1/26",                                      "{{bid_date_formatted}}"),
     ("~1,600 sf",                                   "~{{sqft}} sf"),
     ("$x – Polished Concrete &amp; Joint Filler as described above (material sales tax INCLUDED)",
-     "{{base_bid_formatted}} – Polished Concrete &amp; Joint Filler as described above {{base_tax_phrase}}"),
+     "{{base_bid_formatted}} – Polished Concrete & Joint Filler as described above {{base_tax_phrase}}"),
     ("$  x – Material Sales Tax",                    "{{material_tax_formatted}} – Material Sales Tax"),
     ("$  x – Kansas Remodel Tax",                    "{{tax_amount_formatted}} – Remodel Tax"),
     ("$x – Total",                                   "{{total_formatted}} – Total"),
@@ -133,9 +136,9 @@ GC_RESINOUS_RULES: list[tuple[str, str]] = [
     ("Greg Ingebretson",                            "{{estimator_name}}"),
     ("5/1/26",                                      "{{bid_date_formatted}}"),
     ("~1,600 sf",                                   "~{{sqft}} sf"),
-    ("&amp; 500 lf of integral base",               "&amp; {{cove_lf}} lf of integral base"),
+    ("&amp; 500 lf of integral base",               "& {{cove_lf}} lf of integral base"),
     ("$x – Resinous floor &amp; integral cove base as described above (material sales tax INCLUDED)",
-     "{{base_bid_formatted}} – Resinous floor &amp; integral cove base as described above {{base_tax_phrase}}"),
+     "{{base_bid_formatted}} – Resinous floor & integral cove base as described above {{base_tax_phrase}}"),
     ("$  x – Material Sales Tax",                    "{{material_tax_formatted}} – Material Sales Tax"),
     ("$  x – Kansas Remodel Tax",                    "{{tax_amount_formatted}} – Remodel Tax"),
     ("$x – Total",                                   "{{total_formatted}} – Total"),
