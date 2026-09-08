@@ -204,9 +204,16 @@ function harness(opts) {
     // call is still a failure somewhere.
     remodelCalls: [],
     effectiveRemodelRate: () => null,
+    // Same deal for the filed markup rates: covered end to end by markup-rate-harness.js, and
+    // recorded here only so copyTab dropping the call is a failure SOMEWHERE. It is in this
+    // dependency list at all because `lift` binds by name — a callee absent from deps is an
+    // unbound identifier inside the lifted copy, which would kill every scenario in this file
+    // the moment copyTab gained a line. That has happened six times in one session.
+    markupCalls: [],
   };
   deps.tabs = tabs;
   deps.applyRemodelRateOverride = (r) => { deps.remodelCalls.push(r); };
+  deps.applyMarkupRates = () => { deps.markupCalls.push(true); return 0; };
 
   // ── lift, in dependency order ──────────────────────────────────────────────
   deps.labelFor = liftExpr(/^const labelFor = .*$/m, "labelFor", { state });

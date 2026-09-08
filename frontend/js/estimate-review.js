@@ -1106,6 +1106,13 @@ function copyTab(sourceId) {
   // the copy charged 9.475% on a tax-exempt job while its own box read "No". Also
   // after buildTabs(), so jobFlagTargets can see the new tab.
   applyJobFlags();
+  // And the filed markup rates, for the third time the same reason: the backend
+  // clones a copy from the PRISTINE template, so its rate cells arrive holding the
+  // template's own percent. The cellValues replay above carries them when the source
+  // was already written, which is a side effect of copying edits rather than a
+  // guarantee — it does nothing for a copy made before the rules loaded. Also after
+  // buildTabs(), so markupRateTargets can see the new tab.
+  applyMarkupRates();
   TW.setState({ ...state, tab_copies: state.tab_copies, tab_labels: state.tab_labels,
                 tab_order: state.tab_order, cell_values: cellValues });
   renderTabs();
@@ -1192,6 +1199,13 @@ async function init() {
   // every endpoint is auth-gated, so firing before the token is set 401s and
   // the grid shows "Failed to load …".
   try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+  // 0b. The markup rates an admin filed, fetched now and AWAITED at step 3d. Fired
+  //     here rather than awaited here so it overlaps the sheet load instead of
+  //     adding a round trip to a page that already makes four; it must be after the
+  //     auth await because every /api/* response is gated and a 401 would price
+  //     nothing. loadMarkupRules never rejects — a failure is "no rules", which
+  //     leaves every rate cell exactly as Kyle's template has it.
+  const _markupRulesReady = loadMarkupRules();
   // 1. Tab bar + sheet list
   try {
     const res = await fetch("/api/sheets", { headers: TW.authHeaders() });
@@ -1300,6 +1314,20 @@ async function init() {
   //     that only restate the template.
   const _flagsHealed = applyJobFlags();
 
+  // 3d. The filed markup rates, into Kyle's own rate cells. Same position and same
+  //     reasons as 3c: after the copies exist in HF and after the saved cellValues
+  //     have been replayed, so it sees the whole bid, and before showSheet so the
+  //     first paint is already right.
+  //
+  //     ON PRODUCTION THIS IS A NO-OP TODAY — markup_rules is verified empty (0
+  //     rows, 0 deleted), no rule matches, nothing is written and `changed` is 0.
+  //     Once a rate IS filed, though, note what this means: opening an existing
+  //     estimate adopts it, and the persist at the end of init() then stores the new
+  //     figure. That is the intent of a tab-wide rate, but it is also the reason
+  //     Hanz has to know a filed rate reprices open drafts on their next open.
+  try { await _markupRulesReady; } catch {}
+  const _ratesApplied = applyMarkupRates();
+
   // 4. Open the right starting tab (gyp → the gyp base, polish → Polish, else Epoxy)
   const initialSheet = defaultBaseSheet();
   badge.textContent = labelFor(initialSheet).toUpperCase();
@@ -1324,7 +1352,7 @@ async function init() {
   // page — so a corrected answer that never got saved would still download a bid
   // charging tax the estimator switched off. Saved only when 3c actually moved
   // something, so merely opening a correct draft does not write one.
-  if (_flagsHealed) persistTabState();
+  if (_flagsHealed || _ratesApplied) persistTabState();
 }
 
 function renderTabs() {
@@ -3431,6 +3459,148 @@ function remodelRateTargets() {
   return out;
 }
 
+// ─── The markup rates an admin filed on /markup.html ───────────────────────
+//
+// Until now the Markup page stored rates and nothing read them: an admin could
+// change Super & PTO, watch it save, and no bid anywhere would move. This is the
+// half that reaches the workbook — and it reaches it by writing the rate into
+// KYLE'S OWN rate cell, so his formula, his SUM ranges and his ROUNDUPs still work
+// out the dollars. Nothing here computes money.
+//
+// SCOPE IS THREE LINES, and the other four are excluded STRUCTURALLY — by having no
+// address in this table, never by a "does this look like a plain number?" check on
+// the formula. That distinction is the whole safety property:
+//
+//   gp        Its shipped built-in is `MARKUP(BAND(subtotal, 6500,52%, …))`, which
+//             returns DOLLARS, not a rate, and `estimate_writer._coerce` refuses
+//             MARKUP/BAND (they are not in `_SAFE_FORMULA_FUNCS`) so it would land
+//             in the .xlsx as apostrophe-escaped TEXT and Kyle's
+//             `=ROUNDUP(D70/(1-B73)…)` would read #VALUE!. Worse, an admin who
+//             files gp as the bare literal "45%" IS a plain percent and WOULD pass
+//             any formula-shape guard — flattening a 5-, 6- or 7-tier ladder to one
+//             rate, pricing plausibly and wrongly with nothing on screen to show it.
+//             So the exclusion is by LINE KEY. The guard is the second line of
+//             defence, never the first.
+//   hard_bid  Its discount is `=IF(B5="yes",…)` against `Hard Bid?`, and B5/B7 are
+//             FROZEN literals reading "No" on Seal, Leveling, 'Epoxy blank', every
+//             gyp variant and every copy (test_taxable_flag_reaches_every_sheet.py
+//             names them: KNOWN_UNFIXED_FLAGS = {"local", "hard bid"}). An admin
+//             would file a discount, get no error, and get no discount.
+//
+//   bond      Excluded on EVERY layout, and the long note below the table says why:
+//             Kyle's own bond formula counts the tax rows twice, and filing a rate
+//             is the act that exercises it. That is the one exclusion here that is
+//             about the WORKBOOK being wrong rather than about the line not being a
+//             rate — so it is the one that goes away, one line per layout, when he
+//             fixes it. The two notes below stay relevant on that day.
+//
+// One per-(layout, line_key) hole, which is why this is keyed by both:
+//
+//   Gyp!B75              soft costs, on all five variants:
+//                        `=IF(OR(B5="Yes",B5="No"),IF(B5="Yes",0.09,0.1)
+//                          - IF(E69>334900,0.05,IF(E69>234450,0.035,0)),"error")`
+//                        — a local/away branch, a job-size taper, and Kyle's own
+//                        refuse-to-price "error" sentinel. A flat percent silently
+//                        deletes all three.
+//
+// Every address was read out of backend/templates/estimate_sheet_5.7.xlsx, not
+// reasoned from LOCK_MAP, and every one is confirmed against the A-column label
+// ('Superintendent & PTO' / 'Soft Costs'). All 17 carry number_format '0.00%', so
+// `=0.027` displays as 2.7% — one decimal, because formatNumericValue's percent
+// branch reads `/0\.0/` and stops at 1.
+//
+//   layout          super_pto  soft_costs  template values   bond (NOT WIRED)
+//   Epoxy           B75        B76         0.03  / 0.13      B84
+//   Polish          B69        B70         0.027 / 0.16      B78
+//   Seal            B69        B70         0.027 / 0.16      B78
+//   Seal (+Jnts)    B69        B70         0.027 / 0.16      B78 mirrors Seal
+//   Leveling        B71        B72         0.03  / 0.13      B80
+//   Epoxy blank     B72        B73         0.03  / 0.13      B81
+//   Gyp (…) x5      B74        —           0.041 / (formula) B83
+//
+// The bond column is on record for the day Kyle's formula is fixed, and is checked
+// against the workbook by the test module even though nothing writes it — a
+// coordinate nobody checks is a coordinate that has quietly moved by then.
+//
+// All five gyp variants carry INDEPENDENT literals (B74=0.041 on each; none mirrors
+// another), so all five are written. Extended by a GYP_SHEETS.forEach for the
+// reason REMODEL_RATE_BY_LAYOUT is: a hand-typed variant list drifts from the
+// shipped one.
+// BOND IS DELIBERATELY ABSENT, and it is not an oversight — see
+// test_bond_carries_a_dormant_tax_double_count_in_kyles_own_formula.
+//
+// Kyle's bond row multiplies a SUM whose range overlaps a subtotal inside itself:
+// Epoxy!D84 = ROUNDUP(SUM(D70,D73,D74,D75:D77,D80,D81:D83)*B84,0) while
+// D82 = SUM(D80:D81). D82 sits inside D81:D83, so sales tax and remodel tax are
+// each counted TWICE in the bond base. The same shape is on all eleven priced
+// sheets. Bond is 0 in the template everywhere, so the defect has never been
+// exercised -- and filing a bond rate is precisely the act that exercises it.
+// Measured on the template's Leveling tab ($157 of tax): 1% bond yields +$110
+// where the honest figure is +$108, scaling with the tax, ~$28 on a $36.7k bid.
+// Always an over-charge, in front of a customer.
+//
+// It is Kyle's formula, so it is his to correct. Re-adding bond here is one line
+// per layout once D84 (and its ten siblings) reference the tax rows once each.
+const MARKUP_RATE_TARGETS = {
+  "Epoxy":        { super_pto: "B75", soft_costs: "B76" },
+  "Polish":       { super_pto: "B69", soft_costs: "B70" },
+  "Seal":         { super_pto: "B69", soft_costs: "B70" },
+  "Seal (+Jnts)": { super_pto: "B69", soft_costs: "B70" },
+  "Leveling":     { super_pto: "B71", soft_costs: "B72" },
+  "Epoxy blank":  { super_pto: "B72", soft_costs: "B73" },
+};
+GYP_SHEETS.forEach((s) => { MARKUP_RATE_TARGETS[s] = { super_pto: "B74" }; });
+
+// Template LAYOUT -> the markup_rules `layout` an admin files against. markup.py's
+// LAYOUTS is five names against eleven priced sheets, so ONE filed `seal` row
+// reaches two tabs and ONE filed `gyp` row reaches five. Getting this wrong in the
+// other direction is the PR #432/#433 hole: a rate that reached the obvious sheet
+// and left the rest of the bid on the old one.
+const MARKUP_LAYOUT_OF = {
+  "Epoxy": "epoxy", "Epoxy blank": "epoxy",
+  "Polish": "polish",
+  "Seal": "seal", "Seal (+Jnts)": "seal",
+  "Leveling": "leveling",
+};
+GYP_SHEETS.forEach((s) => { MARKUP_LAYOUT_OF[s] = "gyp"; });
+
+/** Every cell a filed rate must be written to, as [sheetId, markupLayout, lineKey, addr].
+ *
+ *  Computed per call for the reason remodelRateTargets and jobFlagTargets are: copies
+ *  are made and deleted while the page is open, and a copy is the ordinary way to add
+ *  a priced proposal option. The two-pass shape is jobFlagTargets' verbatim —
+ *  template layouts first, so a sheet that ships in the .xlsx but is off screen is
+ *  still written, then every live tab through layoutIdFor, which walks copy-of-copy
+ *  chains 20 deep.
+ *
+ *  A DELETED row or column returns null from txAddr and drops THAT target rather than
+ *  writing at a stale address — the same rule _resolve_ws_layouts applies to the lock
+ *  preset (`[t for t in (...) if t]`), so the screen, the .xlsx and the protection all
+ *  stay in agreement about a cell that is no longer there. It drops one line, not the
+ *  whole sheet: these are per-(layout, line_key) decisions. */
+function markupRateTargets() {
+  const out = [];
+  const seen = new Set();
+  const add = (id, layout) => {
+    const spec = MARKUP_RATE_TARGETS[layout];
+    const mk = MARKUP_LAYOUT_OF[layout];
+    if (!spec || !mk || seen.has(id)) return;
+    seen.add(id);
+    for (const lineKey in spec) {
+      const addr = txAddr(id, spec[lineKey]);
+      if (!addr) continue;
+      out.push([id, mk, lineKey, addr]);
+    }
+  };
+  for (const layout in MARKUP_RATE_TARGETS) add(layout, layout);
+  for (const t of (tabs || [])) {
+    let L;
+    try { L = layoutIdFor(t.id); } catch (e) { continue; }
+    add(t.id, L);
+  }
+  return out;
+}
+
 // ─── The Taxable? / Remodel Tax? answers, on every sheet that holds one ─────
 //
 // Kyle, mid-estimate on a TAX-EXEMPT job: he copied a tab to make an option and the
@@ -3800,6 +3970,123 @@ function applyRemodelRateOverride(rate) {
     if (sheet === activeSheet) touchedActiveSheet = true;
   }
   if (touchedActiveSheet) refreshActiveGridFromHF();
+}
+
+// ─── A filed markup rate -> Kyle's own rate cell ────────────────────────────
+//
+// THE RATE IS PARSED FROM TEXT AND NEVER EVALUATED. `TWMarkup.run` (the Markup
+// page's own engine) treats a trailing % as a divide-by-100 at eval time, and binary
+// floating point does not survive it. Measured against the real markup-core.js:
+//
+//     run("2.7%")  ->  0.027000000000000003     Polish/Seal!B69 holds 0.027
+//     run("4.1%")  ->  0.040999999999999995     every Gyp!B74 holds 0.041
+//
+// What that costs, stated accurately rather than dramatically. Bare
+// `Math.ceil(1000 * 0.027000000000000003)` is 28 where 0.027 gives 27, and round
+// sub-totals are exactly what this sheet produces — but the shipped ROUNDUP is not
+// Math.ceil. xl-excel-rounding.js snaps to 12 significant digits first, and Excel
+// tidies up on its own side, so BOTH artefacts still say 27 today. Executed both
+// ways before writing this.
+//
+// So the reason to parse is not that evaluating misprices; it is that evaluating
+// puts `=0.027000000000000003` in the cell Kyle opens, and leaves the price correct
+// only because a rounding override absorbs it. `shiftDecimalText` moves the point
+// through the number's TEXT (written for this hazard; its comment above measures
+// 9.975/100 landing on 0.09974999999999999) and all six built-ins — 3%, 13%, 2.7%,
+// 16%, 4.1%, 0% — land EXACTLY on the template's literal, with no engine on the
+// pricing screen to load or to be tempted by.
+//
+// THE `%` IS REQUIRED, which is stricter than the spec this was built from asked
+// for. With it optional, the same digits mean a 100x different rate depending on a
+// sign the admin may forget: "0.5" reads as 50% and "0.5%" as half a percent, and
+// the >= 100% ceiling below cannot tell them apart because 0.5 is a perfectly
+// ordinary-looking number. The asymmetry is also backwards from intuition — a bare
+// "3" would be refused while a bare "0.5" was silently accepted as fifty percent.
+// Every built-in on the Markup page carries an explicit % (`F("2.7%")`,
+// `F("4.1%")`), so requiring it costs nothing and closes a 100x misprice. A
+// refusal means THE CELL IS NOT TOUCHED and Kyle's own value stands.
+const _RATE_LITERAL_RE = /^\s*(\d*\.?\d*)\s*%\s*$/;
+function rateTextFrom(formula) {
+  const m = _RATE_LITERAL_RE.exec(String(formula == null ? "" : formula));
+  if (!m || !m[1] || m[1] === ".") return null;
+  const t = shiftDecimalText(m[1], -2);
+  // No Super & PTO, Soft Costs or Bond rate is ever 100% or more. A figure that
+  // reads that way is a typo, and the sheet's own value is a better answer than it.
+  if (t === null || Number(t) >= 1) return null;
+  return t;
+}
+
+// Every rule the Markup page has filed, all layouts. Empty until loadMarkupRules
+// says otherwise, and empty is the day-one state on production (markup_rules is
+// verified 0 rows) — which is why filing nothing has to change nothing.
+let markupRules = [];
+
+/** One GET, no `?layout=`, because one bid can carry tabs from several layouts.
+ *
+ *  ANY failure leaves the cache empty and every rate cell alone: the feature going
+ *  inert is a correct bid, a half-applied rate is not. Read is open to any
+ *  signed-in role (`/api/markup/rules` GET has no `_require_admin`, and
+ *  nav_access.py deliberately sets `api: ()` for /markup.html), so an estimator can
+ *  be priced by a rate they are not allowed to edit — which is the point of a
+ *  tab-wide rate. Called from init() AFTER `await window.TWAuth.ready`, so this
+ *  cannot repeat the /api/default-notes 401 race: the endpoint is not in
+ *  _AUTH_PUBLIC_PATHS and an unauthenticated call would simply come back 401 and
+ *  price nothing. */
+async function loadMarkupRules() {
+  try {
+    const res = await fetch("/api/markup/rules", { headers: TW.authHeaders() });
+    if (!res.ok) { markupRules = []; return 0; }
+    const j = await res.json();
+    markupRules = Array.isArray(j && j.rules) ? j.rules : [];
+  } catch (e) {
+    console.warn("markup rules did not load; the workbook keeps its own rates", e);
+    markupRules = [];
+  }
+  return markupRules.length;
+}
+
+/** Write every filed rate into the cell Kyle's formula multiplies by. Returns how
+ *  many cells actually CHANGED, so a caller can tell a real apply from a no-op and
+ *  only save for the former — the same contract applyJobFlag has.
+ *
+ *  WHY `=<rate>` AND NOT THE PLAIN NUMBER. `refreshDomFromHF` opens with
+ *  `if (!cell.isFormula && !userFormula) continue;`, where userFormula is a
+ *  cellValues string starting with "=". All 27 of these cells are PLAIN numbers in
+ *  the template, so a plain-value write would move every total downstream while
+ *  leaving the rate cell itself showing the old percent — the screen contradicting
+ *  itself, which is how nobody trusts either figure. The alternative is the full
+ *  re-render the autofill path uses (`delete sheetCache[activeSheet]; showSheet`),
+ *  and on a COPIED tab that 404s and blanks the grid. `=0.027` keeps the cheap
+ *  userFormula branch and needs no new repaint helper. Verified through the backend:
+ *  `estimate_writer._coerce("=0.027")` returns the identical string as a FORMULA
+ *  (`_is_safe_formula` passes; there is no function name in it to reject).
+ *
+ *  `applies === false` LEAVES THE CELL ALONE rather than writing a zero. markup.py's
+ *  docstring is emphatic that "this line does not exist on this tab" and "this line
+ *  prices to nothing" are different facts, and it is not this writer's place to turn
+ *  the first into the second. The honest consequence — the tab goes on charging the
+ *  template's own rate for a line the admin just marked absent — is said out loud on
+ *  the Markup page's own row instead (see PRICES_THE_BID in markup.js). */
+function applyMarkupRates() {
+  const targets = markupRateTargets();
+  let changed = 0;
+  let touchedActiveSheet = false;
+  for (const [sheet, layout, lineKey, addr] of targets) {
+    const rule = markupRules.find((r) => r && r.layout === layout && r.line_key === lineKey);
+    if (!rule || rule.applies === false || !rule.formula) continue;
+    const rateText = rateTextFrom(rule.formula);
+    if (rateText === null) continue;
+    const formula = `=${rateText}`;
+    const key = `${sheet}!${addr}`;
+    if (cellValues[key] !== formula) { cellValues[key] = formula; changed++; }
+    if (HF && HF.ready) {
+      try { HF.setCellValue(sheet, addr, formula); }
+      catch (e) { console.warn("HF.setCellValue failed for", sheet, addr, e); }
+    }
+    if (sheet === activeSheet) touchedActiveSheet = true;
+  }
+  if (touchedActiveSheet) refreshActiveGridFromHF();
+  return changed;
 }
 
 // Re-draw the active grid after a programmatic write, WITHOUT discarding its cache.

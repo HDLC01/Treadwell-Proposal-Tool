@@ -80,14 +80,32 @@ def test_a_base_flip_moves_the_document_payload(ran):
 
 @needs_node
 def test_every_line_of_the_price_block_is_rewritten(ran):
-    """The PRICE block is what a customer signs. All of it moves, including the itemised breakdown
-    the epoxy layout has to make add up: base bid + material tax = total."""
+    """The PRICE block is what a customer signs. All of it moves.
+
+    THE BASE BID IS THE WHOLE $18,670 HERE, not $18,060, and that is the fix — not a fixture
+    drifting. This is the Direct epoxy template in the default "INCLUDED" layout, where the
+    Material Sales Tax and Remodel rows sit inside {{#tax_breakout}} / {{#remodel}} and are
+    STRIPPED. Nothing prints for the base line to be net OF, so a base line reading $18,060 is
+    a $610 discount on the only price the document shows. Kyle, 2026-09-08, on the version that
+    did: a proposal reading $6,182 under a $6,307 estimate. The itemised case is
+    test_the_tax_treatment_reaches_the_document, where the rows do print.
+
+    WHOLE DOLLARS, and these figures carry no cents on purpose. Kyle, 2026-09: "can we get rid of
+    the decimal places behind the base bid amount? we always round everything to the nearest
+    dollar." The page prints these through `fmtUSDdoc`, the twin of the backend's `_fmt_usd`, so a
+    trailing ".00" is dropped and the preview byte-matches the generated document. A reappearing
+    "$18,670.00" here is the two-styles-in-one-document bug coming back.
+
+    It is a LOSSLESS strip, not a round, and
+    test_the_remodel_tax_line_appears_and_disappears_with_the_tax keeps its "$1,234.50" with the
+    cents on. If that one goes red at the same time as these, somebody reached for
+    `maximumFractionDigits: 0` and is hiding real money."""
     i = ran["incident"]
-    assert i["totalLabel"] == "$18,670.00 – Total"
-    assert i["lumpSumLabel"] == "$18,670.00 – Epoxy Flooring as described above"
-    assert i["totalFormatted"] == "$18,670.00"
-    assert i["baseBidFormatted"] == "$18,060.00"
-    assert i["materialTaxFormatted"] == "$610.00"
+    assert i["totalLabel"] == "$18,670 – Total"
+    assert i["lumpSumLabel"] == "$18,670 – Epoxy Flooring as described above"
+    assert i["totalFormatted"] == "$18,670"
+    assert i["baseBidFormatted"] == "$18,670"
+    assert i["materialTaxFormatted"] == "$610"
 
 
 @needs_node
@@ -185,7 +203,7 @@ def test_a_plain_reprice_never_touches_the_narrative(ran):
     assert s["calls"]["collectBoxOverrides"] == 0
     assert s["templateVersion"] == "tpl-OLD"
     assert s["paragraphOverrides"] == [{"id": 1, "text": "hand written"}]
-    assert s["totalFormatted"] == "$14,000.00", "the pricing did not sync"
+    assert s["totalFormatted"] == "$14,000", "the pricing did not sync"
 
 
 @needs_node
@@ -196,7 +214,7 @@ def test_an_unmounted_editor_still_lets_the_pricing_through(ran):
     e = ran["editorUnavailable"]
     assert e["threw"] is False
     assert e["workType"] == "epoxy"
-    assert e["pricingStillSynced"] == "$18,670.00"
+    assert e["pricingStillSynced"] == "$18,670"
     assert e["paragraphOverrides"] == [{"id": 1, "text": "from the old template"}]
 
 
@@ -211,7 +229,7 @@ def test_an_unloaded_template_never_blanks_the_version_stamp(ran):
     assert t["templateVersion"] == "tpl-POLISH", "the version stamp was blanked"
     assert t["paragraphOverrides"] == [{"id": 1, "text": "captured on polish"}]
     assert t["calls"]["collectOverrides"] == 0
-    assert t["pricingStillSynced"] == "$18,670.00"
+    assert t["pricingStillSynced"] == "$18,670"
 
 
 @needs_node
@@ -259,6 +277,38 @@ def test_the_tax_treatment_reaches_the_document(ran, mode, phrase):
 
 
 @needs_node
+@pytest.mark.parametrize("mode,base", [
+    # $13,265 total, $420 material sales tax, $900 remodel — a DIRECT template, whose tax rows
+    # live inside {{#tax_breakout}} / {{#remodel}}.
+    ("INCLUDED",   "$13,265"),   # rows stripped: nothing prints for the base to be net of
+    ("BROKEN_OUT", "$11,945"),   # rows print: 11,945 + 420 + 900 = 13,265
+    ("EXCLUDED",   "$13,265"),   # rows stripped, and an exempt job owes no tax anyway
+])
+def test_the_base_bid_is_the_total_less_whatever_tax_rows_print(ran, mode, base):
+    """The rule the whole PRICE block hangs on, on the side of it the estimator SEES.
+
+    A base line net of a tax row that does not print is a silent discount; a base line gross of
+    one that does print makes four figures a customer can add up not add up. Both had shipped —
+    the first as Kyle's $6,182-under-$6,307 report, the second as the GC block printing
+    6,307 + 125 + 0 under a 6,307 Total.
+
+    This asserts the FIGURE, not that some function was called, and it asserts the sum rather
+    than restating the arithmetic: whichever rows print, the printed rows plus the printed base
+    have to come to the printed Total."""
+    f = ran["taxFlip"][mode]
+    assert f["base_bid_formatted"] == base
+
+    def usd(s):
+        return float(str(s).replace("$", "").replace(",", ""))
+
+    printed = usd(f["base_bid_formatted"])
+    if mode == "BROKEN_OUT":                      # the only mode whose rows reach the page
+        printed += usd(f["material_tax_formatted"]) + usd(f["tax_amount_formatted"])
+    assert printed == usd(f["total_formatted"]), (
+        f"{mode}: the printed price block does not sum to the Total ({f!r})")
+
+
+@needs_node
 def test_narrowing_a_combo_to_one_base_clears_the_two_price_lines(ran):
     """A combo with no base prints BOTH systems as options. Choosing one base makes that block
     wrong, and leaving the old lines in the payload prints two prices in a one-price proposal."""
@@ -271,7 +321,13 @@ def test_narrowing_a_combo_to_one_base_clears_the_two_price_lines(ran):
 @needs_node
 def test_the_remodel_tax_line_appears_and_disappears_with_the_tax(ran):
     """`{{#remodel}}` is a conditional block: a leftover line prints a $0.00 Kansas Remodel Tax
-    row, and a missing one makes the three price lines stop summing to the bid."""
+    row, and a missing one makes the three price lines stop summing to the bid.
+
+    THE CENTS ON "$1,234.50" ARE THE POINT, and this assertion is the counterexample that keeps
+    the whole-dollar change honest. Every other money string in this module lost its ".00" when
+    the bid-money sites moved to `fmtUSDdoc`; this one must not, because a remodel tax is a real
+    percentage of a real number and can land on a genuine fraction. Whoever makes this row read
+    "$1,235" has truncated money a customer is being charged."""
     r = ran["remodelLine"]
     assert r["on"] == [{"amount_formatted": "$1,234.50"}]
     assert r["off"] == []
@@ -295,7 +351,7 @@ def test_gyp_area_buckets_reach_the_document(ran):
     assert (g["soft"], g["hard"], g["corridor"]) == ("27,825", "4,100", "900")
     assert g["sqft"] == "32,825", "the total SF the proposal quotes"
     assert g["area"] == "~32,825 sf of gypsum underlayment"
-    assert g["total"] == "$24,000.00"
+    assert g["total"] == "$24,000"
 
 
 # ── the wiring ───────────────────────────────────────────────────────────────
@@ -342,6 +398,6 @@ def test_the_synced_payload_survives_a_reload(ran):
     e = ran["endToEnd"]
     assert e["pageBase"] == "Epoxy", "the page's own half did not persist"
     assert e["docBase"] == "Epoxy", "the document half was lost between setState and getState"
-    assert e["docTotalFormatted"] == "$18,670.00"
+    assert e["docTotalFormatted"] == "$18,670"
     assert e["docWorkType"] == "epoxy"
     assert e["docNarrativeKept"] == NARRATIVE["scope_notes"]

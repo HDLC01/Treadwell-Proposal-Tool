@@ -4,7 +4,21 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const money = (n) => (n == null ? "" : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  // Whole dollars, LOSSLESSLY. Kyle, 2026-09: "can we get rid of the decimal places behind the
+  // base bid amount? we always round everything to the nearest dollar." So a trailing ".00" is
+  // dropped and a REAL fraction is kept. NOT maximumFractionDigits: 0 -- that would print a
+  // genuinely fractional $6,182.50 as $6,183 and hide fifty cents of somebody's money, which is
+  // the mistake polish-estimate.js:79-87 was written about. Same rule as the backend's _fmt_usd
+  // and proposal-review.js's fmtUSDdoc, so the board reads the same as the PDF it links to.
+  // Two things here are load-bearing and must survive an edit: the `n == null` guard (a project
+  // with no bid renders an EMPTY cell, never "$0"), and being self-contained -- three node
+  // harnesses lift this declaration by name (drawer-render, handed-off-tab, followups-sent) and
+  // a call out to a new helper would be an unlifted callee, i.e. a ReferenceError.
+  const money = (n) => {
+    if (n == null) return "";
+    const s = "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return s.endsWith(".00") ? s.slice(0, -3) : s;
+  };
   // Central, not viewer-local: "submitted 7/27 10:04 PM" must mean the same day to
   // Kyle in Kansas and to anyone testing from another timezone. Falls back to the
   // old local rendering only if shared.js somehow hasn't loaded.
