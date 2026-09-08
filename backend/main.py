@@ -4363,6 +4363,27 @@ def _ensure_value_aliases(values: Dict[str, Any], audience=None) -> None:
         if _bd:
             _y, _mo, _d = _bd.groups()
             values["bid_date_formatted"] = f"{int(_mo)}/{int(_d)}/{_y[2:]}"
+    # Polish's Area and Total rows are WHOLE-LINE tokens -- "{{area_description}}"
+    # and "{{total_label}}", not an amount token beside static words -- so the
+    # base_bid/material_tax backfills above never reach them and a payload without
+    # them prints the LITERAL "{{total_label}}" where the customer's Total belongs.
+    # The live browser always sends both (proposal-review.js computeTokenValues), so
+    # the hole only opens on a REPLAY of a frozen payload -- /api/admin/proposal-pdf,
+    # a revision's file links, the To-Dropbox re-file. Both formats below are
+    # byte-identical to what that browser sends, so a replay reproduces the original
+    # document rather than a differently-worded one.
+    if _blank(values.get("area_description")) and not _blank(values.get("sqft")):
+        _noun = ("polished concrete flooring" if _wt == "polish"
+                 else "gypsum underlayment" if _wt == "gyp"
+                 else "epoxy flooring")
+        _area_sf = str(values.get("sqft")).strip()
+        values["area_description"] = "~" + _area_sf + " sf of " + _noun
+    # Mirrors the price-label override path, which composes this same string when
+    # the estimator retitles the Total row (main: values["total_label"] =
+    # f"{_t_amt} – {_t_lbl}"). En dash, spaced, per Kyle's template wording.
+    if _blank(values.get("total_label")) and not _blank(values.get("total_formatted")):
+        _tot_amt = str(values.get("total_formatted")).strip()
+        values["total_label"] = _tot_amt + " – Total"
 
 
 @app.get("/api/default-notes")
