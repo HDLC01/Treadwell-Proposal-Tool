@@ -204,8 +204,16 @@
     if (!revs.length) { box.style.display = "none"; return; }
     const fmtDate = (s) => (window.TW && TW.fmtBizDate) ? TW.fmtBizDate(s)
       : new Date(s).toLocaleDateString("en-US");
-    const money = (n) => n == null ? "—"
-      : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Whole dollars, LOSSLESSLY: a trailing ".00" is dropped, a real fraction is kept. Same rule
+    // as portal.js's money() and proposal-review.js's fmtUSDdoc, so a revision row reads the same
+    // figure as the proposal that revision actually sent. NOT maximumFractionDigits: 0 -- that
+    // would round a fractional total and this list is the basis-and-transparency record. The em
+    // dash guard stays as it was: a revision with no total is UNKNOWN, not zero.
+    const money = (n) => {
+      if (n == null) return "—";
+      const s = "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return s.endsWith(".00") ? s.slice(0, -3) : s;
+    };
     // Classes, not inline styles: this row lives in the send screen's right-hand rail now, where
     // it is ~380px wide, and the three download buttons have to WRAP onto their own line rather
     // than crush the price. `.rev-acts` carries the flex-basis that does it — a rule an inline

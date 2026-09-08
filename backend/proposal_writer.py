@@ -38,6 +38,7 @@ import io
 import logging
 import math
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -2144,6 +2145,78 @@ def iter_editable_blocks(d: Document):
             stack.pop()
         yield idx, kind, p_elem, in_block, txt, txbx_idx
         idx += 1
+
+
+# ─── Which tax rows a template prints no matter what ─────────────────────
+# The PRICE block itemizes  Base Bid + Material Sales Tax + Remodel Tax = Total,
+# so the base line has to equal the Total MINUS whatever tax lines actually print
+# or the four figures a customer reads do not add up. Kyle, 2026-09-08: a GC Polish
+# proposal printed 6,307 + 125 + 0 under a 6,307 Total.
+#
+# WHICH rows print is a property of the TEMPLATE FILE, not of the audience and not
+# of the work type. Kyle's four Direct files wrap their tax rows in
+# `{{#tax_breakout}}` / `{{#remodel}}`, so a fill strips them unless the estimator
+# picks "Sales tax broken out"; the three GC files and the Gyp file author the same
+# rows as PLAIN paragraphs that no flag can strip. A hard-coded `audience == "GC"`
+# list answers today's eight files and silently mis-answers the next one Kyle
+# re-authors — the same layout-keyed-vs-label-keyed hole PR #432/#433 closed for the
+# remodel rate, and the reason the old `work_type == "gyp"` special case never
+# reached GC. This reads the answer off the file instead.
+_TAX_ROW_TOKENS: dict[str, tuple[re.Pattern, ...]] = {
+    # tax row -> the amount token(s) a template can carry it in
+    "material": (re.compile(r"\{\{\s*material_tax_formatted\s*\}\}"),),
+    "remodel":  (re.compile(r"\{\{\s*tax_amount_formatted\s*\}\}"),
+                 re.compile(r"\{\{\s*remodel\.amount_formatted\s*\}\}")),
+}
+
+
+def free_tax_rows(d: Document) -> dict[str, bool]:
+    """`{"material": bool, "remodel": bool}` — True when that tax row is a FREE
+    paragraph in `d` (outside every `{{#block}}`), i.e. it prints on every fill.
+
+    False covers both "inside a block a fill can strip" and "this template has no
+    such row at all": either way there is no unconditional tax line to subtract from
+    the base bid.
+
+    Same walk, same `in_block`, same paragraph text `/api/proposal-template` serves
+    the document editor — so the on-screen proposal and the generated .docx answer
+    this question from ONE source rather than two that can drift."""
+    out = {"material": False, "remodel": False}
+    for _idx, _kind, _p_elem, in_block, text, _txbx in iter_editable_blocks(d):
+        if in_block is not None:
+            continue                      # a strippable region, not an unconditional row
+        for row, pats in _TAX_ROW_TOKENS.items():
+            if any(p.search(text or "") for p in pats):
+                out[row] = True
+    return out
+
+
+@lru_cache(maxsize=64)
+def _free_tax_rows_cached(path_str: str, _mtime_ns: int) -> tuple[bool, bool]:
+    """Memoized on the file's mtime, exactly like main._template_proposal_version's
+    staleness contract: an 11ms walk per generate is wasted work, and a template Kyle
+    re-authors still gets re-read."""
+    rows = free_tax_rows(docx.Document(path_str))
+    return rows["material"], rows["remodel"]
+
+
+def template_free_tax_rows(work_type: str, audience: str | None) -> dict[str, bool]:
+    """`free_tax_rows` for the template `(work_type, audience)` picks.
+
+    An unreadable template answers "no unconditional tax rows" and says why in the
+    log — `fill_proposal` is a moment away from raising on the same file with a
+    message that names it, and that is the error worth surfacing. Silently guessing
+    "GC-shaped" here would print a tax-excluded base bid on a template that never
+    itemizes."""
+    try:
+        p = pick_template(work_type, audience)
+        material, remodel = _free_tax_rows_cached(str(p), p.stat().st_mtime_ns)
+        return {"material": material, "remodel": remodel}
+    except Exception as exc:              # noqa: BLE001 — never fail a generate over a shape read
+        log.warning("Could not read the tax-row shape of the %s/%s proposal template "
+                    "(%s: %s); treating its tax rows as strippable",
+                    work_type, audience, type(exc).__name__, exc)
+        return {"material": False, "remodel": False}
 
 
 # ─── Formatting + page-geometry extraction (fidelity rendering) ──────────

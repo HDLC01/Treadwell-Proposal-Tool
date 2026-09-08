@@ -522,7 +522,7 @@ def test_the_head_carries_the_customer_and_the_money(out):
     html = out["scenarios"]["approved"]["html"]
     head = html[:html.index('class="dtabs"')]
     assert "HANZ URIEL A DE LA CRUZ" in head, "the head does not say who it is for"
-    assert "$22,763.00" in head, "the head does not say what it is worth"
+    assert "$22,763" in head, "the head does not say what it is worth"
     assert 'class="dh-amt amt"' in head, (
         "the head's money is not marked as money, so it loses tabular figures")
 
@@ -533,8 +533,8 @@ def test_the_head_calls_it_approved_only_when_somebody_approved_it(out):
     version of this line calls a live bid "Approved" and puts a word on it nobody has earned."""
     approved = out["scenarios"]["approved"]["html"]
     sent = out["scenarios"]["sent"]["html"]
-    assert "Approved $22,763.00" in approved
-    assert "Bid $41,250.00" in sent, "an unapproved proposal's total is not labelled as a bid"
+    assert "Approved $22,763" in approved
+    assert "Bid $41,250" in sent, "an unapproved proposal's total is not labelled as a bid"
     assert "Approved $" not in sent[:sent.index('class="dtabs"')]
 
 
@@ -548,7 +548,7 @@ def test_the_approval_is_labelled_facts_rather_than_a_sentence(out):
     card = card[:card.index('id="dsec-notify"')]
     for key in ("Amount", "What they took", "Date", "Signed by"):
         assert ">%s<" % key in card, "the approval card lost its %s cell" % key
-    assert 'class="amt amt-lg">$22,763.00' in card, "the approved total is not the card's figure"
+    assert 'class="amt amt-lg">$22,763' in card, "the approved total is not the card's figure"
     assert "signed in as hdlcruz03@gmail.com" in card
 
 
@@ -639,7 +639,7 @@ def test_the_not_sent_panel_keeps_its_actions_and_its_guard(out):
         assert 'id="dpanel-%s"' % key in ns["html"], "the %s tab has no panel to open" % key
     assert "data-go-files" in ns["html"] and "data-go-edit" in ns["html"]
     assert 'class="dclose"' in ns["html"]
-    assert 'class="amt">$88,000.00' in ns["html"], "the bid is not rendered as money"
+    assert 'class="amt">$88,000' in ns["html"], "the bid is not rendered as money"
 
 
 @needs_node
