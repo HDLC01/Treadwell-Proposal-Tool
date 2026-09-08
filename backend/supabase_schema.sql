@@ -338,6 +338,23 @@ values
   ('default-bag', 'Bag')
 on conflict (id) do nothing;
 
+-- ── Who edited it, 2026-09-04 (Hanz) ──────────────────────────────────────
+-- "In the items tab we must put the name of who created it and who edited it." `owner_email`
+-- already answered the first half on every table here; this is the second half.
+--
+-- NULLABLE, and never backfilled. Every row that predates this column was last changed by
+-- somebody nobody recorded, and a `not null default` naming the creator would be a lie about who
+-- touched it — the tab renders an empty one as "—". library.py read-shapes an absent column to
+-- empty, so an old row needs no UPDATE to be readable (the same posture as buy_qty).
+--
+-- SERVER-SET, like owner_email: stamped in library.py from the authenticated request and never
+-- from the request body, because authorship a client can type is authorship anybody can forge.
+-- Distinct from `cost_updated_at`, which marks a PRICE revision only — this one moves on any edit,
+-- including an assembly LINE change (a line edit PATCHes the whole `lines` array through the same
+-- update path).
+alter table public.library_items add column if not exists updated_by text;
+alter table public.library_assemblies add column if not exists updated_by text;
+
 -- ── Markup rules ──────────────────────────────────────────────────────────
 -- The markup chain's rates, as editable expressions, one row per line per sheet LAYOUT. Today
 -- those rates are hardcoded constants in frontend/js/polish-bid-core.js (RATES, GP_BANDS, and
