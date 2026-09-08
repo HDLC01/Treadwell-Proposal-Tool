@@ -158,22 +158,105 @@
       Object.prototype.hasOwnProperty.call(tokens, name) ? String(tokens[name]) : m0);
   }
 
-  /** Substituted HTML for one paragraph. Each filled token is wrapped in `.tw-fill` so a value
-   *  that came from the estimate is visibly a value and not typing — the same cue, the same
-   *  class and therefore the same yellow as the proposal beside it. Screen only; the .docx is
-   *  filled server-side from the tokens, never from this HTML. */
-  function blockHtml(b, tokens) {
+  /** Substituted HTML for one stretch of template text. Each filled token is wrapped in
+   *  `.tw-fill` so a value that came from the estimate is visibly a value and not typing — the
+   *  same cue, the same class and therefore the same yellow as the proposal beside it. Screen
+   *  only; the .docx is filled server-side from the tokens, never from this HTML. */
+  function fillHtml(text, tokens) {
     CL_TOKEN_RE.lastIndex = 0;
     let html = "", last = 0, m;
-    const text = String(b.text || "");
-    while ((m = CL_TOKEN_RE.exec(text))) {
-      html += esc(text.slice(last, m.index));
+    const t = String(text == null ? "" : text);
+    while ((m = CL_TOKEN_RE.exec(t))) {
+      html += esc(t.slice(last, m.index));
       const known = Object.prototype.hasOwnProperty.call(tokens, m[1]);
       html += `<span class="tw-fill" data-token="${esc(m[1])}">` +
               esc(known ? String(tokens[m[1]]) : m[0]) + "</span>";
       last = m.index + m[0].length;
     }
-    return html + esc(text.slice(last));
+    return html + esc(t.slice(last));
+  }
+
+  /** The template's own formatted run segments for one paragraph, or null when they cannot be
+   *  trusted. `proposal_writer._block_runs` builds them and the cover-letter endpoint returns them
+   *  verbatim: `[{text, bold, italic, underline, size_pt, font, color}]`, each switch either a
+   *  boolean or null for "unresolved, use the page default".
+   *
+   *  ONE PREDICATE, TWO CALLERS, and that is the whole point of it. `blockHtml` renders from these
+   *  and `renderBlock` drops the paragraph-level `tw-bold` class when they exist — so if the two
+   *  ever disagreed about whether a paragraph HAS usable runs, that paragraph would come out with
+   *  neither the class nor the per-run weights and lose its bold altogether.
+   *
+   *  Three ways runs are refused, each of them a real .docx:
+   *    · none at all — a response cached before the endpoint carried them, which is what the flat
+   *      path below is still for;
+   *    · they do not rejoin to `b.text` — hyperlink runs are not direct `w:r` children, so the
+   *      walk that built them saw less text than the paragraph has (`_block_runs` invariant 1,
+   *      which it asks the frontend to verify by name);
+   *    · a token straddles a run boundary. The backend promises this cannot happen (invariant 2:
+   *      every token is its own segment, carrying the formatting of the run the match starts in)
+   *      and a promise worth leaning on is a promise worth checking. Rendering runs one at a time
+   *      means a token split down the middle matches in neither half and prints itself raw at the
+   *      estimator — which is the complaint that nothing on the letter was substituted. Flat
+   *      rendering loses the per-run weights and keeps the value; that is the better half to lose. */
+  function clRunsFor(b) {
+    const runs = (b && Array.isArray(b.runs) && b.runs.length) ? b.runs : null;
+    if (!runs) return null;
+    const text = String((b && b.text) || "");
+    const chunk = (r) => String((r && r.text) || "");
+    if (runs.map(chunk).join("") !== text) return null;
+    const edges = [];
+    let pos = 0;
+    for (const r of runs) { pos += chunk(r).length; edges.push(pos); }
+    CL_TOKEN_RE.lastIndex = 0;
+    let m;
+    while ((m = CL_TOKEN_RE.exec(text))) {
+      const a = m.index, z = a + m[0].length;
+      if (edges.some((e) => e > a && e < z)) { CL_TOKEN_RE.lastIndex = 0; return null; }
+    }
+    return runs;
+  }
+
+  /** One paragraph's HTML: the template's own runs when there are usable ones, each carrying its
+   *  own weight, and the flat token walk when there are not.
+   *
+   *  WHY THE PER-RUN PASS IS THE FIX. Hanz, with a screenshot of a bulleted letter: "Only those
+   *  words before and including the colon should be default bold. The other details should not be.
+   *  So, material/system, area, schedule, options should be the only ones bold." They already are
+   *  in the .docx — Kyle's template bolds the label run and leaves the detail run plain — and this
+   *  renderer was throwing that away. It walked `b.text` alone, so the only weight it could show
+   *  was the paragraph-level class, and `b.style.bold` is `any(r.bold for r in p.runs)` on the
+   *  server. Every label bullet has a bold label, so every label bullet reported as a wholly bold
+   *  PARAGRAPH and drew itself as one.
+   *
+   *  ONLY WHAT A RUN TURNS ON IS EMITTED. `clRunCss` can also write the negatives —
+   *  `font-weight:400`, `font-style:normal` — and those are load-bearing when the ESTIMATOR
+   *  presses a switch off, because the .docx then has to say so out loud. Coming from the template
+   *  they are noise with a cost: `clFmtAt` reads inline styles back, so the first press on any
+   *  paragraph would start pinning "not italic, not underlined" onto every run of it. An absent
+   *  switch reads back as null — "inherit whatever the template's own run says" — which is exactly
+   *  true here, because nothing on this path changes it.
+   *
+   *  SIZE IS DELIBERATELY NOT EMITTED AT ALL, though the run records carry one and the proposal's
+   *  renderer uses it. This page is a to-scale preview of a printed sheet: a point size is
+   *  geometry, and re-sizing every run would reflow the letter — an unasked-for change arriving
+   *  inside the one that was asked for. Weight, slant and underline carry no layout of their own,
+   *  which is why they can come across on their own. Absent still means "inherit the template's",
+   *  and it is already what a formatting press stores today.
+   *
+   *  Nesting order matches `clRenderRuns` — the styled span outside, the `.tw-fill` inside — so a
+   *  paragraph re-rendered after a press has the same shape as one drawn straight from the
+   *  template, and `clSegments` reads the two identically. */
+  function blockHtml(b, tokens) {
+    const runs = clRunsFor(b);
+    if (!runs) return fillHtml((b && b.text) || "", tokens);
+    const on = (v) => (v === true ? true : null);
+    let html = "";
+    for (const r of runs) {
+      const inner = fillHtml((r && r.text) || "", tokens);
+      const css = clRunCss({ bold: on(r.bold), italic: on(r.italic), underline: on(r.underline) });
+      html += css ? `<span style="${css}">${inner}</span>` : inner;
+    }
+    return html;
   }
 
   /** A contenteditable block back to plain text. `.tw-fill` spans give up their VALUE (never the
@@ -227,10 +310,39 @@
     el.className = "tw-block";
     el.dataset.id = String(b.id);
     el.spellcheck = false;
-    if (b.list) el.classList.add("tw-li");
+    // A NUMBERED LINE SHOWS ITS NUMBER, not a red square — and on this document that is every
+    // list line there is. `b.list` only says the paragraph carries Word numbering, which is true
+    // of a bulleted row and a numbered one alike, so trusting it painted a red Wingdings square in
+    // front of lines the customer's PDF prints "1." to "4." on. `para.marker` is what the level
+    // actually prints (`proposal_writer._para_marker`) and it is empty for a real bullet row.
+    //
+    // MEASURED, not assumed, across all seven files in backend/templates/CoverLetter: every list
+    // paragraph in every one of them is `bullet: false` with a real decimal marker — Direct/Epoxy
+    // and Direct/Polish 1. to 4., Combo 1. to 4. and then 1. to 3. again for the second system, GC
+    // and Gyp 1. to 3. — and NOT ONE bulleted paragraph exists in any of them. So the square was
+    // never right here; it was wrong on all seven letters, on every labelled line.
+    //
+    // Same fault, same fix and the same two classes as the proposal's 27 numbered Terms clauses.
+    // The note above `.tw-block.tw-empty.tw-li::before` in styles.css records that round: "a
+    // numbered Terms clause was ALSO drawn as .tw-li, so emptying one hid its red square here
+    // while Word printed a bare clause number". Still falls back to the square when there is no
+    // marker to show, which is what that branch was always for: a list level whose definition
+    // cannot be read is the one case where the old behaviour is the best guess left.
+    if (b.list && b.para && b.para.marker) {
+      el.classList.add("tw-num");
+      el.dataset.marker = String(b.para.marker);
+    }
+    else if (b.list) el.classList.add("tw-li");                  // a real Word bullet
     else if (b.style && b.style.name === "List Paragraph") el.classList.add("tw-list");
     if (b.align) el.style.textAlign = b.align;
-    if (b.style && b.style.bold) el.classList.add("tw-bold");
+    // A RUN-LESS FALLBACK ONLY, which is how the proposal's own renderBlock has it. `.tw-bold`
+    // weights every character of the paragraph that no inline style overrides, and `b.style.bold`
+    // is `any(r.bold for r in p.runs if r.bold is not None)` on the server — true the moment ONE
+    // run is bold. So on a bullet with a bold "Area:" label and plain details it said "this whole
+    // paragraph is bold", and the class obligingly bolded the details too. With the runs on screen
+    // each one states its own weight and a run that states none means the page default, so there
+    // is nothing left for the class to say and saying it anyway is the bug.
+    if (b.style && b.style.bold && !clRunsFor(b)) el.classList.add("tw-bold");
     applyGeom(el, b.para);
     el.innerHTML = blockHtml(b, tokens);
     const plain = fillPlain(b.text, tokens);

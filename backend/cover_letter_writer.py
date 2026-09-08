@@ -30,6 +30,12 @@ NOT shared, and not ported:
     padding), PRICE-bullet flattening, the forced Terms page break. Those all
     exist because Kyle's proposal templates lay a fixed FORM out as a dozen
     floating text boxes over full-page artwork, and the estimator rearranges it.
+  * `_normalize_work_label_formatting`. The proposal keeps a WORK label bold
+    through its colon with a pass over `w:txbxContent` — which a boxless letter
+    has none of — driven by heuristics on the TEXT that misread Will's Direct
+    copy. `_split_label_overrides` below does the letter's half of that job off
+    the template's run structure instead. Same goal, different mechanism, and
+    the reasoning is written out there.
 
 THE ONE FLOATING BOX: THE DATE.
 
@@ -334,6 +340,118 @@ def _ensure_cover_letter_values(values: Mapping[str, Any]) -> dict:
     return out
 
 
+# ─── The label bullets keep their own weight through an edit ──────────
+# Every numbered bullet in these letters is written as a BOLD label run ending in
+# a colon followed by NON-bold detail — `Materials / System: `, `Area: `,
+# `Schedule: `, `Options: `, `System: ` (Hanz, 2026-09-04: "Only those words
+# before and including the colon should be default bold. The other details should
+# not be."). `prepare_cover_letter_templates._add` writes that split explicitly
+# (`r.bold = bool(seg.get("bold"))`, so the detail carries `w:b val="0"`, not an
+# inherit), and an unedited letter renders exactly right.
+#
+# An EDITED one did not. A plain-text override arrives as one string and
+# `proposal_writer._set_paragraph_text` keeps the paragraph's FIRST text run and
+# drops the rest — and here the first run is the bold label, so the estimator's
+# whole line came out bold in the customer's PDF (measured on Direct/Epoxy: the
+# rendered span was `Cambria-Bold` across `Schedule: edited by the estimator`).
+#
+# The PROPOSAL never had this bug: `_normalize_work_label_formatting` re-bolds a
+# label through its first colon and normalises the tail after every fill. It
+# cannot be reused here — it only walks `w:txbxContent`, and a cover letter has
+# been pure flow with no text boxes since PR #453 — and its heuristics do not
+# transfer either. It decides what a label is from the TEXT, and Will's Direct
+# copy opens "A few things to note:", which is a sentence, is short, carries no
+# `.?!`, and would therefore have been bolded whole.
+#
+# So the rule here reads the TEMPLATE'S OWN RUN STRUCTURE instead of the words: a
+# paragraph is a label bullet only if the file already writes it as one. That is
+# what keeps "A few things to note:" (a single run) and the Combo group headings
+# (bold with no non-bold tail) out of it, without a list of phrases to maintain.
+def _label_paragraphs(d) -> dict:
+    """`{block id: label text}` for every paragraph THE TEMPLATE writes as a bold
+    label run ending in a colon plus a non-bold remainder.
+
+    Read off the pristine template, so the answer describes Kyle's file rather
+    than the estimator's edit. Ids are positions in
+    `proposal_writer.iter_editable_blocks` — the same walk the overrides resolve
+    against, so an id from here means the same paragraph there.
+    """
+    out: dict[int, str] = {}
+    for idx, _kind, p_elem, in_block, _text, _txbx in \
+            proposal_writer.iter_editable_blocks(d):
+        if in_block is not None:
+            continue
+        segs = proposal_writer._block_runs(p_elem, Paragraph(p_elem, d))
+        if len(segs) < 2:
+            continue                      # one uniform run is not a label row
+        head = segs[0]
+        if not head.get("bold"):
+            continue                      # the label must already be bold
+        if not str(head.get("text") or "").rstrip().endswith(":"):
+            continue                      # ...and must BE a label, colon and all
+        if any(s.get("bold") for s in segs[1:]):
+            continue                      # a fully bold heading has no detail half
+        out[idx] = str(head["text"])
+    return out
+
+
+def _split_label_overrides(overrides: list, labels: Mapping[int, str]) -> list:
+    """`overrides` with every PLAIN-TEXT edit of a label bullet re-expressed as
+    two runs: bold through the first colon, explicitly not bold after it.
+
+    Only plain text is rewritten. An override that already carries `runs` is the
+    estimator having pressed Bold/Italic/Underline themselves, and their stated
+    weight outranks this — the same rule `proposal_writer._user_bolded_runs`
+    enforces for the proposal's WORK rows.
+
+    Total, so the edge cases are not left to `_set_paragraph_text`'s "keep run
+    zero" default:
+      * `"Schedule: two phases"` → bold `"Schedule:"` + normal `" two phases"`;
+      * `"Schedule:"`            → all label, so all bold;
+      * text with no colon       → no label words at all, so nothing is bold;
+      * `""`                     → left alone, so the blank-override path
+                                   (numbered-clause refusal, `_strip_bullet`)
+                                   still sees the shape it expects.
+    The split is at the FIRST colon, matching `_normalize_work_label_formatting`.
+
+    THE NO-COLON CASE DIVERGES FROM THE PROPOSAL, deliberately. There, the
+    normalizer stands down and the row keeps its template weight — so a
+    colon-less `Base System` row stays bold
+    (`test_a_line_with_no_colon_keeps_the_row_weight_the_page_shows`). That is
+    right for the proposal because a WORK row's template run IS the label: the
+    whole row is three or four words. A cover-letter label bullet is the other
+    shape — a two-word label in front of a two-line sentence — so falling back
+    to run zero's weight bolds a paragraph that is almost entirely detail, which
+    is the thing Hanz reported. The fallback here is therefore the DETAIL half's
+    weight, which is also his sentence read literally. It is a judgement call in
+    a customer document, so it is asserted from both sides below rather than
+    left to be rediscovered.
+    """
+    out = []
+    for o in overrides:
+        if not isinstance(o, dict):
+            out.append(o)
+            continue
+        pid = o.get("id")
+        text = o.get("text")
+        runs = o.get("runs")
+        already_formatted = isinstance(runs, list) and bool(runs)
+        if (isinstance(pid, int) and not isinstance(pid, bool) and pid in labels
+                and isinstance(text, str) and text.strip()
+                and not already_formatted):
+            colon = text.find(":")
+            head, tail = (text[:colon + 1], text[colon + 1:]) if colon > 0 else ("", text)
+            split = []
+            if head:
+                split.append({"text": head, "bold": True})
+            if tail:
+                split.append({"text": tail, "bold": False})
+            if split:
+                o = dict(o, runs=split)
+        out.append(o)
+    return out
+
+
 # ─── Fill ─────────────────────────────────────────────────────────────
 def fill_cover_letter(
     *,
@@ -353,6 +471,10 @@ def fill_cover_letter(
     block expansion creates one in `fill_proposal`; applying them first keeps the
     two writers reading the same, and leaves room for that to stay true.)
 
+    A plain-text override of a LABEL BULLET is split at its first colon on the way
+    in, so an edited `Schedule:` line keeps its bold label and normal detail
+    instead of going bold end to end — see `_split_label_overrides`.
+
     Raises `FileNotFoundError` naming the missing template — a caller that
     promised the customer a cover letter must fail loudly rather than send the
     proposal on its own and report success.
@@ -368,7 +490,12 @@ def fill_cover_letter(
     d = docx.Document(str(template_path))
 
     if paragraph_overrides:
-        n_over = proposal_writer._apply_paragraph_overrides(d, list(paragraph_overrides))
+        # Split before applying, and read the labels off `d` while it is still
+        # pristine: `_label_paragraphs` describes the TEMPLATE'S run structure,
+        # which the first applied override would overwrite.
+        overrides = _split_label_overrides(list(paragraph_overrides),
+                                           _label_paragraphs(d))
+        n_over = proposal_writer._apply_paragraph_overrides(d, overrides)
         if n_over:
             log.info("Applied %d cover-letter paragraph override(s)", n_over)
 

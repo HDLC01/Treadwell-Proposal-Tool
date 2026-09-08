@@ -17,6 +17,13 @@
   "use strict";
 
   var L = window.TWLib;                     // pricing (library-core.js)
+  // nameOf() ONLY — the app's one email→display-name convention (crm-core.js). Held as an alias
+  // for the reason L is, and with the same caveat: this line does not itself throw if the include
+  // is missing, it just leaves CRM undefined, and the TypeError arrives later — the first time
+  // somebody sorts the rail by who created an assembly. So the script tag in library.html is what
+  // actually guarantees this, and there is a test on the tag's presence and its order, because no
+  // amount of executing these functions can see a missing <script>.
+  var CRM = window.TWCrm;
   var $ = function (id) { return document.getElementById(id); };
 
   var ITEMS = [];
@@ -188,14 +195,31 @@
   function adoptSaved(kind, fresh) {
     var known = byId(kind, fresh.id);
     if (!known) return;
+    var moved = fresh.updated_at !== known.updated_at;
     known.updated_at = fresh.updated_at;
     // …and the price date, which only the SERVER can decide: it moves when the cost actually
     // changed, not when a PATCH was sent. Without adopting it the row goes on saying "not since we
     // started tracking" until a reload — the stamp Hanz asked for, looking like it doesn't work.
     if (kind === "items" && fresh.cost_updated_at !== known.cost_updated_at) {
       known.cost_updated_at = fresh.cost_updated_at;
-      paintDates(known);
+      moved = true;
     }
+    // AND THE EDITOR, for exactly the same reason one line up. `updated_by` is server-set from the
+    // bearer token, so the reply is the only place the client can learn it. The repaint is now
+    // driven by `updated_at` too, not by the price date alone: an ordinary edit — a spelling, a
+    // vendor — moves `updated_at` and `updated_by` while leaving `cost_updated_at` alone, so the
+    // old condition would have left the new "Edited … by …" line quoting the PREVIOUS editor
+    // until a reload. Same failure the price date had, one column over.
+    // `undefined` is not an answer, and adopting it would BLANK a name we already have. The server
+    // sends `updated_by` on every reply — "" when the row predates the column, never absent — so a
+    // missing key means a caller that isn't the real API, and the safe reading of silence is "no
+    // news", not "nobody edited it".
+    if (kind === "items" && fresh.updated_by !== undefined &&
+        fresh.updated_by !== known.updated_by) {
+      known.updated_by = fresh.updated_by;
+      moved = true;
+    }
+    if (kind === "items" && moved) paintDates(known);
   }
 
   /** Rewrite one row's Dates cell in place.
@@ -280,13 +304,14 @@
     coverage: "Coverage per unit", vendor: "Vendor", divisions: "Division",
   };
 
-  // THE SERVER'S FIELDS, NOT OURS. `updated_at` moves on every write and `cost_updated_at` moves
-  // only when the cost really changed — both are decided server-side and adopted off the reply
-  // (see adoptSaved). A snapshot taken before that reply landed holds the old values, so
-  // restoring the WHOLE snapshot on a Cancel would throw away what the server just told us: the
-  // Dates cell would go back to quoting a price date the database has already moved past, with
-  // nothing on screen marking it. Cancel restores what the estimator typed, and nothing else.
-  var SERVER_OWNED_ITEM_FIELDS = ["updated_at", "cost_updated_at"];
+  // THE SERVER'S FIELDS, NOT OURS. `updated_at` moves on every write, `cost_updated_at` moves
+  // only when the cost really changed, and `updated_by` is stamped from the bearer token — all
+  // three are decided server-side and adopted off the reply (see adoptSaved). A snapshot taken
+  // before that reply landed holds the old values, so restoring the WHOLE snapshot on a Cancel
+  // would throw away what the server just told us: the History cell would go back to quoting a
+  // price date the database has already moved past, and an editor who is no longer the last one,
+  // with nothing on screen marking either. Cancel restores what the estimator typed, nothing else.
+  var SERVER_OWNED_ITEM_FIELDS = ["updated_at", "cost_updated_at", "updated_by"];
 
   // The item as it stood before this round of edits, captured on the first keystroke after each
   // flush. Two jobs: the dialog quotes before → after, and Cancel has something to put back.
@@ -791,16 +816,46 @@
     return '<div class="dupe">Already in the list: ' + esc(names.join(", ")) + "</div>";
   }
 
-  /** When it was added, and when the price last moved. Two dates rather than one, because the
-   *  second is the question people actually ask — "how old is this number?" — and `updated_at`
-   *  answers a different one, since fixing a spelling would make a stale price look fresh. */
+  /** "by Hanz" for a row that names someone, and an honest "by unknown" for one that cannot.
+   *
+   *  `CRM.nameOf` is the app's single email→display-name convention (crm-core.js) — the same one
+   *  the Assemblies rail sorts by, so one person reads identically on both tabs. The name is a
+   *  `<b>` so it takes the emphasis `.dates b` already gives a date, rather than needing a class.
+   *
+   *  "unknown" is not a failure state and not "nobody": `updated_by` was added to the tables on
+   *  2026-09-04, so every row filed before that carries no editor and never will. Rendering the
+   *  line bare would read as a name that failed to load. */
+  function byHtml(email) {
+    var n = CRM.nameOf(String(email || ""));
+    return n ? 'by <b>' + esc(n) + "</b>" : 'by <span class="never">unknown</span>';
+  }
+
+  /** Who added it, when the price last moved, and who last changed it.
+   *
+   *  Three lines rather than the original two, because Hanz asked for the NAMES on this tab and
+   *  "when" without "who" answers half the question people bring to a shared library.
+   *
+   *  THE MIDDLE LINE HAS NO NAME ON PURPOSE. `cost_updated_at` is decided server-side when the
+   *  cost really moved, and no column records who moved it — pairing it with `updated_by` would
+   *  attribute a price change to whoever last fixed a spelling. It stays the question it already
+   *  answered: "how old is this number?"
+   *
+   *  `updated_at === created_at` is the server's own way of saying nothing has happened since the
+   *  row was filed, because a create stamps both columns in one write. So that case reads as "not
+   *  edited since" rather than as an edit by the creator — the same distinction the price line
+   *  already draws with "not since we started tracking". */
   function datesHtml(it) {
     var made = it.created_at ? TW.fmtBizDateTime(it.created_at) : "—";
     var priced = it.cost_updated_at
       ? esc(TW.fmtBizDateTime(it.cost_updated_at))
       : '<span class="never">not since we started tracking</span>';
-    return '<div class="dates"><div>Added <b>' + esc(made) + "</b></div>" +
-           "<div>Price " + priced + "</div></div>";
+    var edited = (it.updated_at && it.updated_at !== it.created_at)
+      ? "Edited <b>" + esc(TW.fmtBizDateTime(it.updated_at)) + "</b> " + byHtml(it.updated_by)
+      : '<span class="never">not edited since</span>';
+    return '<div class="dates"><div>Added <b>' + esc(made) + "</b> " +
+             byHtml(it.owner_email) + "</div>" +
+           "<div>Price " + priced + "</div>" +
+           "<div>" + edited + "</div></div>";
   }
 
   /** The library's own comparison form of a name: case, spacing and punctuation all ignored.
@@ -991,18 +1046,35 @@
     for (var i = 0; i < shown.length; i++) {
       var a = shown[i], p = L.priceAssembly(a, ITEMS, area);
       var per = p.per_unit == null ? "not priced" : L.perUnit(p.per_unit) + "/" + esc(a.unit);
+      // The value the rail is ORDERED on. A sort whose result cannot be read off the rows is a
+      // list that just reshuffled itself; see asmSortLabel for which keys say something and which
+      // are already legible.
+      //
+      // ITS OWN LINE, in the grid .arow already is, and NOT appended to the meta line — which is
+      // where the first version put it. The rail is 272px: "3 lines · $1.099/SF ·
+      // Sherwin-Williams +1 more" wraps, so the rows with a long vendor became two-line while
+      // their neighbours stayed one, and the rail read as ragged. Found in a browser; no DOM
+      // assertion can see a wrap. Ellipsis was the other option and it is worse, because the
+      // thing that gets truncated first on that line is the price.
+      //
+      // Reusing .am rather than coining a class: it is the same muted meta treatment at the same
+      // size, and a fifth way to draw small grey text under a name is exactly the vocabulary
+      // drift this page is trying not to add to.
+      var by = asmSortLabel(a, ASM_SORT, ITEMS, p);
       out += '<button class="arow" type="button" data-open="' + esc(a.id) + '"' +
         (a.id === openId ? ' aria-current="true"' : "") + ">" +
         '<span class="an">' + esc(a.name) + "</span>" +
         '<span class="am">' + a.lines.length + " line" + (a.lines.length === 1 ? "" : "s") +
         " · " + per + (p.broken_lines ? " · " + p.broken_lines + " to fix" : "") +
-        "</span></button>";
+        "</span>" +
+        (by ? '<span class="am">' + esc(by) + "</span>" : "") +
+        "</button>";
     }
     $("asm-list").innerHTML = out;
-    // THE CARD, not the list inside it. "+ New assembly" is the rail's last row now — Hanz asked
-    // for it out of the page header, and the list it appends to is the only honest home for it —
-    // so hiding just the inner list would leave a create button alone in an empty box while the
-    // "No assemblies yet" panel offered a second one beside it.
+    // THE CARD, not the list inside it. "+ New assembly" is the rail's FIRST row (Hanz,
+    // 2026-09-04) and it has been a child of this card since it left the page header, so hiding
+    // just the inner list would leave a create button alone in an empty box while the "No
+    // assemblies yet" panel offered a second one beside it.
     $("asm-rail").hidden = ASMS.length === 0;
     // The badge stays the TOTAL, for the reason #n-items does: it says how many systems Treadwell
     // has, and a number that fell as somebody typed would read as assemblies being deleted.
@@ -1015,8 +1087,11 @@
       $("asm-nomatch-why").textContent = noMatch
         ? "No assemblies " + asmFilterSummary() + "." : "";
     }
-    // "+ New assembly" goes with the rows. Left up, a typo would be answered with an invitation to
-    // build the assembly the search just failed to find.
+    // "+ New assembly" goes with the rows, and STILL DOES now that it sits above them rather than
+    // below: left up, a typo would be answered with an invitation to build the assembly the search
+    // just failed to find. Which end of the rail the button lives at changes nothing about that —
+    // what it must not do is stand over an empty list offering to create the thing that is missing
+    // only because the query was wrong.
     if ($("asm-addrow")) $("asm-addrow").hidden = noMatch;
     if ($("asm-hits")) {
       $("asm-hits").hidden = !filtering;
@@ -1055,6 +1130,20 @@
   var FILTERS = { divisions: [], vendor: "", condition: "" };
   var asmQuery = "";
   var ASM_FILTERS = { unit: "", condition: "" };
+
+  /** HOW THE RAIL IS ORDERED. Hanz, 2026-09-04: "in the assemblies we must be able to sort by
+   *  vendor, scope or worktype, unit, who created it."
+   *
+   *  A PLAIN VARIABLE, and the third one on this page held to that rule for the same reason
+   *  itemQuery and ASM_FILTERS are: an ordering is a view of the data, not part of it, and the
+   *  dropdown filters deleted on 2026-08-19 kept their state on the line object — so every
+   *  debounced save shipped one estimator's view of the list to the server and `lineForSave` had
+   *  to strip it back off. Nothing serialises this.
+   *
+   *  NOT a filter, and deliberately outside anyAsmFilterActive(): a sort narrows nothing, so it
+   *  must not light up the hits count, must not raise the no-match panel, and must not be reset
+   *  by Clear filters. One line, so library-ui-harness.js can lift the default verbatim. */
+  var ASM_SORT = "name";
 
   /** Is the tab showing a subset? Text, facets, or both.
    *
@@ -1325,20 +1414,171 @@
     return bits.join(", ");
   }
 
-  function visibleAssemblies(area) {
-    if (!anyAsmFilterActive()) return ASMS;
-    return ASMS.filter(function (a) {
-      var p = ASM_FILTERS.condition ? L.priceAssembly(a, ITEMS, area) : null;
-      return asmMatchesFilters(a, ASM_FILTERS, p) && asmMatches(a, asmQuery, ITEMS);
+  /** WHICH SUPPLIER AN ASSEMBLY IS "FROM", WHICH IS NOT A FIELD ON ONE.
+   *
+   *  There is no vendor column on library_assemblies and there should not be: a vendor is a fact
+   *  about a MATERIAL, and an assembly is a recipe over several of them. So it is derived, and
+   *  Hanz's rule (2026-09-04, settled — do not re-open it) is the most frequent vendor among the
+   *  lines, ties broken alphabetically.
+   *
+   *  WHY MOST FREQUENT rather than the first line's. "MACRO Flake" is three coats of Sherwin
+   *  product and one Ardex patch; ordering it under Ardex because the patch happens to be line
+   *  one is the answer nobody wants, and line order on an assembly is the order somebody typed
+   *  it in, which carries no meaning at all.
+   *
+   *  WHO DOESN'T VOTE: a line with no item picked yet, a line pointing at a deleted material, and
+   *  a material nobody has named a supplier for. All three are silence, not a vendor called "".
+   *
+   *  Counted case-insensitively and reported in the spelling the item actually carries, because
+   *  `vendor` is free text on an item — "Sherwin-Williams" and "sherwin-williams" are one supplier
+   *  with two spellings and must not split the vote between them. */
+  function asmVendorTally(a, items) {
+    var lines = (a || {}).lines || [], counts = {}, spelling = {};
+    for (var i = 0; i < lines.length; i++) {
+      var it = L.findItem(items || ITEMS, lines[i].item_id);
+      var v = it ? String(it.vendor || "").trim() : "";
+      if (!v) continue;
+      var k = v.toLowerCase();
+      counts[k] = (counts[k] || 0) + 1;
+      if (!spelling[k]) spelling[k] = v;
+    }
+    var keys = Object.keys(counts);
+    if (!keys.length) return { primary: "", others: 0 };
+    keys.sort(function (x, y) {
+      return counts[y] - counts[x] || spelling[x].localeCompare(spelling[y]);
+    });
+    return { primary: spelling[keys[0]], others: keys.length - 1 };
+  }
+
+  /** The vendor as the rail prints it. "+N more" is the honest part: an assembly built out of two
+   *  suppliers has been filed under one of them, and saying so beats a row that looks
+   *  single-sourced. */
+  function asmVendorLabel(a, items) {
+    var t = asmVendorTally(a, items);
+    if (!t.primary) return "No vendor";
+    return t.primary + (t.others ? " +" + t.others + " more" : "");
+  }
+
+  /** "kyle.loseke@wetreadwell.com" → "Kyle Loseke". Hanz asked to sort by "who created it", and
+   *  the answer is a person's name — sorting by the raw address orders by the local part's
+   *  punctuation, and prints an address where a name belongs.
+   *
+   *  TWCrm.nameOf, not a second spelling of it: the CRM board, the trash list and the admin table
+   *  all render people through that one function, and it already falls back to the whole string
+   *  for anything it cannot split. */
+  function asmOwnerName(a) {
+    return CRM.nameOf((a || {}).owner_email || "");
+  }
+
+  /** The one value the rail is currently ordered on, as a plain string.
+   *
+   *  "" means this assembly cannot answer the question, and sortAssemblies puts every "" LAST
+   *  whichever direction the key runs — a blank surfacing at the top of a sort is how an ordering
+   *  loses the reader's trust. `unit` never blanks (asmUnit defaults to SF), and `name` is here
+   *  only as the tie-break every other key falls through to. */
+  function asmSortValue(a, key, items) {
+    if (key === "new") return String((a || {}).created_at || "");
+    if (key === "scope") return String((a || {}).category || "").trim();
+    if (key === "unit") return asmUnit(a);
+    if (key === "vendor") return asmVendorTally(a, items).primary;
+    if (key === "owner") return asmOwnerName(a);
+    return String((a || {}).name || "");
+  }
+
+  /** Order the rail. A NEW ARRAY — never a sort in place, because visibleAssemblies hands back
+   *  ASMS itself when nothing is filtered and reordering that would silently reorder the model
+   *  every other function reads (`current()`, the delete's fallback openId, load()'s first pick).
+   *
+   *  "name" IS A PASS-THROUGH, AND THAT IS THE DECISION HERE, not an oversight. list_assemblies()
+   *  on the server already does `.order("name")`, so the order it hands us IS name A–Z and the
+   *  default view is byte-for-byte what this tab showed before this control existed. Re-sorting it
+   *  client-side would cost nothing visible on a loaded page and would break the one thing Hanz
+   *  asked for in the same breath: a just-created assembly is unshifted to the FRONT of the rail,
+   *  and an active name sort would drop it straight back under N for "New assembly". So the
+   *  default respects the server's order including this session's prepend, and "Newest first" is
+   *  the option that makes new-work-on-top survive a reload. */
+  function sortAssemblies(list, key, items) {
+    if (!key || key === "name") return list;
+    var desc = key === "new";
+    return list.slice().sort(function (x, y) {
+      var vx = asmSortValue(x, key, items), vy = asmSortValue(y, key, items);
+      // Blanks last in BOTH directions: the `desc` flip never reaches this branch.
+      if (!vx !== !vy) return vx ? -1 : 1;
+      var c = desc ? String(vy).localeCompare(String(vx))
+                   : String(vx).localeCompare(String(vy));
+      // ONE TOTAL ORDER. Every key has ties — four assemblies are per SF, two are Kyle's — and
+      // falling through to the name makes the rail stable and predictable instead of leaving the
+      // tied rows in whatever order the array happened to hold.
+      return c || String((x || {}).name || "").localeCompare(String((y || {}).name || ""));
     });
   }
 
-  /** Unlike renderFilterBar this never writes markup - both selects are static, because an
-   *  assembly's unit is a closed SF/LF domain and the three conditions are fixed. So there is
-   *  nothing to rebuild, nothing to rebuild AT, and no focus to lose. */
+  /** WHERE A BRAND-NEW ASSEMBLY LANDS IN THE RAIL. Hanz, 2026-09-04: "when a new assembly is added
+   *  it should append up top not below."
+   *
+   *  A NAMED FUNCTION FOR ONE STATEMENT, and the reason is testability, the same reason the bulk
+   *  modal's four decisions were pulled out of it. The create path lives inside the page's
+   *  anonymous `document.addEventListener("click", …)`, which library-ui-harness.js cannot lift —
+   *  so `push` against `unshift` would be a behaviour change with no test that could fail without
+   *  it, on the half of the instruction most likely to be quietly reverted by somebody tidying up.
+   *  Out here it is executed against the real ASMS the renderer reads. (The two ITEMS.unshift
+   *  calls in that same listener are still unreachable, and still browser-verified only.)
+   *
+   *  IN PLACE, returning the same array: ASMS is the model `current()`, `load()`'s first pick and
+   *  the delete's fallback openId all read, and replacing it with a copy would leave those three
+   *  looking at the old one. */
+  function placeNewAssembly(list, asm) {
+    list.unshift(asm);
+    return list;
+  }
+
+  /** What the row SAYS about the key it is being ordered on, so an order is never a mystery.
+   *
+   *  Only under the sort it belongs to. Printing the vendor and the author on every row would put
+   *  two more lines of small grey text on a 272px rail that nobody asked to widen, and neither is
+   *  what an estimator scanning for "MACRO Flake" is reading.
+   *
+   *  `unit` is the exception and prints only when the row has no price: the unit is already the
+   *  denominator of the "$1.497/SF" the row shows, so saying it twice would be noise — but an
+   *  unpriced row says "not priced" and would then show nothing at all about the thing it was
+   *  just sorted by. */
+  function asmSortLabel(a, key, items, p) {
+    if (key === "new") {
+      return (a || {}).created_at ? "added " + TW.fmtBizDate(a.created_at) : "no added date";
+    }
+    if (key === "scope") return String((a || {}).category || "").trim() || "No scope";
+    if (key === "vendor") return asmVendorLabel(a, items);
+    if (key === "owner") return asmOwnerName(a) || "No creator recorded";
+    if (key === "unit") return (p && p.per_unit != null) ? "" : "per " + asmUnit(a);
+    return "";
+  }
+
+  /** WHAT THE RAIL SHOWS, in the order it shows it. FILTER FIRST, THEN SORT — the hits count says
+   *  "N of M shown" and the no-match panel fires off `shown.length === 0`, so an ordering applied
+   *  before the narrowing would still be right here and both of those would still be right, but
+   *  the pair only stays obviously right if the two steps are in the order the sentence reads. */
+  function visibleAssemblies(area) {
+    if (!anyAsmFilterActive()) return sortAssemblies(ASMS, ASM_SORT, ITEMS);
+    return sortAssemblies(ASMS.filter(function (a) {
+      var p = ASM_FILTERS.condition ? L.priceAssembly(a, ITEMS, area) : null;
+      return asmMatchesFilters(a, ASM_FILTERS, p) && asmMatches(a, asmQuery, ITEMS);
+    }), ASM_SORT, ITEMS);
+  }
+
+  /** Unlike renderFilterBar this never writes markup - all three selects are static, because an
+   *  assembly's unit is a closed SF/LF domain, the three conditions are fixed and the six sort
+   *  keys are. So there is nothing to rebuild, nothing to rebuild AT, and no focus to lose: an
+   *  estimator who tabs into Sort, picks a key and keeps tabbing is still where they left off,
+   *  which is exactly what the item bar needs its filterBarSig to fake.
+   *
+   *  THE SORT IS SYNCED HERE AND CLEARED NOWHERE. It is written back on every render for the same
+   *  reason the facets are — a control whose value does not survive a re-render lies about the
+   *  list under it — but it is absent from clearAsmFilters, because Clear filters clears filters
+   *  and an ordering is not one. */
   function renderAsmFilterBar() {
     if ($("fa-unit")) $("fa-unit").value = ASM_FILTERS.unit;
     if ($("fa-condition")) $("fa-condition").value = ASM_FILTERS.condition;
+    if ($("fa-sort")) $("fa-sort").value = ASM_SORT;
     if ($("fa-clear")) $("fa-clear").hidden = !anyAsmFilterActive();
     // Nothing to filter is not a filter bar. With no assemblies the rail is hidden and the "No
     // assemblies yet" panel is doing the talking; a search box over it would offer to narrow
@@ -2045,9 +2285,9 @@
       renderList();
     });
   }
-  // Bound to the selects themselves and not a container, unlike the item facets: both are static
-  // markup that renderAsmFilterBar only ever assigns `.value` on, so there is no element here that
-  // can be replaced out from under a listener.
+  // Bound to the selects themselves and not a container, unlike the item facets: all three are
+  // static markup that renderAsmFilterBar only ever assigns `.value` on, so there is no element
+  // here that can be replaced out from under a listener.
   if ($("fa-unit")) {
     $("fa-unit").addEventListener("change", function (e) {
       ASM_FILTERS.unit = e.target.value;
@@ -2057,6 +2297,20 @@
   if ($("fa-condition")) {
     $("fa-condition").addEventListener("change", function (e) {
       ASM_FILTERS.condition = e.target.value;
+      renderList();
+    });
+  }
+  // The sort, wired the same way and for the same reason: static markup, so nothing can be
+  // replaced out from under this listener.
+  //
+  // renderList() ONLY, and nothing else. Not clearAsmFilters (which resets the box and the two
+  // facets, and then puts the caret in the search box) and no focus call of its own: an estimator
+  // who has tabbed Unit → Condition → Sort and picked a key is still in the Sort control, and
+  // both of those would yank them out of it mid-keyboard-pass. renderList repaints the rail
+  // underneath and touches no focus at all.
+  if ($("fa-sort")) {
+    $("fa-sort").addEventListener("change", function (e) {
+      ASM_SORT = e.target.value;
       renderList();
     });
   }
@@ -2070,9 +2324,15 @@
     asmQuery = "";
     ASM_FILTERS.unit = "";
     ASM_FILTERS.condition = "";
+    // ASM_SORT IS DELIBERATELY NOT RESET HERE, and this is the line to read before "fixing" it.
+    // Clear filters undoes the NARROWING — it exists so somebody looking at an empty rail can get
+    // all of it back in one press. A sort hides nothing, so there is nothing to get back, and
+    // reshuffling the list as a side effect of a button labelled Clear filters would be the least
+    // predictable thing on this tab. The Sort select is a control the estimator can put back
+    // themselves, in the one place they set it.
     if ($("asm-q")) $("asm-q").value = "";
-    // The two selects are put back by renderAsmFilterBar, which renderList calls; unlike the item
-    // chips there is no markup here that survives a model change.
+    // The two facet selects are put back by renderAsmFilterBar, which renderList calls; unlike the
+    // item chips there is no markup here that survives a model change.
     renderList();
     if ($("asm-q")) $("asm-q").focus();
   }
@@ -2369,12 +2629,29 @@
     }
 
     // asm-new-top is gone: the create control that used to sit in the page header now lives at
-    // the foot of the assembly rail, which is the list it appends to.
+    // the TOP OF THE ASSEMBLY RAIL, which is the list it appends to. Same card either way — see
+    // the .addrow note in library.html for why the August objection is not being reversed here.
     var newAsm = t.closest && t.closest("#asm-new, #asm-new-2");
     if (newAsm) {
       try {
         var a = await post("assemblies", { name: "New assembly", unit: "SF" });
-        ASMS.push(a.assembly);
+        // THE FRONT, not the end. Hanz, 2026-09-04: "when a new assembly is added it should
+        // append up top not below." The button is the rail's first row now, so the row it produces
+        // appears directly under the control that produced it. Through placeNewAssembly rather
+        // than an inline unshift because nothing in this listener is reachable from the harness.
+        //
+        // SAY PLAINLY HOW LONG THIS LASTS, because it is not permanent and that is not a bug.
+        // list_assemblies() on the server does `.order("name")`, so on the next page load "New
+        // assembly" comes back under N and the rail is name A–Z again. That is why the default
+        // sort is a pass-through of the server's order rather than a client-side name sort (which
+        // would undo this on the very next render — see sortAssemblies): the front placement is
+        // for THIS SESSION, for the minute between creating a system and naming it. The estimator
+        // who wants new work at the top permanently picks "Newest first" in the Sort control,
+        // which orders on created_at and survives a reload.
+        //
+        // It is on screen either way: openId is set to it and its name field is focused and
+        // selected two lines down, ready to be typed over.
+        placeNewAssembly(ASMS, a.assembly);
         openId = a.assembly.id;
         showView("asm"); paint();
         $("asm-name").focus(); $("asm-name").select();

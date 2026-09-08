@@ -276,6 +276,136 @@ const BODY = [
     style: { name: null, bold: false }, align: null, list: false, para: null, runs: [] },
 ];
 
+/* THESE ARE OBSERVED PAYLOADS, NOT AN AGREED CONTRACT -- which is the one thing the header of
+ * test_cover_letter_ui.py says this file could not offer. Every block below was dumped out of the
+ * shipped templates in `backend/templates/CoverLetter/` by running the real
+ * `proposal_writer._block_runs` and `para_props` over them, and the weights, slants, point sizes,
+ * markers and indents are transcribed from that dump rather than guessed:
+ *
+ *   Direct/Epoxy.docx  [5] Materials / System:  bold label + plain value, numbered "1.", ind 720/360
+ *                      [6] Area:               bold label + plain value, numbered "2."
+ *                      [8] Options:            bold label + ITALIC instruction, numbered "4."
+ *                      [16] TREADWELL | ...    bold name + plain rest, both 10pt not 11pt, no list
+ *   Direct/Combo.docx  [5] Epoxy / Resinous Flooring:  ONE run, wholly bold, no list, no detail
+ *   GC/Epoxy.docx      [3] Thanks for the opportunity  three runs, no bold anywhere
+ *
+ * The segments come with two invariants this editor leans on and `clRunsFor` re-checks:
+ * they rejoin to `b.text`, and no {{token}} straddles a boundary.
+ *
+ * Those four labels are the four Hanz named. TWO CORRECTIONS TO THE BRIEFS this work was written
+ * from, both worth recording because both were offered as things to protect:
+ *
+ *   · "A few things to note:" is NOT bold in any of the seven templates -- it is one plain run in a
+ *     plain paragraph. The paragraph that IS wholly bold, and that a careless fix would flatten, is
+ *     the Combo system heading ("Epoxy / Resinous Flooring:").
+ *   · not one cover-letter paragraph is a BULLET. All seven templates number their labelled lines:
+ *     `bullet: false`, `locked: true`, markers "1." upward, restarting per system on Combo. The red
+ *     Wingdings square the editor drew was wrong on every letter and every line.
+ *
+ * `runs: []` is KEPT on the three fixtures above rather than replaced, because the flat path it
+ * exercises is still live code for a response cached before the endpoint carried runs, and it is
+ * the branch the guards below fall back into.
+ *
+ * WHY `style.bold` IS COMPUTED HERE AND NEVER TYPED IN. On the server it is
+ * `any(r.bold for r in p.runs if r.bold is not None)` -- true the moment ONE run is bold. That is
+ * the whole defect: every bullet with a bold label reports itself as a bold PARAGRAPH, and the
+ * paragraph-level class then weights the details too. A fixture free to write `bold: false` on a
+ * line whose label is bold could hide that by accident, so it is derived by the same rule. */
+const R = (text, over) => Object.assign(
+  { text: text, bold: null, italic: null, underline: null, size_pt: 11,
+    font: "Zetta Serif", color: null }, over || {});
+const SPACING = { before: null, after: null, line: null, line_rule: null, contextual: false };
+/* A numbered label line, at the templates' real geometry: `w:ind left=720 hanging=360` puts the
+ * text 36pt in and the number 18pt to the left of it. `applyGeom` writes both as inline styles,
+ * which is what stops `.tw-num`'s own 9pt/18pt -- measured off the PROPOSAL's Terms level -- from
+ * standing in for this file's numbers. */
+const NUM = (marker) => ({ bullet: false, indent: 720, hanging: 360, first_line: null,
+                           locked: true, marker: marker, spacing: SPACING });
+const FLOW = { bullet: false, indent: 0, hanging: null, first_line: null, locked: false,
+               marker: "", spacing: SPACING };
+const P = (id, text, runs, over) => Object.assign(
+  { id: id, text: text, txbx: null, in_txbx: false, in_block: null, align: null, list: false,
+    para: FLOW, style: { name: null, bold: runs.some((r) => r.bold === true) }, runs: runs },
+  over || {});
+
+const LABEL_BODY = [
+  // 1 · Direct/Epoxy [5]. THE LINE HE SCREENSHOTTED: the label bold up to and including the colon,
+  // the detail plain. The detail is also the whole of a {{token}}, so this one line answers both
+  // halves of the question -- is the label the only bold part, and did the yellow fill survive
+  // being rendered a run at a time. Numbered "1.", not bulleted.
+  P(1, "Materials / System: {{cover_system_line}}",
+    [R("Materials / System: ", { bold: true, italic: false }),
+     R("{{cover_system_line}}", { bold: false, italic: false })],
+    { list: true, para: NUM("1.") }),
+  // 2 · Direct/Epoxy [6]. The same line at its shortest, and the one with nothing but the
+  // paragraph class standing between its detail half and 700: `bold: false` states no weight of
+  // its own, because only what a run turns ON is emitted.
+  P(2, "Area: {{work_areas}}",
+    [R("Area: ", { bold: true, italic: false }),
+     R("{{work_areas}}", { bold: false, italic: false })],
+    { list: true, para: NUM("2.") }),
+  // 3 · Direct/Epoxy [8]. The Options line, whose detail half is ITALIC in the template -- Kyle
+  // italicises the instructions he leaves for the estimator. Real, and the reason italic had to
+  // travel across with the weight: this line has rendered upright since the letter shipped.
+  P(3, "Options: [OPTIONS - keep the lines that apply]",
+    [R("Options: ", { bold: true, italic: false }),
+     R("[OPTIONS - keep the lines that apply]", { bold: false, italic: true })],
+    { list: true, para: NUM("4.") }),
+  // 4 · Direct/Combo [5]. A SYSTEM HEADING: one run, wholly bold, not a list, no detail half and
+  // nothing to split. It must stay bold in every character. The change is "prefer what the runs
+  // say", not "stop bolding paragraphs" -- a fix that only ever removed weight would read as green
+  // on the lines above and quietly flatten this one instead.
+  P(4, "Epoxy / Resinous Flooring:",
+    [R("Epoxy / Resinous Flooring:", { bold: true, italic: false })]),
+  // 5 · the same heading with its run SPLIT IN TWO. Not in the file today; it is what Word leaves
+  // behind the first time somebody edits one of these headings, and `_block_runs` reports one
+  // segment per `w:r`. Both halves have to stay bold.
+  P(5, "Polished Concrete:",
+    [R("Polished ", { bold: true, italic: false }), R("Concrete:", { bold: true, italic: false })]),
+  // 6 · GC/Epoxy [3]. A plain body sentence in three runs, no bold anywhere, so no class either
+  // and nothing for the guard to put back. The fill still has to land. Numbered "3." so that the
+  // marker is proven not to depend on the line having a bold label.
+  P(6, "Thanks for the opportunity to bid on this {{job_name}} project!",
+    [R("Thanks for the opportunity to bid on this ", { bold: false, italic: false }),
+     R("{{job_name}}", { bold: false, italic: false }),
+     R(" project!", { bold: false, italic: false })],
+    { list: true, para: NUM("3.") }),
+  // 7 · Direct/Epoxy [16]. The signature footer, and the empirical reason no point size is
+  // emitted: the templates really do mix an 11pt body with a 10pt signature block, so restating
+  // the runs' own sizes would visibly re-flow this paragraph on a page that is a to-scale preview
+  // of a printed sheet. Absent means "inherit the template's own", which is what has always
+  // happened here.
+  P(7, "TREADWELL | 913.396.6216 | Olathe, KS",
+    [R("TREADWELL", { bold: true, italic: false, size_pt: 10 }),
+     R(" | 913.396.6216 | Olathe, KS", { bold: false, italic: false, size_pt: 10 })]),
+];
+
+/* The three ways run records are refused, each of them a real .docx rather than a defensive
+ * edge case. All three keep a bold label in the record, so the paragraph-level class has to come
+ * BACK on the two that fall through to flat rendering — a guard that refused the runs and dropped
+ * the class as well would leave those paragraphs with no weight at all. */
+const GUARD_BODY = [
+  // 11 · runs that do not rejoin to the text. `_block_runs` invariant 1, and its own docstring
+  // names the cause: hyperlink runs are not direct `w:r` children, so the walk sees less text than
+  // the paragraph has.
+  P(11, "Terms: see our website for the full conditions.", [R("Terms:", { bold: true })]),
+  // 12 · a token STRADDLING a run boundary. Invariant 2 promises this cannot happen. Rendered a run
+  // at a time it matches in neither half and prints itself raw at the estimator, which is exactly
+  // the "nothing on the letter was substituted" complaint — so the guard sends it flat, where the
+  // value lands and only the per-run weights are lost.
+  P(12, "Bid for {{job_name}} today.",
+    [R("Bid for {{job", { bold: true }), R("_name}} today.")]),
+  // 13 · a token INSIDE a longer run: invariant 2 broken without a straddle. Usable, so it takes
+  // the run path — and the fill still has to land, which is why each run goes through the same
+  // token walk the flat path uses rather than being tested for being a whole token.
+  P(13, "Attn: {{job_name}} team", [R("Attn:", { bold: true }), R(" {{job_name}} team")]),
+  // 14 · A GENUINE WORD BULLET, which no cover-letter template contains today. The red square
+  // branch stays reachable and stays tested: a level whose definition cannot be read reports no
+  // marker, and a square is the best guess left for a line we know is a list and cannot number.
+  P(14, "A bulleted line, if a template ever grows one", [R("A bulleted line, if a template ever grows one")],
+    { list: true, para: Object.assign({}, FLOW, { bullet: true, marker: "" }) }),
+];
+
 const PAGE = { w_pt: 612, h_pt: 792, margin: { top: 72, left: 90, right: 90, bottom: 72 } };
 const ART = [{ name: "image1.png", para_index: 0, x_pt: 0, y_pt: 0, w_pt: 612, h_pt: 792 }];
 
@@ -286,7 +416,9 @@ const GEO_POSITIONED = { page: PAGE, images: ART, boxes: [{ id: 0, x_pt: 396, y_
 // matches production rather than a defensive edge case.
 const GEO_FLOW = { page: PAGE, images: ART, boxes: [] };
 
-const TOKENS = { proposal_date: "8/26/26", job_name: "Olathe Fire Station 4" };
+const TOKENS = { proposal_date: "8/26/26", job_name: "Olathe Fire Station 4",
+                 cover_system_line: "Epoxy, orange-peel texture",
+                 work_areas: "12,000 SF of warehouse" };
 const VER_A = "cl-epoxy-1";
 const VER_B = "cl-epoxy-2";
 
@@ -522,6 +654,72 @@ function makePage(seed, opts) {
       if (!el) return null;
       return { text: el.textContent, cls: el.className, editable: el.contentEditable,
                boxed: !!el.closest(".tw-txbx") };
+    },
+    /** The block element itself, for the one thing only identity can answer: whether a press
+     *  REPLACED the paragraph or only rewrote its children. */
+    el(id) { return surface.querySelector('.tw-block[data-id="' + id + '"]'); },
+    /** WHAT THE PARAGRAPH LOOKS LIKE, resolved the way the browser resolves it: every stretch of
+     *  text with the weight, slant and underline that would actually paint it, and the token it
+     *  sits inside.
+     *
+     *  The cascade is the point. `styles.css:1253` is `.tw-block.tw-bold { font-weight: 700 }`
+     *  with no !important, so an inline weight on an ancestor span outranks it — and text with NO
+     *  inline weight above it inherits the class. That second half is where the whole defect
+     *  lives: a reading that merely counted `<span>`s, or that checked the spans it found were
+     *  right, would call this fixed while every detail half still painted bold off the class. So
+     *  `bold: null` from the walk resolves to the CLASS, and the class is reported on its own line
+     *  as well, which is what lets the Python side name which of the two halves regressed. */
+    painted(id) {
+      const el = surface.querySelector('.tw-block[data-id="' + id + '"]');
+      if (!el) return null;
+      const cls = el.classList.contains("tw-bold");
+      const out = [];
+      const walk = (n, st) => {
+        for (const c of n.childNodes) {
+          if (c.nodeType === Node.TEXT_NODE) {
+            if (c.nodeValue === "") continue;
+            out.push({ text: c.nodeValue, bold: st.bold === null ? cls : st.bold,
+                       italic: st.italic === true, underline: st.underline === true,
+                       token: st.token });
+            continue;
+          }
+          if (c.nodeType !== Node.ELEMENT_NODE) continue;
+          const s = c.style || {};
+          const deco = s.textDecorationLine || s.textDecoration || "";
+          walk(c, {
+            bold: s.fontWeight ? Number(s.fontWeight) >= 600 : st.bold,
+            italic: s.fontStyle ? s.fontStyle === "italic" : st.italic,
+            underline: deco ? String(deco).indexOf("underline") >= 0 : st.underline,
+            token: (c.attrs && c.attrs["data-token"]) || st.token,
+          });
+        }
+      };
+      walk(el, { bold: null, italic: null, underline: null, token: null });
+      return { cls: cls, runs: out };
+    },
+    /** Every inline font-size the letter emitted. Must be empty -- see the footer fixture. */
+    inlineSizes() {
+      return surface.querySelectorAll("span").map((s) => (s.style && s.style.fontSize) || "")
+        .filter((v) => !!v);
+    },
+    /** The list treatment one paragraph actually got: which of the two classes, and what the
+     *  marker prints. `.tw-num::before` renders `attr(data-marker)`, so a missing attribute is a
+     *  numbered line with no number on it. */
+    listLook(id) {
+      const el = surface.querySelector('.tw-block[data-id="' + id + '"]');
+      if (!el) return null;
+      return { num: el.classList.contains("tw-num"), li: el.classList.contains("tw-li"),
+               list: el.classList.contains("tw-list"),
+               marker: (el.attrs && el.attrs["data-marker"]) || null };
+    },
+    /** The same reading, boiled down to the question that was asked: which stretches are bold. */
+    boldParts(id) {
+      const p = this.painted(id);
+      return p ? p.runs.filter((r) => r.bold).map((r) => r.text) : null;
+    },
+    plainParts(id) {
+      const p = this.painted(id);
+      return p ? p.runs.filter((r) => !r.bold).map((r) => r.text) : null;
     },
   };
 }
@@ -1053,6 +1251,298 @@ const out = {};
       text: el.textContent,
       prevented: ev.defaultPrevented,
       plainPrevented: plain.defaultPrevented,
+    };
+  }
+
+  /* ── 17 · only the label is bold ────────────────────────────────────────────────────────────
+   *
+   * Hanz, 2026-09-04, with a screenshot of the Cover letter tab: "Then on the bulleted. Only those
+   * words before and including the colon should be default bold. The other details should not be.
+   * So, material/system, area, schedule, options should be the only ones bold."
+   *
+   * The .docx already agrees with him — Kyle's template bolds the label run and leaves the detail
+   * run plain — and the editor was throwing that away twice over. It walked `b.text`, so the only
+   * weight it could show was the paragraph-level `tw-bold` class, and `b.style.bold` is
+   * `any(r.bold ...)` on the server, so every bullet with a bold label asked for that class.
+   *
+   * READ AS PAINTED TEXT, not as spans: see `painted` above. Both halves of the fix are separately
+   * necessary and this scenario is what proves it — drop the per-run pass and every stretch comes
+   * back bold; keep the class and the `null`-bold details come back bold. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" },
+                       { geometry: GEO_FLOW, blocks: LABEL_BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    out.labelBullets = {
+      bulletBold: p.boldParts(1),
+      bulletPlain: p.plainParts(1),
+      bulletCls: p.painted(1).cls,
+      bulletToken: (p.painted(1).runs.find((r) => r.token) || {}).token || null,
+      areaBold: p.boldParts(2),
+      areaPlain: p.plainParts(2),
+      // The Options line: italic travels per run, and does not drag bold along with it.
+      optionsBold: p.boldParts(3),
+      optionsItalic: p.painted(3).runs.filter((r) => r.italic).map((r) => r.text),
+      headingBold: p.boldParts(4),
+      headingPlain: p.plainParts(4),
+      splitHeadingBold: p.boldParts(5),
+      splitHeadingPlain: p.plainParts(5),
+      bodyBold: p.boldParts(6),
+      bodyToken: (p.painted(6).runs.find((r) => r.token) || {}).token || null,
+      footerBold: p.boldParts(7),
+      footerPlain: p.plainParts(7),
+      // NO POINT SIZE ANYWHERE. The footer's runs state 10pt against an 11pt body, so emitting
+      // them would re-flow this letter -- geometry, on a to-scale preview of a printed sheet.
+      inlineSizes: p.inlineSizes(),
+      // WHICH LIST TREATMENT EACH LINE GOT, and what its marker prints. `.tw-num` shows the
+      // document's own number; `.tw-li` is a red Wingdings square. Every labelled line in all
+      // seven templates is numbered, so a square anywhere in here is a line the estimator
+      // proofreads as a bullet and the customer receives as "1.".
+      lists: [1, 2, 3, 4, 6, 7].map((id) => Object.assign({ id: id }, p.listLook(id))),
+      // ...and the marker is placed at the level's own geometry, not `.tw-num`'s built-in 9pt/18pt
+      // (which was measured off the proposal's Terms level, a different document).
+      numGeom: (function () { const e = p.el(1);
+                              return { ml: e.style.marginLeft, pl: e.style.paddingLeft }; })(),
+      // The words themselves, because a renderer that reflowed the sentence to get the weights
+      // right would be a worse bug than the weights.
+      bulletText: p.look(1).text,
+      // ...and drawing the runs may not make a single paragraph LOOK edited. `pristine` is still
+      // the flat fill of `b.text`, so a per-run render that disagreed with it by one character
+      // would mark every line dirty and ship the whole letter as overrides on the first keystroke.
+      virgin: Object.keys(p.CL().collect()).length,
+      dirty: p.surface.querySelectorAll(".tw-block")
+        .filter((b) => b.classList.contains("tw-dirty")).length,
+    };
+  }
+
+  /* ── 18 · the three ways run records are refused ────────────────────────────────────────────
+   *
+   * Rendering a paragraph one run at a time is only safe while the runs describe the paragraph.
+   * Two of these three cases send it back to the flat walk, and the paragraph-level class has to
+   * come back WITH it: a guard that refused the runs and dropped the class as well would leave
+   * those lines with no weight at all, which is the fix overshooting into a new bug. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" },
+                       { geometry: GEO_FLOW, blocks: GUARD_BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    out.runGuards = {
+      unjoinableCls: p.painted(11).cls,
+      unjoinableBold: p.boldParts(11),
+      unjoinableText: p.look(11).text,
+      straddledCls: p.painted(12).cls,
+      straddledText: p.look(12).text,
+      // The one that matters: the token's VALUE reached the screen rather than its braces.
+      straddledToken: (p.painted(12).runs.find((r) => r.token) || {}).token || null,
+      // A token inside a longer run is still usable, so it keeps its per-run weights AND fills.
+      innerBold: p.boldParts(13),
+      innerPlain: p.plainParts(13),
+      innerCls: p.painted(13).cls,
+      innerToken: (p.painted(13).runs.find((r) => r.token) || {}).token || null,
+      innerText: p.look(13).text,
+      // ...and the red square is still reachable for a line that really is a bullet.
+      realBullet: p.listLook(14),
+    };
+  }
+
+  /* ── 19 · THE COMPOSE PROPERTY, which is the subtle half of this change ─────────────────────
+   *
+   * The backend grew a label-split of its own for the same complaint: given a PLAIN-TEXT override
+   * it bolds the label and leaves the details alone, which is what saves a draft written before
+   * this fix and what the portal's server-side replay of a pinned revision goes through. It stands
+   * aside the moment an override carries `runs`, because an explicit press by the estimator has to
+   * outrank a guess.
+   *
+   * So the danger in rendering runs is not the rendering, it is what `collect()` then reads back:
+   * `clFmtAt` measures inline styles, and the template's own `font-weight:700` is now one of them.
+   * If a paragraph nobody touched serialised its runs, every letter in the product would silently
+   * become an explicit-runs override and the backend's safety net would be switched off for
+   * everybody — a fix for the screen that breaks the print.
+   *
+   * It does not, and the reason is `collect()`'s existing gate: runs are only read from a block
+   * carrying `tw-fmt`, and only `clApplyFormat` (a real press) and `restoreSaved` (replaying an
+   * override that already had runs) ever set it. Three readings, because the property is three
+   * claims: untouched ships nothing, RETYPED ships text with no runs key, and a PRESS is the one
+   * thing that opts that one paragraph into runs. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" },
+                       { geometry: GEO_FLOW, blocks: LABEL_BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    const untouched = Object.keys(p.CL().collect()).length;
+
+    p.type(2, "Area: 14,500 SF");
+    p.flush();
+    const retyped = p.override(2);
+
+    p.caretIn(1);
+    // EVERY RUN IN THESE FIXTURES STATES 11pt, and the ribbon must still show an empty size
+    // box. This page is a to-scale preview of a printed sheet, so a point size is geometry:
+    // emitting the template’s own sizes would reflow the letter, and reading them back would
+    // pin 11pt onto every run of the first paragraph anybody pressed a button on. Absent means
+    // "inherit the template’s own", which is true, and is what a press stored before this
+    // change too.
+    const sizeBoxAfterAim = p.sizeBox.value;
+    p.press("bold");
+    p.flush();
+    const pressed = p.override(1);
+
+    out.composeProperty = {
+      untouched: untouched,
+      // `["text"]` and nothing else. A `runs` key here is the regression: the backend would stand
+      // aside and this paragraph would print with no bold label at all.
+      retypedKeys: retyped ? Object.keys(retyped).sort() : null,
+      retypedText: retyped ? retyped.text : null,
+      pressedKeys: pressed ? Object.keys(pressed).sort() : null,
+      pressedRuns: pressed ? pressed.runs.map((r) => ({ t: r.text, b: r.bold })) : null,
+      sizeBoxAfterAim: sizeBoxAfterAim,
+      pressedSizes: pressed ? pressed.runs.map((r) => r.size_pt === undefined ? "absent" : r.size_pt) : null,
+      // The press opted ONE paragraph in. The other four are still untouched, so the three
+      // paragraphs nobody has been near must still be absent from the store entirely.
+      touched: Object.keys(p.STORE.blob.cover_letter_paragraph_overrides).sort(),
+      // What a retyped paragraph looks like when it comes BACK: `restoreSaved` replays a text-only
+      // entry as textContent, which carries no formatting at all, so the label is not bold on
+      // screen while the generated .docx will bold it via the backend split. Recorded rather than
+      // asserted-away: it is the one place the two halves of the fix disagree, and re-splitting the
+      // label in the browser would be a second copy of the backend's rule.
+      retypedOnReload: await (async () => {
+        const q = makePage(p.STORE.blob, { geometry: GEO_FLOW, blocks: LABEL_BODY });
+        await q.settle();
+        await q.tick(true);
+        await q.settle();
+        return { bold: q.boldParts(2), plain: q.plainParts(2), cls: q.painted(2).cls };
+      })(),
+    };
+  }
+
+  /* ── 20 · Ctrl+B on a label bullet, twice, without touching the caret in between ────────────
+   *
+   * The keyboard is the second wiring (`clWireSurface`, not `clWireRibbon`) and the one an
+   * estimator formatting a letter actually reaches for. On a bullet it is also the first press
+   * that has ever had mixed runs underneath it: `summarize` returns `undefined` for a selection
+   * that is part bold, and `nextToggle` turns THAT on rather than off, so one press bolds the
+   * whole line rather than un-bolding the label.
+   *
+   * The second press is the interesting one. `clApplyFormat` rewrites the paragraph's innerHTML,
+   * which destroys every text node the caret could have been in — the classic "a re-render steals
+   * the focus you just tabbed into". What stops that being fatal is that the BLOCK element is
+   * never replaced, only its children, so `clFmtBlock` still names a paragraph the surface
+   * contains and the second press lands on the same line. Element identity is the only thing that
+   * can say so, hence `sameElement`. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" },
+                       { geometry: GEO_FLOW, blocks: LABEL_BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    const before = p.caretIn(1);
+    const ev = p.key("b");
+    const first = p.override(1);
+    const paintedAfter = p.painted(1);
+    const ev2 = p.key("b");
+    const second = p.override(1);
+    p.flush();
+    out.keyboardOnALabelBullet = {
+      prevented: ev.defaultPrevented,
+      firstRuns: first ? first.runs.map((r) => ({ t: r.text, b: r.bold })) : null,
+      // Bolding the line is an edit to its FORMAT. Not one character of it may move.
+      textAfter: p.look(1).text,
+      // ...and the estimate's value is still marked as a value.
+      fillSurvived: (paintedAfter.runs.find((r) => r.token) || {}).token || null,
+      wholeLineBold: paintedAfter.runs.every((r) => r.bold),
+      secondPrevented: ev2.defaultPrevented,
+      secondRuns: second ? second.runs.map((r) => ({ t: r.text, b: r.bold })) : null,
+      sameElement: before === p.el(1),
+      ids: Object.keys(p.STORE.blob.cover_letter_paragraph_overrides).sort(),
+    };
+  }
+
+  /* ── 21 · a saved runs override replays onto a run-rendered paragraph ───────────────────────
+   *
+   * Scenario 15 proves this for a template with no runs of its own. Now that the template brings
+   * its own, `restoreSaved` is putting the estimator's runs over the top of them — and it is the
+   * paragraph-level class, dropped in `renderBlock`, that decides whether the replay can be seen
+   * for what it is. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" },
+                       { geometry: GEO_FLOW, blocks: LABEL_BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    p.caretIn(4);
+    p.press("bold");                      // a wholly bold heading, turned OFF on purpose
+    p.flush();
+    const q = makePage(p.STORE.blob, { geometry: GEO_FLOW, blocks: LABEL_BODY });
+    await q.settle();
+    await q.tick(true);
+    await q.settle();
+    out.savedRunsOverRuns = {
+      storedRuns: p.STORE.blob.cover_letter_paragraph_overrides["4"].runs
+        .map((r) => ({ t: r.text, b: r.bold })),
+      replayedBold: q.boldParts(4),
+      replayedPlain: q.plainParts(4),
+      replayedFmtClass: q.el(4).classList.contains("tw-fmt"),
+      // The replay rewrites the paragraph's children. Its list treatment is a CLASS on the
+      // paragraph itself, so the number has to still be there afterwards.
+      replayedList: q.listLook(4),
+      neighbourList: q.listLook(1),
+      // The template's own bullets around it are untouched by the replay.
+      neighbourBold: q.boldParts(1),
+      recollected: q.override(4) ? q.override(4).runs.map((r) => r.bold) : null,
+    };
+  }
+
+  /* ── 22 · what an EMPTIED numbered line does, and what `locked` is worth here ────────────────
+   *
+   * `para.locked` is true on every labelled line in all seven templates, and this editor reads it
+   * nowhere. That is not an oversight, and the reading below is what says so rather than a comment
+   * claiming it: the one thing `locked` exists to refuse in the proposal is a press on the
+   * bullet/indent controls, and `clRenderFmtBar` hides the whole `[data-para]` group whenever the
+   * letter is on stage — so there is no control here that could drop a line's numbering.
+   *
+   * What the proposal ALSO does with a numbered paragraph is refuse to let it be emptied
+   * (`restoreEmptiedClause`), because Word would print a bare clause number in a signed contract.
+   * The letter deliberately does NOT copy that: its Options line says "keep the lines that apply",
+   * so deleting one is a thing the estimator is meant to do, and refusing it would be the wrong
+   * answer to a different document's problem.
+   *
+   * The consequence is real and is recorded here rather than hidden: an emptied numbered line
+   * keeps its number, on screen AND in the .docx. `.tw-block.tw-empty.tw-li::before` drops the red
+   * square for an emptied BULLET, and there is no `.tw-num` equivalent — which, now that these
+   * lines render as numbers, means the estimator sees exactly the bare "4." the file prints. Before
+   * this change the square vanished and gave a false all-clear. */
+  {
+    const p = makePage({ work_type: "epoxy", audience: "Direct" },
+                       { geometry: GEO_FLOW, blocks: LABEL_BODY });
+    await p.settle();
+    await p.tick(true);
+    await p.settle();
+    p.coverTab.dispatchEvent(new Ev("click", { bubbles: true }));
+    await p.settle();
+    const el = p.type(3, "");
+    p.flush();
+    out.emptiedNumberedLine = {
+      empty: el.classList.contains("tw-empty"),
+      dirty: el.classList.contains("tw-dirty"),
+      // The number is still there, because the .docx still prints it.
+      list: p.listLook(3),
+      saved: p.STORE.blob.cover_letter_paragraph_overrides["3"],
+      // NOT put back. The proposal restores an emptied numbered clause; the letter must not,
+      // because an Options line the job does not need is meant to be deletable.
+      text: p.look(3).text,
+      // The paragraph controls that `locked` would gate are hidden outright while the letter is
+      // in front, which is why nothing here needs to read the flag.
+      paraControlsHidden: p.paraBtn.style.visibility,
+      paraControlsDisabled: p.paraBtn.disabled,
     };
   }
 

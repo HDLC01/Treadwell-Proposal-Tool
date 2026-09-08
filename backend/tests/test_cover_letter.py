@@ -803,6 +803,252 @@ def test_overrides_are_applied_lowest_id_first():
     assert [o["id"] for o in staged] == [2, 7]
 
 
+# ── (b2) the label bullets: bold to the colon, normal after ──────────────────
+# Hanz, 2026-09-04, looking at the Cover letter tab: "Only those words before and including the
+# colon should be default bold. The other details should not be. So, material/system, area,
+# schedule, options should be the only ones bold."
+#
+# The TEMPLATES always did that (`_add` writes `r.bold = bool(seg.get("bold"))`, so the detail
+# carries an explicit `w:b val="0"`). An EDITED bullet did not: a plain-text override is one
+# string, `_set_paragraph_text` keeps the paragraph's first run and drops the rest, and the first
+# run is the bold label — so the estimator's whole sentence reached the customer's PDF in
+# Cambria-Bold. `_split_label_overrides` re-splits it at the first colon.
+#
+# Everything here executes the real writer over the real templates for every variant. A source
+# assertion could not tell the difference between these two states at all: the generator, the
+# template and the override channel were each individually correct, and the document was wrong.
+
+# The five labels these letters print. `Materials / System:` is the resinous row; `System:` is
+# polish and gyp. Ordered longest-first so `startswith` cannot mistake one for another.
+_BULLET_LABELS = ("Materials / System:", "Schedule:", "Options:", "System:", "Area:")
+
+
+def _bullet_runs(d):
+    """`{label: [(text, bold), ...]}` for every label bullet in a filled letter.
+
+    Keyed on the label rather than on a block id because these assertions are about what the
+    DOCUMENT says; the ids are checked by the override tests above.
+    """
+    out = {}
+    for p in pw._iter_all_paragraphs(d):
+        text = p.text.strip()
+        for label in _BULLET_LABELS:
+            if text.startswith(label):
+                out[label] = [(r.text, r.bold) for r in p.runs if r.text]
+                break
+    return out
+
+
+def _label_ids(key):
+    """`{block id: label text}` — the template's own answer for which paragraphs are label
+    bullets, read off the pristine file the override ids are resolved against."""
+    return clw._label_paragraphs(docx.Document(str(clw.pick_template(*key))))
+
+
+@pytest.mark.parametrize("key", VARIANTS)
+def test_every_label_bullet_ships_bold_to_the_colon_and_normal_after(key):
+    """The baseline, per variant: an UNEDITED letter already gets this right, and must keep
+    getting it right. This is the state Hanz's screenshot was compared against — the editor was
+    showing these lines fully bold while the .docx underneath was correct."""
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type=key[0], audience=key[1], values=FULL_VALUES)))
+    rows = _bullet_runs(d)
+    # Not vacuous: every variant has at least three of these bullets, and the count has to match
+    # what the writer itself classified — a regex that stopped matching would otherwise pass here
+    # by finding nothing.
+    assert len(rows) >= 3, "found no label bullets in %s/%s: %r" % (key[0], key[1], rows)
+    for label, runs in rows.items():
+        assert runs[0][1] is True, "%s is not bold in %s/%s: %r" % (label, key[0], key[1], runs)
+        assert runs[0][0].rstrip().endswith(":"), (
+            "the bold run runs past the colon in %s/%s: %r" % (key[0], key[1], runs))
+        assert all(b is False for _t, b in runs[1:]), (
+            "detail after %s inherited the label's bold in %s/%s: %r"
+            % (label, key[0], key[1], runs))
+
+
+@pytest.mark.parametrize("key", VARIANTS)
+def test_an_edited_label_bullet_keeps_its_bold_label_and_normal_detail(key):
+    """THE ONE THAT WOULD HAVE CAUGHT IT — the round trip, for every variant.
+
+    The estimator retypes a bullet in the document editor, which sends a plain string; the
+    override is applied on generate. Before `_split_label_overrides` the rebuilt paragraph was a
+    single run wearing the label's weight, and the customer's PDF rendered
+    `Schedule: edited by the estimator` bold end to end (measured on Direct/Epoxy: one
+    `Cambria-Bold` span across the whole line, where the unedited letter renders two).
+    """
+    labels = _label_ids(key)
+    assert labels, "no label bullets classified in %s/%s" % (key[0], key[1])
+    overrides = [{"id": bid, "text": label.strip() + " the estimator retyped this line."}
+                 for bid, label in labels.items()]
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type=key[0], audience=key[1], values=FULL_VALUES,
+        paragraph_overrides=overrides)))
+    edited = [p for p in pw._iter_all_paragraphs(d)
+              if "the estimator retyped this line." in p.text]
+    assert len(edited) == len(labels), (
+        "%d of %d edits reached the letter" % (len(edited), len(labels)))
+    for p in edited:
+        runs = [(r.text, r.bold) for r in p.runs if r.text]
+        assert len(runs) == 2, "the edit was not split at the colon: %r" % (runs,)
+        assert runs[0][1] is True and runs[0][0].rstrip().endswith(":"), runs
+        assert runs[1][1] is False, "the estimator's detail came out bold: %r" % (runs,)
+
+
+def test_an_edited_bullet_round_trips_through_the_live_generate():
+    """The same round trip through `/api/generate` rather than the writer, because that is the
+    path the estimator's browser actually takes: id-keyed dict → `_sanitize_cover_letter_overrides`
+    → `_sanitize_paragraph_overrides` → the writer. A split that only worked when called directly
+    would be a fix nobody could see."""
+    body = _template()
+    sched = next(b for b in body["blocks"] if b["text"].strip().startswith("Schedule:"))
+    out = _generate(cover_letter_enabled=True,
+                    cover_letter_template_version=body["template_version"],
+                    cover_letter_paragraph_overrides={
+                        str(sched["id"]): {"text": "Schedule: two mobilizations, second in June."}})
+    d = docx.Document(io.BytesIO(client.get(out["cover_letter_download_url"]).content))
+    runs = _bullet_runs(d)["Schedule:"]
+    assert "two mobilizations" in "".join(t for t, _b in runs), runs
+    assert runs[0] == ("Schedule:", True), runs
+    assert all(b is False for _t, b in runs[1:]), runs
+
+
+def test_the_estimators_own_formatting_outranks_the_split():
+    """An override that carries `runs` is the estimator having pressed Bold themselves — PR #453
+    is what made those buttons reach the letter. Their stated weight wins, exactly as
+    `_user_bolded_runs` makes it win over the proposal's normalizer; re-splitting it would make
+    the most-used button in the ribbon a no-op on these four rows."""
+    labels = _label_ids(("epoxy", "Direct"))
+    bid = next(i for i, lab in labels.items() if lab.strip() == "Schedule:")
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type="epoxy", audience="Direct", values=FULL_VALUES,
+        paragraph_overrides=[{"id": bid, "runs": [
+            {"text": "Schedule: ", "bold": False},
+            {"text": "all of this is deliberately bold", "bold": True}]}])))
+    runs = _bullet_runs(d)["Schedule:"]
+    assert runs == [("Schedule: ", False), ("all of this is deliberately bold", True)], runs
+
+
+def test_a_sentence_that_merely_ends_in_a_colon_is_not_a_label():
+    """WHY THE RULE READS THE TEMPLATE'S RUNS AND NOT THE WORDS.
+
+    Will's Direct copy opens `A few things to note:` — short, colon-terminated, no `.?!`, which is
+    everything the proposal's text-driven `_normalize_work_label_formatting` looks for. Text
+    heuristics would have bolded it. The template writes it as ONE run, so it is not a label
+    bullet, and an edit of it stays as uniform as the line it replaced."""
+    d0 = docx.Document(str(clw.pick_template("epoxy", "Direct")))
+    intro = next(
+        (idx for idx, _k, _pe, _ib, text, _t in pw.iter_editable_blocks(d0)
+         if text.strip() == "A few things to note:"), None)
+    assert intro is not None, "the Direct intro line moved — re-derive this test, don't delete it"
+    assert intro not in clw._label_paragraphs(d0), "the intro was classified as a label bullet"
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type="epoxy", audience="Direct", values=FULL_VALUES,
+        paragraph_overrides=[{"id": intro, "text": "A couple of things to note:"}])))
+    p = next(p for p in pw._iter_all_paragraphs(d)
+             if p.text.strip() == "A couple of things to note:")
+    assert [r.bold for r in p.runs if r.text] == [False], (
+        "the intro line picked up a label's bold: %r" % ([(r.text, r.bold) for r in p.runs],))
+
+
+def test_a_group_heading_stays_bold_all_the_way_through():
+    """Combo's `Epoxy / Resinous Flooring:` / `Polished Concrete:` headings are colon-terminated
+    AND fully bold by design. They are single bold runs with no detail half, so they are not label
+    bullets either — the split must not hand them a normal-weight tail."""
+    d0 = docx.Document(str(clw.pick_template("combo", "Direct")))
+    heads = {text.strip(): idx
+             for idx, _k, _pe, _ib, text, _t in pw.iter_editable_blocks(d0)
+             if text.strip() in ("Epoxy / Resinous Flooring:", "Polished Concrete:")}
+    assert len(heads) == 2, heads
+    labels = clw._label_paragraphs(d0)
+    assert not [h for h in heads.values() if h in labels], "a heading was taken for a bullet"
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type="combo", audience="Direct", values=FULL_VALUES,
+        paragraph_overrides=[{"id": i, "text": name.rstrip(":") + " Systems:"}
+                             for name, i in heads.items()])))
+    for name in ("Epoxy / Resinous Flooring Systems:", "Polished Concrete Systems:"):
+        p = next(p for p in pw._iter_all_paragraphs(d) if p.text.strip() == name)
+        assert [r.bold for r in p.runs if r.text] == [True], (
+            "%s lost its heading weight: %r" % (name, [(r.text, r.bold) for r in p.runs]))
+
+
+@pytest.mark.parametrize("typed, expect", [
+    # Both sides of the split, so a change to either is deliberate.
+    ("Schedule: two phases", [("Schedule:", True), (" two phases", False)]),
+    # All label and nothing else — the whole thing is what he asked to be bold.
+    ("Schedule:", [("Schedule:", True)]),
+    # NO COLON, and this is where the letter diverges from the proposal on purpose: there the
+    # normalizer stands down and a colon-less WORK row keeps its bold, because that row IS the
+    # label. A cover-letter bullet is a two-word label in front of a two-line sentence, so
+    # falling back to the label's weight bolds a paragraph that is nearly all detail — the exact
+    # thing being fixed. The fallback is the DETAIL half's weight.
+    ("Now a plain sentence with no label at all",
+     [("Now a plain sentence with no label at all", False)]),
+    # A leading colon leaves no label words in front of it.
+    (": straight into the detail", [(": straight into the detail", False)]),
+])
+def test_the_edges_of_the_colon_rule(typed, expect):
+    labels = _label_ids(("epoxy", "Direct"))
+    bid = next(i for i, lab in labels.items() if lab.strip() == "Schedule:")
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type="epoxy", audience="Direct", values=FULL_VALUES,
+        paragraph_overrides=[{"id": bid, "text": typed}])))
+    p = next(p for p in pw._iter_all_paragraphs(d) if p.text.strip() == typed.strip())
+    assert [(r.text, r.bold) for r in p.runs if r.text] == expect
+
+
+def test_emptying_a_bullet_still_takes_the_blank_path():
+    """A blank override must reach `_apply_paragraph_overrides` as the shape it expects, or the
+    numbered-clause refusal stops protecting these bullets — they carry real Word numbering, so an
+    emptied one would print a bare `3.` in a customer's letter. The split leaves blanks alone
+    precisely so that guard still fires."""
+    labels = _label_ids(("epoxy", "Direct"))
+    bid = next(i for i, lab in labels.items() if lab.strip() == "Schedule:")
+    d = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type="epoxy", audience="Direct", values=FULL_VALUES,
+        paragraph_overrides=[{"id": bid, "text": "   "}])))
+    kept = _bullet_runs(d).get("Schedule:")
+    assert kept, "the blank override emptied a numbered bullet instead of being refused"
+    assert kept[0][1] is True and kept[0][0].rstrip().endswith(":"), kept
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None and shutil.which("libreoffice") is None,
+                    reason="LibreOffice renders production's PDF; not installed on this box")
+def test_the_rendered_pdf_shows_the_split_not_one_bold_line():
+    """THE ARTEFACT THE CUSTOMER READS. LibreOffice renders the PDF in production and diverges
+    from Word — it ignores docx text-box autofit — so a docx-level assertion is not by itself
+    proof. `w:b` in flow text is not one of the divergences, and a letter has been pure flow since
+    PR #453, but the whole point of this fix is a weight on a page: assert it on the page.
+
+    Two spans on the line, one bold and one not. Before the fix this was ONE bold span.
+    """
+    import fitz                                  # noqa: PLC0415 — optional, dev-only
+    import pdf_writer
+
+    labels = _label_ids(("epoxy", "Direct"))
+    bid = next(i for i, lab in labels.items() if lab.strip() == "Schedule:")
+    docx_bytes = clw.fill_cover_letter(
+        work_type="epoxy", audience="Direct", values=FULL_VALUES,
+        paragraph_overrides=[{"id": bid, "text": "Schedule: the estimator retyped this."}])
+    doc = fitz.open(stream=pdf_writer.docx_to_pdf(docx_bytes), filetype="pdf")
+    try:
+        spans = None
+        for page in doc:
+            for blk in page.get_text("dict")["blocks"]:
+                for line in blk.get("lines", []):
+                    joined = "".join(s["text"] for s in line["spans"])
+                    if "the estimator retyped this." in joined:
+                        spans = [s for s in line["spans"] if s["text"].strip()]
+        assert spans, "the edited bullet never reached the rendered page"
+        bold = ["bold" in s["font"].lower() or bool(s["flags"] & 2 ** 4) for s in spans]
+        texts = [s["text"] for s in spans]
+        label = next(i for i, t in enumerate(texts) if "Schedule:" in t)
+        assert bold[label] is True, list(zip(texts, bold))
+        assert any(b is False for b in bold[label + 1:]), (
+            "the whole rendered line is bold: %r" % (list(zip(texts, bold)),))
+    finally:
+        doc.close()
+
+
 # ── (c) /api/coverletter-template ────────────────────────────────────────────
 def test_the_template_endpoint_serves_the_block_model():
     body = _template("polish", "GC")

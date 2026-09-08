@@ -58,6 +58,15 @@ UNIT_REFS = "library_units"
 
 # What a caller may set. Anything else in the payload is ignored rather than stored: an unknown
 # key is a client bug, and persisting it makes the row shape unpredictable for later readers.
+#
+# THE SERVER-SET COLUMNS ARE DELIBERATELY ABSENT: `owner_email`, `updated_by`, `created_at`,
+# `updated_at`, `cost_updated_at` and `deleted_at`. Authorship a client can type is authorship
+# anybody can forge, and these rows are the answer to "who changed this price" — so who edited a
+# row comes from the authenticated request, never from the body.
+#
+# These tuples DOCUMENT that contract; they do not enforce it. The enforcement is
+# validate_item / validate_assembly, which build their output from an explicit key list and drop
+# everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
                  "sku", "vendor", "notes")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines")
@@ -110,6 +119,19 @@ class ValidationError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _actor(email: Optional[str]) -> Optional[str]:
+    """The stored form of the person behind a write: lower-cased and trimmed, or None.
+
+    One helper for both authorship columns so `owner_email` and `updated_by` are always
+    comparable — the Items tab puts them side by side, and "Kyle@wetreadwell.com" created it /
+    "kyle@wetreadwell.com" edited it would read as two different people.
+
+    None when we cannot name them. That is a real state (an unauthenticated internal call) and it
+    is stored as NULL rather than papered over, because the tab shows an unknown editor as "—" and
+    a guess is worse than a dash."""
+    return (email or "").strip().lower() or None
 
 
 def _clean_text(value: Any, limit: int = _MAX_TEXT) -> str:
@@ -416,6 +438,14 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "owner_email": row.get("owner_email") or "",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
+        # WHO last changed the row, beside `owner_email`'s who first made it — Hanz, 2026-09-04:
+        # "in the items tab we must put the name of who created it and who edited it".
+        #
+        # Read-shaped like buy_qty, and always present in the response even when the column is
+        # absent from the row: every row typed before this existed was edited by somebody we
+        # cannot name, so it reads back empty and the tab shows "—". Not backfilled to the
+        # creator, which would have the row claim an edit that never happened.
+        "updated_by": row.get("updated_by") or "",
         # When the PRICE last moved, which is not when the row last changed — fixing a spelling
         # does not make a cost newer. None means "not since we started recording it".
         "cost_updated_at": row.get("cost_updated_at"),
@@ -512,18 +542,33 @@ def create_item(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str
     if clash:
         raise ValidationError("\"%s\" is already in the library." % clash["name"])
     row["id"] = str(uuid.uuid4())
-    row["owner_email"] = (owner_email or "").lower() or None
+    row["owner_email"] = _actor(owner_email)
+    # The create IS the row's first write, and `updated_at` is stamped on it below. So
+    # `updated_by` names the same person, because two columns describing one write must not
+    # disagree — a fresh row reading "changed just now, by nobody" looks like a bug in the tab.
+    # NULL therefore means one thing only: this row predates the column.
+    row["updated_by"] = row["owner_email"]
     row["created_at"] = row["updated_at"] = _now_iso()
     sb = get_client()
     sb.table(ITEMS).insert(row).execute()
     return _shape_item(row)
 
 
-def update_item(item_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def update_item(item_id: str, payload: Dict[str, Any],
+                editor_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Patch one material. `editor_email` is who the row will say last changed it.
+
+    It comes from the authenticated request (`_user_email` at the route), never from the payload —
+    see ITEM_WRITABLE. Optional because a script or an import is not an identity, and those write
+    NULL: an edit by somebody we cannot name must not leave the PREVIOUS editor's name on the row,
+    which would attribute a change to a person who did not make it."""
     patch = validate_item(payload, partial=True)
     if not patch:
+        # Nothing changed, so nobody edited it — authorship is left exactly as it was rather than
+        # reassigned by a PATCH that did nothing (the debounced save re-sends fields routinely).
         return get_item(item_id)
     patch["updated_at"] = _now_iso()
+    patch["updated_by"] = _actor(editor_email)
     sb = get_client()
     cur = (sb.table(ITEMS).select("id,unit_cost")
            .eq("id", item_id).is_("deleted_at", "null").limit(1).execute())
@@ -676,6 +721,10 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             "note": (ln or {}).get("note") or "",
         } for ln in lines if isinstance(ln, dict)],
         "owner_email": row.get("owner_email") or "",
+        # Who last changed it, on the same terms as an item's — including a LINE change, which is
+        # the edit that actually happens here. See _shape_item for why an absent column reads
+        # empty rather than as the creator.
+        "updated_by": row.get("updated_by") or "",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -701,7 +750,8 @@ def get_assembly(asm_id: str) -> Optional[Dict[str, Any]]:
 def create_assembly(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str, Any]:
     row = validate_assembly(payload)
     row["id"] = str(uuid.uuid4())
-    row["owner_email"] = (owner_email or "").lower() or None
+    row["owner_email"] = _actor(owner_email)
+    row["updated_by"] = row["owner_email"]      # the create is the first write; see create_item
     row["created_at"] = row["updated_at"] = _now_iso()
     sb = get_client()
     sb.table(ASSEMBLIES).insert(row).execute()
@@ -726,13 +776,19 @@ class StaleWrite(Exception):
         self.current = current
 
 
-def update_assembly(asm_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Patch one assembly. `expected_updated_at`, when given, must match what is stored."""
+def update_assembly(asm_id: str, payload: Dict[str, Any],
+                    editor_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Patch one assembly. `expected_updated_at`, when given, must match what is stored.
+
+    `editor_email` is who the row will say last changed it, on the same terms as update_item's.
+    A LINE edit comes through here too — it PATCHes the whole `lines` array — so changing a
+    coverage or adding a coat is an edit and is stamped as one."""
     expected = payload.get("expected_updated_at") if isinstance(payload, dict) else None
     patch = validate_assembly(payload, partial=True)
     if not patch:
         return get_assembly(asm_id)
     patch["updated_at"] = _now_iso()
+    patch["updated_by"] = _actor(editor_email)
     sb = get_client()
     cur = (sb.table(ASSEMBLIES).select("id,updated_at")
            .eq("id", asm_id).is_("deleted_at", "null").limit(1).execute())

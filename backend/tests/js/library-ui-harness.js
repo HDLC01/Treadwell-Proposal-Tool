@@ -37,6 +37,10 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const src = read(path.join(ROOT, "js", "library.js"));
 const html = read(path.join(ROOT, "library.html"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
+// The REAL nameOf, for the same reason the pricing is real: the Assemblies rail sorts and labels
+// by who created an assembly through TWCrm.nameOf, which is the app's one email→display-name
+// convention. A stub here could agree with this file and disagree with the CRM board.
+const CRM = require(path.join(ROOT, "js", "crm-core.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced.
  *
@@ -60,11 +64,46 @@ function grab(re, what) {
   return m[0];
 }
 
+/** The body of one `$("id").addEventListener("event", function (e) { … })`, braces balanced.
+ *
+ *  SOURCE TEXT, AND SAID OUT LOUD BECAUSE THIS FILE IS OTHERWISE EXECUTED. The page's listeners
+ *  are top-level wiring inside its IIFE, not functions, so `fn()` cannot reach them and neither
+ *  can any scenario here — the same reason confirmDanger's dialog and the bulk modal are verified
+ *  in a browser. What this is for is narrow and worth having: proving a listener calls the
+ *  repaint and NOT one of the two neighbouring helpers that also repaint and additionally move
+ *  the caret. That is a wiring mistake, not a logic one, and a wiring mistake is exactly the kind
+ *  a source assertion can see. It cannot tell you the body runs, so nothing that has a testable
+ *  decision in it belongs here — pull that out into a named function instead, the way
+ *  placeNewAssembly was. */
+function listenerBody(id, ev) {
+  const m = new RegExp('\\$\\("' + id + '"\\)\\.addEventListener\\("' + ev
+    + '", function \\(e\\) \\{').exec(src);
+  if (!m) {
+    throw new Error("the " + id + " " + ev + " listener is gone from library.js — rewrite this "
+      + "harness, don't stub it");
+  }
+  const i = src.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) return src.slice(i, j + 1);
+  }
+  throw new Error("unbalanced braces reading the " + id + " listener");
+}
+
 // ── a DOM stub, only as much as these functions touch ────────────────────────
 function makeDom() {
   const nodes = {};
+  // EVERY focus() ANY RENDERER CALLS, in order, and nothing clears it.
+  //
+  // Recorded because a render that moves the caret is a keyboard bug no clicking test can reach:
+  // an estimator who tabs Unit → Condition → Sort and picks a key is still inside that select,
+  // and a renderer that focuses the search box (which clearAsmFilters legitimately does) throws
+  // them out of the pass they were making. An empty list after a render is the assertion.
+  const focused = [];
   const el = (id) => (nodes[id] = nodes[id] || {
     id, innerHTML: "", textContent: "", hidden: false, value: "",
+    focus() { focused.push(this.id); },
     // Filled in on demand by tests that need to walk a rendered table.
     rows: null,
     querySelectorAll(sel) {
@@ -73,7 +112,7 @@ function makeDom() {
       return this.rows;
     },
   });
-  return { el, nodes };
+  return { el, nodes, focused };
 }
 
 /** Turn rendered table HTML into the minimum object graph `refreshNumbers` walks.
@@ -173,7 +212,7 @@ function makeDocument(presentSelectors) {
 }
 
 const dom = makeDom();
-const scope = new Function("L", "$", "TW", "state", "document", `
+const scope = new Function("L", "$", "TW", "state", "document", "CRM", `
   "use strict";
   var ITEMS = state.ITEMS, ASMS = state.ASMS, VENDORS = state.VENDORS;
   var DIVISION_REFS = state.DIVISION_REFS || [], UNIT_REFS = state.UNIT_REFS || [];
@@ -212,6 +251,11 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("vendorNames")}
   ${fn("similarNames")}
   ${fn("dupeHtml")}
+  // BEFORE datesHtml, which calls it on both the Added and the Edited line. This is the exact
+  // hazard the note above describes: byHtml arrived with the who-created/who-edited columns on
+  // 2026-09-04, and without this lift datesHtml raises a ReferenceError that reds every scenario
+  // in this file rather than the one test about names.
+  ${fn("byHtml")}
   ${fn("datesHtml")}
   // LIFTED, not stubbed, and it has to be lifted BEFORE the three renderers that call it.
   // renderItems, renderRefSection and renderPanel each ask icon() for a glyph now; leaving it
@@ -266,12 +310,31 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   var asmQuery = state.asmQuery === undefined ? "" : state.asmQuery;
   ${grab(/^  var ASM_FILTERS = \{[^}]*\};$/m, "the ASM_FILTERS declaration")}
   if (state.ASM_FILTERS) ASM_FILTERS = Object.assign(ASM_FILTERS, state.ASM_FILTERS);
+  // THE DEFAULT IS LIFTED, not restated. "name" being the default is the decision that keeps the
+  // rail looking exactly as it did before this control existed, and a harness that hardcoded
+  // "name" here would pass just as happily against a page that shipped with "new".
+  ${grab(/^  var ASM_SORT = "[a-z]+";$/m, "the ASM_SORT declaration")}
+  if (state.ASM_SORT) ASM_SORT = state.ASM_SORT;
   ${fn("anyAsmFilterActive")}
   ${fn("asmConditionHits")}
   ${fn("asmMatchesFilters")}
   ${fn("asmTermHits")}
   ${fn("asmMatches")}
   ${fn("asmFilterSummary")}
+  // THE SORT. Every one of these is reached from visibleAssemblies or renderList, so a missing
+  // lift is a ReferenceError that takes every test in test_library_ui.py red at once with nothing
+  // pointing at the cause: visibleAssemblies asks sortAssemblies (asks asmSortValue, which asks
+  // asmVendorTally, asmOwnerName and asmUnit); renderList asks asmSortLabel (asks asmVendorLabel,
+  // asmOwnerName, asmUnit and TW.fmtBizDate).
+  ${fn("asmVendorTally")}
+  ${fn("asmVendorLabel")}
+  ${fn("asmOwnerName")}
+  ${fn("asmSortValue")}
+  ${fn("sortAssemblies")}
+  // Not reached from a renderer — it is the create path's one decision, pulled out of the page's
+  // anonymous click listener precisely so it CAN be reached from here.
+  ${fn("placeNewAssembly")}
+  ${fn("asmSortLabel")}
   ${fn("visibleAssemblies")}
   ${fn("renderAsmFilterBar")}
   // BULK ADD. The modal itself is out of reach here — this DOM stub has no createElement, no focus
@@ -290,6 +353,7 @@ const scope = new Function("L", "$", "TW", "state", "document", `
   ${fn("renderPanel")}
   ${fn("refreshNumbers")}
   ${grab(/^  var NUMERIC_ITEM_FIELDS = \[[^\]]*\];$/m, "NUMERIC_ITEM_FIELDS")}
+  ${grab(/^  var SERVER_OWNED_ITEM_FIELDS = \[[^\]]*\];$/m, "SERVER_OWNED_ITEM_FIELDS")}
   // The real handler, with only the network stubbed. Everything it touches on the way to the
   // model — the coercion list, the duplicate hint, the queued body — is the code the page runs.
   var QUEUED = [];
@@ -315,11 +379,17 @@ const scope = new Function("L", "$", "TW", "state", "document", `
            numberHits, FILTERS,
            renderItems, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, datesHtml, adoptSaved,
-           onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, ITEMS, VENDORS,
+           onItemEdit, QUEUED, NUMERIC_ITEM_FIELDS, SERVER_OWNED_ITEM_FIELDS, ITEMS, VENDORS,
            itemMatches, itemResultsHtml, lineForSave, visibleItems, duplicateName, nameKey,
            asmQuery, ASM_FILTERS, anyAsmFilterActive, asmMatches, asmMatchesFilters,
            asmConditionHits, asmTermHits, asmFilterSummary, visibleAssemblies,
            renderAsmFilterBar,
+           ASM_SORT, asmVendorTally, asmVendorLabel, asmOwnerName, asmSortValue,
+           sortAssemblies, asmSortLabel, placeNewAssembly,
+           // THE ARRAY ITSELF, not a copy, so a test can put a row into the model the renderer
+           // reads and then render — which is the only way to prove the prepend and the
+           // pass-through default work together rather than each in isolation.
+           ASMS,
            newMaterialName, newRefName,
            bulkCandidates, bulkSelectAllState, bulkLinesFor, bulkAddRoom, BULK_MAX_LINES,
            snapshotOf: function (id) { return itemBefore[id]; } };
@@ -362,9 +432,14 @@ function build(overrides, docSelectors) {
     UNIT_USE: { gal: 1, gallon: 1 },
     ADMIN: false, openId: "a1",
   }, overrides || {});
-  const TW = { fmtBizDateTime: (iso) => "BIZ(" + iso + ")" };
+  // Marked rather than formatted, so an assertion cannot pass by accident on a date that happens
+  // to read the same in UTC and in Central. The dev box clock runs ~13 hours ahead of Chicago and
+  // these are project dates: the ONLY correct renderer is TW's, and this proves the page reached
+  // for it rather than for `new Date(...).toLocaleDateString()`.
+  const TW = { fmtBizDateTime: (iso) => "BIZ(" + iso + ")",
+               fmtBizDate: (iso) => "BIZDAY(" + iso + ")" };
   const doc = makeDocument(docSelectors || []);
-  const api = scope(L, d.el, TW, st, doc);
+  const api = scope(L, d.el, TW, st, doc, CRM);
   d.el("area").value = "2875";
   return { api, dom: d, st, doc };
 }
@@ -609,11 +684,42 @@ const out = {};
       ? !/not since we started tracking/.test(wrote[0].html) : false,
   };
 
-  // A patch that did NOT change the cost must not repaint — and must not invent a date.
+  // REVERSED on 2026-09-04, deliberately, and this is the reasoning so nobody "fixes" it back.
+  //
+  // This used to assert that a patch which did not change the cost must NOT repaint, and that was
+  // right while the cell held only `created_at` and `cost_updated_at` — `updated_at` moved on
+  // every write and changed nothing on screen, so repainting was pure churn.
+  //
+  // The cell now carries "Edited <updated_at> by <updated_by>", so `updated_at` is exactly what
+  // one of its three lines quotes. Suppressing the repaint would leave the Edited line showing the
+  // PREVIOUS edit time and the previous editor until F5 — the identical failure the price date had
+  // one column over, which is what the original version of this scenario was written to catch.
+  //
+  // What must still hold is that the repaint is DRIVEN BY A CHANGE, not fired unconditionally:
+  // `sameStampNoRepaint` below is the half that keeps the churn honest.
   const quiet = build({}, [sel]);
   quiet.api.adoptSaved("items", { id: "i1", updated_at: "2026-08-15T00:00:02Z",
                                   cost_updated_at: null });
-  out.priceDate.quietPatchNoRepaint = quiet.doc.writes.length === 0;
+  out.priceDate.costlessPatchStillRepaints = quiet.doc.writes.length === 1;
+  out.priceDate.costlessRepaintKeepsNeverLine = quiet.doc.writes.length
+    ? /not since we started tracking/.test(quiet.doc.writes[0].html) : false;
+
+  // A reply that moved NOTHING must still not repaint. Same stamps in, no write out — this is the
+  // assertion that stops the reversal above becoming "repaint on every reply".
+  const same = build({}, [sel]);
+  const before = same.api.ITEMS[0];
+  same.api.adoptSaved("items", { id: "i1", updated_at: before.updated_at,
+                                 cost_updated_at: before.cost_updated_at,
+                                 updated_by: before.updated_by });
+  out.priceDate.sameStampNoRepaint = same.doc.writes.length === 0;
+
+  // A reply that omits updated_by entirely must not blank a name we already hold.
+  const partial = build({}, [sel]);
+  partial.api.ITEMS[0].updated_by = "hanz@wetreadwell.com";
+  partial.api.adoptSaved("items", { id: "i1", updated_at: "2026-08-15T00:00:04Z",
+                                    cost_updated_at: null });
+  out.priceDate.missingEditorDoesNotBlankIt =
+    partial.api.ITEMS[0].updated_by === "hanz@wetreadwell.com";
   out.priceDate.quietPatchStillBumpedVersion =
     quiet.api.ITEMS[0].updated_at === "2026-08-15T00:00:02Z";
 
@@ -684,6 +790,143 @@ const out = {};
     neverPricedSaysSo: /not since we started tracking/.test(never),
     neverPricedShowsNoDate: !/BIZ\(2026-08-14/.test(never),
   };
+}
+
+// ── who created it, who edited it ────────────────────────────────────────────
+// Hanz, 2026-09-04: "In the items tab we must put the name of who created it and who edited it".
+// Every field here is a real column: owner_email has always existed, updated_by was added the
+// same day. The REAL nameOf runs (see the note at the top of this file), so these assert the
+// app's one email→name convention rather than a restatement of it.
+{
+  const { api } = build();
+
+  // Filed by one person, later changed by another.
+  const edited = api.datesHtml({
+    created_at: "2026-08-02T09:00:00Z",
+    updated_at: "2026-09-01T16:00:00Z",
+    cost_updated_at: null,
+    owner_email: "kyle.loseke@wetreadwell.com",
+    updated_by: "hanz@wetreadwell.com",
+  });
+
+  // A create stamps updated_at AND created_at in one write, so equal stamps mean "nothing has
+  // happened since" — not "the creator edited it the moment they filed it".
+  const untouched = api.datesHtml({
+    created_at: "2026-08-02T09:00:00Z",
+    updated_at: "2026-08-02T09:00:00Z",
+    cost_updated_at: null,
+    owner_email: "kyle.loseke@wetreadwell.com",
+    updated_by: "kyle.loseke@wetreadwell.com",
+  });
+
+  // Filed before updated_by existed, and edited since. There is no name to show and there never
+  // will be for this row.
+  const legacy = api.datesHtml({
+    created_at: "2026-06-01T09:00:00Z",
+    updated_at: "2026-07-01T09:00:00Z",
+    cost_updated_at: null,
+    owner_email: "kyle.loseke@wetreadwell.com",
+    updated_by: "",
+  });
+
+  // A price move with no name attached to it, because no column records who moved a cost.
+  const priced = api.datesHtml({
+    created_at: "2026-08-02T09:00:00Z",
+    updated_at: "2026-08-02T09:00:00Z",
+    cost_updated_at: "2026-08-14T21:15:00Z",
+    owner_email: "kyle.loseke@wetreadwell.com",
+    updated_by: "",
+  });
+
+  out.authorship = {
+    // The NAME, not the address — what he asked for, through CRM.nameOf.
+    creatorReadsAsAName: /Added[\s\S]*?by <b>Kyle Loseke<\/b>/.test(edited),
+    creatorIsNotAnEmail: !/kyle\.loseke@/.test(edited),
+    // The two names are distinct in the same cell, so a row cannot silently attribute an edit to
+    // whoever filed it.
+    editorReadsAsAName: /Edited[\s\S]*?by <b>Hanz<\/b>/.test(edited),
+    editorDateShown: /BIZ\(2026-09-01T16:00:00Z\)/.test(edited),
+
+    // updated_at === created_at is the untouched case.
+    untouchedSaysNotEdited: /not edited since/.test(untouched),
+    untouchedNamesNoEditor: !/by <b>Hanz<\/b>/.test(untouched),
+    // The creator's name still shows on the Added line — "not edited" must not blank the row.
+    untouchedStillNamesCreator: /Added[\s\S]*?by <b>Kyle Loseke<\/b>/.test(untouched),
+
+    // An unattributable edit says so rather than rendering a bare date that reads as a name
+    // which failed to load.
+    legacyEditSaysUnknown: /Edited[\s\S]*?by <span class="never">unknown<\/span>/.test(legacy),
+    // ANCHORED AFTER "Edited", because the Edited line is the last of the three. The first
+    // version of this read `by <b>Kyle Loseke</b>[\s\S]*?Edited` and failed against correct
+    // output: it matched the ADDED line followed by the word "Edited", so it was asserting that
+    // the creator is never named anywhere — which is the opposite of what this tab is for.
+    legacyDoesNotInventAnEditor: !/Edited[\s\S]*Kyle Loseke/.test(legacy),
+
+    // THE PRICE LINE TAKES NO AUTHOR. cost_updated_at is decided server-side when the cost really
+    // moved and nothing records who moved it, so attributing it would be a guess.
+    priceLineHasNoAuthor: /Price BIZ\(2026-08-14T21:15:00Z\)(?!\s*by)/.test(priced),
+  };
+}
+
+// ── the editor is adopted off the reply, not left until F5 ───────────────────
+// The same failure the price date had one column over: an ordinary edit moves updated_at and
+// updated_by but leaves cost_updated_at alone, so a repaint gated on the price date alone would
+// leave the Edited line quoting the PREVIOUS editor until a reload.
+{
+  // The selector comes from what renderItems ACTUALLY emits, same as the price-date scenario, so
+  // renaming the cell's class breaks this rather than quietly making the repaint a no-op.
+  const rendered = build();
+  rendered.api.renderItems();
+  const cellClass = /<td class="([a-z]+)">\s*<div class="dates"/.exec(
+    rendered.dom.nodes["items-body"].innerHTML);
+  const sel = '[data-item="i1"] .' + (cellClass ? cellClass[1] : "MISSING");
+
+  const b = build({}, [sel]);
+  b.api.ITEMS[0].created_at = "2026-08-02T09:00:00Z";
+  b.api.ITEMS[0].updated_at = "2026-08-02T09:00:00Z";
+  b.api.ITEMS[0].updated_by = "";
+
+  // Somebody else's edit comes back on the reply to our own PATCH.
+  b.api.adoptSaved("items", {
+    id: "i1",
+    updated_at: "2026-09-04T18:00:00Z",
+    cost_updated_at: b.api.ITEMS[0].cost_updated_at,
+    updated_by: "hanz@wetreadwell.com",
+  });
+
+  out.adoptEditor = {
+    editorAdopted: b.api.ITEMS[0].updated_by === "hanz@wetreadwell.com",
+    repainted: b.doc.writes.length === 1,
+    // The repaint carries the new NAME, so this is the whole round trip and not just a redraw.
+    repaintNamesTheEditor: b.doc.writes.length
+      ? /by <b>Hanz<\/b>/.test(b.doc.writes[0].html) : false,
+    // And it stopped saying the row was untouched.
+    repaintDroppedNotEditedSince: b.doc.writes.length
+      ? !/not edited since/.test(b.doc.writes[0].html) : false,
+  };
+
+  // THE EDITOR ALONE, with both dates held still. Added because a mutation run proved the
+  // scenario above could not see the editor branch's repaint at all: it moved updated_at too, so
+  // deleting the branch's `moved = true` still repainted via the date and every test stayed green.
+  // The two columns are stamped in the same write in practice, which is exactly why a test that
+  // moves both cannot tell which one is driving.
+  // The row must ALREADY read as edited, or holding the dates still makes it "not edited since"
+  // and the Edited line correctly names nobody — which is the row contradicting the scenario, not
+  // the code failing. Distinct created_at and updated_at up front; only updated_by moves.
+  const only = build({}, [sel]);
+  only.api.ITEMS[0].created_at = "2026-08-02T09:00:00Z";
+  only.api.ITEMS[0].updated_at = "2026-09-01T16:00:00Z";
+  only.api.ITEMS[0].updated_by = "";
+  only.doc.writes.length = 0;
+  only.api.adoptSaved("items", {
+    id: "i1",
+    updated_at: "2026-09-01T16:00:00Z",
+    cost_updated_at: only.api.ITEMS[0].cost_updated_at,
+    updated_by: "kyle.loseke@wetreadwell.com",
+  });
+  out.adoptEditor.editorAloneRepaints = only.doc.writes.length === 1;
+  out.adoptEditor.editorAloneNamesTheEditor = only.doc.writes.length
+    ? /by <b>Kyle Loseke<\/b>/.test(only.doc.writes[0].html) : false;
 }
 
 // ── Vendors: admin edits, everybody else reads ───────────────────────────────
@@ -1808,6 +2051,266 @@ async function conflictChecks() {
   };
 }
 
+// ── B3. the Assemblies tab: six ways to order the rail ──────────────────────
+// Hanz, 2026-09-04: "in the assemblies we must be able to sort by vendor, scope or worktype,
+// unit, who created it."
+//
+// SIX FIXTURES, LOCAL TO THIS BLOCK for the reason B2's four are: the module set is one assembly
+// and two materials, and growing it would move every row count, badge and datalist asserted
+// above. Each one is here to make a specific way of being wrong visible:
+//
+//   s1  three Sherwin lines and one Ardex — FREQUENCY has to beat alphabet, or an assembly that
+//       is three coats of Sherwin product files under the one Ardex patch on it.
+//   s5  one Sika line then one Sherwin line — a 1-1 tie, listed Sika first, so "first line wins"
+//       and "insertion order" both answer Sika and only the alphabetical rule answers Sherwin.
+//   s6  "Sherwin-Williams", "sherwin-williams" and one Sika — `vendor` is FREE TEXT on an item,
+//       so two spellings of one supplier must not split the vote three ways.
+//   s3  no lines at all, and s4 one line whose material has no supplier — two different routes
+//       to "No vendor", and s3 is also the only unpriced row.
+//   s2  the only per-LF one, the only one with no category, and the newest.
+//   s2/s6 `will@` and `will.baker@` — the ONE pair whose order flips between the raw address and
+//       the display name (raw sorts "will.baker@" first, "Will" before "Will Baker" as names),
+//       which is what makes "sorted by who created it, not by their email" a real assertion.
+{
+  const ITEMS6 = [
+    { id: "i1", name: "OPF", category: "Epoxy", unit: "Gal", buy_qty: 1, unit_cost: 85.3827,
+      coverage: 275, vendor: "Sherwin-Williams", notes: "" },
+    { id: "i2", name: "OPF Primer", category: "Epoxy", unit: "Gallon", buy_qty: 5,
+      unit_cost: 426.91, coverage: 275, vendor: "Ardex", notes: "" },
+    { id: "i3", name: "Joint Filler", category: "Polished Concrete", unit: "Kit", buy_qty: 1,
+      unit_cost: 500, coverage: 775, vendor: "Sika", notes: "" },
+    // A real material that nobody has named a supplier for. It is not a vendor called "".
+    { id: "i4", name: "Unbranded Bag", category: "Gypsum Underlayment", unit: "Bag", buy_qty: 1,
+      unit_cost: 22, coverage: 90, vendor: "", notes: "" },
+    // The same supplier, typed in lowercase by whoever entered this row.
+    { id: "i5", name: "Second Sherwin Coat", category: "Epoxy", unit: "Gal", buy_qty: 1,
+      unit_cost: 90, coverage: 275, vendor: "sherwin-williams", notes: "" },
+  ];
+  const ln = (id) => ({ role: "", item_id: id, coverage: null, waste_pct: 0, roundup: true,
+                        note: "" });
+  // DELIBERATELY NOT IN NAME ORDER. The live page gets this array from list_assemblies(), which
+  // does `.order("name")`, so a fixture in name order could not tell a pass-through apart from a
+  // client-side name sort — and which of those two the default is decides whether a
+  // just-created assembly stays at the top of the rail.
+  const ASMS6 = [
+    { id: "s1", name: "MACRO Flake", unit: "SF", category: "Epoxy",
+      created_at: "2026-08-01T14:30:00Z", owner_email: "kyle.loseke@wetreadwell.com",
+      lines: [ln("i1"), ln("i1"), ln("i2")] },
+    { id: "s2", name: "Cove Base", unit: "LF", category: "",
+      created_at: "2026-08-20T09:00:00Z", owner_email: "will@wetreadwell.com",
+      lines: [ln("i3")] },
+    { id: "s3", name: "Densify Only", unit: "SF", category: "Polished Concrete",
+      created_at: "2026-08-10T12:00:00Z", owner_email: "", lines: [] },
+    { id: "s4", name: "Bag Pour", unit: "SF", category: "Gypsum Underlayment",
+      created_at: "2026-08-05T08:00:00Z", owner_email: "hanz@wetreadwell.com",
+      lines: [ln("i4")] },
+    { id: "s5", name: "Tie Break", unit: "SF", category: "Epoxy",
+      created_at: "2026-08-02T10:00:00Z", owner_email: "kyle.loseke@wetreadwell.com",
+      lines: [ln("i3"), ln("i1")] },
+    { id: "s6", name: "Case Fold", unit: "SF", category: "Epoxy",
+      created_at: "2026-08-03T11:00:00Z", owner_email: "will.baker@wetreadwell.com",
+      lines: [ln("i1"), ln("i5"), ln("i3")] },
+  ];
+  const six = (over) => {
+    const b = build(Object.assign({
+      ITEMS: JSON.parse(JSON.stringify(ITEMS6)),
+      ASMS: JSON.parse(JSON.stringify(ASMS6)),
+      openId: "s1",
+    }, over || {}));
+    b.api.renderList();
+    return b;
+  };
+  const has = (d, id) => Object.prototype.hasOwnProperty.call(d.nodes, id);
+  const hid = (d, id) => (has(d, id) ? d.nodes[id].hidden : null);
+  const txt = (d, id) => (has(d, id) ? d.nodes[id].textContent : null);
+  const val = (d, id) => (has(d, id) ? d.nodes[id].value : null);
+  const listOf = (d) => (has(d, "asm-list") ? d.nodes["asm-list"].innerHTML : "");
+  // THE RENDERED ORDER, off the real rows, not the return of a sort function. renderList could
+  // sort and then loop over something else; only reading the markup rules that out.
+  const idsIn = (d) => (listOf(d).match(/data-open="([^"]+)"/g) || []).map((m) => m.slice(11, -1));
+  // EVERY `.am` LINE of each row, in order, keyed by id — so a label is checked against the row
+  // that owns it rather than against a blob of the whole rail, and so its LINE is part of the
+  // assertion. The sort label is a second .am rather than a suffix on the first, because on a
+  // 272px rail "3 lines · $1.099/SF · Sherwin-Williams +1 more" wraps and leaves those rows a
+  // line taller than their neighbours. An array of one therefore means "this sort adds nothing",
+  // which is a claim about layout that counting separators could not make.
+  const metaIn = (d) => {
+    const outp = {};
+    listOf(d).split("</button>").forEach((row) => {
+      const id = (/data-open="([^"]+)"/.exec(row) || [])[1];
+      if (id) outp[id] = (row.match(/<span class="am">([\s\S]*?)<\/span>/g) || [])
+        .map((m) => m.slice('<span class="am">'.length, -"</span>".length));
+    });
+    return outp;
+  };
+
+  const byName = six();
+  const byNew = six({ ASM_SORT: "new" });
+  const byScope = six({ ASM_SORT: "scope" });
+  const byUnit = six({ ASM_SORT: "unit" });
+  const byVendor = six({ ASM_SORT: "vendor" });
+  const byOwner = six({ ASM_SORT: "owner" });
+  const sortedAndFiltered = six({ ASM_SORT: "vendor", ASM_FILTERS: { unit: "SF" } });
+
+  // NOT MUTATING THE MODEL. visibleAssemblies hands ASMS itself back when nothing is filtered, so
+  // a sort in place would silently reorder the array current(), load()'s first pick and the
+  // delete's fallback openId all read.
+  const probe = six();
+  const arr = [{ id: "z", name: "Zeta", lines: [], created_at: "2026-01-01T00:00:00Z" },
+               { id: "a", name: "Alpha", lines: [], created_at: "2026-02-01T00:00:00Z" }];
+  const reordered = probe.api.sortAssemblies(arr, "new", []);
+
+  out.asmSort = {
+    // ── the default is the SERVER's order, passed through ────────────────────
+    // list_assemblies() does `.order("name")`, so this IS name A-Z on a loaded page and the tab
+    // looks exactly as it did before the control existed. It also has to be a pass-through rather
+    // than a client-side name sort, or the unshift that puts a brand-new assembly at the top of
+    // the rail is undone by the very next render.
+    defaultKey: byName.api.ASM_SORT,
+    defaultIsTheArrayOrder: idsIn(byName.dom),
+    namePassesTheArrayThrough: probe.api.sortAssemblies(arr, "name", []) === arr,
+
+    // ── the five orderings ──────────────────────────────────────────────────
+    newest: idsIn(byNew.dom),
+    scope: idsIn(byScope.dom),
+    unit: idsIn(byUnit.dom),
+    vendor: idsIn(byVendor.dom),
+    owner: idsIn(byOwner.dom),
+
+    // ── the derived vendor ──────────────────────────────────────────────────
+    // Read as {primary, others} straight off the real helper as well as off the rendered label,
+    // because the count is what the "+N more" is built from and a wrong tally with a right label
+    // is not a thing that can happen by accident twice.
+    tallyFrequencyBeatsAlphabet: probe.api.asmVendorTally(ASMS6[0], ITEMS6),
+    tallyTieGoesAlphabetical: probe.api.asmVendorTally(ASMS6[4], ITEMS6),
+    tallyFoldsTheSpelling: probe.api.asmVendorTally(ASMS6[5], ITEMS6),
+    tallyNoLines: probe.api.asmVendorTally(ASMS6[2], ITEMS6),
+    tallyItemWithNoVendor: probe.api.asmVendorTally(ASMS6[3], ITEMS6),
+    vendorLabels: metaIn(byVendor.dom),
+
+    // ── who created it, as a NAME ───────────────────────────────────────────
+    ownerLabels: metaIn(byOwner.dom),
+    // The whole rail under the author sort. An address anywhere in it fails, which no ordering
+    // assertion can promise on its own.
+    noAddressInTheRail: /@/.test(listOf(byOwner.dom)),
+
+    // ── the row says what it was ordered by, and only then ──────────────────
+    nameLabels: metaIn(byName.dom),
+    scopeLabels: metaIn(byScope.dom),
+    unitLabels: metaIn(byUnit.dom),
+    newLabels: metaIn(byNew.dom),
+
+    // ── it composes with the filters, and is not one of them ────────────────
+    filteredThenSorted: idsIn(sortedAndFiltered.dom),
+    hitsWhileSortedAndFiltered: txt(sortedAndFiltered.dom, "asm-hits"),
+    // A sort narrows nothing: no hits count, no no-match panel, nothing to Clear.
+    hitsHiddenWhenOnlySorted: hid(byVendor.dom, "asm-hits"),
+    noMatchHiddenWhenOnlySorted: hid(byVendor.dom, "asm-nomatch"),
+    clearHiddenWhenOnlySorted: hid(byVendor.dom, "fa-clear"),
+    railShownWhenOnlySorted: hid(byVendor.dom, "asm-rail"),
+    badgeUnmovedBySorting: txt(byVendor.dom, "n-asm"),
+
+    // ── the control comes back showing the key it is on ─────────────────────
+    sortSelectSynced: val(byVendor.dom, "fa-sort"),
+    sortSelectSyncedToDefault: val(byName.dom, "fa-sort"),
+
+    // ── the keyboard ────────────────────────────────────────────────────────
+    // NOTHING is focused by a render. An estimator tabbing Unit -> Condition -> Sort and picking
+    // a key is still in that select; a renderer that focused the search box (which
+    // clearAsmFilters legitimately does, which is why the sort must not route through it) would
+    // throw them out of the pass they were making. No click ever finds this.
+    renderTouchesNoFocus: byVendor.dom.focused.slice(),
+    // …and the recorder is not simply broken: this proves a focus() DOES land when called.
+    focusProbeWorks: (() => {
+      const k = six({ ASM_SORT: "owner" });
+      k.dom.el("asm-q").focus();
+      return k.dom.focused.slice();
+    })(),
+    // THE OTHER HALF, and it is a source read rather than an execution — the listener is
+    // top-level wiring this harness cannot reach (see listenerBody). The live hazard is routing
+    // the sort through clearAsmFilters to share the repaint: that function ends with
+    // `$("asm-q").focus()`, which is right for a button that just vanished and wrong for a select
+    // the estimator is standing in. The executed half above cannot see it, because it measures
+    // what renderList does, not what the listener does.
+    sortListenerBody: listenerBody("fa-sort", "change"),
+
+    // ── the model is untouched ──────────────────────────────────────────────
+    doesNotMutateTheModel: arr.map((x) => x.id).join(","),
+    returnsANewArray: reordered !== arr,
+    reorderedCopy: reordered.map((x) => x.id).join(","),
+
+    // ── a brand-new assembly lands at the FRONT, and shows there ────────────
+    // Both halves in one scenario, against the real model: placeNewAssembly puts it into the ASMS
+    // the renderer reads, and then renderList draws the rail. Under the DEFAULT sort, which is
+    // where an estimator who just pressed the button actually is.
+    newAssemblyIsFirst: (() => {
+      const b = six();
+      b.api.placeNewAssembly(b.api.ASMS, {
+        id: "new1", name: "New assembly", unit: "SF", category: "",
+        // Latest of the six, the way the server stamps it, so "Newest first" agrees.
+        created_at: "2026-09-04T15:00:00Z", owner_email: "kyle.loseke@wetreadwell.com",
+        lines: [],
+      });
+      b.api.renderList();
+      return idsIn(b.dom);
+    })(),
+    // …and it stays first when the estimator has chosen the sort that makes it permanent.
+    newAssemblyIsFirstUnderNewest: (() => {
+      const b = six({ ASM_SORT: "new" });
+      b.api.placeNewAssembly(b.api.ASMS, {
+        id: "new1", name: "New assembly", unit: "SF", category: "",
+        created_at: "2026-09-04T15:00:00Z", owner_email: "kyle.loseke@wetreadwell.com",
+        lines: [],
+      });
+      b.api.renderList();
+      return idsIn(b.dom);
+    })(),
+    // The row it creates is directly under the button, which is the rail's first row — so the
+    // ordering of those two nodes in the markup is part of this behaviour, not decoration. Read
+    // off the same source the createAction block reads.
+    buttonIsAboveTheRowItCreates: (() => {
+      const i = html.indexOf('id="asm-rail"');
+      const rail = html.slice(i, html.indexOf("</section>", i));
+      return rail.indexOf('id="asm-addrow"') < rail.indexOf('id="asm-list"');
+    })(),
+
+    // ── the page actually loads the file nameOf comes out of ────────────────
+    // THE ONE THING THIS HARNESS CANNOT OTHERWISE NOTICE. It `require`s crm-core.js straight off
+    // disk, so every author assertion above stays green on a page that never loads it — and the
+    // real failure is a LATE one rather than a loud one: `var CRM = window.TWCrm` leaves CRM
+    // undefined quietly, so the tab renders and then throws the first time somebody sorts by who
+    // created an assembly. A missing <script> is only visible in the markup.
+    crmCoreLoadedBeforeThePageScript: (() => {
+      const crm = html.indexOf('src="/js/crm-core.js"');
+      const lib = html.indexOf('src="/js/library.js"');
+      return crm !== -1 && lib !== -1 && crm < lib;
+    })(),
+
+    // ── the six keys the markup offers ──────────────────────────────────────
+    optionValues: (() => {
+      const i = html.indexOf('id="fa-sort"');
+      const j = html.indexOf("</select>", i);
+      return (html.slice(i, j).match(/value="([^"]*)"/g) || []).map((m) => m.slice(7, -1));
+    })(),
+    optionLabels: (() => {
+      const i = html.indexOf('id="fa-sort"');
+      const j = html.indexOf("</select>", i);
+      return (html.slice(i, j).match(/>([^<>]+)<\/option>/g) || [])
+        .map((m) => m.slice(1, -"</option>".length));
+    })(),
+    // The select is inside the filter bar, so `#asm-filterbar[hidden]` has to actually hide it —
+    // and a class `display` declaration beats a bare `hidden` attribute. This page's escape hatch
+    // is the `!important` rule; four live instances of that bug have existed in this codebase.
+    hiddenBeatsAnyDisplayRule: /\[hidden\]\s*\{\s*display:none\s*!important/.test(html),
+    // Clear filters clears FILTERS. An ordering hides nothing, so there is nothing to restore,
+    // and reshuffling the list from a button labelled Clear filters is the least predictable
+    // thing this tab could do. Asserted on the function's source because clearAsmFilters is
+    // page wiring rather than a lifted function — the ordering itself is executed everywhere else
+    // in this block.
+    clearDoesNotResetTheSort: !/ASM_SORT\s*=/.test(fn("clearAsmFilters")),
+  };
+}
+
 // ── D. the name a copy gets ─────────────────────────────────────────────────
 {
   const plain = build().api;
@@ -2161,11 +2664,24 @@ async function dialogChecks() {
 // ── the numeric coercion list ────────────────────────────────────────────────
 out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
 
+// The real declaration, evaluated — same idiom as numericFields above. Added because a mutation
+// run proved nothing caught `updated_by` being dropped from this list: the field would still
+// render, and the only symptom would be a Cancel quietly putting back an editor the server had
+// already replaced. Executing the whole Cancel path here would cost a dialog scenario; pinning the
+// membership costs one line and fails on exactly the mutation that was getting through.
+out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
+
 // ── EXECUTED: where the create controls live ────────────────────────────────
 // Hanz, 2026-08-27: "I dont like the New assembly button up top." It sat in a .tabaction wrapper
 // at the right-hand end of the tab strip, beside Administration and about 1300px from the rail it
-// appends a row to. The rule now is one rule in four places: a create control sits at the foot of
-// the list it adds to, inside the same container.
+// appends a row to. The rule is one rule in five places: a create control sits inside the same
+// container as the rows it adds to. WHICH END of that container varies, and each end was asked
+// for — the three administration lists at the foot, materials at the top (2026-08-28), and
+// assemblies at the top since 2026-09-04 ("Move the assembly button up top and when a new
+// assembly is added it should append up top not below").
+//
+// THE PROPERTY THAT DID NOT CHANGE is the one worth keeping a test on: it is not in the tab
+// strip. That is where the 1300px came from.
 //
 // Read off the real markup and driven through the real renderList, because "it moved" is a
 // structural fact a source grep for the id would answer identically before and after.
@@ -2190,10 +2706,25 @@ out.numericFields = build().api.NUMERIC_ITEM_FIELDS;
       !/\.tabaction\s*\{/.test(html) &&
       (tabStrip.match(/<button/g) || []).length ===
       (tabStrip.match(/role="tab"/g) || []).length,
-    // AT THE FOOT OF THE RAIL, and after the list rather than before it: the control has to read
-    // as the next row, not as a header above the ones that exist.
-    inTheRail: /id="asm-new-2"/.test(rail) &&
-      rail.indexOf('id="asm-list"') < rail.indexOf('id="asm-new-2"'),
+    // IN THE RAIL CARD — the property the August move was about, and the one that must not
+    // regress whichever end it sits at.
+    inTheRail: /id="asm-new-2"/.test(rail),
+    // AT THE TOP OF IT, before the list rather than after (Hanz, 2026-09-04). Asserted as an
+    // ordering rather than as "the id is present", because the two placements are the same
+    // markup in a different order and nothing else can tell them apart.
+    atTheTopOfTheRail: rail.indexOf('id="asm-new-2"') < rail.indexOf('id="asm-list"'),
+    // …and the no-match caption stayed BELOW the list. It is a sentence about the rows that are
+    // not there, so it belongs where they would have been; carried up with the button it would
+    // sit above an empty list, between the create control and nothing.
+    noMatchStillUnderTheList:
+      rail.indexOf('id="asm-list"') < rail.indexOf('id="asm-nomatch"'),
+    // THE HAIRLINE FOLLOWS THE ROW. `.addrow` draws a border-top, which separates it from rows
+    // ABOVE it; at the head of the rail that line lands on the card's own edge and the button
+    // bleeds into the first assembly under it. Scoped by id, not by a second class, because the
+    // addrow/addbtn literal counts below are what prove this page has one way to say "add
+    // another".
+    railAddRowFlipsItsBorder: /#asm-addrow \{[^}]*border-top:0[^}]*border-bottom:1px solid/
+      .test(html),
     // The same shape in all four places, so the page has ONE way of saying "add another".
     addRowCount: (html.match(/class="addrow"/g) || []).length,
     addBtnCount: (html.match(/class="addbtn"/g) || []).length,
