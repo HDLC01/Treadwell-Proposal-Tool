@@ -756,7 +756,7 @@
     // Payload-level pricing structures, mirroring continueToDone's own construction.
     const remodelTax = Number(state.proposal_remodel_tax) || 0;
     pp.rooms = Array.isArray(state.rooms) ? state.rooms : [];
-    pp.remodel = remodelTax > 0 ? [{ amount_formatted: fmtUSD(remodelTax) }] : [];
+    pp.remodel = remodelTax > 0 ? [{ amount_formatted: fmtUSDdoc(remodelTax) }] : [];
     // Clears itself when a combo is narrowed to one base — comboLinesForPayload returns [] then.
     pp.combo_options = comboLinesForPayload();
     // The WORK section's system rows are resolved from the BASE tab's own cells, so they follow a
@@ -779,6 +779,67 @@
     const exempt = ["EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A"].includes(incl);
     const broken = ["BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT"].includes(incl);
     return { incl, exempt, broken };
+  }
+
+  /** Which of the PRICE block's tax rows this proposal will ACTUALLY print:
+   *  `{material, remodel}`.
+   *
+   *  Two sources, one question. The estimator's tax mode fills or strips the
+   *  `{{#tax_breakout}}` / `{{#remodel}}` regions; the TEMPLATE'S OWN SHAPE decides
+   *  whether there is anything to strip. Kyle's Direct files wrap those rows in
+   *  those regions, so they print only in "Sales tax broken out"; the three GC files
+   *  and the Gyp file author the same rows as PLAIN paragraphs, which no flag can
+   *  strip — they print on every fill.
+   *
+   *  READ OFF THE SERVED BLOCK DATA, never off the audience or the work type:
+   *  /api/proposal-template already gives every paragraph its `text` and its
+   *  `in_block`, and `in_block === null` IS "outside every strippable region". A
+   *  hard-coded `audience === "GC"` list answers today's eight files and silently
+   *  mis-answers the next one Kyle re-authors with or without a wrapper — the same
+   *  layout-keyed-vs-label-keyed hole PR #432/#433 closed for the remodel rate.
+   *
+   *  Before the template loads `templateBlocks` is null, so the shape is unknown and
+   *  this answers "gated" — the right preview default for the four Direct files, and
+   *  harmless either way, because `_generate` re-derives all of this from the
+   *  template FILE and overwrites `base_bid_formatted`. The document is never at the
+   *  mercy of what the browser had loaded when Continue was pressed. */
+  function printedTaxRows() {
+    const { broken } = taxTreatmentMode();
+    let material = false, remodel = false;
+    for (const b of (templateBlocks || [])) {
+      if (b.in_block != null) continue;          // inside a region a fill can strip
+      const t = String(b.text || "");
+      if (/\{\{\s*material_tax_formatted\s*\}\}/.test(t)) material = true;
+      if (/\{\{\s*(tax_amount_formatted|remodel\.amount_formatted)\s*\}\}/.test(t)) remodel = true;
+    }
+    return { material: material || broken, remodel: remodel || broken };
+  }
+
+  /** THE base-bid figure — `{base, itemized}` — for the on-screen PRICE block AND
+   *  for the generated .docx. THE RULE: base = Total minus every tax row that prints.
+   *
+   *  ONE EXPRESSION, TWO CALLERS, and that is the whole point. This page used to
+   *  compute the displayed base twice: `refreshPriceDisplay` painted `Total` in the
+   *  default layout while `computeTokenValues` shipped `Total − sales − remodel` as
+   *  {{base_bid_formatted}} — and a template whose base line is a FREE paragraph
+   *  (polish Direct, every GC file) prints that token directly, so the two answers
+   *  were visibly different numbers for the same line. Kyle, 2026-09-08: a proposal
+   *  reading $6,182 under a $6,307 estimate. The GC block had the mirror-image fault,
+   *  printing 6,307 + 125 + 0 under a 6,307 Total. One rule fixes both, because it
+   *  asks what the page actually prints instead of who the proposal is for.
+   *
+   *  Rounded to CENTS before subtracting: cents are the precision the document prints
+   *  at, so base + tax rows equal the Total exactly rather than within a rounding
+   *  error (the backend reads the same figures back off the formatted strings).
+   *  `itemized` — "the tax rows print" — also drives the layout and the base line's
+   *  parenthetical, so those cannot disagree with the arithmetic either. */
+  function baseBidFigure(total, salesTax, remodelTax) {
+    const cents = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const p = printedTaxRows();
+    const base = cents(total)
+               - (p.material ? cents(salesTax) : 0)
+               - (p.remodel ? cents(remodelTax) : 0);
+    return { base: Math.max(0, base), itemized: p.material || p.remodel };
   }
 
   // Combo per-option price breakout: Option 1 (Epoxy) + Option 2 (Polish), each
@@ -812,24 +873,24 @@
         // Broken out: base (pre-tax) + Material Sales Tax + Remodel Tax = Total —
         // mirrors the non-combo broken-out layout, no "(…INCLUDED)" phrase.
         const flooring = total - remodel - salesTax;
-        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSD(flooring), label: `${optLabel}: ${noun} as described above` });
-        if (salesTax > 0) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSD(salesTax), label: "Material Sales Tax" });
-        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(flooring), label: `${optLabel}: ${noun} as described above` });
+        if (salesTax > 0) lines.push({ key: `${role}.sales_tax`, amount_formatted: fmtUSDdoc(salesTax), label: "Material Sales Tax" });
+        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(remodel), label: "Kansas Remodel Tax" });
       } else if (exempt) {
         // Tax exempt: the full total carries the "(tax exempt)" phrase — no sales
         // tax is baked in to strip out. Remodel line only if the snapshot actually
         // has one (normally zero on an exempt job).
-        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSD(total), label: `${optLabel}: ${noun} as described above (tax exempt)` });
-        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(total), label: `${optLabel}: ${noun} as described above (tax exempt)` });
+        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(remodel), label: "Kansas Remodel Tax" });
       } else {
         // Included (default): one all-in flooring line + a separate remodel line
         // when it applies — this is the pre-existing combo wording.
         const flooring = total - remodel;
-        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSD(flooring),
+        lines.push({ key: `${role}.flooring`, amount_formatted: fmtUSDdoc(flooring),
           label: `${optLabel}: ${noun} as described above (material sales tax INCLUDED)` });
-        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSD(remodel), label: "Kansas Remodel Tax" });
+        if (remodel > 0) lines.push({ key: `${role}.remodel`, amount_formatted: fmtUSDdoc(remodel), label: "Kansas Remodel Tax" });
       }
-      lines.push({ key: `${role}.total`, amount_formatted: fmtUSD(total), label: "Total" });
+      lines.push({ key: `${role}.total`, amount_formatted: fmtUSDdoc(total), label: "Total" });
     };
     pushSys(eB, "Epoxy flooring", "epoxy");
     pushSys(pB, "Polished Concrete flooring", "polish");
@@ -880,13 +941,17 @@
     const fb = (state.computed_bid && state.computed_bid.full_bid) || {};
     const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : fb.remodel_tax) || 0);
     const salesTax   = Number((state.proposal_sales_tax   != null ? state.proposal_sales_tax   : fb.sales_tax)   || 0);
-    const baseBid    = Math.max(0, lumpSumN - salesTax - remodelTax);
+    // THE ONE EXPRESSION, shared with computeTokenValues — see baseBidFigure. Not a
+    // second copy of "total minus tax": that second copy is what printed one number
+    // on this screen and a different one in the customer's document.
+    const { base: baseBid, itemized } = baseBidFigure(lumpSumN, salesTax, remodelTax);
 
-    // PRICE layout — mirror the .docx. Default (INCLUDED): ONE all-in line, the
-    // flooring price = the full total + "(material sales tax INCLUDED)", with the
-    // Material Sales Tax / Remodel / Total lines hidden. "Sales tax broken out":
-    // base (pre-tax) + Material Sales Tax + Remodel + Total, no INCLUDED label.
-    const { exempt, broken } = taxTreatmentMode();
+    // PRICE layout — mirror the .docx. Tax rows hidden (INCLUDED / exempt on a
+    // template that gates them): ONE all-in line, the flooring price = the full
+    // total + "(material sales tax INCLUDED)". Tax rows printing ("Sales tax broken
+    // out", or a template that always prints them): base (pre-tax) + Material Sales
+    // Tax + Remodel + Total, no INCLUDED label.
+    const { exempt } = taxTreatmentMode();
 
     const salesRow   = document.getElementById("sales-tax-row");
     const remodelRow = document.getElementById("remodel-tax-row");
@@ -918,22 +983,33 @@
       if (baseBidHeading) { baseBidHeading.style.display = ""; paintLine(baseBidHeading, "heading_base", "Base Bid"); }
       if (baseBidRow) baseBidRow.style.display = "";
       const desc = baseDescLabel();
-      if (broken) {
-        // Broken out: base (pre-tax) + Material Sales Tax + Remodel + Total. fmtUSD
-        // keeps cents to match the docx (base_bid_formatted / total_formatted).
-        paintLine(baseBidRow, "base", `${fmtUSD(baseBid)} – ${desc}`);
+      // The base line's parenthetical, resolved by the SAME three-way rule as
+      // {{base_tax_phrase}} in computeTokenValues (which is the rule main.py applies):
+      // exempt describes the tax treatment and prints in either layout, and any
+      // "(… INCLUDED)" claim is dropped once the tax rows print their own figures
+      // underneath. Two expressions for one printed parenthetical is how the base
+      // FIGURE came to differ between this screen and the customer's document.
+      const computedPhrase = exempt ? "(tax exempt)"
+        : itemized ? ""
+        : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
+        : "(material sales tax INCLUDED)";
+      const baseLine = (amount) => `${fmtUSDdoc(amount)} – ${desc}` + (computedPhrase ? ` ${computedPhrase}` : "");
+      if (itemized) {
+        // Itemized: base (net of the printed tax) + Material Sales Tax + Remodel +
+        // Total. fmtUSDdoc, not fmtUSD, so the preview byte-matches the docx
+        // (base_bid_formatted / total_formatted) — which the backend prints through
+        // _fmt_usd. It drops a trailing ".00" and KEEPS a real fraction, so the
+        // lines still sum.
+        paintLine(baseBidRow, "base", baseLine(baseBid));
         if (salesRow)   salesRow.style.display = "";
-        paintLine(salesRow, "sales_tax", `${fmtUSD(salesTax)} – Material Sales Tax`);
+        paintLine(salesRow, "sales_tax", `${fmtUSDdoc(salesTax)} – Material Sales Tax`);
         if (remodelRow) remodelRow.style.display = remodelTax > 0 ? "" : "none";
-        paintLine(remodelRow, "remodel", `${fmtUSD(remodelTax)} – Remodel Tax`);
+        paintLine(remodelRow, "remodel", `${fmtUSDdoc(remodelTax)} – Remodel Tax`);
         if (totalRow)   totalRow.style.display = "";
-        paintLine(totalRow, "total", `${fmtUSD(lumpSumN)} – Total`);
+        paintLine(totalRow, "total", `${fmtUSDdoc(lumpSumN)} – Total`);
       } else {
-        // Included / exempt: ONE all-in base line; tax rows hidden.
-        const computedPhrase = exempt ? "(tax exempt)"
-          : remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
-          : "(material sales tax INCLUDED)";
-        paintLine(baseBidRow, "base", `${fmtUSD(lumpSumN)} – ${desc} ${computedPhrase}`);
+        // No tax row prints: ONE all-in base line carrying the whole bid; tax rows hidden.
+        paintLine(baseBidRow, "base", baseLine(lumpSumN));
         if (salesRow)   salesRow.style.display = "none";
         if (remodelRow) remodelRow.style.display = "none";
         if (totalRow)   totalRow.style.display = "none";
@@ -1089,7 +1165,7 @@
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
             // No Base-bid radio on an option-only sheet — the same suppression the Estimate strip
             // applies, so the two screens cannot offer different answers to "can this be the base?".
-            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSD(N(t.total))}</span></span>`;
+            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSDdoc(N(t.total))}</span></span>`;
             r += isOptionOnlyTab(t)
               ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
               : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}> ` +
@@ -1235,9 +1311,9 @@
     // optional "$X – Remodel Tax", "$X – Total".
     altBlock.innerHTML =
       lineEl("alt_name", `ALTERNATE SYSTEM — ${altLabel}`, { bold: true, style: "margin:6pt 0 2pt;" }) +
-      lineEl("alt_flooring", `${fmtUSD(altFloor)} – Flooring as described above (material sales tax INCLUDED)`) +
-      (altRemodel > 0 ? lineEl("alt_remodel", `${fmtUSD(altRemodel)} – Remodel Tax`) : "") +
-      lineEl("alt_total", `${fmtUSD(altTotal)} – Total`);
+      lineEl("alt_flooring", `${fmtUSDdoc(altFloor)} – Flooring as described above (material sales tax INCLUDED)`) +
+      (altRemodel > 0 ? lineEl("alt_remodel", `${fmtUSDdoc(altRemodel)} – Remodel Tax`) : "") +
+      lineEl("alt_total", `${fmtUSDdoc(altTotal)} – Total`);
   }
 
   // ─── Token values (shared by the document fills + the generate payload) ──
@@ -1271,9 +1347,13 @@
     const remodelTax = Number((state.proposal_remodel_tax != null ? state.proposal_remodel_tax : _fb.remodel_tax) || 0);
     const salesTax   = Number((state.proposal_sales_tax   != null ? state.proposal_sales_tax   : _fb.sales_tax)   || 0);
     const flooringPortion = lumpSumNumber - remodelTax;
-    // Itemized breakdown (Base Bid + Material Sales Tax [+ Remodel Tax] = Total).
-    // Base Bid is the remainder so the three lines sum to the sheet's lump sum.
-    const baseBid = Math.max(0, lumpSumNumber - salesTax - remodelTax);
+    // Itemized breakdown (Base Bid + Material Sales Tax [+ Remodel Tax] = Total), or
+    // the whole tax-inclusive bid on one line when this template prints no tax rows.
+    // THE ONE EXPRESSION, shared with refreshPriceDisplay — see baseBidFigure. The
+    // templates whose base line is a free paragraph (polish Direct, every GC file)
+    // print {{base_bid_formatted}} straight from here, which is why an unconditional
+    // "total minus tax" here read $6,182 under a $6,307 estimate.
+    const { base: baseBid, itemized: taxRowsPrint } = baseBidFigure(lumpSumNumber, salesTax, remodelTax);
     const safe = (v) => (v === undefined || v === null || v === "" ? "0" : v);
 
     // A generated proposal is persisted back into `mergedValues`.  Seed those
@@ -1332,14 +1412,14 @@
         : `${fmtSF(epoxySF)} of epoxy flooring`,
       // Template's native 3-line price block, filled so it sums to the bid:
       //   flooring (sales tax incl)  +  KS remodel tax  =  Total
-      total_label:        `${fmtUSD(lumpSumNumber)} – Total`,
-      lump_sum_label:     `${fmtUSD(flooringPortion)} – ${workType === "polish" ? "Polished Concrete Flooring" : "Epoxy Flooring"} as described above`,
-      lump_sum_formatted: fmtUSD(flooringPortion),  // (combo/polish templates) flooring incl sales tax
-      tax_amount_formatted: fmtUSD(remodelTax),     // legacy remodel-tax token (combo/polish)
-      total_formatted:    fmtUSD(lumpSumNumber),    // the tax-inclusive Total Base Bid
+      total_label:        `${fmtUSDdoc(lumpSumNumber)} – Total`,
+      lump_sum_label:     `${fmtUSDdoc(flooringPortion)} – ${workType === "polish" ? "Polished Concrete Flooring" : "Epoxy Flooring"} as described above`,
+      lump_sum_formatted: fmtUSDdoc(flooringPortion),  // (combo/polish templates) flooring incl sales tax
+      tax_amount_formatted: fmtUSDdoc(remodelTax),     // legacy remodel-tax token (combo/polish)
+      total_formatted:    fmtUSDdoc(lumpSumNumber),    // the tax-inclusive Total Base Bid
       // Epoxy PRICE breakdown (Base Bid + Material Sales Tax [+ Kansas Remodel Tax] = Total):
-      base_bid_formatted:    fmtUSD(baseBid),
-      material_tax_formatted: fmtUSD(salesTax),
+      base_bid_formatted:    fmtUSDdoc(baseBid),
+      material_tax_formatted: fmtUSDdoc(salesTax),
       scope_notes:        safe(mergedValues.scope_notes),
       schedule_notes:     safe(mergedValues.schedule_notes),
       exclusions:         safe(mergedValues.exclusions),
@@ -1359,9 +1439,11 @@
       // logic (broken out → no label; exempt → "(tax exempt)"; else INCLUDED,
       // with the remodel note when remodel tax applies).
       base_tax_phrase: (() => {
-        const m = taxTreatmentMode();
-        if (m.broken) return "";
-        if (m.exempt) return "(tax exempt)";
+        // Mirrors main.py's order exactly: exempt describes the tax TREATMENT and
+        // prints whatever the layout; otherwise a printing tax row makes any
+        // "(… INCLUDED)" claim contradict the itemisation right below it.
+        if (taxTreatmentMode().exempt) return "(tax exempt)";
+        if (taxRowsPrint) return "";
         return remodelTax > 0 ? "(Remodel Tax AND material sales tax INCLUDED)"
                               : "(material sales tax INCLUDED)";
       })(),
@@ -6759,7 +6841,7 @@
         alternate_computed_bid: state.alternate_computed_bid || null,
         alternate_label: (state.alternate && state.alternate.label) || "",
         // Conditional Kansas Remodel Tax line — only when remodel tax applies.
-        remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSD(remodelTax) }] : [],
+        remodel: remodelTax > 0 ? [{ amount_formatted: fmtUSDdoc(remodelTax) }] : [],
         // Optional per-sheet priced options -> {{#room}} block (empty unless the
         // estimate side opts in; copy/rename itself is a pure sheet operation).
         rooms: Array.isArray(state.rooms) ? state.rooms : [],

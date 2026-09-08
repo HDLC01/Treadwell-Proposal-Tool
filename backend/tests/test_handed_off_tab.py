@@ -452,7 +452,7 @@ def test_a_won_unsent_card_still_shows_its_money_and_its_estimator(ran):
     to whoever priced it, drawn with a "?" because nobody chose them."""
     body = _card(ran, "active", "won-unsent")
     assert body, "the card he marked won did not render on the live board"
-    assert "$88,000.00" in body, "the bid value is gone from the card: %s" % body
+    assert "$88,000" in body, "the bid value is gone from the card: %s" % body
     assert "Kyle" in body, "the estimator is gone from the card"
     assert "chip-won" in body, "nothing on the card says it has been won"
 

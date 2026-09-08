@@ -3475,6 +3475,82 @@ def _fmt_usd(n, parens: bool = False) -> str:
     return f"({s})" if parens else s
 
 
+# The inverse of _fmt_usd, for reading back a figure the document is about to print.
+_USD_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def _parse_usd(s) -> Optional[float]:
+    """The number inside a formatted price string: "$6,307" -> 6307.0, "($500)" ->
+    -500.0, "" / "n/a" -> None.
+
+    None means UNREADABLE, and every caller has to treat it differently from 0.0 —
+    reading a missing Total as zero is how a $0 bid gets printed under a real one."""
+    txt = str(s if s is not None else "")
+    m = _USD_RE.search(txt)
+    if not m:
+        return None
+    try:
+        v = float(m.group(0).replace(",", ""))
+    except ValueError:
+        return None
+    return -v if txt.lstrip().startswith("(") else v
+
+
+def _base_bid_less_printed_tax(total_formatted, printed_tax) -> Optional[str]:
+    """THE PRICE-BLOCK RULE: the Base Bid line equals the printed Total minus the tax
+    rows that actually print. Returns the formatted base bid, or None to leave it
+    alone.
+
+    Kyle, 2026-09-08 — a GC Polish proposal printed:
+
+        $6,307.00 – Polished Concrete & Joint Filler … (material sales tax INCLUDED)
+          $125.00 – Material Sales Tax
+            $0.00 – Remodel Tax
+        $6,307.00 – Total
+
+    6,307 + 125 + 0 = 6,432. The Total was right and the itemisation could not be
+    reconciled, because the base line carried the whole tax-inclusive bid AND the tax
+    rows printed underneath it. Computed here from the FORMATTED figures rather than
+    from raw floats on purpose: the invariant a customer can check with a calculator
+    is about the strings on the page, so the arithmetic is done at the cent precision
+    the page prints at.
+
+    A figure it cannot read is named in the log, with what that costs — a
+    "refused"-style warning that does not say which figure buys an SSH session and a
+    container probe. It never raises: half a price block is still a sendable proposal,
+    and `_generate` has already been told the total by two other routes."""
+    total = _parse_usd(total_formatted)
+    if total is None:
+        log.warning("PRICE block: cannot read the Total %r, so the Base Bid is left as the "
+                    "caller sent it and may not equal Total minus the printed tax rows",
+                    total_formatted)
+        return None
+    out = total
+    for s in printed_tax:
+        v = _parse_usd(s)
+        if v is None:
+            log.warning("PRICE block: cannot read the printed tax row %r (Total %r) — the "
+                        "Base Bid, the tax rows and the Total will not sum", s, total_formatted)
+            continue
+        out -= v
+    if out < 0:
+        # Clamped, and said out loud: the frontend clamps at zero too, so screen and
+        # document still agree — but the four rows now cannot sum, and the cause is a
+        # tax snapshot larger than the bid it came from.
+        log.warning("PRICE block: the printed tax rows %r exceed the Total %r; clamping the "
+                    "Base Bid to $0 — the price block will NOT sum", printed_tax, total_formatted)
+        out = 0.0
+    # IN THE TOTAL'S OWN MONEY STYLE. `_fmt_usd` drops a trailing ".00" (Kyle: "we always round
+    # everything to the nearest dollar"), which is what the page sends today — but a draft frozen
+    # before that change replays "$36,763.00" strings, and those are re-rendered for the
+    # customer's PDF and every revision's files. Formatting the base bid one way while the
+    # Material Sales Tax and Total rows beside it keep their cents puts two money styles in one
+    # price block, which is exactly the thing that change was undoing.
+    if re.search(r"\.\d\d\s*$", str(total_formatted or "")):
+        return f"${out:,.2f}"
+    return _fmt_usd(out)
+
+
 def _ensure_state_name(values: Dict[str, Any]) -> None:
     """Default a blank state_name to "Kansas" in-place.
 
@@ -4542,35 +4618,58 @@ def _generate(payload: GenerateIn, request: Request, *, persist: bool = True,
         except (TypeError, ValueError):
             pass
 
-    # PRICE layout. Default ("INCLUDED") = a single all-in line:
-    #   "$Total – … (material sales tax INCLUDED)"  (remodel folded into the total)
-    # "Sales tax broken out" itemizes Base + Material Sales Tax + Remodel + Total
-    # and drops the "(… INCLUDED)" label. "Tax exempt" = one line, "(tax exempt)".
+    # PRICE layout. "Sales tax broken out" itemizes Base + Material Sales Tax +
+    # Remodel + Total and drops the "(… INCLUDED)" label. Default ("INCLUDED") and
+    # "Tax exempt" ask for a single all-in line — which some templates CANNOT give,
+    # see below.
     _incl = str(values.get("tax_inclusion") or "INCLUDED").strip().upper()
     _exempt = _incl in ("EXCLUDED", "EXEMPT", "NOT INCLUDED", "NONE", "NO", "N/A")
     _broken = _incl in ("BROKEN_OUT", "BROKEN OUT", "BROKENOUT", "ITEMIZED", "BREAKOUT")
-    # Gyp always itemizes (its template shows Base + Material Sales Tax + Kansas
-    # Remodel Tax + Total as flat rows), so never collapse base_bid_formatted to
-    # the total for gyp — keep the pre-tax base the frontend computed.
-    if str(values.get("work_type") or "").lower() == "gyp":
-        _broken = True
-    if _broken:
-        # Itemized: keep the frontend's pre-tax base + Material Sales Tax + Total;
-        # remodel shows as its own line; no "INCLUDED" label on the base line.
-        values["base_tax_phrase"] = ""
-        _tax_breakout = True
-        _remodel_lines = list(payload.remodel or [])
-    else:
-        # One all-in line: the base line carries the FULL total; remodel folds in.
-        if str(values.get("total_formatted") or "").strip():
-            values["base_bid_formatted"] = values["total_formatted"]
-        _tax_breakout = False
-        _remodel_lines = []
-        values["base_tax_phrase"] = (
-            "(tax exempt)" if _exempt
-            else "(Remodel Tax AND material sales tax INCLUDED)" if payload.remodel
-            else "(material sales tax INCLUDED)"
-        )
+    _tax_breakout = _broken
+    _remodel_lines = list(payload.remodel or []) if _broken else []
+
+    # WHICH TAX ROWS THIS PROPOSAL WILL ACTUALLY PRINT. Two sources, one question:
+    # the estimator's tax mode (which fills or strips the {{#tax_breakout}} /
+    # {{#remodel}} regions) and the TEMPLATE'S OWN SHAPE, because the three GC files
+    # and the Gyp file author those rows as plain paragraphs that no flag can strip
+    # (proposal_writer.template_free_tax_rows reads that off the file — it is
+    # deliberately not keyed on the audience or the work type; the old
+    # `work_type == "gyp"` special case here was this same fact spelled as a string,
+    # which is exactly why GC never got it).
+    _free_rows = proposal_writer.template_free_tax_rows(payload.work_type, payload.audience)
+    _prints_material = _free_rows["material"] or _broken
+    _prints_remodel = _free_rows["remodel"] or bool(_remodel_lines)
+
+    # The base line makes no "(… INCLUDED)" claim when the tax rows print their own
+    # figures right underneath it: that sentence and that itemisation contradict each
+    # other, and the itemisation is the half that has to sum. "(tax exempt)" prints on
+    # an exempt job whatever the layout — it describes the tax TREATMENT, not a row.
+    values["base_tax_phrase"] = (
+        "(tax exempt)" if _exempt
+        else "" if (_prints_material or _prints_remodel)
+        else "(Remodel Tax AND material sales tax INCLUDED)" if payload.remodel
+        else "(material sales tax INCLUDED)"
+    )
+
+    # THE RULE, in ONE place: the base line equals the Total minus whatever tax lines
+    # actually print. It is what makes the printed figures add up in BOTH layouts —
+    # a Direct template that prints no tax rows puts the whole tax-inclusive bid on
+    # the base line (Kyle, 2026-09-08: the on-screen proposal was showing $6,182 under
+    # a $6,307 estimate), and a GC template that always prints them puts the ex-tax
+    # figure there so 6,182 + 125 + 0 = 6,307. Computed server-side in every mode
+    # rather than trusting the payload's own base bid, because the browser cannot know
+    # the shape until the template loads and a replayed payload was frozen elsewhere.
+    _printed_tax = []
+    if _prints_material:
+        _printed_tax.append(values.get("material_tax_formatted"))
+    if _prints_remodel:
+        # A free paragraph prints the flat {{tax_amount_formatted}}; the {{#remodel}}
+        # region prints its own row's amount. Read whichever one THIS template uses.
+        _printed_tax.append(values.get("tax_amount_formatted") if _free_rows["remodel"]
+                            else (_remodel_lines[0] or {}).get("amount_formatted"))
+    _base_line = _base_bid_less_printed_tax(values.get("total_formatted"), _printed_tax)
+    if _base_line is not None:
+        values["base_bid_formatted"] = _base_line
 
     # Combo WORK lists the real picked epoxy system as "Option 1: <name>" (from
     # the Epoxy!A22 dropdown), falling back to the generic label.
