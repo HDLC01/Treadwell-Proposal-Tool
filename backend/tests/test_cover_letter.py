@@ -1,36 +1,55 @@
-"""The optional Cover Letter — the letter the customer portal shows AHEAD of the proposal.
+"""The optional Cover Letter — Treadwell's letterhead page, PREPENDED as page 1 of the proposal.
 
-It is a portal DOCUMENT page, not an email (Hanz, 2026-08-28): one letterhead template per
-(work type, audience), filled from the same intake/estimate values the proposal uses, riding
-inside the same `proposal_payload` so a sent revision pins the letter exactly as it pins the
-prices.
+It is not a second document and never was one that reached anybody. From 2026-08-28 it had its
+own editor tab, its own `/api/coverletter-template` block model, its own paragraph-override
+channel, its own `/api/admin/cover-letter-pdf` render and a `has_cover_letter` flag telling the
+customer portal to show it first — and the portal implemented none of that, so every letter an
+estimator ticked, edited and generated reached no customer at all. On 2026-09-09 Hanz replaced the
+lot with one checkbox: `docx_merge.prepend_cover_letter` puts the filled letter on the front of the
+filled proposal, so the .docx download, the LibreOffice PDF, the portal's /api/admin/proposal-pdf
+and the To-Dropbox copy all carry it without any of them knowing it exists.
+
+One letterhead template per (work type, audience), filled from the same intake/estimate values the
+proposal uses, riding inside the same `proposal_payload` so a sent revision pins the letter exactly
+as it pins the prices.
 
 Everything here EXECUTES the real writer and the real templates. A source-text assertion cannot
 catch a token nothing fills, a numbering definition Word would reject, or a template that quietly
 lost its letterhead — and those are the three ways a first-draft document set goes wrong.
 
 Covers:
-  (a) the templates themselves — one per (work type, audience), real letterhead, the floating
-      date box, no raw token left behind;
-  (b) GenerateIn/GenerateOut — off by default, and OFF means no download url at all;
-  (c) /api/coverletter-template — the block model the document editor renders;
-  (d) /api/admin/cover-letter-pdf — the portal's server-to-server render, its SERVICE_TOKEN gate,
-      its revision pinning, and its named refusal when there is no letter;
-  (e) PortalPublishIn.has_cover_letter — the omitted-means-nothing-forwarded contract.
+  (a) the templates themselves — one per (work type, audience), real letterhead, the dates, no raw
+      token left behind, the numbering that has to restart for a second system;
+  (b) the generate path — off by default, and ON means the letter's words are IN the proposal
+      .docx, ahead of the proposal's own, with no second file anywhere;
+  (b2) the label bullets, bold to the colon and normal after, unedited AND overridden. The writer
+      still accepts `paragraph_overrides` and nothing in production passes any; these tests are
+      what keeps that parameter honest, because the split it performs is the reason it exists;
+  (c) PortalPublishIn.has_cover_letter — the omitted-means-nothing-forwarded contract. It no
+      longer tells the portal to DO anything (the letter is inside the document), and it is kept
+      because it is a true statement about the paperwork and because a portal row that already has
+      it must not silently lose it.
+
+The merge itself — id collisions, section properties, the letterhead artwork — is
+`test_docx_merge.py`. This file asserts that the letter and the proposal come out of `_generate`
+as one document; that file asserts the document is well-formed.
 """
 import io
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import zipfile
+from unittest import mock
 
 import docx
 import pytest
 from fastapi.testclient import TestClient
 
 import cover_letter_writer as clw
+import docx_merge
 import main
 import prepare_cover_letter_templates as prep
 import proposal_writer as pw
@@ -73,13 +92,6 @@ def _generate(**extra):
     return r.json()
 
 
-# What the greeting paragraph says IN THE TEMPLATE, as opposed to in the rendered letter.
-# Direct moved to "{{greeting}}" on 2026-09-03 (Will's wording); GC and Gyp still say "Hello,"
-# literally. Five override tests below anchor on this paragraph to get a block id, and they broke
-# together the last time the copy moved -- so the string lives in one place now.
-_GREETING_SOURCE = {"Direct": "{{greeting}}", "GC": "Hello,", None: "Hello,"}
-
-
 # Which letters print the job name in their own body copy.
 #
 # Until 2026-09-04 every variant did, because every variant opened with the red heading
@@ -94,25 +106,6 @@ _GREETING_SOURCE = {"Direct": "{{greeting}}", "GC": "Hello,", None: "Hello,"}
 # assertion below is two-sided, so restoring the job name to Will's wording (or losing it from
 # GC's on a copy pass) goes red here and has to be a deliberate edit.
 _NAMES_THE_JOB = {"Direct": False, "GC": True, None: True}
-
-
-def _greeting_block(body, audience="Direct"):
-    """The block id the document editor would use for the greeting paragraph."""
-    want = _GREETING_SOURCE[audience]
-    for b in body["blocks"]:
-        if b["text"].strip() == want:
-            return b
-    raise AssertionError(
-        "no %r paragraph in the %s letter -- if the greeting copy moved, update "
-        "_GREETING_SOURCE rather than loosening the match. Blocks: %r"
-        % (want, audience, [b["text"][:30] for b in body["blocks"]][:12]))
-
-
-def _template(work_type="epoxy", audience="Direct"):
-    r = client.get("/api/coverletter-template?work_type=" + work_type
-                   + "&audience=" + str(audience))
-    assert r.status_code == 200, r.text
-    return r.json()
 
 
 # ── (a) the templates ────────────────────────────────────────────────────────
@@ -205,10 +198,13 @@ def test_a_letter_is_pure_flow_with_no_floating_box(key):
 
       * `in_block` is None everywhere — a letter has no priced/repeatable region, so every
         paragraph is freely editable and nothing is engine-owned;
-      * NOTHING is positioned. The editor already had a no-box layout branch (a template with no
-        boxes is a layout, not a failure — see `test_cover_letter_ui`); this is the assertion that
-        says the letter takes it, and that a stray box re-appearing on a copy pass goes red here
-        rather than on a customer's screen.
+      * NOTHING is positioned. That mattered for the document editor, which had a no-box layout
+        branch to fall into (a template with no boxes was a layout, not a failure); the editor is
+        gone since 2026-09-09 and the claim outlived it, because `_halves` and
+        `_body_paragraphs` in section (b) both rely on the letter being pure flow to tell the two
+        documents apart in the merged .docx. A stray box re-appearing on a copy pass would put
+        one letter line after the whole proposal in those walks — so it goes red here rather
+        than on a customer's screen.
     """
     _, blocks, geometry = clw.describe_template(*key)
     assert len(blocks) > 5
@@ -557,96 +553,271 @@ def test_filling_the_letter_does_not_mutate_the_caller_s_values():
     assert values == before
 
 
-# ── (b) GenerateIn / GenerateOut ─────────────────────────────────────────────
-def test_the_cover_letter_is_off_by_default():
-    """Every draft saved before this feature carries none of the three keys, and
-    `GenerateIn(**proposal_payload)` is how the portal PDF, the revision replay and the
-    To-Dropbox re-upload rebuild those payloads."""
+# ── (b) the generate path: the letter IS the proposal's first page ───────────
+# THE MARKERS, and why they are these. `_LETTER_*` are two lines the shipped Direct letter prints
+# and the Direct proposal template does not; `_PROPOSAL_ONLY` is a heading the proposal prints and
+# the letter does not. Every test below is a claim about which of two documents a piece of text
+# came from, so a marker that turned out to be in BOTH — or in neither — would make those claims
+# unfalsifiable. `test_the_markers_really_do_tell_the_two_documents_apart` is the counterexample
+# that keeps them honest: read it first when anything in this section goes red, because a marker
+# that has drifted out of a template fails several tests at once and none of them by name.
+_LETTER_OPENING = "Thank you for the opportunity to provide a quote for this project."
+_LETTER_SIGNOFF = "Looking forward to working with you!"
+_PROPOSAL_ONLY = "TERMS AND CONDITIONS"
+
+
+def _body_paragraphs(docx_bytes: bytes):
+    """`d.paragraphs` — the BODY, in real document order, blanks included.
+
+    Deliberately not `_rendered`, which walks the text boxes after the body and so reports a
+    proposal's own front page LAST. Document order is the whole question here ("is the letter page
+    1?"), and the letter is pure flow with no floating box of its own
+    (test_a_letter_is_pure_flow_with_no_floating_box), so every one of its paragraphs is a body
+    paragraph and this walk sees all of them in the order Word will lay them out."""
+    return [p.text for p in docx.Document(io.BytesIO(docx_bytes)).paragraphs]
+
+
+def _body_index(paragraphs, needle):
+    """The index of the first body paragraph containing `needle`, or None."""
+    return next((i for i, t in enumerate(paragraphs) if needle in t), None)
+
+
+def _halves(docx_bytes: bytes):
+    """`(letter_text, proposal_text)` for a merged document, split at the Terms heading.
+
+    `_PROPOSAL_ONLY` is the first thing the proposal itself prints in this walk — the letter is
+    pure flow and comes first, and the proposal's own front page lives in text boxes that
+    `_iter_all_paragraphs` visits after the body. Verified rather than assumed: for both audiences
+    the lines before the Terms heading are EXACTLY the standalone letter, which is what
+    test_the_two_halves_are_really_the_two_documents asserts.
+
+    A split is needed because the two documents are one file now. "The letter says X and the
+    proposal says X" used to be two `client.get`s; asserting it against the merged text would
+    instead be satisfied by either half alone, which is how a merge that dropped the proposal
+    entirely would keep a green test."""
+    lines = [t for t in _rendered(docx_bytes).split("\n")]
+    cut = next((i for i, t in enumerate(lines) if _PROPOSAL_ONLY in t), None)
+    assert cut is not None, (
+        "the proposal's %r heading is not in the merged document, so the letter and the proposal "
+        "cannot be told apart" % _PROPOSAL_ONLY)
+    return "\n".join(lines[:cut]), "\n".join(lines[cut:])
+
+
+def test_the_two_halves_are_really_the_two_documents():
+    """THE PREMISE OF `_halves`, checked for both audiences rather than trusted. It splits the
+    merged text at the Terms heading and calls everything before it "the letter" — true only
+    while the proposal prints nothing ahead of that heading in this walk. Kyle's templates put
+    the front page in text boxes, which are walked last, so it holds today; a template edit that
+    moved one line of the proposal into the flowing body would silently reassign it to the letter
+    and every content assertion below would be reading the wrong half.
+
+    So: the lines before the cut must be, exactly, the standalone letter."""
+    for audience in ("Direct", "GC"):
+        values = dict(BASE["values"])
+        letter = _rendered(clw.fill_cover_letter(work_type="epoxy", audience=audience,
+                                                 values=values))
+        merged = docx_merge.prepend_cover_letter(
+            pw.fill_proposal(work_type="epoxy", audience=audience, values=dict(values)),
+            clw.fill_cover_letter(work_type="epoxy", audience=audience, values=dict(values)))
+        letter_half, proposal_half = _halves(merged)
+        assert letter_half == letter, (
+            "the %s split does not land between the two documents. Before the Terms heading the "
+            "merged document has:\n%r\nand the standalone letter is:\n%r"
+            % (audience, letter_half[-400:], letter[-400:]))
+        assert proposal_half, "the proposal's half of the %s document is empty" % audience
+
+
+def test_the_markers_really_do_tell_the_two_documents_apart():
+    """THE COUNTEREXAMPLE FOR EVERY TEST BELOW. Each of them says "this text is the letter's" or
+    "this text is the proposal's", and a marker string that had drifted out of one template — a
+    copy pass, a re-generated letterhead — would turn those into assertions about nothing that go
+    on passing. So both documents are built standalone here and each marker is checked against
+    both: present in the one it belongs to, absent from the other.
+
+    If this goes red, the markers are wrong, not the merge. Fix them here first."""
+    letter = _rendered(clw.fill_cover_letter(work_type="epoxy", audience="Direct",
+                                             values=dict(BASE["values"])))
+    proposal = _rendered(pw.fill_proposal(work_type="epoxy", audience="Direct",
+                                          values=dict(BASE["values"])))
+    for marker in (_LETTER_OPENING, _LETTER_SIGNOFF):
+        assert marker in letter, (
+            "the Direct letter no longer says %r — update the marker, do not loosen the tests "
+            "that use it" % marker)
+        assert marker not in proposal, (
+            "%r is in the PROPOSAL template too, so 'the letter's text is in the .docx' stops "
+            "being a claim about the letter" % marker)
+    assert _PROPOSAL_ONLY in proposal, (
+        "the proposal no longer prints %r — the 'both documents are in there' assertions would "
+        "then only be checking the letter" % _PROPOSAL_ONLY)
+    assert _PROPOSAL_ONLY not in letter, (
+        "%r is in the LETTER now, so it cannot stand for the proposal's own content"
+        % _PROPOSAL_ONLY)
+
+
+def test_the_cover_letter_is_off_by_default_and_a_legacy_payload_still_replays():
+    """Off by default: every draft saved before this feature carries none of these keys, and
+    `GenerateIn(**proposal_payload)` is how the portal PDF, the revision replay and the To-Dropbox
+    re-upload rebuild those payloads.
+
+    AND THE TWO REMOVED KEYS MUST BE IGNORED, NOT REFUSED. Between 2026-08-28 and 2026-09-09 a
+    generate payload could also carry `cover_letter_paragraph_overrides` and
+    `cover_letter_template_version`, and drafts saved in that window still have them frozen inside
+    `proposal_payload`. Those payloads are replayed months later, by a customer opening a portal
+    link. Pydantic ignores unknown keys by default, so they keep working and simply stop honouring
+    edits nothing can make any more — but "by default" is a config away from being false, and
+    `extra="forbid"` on this model would turn every one of those drafts into a 422 on the
+    customer's side. Asserted, because nothing else would notice until it happened."""
     gi = main.GenerateIn(**{"work_type": "epoxy", "values": {}})
     assert gi.cover_letter_enabled is False
-    assert gi.cover_letter_paragraph_overrides == {}
-    assert gi.cover_letter_template_version == ""
+    legacy = main.GenerateIn(**{
+        "work_type": "epoxy", "values": {}, "cover_letter_enabled": True,
+        "cover_letter_paragraph_overrides": {"3": {"text": "an edit nothing can make now"}},
+        "cover_letter_template_version": "epoxy:Direct@1756000000000000000"})
+    assert legacy.cover_letter_enabled is True, (
+        "a payload frozen while the editor existed no longer replays — a customer's pinned "
+        "revision would 422 instead of rendering")
+    for dead in ("cover_letter_paragraph_overrides", "cover_letter_template_version"):
+        assert not hasattr(legacy, dead), (
+            dead + " is back on GenerateIn; there is no editor to produce it and no sanitizer to "
+            "validate it")
 
 
-def test_disabled_means_no_download_url_at_all():
-    """Not an empty string, not a url that 404s. The Done page and the portal both branch on
-    whether this field is set."""
+def test_disabled_means_the_proposal_alone_and_no_second_download():
+    """Not an empty string, not a url that 404s: the key does not exist. `GenerateOut` used to
+    carry `cover_letter_download_url` and the Done page branched on it; both are gone, and a key
+    that came back as `null` would let a caller start branching on it again.
+
+    And the proposal is the proposal. A merge that ran unconditionally would put Treadwell's
+    letterhead on the front of every bid, most of which do not want one, and the estimator would
+    only find out from the customer."""
     out = _generate()
-    assert out["cover_letter_download_url"] is None
-    assert out["docx_download_url"]          # the proposal itself is unaffected
+    # Asserted on the MODEL as well as on the payload, and the pair is deliberate. FastAPI
+    # serializes exactly `GenerateOut`'s declared fields, so the response can only regrow this key
+    # by the field being re-declared — which means the payload check alone cannot be made to fail
+    # by any amount of runtime misbehaviour, only by that source change. The model check names the
+    # source change directly; the payload check is what proves the route really is filtered
+    # through the model (`out["docx_download_url"]` below is the positive control for that).
+    assert "cover_letter_download_url" not in main.GenerateOut.model_fields, (
+        "GenerateOut declares a cover-letter download again; the letter is page 1 of the "
+        "proposal, so a second file either 404s or duplicates it")
+    assert "cover_letter_download_url" not in out, (
+        "GenerateOut is advertising a separate cover-letter download again")
+    assert out["docx_download_url"]
+    paragraphs = _body_paragraphs(client.get(out["docx_download_url"]).content)
+    joined = "\n".join(paragraphs)
+    for marker in (_LETTER_OPENING, _LETTER_SIGNOFF):
+        assert marker not in joined, (
+            "a bid that did not ask for a cover letter got one: %r is in the proposal .docx"
+            % marker)
+    assert _PROPOSAL_ONLY in joined, "the proposal itself came out empty"
 
 
-def test_enabled_returns_a_real_downloadable_letter():
+def test_enabled_puts_the_letter_in_front_of_the_proposal_in_one_document():
+    """THE FEATURE. One .docx, letter first, proposal whole and behind it — which is what makes
+    every downstream consumer carry the letter without knowing it exists.
+
+    Both documents' text, and the ORDER. Either half alone would pass a broken merge: a document
+    that dropped the proposal still contains the letter's words, and a document that appended the
+    letter to the END still contains both. There is still no second download, because there is no
+    second file."""
     out = _generate(cover_letter_enabled=True)
-    url = out["cover_letter_download_url"]
-    assert url and url != out["docx_download_url"], (
-        "the cover letter url must be its own cache token, not the proposal's")
-    text = _rendered(client.get(url).content)
-    # BASE is a Direct bid, and a Direct letter names neither the job nor the system since the
-    # heading came off (see _NAMES_THE_JOB) — so assert on what a Direct letter DOES carry: the
-    # estimator's signature and a resolved {{cover_system_line}}.
-    assert "Kyle Loseke | Estimator" in text
-    assert "Materials / System: Treadwell MACRO Flake" in text
-    # And it is a DIFFERENT document from the proposal, not a second copy of it.
-    assert "TERMS AND CONDITIONS" not in text.upper()
+    assert "cover_letter_download_url" not in out
+    paragraphs = _body_paragraphs(client.get(out["docx_download_url"]).content)
+    i_letter = _body_index(paragraphs, _LETTER_OPENING)
+    i_signoff = _body_index(paragraphs, _LETTER_SIGNOFF)
+    i_proposal = _body_index(paragraphs, _PROPOSAL_ONLY)
+    assert i_letter is not None, (
+        "the letter's opening line is not in the proposal .docx — the estimator ticked the box "
+        "and got the proposal alone, with nothing on screen saying so")
+    assert i_proposal is not None, (
+        "the PROPOSAL's own text is missing from the merged document; the letter replaced the "
+        "contract instead of being stapled in front of it")
+    assert i_letter < i_signoff < i_proposal, (
+        "the letter is not page 1: opening at %r, sign-off at %r, the proposal's Terms at %r"
+        % (i_letter, i_signoff, i_proposal))
+    # And it is one document, not the proposal twice: the letter's page is not a copy of the bid.
+    text = _rendered(client.get(out["docx_download_url"]).content)
+    assert text.count(_PROPOSAL_ONLY) == 1, "the proposal's Terms appear twice"
 
 
 def test_a_broken_letter_fails_the_live_generate_loudly(monkeypatch):
-    """The default half of the `want_cover_letter` gate, and the reason it defaults to True: an
-    estimator who ticked the box must not be handed a silent proposal-only send. They would publish
-    a portal that promises a letter and shows nothing, and only the customer would find out."""
+    """An estimator who ticked the box must not be handed a silent proposal-only send. They would
+    read "generated", press Send, and the customer would receive a document with its first page
+    missing — the same shape of failure as the publish that wrote the proposal row, refused the
+    attachment, logged it and returned 200."""
     def boom(*a, **k):
         raise RuntimeError("template is corrupt")
     monkeypatch.setattr(clw, "fill_cover_letter", boom)
     r = client.post("/api/generate", json=dict(BASE, cover_letter_enabled=True))
     assert r.status_code >= 400, "a failed letter was swallowed on the live generate path"
+    assert "cover letter" in r.json()["detail"].lower(), (
+        "the refusal does not name the cover letter, so the estimator cannot tell what failed: %r"
+        % (r.json(),))
 
 
-def test_a_broken_letter_does_not_take_down_the_proposal_only_callers(monkeypatch):
-    """`want_cover_letter=False`. /api/admin/proposal-pdf, the To-Dropbox re-file and the revision
-    replay all rebuild a stored payload with `GenerateIn(**pp)` — so a draft that had the box
-    ticked replays with it ticked — and NONE of them ever serves the letter. Before the gate, a
-    cover-letter fault 500'd a proposal PDF the portal was waiting on and blocked a Dropbox filing
-    that has nothing to do with the letter."""
-    import inspect
+def _pinned(monkeypatch, payload, live=None):
+    """SERVICE_TOKEN plus a draft whose revision and live copy are both `payload`."""
+    monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
+    monkeypatch.setattr(main.drafts, "get_revision",
+                        lambda did, no: {"data": {"proposal_payload": payload}})
+    monkeypatch.setattr(main.drafts, "load_draft",
+                        lambda did: {"data": {"proposal_payload":
+                                              live if live is not None else payload}})
+
+
+def test_a_broken_letter_now_fails_the_customers_pdf_too(monkeypatch):
+    """THE REVERSAL, STATED OUT LOUD. Until 2026-09-09 this route passed `want_cover_letter=False`
+    and the test here asserted the opposite of this one: a cover-letter fault must not 500 the
+    proposal PDF the portal is waiting on, because the letter was a separate document this route
+    never served.
+
+    It serves it now — the letter is page 1 of this very PDF. So the trade has flipped with it, and
+    it is a deliberate trade rather than an oversight: a refusal is reportable, and a customer PDF
+    that silently arrives without the page the estimator approved is not. The blast radius really
+    is wider than it was (the letter templates are re-generated from Kyle's master by hand, per
+    CoverLetter/README.md, so they can break while the estimate sheet and the proposal templates
+    are fine) and that is the accepted cost.
+
+    Executed through the route, not read off the source: the refusal has to survive the handler's
+    own error handling, which is where a 500 turns back into a 200 with something missing."""
     monkeypatch.setattr(clw, "fill_cover_letter",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("template is corrupt")))
-    gi = main.GenerateIn(**dict(BASE, cover_letter_enabled=True))
-    # The signature is the contract these two call sites depend on.
-    assert "want_cover_letter" in inspect.signature(main._generate).parameters
-    out = main._generate(gi, _req(), persist=False, want_cover_letter=False)
-    assert out.docx_download_url, "the proposal was lost to a cover-letter fault"
-    assert out.cover_letter_download_url is None
+    _pinned(monkeypatch, dict(BASE, cover_letter_enabled=True))
+    r = client.get("/api/admin/proposal-pdf?draft_id=d1",
+                   headers={"X-Service-Token": "svc-test"})
+    assert r.status_code == 500, (
+        "the customer's PDF rendered anyway, so it is missing the cover-letter page 1 the "
+        "estimator approved and nothing says so: %s %s" % (r.status_code, r.text[:200]))
+    assert "cover letter" in r.json()["detail"].lower(), (
+        "the refusal does not name the cover letter: %r" % (r.json(),))
 
 
-def _req():
-    """The minimum Request `_generate` touches (it reads headers for the base url)."""
-    from starlette.requests import Request
-    return Request({"type": "http", "method": "POST", "path": "/api/generate",
-                    "headers": [(b"host", b"testserver")], "query_string": b"",
-                    "scheme": "http", "server": ("testserver", 80), "client": ("test", 1)})
+def test_the_customers_pdf_still_renders_when_the_letter_is_fine(monkeypatch):
+    """The other half, and the reason the test above is not merely "this route 500s". Without this
+    one, a route that had come to refuse EVERY render — a letter-enabled draft it could no longer
+    handle at all — would pass it, and the pair would look like a working refusal.
 
+    LibreOffice is stubbed: it is what production renders with and it is not on every dev box, and
+    the claim here is about the route reaching a 200 with the box ticked, not about soffice. The
+    document that reaches it is the REAL merged .docx — `_generate` is untouched — and
+    test_enabled_puts_the_letter_in_front_of_the_proposal_in_one_document is what checks its
+    contents."""
+    _pinned(monkeypatch, dict(BASE, cover_letter_enabled=True))
+    rendered_from = {}
 
-def test_every_proposal_only_call_site_still_passes_the_gate():
-    """A reader of `main.py`, not of a mock: the gate is only worth having if the call sites it was
-    added for actually pass it. THREE of them now — the customer proposal PDF, the To-Dropbox
-    re-file, and the revision replay (/api/draft/{id}/revisions/{n}/files). If someone adds a
-    fourth proposal-only replay this test does not catch it — but it does catch the known ones
-    silently losing the argument in a refactor.
+    def fake_pdf(blob):
+        rendered_from["bytes"] = blob
+        return b"%PDF-1.4"
 
-    Each has its own executed test asserting the value at the call site; this one exists because
-    those use a stubbed `_generate` and so cannot notice a site that stopped calling it at all."""
-    import inspect
-    import re as _re
-    src = inspect.getsource(main)
-    # CALLS only. Counting the bare string would also count the comment above each call site and
-    # the parameter's own docstring, which is how this test first went red against correct code.
-    # Not `[^)]*` — two of the three call sites are `_generate(GenerateIn(**pp), ...)`, whose own
-    # closing paren ends the class before the argument is reached.
-    calls = _re.findall(r"_generate\(.{0,120}?want_cover_letter=False", src, _re.S)
-    assert len(calls) == 3, (
-        "a proposal-only caller stopped opting out of the letter (or a fourth one appeared "
-        "without being reviewed): found %d" % len(calls))
+    monkeypatch.setattr(main.pdf_writer, "docx_to_pdf", fake_pdf)
+    r = client.get("/api/admin/proposal-pdf?draft_id=d1",
+                   headers={"X-Service-Token": "svc-test"})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/pdf")
+    # The bytes handed to the renderer are the merged document, not the bare proposal.
+    joined = "\n".join(_body_paragraphs(rendered_from["bytes"]))
+    assert _LETTER_OPENING in joined and _PROPOSAL_ONLY in joined, (
+        "the customer's PDF was rendered from a document that is missing one of the two halves")
 
 
 @pytest.mark.parametrize("audience", ["Direct", "GC"])
@@ -658,7 +829,11 @@ def test_the_audience_on_the_generate_body_picks_the_letter(monkeypatch, audienc
     GC/Epoxy.docx are byte-identical today (the source PDF has no GC copy — see the CoverLetter
     README). Comparing the produced documents would therefore pass with the audience hard-wired to
     None, and go on passing right up until the copy pass diverges them and a GC customer gets the
-    owner's letter."""
+    owner's letter.
+
+    Read out of the ONE .docx now, which changes what the second assertion can say: the merged
+    document always contains the job name, because the proposal prints it. So the check runs on
+    the LETTER's half — see `_halves`."""
     seen = {}
     real = clw.fill_cover_letter
 
@@ -671,136 +846,711 @@ def test_the_audience_on_the_generate_body_picks_the_letter(monkeypatch, audienc
     out = _generate(audience=audience, cover_letter_enabled=True)
     assert seen["audience"] == audience
     assert seen["path"].parent.name == audience
-    text = _rendered(client.get(out["cover_letter_download_url"]).content)
-    assert "Kyle Loseke" in text
-    assert ("Cover Letter QA" in text) is _NAMES_THE_JOB[audience]
+    letter_half, _proposal_half = _halves(client.get(out["docx_download_url"]).content)
+    assert "Kyle Loseke" in letter_half
+    assert ("Cover Letter QA" in letter_half) is _NAMES_THE_JOB[audience], (
+        "the %s letter %s the job name, against _NAMES_THE_JOB" %
+        (audience, "names" if "Cover Letter QA" in letter_half else "does not name"))
 
 
 def test_the_letter_and_the_proposal_agree_on_the_job():
-    """Built from the same `values` dict, after the same alias/backfill pass. Two documents that
-    disagree about the job name is what a second values path would produce.
+    """Built from the same `values` dict, after the same alias/backfill pass. Two halves of one
+    document that disagree about the job is what a second values path would produce — and it is
+    one document now, so the disagreement would be consecutive pages contradicting each other,
+    which is worse to read and no easier to notice.
 
-    The comparand is no longer the job name, and the reason is worth writing down because the
-    obvious substitutes are both wrong. Since the title line came off (2026-09-04) a DIRECT letter
-    names the job nowhere, so `{{job_name}}` cannot be checked against a Direct proposal; and
-    swapping the whole test to GC — whose letter DOES still say "this {{job_name}} project" — only
-    moves the hole, because the GC proposal template carries its job name inside the page artwork
-    and no text assertion can see it. So the check runs on two values that both documents really
-    print from the same dict: the system name and the estimator. A second values path would still
-    be caught, which is the whole point of the test.
+    The comparand is not the job name, and the reason is worth writing down because the obvious
+    substitutes are both wrong. Since the title line came off (2026-09-04) a DIRECT letter names
+    the job nowhere, so `{{job_name}}` cannot be checked against the letter's half; and swapping
+    the whole test to GC — whose letter DOES still say "this {{job_name}} project" — only moves
+    the hole, because the GC proposal template carries its job name inside the page artwork and no
+    text assertion can see it. So the check runs on two values both halves really print from the
+    same dict: the system name and the estimator. A second values path would still be caught,
+    which is the whole point of the test.
     """
     out = _generate(cover_letter_enabled=True)
-    letter = _rendered(client.get(out["cover_letter_download_url"]).content)
-    proposal = _rendered(client.get(out["docx_download_url"]).content)
+    letter_half, proposal_half = _halves(client.get(out["docx_download_url"]).content)
     for shared in ("Treadwell MACRO Flake", "Kyle Loseke"):
-        assert shared in letter and shared in proposal, shared
-    # And the job name still round-trips into the proposal, which is now the only document in the
-    # pair that prints it on a Direct bid.
-    assert "Cover Letter QA" in proposal
+        assert shared in letter_half, "%r is missing from the letter's half" % shared
+        assert shared in proposal_half, "%r is missing from the proposal's half" % shared
+    # And the job name still round-trips into the proposal, which is the only half of the pair
+    # that prints it on a Direct bid.
+    assert "Cover Letter QA" in proposal_half
+    assert "Cover Letter QA" not in letter_half, (
+        "Will's Direct copy has started naming the job — update _NAMES_THE_JOB, which the "
+        "audience test above reads, rather than only this line")
 
 
-def test_a_paragraph_override_reaches_the_letter():
-    """The document editor's channel, keyed by the block id /api/coverletter-template hands out."""
-    greeting = _greeting_block(_template())
-    out = _generate(cover_letter_enabled=True,
-                    cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}})
-    text = _rendered(client.get(out["cover_letter_download_url"]).content)
-    assert "Good morning," in text and "Hello," not in text
+# ── (b4) no letter exists for this bid, so none is invented ─────────────────
+# `pick_template` resolves an unmapped work type to (epoxy, Direct) and always has: the document
+# editor needed something to render, and the wrong letter on screen was better than an empty tab.
+# That stopped being the right answer when the letter became signed paperwork. A sealer or budget
+# bid has no letter of its own, and the epoxy one would open a GC sealer contract in the owner's
+# voice, name Treadwell Epoxy as the system, and offer epoxy-only adders — to a customer, on
+# page 1, above a price for different work.
+#
+# So `/api/generate` refuses by name (400) when `has_template` is False. Refusing is right and
+# silently substituting is not, because the estimator ASKED for a letter: sending the wrong one
+# and sending none are both worse than being told which work types have one.
+@pytest.mark.parametrize("work_type", ["sealer", "budget"])
+def test_a_work_type_with_no_letter_is_refused_by_name(monkeypatch, work_type):
+    """The two work types the picker has no letter for. Refused with a message the UI can show as
+    it stands — it names the work type and it names the way out — because a 400 whose body says
+    "bad request" leaves an estimator with a button that does nothing.
+
+    A SPY ON THE WRITER IS THE REAL ASSERTION. A 400 alone would also be satisfied by a route that
+    built the epoxy letter, merged it, and then refused for some unrelated reason; what must be
+    true is that no letter was filled at all. Asserted with the real `fill_cover_letter` replaced
+    by something that fails the test if it is reached."""
+    called = []
+    monkeypatch.setattr(main.cover_letter_writer, "fill_cover_letter",
+                        lambda **kw: called.append(kw) or b"")
+    r = client.post("/api/generate", json=dict(BASE, work_type=work_type,
+                                               cover_letter_enabled=True))
+    assert r.status_code == 400, (
+        "a %s bid with the cover letter ticked was not refused (%s). If it generated, the "
+        "customer's page 1 is the EPOXY letter: wrong system, wrong adders, over a price for "
+        "different work." % (work_type, r.status_code))
+    detail = r.json()["detail"]
+    assert work_type in detail, (
+        "the refusal does not name the work type, so the estimator cannot tell which bids have a "
+        "letter: %r" % detail)
+    assert "Cover letter" in detail or "cover letter" in detail.lower(), detail
+    assert "Untick" in detail or "untick" in detail, (
+        "the refusal does not say how to proceed: %r" % detail)
+    assert called == [], (
+        "the fallback letter was built before the refusal — %d fill(s). `pick_template` resolves "
+        "an unmapped work type to Direct/Epoxy, so this is the wrong document being produced, "
+        "not merely wasted work." % len(called))
 
 
-def test_a_stale_template_version_drops_the_overrides():
-    """A block id is a position in a walk over ONE file. A regenerated template shifts every id
-    after the changed paragraph, so a draft captured against the old one would rewrite the wrong
-    sentence — silently, in a document a customer reads."""
-    greeting = _greeting_block(_template())
-    out = _generate(cover_letter_enabled=True,
-                    cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}},
-                    cover_letter_template_version="not-the-current-version")
-    text = _rendered(client.get(out["cover_letter_download_url"]).content)
-    assert "Hello," in text and "Good morning," not in text
+@pytest.mark.parametrize("work_type", ["sealer", "budget"])
+def test_the_same_bid_still_generates_without_a_letter(work_type):
+    """THE OTHER HALF, and without it the test above is satisfied by a route that refuses every
+    sealer bid outright. The refusal is scoped to the letter: unticking the box is a real way out,
+    which is what the message tells the estimator to do, so it has to work."""
+    r = client.post("/api/generate", json=dict(BASE, work_type=work_type,
+                                               cover_letter_enabled=False))
+    assert r.status_code == 200, (
+        "a %s bid cannot be generated at all now, so the refusal above tells the estimator to do "
+        "something that does not help: %s" % (work_type, r.text[:200]))
+    assert r.json()["docx_download_url"]
 
 
-def test_the_current_template_version_keeps_the_overrides():
-    """The other half of the guard: matching versions must NOT drop an edit the estimator made."""
-    body = _template()
-    greeting = _greeting_block(body)
-    out = _generate(cover_letter_enabled=True,
-                    cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}},
-                    cover_letter_template_version=body["template_version"])
-    assert "Good morning," in _rendered(client.get(out["cover_letter_download_url"]).content)
+def test_the_work_types_that_do_have_a_letter_are_not_refused():
+    """The counterexample for the refusal: a guard keyed on the wrong thing — a truthiness slip,
+    an inverted `not` — would refuse everything, and both tests above would still pass. Every
+    mapped variant is asserted, so the gate cannot be a blanket."""
+    for wt, aud in VARIANTS:
+        assert clw.has_template(wt, aud) is True, (wt, aud)
+    r = client.post("/api/generate", json=dict(BASE, cover_letter_enabled=True))
+    assert r.status_code == 200, (
+        "an epoxy/Direct bid — which HAS a letter — was refused: %s" % r.text[:200])
 
 
-@pytest.fixture
-def identical_mtimes():
-    """Force Direct/Epoxy.docx and GC/Epoxy.docx to the same mtime, and put them back after.
-
-    Not a contrived condition: all seven letters are written by one generator run, and a `git
-    checkout` or a Docker `COPY` stamps a whole tree at once. The test below would pass by luck on
-    a box where the two files happened to land a few hundred nanoseconds apart."""
-    paths = [clw.pick_template("epoxy", "Direct"), clw.pick_template("epoxy", "GC")]
-    saved = [(p, p.stat().st_atime_ns, p.stat().st_mtime_ns) for p in paths]
-    stamp = saved[0][2]
-    for p in paths:
-        os.utime(p, ns=(stamp, stamp))
-    yield
-    for p, atime, mtime in saved:
-        os.utime(p, ns=(atime, mtime))
-
-
-def test_an_override_captured_on_another_variant_is_dropped(identical_mtimes):
-    """THE REASON `template_version` IS NOT A BARE MTIME HERE.
-
-    With the two files stamped identically — see the fixture — mtime alone cannot tell Direct from
-    GC, so this payload (a Direct edit replayed on a GC generate) would sail through the guard and
-    rewrite whichever GC sentence happened to sit at that index, in a document a customer reads.
-    The variant prefix is the server-side half of proposal-review.js's per-template
-    `overrideKey(wt, audience)` store."""
-    direct = _template("epoxy", "Direct")
-    gc = _template("epoxy", "GC")
-    assert direct["template_version"].split("@")[1] == gc["template_version"].split("@")[1], (
-        "the fixture did not equalise the mtimes; this test would then pass for the wrong reason")
-    assert direct["template_version"] != gc["template_version"]
-    greeting = _greeting_block(direct)
-    out = _generate(audience="GC", cover_letter_enabled=True,
-                    cover_letter_paragraph_overrides={str(greeting["id"]): {"text": "Good morning,"}},
-                    cover_letter_template_version=direct["template_version"])
-    text = _rendered(client.get(out["cover_letter_download_url"]).content)
-    assert "Hello," in text and "Good morning," not in text
+# ── (b5) the signature's contact line ────────────────────────────────────────
+# `{{estimator_contact_line}}` replaced the literal "[ESTIMATOR EMAIL]" that all seven templates
+# printed at the customer until 2026-09-09. It was the one placeholder that needed no copy
+# decision — the tool already knew who was signing — and it became urgent the moment the letter
+# stopped being a document nobody rendered and became page 1 of the proposal .docx.
+#
+# THE WHOLE LINE IS ONE TOKEN, which is the design worth pinning: a template that said
+# "{{estimator_email}} | wetreadwell.com" would show a customer " | wetreadwell.com" whenever the
+# address was unresolvable, and a dangling pipe in a signature reads as a broken document.
+def _signature_block(docx_bytes):
+    """`[name line, contact line, company line]` from a letter or a merged proposal."""
+    lines = [p.text.strip() for p in
+             pw._iter_all_paragraphs(docx.Document(io.BytesIO(docx_bytes))) if p.text.strip()]
+    i = next((i for i, t in enumerate(lines) if "| Estimator" in t), None)
+    assert i is not None, (
+        "no '<name> | Estimator' line in this document, so the signature cannot be located; "
+        "the letter's closing block has been reworded and this helper needs re-deriving")
+    return lines[i:i + 3]
 
 
-def test_the_version_stamp_names_the_variant_actually_opened():
-    """Built from the RESOLVED key, so the epoxy fallback and the audience-agnostic gyp entry
-    stamp the file that was opened rather than the one that was asked for."""
-    assert main._cover_letter_template_version("sealer", "GC").startswith("epoxy:Direct@")
-    assert main._cover_letter_template_version("gyp", "GC").startswith("gyp:@")
-    assert (main._cover_letter_template_version("gyp", "Direct")
-            == main._cover_letter_template_version("gyp", "GC"))
+@pytest.mark.parametrize("key", VARIANTS)
+def test_every_letter_signs_with_a_resolved_contact_line(key):
+    """No template may still print the literal, and none may print the raw token either. Per
+    variant, because the placeholder was in all seven and a fix applied to six is a customer
+    reading "[ESTIMATOR EMAIL]" on the seventh."""
+    text = _rendered(clw.fill_cover_letter(
+        work_type=key[0], audience=key[1],
+        values=dict(FULL_VALUES, estimator_email="kyle@wetreadwell.com")))
+    assert "[ESTIMATOR EMAIL]" not in text, (
+        "%s/%s still prints the literal placeholder at the customer" % (key[0], key[1]))
+    assert "{{estimator_contact_line}}" not in text, (
+        "%s/%s prints the raw token — the value never reached the writer" % (key[0], key[1]))
+    assert "kyle@wetreadwell.com | wetreadwell.com" in text, (
+        "%s/%s does not sign with the resolved contact line" % (key[0], key[1]))
 
 
-@pytest.mark.parametrize("hostile", [
-    {"not-an-int": {"text": "x"}},
-    {"0": "a string, not a dict"},
-    {"0": {"text": 17}},
-    [],                      # the proposal's list shape, sent to the dict channel
-    "nonsense",
-])
-def test_a_malformed_override_payload_cannot_break_a_generate(hostile):
-    """A stale draft or a hand-built body must never 500 the one action that produces the
-    customer's documents."""
-    r = client.post("/api/generate", json={**BASE, "cover_letter_enabled": True,
-                                           "cover_letter_paragraph_overrides": hostile})
-    # A non-dict is refused by the model itself (422) — never accepted and half-applied.
-    assert r.status_code in (200, 422), r.text
-    if r.status_code == 200:
-        assert r.json()["cover_letter_download_url"]
+def test_no_address_prints_the_site_alone_and_never_a_dangling_pipe():
+    """THE REASON THE WHOLE LINE IS ONE TOKEN. With the separator baked into the template, an
+    unresolvable address leaves a customer reading " | wetreadwell.com" under the estimator's
+    name. Three ways of having no address are asserted — absent, empty, whitespace — because the
+    writer's guard is a `_blank` check and "  " is the shape that slips past a truthiness test.
+
+    The site alone is a true, complete line, which is why it is the fallback rather than nothing:
+    a signature block with a hole in it reads as a document that failed to build."""
+    for label, extra in (("absent", {}),
+                         ("empty", {"estimator_email": ""}),
+                         ("whitespace", {"estimator_email": "   "})):
+        values = {k: v for k, v in FULL_VALUES.items() if k != "estimator_email"}
+        values.update(extra)
+        block = _signature_block(clw.fill_cover_letter(
+            work_type="epoxy", audience="Direct", values=values))
+        assert block[1] == "wetreadwell.com", (
+            "with the address %s the contact line is %r — a dangling separator, or a hole"
+            % (label, block[1]))
+        assert "|" not in block[1], (
+            "the separator survived without a value to separate (%s): %r" % (label, block[1]))
+    # The positive control: with an address, the separator IS there. Without this the assertions
+    # above would pass against a writer that had dropped the email half entirely.
+    with_email = _signature_block(clw.fill_cover_letter(
+        work_type="epoxy", audience="Direct",
+        values=dict(FULL_VALUES, estimator_email="kyle@wetreadwell.com")))
+    assert with_email[1] == "kyle@wetreadwell.com | wetreadwell.com", with_email[1]
 
 
-def test_overrides_are_applied_lowest_id_first():
-    """A draft round-trips its dict keys in whatever order it was stored. Applying them in that
-    order would make the result depend on JSON serialization, which is not a property anybody can
-    reason about."""
-    staged = main._sanitize_cover_letter_overrides({"7": {"text": "b"}, "2": {"text": "a"}})
-    assert [o["id"] for o in staged] == [2, 7]
+def test_a_payload_frozen_before_the_token_existed_prints_no_raw_token():
+    """Every draft sent between the cover letter shipping and 2026-09-09 has a `proposal_payload`
+    with no `estimator_email` and no `estimator_contact_line` in it, and those payloads are
+    replayed months later by a customer opening a portal link. The token must resolve to something
+    true, not stand there in braces on page 1 of a contract.
+
+    `estimator_name` is asserted alongside it for the same reason and by the same route: it is
+    forced to EXIST rather than derived, because inventing a signatory for a customer's contract
+    is worse than a short line — but a raw `{{estimator_name}}` is worse than both."""
+    legacy = {k: v for k, v in FULL_VALUES.items()
+              if k not in ("estimator_email", "estimator_name")}
+    text = _rendered(clw.fill_cover_letter(work_type="epoxy", audience="Direct", values=legacy))
+    for token in ("{{estimator_contact_line}}", "{{estimator_name}}", "{{estimator_email}}"):
+        assert token not in text, (
+            "a payload frozen before %s existed prints it raw on the customer's page 1" % token)
+    assert "wetreadwell.com" in text, "the signature lost its contact line entirely"
+
+
+def test_the_sent_document_and_the_customers_replay_sign_identically(monkeypatch):
+    """THE PROPERTY THE TOKEN'S OWN COMMENT CLAIMS, executed end to end on both paths.
+
+    /api/admin/proposal-pdf is service-token gated and sits in `_AUTH_PUBLIC_PATHS`, so it carries
+    no bearer: `verify_token_claims` raises, `_user_email` returns None, and BOTH halves of
+    main.py's estimator backfill no-op. A server-only resolution would therefore sign the document
+    a customer re-opens differently from the one they were sent — the estimator's address on the
+    email that went out, and a bare "wetreadwell.com" on the copy behind the link. The frontend
+    puts `estimator_email` into `tokenValues`, which rides `proposal_payload.values`, so the
+    frozen payload carries it and the replay resolves the same line from the same data.
+
+    Asserted on the SIGNATURE BLOCK rather than on the whole document, because the two do
+    legitimately differ elsewhere (the proposal_date is stamped per render)."""
+    payload = dict(BASE, cover_letter_enabled=True)
+    payload["values"] = dict(BASE["values"], estimator_email="kyle@wetreadwell.com",
+                             estimator_name="Kyle Loseke")
+
+    # 1. What the estimator generated and sent, through the authenticated route.
+    sent = client.post("/api/generate", json=payload)
+    assert sent.status_code == 200, sent.text
+    sent_block = _signature_block(client.get(sent.json()["docx_download_url"]).content)
+    assert sent_block[1] == "kyle@wetreadwell.com | wetreadwell.com", sent_block
+
+    # 2. What the customer's on-demand render produces from the frozen copy of that same payload,
+    #    with no bearer at all. LibreOffice is stubbed; the bytes it is handed are the real
+    #    merged document.
+    _pinned(monkeypatch, payload)
+    rendered_from = {}
+
+    def fake_pdf(blob):
+        rendered_from["bytes"] = blob
+        return b"%PDF-1.4"
+
+    monkeypatch.setattr(main.pdf_writer, "docx_to_pdf", fake_pdf)
+    r = client.get("/api/admin/proposal-pdf?draft_id=d1",
+                   headers={"X-Service-Token": "svc-test"})
+    assert r.status_code == 200, r.text
+    replay_block = _signature_block(rendered_from["bytes"])
+
+    assert replay_block == sent_block, (
+        "the customer's re-opened document signs differently from the one they were sent.\n"
+        "sent:   %r\nreplay: %r" % (sent_block, replay_block))
+
+
+def test_the_replay_really_has_no_signed_in_user_to_fall_back_on(monkeypatch):
+    """The counterexample for the test above, and it is the one that decides whether that test
+    means anything. If the replay route could resolve the estimator from a session, the two paths
+    would agree for a reason that has nothing to do with the frozen payload, and the test would go
+    on passing after somebody removed `estimator_email` from `tokenValues`.
+
+    So: strip the address OUT of the frozen payload and assert the replay signs with the site
+    alone. That is the failure the frontend's copy of this field prevents — proved, rather than
+    argued from the route's auth configuration."""
+    payload = dict(BASE, cover_letter_enabled=True)
+    payload["values"] = {k: v for k, v in BASE["values"].items() if k != "estimator_email"}
+    payload["values"]["estimator_name"] = "Kyle Loseke"
+    _pinned(monkeypatch, payload)
+    rendered_from = {}
+
+    def fake_pdf(blob):
+        rendered_from["bytes"] = blob
+        return b"%PDF-1.4"
+
+    monkeypatch.setattr(main.pdf_writer, "docx_to_pdf", fake_pdf)
+    r = client.get("/api/admin/proposal-pdf?draft_id=d1",
+                   headers={"X-Service-Token": "svc-test"})
+    assert r.status_code == 200, r.text
+    block = _signature_block(rendered_from["bytes"])
+    assert block[1] == "wetreadwell.com", (
+        "the replay resolved an estimator address from somewhere other than the frozen payload, "
+        "so test_the_sent_document_and_the_customers_replay_sign_identically is not testing what "
+        "it says it is: %r" % (block,))
+
+
+# ── (b3) the unfinished-wording scan ────────────────────────────────────────
+# The copy in these seven templates is a DRAFT (templates/CoverLetter/README.md) and every one of
+# them still carries bracketed instructions written TO the estimator — "[SHEEN - pick one: ...]".
+# They reached nobody while the letter was a separate document the customer portal never rendered.
+# They are page 1 of a customer's proposal now, and the document editor the README named as the
+# way to delete them is gone, so /api/generate REPORTS them and the Done page prints them before
+# anything is sent.
+#
+# WHICH DOCUMENT IS SCANNED IS THE WHOLE DESIGN, and it was got wrong once. Scanning the FILLED
+# letter reported the estimator's own free text: construction estimators write bracketed uppercase
+# shorthand as a matter of course, and "Amazon DFW7 [PHASE 2]" is a correct job name, not
+# unfinished template copy. The warning told them to untick a page they wanted, about words they
+# had typed on purpose. `template_placeholders` reads the TEMPLATE instead — no estimator text can
+# reach it, and a placeholder added by a future `prepare_cover_letter_templates.py` run is still
+# found with no list of known prefixes to maintain.
+#
+# `_expected_placeholders` below is DERIVED, not transcribed, and derived through a different
+# property than the function under test uses. The generator marks every placeholder ITALIC (`_ph`
+# is `_seg(text, italic=True)` and nothing else in that file sets italic); the scanner matches
+# brackets. So the two agree only if the shipped .docx really carries the instructions the
+# generator declares, and a hardcoded count would have gone stale the moment Hanz edits the copy.
+
+# Estimator free text, of the kind that made the filled-letter scan cry wolf. Real shapes: a
+# phase suffix on an Amazon job name, a schedule not yet fixed by the GC, an area that points at
+# a drawing. Every one matches the scanner's own pattern, which is exactly why they are the
+# regression guard: a scanner reading the filled letter reports all of them.
+#
+# KEYED BY AUDIENCE, because the two letters print different fields and a fixture that never
+# reaches the page proves nothing. Direct names no job at all (Will's copy, see _NAMES_THE_JOB)
+# and takes `work_areas` through {{cover_area_line}}; GC opens "this {{job_name}} project" and has
+# a {{schedule_notes}} token Direct does not. `system_name` is the one both print, so it appears
+# in both. Established by rendering them, not by reading the templates — and asserted per field in
+# the test below, so a copy change that drops one goes red rather than quietly weakening this.
+_ESTIMATOR_BRACKETS = {
+    "Direct": {
+        "work_areas": "Bays 1-4 [SEE PLAN A1.1]",
+        "system_name": "Treadwell MACRO Flake [ALT 1]",
+    },
+    "GC": {
+        "job_name": "Amazon DFW7 [PHASE 2]",
+        "project_name": "Amazon DFW7 [PHASE 2]",
+        "schedule_notes": "[TBD] pending GC schedule",
+        "system_name": "Treadwell MACRO Flake [ALT 1]",
+    },
+}
+
+
+def _expected_placeholders(key):
+    """Every bracketed instruction the SHIPPED template for `key` carries, derived from the
+    ITALIC runs rather than from the scanner's own rule.
+
+    Two independent representations of one fact: `prepare_cover_letter_templates._ph` writes
+    placeholders italic ("so it is impossible to miss on the page") and nothing else in that
+    generator sets italic, while `cover_letter_writer.template_placeholders` finds them by their
+    brackets. Agreement means the .docx on disk really contains the instructions the generator
+    declares. Bracket-splitting is done here too, because two adjacent `_ph` segments land in one
+    italic run and the scanner is right to report them as the two separate instructions they are.
+    """
+    d = docx.Document(str(clw.pick_template(*key)))
+    seen, out = set(), []
+    for para in pw._iter_all_paragraphs(d):
+        for run in para.runs:
+            if not run.italic:
+                continue
+            for piece in re.findall(r"\[[^\[\]]*\]", run.text or ""):
+                text = " ".join(piece.split())
+                if text not in seen:
+                    seen.add(text)
+                    out.append(text)
+    return out
+
+
+@pytest.mark.parametrize("key", VARIANTS)
+def test_every_instruction_the_template_carries_is_reported(key):
+    """Per variant, and in template order, because the Done page prints this list verbatim and an
+    estimator reading it is comparing it against the page in front of them.
+
+    Not vacuous in either direction. The expected set is derived from the italic runs (see
+    `_expected_placeholders`), so a scanner that found nothing fails on the missing entries and a
+    scanner that started matching ordinary prose fails on the extra ones. And the assertion below
+    that the set is non-empty is what stops the whole thing passing on a template set that had
+    quietly lost its instructions — which would be good news, but news this test must not deliver
+    silently."""
+    expected = _expected_placeholders(key)
+    assert expected, (
+        "%s/%s carries no italic bracketed instruction at all. If the copy pass has landed, that "
+        "is the good outcome — but it makes this test vacuous, so delete it deliberately rather "
+        "than letting it pass on nothing." % (key[0], key[1]))
+    got = clw.template_placeholders(*key)
+    assert got == expected, (
+        "the scan of %s/%s does not match the instructions the template actually carries.\n"
+        "missing: %r\nextra:   %r" % (key[0], key[1],
+                                      [x for x in expected if x not in got],
+                                      [x for x in got if x not in expected]))
+
+
+def test_the_seven_variants_do_not_all_carry_the_same_list():
+    """The counterexample for the parametrized test above. Seven variants each compared against
+    their own derived set would pass just as well if the scanner ignored its argument and returned
+    one fixed list — as it would if `pick_template`'s epoxy fallback were reached for every call.
+    A GC bid carries thickness and cove-height instructions a Direct bid does not, so the lists
+    genuinely differ, and this fails with a note if they ever stop differing."""
+    lists = {key: tuple(clw.template_placeholders(*key)) for key in VARIANTS}
+    assert len(set(lists.values())) > 1, (
+        "every variant now reports an identical list, so the parametrized test above cannot tell "
+        "a per-variant scan from a constant: %r" % (lists,))
+    direct, gc = tuple(lists[("epoxy", "Direct")]), tuple(lists[("epoxy", "GC")])
+    assert set(direct) < set(gc), (
+        "the GC epoxy letter used to carry strictly more instructions than the Direct one "
+        "(thickness, cove height, schedule); that relationship has changed, so re-derive what "
+        "this test is protecting. Direct=%r GC=%r" % (direct, gc))
+
+
+@pytest.mark.parametrize("audience", sorted(_ESTIMATOR_BRACKETS))
+def test_the_estimators_own_bracketed_text_is_not_called_unfinished(audience):
+    """THE REGRESSION GUARD, and the defect it guards is a warning that lied to the person it was
+    written for. Estimators type bracketed uppercase shorthand constantly — "[TBD] pending GC
+    schedule", "Amazon DFW7 [PHASE 2]", "Bays 1-4 [SEE PLAN A1.1]", "[NIC]", "[ALT 1]" — and the
+    first version of this scan read the FILLED letter, so it reported all of it as unfinished
+    template copy and offered to fix it by unticking a page the estimator wanted. It told them
+    their own correct job name was a mistake.
+
+    Both halves are asserted, and both are needed. That the strings reach the DOCUMENT is what
+    makes the second half meaningful: without it, a writer that silently dropped `work_areas`
+    would pass by never printing the text at all rather than by classifying it correctly. Writing
+    it caught exactly that — the first draft of this test put the job name on a DIRECT letter,
+    which names no job, so half two was asserting the absence of a string that was never there.
+
+    It was also a latent trap rather than only a present annoyance. While every template still
+    ships real instructions the banner is up regardless, so the false positives were invisible —
+    they would have become the SOLE trigger the moment the copy pass landed and somebody started
+    trusting the warning."""
+    fields = _ESTIMATOR_BRACKETS[audience]
+    values = dict(FULL_VALUES, **fields)
+    text = _rendered(clw.fill_cover_letter(work_type="epoxy", audience=audience, values=values))
+    # Half one: the estimator's words are really on the page.
+    for field, phrase in sorted(fields.items()):
+        assert phrase in text, (
+            "%r (%s) never reached the %s letter, so the second half of this test would pass for "
+            "the wrong reason. Move the fixture to the audience whose template prints it."
+            % (phrase, field, audience))
+    # Half two: none of them is reported as unfinished template copy.
+    reported = clw.template_placeholders("epoxy", audience)
+    joined = "\n".join(reported)
+    for field, phrase in sorted(fields.items()):
+        bracketed = re.findall(r"\[[^\[\]]*\]", phrase)
+        assert bracketed, "the %s fixture has no brackets, so it tests nothing" % field
+        for piece in bracketed:
+            assert piece not in joined, (
+                "%r — the estimator's own %s — is being reported as unfinished template copy. "
+                "The scan is reading the filled letter again; it must read the template. "
+                "Reported: %r" % (piece, field, reported))
+
+
+@pytest.mark.parametrize("audience", sorted(_ESTIMATOR_BRACKETS))
+def test_the_estimator_fixtures_would_be_caught_by_a_filled_letter_scan(audience):
+    """The counterexample for the guard above, and it needs one badly: a handful of phrases absent
+    from a list would be absent whether the scanner was right or wrong, and the test would go on
+    passing after somebody pointed it back at the filled document.
+
+    So this asserts the fixtures are genuinely dangerous — that the scanner's OWN pattern matches
+    every one of them in the FILLED letter, which is what the old implementation scanned. If a
+    future pattern legitimately stops matching "[TBD]" and friends, this fails and says so, at
+    which point the guard above has become untested rather than unneeded and the fixtures need
+    replacing with shapes the new pattern does match."""
+    fields = _ESTIMATOR_BRACKETS[audience]
+    values = dict(FULL_VALUES, **fields)
+    filled = docx.Document(io.BytesIO(clw.fill_cover_letter(
+        work_type="epoxy", audience=audience, values=values)))
+    would_report = set()
+    for para in pw._iter_all_paragraphs(filled):
+        for hit in clw._PLACEHOLDER_RE.findall(para.text or ""):
+            would_report.add(" ".join(hit.split()))
+    for field, phrase in sorted(fields.items()):
+        for piece in re.findall(r"\[[^\[\]]*\]", phrase):
+            assert piece in would_report, (
+                "%r (%s) is no longer matched by _PLACEHOLDER_RE, so it cannot demonstrate the "
+                "false positive and test_the_estimators_own_bracketed_text_is_not_called_"
+                "unfinished has become vacuous. Matched: %r" % (piece, field,
+                                                                sorted(would_report)))
+    # And the two strategies really do disagree on this document, which is the whole point.
+    assert would_report - set(clw.template_placeholders("epoxy", audience)), (
+        "scanning the filled %s letter finds nothing the template scan does not, so the two "
+        "strategies are indistinguishable here and this section proves nothing" % audience)
+
+
+def test_the_pattern_skips_ordinary_prose_in_brackets():
+    """The two bounds `_PLACEHOLDER_RE` states in its own comment, pinned because nothing else
+    can reach them: every bracketed span in all seven shipped templates is uppercase-initial and
+    long, so widening the pattern changes no current output at all and no template-level test
+    could tell. It would matter the first time a copy pass added a prose aside — "[sic]", "[see
+    plan A1.1]" — which would then be reported to an estimator as unfinished wording.
+
+    UPPERCASE FIRST LETTER, and at least three characters inside. Both directions asserted with a
+    positive control from the real set, so a pattern that stopped matching anything at all fails
+    here rather than looking strict."""
+    for prose in ("[sic]", "[see plan A1.1]", "[note - lowercase instruction]", "[2 phases]",
+                  "[]", "[OK]", "[AB]"):
+        assert clw._PLACEHOLDER_RE.findall(prose) == [], (
+            "%r reads as an unfinished instruction, so a prose aside or a two-letter bracket in "
+            "a future copy pass would be reported to the estimator as one" % prose)
+    for instruction in ("[TBD]", "[NIC]", "[ALT 1]", "[PHASE 2]",
+                        "[SHEEN - pick one: Level 2 (400 grit) / Level 3 (800 grit).]"):
+        assert clw._PLACEHOLDER_RE.findall(instruction) == [instruction], (
+            "%r is no longer matched; the pattern has become too strict to find the real "
+            "instructions" % instruction)
+
+
+def test_the_scan_survives_a_template_it_cannot_open():
+    """A warning must never be the thing that fails a generate. `template_placeholders` catches
+    everything and returns an empty list, because the estimator's document is already built by
+    the time it runs and refusing to hand it over because the ADVISORY scan tripped would be the
+    tail wagging the dog. The log line is what carries the fault."""
+    with mock.patch.object(clw.docx, "Document", side_effect=RuntimeError("package is corrupt")):
+        assert clw.template_placeholders("epoxy", "Direct") == [], (
+            "an unreadable template makes the placeholder scan raise, which fails a generate "
+            "whose documents are already complete")
+
+
+def test_an_unmapped_work_type_is_never_scanned_for_a_letter_it_cannot_have():
+    """`template_placeholders` resolves through `pick_template`, which falls back to Direct/Epoxy
+    for an unmapped work type — so asked about a sealer bid it would return the EPOXY letter's
+    instructions, describing a page that is never built. That is not a defect in the scanner: as
+    of 2026-09-09 `_generate` refuses a sealer or budget bid with the letter ticked before it gets
+    anywhere near this function (`has_template`, 400).
+
+    Pinned here so the two stay in step. If the refusal is ever relaxed, this is the test that
+    says the scan needs its own `has_template` guard rather than quietly reporting an epoxy
+    letter's unfinished wording on a sealer proposal."""
+    assert clw.has_template("sealer", "GC") is False
+    assert clw.has_template("budget", "Direct") is False
+    # The fallback really does happen, which is why the route's refusal is load-bearing.
+    assert (clw.template_placeholders("sealer", "GC")
+            == clw.template_placeholders("epoxy", "Direct")), (
+        "pick_template's epoxy fallback has changed shape; re-derive whether the placeholder "
+        "scan still needs the route's has_template refusal in front of it")
+
+
+# ── (b6) the placeholder endpoint, and the log line behind it ───────────────
+# `GET /api/cover-letter/placeholders?work_type=&audience=` -> `{work_type, audience, has_letter,
+# placeholders}`. The Done page asks this before anything is sent, with the variant out of the
+# `proposal_payload` it is about to pin.
+#
+# WHY AN ENDPOINT AND NOT A FIELD ON THE GENERATE RESPONSE. It was a field for one day and broke
+# five ways, every one the same sentence: the warning's input was not the input the document is
+# built from. `generate_result` is persisted on the draft, never cleared, and Continue does not
+# regenerate — so the page's copy could predate the estimator ticking the box, could describe the
+# epoxy/Direct letter (1 instruction) while a GC letter (4) was about to be pinned, or could
+# arrive in a shape indistinguishable from "scanned and clean". Four of the five UNDER-reported,
+# which is the direction that reaches a customer. The list is a pure function of
+# `(work_type, audience)` read off the TEMPLATE — no estimator input is in it at all — so asking
+# for it is strictly better than remembering it, and there is nothing left to go stale.
+#
+# WHAT WAS DELETED WITH THE FIELD, rather than ported: two tests that asserted the WIRE SHAPE of
+# `GenerateOut.cover_letter_placeholders` — that a letter-off generate answered `None` and a clean
+# scan answered `[]`. Those pinned a null/empty/array trichotomy that the Done page had to
+# disambiguate, and the whole point of the redesign is that it no longer has to. The claims have
+# no subject any more; they are recorded here rather than left as tests of a field that is gone.
+def test_the_placeholder_endpoint_answers_for_every_mapped_variant():
+    """One request per variant, each answering ITS OWN template's instructions in template order.
+
+    Expected is DERIVED, through a different property than the endpoint uses: the generator marks
+    every placeholder ITALIC (`prepare_cover_letter_templates._ph` is `_seg(text, italic=True)`,
+    and nothing else in that file sets italic) while the scan finds them by their brackets. See
+    `_expected_placeholders`. A hardcoded count would go stale the moment Hanz edits the copy, and
+    a self-comparison against `template_placeholders` would prove only that the route calls it."""
+    for wt, aud in VARIANTS:
+        r = client.get("/api/cover-letter/placeholders?work_type=%s&audience=%s"
+                       % (wt, aud or ""))
+        assert r.status_code == 200, (wt, aud, r.text)
+        body = r.json()
+        assert body["has_letter"] is True, (
+            "%s/%s has a letter on disk and the endpoint says it does not, so the Done page "
+            "cannot warn about a page it is going to send" % (wt, aud))
+        expected = _expected_placeholders((wt, aud))
+        assert expected, (
+            "%s/%s carries no italic bracketed instruction at all. If the copy pass has landed "
+            "that is the good outcome, but it makes this comparison vacuous for that variant — "
+            "delete it deliberately rather than letting it pass on nothing." % (wt, aud))
+        assert body["placeholders"] == expected, (
+            "the endpoint's answer for %s/%s does not match the instructions the template "
+            "actually carries.\nmissing: %r\nextra:   %r"
+            % (wt, aud, [x for x in expected if x not in body["placeholders"]],
+               [x for x in body["placeholders"] if x not in expected]))
+
+
+def test_two_variants_that_differ_really_answer_differently():
+    """THE GUARD FOR THE DEFECT THAT MADE THIS AN ENDPOINT. The cached list showed an estimator 1
+    instruction while the customer received 4, because the list was for epoxy/Direct and the
+    letter being pinned was epoxy/GC. If this endpoint answered the same thing for every variant —
+    a hardcoded list, an ignored argument, `pick_template`'s epoxy fallback reached for every
+    call — then the frontend asking with the right variant would buy nothing, and the test above
+    would pass per-variant while proving nothing about the axis that broke.
+
+    So: the answers must genuinely differ, and the specific relationship is pinned. If it ever
+    stops holding, this fails with a note rather than going quietly vacuous."""
+    answers = {}
+    for wt, aud in VARIANTS:
+        r = client.get("/api/cover-letter/placeholders?work_type=%s&audience=%s" % (wt, aud or ""))
+        answers[(wt, aud)] = tuple(r.json()["placeholders"])
+    assert len(set(answers.values())) > 1, (
+        "every variant answers an identical list, so asking with the right variant cannot "
+        "matter and the per-variant test above cannot tell a real scan from a constant: %r"
+        % (answers,))
+    direct, gc = answers[("epoxy", "Direct")], answers[("epoxy", "GC")]
+    assert set(direct) < set(gc), (
+        "the GC epoxy letter used to carry strictly more instructions than the Direct one "
+        "(thickness, cove height, schedule) — that is the pair whose 1-versus-4 mismatch reached "
+        "a customer. The relationship has changed; re-derive what this is protecting. "
+        "Direct=%r GC=%r" % (direct, gc))
+    assert len(gc) > len(direct), (len(direct), len(gc))
+
+
+@pytest.mark.parametrize("work_type", ["sealer", "budget"])
+def test_a_variant_with_no_letter_answers_false_and_an_empty_list(work_type):
+    """Never a 404 — "this bid has no cover letter" is a true answer, not an error, and a screen
+    that has to distinguish 404-because-unmapped from 404-because-the-route-moved will get it
+    wrong.
+
+    AND THE LIST IS EMPTY, NOT THE FALLBACK'S. `pick_template` resolves an unmapped work type to
+    (epoxy, Direct), so a naive implementation would answer a sealer bid with the EPOXY letter's
+    instructions: a list of things wrong with a page that is never going to be built, since
+    /api/generate refuses that combination outright (400). The two fields would then contradict
+    each other — `has_letter: false` beside a list of what is unfinished on it — and whichever the
+    frontend believed, it would be describing a document that does not exist."""
+    r = client.get("/api/cover-letter/placeholders?work_type=%s&audience=Direct" % work_type)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["has_letter"] is False, (
+        "%s has no letter of its own and the endpoint claims it does; /api/generate refuses this "
+        "combination, so the two halves of the product now disagree" % work_type)
+    assert body["placeholders"] == [], (
+        "%s answered %r — that is the epoxy fallback's list, describing a page that will never "
+        "be built. Compare: epoxy/Direct answers %r."
+        % (work_type, body["placeholders"], _expected_placeholders(("epoxy", "Direct"))))
+    # The counterexample: the fallback really would have produced something, so the empty list is
+    # a decision and not an accident of there being nothing to find.
+    assert clw.template_placeholders(work_type, "Direct"), (
+        "pick_template's epoxy fallback no longer yields any instruction for an unmapped work "
+        "type, so the assertion above cannot fail and this guard has become vacuous")
+
+
+def test_the_endpoint_takes_no_draft_and_no_estimator_input():
+    """It is a pure function of the variant, and that is the property the whole redesign rests on:
+    no estimator text can reach it, so nothing it reports can be the estimator's own words read
+    back at them as an error. (That was its own defect once — "Amazon DFW7 [PHASE 2]" reported as
+    unfinished template copy — fixed by scanning the template instead of the filled letter.)
+
+    Asserted on the SIGNATURE, which is what makes it a claim rather than an observation: two
+    query parameters, both strings, and no `Request`, no body model, no draft id. A route that
+    grew a draft id would be able to reach a draft's values, and a route that grew a `Request`
+    could reach headers and cookies — both of which put a caller's data into an answer that is
+    supposed to depend on nothing but the variant."""
+    import inspect
+    params = inspect.signature(main.api_cover_letter_placeholders).parameters
+    assert set(params) == {"work_type", "audience"}, (
+        "the placeholder endpoint grew a parameter: %r. It answers a question about a TEMPLATE; "
+        "anything caller-specific in here is a way for an estimator's own words to come back as "
+        "an error." % sorted(params))
+    for name, p in params.items():
+        # `str` or the string "str": main.py has `from __future__ import annotations`, so
+        # annotations arrive unevaluated. Both spellings mean the same declaration, and a test
+        # that insisted on one would break on an unrelated import change.
+        assert p.annotation in (str, "str"), (
+            "%s is annotated %r — anything but a plain string is a richer type than a query "
+            "parameter needs, and a model here is a body in disguise" % (name, p.annotation))
+        assert p.default is not inspect.Parameter.empty, (
+            "%s has no default, so the Done page's request must always send it" % name)
+    route = next(r for r in main.app.routes
+                 if getattr(r, "path", "") == "/api/cover-letter/placeholders")
+    assert set(route.methods) == {"GET"}, (
+        "the endpoint accepts %r — a POST twin is a second contract, and a body is exactly the "
+        "thing this must not have" % (route.methods,))
+    assert not route.dependant.body_params, route.dependant.body_params
+    assert {p.name for p in route.dependant.query_params} == {"work_type", "audience"}
+    # And it really is read-only: no draft is loaded, nothing is written.
+    r = client.get("/api/cover-letter/placeholders")
+    assert r.status_code == 200 and r.json()["work_type"] == "epoxy", r.text
+
+
+def test_the_endpoint_echoes_the_variant_it_answered_about():
+    """The Done page fires this while the estimator can still change things, and a stray earlier
+    response arriving late is the browser's own version of the staleness this replaced. Echoing
+    the variant is what lets a caller tell whose answer it is holding — worth pinning because a
+    tidy-up that dropped the echo would take that ability away silently."""
+    r = client.get("/api/cover-letter/placeholders?work_type=POLISH&audience=GC")
+    body = r.json()
+    assert body["work_type"] == "polish", (
+        "the echo is not normalised, so a caller comparing it against its own lowercase "
+        "work_type would read every answer as somebody else's: %r" % body["work_type"])
+    assert body["audience"] == "GC", body["audience"]
+    assert body["has_letter"] is True and body["placeholders"], body
+
+
+def test_the_generate_log_still_records_what_went_out(caplog):
+    """THE SCAN IS LOG-ONLY NOW, and its remaining job is the audit trail: a letter that went to a
+    customer with draft instructions on it has to be answerable from container logs afterwards,
+    because nothing is stored per send that would say so.
+
+    KEPT FROM THE FIELD ERA, with its claim re-pointed. It used to assert that the scanner is not
+    called on the letter-off path so nothing could leak onto the wire; the wire is gone, but the
+    claim is not vacuous — it now says the log does not carry a warning about a letter that was
+    never built, and DOES carry the instructions of the variant that actually was. A scan of the
+    wrong variant would put the wrong list in the audit trail, which is worse than none: it would
+    answer "what did we send" with somebody else's answer.
+
+    The spy is still the load-bearing part. A route that scanned unconditionally and discarded the
+    result would satisfy any assertion about the log while doing the work, and the next refactor
+    keeps the scan and drops the discard."""
+    calls = []
+    # Held BEFORE the patch. `main.cover_letter_writer` IS the `clw` module object, so a spy that
+    # reached for `clw.template_placeholders` by name would call ITSELF — an infinite recursion
+    # that surfaces as a 500 from the route and reads like a product bug. (It did, once.)
+    real = clw.template_placeholders
+
+    def spy(work_type, audience=None):
+        calls.append((work_type, audience))
+        return real(work_type, audience)
+
+    with mock.patch.object(main.cover_letter_writer, "template_placeholders", spy):
+        with caplog.at_level("WARNING", logger="proposal_tool"):
+            _generate()
+            assert calls == [], (
+                "the template was scanned for a bid with no cover letter: %r" % (calls,))
+            assert not [r for r in caplog.records if "cover letter" in r.getMessage().lower()], (
+                "a letter-off generate wrote a cover-letter warning to the log, so the audit "
+                "trail claims a page 1 that was never built")
+            caplog.clear()
+            _generate(audience="GC", cover_letter_enabled=True)
+
+    assert calls == [("epoxy", "GC")], (
+        "the scan did not run exactly once for the variant actually being built: %r. A GC send "
+        "logged against the Direct letter's instructions is an audit trail that lies." % (calls,))
+    warned = [r.getMessage() for r in caplog.records
+              if "placeholder" in r.getMessage().lower()]
+    assert len(warned) == 1, (
+        "expected exactly one placeholder warning for a letter-on generate, got %r" % (warned,))
+    line = warned[0]
+    # The GC letter's own instructions, which the Direct letter does not carry — so the log names
+    # the variant by its content even though it does not print the variant itself.
+    gc_only = [p for p in _expected_placeholders(("epoxy", "GC"))
+               if p not in _expected_placeholders(("epoxy", "Direct"))]
+    assert gc_only, "the two variants no longer differ; this assertion cannot fail"
+    for phrase in gc_only:
+        assert phrase in line, (
+            "the log line does not carry the GC letter's own instruction %r, so it cannot be "
+            "told from a Direct send afterwards. Line: %r" % (phrase, line))
 
 
 # ── (b2) the label bullets: bold to the colon, normal after ──────────────────
@@ -892,24 +1642,6 @@ def test_an_edited_label_bullet_keeps_its_bold_label_and_normal_detail(key):
         assert len(runs) == 2, "the edit was not split at the colon: %r" % (runs,)
         assert runs[0][1] is True and runs[0][0].rstrip().endswith(":"), runs
         assert runs[1][1] is False, "the estimator's detail came out bold: %r" % (runs,)
-
-
-def test_an_edited_bullet_round_trips_through_the_live_generate():
-    """The same round trip through `/api/generate` rather than the writer, because that is the
-    path the estimator's browser actually takes: id-keyed dict → `_sanitize_cover_letter_overrides`
-    → `_sanitize_paragraph_overrides` → the writer. A split that only worked when called directly
-    would be a fix nobody could see."""
-    body = _template()
-    sched = next(b for b in body["blocks"] if b["text"].strip().startswith("Schedule:"))
-    out = _generate(cover_letter_enabled=True,
-                    cover_letter_template_version=body["template_version"],
-                    cover_letter_paragraph_overrides={
-                        str(sched["id"]): {"text": "Schedule: two mobilizations, second in June."}})
-    d = docx.Document(io.BytesIO(client.get(out["cover_letter_download_url"]).content))
-    runs = _bullet_runs(d)["Schedule:"]
-    assert "two mobilizations" in "".join(t for t, _b in runs), runs
-    assert runs[0] == ("Schedule:", True), runs
-    assert all(b is False for _t, b in runs[1:]), runs
 
 
 def test_the_estimators_own_formatting_outranks_the_split():
@@ -1049,175 +1781,7 @@ def test_the_rendered_pdf_shows_the_split_not_one_bold_line():
         doc.close()
 
 
-# ── (c) /api/coverletter-template ────────────────────────────────────────────
-def test_the_template_endpoint_serves_the_block_model():
-    body = _template("polish", "GC")
-    assert body["work_type"] == "polish" and body["audience"] == "GC"
-    # Folder AND file: "Polish.docx" alone does not say which of two documents this is.
-    assert body["template_name"] == "GC/Polish.docx"
-    assert body["template_version"].startswith("polish:GC@")
-    assert body["geometry"]["page"]["w_pt"] == 612.0
-    ids = [b["id"] for b in body["blocks"]]
-    assert ids == list(range(len(ids))), "block ids must be the walk's positions, in order"
-    # The fidelity metadata the editor renders from, on the same keys the proposal endpoint uses.
-    for key in ("runs", "para", "align", "list", "price_flat", "style", "in_txbx", "txbx"):
-        assert key in body["blocks"][0], key + " missing — the editor renders both documents"
-
-
-def test_the_two_audiences_are_two_different_documents():
-    assert _template("epoxy", "Direct")["template_name"] == "Direct/Epoxy.docx"
-    assert _template("epoxy", "GC")["template_name"] == "GC/Epoxy.docx"
-
-
-def test_the_template_endpoint_revalidates_cheaply():
-    """Same ETag contract as /api/proposal-template — the editor re-fetches on every open."""
-    first = client.get("/api/coverletter-template?work_type=epoxy&audience=Direct")
-    again = client.get("/api/coverletter-template?work_type=epoxy&audience=Direct",
-                       headers={"If-None-Match": first.headers["etag"]})
-    assert again.status_code == 304
-
-
-def test_the_etag_distinguishes_the_audiences():
-    """One cached response serving both variants would show the estimator the wrong document and,
-    worse, hand out ids captured against it."""
-    direct = client.get("/api/coverletter-template?work_type=epoxy&audience=Direct")
-    gc = client.get("/api/coverletter-template?work_type=epoxy&audience=GC",
-                    headers={"If-None-Match": direct.headers["etag"]})
-    assert gc.status_code == 200
-    assert gc.headers["etag"] != direct.headers["etag"]
-
-
-def test_an_unknown_work_type_serves_the_fallback_rather_than_an_empty_editor():
-    assert _template("sealer", "GC")["template_name"] == "Direct/Epoxy.docx"
-
-
-def test_the_media_route_only_serves_this_package_s_own_parts():
-    """Whitelisted against the package's own listing — the same rule as the proposal's media
-    route, because the name arrives in a query string."""
-    _, _, geometry = clw.describe_template("epoxy", "GC")
-    base = "/api/coverletter-template/media?work_type=epoxy&audience=GC&name="
-    ok = client.get(base + geometry["images"][0]["name"])
-    assert ok.status_code == 200 and ok.content[:4] == b"\x89PNG"
-    for bad in ("../word/document.xml", "word/document.xml", "nope.png"):
-        assert client.get(base + bad).status_code == 404
-
-
-# ── (d) /api/admin/cover-letter-pdf ──────────────────────────────────────────
-# A GET with query params, matching /api/admin/proposal-pdf exactly — the portal proxies straight
-# through to it.
-URL = "/api/admin/cover-letter-pdf?draft_id=d1"
-
-
-def _pinned(monkeypatch, payload, live=None):
-    monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
-    monkeypatch.setattr(main.drafts, "get_revision",
-                        lambda did, no: {"data": {"proposal_payload": payload}})
-    monkeypatch.setattr(main.drafts, "load_draft",
-                        lambda did: {"data": {"proposal_payload":
-                                              live if live is not None else payload}})
-
-
-def _stub_generate(monkeypatch, seen, token="cl-tok"):
-    def fake_generate(gi, request, *, persist=True, want_cover_letter=True):
-        seen["name"] = gi.values.get("project_name")
-        seen["persist"] = persist
-        seen["want_cover_letter"] = want_cover_letter
-        seen["enabled"] = gi.cover_letter_enabled
-        return main.GenerateOut(
-            work_type="epoxy", audience="Direct",
-            xlsx_download_url="/api/file/x", docx_download_url="/api/file/d",
-            pdf_download_url="/api/file/d/pdf", totals={},
-            cover_letter_download_url="/api/file/" + token)
-    monkeypatch.setattr(main, "_generate", fake_generate)
-    main._FILE_CACHE[token] = {"content": b"docx", "_pdf": b"%PDF-1.4"}
-
-
-def test_the_pdf_route_is_a_get_with_query_params():
-    """The portal's proxy is built against this signature. A POST-with-a-body twin would be a
-    second contract to keep in step with /api/admin/proposal-pdf."""
-    route = next(r for r in main.app.routes
-                 if getattr(r, "path", "") == "/api/admin/cover-letter-pdf")
-    assert set(route.methods) == {"GET"}
-    assert {"draft_id", "revision_no"} <= {p.name for p in route.dependant.query_params}
-
-
-def test_the_pdf_route_is_service_token_gated(monkeypatch):
-    """It is in _AUTH_PUBLIC_PATHS so the portal can reach it without a Google session — which is
-    required, or the auth gate rejects the server-to-server call before this handler runs. The
-    only thing then standing in front of a customer's document is this header."""
-    monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
-    assert "/api/admin/cover-letter-pdf" in main._AUTH_PUBLIC_PATHS
-    for headers in ({}, {"X-Service-Token": ""}, {"X-Service-Token": "svc-tes"},
-                    {"X-Service-Token": "svc-test-extra"}):
-        assert client.get(URL, headers=headers).status_code == 401, headers
-
-
-def test_an_unset_service_token_refuses_everything(monkeypatch):
-    """An unconfigured deploy must be closed, not open. `not token_env` comes FIRST so an empty
-    env var can never compare equal to an empty header."""
-    monkeypatch.delenv("SERVICE_TOKEN", raising=False)
-    assert client.get(URL, headers={"X-Service-Token": ""}).status_code == 401
-
-
-def test_the_pdf_renders_the_pinned_revision_not_the_live_draft(monkeypatch):
-    """Same reason as the proposal PDF: a letter a customer opens must not disagree with the
-    proposal below it because the estimator has since re-saved."""
-    seen = {}
-    _pinned(monkeypatch,
-            {"values": {"project_name": "Snap"}, "cover_letter_enabled": True},
-            live={"values": {"project_name": "LIVE"}, "cover_letter_enabled": True})
-    _stub_generate(monkeypatch, seen)
-    r = client.get(URL + "&revision_no=2", headers={"X-Service-Token": "svc-test"})
-    assert r.status_code == 200, r.text
-    assert r.headers["content-type"].startswith("application/pdf")
-    assert seen["name"] == "Snap"
-    assert seen["persist"] is False, "a customer's letter render wrote to the estimator's draft"
-
-
-def test_a_project_without_a_cover_letter_is_404_by_name(monkeypatch):
-    """404, NOT 500 — the portal passes it through to the customer as "no cover letter", and a
-    500 there reads as a broken feature instead of a project that simply has none. The body names
-    the missing thing, because that sentence is what the portal shows."""
-    seen = {}
-    _pinned(monkeypatch, {"values": {"project_name": "No letter"}})
-    _stub_generate(monkeypatch, seen)
-    r = client.get(URL, headers={"X-Service-Token": "svc-test"})
-    assert r.status_code == 404
-    assert "cover letter" in r.json()["detail"].lower()
-    assert seen == {}, "a project with no cover letter still ran a full generate"
-
-
-def test_an_ungenerated_proposal_is_422(monkeypatch):
-    monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
-    monkeypatch.setattr(main.drafts, "load_draft", lambda did: {"data": {"project_name": "x"}})
-    assert client.get(URL, headers={"X-Service-Token": "svc-test"}).status_code == 422
-
-
-def test_a_missing_revision_is_404(monkeypatch):
-    monkeypatch.setitem(os.environ, "SERVICE_TOKEN", "svc-test")
-    monkeypatch.setattr(main.drafts, "get_revision", lambda did, no: None)
-    assert client.get(URL + "&revision_no=9",
-                      headers={"X-Service-Token": "svc-test"}).status_code == 404
-
-
-def test_a_render_failure_is_a_500_that_names_the_letter(monkeypatch):
-    """It must not fall back to serving the proposal, and it must not return 200 with nothing.
-    The estimator reading "sent" while the customer sees an empty viewer is the failure this whole
-    file is written against."""
-    seen = {}
-    _pinned(monkeypatch, {"values": {"project_name": "Boom"}, "cover_letter_enabled": True})
-    _stub_generate(monkeypatch, seen, token="cl-boom")
-    main._FILE_CACHE["cl-boom"] = {"content": b"docx"}      # no memoized _pdf -> a real render
-
-    def boom(_blob):
-        raise RuntimeError("soffice exited 1")
-    monkeypatch.setattr(main.pdf_writer, "docx_to_pdf", boom)
-    r = client.get(URL, headers={"X-Service-Token": "svc-test"})
-    assert r.status_code == 500
-    assert "cover letter" in r.json()["detail"].lower()
-
-
-# ── (e) PortalPublishIn.has_cover_letter ─────────────────────────────────────
+# ── (c) PortalPublishIn.has_cover_letter ────────────────────────────────────────
 def test_has_cover_letter_defaults_to_forwarding_nothing():
     """Same contract as require_deposit beside it: omitted means the portal keeps its stored
     value, so a re-send from an older page cannot switch a customer's letter off."""

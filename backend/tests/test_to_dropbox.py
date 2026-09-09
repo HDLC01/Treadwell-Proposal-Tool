@@ -114,12 +114,16 @@ def _stub_route(monkeypatch, *, owner_subfolder=""):
     monkeypatch.setattr(main.drafts, "load_draft", lambda i: {"id": i, "data": data})
     monkeypatch.setattr(main.drafts, "save_draft", lambda i, d, **k: None)
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
-    # `want_cover_letter` is DECLARED, not absorbed by a **kw. A double that swallowed it would
-    # keep passing while the route quietly stopped opting out — and the route's own broad `except`
-    # turns a TypeError here into a 200 with a warning, so the miss surfaces as a baffling KeyError
-    # on some later assertion rather than as the signature mismatch it is.
-    def fake_generate(gi, request, persist=True, want_cover_letter=True):
-        captured["want_cover_letter"] = want_cover_letter
+    # `persist` is DECLARED, not absorbed by a **kw. A double that swallowed it would keep passing
+    # while the route quietly stopped opting out of the write-back — and the route's own broad
+    # `except` turns a TypeError here into a 200 with a warning, so the miss surfaces as a baffling
+    # KeyError on some later assertion rather than as the signature mismatch it is.
+    #
+    # `want_cover_letter` used to be declared here too. It is gone from `_generate` (2026-09-09):
+    # the letter is prepended into the proposal .docx, so the document this route files to Kyle's
+    # Estimating folder is the same one the customer gets, letter included, and there is no longer
+    # a knob to turn it off.
+    def fake_generate(gi, request, persist=True):
         return main.GenerateOut(
             work_type=gi.work_type, audience=gi.audience, xlsx_download_url="/api/files/x",
             docx_download_url="/api/files/d", pdf_download_url="/api/files/d/pdf", totals={})

@@ -472,6 +472,15 @@
       <div class="lbl">Lump Sum</div>
       <div class="val money" id="rv-lump">—</div>
     </div>
+    <!-- THE COVER LETTER, NAMED BEFORE IT IS SENT. The switch lives two screens back in the
+         Proposal ribbon, and until 2026-09-09 the letter was a second document with its own
+         editor tab; now it is page 1 of the proposal itself and there is nothing to edit. So the
+         one place that lists what is about to be built has to say whether the customer's document
+         starts with a letterhead page — a review card that omits page 1 is not a review. -->
+    <div class="review-row" id="rv-cover-row" style="display:none;">
+      <div class="lbl">Cover letter</div>
+      <div class="val" id="rv-cover">—</div>
+    </div>
 
     <div class="review-actions">
       <button id="back-btn-done" type="button">← Back to Proposal</button>
@@ -481,6 +490,28 @@
 
   <!-- Post-generate success view (shown after click) -->
   <div id="post-generate" class="fp-wrap" style="display:none;">
+
+    <!-- ══ 0 · WHAT IS STILL UNFINISHED ON PAGE 1 ════════════════════════════════════
+         The letter's copy is still a draft (backend/templates/CoverLetter/README.md) and several
+         of its paragraphs are bracketed instructions to the estimator rather than finished
+         sentences. They reached nobody while the letter was a separate document the portal never
+         rendered; they are customer-facing now, and the editor that was the documented way to
+         delete them is gone. The tool will not invent the wording, so the estimator is told
+         exactly what is still standing.
+
+         A SIBLING OF THE PANEL, NOT A CHILD OF IT. It lived inside `.success-card.fp-ready`
+         first, which is `display: flex` in ROW direction until 820px — so instead of sitting
+         above the downloads it rendered as a fourth COLUMN beside them, squeezing the headline
+         and stacking the buttons. Here it is its own full-width row, read before anything in the
+         panel below it, at every width. -->
+    <div id="cl-placeholders" class="cl-ph" role="status" style="display:none;">
+      <strong id="cl-ph-head">Page 1 still has unfinished wording.</strong>
+      <p class="cl-ph-text" id="cl-ph-text">The cover letter is the first page of the proposal, and
+        these lines are instructions to you, not finished copy. They will print to the customer
+        exactly as shown. Untick <em>Cover letter</em> on the Proposal step to send the proposal on
+        its own.</p>
+      <ul id="cl-ph-list" class="cl-ph-list"></ul>
+    </div>
 
     <!-- ══ 1 · THE FILES EXIST ═══════════════════════════════════════════════════════ -->
     <div class="success-card fp-panel fp-ready">
@@ -501,13 +532,6 @@
         <button id="dl-xlsx" class="download-link secondary" type="button">↓ Estimate .xlsx</button>
         <button id="dl-docx" class="download-link secondary" type="button">↓ Proposal .docx</button>
         <button id="dl-pdf" class="download-link secondary" type="button">↓ Proposal PDF</button>
-        <!-- The cover letter, and ONLY when there is one. Hidden here rather than absent, because
-             done.js decides from the generate response: a project generated before the estimator
-             ticked the box has no letter in its result, and a button that 404s is worse than no
-             button. Same `.secondary` as its three neighbours -- a fourth solid-red control on
-             this row would compete with the send, which is the one irreversible thing here. -->
-        <button id="dl-cover" class="download-link secondary" type="button"
-                style="display:none;">↓ Cover letter .docx</button>
       </div>
     </div>
 
@@ -781,12 +805,6 @@
      truth so an estimator looks identical on every page. Must precede the page's
      own script, which reads window.TWCrm as it runs. -->
 <script src="/js/crm-core.js"></script>
-<!-- ONE READER FOR THE COVER LETTER FIELDS, on both pages that build a generate payload. The
-     editor itself no-ops here (it looks for #cl-toggle, #doc-tabs and #cl-surface and returns when
-     they are absent); what this page needs is TWCoverLetter.payloadFields, so that the Proposal
-     step's Continue and this page's "View files" rebuild cannot come to disagree about what the
-     estimator asked for. Before done.js, which reads it. -->
-<script src="/js/coverletter-editor.js?v=20260828-1"></script>
 <script src="/js/done.js"></script>
 <!-- The Dropbox filing section (was step 5) now lives on this page. -->
 <script src="/js/dropbox.js"></script>
