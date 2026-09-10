@@ -926,6 +926,16 @@ def test_applying_twice_reports_no_second_change(ran):
 
 
 @needs_node
+def test_saved_draft_markup_cells_are_not_rewritten_on_load(ran):
+    """A draft's saved rate cells must beat the current admin defaults when Estimate Review opens."""
+    r = ran["savedDraftCellsWin"]
+    assert r["changed"] == 16
+    assert r["epoxySuperPto"] == "=0.025"
+    assert r["epoxySoftCosts"] == "=0.04"
+    assert r["wroteSkippedCell"] is False
+
+
+@needs_node
 def test_the_xlsx_still_gets_the_rate_when_the_engine_is_not_up(ran):
     """`cellValues` is what /api/generate fills the workbook from. A write that only reached
     HyperFormula would be a screen that agreed with nothing it produced."""
