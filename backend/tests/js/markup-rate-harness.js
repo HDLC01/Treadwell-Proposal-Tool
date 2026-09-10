@@ -433,6 +433,18 @@ out.builtin = MK.BUILTIN;
   out.idempotent = { first, second, keys: Object.keys(h.cellValues).length };
 }
 
+{
+  const h = harness(BASE_TABS);
+  h.cellValues["Epoxy!B75"] = "=0.025";
+  h.setRules(filedEverywhere("4%"));
+  out.savedDraftCellsWin = {
+    changed: h.applyMarkupRates(),
+    epoxySuperPto: h.cellValues["Epoxy!B75"],
+    epoxySoftCosts: h.cellValues["Epoxy!B76"],
+    wroteSkippedCell: h.hfCalls.some((c) => c.sheet === "Epoxy" && c.addr === "B75"),
+  };
+}
+
 // ── 9. the .xlsx still gets the write when HyperFormula is not up ───────────
 {
   const h = harness(BASE_TABS, "Epoxy", null, false);

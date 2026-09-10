@@ -343,6 +343,16 @@ def test_hand_edited_price_lines_survive_the_sync(ran):
 
 
 @needs_node
+def test_stale_computed_tax_line_overrides_do_not_survive_the_sync(ran):
+    """Rows that merely look like an old computed price block should not outrank today's tax math."""
+    o = ran["staleComputedTaxOverrides"]
+    assert o["remainingLines"] == {}
+    assert o["payloadLines"] == {}
+    assert (o["base"], o["material"], o["remodel"], o["total"]) == (
+        "$11,945", "$420", "$900", "$13,265")
+
+
+@needs_node
 def test_gyp_area_buckets_reach_the_document(ran):
     """Gyp quotes three thicknesses as separate SF buckets and the template prints those tokens
     directly, so its area numbers live in keys nothing else uses. The whitelist carries them; this

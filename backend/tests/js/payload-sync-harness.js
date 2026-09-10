@@ -61,11 +61,15 @@ const UNITS = [
   fn("taxTreatmentMode"),
   fn("printedTaxRows"),
   fn("baseBidFigure"),
+  grab(/^  const COMPUTED_PRICE_LINE_KEYS = .*$/m, "COMPUTED_PRICE_LINE_KEYS"),
+  fn("looksLikeComputedPriceLine"),
   fn("lineOverride"),
   fn("comboSystemLines"),
   fn("comboLinesForPayload"),
   fn("computeTokenValues"),
   grab(/^  const PAYLOAD_PRICING_KEYS = \[[\s\S]*?\];$/m, "PAYLOAD_PRICING_KEYS"),
+  fn("baseDescLabel"),
+  fn("pruneComputedPriceLineOverrides"),
   fn("syncPayloadPricing"),
 ].join(NL);
 
@@ -129,7 +133,7 @@ function scopeFor(state, opts) {
       : [{ name: "Epoxy System", sf: 7400, lf: 120 }, { name: "Options", sf: 0, lf: 0 }];
   };
   const body = UNITS + NL +
-    "return { syncPayloadPricing, computeTokenValues, comboLinesForPayload, PAYLOAD_PRICING_KEYS };";
+    "return { syncPayloadPricing, computeTokenValues, comboLinesForPayload, lineOverride, PAYLOAD_PRICING_KEYS };";
   const api = new Function("state", "document", "form", "TW", "window", "templateVersion",
                            "collectOverrides", "collectBoxOverrides", "sheetSystems",
                            "templateBlocks", body)(
@@ -481,6 +485,28 @@ out.overrides = (() => {
   bad.price_overrides = "garbage";
   const pp2 = scopeFor(bad, { lumpText: "$13,265.00", form: {} }).syncPayloadPricing();
   return { kept: pp.price_overrides, garbageBecomes: pp2.price_overrides };
+})();
+
+out.staleComputedTaxOverrides = (() => {
+  const s = baseState();
+  s.proposal_remodel_tax = 900;
+  s.price_overrides = { lines: {
+    base: "$13,265 - Polished Concrete Flooring as described above (material sales tax INCLUDED)",
+    sales_tax: "$0 - Material Sales Tax",
+    remodel: "$0 - Remodel Tax",
+    total: "$0 - Total",
+  } };
+  const sc = scopeFor(s, { lumpText: "$13,265.00",
+                           form: { tax_inclusion: "BROKEN_OUT", sales_tax_handling: "BROKEN_OUT" } });
+  const pp = sc.syncPayloadPricing();
+  return {
+    remainingLines: s.price_overrides.lines,
+    payloadLines: pp.price_overrides.lines,
+    base: pp.values.base_bid_formatted,
+    material: pp.values.material_tax_formatted,
+    remodel: pp.values.tax_amount_formatted,
+    total: pp.values.total_formatted,
+  };
 })();
 
 // ── 9. THE WIRING ────────────────────────────────────────────────────────────
