@@ -81,7 +81,16 @@ prints as itself and reads as an instruction.
 | `[OPTIONS - keep the lines that apply: ...]` | all | The proposal's priced options live in its own PRICE block; these are the unpriced "add for ..." notes from the source email, and there is no field behind them. |
 | `[SOUND MAT - state the mat thickness and where it goes ...]` | Gyp | No sound-mat field. |
 | `[NOTES - add the ones this job needs: spec thickness conflict / STC & IIC / excluded mat / GC storage]` | Gyp | Source template 4 lists four job-specific notes. Writing them as boilerplate would put claims about a spec nobody has read into a customer document, so they ship as one instruction line instead of four invented sentences. |
-| `[ESTIMATOR EMAIL]` | all | `{{estimator_name}}` exists and is filled; there is no estimator-email token in the proposal vocabulary. Adding one is a small change to `computeTokenValues` + `_ensure_value_aliases` if Hanz wants the signature complete. |
+| ~~`[ESTIMATOR EMAIL]`~~ | — | **RESOLVED 2026-09-09.** It is now `{{estimator_contact_line}}`, filled from the signed-in estimator. This was the one placeholder that needed no copy decision — the tool already knew who was signing — and it became urgent when the letter stopped being a separate document nobody rendered and became page 1 of the proposal .docx: those two words were printing to customers. The whole line is one token so the `" | "` separator can be dropped with the value; `cover_letter_writer._ensure_cover_letter_values` falls back to `wetreadwell.com` alone rather than leaving a dangling pipe. |
+
+> **The remaining rows above are now customer-facing, and the tool says so.**
+> The letter became page 1 of the proposal `.docx` on 2026-09-09, and the document editor
+> that several rows above name as the mitigation ("the estimator can edit this paragraph in
+> the document editor") was removed in the same change. So `/api/generate` scans the TEMPLATE
+> for `[...]` instructions and returns them as `cover_letter_placeholders`; the Done
+> page prints them above the download buttons, verbatim, before anything is sent. That is a
+> warning, not a fix — a ticked box still mails whatever is in this table. Until the copy
+> pass lands, this feature should stay on staging.
 
 ## Tokens that ARE filled
 

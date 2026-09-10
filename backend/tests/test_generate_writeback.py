@@ -240,17 +240,19 @@ def _statements(fn):
     return "\n".join(l.split("#")[0] for l in lines)
 
 
-@pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_admin_cover_letter_pdf",
-                                    "api_draft_revision_files", "api_to_dropbox"])
+@pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_draft_revision_files",
+                                    "api_to_dropbox"])
 def test_every_replay_caller_opts_out_of_persisting(caller):
-    """These four re-run a payload frozen at some earlier moment. Named individually because each
-    one is a separate route somebody could add a fifth sibling to — and because the customer PDF
-    paths are reachable by anyone holding a portal link.
+    """These three re-run a payload frozen at some earlier moment. Named individually because each
+    one is a separate route somebody could add a fourth sibling to — and because the customer PDF
+    path is reachable by anyone holding a portal link.
 
-    `api_admin_cover_letter_pdf` is the newest and the reason this list is worth keeping: it was
-    written by copying its proposal sibling, and a copy that dropped the keyword would have
-    pushed a months-old pinned revision over the estimator's live draft every time a customer
-    opened the letter."""
+    There were four until 2026-09-09. `api_admin_cover_letter_pdf` was the newest, written by
+    copying its proposal sibling, and the reason this list is worth keeping by name: a copy that
+    dropped the keyword would have pushed a months-old pinned revision over the estimator's live
+    draft every time a customer opened the letter. That route is gone — the letter is page 1 of
+    the proposal document now — so the copy-paste risk it demonstrated moved to whoever writes
+    the next sibling, which is who this list is for."""
     src = _statements(getattr(main, caller))
     assert "_generate(" in src, f"{caller} no longer calls _generate — recheck this guard"
     assert "persist=False" in src, f"{caller} replays a stored payload AND persists it"
@@ -265,15 +267,17 @@ def test_to_dropbox_replays_read_only(monkeypatch):
     would have kept passing if the route stopped passing the estimator's chosen folder, or misspelled
     one of the kwargs the real function has no **kwargs to absorb."""
     seen = {}
+    # Held BEFORE the monkeypatch: the cover-letter assertion at the bottom asks what the REAL
+    # function will accept, and `main._generate` is our own stub by then.
+    real_generate = main._generate
     payload = {"work_type": "epoxy", "audience": "Direct",
                "values": {"project_name": "Westport", "proposal_lump_sum": 13265}}
     monkeypatch.setattr(main.drafts, "load_draft",
                         lambda i: {"id": i, "data": {"proposal_payload": payload,
                                                      "project_name": "Westport"}})
 
-    def fake_generate(gi, request, *, persist=True, want_cover_letter=True):
+    def fake_generate(gi, request, *, persist=True):
         seen["persist"] = persist
-        seen["want_cover_letter"] = want_cover_letter
         return main.GenerateOut(work_type="epoxy", audience="Direct",
                                 xlsx_download_url="/api/files/x",
                                 docx_download_url="/api/files/d",
@@ -296,15 +300,17 @@ def test_to_dropbox_replays_read_only(monkeypatch):
                                   json={"draft_id": "d1", "destination": "gyp"})
     assert r.status_code == 200, r.text
     assert seen.get("persist") is False, "filing to Dropbox wrote the stored payload back"
-    # EXECUTED, at the call site — the companion to the source-level count in test_cover_letter.py.
-    # A re-file replays the stored payload through `GenerateIn(**pp)`, so a draft that had the cover
-    # letter ticked replays with it ticked; and this route never reads the letter bytes. Before the
-    # gate, a fault in a document nobody here asked for failed a filing that has nothing to do with
-    # it. Note the route swallows exceptions into a warning, so without this the miss would show up
-    # as a 200 and a puzzling KeyError further down.
-    assert seen.get("want_cover_letter") is False, (
-        "the Dropbox re-file is building a cover letter it never files — a fault in it now takes "
-        "down a filing that does not want it")
+    # AND THE RE-FILE CANNOT OPT OUT OF THE COVER LETTER ANY MORE. This used to assert the opposite
+    # — `want_cover_letter=False`, on the grounds that a fault in a document this route never reads
+    # should not fail a filing. Since 2026-09-09 the letter is prepended into the proposal .docx
+    # (`docx_merge`), so it IS the document this route files, and the keyword is gone from
+    # `_generate` entirely. Asserted against the real signature rather than the stub, because the
+    # stub is ours and would go on accepting a keyword the real function had quietly regrown: a
+    # `want_cover_letter=False` back in this path would file Kyle's Estimating folder a copy of the
+    # proposal missing the first page the customer received.
+    assert "want_cover_letter" not in inspect.signature(real_generate).parameters, (
+        "_generate regrew a want_cover_letter knob; the Dropbox re-file would then be able to file "
+        "a proposal whose cover-letter page 1 is missing")
     kw = seen["upload_kwargs"]
     assert kw["base_path"] == "/Estimating/Gyp"     # the destination the estimator chose
     # Present even when there is no folder to reuse: a route that stops passing them files into a

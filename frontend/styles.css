@@ -1331,20 +1331,22 @@ button {
   top: 0;
 }
 
-/* …BUT NOT ON THE COVER LETTER, whose numbering level is a different level in a different file.
-   The rule above is right for the Terms clauses and its comment says why: numId 5 carries
-   `w:rPr><w:b/`, so a plain marker there would contradict the document.
-
-   The letter's labelled lines are `numId` 33/34 -> `abstractNum` 32, `lvlText` "%1." — and that
-   level has NO `w:rPr` element at all, measured across all seven templates in
-   backend/templates/CoverLetter/. So its number prints at the paragraph's own weight, and 700
-   here would make the screen one step heavier than the .docx.
-
-   Scoped to `#cl-surface`, which is the letter's own surface and never `#doc-surface`
-   (frontend/proposal-review.html:742) — so this cannot reach a Terms clause. `inherit` rather
-   than `400`, because the number should follow whatever weight its paragraph is actually in
-   rather than asserting a second fixed answer one file over. */
-#cl-surface .tw-num::before { font-weight: inherit; }
+/* UNFINISHED WORDING ON PAGE 1 — the Done page's amber notice.
+   AMBER, NOT RED, and the distinction is the one this file already makes for .cl-warn and
+   .pr-inert-warn: the proposal itself is correct and the bid can still go out today. This is a
+   page to look at before sending, not a failure. Same palette as those two so the page keeps one
+   meaning for one colour.
+   Sits above the download row inside .fp-panel, so it is read before anything is clicked. */
+.cl-ph { background: #fdf6e3; border: 1px solid #e8d9a8; border-radius: 8px;
+  padding: 12px 14px; margin: 0 0 14px; color: #7a5c00; }
+.cl-ph strong { display: block; font-size: 13.5px; margin-bottom: 4px; }
+.cl-ph-text { margin: 0 0 8px; font-size: 12.5px; line-height: 1.45; }
+/* The template's own words, quoted verbatim. Monospace and wrapping because these are long
+   bracketed instructions, and a customer-facing string that has been re-flowed or truncated on
+   screen is one an estimator can read past. */
+.cl-ph-list { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; }
+.cl-ph-list li { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere; margin: 0 0 4px; }
 
 /* "You cannot empty a numbered clause" — said where it happened, at the moment it happened.
    Emptying a clause used to be accepted on screen and printed as a lone "1." in a signed

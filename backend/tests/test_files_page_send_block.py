@@ -297,14 +297,51 @@ def test_the_downloads_are_the_outline_variant_and_it_finally_has_a_hover():
     with no working hover, because `.download-link:hover` and `.download-link.secondary` are
     both (0,2,0) and the variant, declared second, painted the button back to white on contact.
 
-    FOUR since 2026-08-28 — the optional cover letter's .docx joined the row, and it is in the list
-    rather than exempt from it for the same reason the other three are: a solid fourth would
-    compete with Send just as hard."""
+    THREE, and briefly four: the optional cover letter's .docx joined the row on 2026-08-28 and
+    left again on 2026-09-09, when the letter became page 1 of the proposal document instead of a
+    file of its own. There is no fourth download to offer, and the estimate / proposal / PDF that
+    are left are exactly the three files the project produces."""
     dl = POST.find_class("fp-dl")
     kinds = [e.id for e in dl.kids if e.tag == "button"]
-    assert kinds == ["dl-xlsx", "dl-docx", "dl-pdf", "dl-cover"]
+    assert kinds == ["dl-xlsx", "dl-docx", "dl-pdf"]
+    assert "dl-cover" not in DONE_HTML, (
+        "the separate cover-letter download is back; the letter is inside the proposal .docx, so "
+        "a second button either 404s or hands over a duplicate of page 1")
     assert all({"download-link", "secondary"} <= e.classes for e in dl.kids if e.tag == "button")
     assert _rule(STYLES, ".download-link.secondary:hover"), "the outline button has no hover state"
+
+
+def test_the_three_downloads_wrap_on_a_phone_instead_of_being_crushed():
+    """`flex: 1 1 140px`, not `1 1 0`, inside the 820px block. A zero basis makes flex items share
+    the row no matter how narrow it gets, so on a phone the three downloads become three columns
+    of about 120px and their labels wrap mid-word — "↓ Estimate .xlsx" over two lines with the
+    dot-x-l-s-x split across them. A real basis is what lets `.fp-dl`'s own `flex-wrap: wrap` do
+    the work: two per row on a phone, one row on anything wider.
+
+    THREE, AND FOUR UNTIL 2026-09-09. The rule was written on 2026-08-28 for a fourth button, the
+    cover letter's own .docx, whose longer label was what made the crush visible; the letter is
+    page 1 of the proposal document now and the button is gone with it (see
+    test_the_downloads_are_the_outline_variant_and_it_finally_has_a_hover). The COUNT changed and
+    the claim did not, which is why this is not simply deleted with the button: three at a zero
+    basis are still three crushed columns, just less obviously so, and `1 1 0` is exactly what a
+    tidy-up of a rule whose comment talks about a button that no longer exists would reach for.
+
+    Re-homed here from test_cover_letter_ui.py, which was deleted with the editor it tested. This
+    is the only claim in that file that outlived its subject.
+    """
+    phone = _media(DONE_HTML, "@media (max-width: 820px)")
+    assert phone, "the 820px block moved out of done.html — re-derive this check"
+    decls = _rule(phone, ".fp-dl .download-link")
+    assert decls, "the download-row flex rule is gone from the 820px block"
+    m = re.search(r"(?<![-\w])flex\s*:\s*([^;]+)", decls)
+    assert m, "the download buttons have no `flex` shorthand any more: %r" % decls
+    basis = m.group(1).split()[-1].strip()
+    assert basis not in ("0", "0px", "0%", "auto"), (
+        "the download buttons share a zero/auto basis, so on a phone they are crushed into one "
+        "line of narrow columns and the labels wrap mid-word: flex: %s" % m.group(1).strip())
+    # The basis only does anything because the row is allowed to wrap. Both halves or neither.
+    assert re.search(r"flex-wrap\s*:\s*wrap", _rule(DONE_HTML, ".fp-dl") or ""), (
+        "`.fp-dl` no longer wraps, so a real flex-basis just overflows the row instead")
 
 
 def test_no_button_the_javascript_rewrites_carries_an_icon():
@@ -313,7 +350,7 @@ def test_no_button_the_javascript_rewrites_carries_an_icon():
     deleted by the first click and never comes back, so the icon is not a styling choice here,
     it is a bug with a delay on it. Icons go in section heads and on the two buttons nothing
     rewrites (Add a photo or file, Start a new project)."""
-    rewritten = ("dl-xlsx", "dl-docx", "dl-pdf", "dl-cover", "portal-btn", "gen-btn", "dbx-go")
+    rewritten = ("dl-xlsx", "dl-docx", "dl-pdf", "portal-btn", "gen-btn", "dbx-go")
     for node_id in rewritten:
         el = DOC.find_id(node_id)
         assert el is not None, node_id

@@ -86,10 +86,11 @@
       price_overrides: (s.price_overrides && typeof s.price_overrides === "object") ? s.price_overrides : {},
       // The optional cover letter, carried here for the same reason box_overrides is: this
       // rebuild is what "View files" regenerates from, and without it a project the estimator
-      // gave a letter would come back with the proposal alone — the second download disagreeing
-      // with the first one they already checked. Read through the one helper the Proposal step's
-      // Continue also uses, so the two cannot drift apart on what "enabled" means.
-      ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
+      // gave a letter would come back with the proposal alone — page 1 missing from the second
+      // download, disagreeing with the first one they already checked. Since 2026-09-09 the flag
+      // is the whole feature (the editor is gone), so it is read straight off the draft rather
+      // than through a helper on window.
+      cover_letter_enabled: !!s.cover_letter_enabled,
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);
@@ -669,6 +670,71 @@
     renderList();
   }
 
+  /** WHAT PAGE 1 WILL BE, ASKED ONCE, FOR BOTH SURFACES THAT SHOW IT.
+   *
+   *  Two places on this page talk about the cover letter — the pre-generate review row and the
+   *  post-generate warning banner — and they must never disagree, because between them they are
+   *  the only signal that the customer's document has a first page at all. They were separate
+   *  reads for one day and immediately drifted: the banner was moved onto `proposal_payload` and
+   *  the row was left on the top-level flag, so on the untick-without-Continue path the row
+   *  promised a letterhead page for a document that would not have one.
+   *
+   *  `proposal_payload` IS THE SOURCE, not top-level state. That blob is what /api/generate builds
+   *  from, what `create_revision` pins, and what `hasCoverLetter` reports to the portal — so
+   *  reading it makes every claim on this page agree with the document by construction. The
+   *  fallback mirrors `viewFiles`'s own, for a draft with no payload yet.
+   *
+   *  THE LIST IS NOT CACHED ANYWHERE. It is a pure function of (work_type, audience) read off the
+   *  TEMPLATE, and the one thing this feature has proved repeatedly is that a remembered copy goes
+   *  stale in a direction that reaches a customer. Asking twice on one page load is cheaper than
+   *  one more stale-value defect.
+   *
+   *  BOUNDED. An 8s AbortController, because the caller is fire-and-forget: `showPostGenerate`
+   *  yields at its first await and goes on to wire Send, so a request that hung forever would
+   *  leave Send live with the banner never appearing and nothing on screen to explain it. A
+   *  timeout turns "silent forever" into "could not be checked", which is a state both callers
+   *  already render.
+   *
+   *  Returns `{enabled, hasLetter, placeholders}`. `enabled:false` means no letter is being built.
+   *  `placeholders: null` means the check could not be made — never read that as "clean". */
+  async function coverLetterCheck() {
+    const st = TW.getState() || {};
+    const pp = st.proposal_payload;
+    const src = (pp && pp.values) ? pp : st;
+    if (!src.cover_letter_enabled) return { enabled: false, placeholders: null };
+    const out = { enabled: true, hasLetter: null, placeholders: null };
+    try {
+      // Awaited BEFORE the fetch, never alongside it: /api/default-notes shipped without this and
+      // fired before the auth header existed, so brand-new projects silently missed their
+      // boilerplate — a 401 that read as a missing feature (PR #124).
+      if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
+      const ctl = new AbortController();
+      const bell = setTimeout(() => ctl.abort(), 8000);
+      const q = "?work_type=" + encodeURIComponent(src.work_type || "epoxy")
+              + "&audience=" + encodeURIComponent(src.audience || "Direct");
+      let r;
+      try {
+        r = await fetch(TW.resolveApiBase() + "/api/cover-letter/placeholders" + q,
+                        { headers: TW.authHeaders(), signal: ctl.signal });
+      } finally {
+        clearTimeout(bell);
+      }
+      // `r.ok` is load-bearing on its own. A gateway or an auth proxy answers a 502/401 with its
+      // OWN json envelope, which can carry a perfectly well-formed `placeholders: []` — read
+      // without the status check that is "page 1 is clean" from a request that never arrived.
+      if (r.ok) {
+        const j = await r.json();
+        if (Array.isArray(j.placeholders)) {
+          out.placeholders = j.placeholders.filter(s => String(s || "").trim());
+          out.hasLetter = j.has_letter !== false;
+        }
+      }
+    } catch (err) {
+      console.error("cover-letter placeholder check failed", err);
+    }
+    return out;
+  }
+
   function showPreGenerate() {
     preEl.style.display = "";
     // Show the project deadline as a compact YY.MM.DD due date.
@@ -682,6 +748,37 @@
     document.getElementById("rv-worktype").textContent = (state.work_type || "epoxy").toUpperCase();
     document.getElementById("rv-audience").textContent = state.audience || "Direct";
     document.getElementById("rv-lump").textContent     = state.lump_sum_display || "—";
+    // PAGE 1, SAID OUT LOUD, BEFORE ANYTHING IS BUILT. Through `coverLetterCheck` so this row and
+    // the post-generate banner cannot come to disagree — see that function for why the source is
+    // `proposal_payload` and not the top-level flag. The row is hidden rather than showing "No",
+    // because a bid without a letter should look exactly as it did before this feature existed.
+    //
+    // IT ALSO REPORTS A WORK TYPE THAT HAS NO LETTER. /api/generate REFUSES those (sealer, budget)
+    // rather than sending the epoxy fallback, so without this the estimator ticks the box, reads
+    // "Yes — letterhead prints as page 1", presses Generate and meets a 400. `has_letter` exists
+    // on the endpoint for exactly this and was read nowhere until now.
+    (async function coverLetterRow() {
+      const row = document.getElementById("rv-cover-row");
+      const val = document.getElementById("rv-cover");
+      if (!row || !val) return;
+      const chk = await coverLetterCheck();
+      if (!chk.enabled) { row.style.display = "none"; return; }
+      if (chk.hasLetter === false) {
+        val.textContent = "No letter is written for this work type — Generate will refuse until "
+                        + "you untick it on the Proposal step";
+      } else if (chk.placeholders === null) {
+        val.textContent = "Yes — Treadwell letterhead prints as page 1 (its wording could not be "
+                        + "checked from here)";
+      } else if (chk.placeholders.length) {
+        val.textContent = "Yes — Treadwell letterhead prints as page 1, and "
+                        + chk.placeholders.length + " line"
+                        + (chk.placeholders.length === 1 ? "" : "s")
+                        + " on it still need your wording";
+      } else {
+        val.textContent = "Yes — Treadwell letterhead prints as page 1 of the proposal";
+      }
+      row.style.display = "";
+    })();
 
     document.getElementById("back-btn-done").addEventListener("click", () => {
       window.location.assign(TW.withDraft("/proposal-review.html"));
@@ -1008,6 +1105,75 @@
       }
     }
 
+    // WHAT IS STILL UNFINISHED ON PAGE 1.
+    //
+    // ASKED, NOT REMEMBERED, and that is the whole design of this block. It read the list off
+    // `result` (= `state.generate_result`) for one day and broke five different ways, every one of
+    // them the same sentence: THE WARNING'S INPUT WAS NOT THE INPUT THE DOCUMENT IS BUILT FROM.
+    // `generate_result` is persisted on the draft, never cleared, and `continueToDone` does not
+    // regenerate — it stashes a fresh `proposal_payload` and navigates straight here. So the copy
+    // sitting in state could
+    //   * predate the estimator ticking the box (generate letter-off, go back, tick, Continue) —
+    //     the banner hid itself and the customer got the bracketed instructions unwarned;
+    //   * describe a DIFFERENT variant than the one about to be pinned (generate epoxy/Direct,
+    //     change the audience to GC, Continue) — 1 instruction shown, 4 actually sent;
+    //   * arrive as a shape indistinguishable from "scanned and clean".
+    // All three failed by UNDER-reporting, which is the direction that reaches a customer.
+    //
+    // The list is a pure function of `(work_type, audience)` — it is read off the TEMPLATE, so no
+    // estimator input is in it — so the page asks the server for it with the variant it is
+    // ACTUALLY about to send, and keeps no copy that can go stale.
+    //
+    // THE VARIANT AND THE FLAG COME FROM `proposal_payload`, NOT FROM TOP-LEVEL STATE. That blob is
+    // what /api/generate builds from, what `create_revision` pins, and what `hasCoverLetter` tells
+    // the portal — so reading it here makes the banner and the document agree by construction.
+    // Gating on the top-level flag instead was defect five: tick, Continue, Back, untick, then
+    // reach this page via Projects → View files, and `viewFiles` builds from `pp` (letter IS built)
+    // while the top-level flag said false (banner hidden). The fallback to top-level state mirrors
+    // `viewFiles`'s own fallback branch, for a draft that has no payload yet.
+    //
+    // IT FAILS LOUD, NOT QUIET. If the fetch fails there is no way to know what is on page 1, and
+    // "cannot tell" is not "clean" — the banner still appears, without a list, saying so.
+    (async function showCoverLetterPlaceholders() {
+      const box = document.getElementById("cl-placeholders");
+      const ul = document.getElementById("cl-ph-list");
+      const head = document.getElementById("cl-ph-head");
+      const note = document.getElementById("cl-ph-text");
+      if (!box || !ul) return;
+
+      const chk = await coverLetterCheck();
+      if (!chk.enabled) { box.style.display = "none"; return; }
+      const list = chk.placeholders;                 // null = the check could not be made
+      if (list && !list.length) { box.style.display = "none"; return; }   // scanned, clean
+
+      ul.textContent = "";
+      (list || []).forEach((text) => {
+        const li = document.createElement("li");
+        li.textContent = text;                    // textContent: template copy, never markup
+        ul.appendChild(li);
+      });
+      if (head) {
+        head.textContent = !list
+          ? "Page 1 could not be checked."
+          : (list.length === 1
+            ? "Page 1 still has 1 line of unfinished wording."
+            : `Page 1 still has ${list.length} lines of unfinished wording.`);
+      }
+      if (note) {
+        note.textContent = !list
+          ? ("The cover letter is the first page of the proposal, and its wording is still a "
+             + "draft — parts of it are instructions to you rather than finished copy. This page "
+             + "could not reach the server to check which ones are still on it. Reload before "
+             + "sending, or untick Cover letter on the Proposal step to send the proposal on its "
+             + "own.")
+          : ("The cover letter is the first page of the proposal, and these lines are "
+             + "instructions to you, not finished copy. They will print to the customer exactly "
+             + "as shown. Untick Cover letter on the Proposal step to send the proposal on its "
+             + "own.");
+      }
+      box.style.display = "";
+    })();
+
     const xlsxBtn = document.getElementById("dl-xlsx");
     const docxBtn = document.getElementById("dl-docx");
     const pdfBtn  = document.getElementById("dl-pdf");
@@ -1023,37 +1189,11 @@
     } else {
       pdfBtn.style.display = "none";
     }
-    // THE COVER LETTER. Two things both have to be true: the backend actually built and cached a
-    // letter for THIS `result` (`cover_letter_download_url` set from `cover_letter_token`, which
-    // only exists inside `if payload.cover_letter_enabled and want_cover_letter` — see `_generate`),
-    // AND the estimator's CURRENT choice still wants one. The url alone used to be treated as the
-    // whole gate; it isn't, because `result` can be stale.
-    //
-    // `result` is `state.generate_result` (see the top of this file), persisted by every entry
-    // point into this function and NEVER cleared. `continueToDone` (proposal-review.js) does not
-    // call /api/generate — it stashes a fresh `proposal_payload` and navigates straight here — so
-    // toggling the letter off, then Continue, lands on the "restored" branch of the IIFE below
-    // with the OLD `generate_result` from before the toggle. Gating on its url alone would offer a
-    // stale letter for a proposal that no longer has one queued to send.
-    //
-    // The estimator's actual current choice is TOP-LEVEL state (`coverletter-editor.js setEnabled`,
-    // also what `payloadFields()` reads when building the generate request) — read fresh rather
-    // than the module-top `state` snapshot from page load, since nothing here re-runs it.
-    //
-    // `downloadAs` unchanged and unforked: the same bearer fetch, the same 404-after-a-restart
-    // self-heal, the same octet-stream blob that stops Chrome's viewer from swallowing the
-    // filename. Only the key and the suffix differ.
-    const coverBtn = document.getElementById("dl-cover");
-    if (coverBtn) {
-      const _wantsCoverNow = !!(TW.getState() || {}).cover_letter_enabled;
-      if (_wantsCoverNow && result.cover_letter_download_url) {
-        coverBtn.style.display = "";
-        coverBtn.addEventListener("click", () => downloadAs(
-          "cover_letter_download_url", `${safeName}_cover_letter.docx`, coverBtn));
-      } else {
-        coverBtn.style.display = "none";
-      }
-    }
+    // NO SEPARATE COVER-LETTER DOWNLOAD. There used to be a fourth button here, and a careful
+    // two-part gate on it (a letter cached for THIS `result`, AND the estimator's current choice)
+    // because `result` can be stale. Both are gone: the letter is page 1 of the .docx and the PDF
+    // that "↓ Proposal" already hands over, so there is no second file to offer and no way for the
+    // two downloads to disagree about whether the job has a letter.
 
     // Send to the inline recipient list shown above (no popup). Every recipient
     // gets a secure link + full portal access (view / ask / approve).
@@ -1170,7 +1310,8 @@
           const attachments = await sendAtts.payload();
           // What the portal is told must agree with what `create_revision` (main.py) is about to
           // pin — `row.get("data")`, i.e. the persisted `proposal_payload` — because that is the
-          // exact blob `/api/admin/cover-letter-pdf` reads back later (`pp["cover_letter_enabled"]`).
+          // exact blob `/api/admin/proposal-pdf` reads back later (`pp["cover_letter_enabled"]`,
+          // which decides whether the customer's document gets its letterhead page 1).
           // `generate_result` is the WRONG source for this: it is whatever the last successful
           // `/api/generate` call happened to return, and Continuing from the Proposal step after
           // toggling the letter does not call generate again (it stashes a fresh `proposal_payload`
