@@ -980,7 +980,8 @@ def test_every_letter_signs_with_a_resolved_contact_line(key):
         "%s/%s still prints the literal placeholder at the customer" % (key[0], key[1]))
     assert "{{estimator_contact_line}}" not in text, (
         "%s/%s prints the raw token — the value never reached the writer" % (key[0], key[1]))
-    assert "kyle@wetreadwell.com | wetreadwell.com" in text, (
+    assert "kyle@wetreadwell.com | wetreadwell.com" in [
+        ln.strip() for ln in text.splitlines()], (
         "%s/%s does not sign with the resolved contact line" % (key[0], key[1]))
 
 
@@ -1027,7 +1028,15 @@ def test_a_payload_frozen_before_the_token_existed_prints_no_raw_token():
     for token in ("{{estimator_contact_line}}", "{{estimator_name}}", "{{estimator_email}}"):
         assert token not in text, (
             "a payload frozen before %s existed prints it raw on the customer's page 1" % token)
-    assert "wetreadwell.com" in text, "the signature lost its contact line entirely"
+    # AN EXACT LINE, NOT A SUBSTRING, and CodeQL is why but the test is better for it:
+    # `"wetreadwell.com" in text` also passes for "| wetreadwell.com", which is precisely the
+    # dangling-separator bug `_ensure_cover_letter_values` builds the whole line to avoid. The
+    # claim is that the line IS the site and nothing else.
+    lines = [ln.strip() for ln in text.splitlines()]
+    assert "wetreadwell.com" in lines, (
+        "the fallback contact line is not the site on its own -- a payload with no "
+        "estimator_email should print 'wetreadwell.com' and no separator, got: %r"
+        % [ln for ln in lines if "wetreadwell" in ln])
 
 
 def test_the_sent_document_and_the_customers_replay_sign_identically(monkeypatch):

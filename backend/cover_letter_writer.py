@@ -109,6 +109,21 @@ TEMPLATE_PICKER: dict[tuple[str, str | None], str] = {
 _FALLBACK_KEY = ("epoxy", "Direct")
 
 
+def _log_safe(value: Any, limit: int = 40) -> str:
+    """One log field, with no way to forge a second line out of it.
+
+    Strips everything that is not a plain printable character and truncates, so a
+    `work_type` arriving from a query string cannot inject a newline (a forged
+    entry), a carriage return (an overwritten one) or a megabyte of padding.
+    Returns `repr`-style quoting so an empty or whitespace value is still visible
+    in the log rather than reading as a missing field."""
+    text = "" if value is None else str(value)
+    clean = "".join(ch for ch in text if ch.isprintable())
+    if len(clean) > limit:
+        clean = clean[:limit] + "..."
+    return repr(clean)
+
+
 def _norm(work_type: str | None, audience: str | None) -> tuple[str, str | None]:
     return (str(work_type or "").strip().lower(),
             (str(audience).strip() or None) if audience is not None else None)
@@ -130,8 +145,16 @@ def resolve(work_type: str | None, audience: str | None) -> tuple[str, str | Non
         return key
     if (key[0], None) in TEMPLATE_PICKER:
         return (key[0], None)
-    log.warning("No cover-letter template for (%r, %r); falling back to %s",
-                work_type, audience, _FALLBACK_KEY)
+    # SANITIZED, because this line is now reachable from a QUERY STRING.
+    # `/api/cover-letter/placeholders?work_type=...` passes its parameters
+    # straight down to here, so an unmapped value carrying newlines could forge
+    # log entries -- and these logs are the record of what actually went out on a
+    # customer's page 1, which is the one thing they are for. `%r` does escape
+    # newlines, so the practical risk was small, but a sanitizer at the log site
+    # covers every caller (including `_generate`, whose values are also
+    # user-influenced) rather than trusting each one to pick the right verb.
+    log.warning("No cover-letter template for (%s, %s); falling back to %s",
+                _log_safe(work_type), _log_safe(audience), _FALLBACK_KEY)
     return _FALLBACK_KEY
 
 
