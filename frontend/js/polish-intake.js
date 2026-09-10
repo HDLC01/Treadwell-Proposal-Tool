@@ -74,6 +74,66 @@
   // and the calculator cannot open a new project on two different sets of defaults.
   var DEFAULT_CONDITIONS = B.freshModel().conditions;
 
+  /** The FOUR polish-only conditions the live intake also asks, carried through and not priced.
+   *
+   *  WHY THEY ARE HERE. Hanz, 2026-09-11: "ytou didnt follow this on the beta polish, the toggle
+   *  buttons are different for each work type." He is right. js/index.js scopes TEN toggles by
+   *  work type and hands a polish job NINE of them; this page shipped a flat five, so an
+   *  estimator who set Renovation or Dye on the live intake arrived here to find the questions
+   *  missing and the two screens describing the same job differently.
+   *
+   *  CARRIED, NOT PRICED, and that is the whole difference from the five above. In the workbook
+   *  these four ARE cells -- Polish!B10/E25/E29/F29 -- and Kyle's formulas price them. The beta
+   *  prices from the Items & Assemblies library instead, and js/polish-bid-core.js has no notion
+   *  of any of them (grep "dye" in it and nothing comes back). So they are written to
+   *  cell_values, where the generated .xlsx and the proposal read them, and they are deliberately
+   *  NOT handed to markupChain: a key the chain does not read must not pretend to move money.
+   *  Dye's beta price is a starred default assembly on the estimate screen instead, which is the
+   *  decision recorded separately.
+   *
+   *  AND NOT IN polish_estimate.conditions, which is not an oversight. migrateModel() whitelists
+   *  condition keys against freshModel().conditions and DROPS every other one, so a key stored
+   *  there would look saved and come back missing on the next load. cell_values is their one
+   *  home; both literals are always written, so the read-back in adoptModel can never find a
+   *  blank it has to guess about.
+   *
+   *  The literals and the defaults are the live intake's, cell for cell. Renovation is Reno/New
+   *  rather than Yes/No because Polish!C17 is IF(B10="New",0.05,0.15): a blank B10 silently takes
+   *  the Reno branch and triples the patch material rate.
+   *
+   *  Renovation writes BOTH B10s, and Epoxy!B10 is deliberately first. It is where the live
+   *  intake hydrates the switch from (js/index.js reads cells[0]) and where the AI autofill puts
+   *  its New/Reno answer, so writing only the Polish one would leave this page agreeing with the
+   *  workbook and disagreeing with the two screens either side of it -- the same complaint, in
+   *  the other direction. It costs nothing on a polish bid: Epoxy!C17 multiplies an epoxy area
+   *  this job does not have. */
+  var CARRY_CONDITIONS = [
+    { key: "reno", label: "Renovation",
+      why: "Existing floor, not new construction. Triples the patch material rate.",
+      def: false, cells: ["Epoxy!B10", "Polish!B10"], on: "Reno", off: "New" },
+    { key: "dye", label: "Dye",
+      why: "Two coats of dye across the polished area.",
+      def: false, cells: ["Polish!E25"], on: "Yes", off: "No" },
+    { key: "joint_filler", label: "Joint filler",
+      why: "One kit per 3,500 sq ft. On by default, which is how the sheet ships.",
+      def: true, cells: ["Polish!E29"], on: "Yes", off: "No" },
+    { key: "remove_existing_jf", label: "Remove existing joint filler",
+      why: "Adds a fourth hand to the joint-filler crew.",
+      def: false, cells: ["Polish!F29"], on: "Yes", off: "No", needs: "joint_filler" }
+  ];
+
+  /** Every toggle on screen, in the order the live intake shows them for a polish job. */
+  function allConditions() { return CONDITIONS.concat(CARRY_CONDITIONS); }
+
+  /** The carry spec for a key, or null if the key is one of the engine five. The two lists are
+   *  kept apart everywhere precisely because only one of them reaches the pricing engine. */
+  function carrySpec(key) {
+    for (var i = 0; i < CARRY_CONDITIONS.length; i++) {
+      if (CARRY_CONDITIONS[i].key === key) return CARRY_CONDITIONS[i];
+    }
+    return null;
+  }
+
   /** The spreadsheet cells these five conditions ARE, so this page and the live intake
    *  cannot answer the same question two different ways.
    *
@@ -116,6 +176,15 @@
       var lit = M.conditions[key] ? spec.on : spec.off;
       for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
     }
+    // The carry four, whose ONLY home this is. Written unconditionally, including
+    // remove_existing_jf while Joint filler is off: the switch greys out on screen because it
+    // changes no price, not because its answer stopped existing, and a blank cell is not "No"
+    // to Kyle's formulas.
+    for (var c = 0; c < CARRY_CONDITIONS.length; c++) {
+      var cc = CARRY_CONDITIONS[c];
+      var clit = carry[cc.key] ? cc.on : cc.off;
+      for (var j = 0; j < cc.cells.length; j++) out[cc.cells[j]] = clit;
+    }
     return out;
   }
 
@@ -126,6 +195,11 @@
   var state = {};
   var M = null;
   var form = null;
+
+  // The carry four's on/off, kept OFF the model on purpose: M is what the pricing engine is
+  // handed, and migrateModel would strip these keys out of it anyway. Reassigned by adoptModel
+  // for the same reason M is -- the page can switch drafts mid-boot.
+  var carry = {};
 
   // WHICH OF THE FIVE THE ESTIMATOR SETTLED THEMSELVES. Hanz, 2026-08-27: the verbal panel must
   // respect the human. The panel is allowed to fill an empty form; it is not allowed to argue with
@@ -167,6 +241,17 @@
       M.conditions[ck] =
         String(cell).trim().toLowerCase() === String(CONDITION_CELLS[ck].on).toLowerCase();
     }
+    // The carry four, out of the same cell_values, because they have nowhere else to come back
+    // from. A blank means nobody has answered yet -- every save writes both literals -- so the
+    // documented default applies rather than a silent "off".
+    carry = {};
+    for (var i = 0; i < CARRY_CONDITIONS.length; i++) {
+      var cc = CARRY_CONDITIONS[i];
+      var v = cv[cc.cells[0]];
+      carry[cc.key] = (v == null || v === "")
+        ? cc.def
+        : String(v).trim().toLowerCase() === String(cc.on).trim().toLowerCase();
+    }
   }
 
   function isCondition(key) {
@@ -175,17 +260,53 @@
   }
 
   // ── the toggles ─────────────────────────────────────────────────────────────
+
+  /** One read for both lists, so nothing on screen has to know which of the two a key came out
+   *  of. The engine five live on the model; the carry four cannot (see CARRY_CONDITIONS). */
+  function condOn(key) {
+    return carrySpec(key) ? !!carry[key] : !!M.conditions[key];
+  }
+
   function switchHtml(c) {
-    var on = !!M.conditions[c.key];
-    return '<div class="sw' + (on ? " on" : "") + '" id="cond-' + esc(c.key) +
-      '" data-cond="' + esc(c.key) + '" role="switch" tabindex="0" aria-checked="' +
+    var on = condOn(c.key);
+    // Greyed, not hidden and not disabled: Remove existing joint filler is a real answer about
+    // the job either way, it just costs nothing while there is no joint filler to remove. The
+    // live intake says the same thing through the same class -- styles.css `.sw.inert`.
+    var needed = c.needs ? carrySpec(c.needs) : null;
+    var inert = !!(c.needs && !condOn(c.needs));
+    var why = inert
+      ? c.why + " Not affecting the price while " + ((needed && needed.label) || c.needs) +
+        " is off."
+      : c.why;
+    return '<div class="sw' + (on ? " on" : "") + (inert ? " inert" : "") + '" id="cond-' +
+      esc(c.key) + '" data-cond="' + esc(c.key) + '" role="switch" tabindex="0" aria-checked="' +
       (on ? "true" : "false") + '">' +
       '<span class="track"></span><span><span class="t">' + esc(c.label) + '</span>' +
-      '<span class="c">' + esc(c.why) + '</span></span></div>';
+      '<span class="c">' + esc(why) + '</span></span></div>';
   }
 
   function renderConditions() {
-    $("conditions").innerHTML = CONDITIONS.map(switchHtml).join("");
+    $("conditions").innerHTML = allConditions().map(switchHtml).join("");
+  }
+
+  /** Does anything on screen grey itself out because of this key? */
+  function hasDependents(key) {
+    for (var i = 0; i < CARRY_CONDITIONS.length; i++) {
+      if (CARRY_CONDITIONS[i].needs === key) return true;
+    }
+    return false;
+  }
+
+  /** Show a flip: one switch where that is enough, the whole block where it is not.
+   *
+   *  Joint filler changes the SENTENCE inside the switch below it, not just its class, so that
+   *  one has to re-render -- and re-rendering costs the keyboard caret, which is put back the
+   *  way the live intake puts it back. Every other key takes the cheap path below. */
+  function repaintCondition(key) {
+    if (!hasDependents(key)) { paintCondition(key); return; }
+    renderConditions();
+    var again = $("cond-" + key);
+    if (again && again.focus) again.focus();
   }
 
   /** Repaint ONE switch rather than the block.
@@ -196,8 +317,10 @@
   function paintCondition(key) {
     var el = $("cond-" + key);
     if (!el) return;
-    var on = !!M.conditions[key];
-    el.className = "sw" + (on ? " on" : "");
+    var spec = carrySpec(key);
+    var on = condOn(key);
+    var inert = !!(spec && spec.needs && !condOn(spec.needs));
+    el.className = "sw" + (on ? " on" : "") + (inert ? " inert" : "");
     el.setAttribute("aria-checked", on ? "true" : "false");
   }
 
@@ -208,10 +331,13 @@
    *  directions: forgetting the flag costs the panel one re-fill, while getting it wrong the other
    *  way would let the AI overwrite a decision a person had already made. */
   function toggleCondition(key, fromVerbal) {
-    if (!isCondition(key)) return;          // only the five; a stray data-cond invents nothing
+    var cc = carrySpec(key);
+    // Only the nine this page renders; a stray data-cond invents nothing.
+    if (!cc && !isCondition(key)) return;
     if (!fromVerbal) humanConditions[key] = true;
-    M.conditions[key] = !M.conditions[key];
-    paintCondition(key);
+    if (cc) carry[key] = !carry[key];
+    else M.conditions[key] = !M.conditions[key];
+    repaintCondition(key);
     // The county note quotes the Remodel tax toggle by name, so it is stale the moment one of these
     // flips. Repainted for any of the five rather than just that one: it costs a string, and a
     // note that describes the price has to describe the price as it is now.
