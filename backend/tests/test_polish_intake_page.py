@@ -354,6 +354,13 @@ def test_every_pill_link_carries_the_draft_the_page_settled_on(ran):
     Estimate" leaves this page with NO ?d= unless the sandbox gives it one, and the other two leave
     it carrying the id the estimator arrived with, which on a test copy is the real project's."""
     p = ran["pills"]
+    # NOT VACUOUS, and said out loud because for one afternoon it nearly was. Every list below is
+    # derived from this page's markup, and the harness used to slice the pills out with a pair of
+    # bare indexOf calls: when the step row's markup changed, both missed, `slice(-1, -1)` returned
+    # "", `raw` came back empty, and the harness did not crash. `withNoDraft == stampedBySharedJs`
+    # would then have been [] == [] and reported green. The harness now throws on a missed slice;
+    # this is the same guard on the test's side of the boundary, so neither half can go quiet alone.
+    assert all(p.values()), "the harness handed back an empty pill list: %r" % p
     assert p["raw"] == ["/polish-estimate.html", "/proposal-review.html", "/done.html"]
     assert p["stampedBySharedJs"][0] == "/polish-estimate.html", (
         "shared.js has started stamping the beta pages; if _WIZARD_PATH now covers them this test "
@@ -741,9 +748,17 @@ def test_the_page_loads_no_formula_engine(html):
 def test_the_step_row_says_where_you_are_and_where_the_beta_goes(html):
     """Four pills, Intake current, and step 2 pointing at the BETA calculator rather than the
     spreadsheet screen — which is the confusion Hanz reported on 2026-08-11 ("it leads me to the
-    excel sheet still")."""
-    nav = html[html.index('<nav class="steps">'):html.index("</nav>")]
-    assert '<span class="on">1 · Intake</span>' in nav, "the Intake pill is not the current page"
+    excel sheet still").
+
+    Re-expressed on 2026-09-10 against the live intake's shared `.progress` / `.step.active` shell,
+    which this page adopted in place of its own `<nav class="steps">` / `<span class="on">`. Every
+    claim above is unchanged; only the class names the shell uses are. The pills MUST carry
+    `.progress` specifically: auth.js finds them by `pageHeader.querySelector(".progress")` and
+    folds them into its one-line header, and a renamed container would silently leave them behind
+    in a `header.topbar` whose children it then replaces."""
+    nav = html[html.index('<div class="progress">'):html.index("</header>")]
+    assert '<span class="step active">1 · Intake</span>' in nav, (
+        "the Intake pill is not the current page")
     assert 'href="/polish-estimate.html">2 · Estimate' in nav, (
         "step 2 does not point at the beta calculator")
     assert 'href="/proposal-review.html">3 · Proposal' in nav
