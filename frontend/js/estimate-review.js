@@ -4078,6 +4078,10 @@ function applyMarkupRates() {
     if (rateText === null) continue;
     const formula = `=${rateText}`;
     const key = `${sheet}!${addr}`;
+    // A draft with a saved value owns that cell. Reopening Estimate Review must
+    // not silently rewrite an estimator's already-priced bid just because the
+    // admin markup table changed after the draft was created.
+    if (Object.prototype.hasOwnProperty.call(cellValues, key)) continue;
     if (cellValues[key] !== formula) { cellValues[key] = formula; changed++; }
     if (HF && HF.ready) {
       try { HF.setCellValue(sheet, addr, formula); }
