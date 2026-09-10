@@ -290,10 +290,17 @@ def test_denying_every_single_tab_still_leaves_every_shared_route_open():
 def test_the_page_refusal_only_tabs_own_no_api():
     """Named individually. These read only routes that other pages read too, so switching them off
     hides the tab and blocks the page and leaves the data reachable — and the Admin page says so on
-    screen. If one of them ever gains a private route, this fails and the wording changes with it."""
+    screen. If one of them ever gains a private route, this fails and the wording changes with it.
+
+    /polish-estimates.html JOINED THE LIST on 2026-09-10 and belongs here for the reason the list
+    exists: the Polish Estimate Database reads /api/drafts and nothing else, and that route is the
+    Proposals Database's own list. Claiming it would 403 a page nobody restricted, so the row buys
+    a page refusal and no data refusal — exactly the trade every other name here makes. The Admin
+    page needs no edit alongside it: js/admin.js:167 derives the "hides the tab only" wording from
+    the row's own empty `api` at render time rather than from a second copy of this list."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/portal.html", "/polish-intake.html", "/projects.html", "/library.html",
-        "/markup.html", "/notifications.html", "/admin.html"], (
+        "/portal.html", "/polish-intake.html", "/polish-estimates.html", "/projects.html",
+        "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
 
