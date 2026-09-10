@@ -162,6 +162,55 @@ def test_the_rail_gets_its_own_lane_at_every_width_it_floats_at(intake_css):
             "overlaps the form again — that was the 21px bug, measured at 1750px.")
 
 
+def test_the_column_sits_in_the_middle_of_what_is_left_not_jammed_against_the_rail(intake_css):
+    """Reserving the lane and pinning the column to the near edge of it are two different things.
+
+    Hanz, on a screenshot: *"move this intake form a little bit to the left please."* The test above
+    only says the rail GETS its 282px, and `margin-left:auto` satisfied that while dumping every
+    spare pixel on the LEFT -- so the form pressed against the panel with the whole gutter behind
+    it. At a 1400px body the column started at x=238 with 238 empty pixels to its left and 16 to
+    its right. This asserts the distribution as geometry, and it asserts the thing that was
+    actually wrong: the left edge must be strictly further left than `margin-left:auto` put it, at
+    every body width this query covers.
+    """
+    rule = re.search(r"\.container\{margin-left:([^;]+);margin-right:(\d+)px\}", intake_css)
+    assert rule, "the floating .container rule is gone"
+    left_expr, rail = rule.group(1), int(rule.group(2))
+    assert "auto" not in left_expr, (
+        "margin-left:auto is back. It reserves the lane and then pins the column to the near edge "
+        "of it, which is the layout Hanz asked to move left.")
+
+    calc = re.search(r"max\(0px,calc\(\(100% - (\d+)px - (\d+)px\) / 2\)\)", left_expr)
+    assert calc, f"the centring calc is not recognisable, got: {left_expr}"
+    assert int(calc.group(1)) == rail, (
+        f"the calc subtracts {calc.group(1)}px but the reservation holds {rail}px -- if these two "
+        "drift apart the column is centred against a lane that is not the one the rail uses")
+    col = int(calc.group(2))
+
+    # The column figure is not a constant of this page: .container's max-width lives in the shared
+    # stylesheet, so hard-coding 880 here would let a change there re-open the overlap silently.
+    shared = re.search(r"\.container \{[^}]*?max-width:\s*(\d+)px",
+                       (FRONTEND / "styles.css").read_text(encoding="utf-8"), re.S)
+    assert shared and int(shared.group(1)) == col, (
+        f"the calc centres a {col}px column but .container is "
+        f"{shared.group(1) if shared else '?'}px wide in styles.css")
+
+    # BODY is the containing block and the left nav eats into it -- the mistake the 21px paragraph
+    # at the top of this file records. So evaluate at body widths that actually occur, not at
+    # viewport widths.
+    for body in (1160, 1400, 1510, 1750):
+        centred = max(0, (body - rail - col) // 2)
+        pinned = max(0, body - rail - col)       # what margin-left:auto produced
+        width = min(col, body - rail - centred)  # margin-right squeezes it at the narrow end
+        assert centred + width <= body - rail, (
+            f"at a {body}px body the column runs to x={centred + width}, into the rail's lane "
+            f"which starts at x={body - rail}")
+        if pinned > 0:
+            assert centred < pinned, (
+                f"at a {body}px body the column starts at x={centred}, no further left than the "
+                f"x={pinned} margin-left:auto already gave it")
+
+
 def test_the_step_three_rail_keeps_the_lane_it_always_kept():
     """The reference, asserted so "match the step-3 widget" stays a fact and not a memory.
 
