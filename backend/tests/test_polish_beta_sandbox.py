@@ -322,11 +322,43 @@ def test_the_test_flag_is_only_set_after_a_save_that_landed():
     assert re.search(r"await fileAsTest\(", body), "the filing is not awaited"
 
 
-def test_the_writes_survive_a_navigation():
-    """The estimator can click away mid-copy; a plain fetch is cancelled on unload, which is why
-    shared.js carries its own saves this way."""
-    for fn in ("saveThenFileAsTest", "fileAsTest"):
-        assert "keepalive: true" in _block(PAGE, fn), "%s can be cancelled by a navigation" % fn
+def test_only_the_small_write_survives_a_navigation_and_the_big_one_must_not_try():
+    """keepalive on the FLAG post, never on the whole-blob PUT -- and this test used to assert the
+    opposite, which is how the bug shipped.
+
+    The estimator can click away mid-copy and a plain fetch is cancelled on unload, so the little
+    `{is_test: true}` POST carries keepalive: its body is a few dozen bytes and losing it would
+    leave a test copy sitting in Active.
+
+    THE WHOLE-BLOB PUT MUST NOT. Chromium caps a keepalive request body at ~64KiB per origin, and
+    exceeding it fails SYNCHRONOUSLY with "TypeError: Failed to fetch". A real bid's draft is
+    bigger than that, so the copy PUT died, `startSandbox` reported "Couldn't make the test copy",
+    and the beta refused to open on any project worth opening it for -- while still working
+    perfectly on the small test projects it was developed against. Measured on production
+    2026-09-10 on draft 76a1f75d.
+
+    The earlier version of this test looped over BOTH functions demanding keepalive, so it was
+    holding the defect in place: the fix could not land without it going red. Its claim was right
+    about `fileAsTest` and wrong about the PUT, and the difference is the body size, not the
+    navigation risk. shared.js's `putDraft` learned the same lesson in PR #456 and made keepalive
+    an opt-in argument; this file kept the old pattern.
+
+    What the PUT relies on instead: it runs during the sandbox's own startup, awaited, before the
+    form is shown, and if it is cancelled the next visit simply makes the copy. A retry, not a
+    loss."""
+    flag = _block(PAGE, "fileAsTest")
+    assert "keepalive: true" in flag, (
+        "the test-flag POST can be cancelled by a navigation, leaving a test copy in Active")
+
+    put = _block(PAGE, "saveThenFileAsTest")
+    assert "keepalive" not in put, (
+        "the whole-blob PUT sets keepalive again -- Chromium caps that body at ~64KiB, so this "
+        "fails synchronously on any real bid and the beta cannot open")
+    # NO assertion on the explaining comment, and the reason is instructive: `_code` strips `//`
+    # lines on purpose ("these files explain a bug by quoting it, so a raw grep matches its own
+    # prose"). A first draft of this test asserted "64KiB" appeared in the block and could never
+    # have passed. The explanation lives in polish-sandbox.js where the next person will read it;
+    # what is ENFORCED here is the behaviour, which is the right split.
 
 
 # ── the page, and the URL, move onto the copy ────────────────────────────────

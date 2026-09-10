@@ -184,7 +184,22 @@
       method: "PUT",
       headers: TW.authHeaders(),
       body: JSON.stringify({ data: blob }),
-      keepalive: true,
+      // NO keepalive, and this is the whole bug it caused. Chromium caps a keepalive request
+      // body at ~64KiB per origin, and blowing that cap fails SYNCHRONOUSLY with
+      // "TypeError: Failed to fetch" -- so this PUT died for any project whose draft is bigger
+      // than that, the catch upstream reported "Couldn't make the test copy", and the beta
+      // refused to open. It worked on small test projects and failed on every real bid, which
+      // is the worst possible shape for a bug: fine in testing, broken in use. Measured on prod
+      // 2026-09-10 against a live draft.
+      //
+      // shared.js's putDraft learned this in PR #456 ("putDraft's unconditional keepalive
+      // silently drops large-draft autosaves") and made keepalive an opt-in argument for the
+      // one case that needs it. This file kept its own copy of the old pattern and was missed.
+      //
+      // keepalive exists for a save racing PAGE TEARDOWN. This call is not that: it runs during
+      // the sandbox's own startup, it is awaited, and the form is not shown until it resolves.
+      // If the estimator does navigate away mid-flight the cost is that no test copy was made
+      // and the next visit makes one -- which is a retry, not a loss.
     });
     var body = res.ok ? await res.json().catch(function () { return null; }) : null;
     if (!res.ok || (body && body.ok === false)) {
