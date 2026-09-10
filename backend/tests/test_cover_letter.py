@@ -1035,8 +1035,8 @@ def test_a_payload_frozen_before_the_token_existed_prints_no_raw_token():
     lines = [ln.strip() for ln in text.splitlines()]
     assert "wetreadwell.com" in lines, (
         "the fallback contact line is not the site on its own -- a payload with no "
-        "estimator_email should print 'wetreadwell.com' and no separator, got: %r"
-        % [ln for ln in lines if "wetreadwell" in ln])
+        "estimator_email should print it with no separator. The signature block "
+        "ended: %r" % lines[-4:])
 
 
 def test_the_sent_document_and_the_customers_replay_sign_identically(monkeypatch):
