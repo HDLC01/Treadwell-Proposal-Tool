@@ -836,14 +836,24 @@ def test_the_ribbon_row_sits_between_the_toolbar_and_the_canvas():
     """Where it is IS the feature. `body.word-app` is a flex column and `.word-canvas` is
     `flex: 1; overflow-y: auto`, so the canvas is the scroller and everything above it is
     permanently-visible chrome — which is why this needs no `position: sticky` and no `fixed`
-    coordinates. The div is a MOUNT POINT: `ensureFmtBar` puts the bar inside it.
+    coordinates. The div is a MOUNT POINT: nothing is written in it, and `ensureFmtBar` puts the
+    bar inside it at runtime.
 
-    It was empty until 2026-08-28, when the optional cover letter's document tabs joined the row —
-    a within-step switch between two documents, which does not belong beside the step pills above
-    (that would make the letter a fifth step) and did not earn a chrome row of its own on a canvas
-    that is a to-scale preview of printed paper. So what this asserts is the thing the emptiness
-    was standing in for: the host holds nothing but that tab strip, and the bar is APPENDED, so it
-    still lands inside the row and nothing has replaced the host's contents wholesale."""
+    IT IS EMPTY AGAIN. Between 2026-08-28 and 2026-09-09 it also held `#doc-tabs`, the cover
+    letter's Proposal/Cover-letter switch — a within-step switch between two documents, which did
+    not belong beside the step pills above (that would make the letter a fifth step) and did not
+    earn a chrome row of its own on a canvas that is a to-scale preview of printed paper. The
+    letter's editor is gone and so is the strip: the letter is generated straight onto the front
+    of the proposal .docx and there is no second document to switch to.
+
+    So this pins the emptiness itself. A row that acquires markup in the HTML gets it drawn
+    BEFORE the bar mounts and beside it afterwards, in the one strip of chrome that has to stay
+    the same height for the canvas below to be bounded (see
+    test_the_canvas_is_the_scroller_so_the_ribbon_needs_no_sticky — the bound is what keeps the
+    ribbon on screen at all). And the bar is still APPENDED rather than assigned over the host's
+    contents. With the host empty those two are indistinguishable in effect today, which is
+    exactly why it is worth asserting: this row has had a second occupant once already, and the
+    next one arrives to a mount point that shares rather than one that overwrites."""
     assert PAGE.count('id="fmt-ribbon"') == 1, (
         "there is more than one ribbon host; getElementById picks one and the rest stay empty")
     i_body = PAGE.index('<body class="word-app">')
@@ -852,12 +862,20 @@ def test_the_ribbon_row_sits_between_the_toolbar_and_the_canvas():
     i_canvas = PAGE.index('<div class="word-canvas">')
     assert i_body < i_tools < i_ribbon < i_canvas, (
         "the formatting ribbon is not the row between the toolbar and the canvas")
-    host = re.search(r'<div id="fmt-ribbon" class="fmt-ribbon">(.*?)</div></div>', PAGE, re.S)
+    # Non-greedy, so it stops at the FIRST `</div>`: a host that grew a child leaves that child's
+    # opening markup in `inside`, and a host that grew a non-div leaves the element itself. Either
+    # way the emptiness assertion below fires rather than matching around the new content.
+    host = re.search(r'<div id="fmt-ribbon" class="fmt-ribbon">(.*?)</div>', PAGE, re.S)
     assert host, "the ribbon host is not a self-contained div any more"
     inside = re.sub(r"<!--.*?-->", "", host.group(1), flags=re.S)
-    assert re.fullmatch(r'\s*<div id="doc-tabs".*', inside, re.S), (
-        "something other than the document tabs was put in the ribbon host: %r" % inside[:120])
-    assert '.tw-fmtbar' not in inside, "the formatting bar is hardcoded into the page markup"
+    assert inside.strip() == "", (
+        "something was put in the ribbon host, which mounts the formatting bar: %r" % inside[:120])
+    # The bar is BUILT in js (`fmtBar.className = "tw-fmtbar"`), never written in the page. A
+    # hardcoded one would sit beside the mounted one, both live, both aimed at the same paragraph.
+    # Asserted against the whole page rather than against the host's (now empty) contents, where
+    # it could not have failed.
+    assert 'class="tw-fmtbar"' not in PAGE, (
+        "the formatting bar is hardcoded into the page markup; ensureFmtBar appends a second one")
     assert 'getElementById("fmt-ribbon") || document.body).appendChild(' in JS, (
         "the bar no longer APPENDS into the host — anything already in that row is destroyed")
     # A direct child of <body>, not nested inside the toolbar above it: div depth must be back to

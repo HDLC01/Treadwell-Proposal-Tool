@@ -49,11 +49,15 @@ artwork is a full-page PNG anchored inside a `w:sdt` (a "Cover Pages" content
 control), and everything about that — the anchor offsets, the two-section page
 setup, the theme fonts — is left exactly as Kyle's file has it. We add
 paragraphs to the BODY after the `w:sdt`, one decimal numbering definition
-copied out of Hanz's example letter, and one anchored text box (the date).
+copied out of Hanz's example letter. (It USED to add one anchored text box for
+the date; PR #453 made these letters pure flow and there are no text boxes in
+any of the seven files today -- `test_a_letter_is_pure_flow_with_no_floating_box`
+pins that.)
 
 Body paragraphs outside the `w:sdt`, deliberately:
-`proposal_writer.iter_editable_blocks` (which the doc editor and
-`/api/coverletter-template` walk for their block ids) yields the body's DIRECT
+`proposal_writer.iter_editable_blocks` (which the proposal's doc editor walks
+for its block ids, and `cover_letter_writer.template_blocks` still walks for the
+tests) yields the body's DIRECT
 `w:p` children. Paragraphs nested inside a `w:sdt` are invisible to it — which is
 exactly why Hanz's own example letter shows up as two blocks instead of
 twenty-two. Anything the estimator must be able to edit therefore has to be a
@@ -455,7 +459,17 @@ DIRECT_COPY = {
 SIGNATURE = [
     [_seg("--")],
     [_seg("{{estimator_name}}", bold=True), _seg(" | Estimator")],
-    [_ph("[ESTIMATOR EMAIL]"), _seg(" | wetreadwell.com")],
+    # NOT A PLACEHOLDER ANY MORE (2026-09-09). This was `_ph("[ESTIMATOR EMAIL]")`, and it
+    # printed those words to the customer — harmlessly while nothing rendered the letter, and
+    # then on page 1 of every proposal once the letter was merged into the .docx. It is the one
+    # placeholder in the set that needed no copy decision at all: the tool already knows who is
+    # signing, from the same signed-in user that fills {{estimator_name}} directly above.
+    #
+    # ONE TOKEN FOR THE WHOLE LINE, not `{{estimator_email}} | wetreadwell.com`. A writer cannot
+    # conditionally drop a separator, so an unresolvable email would leave the customer reading
+    # " | wetreadwell.com" with a dangling pipe. `cover_letter_writer._ensure_cover_letter_values`
+    # builds the whole string and omits the pipe when there is no address to put before it.
+    [_seg("{{estimator_contact_line}}")],
     [],
     [_seg("TREADWELL", bold=True),
      _seg(" | 913.396.6216 | 1707 E. 123rd Ter, Olathe, KS 66061")],

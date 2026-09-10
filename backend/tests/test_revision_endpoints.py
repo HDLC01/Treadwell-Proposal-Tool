@@ -4,10 +4,17 @@ Nothing binary is stored per revision: only the snapshot of the project state. T
 documents are rebuilt from that snapshot's `proposal_payload` on demand, which is
 what makes an old quote answerable with a real file rather than a number in a list.
 """
+import inspect
+
 import main
 from fastapi.testclient import TestClient
 
 client = TestClient(main.app)
+
+# The REAL `_generate`, held at import time. Every test below replaces
+# `main._generate` with a double, so a question about what the real function
+# accepts has to be asked of this reference and not of the module attribute.
+_REAL_GENERATE = main._generate
 
 
 def _gen_out(docx_token="tok"):
@@ -61,10 +68,9 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"revision_no": no, "data": {"proposal_payload": snapshot_payload}})
 
-    def fake_generate(payload, request, *, persist=True, want_cover_letter=True):
+    def fake_generate(payload, request, *, persist=True):
         seen["values"] = payload.values
         seen["persist"] = persist
-        seen["want_cover_letter"] = want_cover_letter
         return _gen_out()
 
     # `_generate`, not `api_generate`: the route is a thin wrapper that always persists, and the
@@ -75,18 +81,16 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     assert seen["values"]["project_name"] == "Westport"
     assert seen["persist"] is False, (
         "replaying an old revision persisted its values — that writes March over the live draft")
-    # EXECUTED, at the call site — the third opt-out, on the same terms as the other two: don't
-    # build what you don't serve. The response model has a cover_letter_download_url and this
-    # route returns it, but no caller reads it: done.js `downloadRevision` and portal.js both pick
-    # from a hardcoded ("xlsx", "docx", "pdf") list, so there is no button for it in the product.
-    # The historic letter already has its own route (/api/admin/cover-letter-pdf?revision_no=).
-    # Building one here is pure downside: cover_letter_writer raises before the xlsx/docx reach
-    # the cache, so a letter template that can't render 500s a revision download that would
-    # otherwise have succeeded — and the letter templates are regenerated from Kyle's master by
-    # hand (CoverLetter/README.md), so they can break while nothing else has.
-    assert seen["want_cover_letter"] is False, (
-        "a revision replay is building a cover letter nothing offers — a fault in it now fails "
-        "the xlsx and docx download too")
+    # AND IT CANNOT SKIP THE COVER LETTER. This used to assert the opposite — a third
+    # `want_cover_letter=False`, on the grounds that nothing offered the historic letter as a
+    # download so building it was pure downside. Since 2026-09-09 the letter is prepended into the
+    # proposal's own bytes, so the .docx this route hands back for "what did we send in March" is
+    # the whole document or it is a document with page 1 missing and nothing on screen saying so.
+    # There is no knob any more, which is the assertion: asked of the REAL function, because the
+    # stub above is ours and would accept a keyword the real one had quietly regrown.
+    assert "want_cover_letter" not in inspect.signature(_REAL_GENERATE).parameters, (
+        "_generate regrew a want_cover_letter knob; a revision rebuild could then hand staff a "
+        "historic proposal with its cover-letter first page silently dropped")
 
 
 def test_missing_revision_is_404(monkeypatch):
@@ -114,10 +118,9 @@ def test_proposal_pdf_renders_a_specific_revision(monkeypatch):
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}
 
-    def fake_generate(payload, request, *, persist=True, want_cover_letter=True):
+    def fake_generate(payload, request, *, persist=True):
         seen["name"] = payload.values.get("project_name")
         seen["persist"] = persist
-        seen["want_cover_letter"] = want_cover_letter
         return _gen_out("tok")
 
     monkeypatch.setattr(main, "_generate", fake_generate)
@@ -127,12 +130,15 @@ def test_proposal_pdf_renders_a_specific_revision(monkeypatch):
     assert r.status_code == 200, r.text
     assert seen["name"] == "Snap"        # the snapshot, not the live draft
     assert seen["persist"] is False, "a customer's PDF render wrote to the estimator's draft"
-    # EXECUTED, at the call site. This route returns the PROPOSAL pdf; the letter has its own
-    # endpoint (/api/admin/cover-letter-pdf). A pinned revision whose payload has the box ticked
-    # replays with it ticked, so without the gate a customer opening their proposal would build a
-    # letter nobody reads here — and a fault in it would 500 the PDF the portal is waiting on.
-    assert seen["want_cover_letter"] is False, (
-        "the customer's proposal PDF is building a cover letter it never serves")
+    # AND THE CUSTOMER'S PDF CANNOT SKIP THE COVER LETTER. This route used to pass
+    # `want_cover_letter=False` — the letter had an endpoint of its own and a fault in it must not
+    # 500 the render the portal is waiting on — and this test used to assert that. It is reversed
+    # on purpose: the letter is now page 1 of this very PDF, and a customer whose document quietly
+    # lost the page the estimator approved is the worse of the two failures. So there is no knob,
+    # which is what is asserted, of the REAL function rather than of the stub above.
+    assert "want_cover_letter" not in inspect.signature(_REAL_GENERATE).parameters, (
+        "_generate regrew a want_cover_letter knob; the customer's proposal PDF could then render "
+        "without the cover-letter page 1 the estimator ticked")
 
 
 def test_proposal_pdf_without_revision_still_uses_the_live_draft(monkeypatch):
@@ -143,10 +149,9 @@ def test_proposal_pdf_without_revision_still_uses_the_live_draft(monkeypatch):
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}
 
-    def fake_generate(payload, request, *, persist=True, want_cover_letter=True):
+    def fake_generate(payload, request, *, persist=True):
         seen["name"] = payload.values.get("project_name")
         seen["persist"] = persist
-        seen["want_cover_letter"] = want_cover_letter
         return _gen_out("tok2")
 
     monkeypatch.setattr(main, "_generate", fake_generate)

@@ -71,15 +71,24 @@
 >
         <div id="address-results" class="addr-results"></div>
       </label>
-      <div class="row">
+      <!-- `.row three`, and the two dead `style="flex: 0 0 …"` attributes deleted with it.
+           `.row` has been `display:grid; grid-template-columns:1fr 1fr` since the form was built,
+           so the flex bases on State and Zip -- left over from when it was a flex row -- have never
+           applied to anything. What they were hiding is that three fields in a two-column grid
+           renders as City and State on one line and Zip alone on the next. Found while reskinning
+           the polish beta intake onto this shell (2026-09-10): the beta could either copy this
+           markup and reproduce the break, or use `.row three` and disagree with the live form on
+           that one row. Fixed here so neither is true. `text-transform` on the State input stays --
+           that one does work. -->
+      <div class="row three">
         <label>City
           <input type="text" name="city" id="city-input">
         </label>
-        <label style="flex: 0 0 90px;">State
+        <label>State
           <input type="text" name="state" id="state-input" maxlength="2"
  style="text-transform: uppercase;">
         </label>
-        <label style="flex: 0 0 130px;">Zip
+        <label>Zip
           <input type="text" name="zip" id="zip-input" maxlength="10"
                  inputmode="numeric">
         </label>

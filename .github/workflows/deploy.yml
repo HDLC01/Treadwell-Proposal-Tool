@@ -204,24 +204,60 @@ jobs:
               sh -c 'pip install --quiet --no-input pytest pymupdf >/dev/null 2>&1 || {
                        echo "could not install pytest/pymupdf - skipping"; exit 0; }
                      cd /src/backend
-                     # test_box_resize.py (size) and test_box_move.py (position) are the only
-                     # files with genuinely LibreOffice-gated tests. test_pdf_export.py
-                     # monkeypatches docx_to_pdf away in every case, so running it here would
-                     # imply PDF coverage that does not exist.
+                     # `set -e` FROM HERE. The `set -euo pipefail` above belongs to the SSH shell and
+                     # governs only the exit code of `docker run`; this container script is `sh -c` with
+                     # no -e of its own, so until 2026-09-09 a pytest invocation that FAILED was simply
+                     # discarded and the script went on to exit 0 from its closing `if`. The two greps
+                     # below caught a skip and caught zero passes, but a red test read exactly like a
+                     # green one -- which is the same false reassurance this whole step exists to remove.
+                     # Placed AFTER the pip block on purpose: the `exit 0` early-out in that block is a
+                     # deliberate skip when the image cannot install pytest/pymupdf.
+                     set -e
+                     # test_box_resize.py (size), test_box_move.py (position) and test_docx_merge.py
+                     # (the cover letter merged onto the front of the proposal) are the only files
+                     # with genuinely LibreOffice-gated tests. test_pdf_export.py monkeypatches
+                     # docx_to_pdf away in every case, so running it here would imply PDF coverage
+                     # that does not exist.
+                     #
+                     # test_docx_merge.py joined this list on 2026-09-09, with the merge itself. Its
+                     # renderer test asserts the one thing no XML check can: that LibreOffice still
+                     # yields letter-pages + proposal-pages, letter on page 1, from a document the
+                     # merge takes from one section to three. Until it was listed here, the number of
+                     # LibreOffice assertions covering that output -- on the dev box, in CI and in the
+                     # image alike -- was zero.
                      python -m pytest tests/test_box_resize.py tests/test_box_move.py \
+                       tests/test_docx_merge.py \
                        -q -p no:cacheprovider -p no:warnings
                      # Fail loudly if the tests this step exists for silently skipped - a green
                      # "150 passed, 3 skipped" with the PDF cases skipped is the exact false
                      # reassurance this step was added to remove. Counted rather than hardcoded,
                      # so adding another PDF case does not quietly turn the gate off.
+                     #
+                     # `-k "pdf or libreoffice"`, not `-k pdf`: the merge renderer test is named for
+                     # the renderer rather than for the format, and a gate matching only "pdf" would
+                     # have let it skip in the one image that can actually run it -- silently, which is
+                     # the reassurance-without-coverage this whole block exists to prevent.
                      python -m pytest tests/test_box_resize.py tests/test_box_move.py \
-                       -p no:cacheprovider -p no:warnings -q -k pdf 2>&1 | tee /tmp/pdf.out
+                       tests/test_docx_merge.py \
+                       -p no:cacheprovider -p no:warnings -q \
+                       -k "pdf or libreoffice" 2>&1 | tee /tmp/pdf.out
                      grep -qE "[0-9]+ passed" /tmp/pdf.out || {
                        echo "PDF fidelity tests did not RUN (skipped or missing)"; exit 1; }
                      if grep -q "skipped" /tmp/pdf.out; then
                        echo "a PDF fidelity test SKIPPED in the image that has LibreOffice"
                        exit 1
-                     fi'
+                     fi
+                     # AND THE MERGE TEST BY NAME. The gate above is a `-k` expression, so it is coupled
+                     # to a test NAME: rename `test_libreoffice_renders_the_letter_as_page_one...` and the
+                     # selection silently shrinks from four tests to three, with every check still green.
+                     # This asserts the one that covers the cover-letter merge ran and passed, so a rename
+                     # breaks the build loudly instead of quietly dropping the only LibreOffice assertion
+                     # on a document a customer receives.
+                     python -m pytest tests/test_docx_merge.py -k libreoffice \
+                       -p no:cacheprovider -p no:warnings -q 2>&1 | tee /tmp/merge.out
+                     grep -qE "^1 passed" /tmp/merge.out || {
+                       echo "the cover-letter merge renderer test did not run+pass (renamed? errored?)"
+                       exit 1; }'
         env:
           # Each ssh-action step gets its own environment, so TW_IMAGE has to be passed again
           # here — without it `set -u` aborts on the first line and the step never runs the

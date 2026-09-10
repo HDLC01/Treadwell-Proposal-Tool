@@ -109,6 +109,21 @@ TEMPLATE_PICKER: dict[tuple[str, str | None], str] = {
 _FALLBACK_KEY = ("epoxy", "Direct")
 
 
+def _log_safe(value: Any, limit: int = 40) -> str:
+    """One log field, with no way to forge a second line out of it.
+
+    Strips everything that is not a plain printable character and truncates, so a
+    `work_type` arriving from a query string cannot inject a newline (a forged
+    entry), a carriage return (an overwritten one) or a megabyte of padding.
+    Returns `repr`-style quoting so an empty or whitespace value is still visible
+    in the log rather than reading as a missing field."""
+    text = "" if value is None else str(value)
+    clean = "".join(ch for ch in text if ch.isprintable())
+    if len(clean) > limit:
+        clean = clean[:limit] + "..."
+    return repr(clean)
+
+
 def _norm(work_type: str | None, audience: str | None) -> tuple[str, str | None]:
     return (str(work_type or "").strip().lower(),
             (str(audience).strip() or None) if audience is not None else None)
@@ -130,8 +145,16 @@ def resolve(work_type: str | None, audience: str | None) -> tuple[str, str | Non
         return key
     if (key[0], None) in TEMPLATE_PICKER:
         return (key[0], None)
-    log.warning("No cover-letter template for (%r, %r); falling back to %s",
-                work_type, audience, _FALLBACK_KEY)
+    # SANITIZED, because this line is now reachable from a QUERY STRING.
+    # `/api/cover-letter/placeholders?work_type=...` passes its parameters
+    # straight down to here, so an unmapped value carrying newlines could forge
+    # log entries -- and these logs are the record of what actually went out on a
+    # customer's page 1, which is the one thing they are for. `%r` does escape
+    # newlines, so the practical risk was small, but a sanitizer at the log site
+    # covers every caller (including `_generate`, whose values are also
+    # user-influenced) rather than trusting each one to pick the right verb.
+    log.warning("No cover-letter template for (%s, %s); falling back to %s",
+                _log_safe(work_type), _log_safe(audience), _FALLBACK_KEY)
     return _FALLBACK_KEY
 
 
@@ -281,6 +304,41 @@ def _ensure_cover_letter_values(values: Mapping[str, Any]) -> dict:
                         ", ".join(_SHORT_DATE_SOURCES), first,
                         out.get("project_name") or out.get("job_name") or "(unnamed)")
         out["proposal_date_short"] = ""
+
+    # ── The signature's contact line ─────────────────────────────────────────
+    # `{{estimator_contact_line}}` replaced the literal "[ESTIMATOR EMAIL]" that
+    # every one of these templates used to print at the customer (2026-09-09).
+    # THE WHOLE LINE IS ONE TOKEN so the separator can be dropped with the value:
+    # a template that said "{{estimator_email}} | wetreadwell.com" would show a
+    # customer " | wetreadwell.com" whenever the address was unresolvable, and a
+    # dangling pipe in a signature reads as a broken document.
+    #
+    # Resolved here as well as in main.py's backfill for the usual reason: a
+    # SERVER-SIDE REPLAY of a payload frozen before this token existed has no
+    # `estimator_email` at all, and the site alone is a true, complete line.
+    if _blank(out.get("estimator_contact_line")):
+        email = str(out.get("estimator_email") or "").strip()
+        out["estimator_contact_line"] = (f"{email} | wetreadwell.com"
+                                         if email else "wetreadwell.com")
+
+    # And the name on the line above it. NOT derived -- inventing a signatory for
+    # a customer's contract is worse than leaving the line short -- but forced to
+    # EXIST, so the token is substituted with nothing rather than left standing.
+    #
+    # The hole is only reachable on the customer's copy, which is what makes it
+    # worth closing here. main.py backfills `estimator_name` from the signed-in
+    # user, and /api/admin/proposal-pdf is service-token gated and in
+    # _AUTH_PUBLIC_PATHS -- so it has no bearer, `verify_token_claims` raises,
+    # `_user_email` returns None, and both halves of that backfill no-op. A
+    # payload frozen before {{estimator_name}} existed would then print the
+    # literal token on page 1 of the document the CUSTOMER opens while the
+    # estimator's own authenticated download looked perfect.
+    if _blank(out.get("estimator_name")):
+        log.warning("Cover letter has no estimator name for %r; the signature "
+                    "line will print without one",
+                    out.get("project_name") or out.get("job_name") or "(unnamed)")
+        out["estimator_name"] = ""
+
     # ── Will Buchanan's Direct wording, 2026-09-03 ───────────────────────────
     # THE OTHER HALF OF A DUAL RESOLUTION. `computeTokenValues` in
     # proposal-review.js resolves these same three for the editor's on-screen
@@ -367,6 +425,74 @@ def _ensure_cover_letter_values(values: Mapping[str, Any]) -> dict:
 # paragraph is a label bullet only if the file already writes it as one. That is
 # what keeps "A few things to note:" (a single run) and the Combo group headings
 # (bold with no non-bold tail) out of it, without a list of phrases to maintain.
+# ── Unresolved editor instructions ───────────────────────────────────────────
+# The copy in these templates is a DRAFT (templates/CoverLetter/README.md: "The
+# copy is a draft. It needs Hanz's review"), and several paragraphs carry
+# bracketed instructions to the estimator rather than finished sentences —
+# "[OPTIONS - keep the lines that apply: ...]", "[SHEEN - pick one: ...]". They
+# are square brackets and not `{{braces}}` on purpose: a token would be
+# substituted or silently dropped, whereas this prints as itself and reads as an
+# instruction (see prepare_cover_letter_templates._ph).
+#
+# WHY THIS FUNCTION EXISTS AT ALL. Those words used to reach nobody: the letter
+# was a separate document the customer portal never rendered. Since the letter
+# became page 1 of the proposal .docx (2026-09-09) they are customer-facing, and
+# the editor that was the documented way to remove them is gone. So generate
+# REPORTS them — the Done page shows the estimator exactly what is still
+# unresolved on the page they are about to send. It does not refuse and it does
+# not rewrite: nobody has approved replacement wording, and inventing it is what
+# templates/CoverLetter/README.md tells us not to do.
+#
+# The pattern requires an UPPERCASE first letter inside the brackets, which is
+# what every placeholder in the set has and what ordinary prose in brackets
+# (an aside, a "[sic]") would not.
+_PLACEHOLDER_RE = re.compile(r"\[[A-Z][^\]]{2,}\]")
+
+
+def template_placeholders(work_type: str | None,
+                          audience: str | None = None) -> list:
+    """Every "[INSTRUCTION ...]" the TEMPLATE for this variant still carries, in
+    template order, de-duplicated.
+
+    THE TEMPLATE, NOT THE FILLED LETTER, and that is the whole design of this
+    function. A filled letter also contains the estimator's own free text --
+    `work_areas`, `schedule_notes`, `job_name`, `system_name`, `estimator_name`
+    -- and construction estimators write bracketed uppercase shorthand as a
+    matter of course: "[TBD] pending GC schedule", "Amazon DFW7 [PHASE 2]",
+    "Bays 1-4 [SEE PLAN A1.1]", "[NIC]", "[ALT 1]". Scanning the filled document
+    reported all of those as unfinished template copy and told the estimator to
+    untick a page they wanted -- crying wolf about their own correct job name.
+    A latent trap, too: while every template still ships real instructions the
+    banner is up anyway, so the false positives would only become the SOLE
+    trigger once the copy pass lands and somebody is relying on it.
+
+    Reading the template instead is strictly better in both directions: no
+    estimator text can reach it, and a placeholder added by a future
+    `prepare_cover_letter_templates.py` run is still found without anyone
+    maintaining a list of known prefixes here.
+
+    The cost, stated: a placeholder whose brackets are only assembled AFTER
+    substitution -- a token whose value is itself bracketed uppercase, sitting
+    where the template has no brackets -- is invisible to this. No token in these
+    seven files is positioned to do that, and the alternative reports the
+    estimator's own words back at them as an error."""
+    path = pick_template(work_type, audience)
+    try:
+        d = docx.Document(str(path))
+    except Exception as exc:  # noqa: BLE001 — a warning must never fail a generate
+        log.warning("Could not scan %s for placeholders: %s: %s",
+                    path.name, type(exc).__name__, exc)
+        return []
+    seen, out = set(), []
+    for para in proposal_writer._iter_all_paragraphs(d):
+        for hit in _PLACEHOLDER_RE.findall(para.text or ""):
+            text = " ".join(hit.split())
+            if text not in seen:
+                seen.add(text)
+                out.append(text)
+    return out
+
+
 def _label_paragraphs(d) -> dict:
     """`{block id: label text}` for every paragraph THE TEMPLATE writes as a bold
     label run ending in a colon plus a non-bold remainder.
@@ -578,9 +704,16 @@ def template_blocks(d) -> list:
 
 
 def describe_template(work_type: str, audience: str | None = None) -> tuple:
-    """`(template_path, blocks, geometry)` for `(work_type, audience)` —
-    everything `/api/coverletter-template` serves except the cache version, which
-    is the file's mtime and belongs to the endpoint that sets the ETag.
+    """`(template_path, blocks, geometry)` for `(work_type, audience)`.
+
+    INTROSPECTION ONLY SINCE 2026-09-09. This described what
+    `/api/coverletter-template` served the letter's own editor tab, and that
+    endpoint and that tab are both gone — the letter is now generated from the
+    template plus the proposal's own values and prepended onto the proposal
+    .docx, with nothing rendering it on screen. What remains is a reader the
+    tests use to assert the shipped templates' shape (block ids, the single
+    anchored date box, the letterhead artwork), which is worth keeping precisely
+    because nobody looks at these documents until a customer does.
 
     `geometry` comes from the same `proposal_writer.template_geometry` the
     proposal editor uses: page size, margins, the anchored letterhead artwork
