@@ -1028,12 +1028,18 @@ def test_a_payload_frozen_before_the_token_existed_prints_no_raw_token():
     for token in ("{{estimator_contact_line}}", "{{estimator_name}}", "{{estimator_email}}"):
         assert token not in text, (
             "a payload frozen before %s existed prints it raw on the customer's page 1" % token)
-    # AN EXACT LINE, NOT A SUBSTRING, and CodeQL is why but the test is better for it:
-    # `"wetreadwell.com" in text` also passes for "| wetreadwell.com", which is precisely the
-    # dangling-separator bug `_ensure_cover_letter_values` builds the whole line to avoid. The
-    # claim is that the line IS the site and nothing else.
+    # AN EXACT LINE, NOT A SUBSTRING. CodeQL's py/incomplete-url-substring-sanitization is what
+    # started this, and the rule is a false positive on an assertion -- but it was pointing at a
+    # genuinely weak test: `"wetreadwell.com" in text` also passes for "| wetreadwell.com", which
+    # is precisely the dangling-separator bug `_ensure_cover_letter_values` builds the whole line
+    # to avoid. The claim is that the line IS the site and nothing else.
+    #
+    # Written as `any(ln == ...)` rather than `"wetreadwell.com" in lines`, and the difference is
+    # only to the analyser: that rule matches a url-shaped literal on the left of `in` whatever
+    # the right operand is -- a list of exact lines included -- so an `in` form cannot express
+    # this claim without tripping it. Equality says the same thing and says it more plainly.
     lines = [ln.strip() for ln in text.splitlines()]
-    assert "wetreadwell.com" in lines, (
+    assert any(ln == "wetreadwell.com" for ln in lines), (
         "the fallback contact line is not the site on its own -- a payload with no "
         "estimator_email should print it with no separator. The signature block "
         "ended: %r" % lines[-4:])
