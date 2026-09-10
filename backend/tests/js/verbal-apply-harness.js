@@ -58,10 +58,21 @@ function makeWorld(conditions) {
     };
   }
   const byId = {};
-  for (const key of Object.keys(conditions)) {
+  // Which switches had focus() called on them, and how many times the whole block was re-rendered.
+  // Only a key something DEPENDS ON forces a re-render; the rest take the cheap one-node repaint.
+  // Both are recorded because "it repainted" and "it repainted the expensive way" are different
+  // claims, and the verbal panel touching five keys should never pay for the expensive one.
+  const focuses = [];
+  const rerenders = [];
+  // The engine five come from the fixture; the carried four are always on this page, so they are
+  // always in the DOM. A world with only five switches cannot see the caret being put back.
+  const keys = Object.keys(conditions)
+    .concat(["reno", "dye", "joint_filler", "remove_existing_jf"]);
+  for (const key of keys) {
     byId["cond-" + key] = {
       className: "", attrs: {},
       setAttribute(k, v) { this.attrs[k] = v; painted.push([key, k, v]); },
+      focus() { focuses.push(key); },
     };
   }
   // The caption above the form. Counted as well as read: "it was repainted" and "it says the right
@@ -73,7 +84,7 @@ function makeWorld(conditions) {
     set textContent(v) { this._text = String(v); captionWrites.push(String(v)); },
   };
   return {
-    events, painted, inputs, byId, captionWrites,
+    events, painted, inputs, byId, captionWrites, focuses, rerenders,
     form: { querySelector: (sel) => inputs[(/\[name="([^"]+)"\]/.exec(sel) || [])[1]] || null },
   };
 }
@@ -90,14 +101,30 @@ function visit(conditions, steps, blob) {
     `"use strict";
     var CONDITIONS = [{ key: "local" }, { key: "hard_bid" }, { key: "prevailing_wage" },
                       { key: "taxable" }, { key: "remodel_tax" }];
+    // The four the polish page carries through from the live intake. They are NOT the engine's --
+    // they move no money and they are not on the model -- but the toggle path reads them, so a
+    // scope without them is a ReferenceError the moment anything is clicked. Same shape as the
+    // page's own list, including the one dependency, because hasDependents reads "needs".
+    var CARRY_CONDITIONS = [{ key: "reno" }, { key: "dye" }, { key: "joint_filler" },
+                            { key: "remove_existing_jf", needs: "joint_filler" }];
+    var carry = {};
     var $ = function (id) { return world.byId[id] || null; };
     var humanConditions = {};
     function renderCountyNote() { notes.push(1); }
     function saveSoon() { saves.push(1); }
-    ` + fn("isCondition") + fn("paintCondition") + fn("toggleCondition") + fn("paintProjLine") +
+    // The page rewrites the whole block's innerHTML; what matters to this harness is the EFFECT --
+    // every switch repainted and the caret gone -- so the stub reproduces that and counts itself.
+    function renderConditions() {
+      world.rerenders.push(1);
+      Object.keys(world.byId).forEach(function (id) {
+        if (id.indexOf("cond-") === 0) paintCondition(id.slice(5));
+      });
+    }
+    ` + fn("isCondition") + fn("carrySpec") + fn("condOn") + fn("hasDependents") +
+    fn("paintCondition") + fn("repaintCondition") + fn("toggleCondition") + fn("paintProjLine") +
     fn("applyVerbal") + `
     return { applyVerbal: applyVerbal, toggleCondition: toggleCondition, model: M,
-             human: humanConditions };`
+             carry: carry, human: humanConditions };`
   )(M, world.form, world, saves, notes, function (type, opts) {
     return { type, bubbles: !!(opts && opts.bubbles) };
   }, blob || {});
@@ -118,6 +145,9 @@ function visit(conditions, steps, blob) {
     results,
     applied: results.length === 1 ? results[0].applied : undefined,
     conditionsAfter: Object.assign({}, M.conditions),
+    // Whatever the run left on the carried-four binding. The verbal panel is gated on
+    // isCondition, which is the ENGINE five, so this stays empty -- see the probe below.
+    carryAfter: Object.assign({}, scope.carry),
     humanOwned: Object.keys(scope.human).sort(),
     events: world.events,
     inputValues: Object.keys(world.inputs).reduce((acc, k) => {
@@ -127,6 +157,8 @@ function visit(conditions, steps, blob) {
     saves: saves.length,
     countyNoteRepaints: notes.length,
     painted: world.painted,
+    focuses: world.focuses,
+    rerenders: world.rerenders.length,
     captionWrites: world.captionWrites,
     caption: world.byId["proj-line"].textContent,
   };
@@ -180,6 +212,23 @@ out.unknownCondition = run(BASE, {
   conditions: { union_job: { value: true, context: "x" },
                 county_remodel_rate: { value: true, context: "x" } },
 });
+
+// ═══ 4b. a CARRIED-THROUGH key handed back by the extraction ═══════════════
+// The polish page renders nine switches and the AI's flag list includes B10 New/Reno, so this is
+// a shape the extraction can really produce. It must change nothing: applyVerbal is gated on
+// isCondition, which is the engine five, and its "only if it DIFFERS" test compares against
+// M.conditions -- where a carried key is always undefined. Wiring these up later means fixing
+// that comparison in the same edit, and this is the test that will say so.
+out.carryFromVerbal = run(BASE, {
+  conditions: { reno: { value: true, context: "the notes say it is a remodel" },
+                joint_filler: { value: false, context: "no joint filler on this one" } },
+});
+
+// ═══ 4c. a click on a carried-through key still works ══════════════════════
+// Straight through toggleCondition with no second argument, exactly as the delegated click
+// handler calls it. This is the path that threw ReferenceError while the scope had no carry
+// bindings -- every test in this file errored, and none of them was about the carried four.
+out.carryClicked = visit(BASE, [{ click: "joint_filler" }, { click: "dye" }]);
 
 // ═══ 5. a non-boolean is not a decision ════════════════════════════════════
 out.nonBoolean = run(BASE, {
