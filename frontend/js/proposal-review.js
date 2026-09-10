@@ -6940,6 +6940,28 @@
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
       lump_sum_display: lumpSumText,
+      // AND THROW AWAY THE OLD FILES IF PAGE 1 JUST CHANGED.
+      //
+      // `state.generate_result` is persisted and never cleared, and done.js's mode decider is
+      // `else if (res) showPostGenerate(res)` -- so on a project that has been generated once,
+      // Continue lands on the PREVIOUS downloads and never rebuilds. `#gen-btn` does not even
+      // get a click listener, because showPreGenerate() is not called. That was a tolerable
+      // quirk while Continue only ever changed prices inside a document that already existed.
+      //
+      // It stopped being tolerable when the cover letter became PAGE 1: Hanz ticked the box on
+      // prod, pressed Continue, downloaded the document from before the tick, and the toggle
+      // looked dead. Nothing was broken server-side -- /api/generate had simply never been
+      // called again.
+      //
+      // So when the letter flag differs from the payload that produced those files, the result
+      // is dropped and Done falls through to showPreGenerate() with a live Generate button.
+      // Scoped to this one key ON PURPOSE: it is the only field whose change adds or removes a
+      // PAGE, and clearing on every Continue would make anyone who steps forward just to look
+      // press Generate again. The same staleness still applies to a price or a note edited after
+      // a generate; that is pre-existing, wider than this fix, and worth its own round.
+      ...(!!liveKey("cover_letter_enabled") !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
+          ? { generate_result: null }
+          : {}),
     });
     // Belt and braces on the same failure. The guard above covers the three refusals setState
     // knows about; this covers the one it does not -- writeBlob returning false on a full or
