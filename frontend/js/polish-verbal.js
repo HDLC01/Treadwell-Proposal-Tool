@@ -292,7 +292,12 @@
     if (res.question && !asked) {
       html += '<div class="vgroup ask"><h3>One question</h3><p>' + esc(res.question) + "</p>" +
         '<textarea id="verbal-answer" rows="2" aria-label="Your answer"></textarea>' +
-        '<button type="button" class="btn sm" id="verbal-answer-go">' + esc(ASK_LABEL) +
+        // .btn-primary, not the old `btn sm`: polish-intake.html adopted /styles.css on 2026-09-10
+        // and its page-local `.btn` went with the rest of its private vocabulary. `sm` was already
+        // dead -- no `.sm` rule has ever existed on that page, in styles.css or in auth.js -- so
+        // this button was rendering full size under `.btn` anyway. Left unstyled it would have
+        // become plain red text on the one control the estimator is looking at mid-run.
+        '<button type="button" class="btn-primary" id="verbal-answer-go">' + esc(ASK_LABEL) +
         "</button></div>";
     }
 

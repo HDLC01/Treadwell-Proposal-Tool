@@ -1056,8 +1056,29 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     if (!wizardSrc) throw new Error("_WIZARD_PATH is gone from shared.js — rewrite this block");
     const wizard = new RegExp(wizardSrc);
 
-    const nav = pageHtml.slice(pageHtml.indexOf('<nav class="steps">'), pageHtml.indexOf("</nav>"));
+    // THE STEP ROW, out of the page. `<div class="progress">` … `</header>` since 2026-09-10, when
+    // this page dropped its private `<nav class="steps">` for the live intake's shared shell —
+    // auth.js finds the pills by that exact class and folds them into its one-line header.
+    //
+    // GUARDED, and that is the point of the guard rather than politeness: the old slice was
+    // `indexOf(open) … indexOf(close)`, and when a markup change made both miss it returned -1 and
+    // -1, `slice(-1, -1)` gave "", and `raw` came back as an empty array. The harness did not
+    // crash. Every assertion downstream that compares two derived lists would then have compared
+    // [] to [] and PASSED — a test that proves nothing while reporting green is worse than a red
+    // one. So a slice that cannot find its ends, or that finds no pills, is a harness fault and
+    // says so, in the same voice as fn() and grab() above.
+    const navFrom = pageHtml.indexOf('<div class="progress">');
+    const navTo = pageHtml.indexOf("</header>", navFrom);
+    if (navFrom < 0 || navTo < 0) {
+      throw new Error('the step row is no longer `<div class="progress">` inside <header> in ' +
+        "polish-intake.html — retarget this slice, don't let it return an empty list");
+    }
+    const nav = pageHtml.slice(navFrom, navTo);
     const raw = (nav.match(/href="([^"]+)"/g) || []).map((h) => h.slice(6, -1));
+    if (raw.length !== 3) {
+      throw new Error("parsed " + raw.length + " step links out of polish-intake.html, expected 3 " +
+        "— rewrite this block rather than testing an empty list");
+    }
 
     function run(draftId, hrefs) {
       const anchors = hrefs.map((h) => {
