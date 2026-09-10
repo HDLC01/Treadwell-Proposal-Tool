@@ -5137,6 +5137,8 @@ def _generate(payload: GenerateIn, request: Request, *,
         xlsx_download_url=f"/api/file/{xlsx_token}",
         docx_download_url=f"/api/file/{docx_token}",
         pdf_download_url=f"/api/file/{docx_token}/pdf",
+        cover_letter_download_url=(f"/api/file/{cover_letter_token}"
+                                   if cover_letter_token else None),
         # Authoritative totals from the 5.7-recipe engine (computed on
         # Screen 2 and passed through). Falls back to an empty dict if a
         # caller generated without first running the pricing engine.
