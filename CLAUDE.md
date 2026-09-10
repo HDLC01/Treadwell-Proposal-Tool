@@ -99,6 +99,17 @@ context loaded.
   download helper builds the blob as `application/octet-stream` so the browser
   downloads it under the real `<project>_proposal.pdf` name rather than the blob
   UUID / opening it in the inline PDF viewer.
+- **Cover letter = page 1 of the proposal (changed 2026-09-09).** The optional letter is no
+  longer a second document with its own editor tab. `backend/docx_merge.py` prepends the filled
+  letterhead into the proposal `.docx` at the XML level, so the letter rides the proposal's own
+  bytes and every consumer inherits it: the `.docx` download, the LibreOffice PDF, the portal's
+  `/api/admin/proposal-pdf` and the To-Dropbox copy. The ribbon checkbox is the whole interaction.
+  Removed with the editor: `/api/coverletter-template` (+ `/media`),
+  `/api/admin/cover-letter-pdf`, `cover_letter_paragraph_overrides`,
+  `cover_letter_template_version`, `GenerateOut.cover_letter_download_url`, and `_generate`'s
+  `want_cover_letter` gate — all three replay paths now build the letter, because "the proposal
+  without the letter" is a document missing its first page. The old separate letter reached no
+  customer: the portal never implemented it.
 - **Generation never emits a raw `{{token}}`.** `_ensure_value_aliases` in
   `main.py` backfills `job_name`↔`project_name`, `work_description`←address, and
   `site_visit_date`←bid date before filling, so a customer-facing proposal can't

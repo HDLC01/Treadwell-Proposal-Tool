@@ -14,6 +14,12 @@ openpyxl==3.1.5
 # Pinned by test_info_sheet.py::test_the_download_keeps_the_treadwell_logo.
 Pillow>=10.4.0
 python-docx==1.2.0
+# Imported DIRECTLY by backend/docx_merge.py, which prepends the cover letter into the proposal
+# .docx at the XML level (python-docx cannot copy parts between two packages). It has always
+# shipped transitively as a python-docx dependency (`lxml>=3.1.0`), which is exactly the position
+# Pillow was in above when a version bump silently dropped every logo from the Info Sheet. Declared
+# so the merge's dependency is the merge's own, not a side effect of somebody else's pin.
+lxml>=5.2.0
 dropbox==12.0.2
 pydantic>=2.13.4
 anthropic>=0.111.0

@@ -123,6 +123,26 @@
     });
   })();
 
+  // THE COVER-LETTER SWITCH. It used to belong to coverletter-editor.js, which also revealed a
+  // document tab and loaded the letter's template to edit; both are gone (Hanz, 2026-09-09), and
+  // what is left is a single flag on the draft that /api/generate reads to decide whether to
+  // prepend Treadwell's letterhead page onto the front of the proposal .docx.
+  //
+  // Written with TW.setState so it lands on the draft the same way every other choice on this page
+  // does, and read back through a LIVE TW.getState() — never the module-top `state` snapshot — so a
+  // saved project shows the box as the estimator left it. The distinction is not pedantry here: a
+  // stale read of this exact key on the Continue path shipped a false flag and a customer document
+  // with no page 1, and it is the only bug this feature has had. No repaint: nothing on this
+  // screen renders the letter, so there is nothing to redraw.
+  (function wireCoverLetterSwitch() {
+    const box = document.getElementById("cl-toggle");
+    if (!box) return;
+    box.checked = !!(TW.getState() || {}).cover_letter_enabled;
+    box.addEventListener("change", () => {
+      try { TW.setState({ cover_letter_enabled: !!box.checked }); } catch {}
+    });
+  })();
+
   // Proposal boilerplate as REAL default values (these used to be placeholders,
   // which never made it into the generated doc — that's why Schedule came out
   // blank). writeForm above already applied any saved / AI-autofilled values, so
@@ -1383,6 +1403,13 @@
       // else the signed-in user's name. Replaces the old hardcoded "Troy Holmes".
       estimator_name:     (String(mergedValues.estimator_name || "").trim()
                            || ((window.TWAuth && TWAuth.user() && TWAuth.user().name) || "")),
+      // The cover letter's signature line. It printed a literal "[ESTIMATOR EMAIL]" to the
+      // customer until 2026-09-09; cover_letter_writer turns this into the whole line and drops
+      // the " | " when there is no address. Set HERE as well as backfilled in main.py so it rides
+      // the frozen proposal_payload — a replay of a pinned revision has no signed-in user, so a
+      // server-only resolution would sign the customer's re-opened document differently from the
+      // one they were sent.
+      estimator_email:    ((window.TWAuth && TWAuth.user() && TWAuth.user().email) || ""),
       city_state:         safe(mergedValues.city_state),
       address:            safe(mergedValues.address),
       work_description:   safe(mergedValues.work_description || mergedValues.address || "0"),
@@ -1507,12 +1534,13 @@
     if (!String(tokenValues.state_name || "").trim()) tokenValues.state_name = "Kansas";
 
     // ── Cover-letter values (Will Buchanan's Direct text, 2026-09-03) ──────
-    // RESOLVED TWICE, ON PURPOSE. The cover-letter editor's clTokens() borrows this
-    // function for its on-screen preview; generate and the portal's server-side replay
-    // go through cover_letter_writer._ensure_cover_letter_values instead. A token added
-    // to only one side previews as a raw {{token}} over a correct PDF -- exactly the bug
-    // PR #431 fixed for {{proposal_date_short}}, and an estimator proofreading on screen
-    // cannot tell that from a broken document. The two must agree; a test asserts it.
+    // STILL RESOLVED HERE, THOUGH NOTHING PREVIEWS THE LETTER ANY MORE. These three ride
+    // the generate payload's `values`, and cover_letter_writer._ensure_cover_letter_values
+    // only derives what arrives blank -- so this is the side that actually decides what a
+    // customer reads whenever the estimator has typed an Area or a system. The editor whose
+    // clTokens() also borrowed this function is gone (2026-09-09); the agreement between
+    // the two derivations still matters and a test still asserts it, because the server side
+    // is now the only thing standing between a missing value and a raw {{token}}.
     //
     // INLINE IIFEs, not named helpers -- matching base_tax_phrase above. Harnesses lift
     // functions out of this file BY NAME, so a new free identifier inside a lifted
@@ -3383,7 +3411,17 @@
    *  the customer's document carried the template's own geometry with the estimator's resize
    *  silently discarded, which is the exact failure this feature exists to prevent.
    *
-   *  The same flaw applied to the paragraph overrides, where the loss is typed text. */
+   *  The same flaw applied to the paragraph overrides, where the loss is typed text.
+   *
+   *  WHICH KEYS ARE AT RISK, STATED STRUCTURALLY, because "remember to use liveKey" is not a rule
+   *  anybody can apply. Every other top-level key the generate payload reads off `state` is an
+   *  OBJECT or an ARRAY, and each of their writers hands the snapshot's own reference straight back
+   *  (`setState({ price_overrides: state.price_overrides })`) or reassigns through it — so the
+   *  snapshot follows the draft by identity and a stale read is harmless. A PRIMITIVE cannot be
+   *  mutated in place, so its writer has no choice but to REPLACE it, which is precisely what the
+   *  snapshot cannot see. `cover_letter_enabled` was the first primitive in that literal and it was
+   *  broken the day it was added. If you put another top-level primitive on the draft and read it
+   *  in the payload, it must come through here. */
   const liveKey = (name) => {
     try { return (TW.getState() || {})[name]; } catch { return undefined; }
   };
@@ -6879,18 +6917,25 @@
         // amount / tax phrase, option + manual line label/amount). Display-only —
         // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
         price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
-        // THE OPTIONAL COVER LETTER — the enabled flag, the estimator's edits, and the template
-        // version those edit ids were captured against.
+        // THE OPTIONAL COVER LETTER — one flag, and since 2026-09-09 that is the whole feature.
         //
         // Inside proposal_payload, not merely on the POST body, because the payload is what gets
-        // FROZEN into a sent revision: the portal re-renders a customer's letter from the pinned
-        // copy (api_admin_cover_letter_pdf reads pp["cover_letter_enabled"]), so a letter that
-        // rode only the request would vanish the first time a customer re-opened their proposal.
+        // FROZEN into a sent revision: /api/admin/proposal-pdf re-renders a customer's document
+        // from the pinned copy and reads pp["cover_letter_enabled"] to decide whether to build
+        // page 1, so a letter that rode only the request would vanish the first time a customer
+        // re-opened their proposal.
         //
-        // Read through the ONE helper on window, which the Files page's rebuild also reads, so the
-        // two cannot come to disagree about what the estimator asked for. An empty object when
-        // that script did not load — which the backend already treats as "no cover letter".
-        ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
+        // THROUGH liveKey, NOT off `state`, and the reason is a bug this shipped with for the
+        // length of one review: `state` is the module-top one-shot snapshot, and
+        // wireCoverLetterSwitch (above) writes cover_letter_enabled as a TOP-LEVEL key, which
+        // TW.setState REPLACES on a freshly parsed object rather than mutating in place. So a
+        // snapshot read here returns the value from page load: tick the box, press Continue in
+        // the same visit, and the payload ships `false`, create_revision pins `false`, and the
+        // customer's document has no page 1 — while the box stays ticked after a reload, because
+        // localStorage was right all along and only this read was wrong. Untick-then-Continue
+        // fails the same way in reverse. Twelve other keys on this page go through liveKey for
+        // exactly this reason; the note at its definition spells the mechanism out.
+        cover_letter_enabled: !!liveKey("cover_letter_enabled"),
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
