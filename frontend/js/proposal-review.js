@@ -511,14 +511,33 @@
   //   base · heading_base · sales_tax · remodel · total · heading_options
   //   combo:<role.line> · option:<id> · manual:<idx> · alt_name/alt_flooring/…
   // Display-only (backend price_overrides.lines) — never touches the .xlsx/totals.
-  function lineOverride(key) {
+  const COMPUTED_PRICE_LINE_KEYS = new Set(["base", "sales_tax", "remodel", "total"]);
+  function looksLikeComputedPriceLine(key, text) {
+    const s = String(text == null ? "" : text).trim().replace(/\s+/g, " ");
+    const money = "\\$[0-9][0-9,]*(?:\\.\\d{2})?";
+    if (key === "sales_tax") return new RegExp("^" + money + "\\s*[-–—]\\s*Material Sales Tax$", "i").test(s);
+    if (key === "remodel") return new RegExp("^" + money + "\\s*[-–—]\\s*Remodel Tax$", "i").test(s);
+    if (key === "total") return new RegExp("^" + money + "\\s*[-–—]\\s*Total$", "i").test(s);
+    if (key === "base") return new RegExp("^" + money + "\\s*[-–—]\\s*.+\\bas described above\\b(?:\\s*\\([^)]*\\))?$", "i").test(s);
+    return false;
+  }
+  function lineOverride(key, computed) {
     const pov = state.price_overrides;
     const lines = (pov && typeof pov === "object" && pov.lines && typeof pov.lines === "object") ? pov.lines : null;
     const v = lines ? lines[key] : null;
+    if (computed != null && typeof v === "string" && v.trim()
+        && String(v) !== String(computed)
+        && COMPUTED_PRICE_LINE_KEYS.has(key)
+        && looksLikeComputedPriceLine(key, v)
+        && looksLikeComputedPriceLine(key, computed)) {
+      delete lines[key];
+      try { queuePovSave(); } catch {}
+      return null;
+    }
     return (typeof v === "string" && v.trim()) ? v : null;
   }
   function lineValue(key, computed) {
-    const ov = lineOverride(key);
+    const ov = lineOverride(key, computed);
     return ov != null ? ov : computed;
   }
   // Markup for a JS-rendered whole-line (combo / option / manual / alternate).
@@ -719,6 +738,15 @@
     "work_areas", "cover_system_line",
   ];
 
+  function pruneComputedPriceLineOverrides(values) {
+    if (!values || typeof values !== "object") return;
+    const phrase = values.base_tax_phrase ? ` ${values.base_tax_phrase}` : "";
+    lineOverride("base", `${values.base_bid_formatted} – ${baseDescLabel()}${phrase}`);
+    lineOverride("sales_tax", `${values.material_tax_formatted} – Material Sales Tax`);
+    lineOverride("remodel", `${values.tax_amount_formatted} – Remodel Tax`);
+    lineOverride("total", `${values.total_formatted} – Total`);
+  }
+
   /** Patch the stored generate payload's PRICING slice from current state. Returns the patched
    *  payload, or null when there is nothing to patch.
    *
@@ -750,6 +778,7 @@
       if (!Number.isFinite(_tbNum) || Math.abs(_tbNum - _stateLump) > 0.01) return null;
       fresh = computeTokenValues(Object.assign({}, state, TW.readForm(form)));
     } catch { return null; }                     // never let a persist fail over this
+    pruneComputedPriceLineOverrides(fresh);
     PAYLOAD_PRICING_KEYS.forEach((k) => { if (k in fresh) pp.values[k] = fresh[k]; });
     // ── the TEMPLATE, not just the numbers ───────────────────────────────────────────────
     // `work_type` picks which .docx the customer receives, and it is DERIVED from the base tab's
