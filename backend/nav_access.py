@@ -162,6 +162,21 @@ TABS: Dict[str, Dict[str, Any]] = {
         "pages": ("/polish-intake.html", "/polish-estimate.html"),
         "api": (),
     },
+    "/polish-estimates.html": {
+        "label": "Polish Estimate Database",
+        # api: () DELIBERATELY. The page reads /api/drafts and NOTHING else, and that route is the
+        # Proposals Database's own list — claiming it here would 403 a page nobody restricted the
+        # moment anyone switched this row off, which is the single-caller rule this whole table is
+        # built on (test_no_tab_claims_a_shared_prefix, and the note on /followups.html above
+        # spelling out the four routes left unlisted for exactly this reason). Denying this row
+        # therefore refuses the PAGE and leaves the data alone — the same shape as /projects.html.
+        #
+        # ONE PAGE, unlike its neighbour above: there is no second door into this list. It is
+        # reached from the sidebar, and its rows lead OUT to /polish-intake.html, which that row
+        # already governs.
+        "pages": ("/polish-estimates.html",),
+        "api": (),
+    },
     "/analytics.html": {
         "label": "Analytics",
         # CHILDREN ONLY, and the trailing slash is load-bearing: /api/analytics/export and

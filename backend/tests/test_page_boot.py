@@ -71,7 +71,7 @@ def test_every_local_script_it_pulls_in_exists(page):
 # wrong and the page throws on boot and renders nothing at all.
 PERSON_PAGES = ["portal.html", "projects.html", "admin.html", "analytics.html", "crm.html",
                 "notifications.html", "trash.html", "done.html", "proposal-review.html",
-                "calendar.html"]
+                "calendar.html", "polish-estimates.html"]
 
 
 @pytest.mark.parametrize("name", PERSON_PAGES)

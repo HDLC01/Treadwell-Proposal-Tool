@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polish Estimate Database · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <style>
+    /* MODELLED ON projects.html, DELIBERATELY AND LINE BY LINE. Same tokens, same control
+       heights, same table anatomy — this page is the Proposals Database read through one
+       filter, so a second way of drawing a list would be a bug rather than a style. Values
+       are copied rather than shared because projects.html carries its own <style> too; the
+       six pages on /styles.css are the wizard, and this is not one of them. */
+    :root { --red:#c8102e; --ink:#1b1c1c; --ink-v:#5c403f; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f4f4f5; color:var(--ink); font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:28px 22px 90px; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1100px; margin:0 auto 20px; }
+    .logo { width:54px;height:34px;display:block;flex:none; }
+    h1 { font-size:20px; margin:0; }
+    /* The heading and its BETA tag are one unit, so the tag never wraps away from the
+       name it qualifies. `flex:1` moves from the h1 to this wrapper for the same reason. */
+    .h1wrap { display:flex; align-items:center; gap:9px; flex:1; min-width:0; }
+    .tag { background:#fdf6dd; color:#7a5c00; border:1px solid #c9a227; border-radius:6px; padding:1px 7px; font:800 10px/1.6 system-ui; text-transform:uppercase; letter-spacing:.05em; flex:none; }
+    .btn { background:var(--red); color:#fff; border:none; border-radius:9px; padding:9px 16px; font:600 13px system-ui; cursor:pointer; text-decoration:none; }
+    .btn:hover { background:#a4232b; }
+    .wrap { max-width:1100px; margin:0 auto; }
+    .hint { color:var(--ink-v); font-size:13px; max-width:1100px; margin:0 auto 6px; }
+    /* The two sentences that keep a number on this page from being read as the bid, and the
+       page itself from being read as part of the reporting. Quieter than .hint but NOT
+       hidden behind a tooltip: both are things somebody would otherwise only find out by
+       trusting the wrong figure. See the Beta total header comment in js/polish-estimates.js. */
+    .hint-quiet { color:var(--ink-v); font-size:12.5px; max-width:1100px; margin:0 auto 4px; opacity:.85; }
+    /* An explicit modifier rather than :last-of-type — that selector counts <p> siblings, so
+       adding one paragraph anywhere below would silently move this margin somewhere else. */
+    .hint-quiet.is-last { margin-bottom:14px; }
+    .hint-quiet b { font-weight:700; }
+    /* search / month / sort toolbar — the same controls as the Proposals Database, so a
+       scan here works the way a scan there does. */
+    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 16px; }
+    /* THE `hidden` CASCADE GUARD, and it is not optional. The UA's `[hidden]{display:none}`
+       is the lowest-specificity rule there is, so the `display:flex` above silently beats it
+       and `tb.hidden = true` does nothing. projects.html, calendar.html, followups.html and
+       notifications.html each carry this line with the same note; projects.html was MISSED
+       for a while and shipped a toolbar over an empty list. Written here on the way in
+       rather than after a staging walk finds it again. */
+    .toolbar[hidden] { display:none; }
+    .tw-search { flex:1; min-width:180px; max-width:320px; background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 12px; font:600 12.5px system-ui; }
+    .tw-select { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:7px 10px; font:600 12.5px system-ui; cursor:pointer; }
+    .tw-dir { min-width:74px; text-align:center; font-variant-numeric:tabular-nums; }
+    .tw-dir[aria-pressed="true"] { color:var(--red); border-color:var(--red); }
+    .tw-search:hover,.tw-select:hover,.tw-search:focus,.tw-select:focus { border-color:var(--red); outline:none; }
+    .tw-count { color:var(--ink-v); font:600 12.5px system-ui; font-variant-numeric:tabular-nums; margin-left:auto; }
+    .chip { background:#fff; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:999px; padding:6px 14px; font:600 12.5px system-ui; cursor:pointer; transition:all .12s; }
+    .chip:hover { border-color:var(--red); color:var(--red); }
+    .chip[hidden] { display:none; }
+    @media (max-width:520px){ .tw-search{ flex:1 0 100%; max-width:none; } .tw-count{ margin-left:0; } }
+    /* ── the table ───────────────────────────────────────────────────────────
+       projects.html's .ptable verbatim. Scrolls inside its own box so the page body
+       never scrolls sideways. */
+    .tablewrap { overflow-x:auto; }
+    .ptable { width:100%; min-width:820px; border-collapse:separate; border-spacing:0; background:#fff;
+      border:1px solid rgba(27,28,28,.1); border-radius:12px; overflow:hidden; font-size:13px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05); }
+    .ptable th, .ptable td { text-align:left; padding:9px 12px; border-bottom:1px solid rgba(27,28,28,.08); white-space:nowrap; }
+    .ptable thead th { position:sticky; top:0; z-index:1; background:#faf9f9; font-size:10.5px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.05em; color:var(--ink-v); }
+    .ptable tbody tr:last-child td { border-bottom:none; }
+    .ptable tbody tr { cursor:pointer; }
+    .ptable tbody tr:hover { background:#faf9f9; }
+    .ptable tbody tr:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
+    .ptable .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .ptable .t-name { font-weight:700; white-space:normal; min-width:200px; }
+    .ptable .soft { color:var(--ink-v); font-style:italic; }
+    .ptable .th-sort { padding:0; }
+    .ptable .th-sort button { width:100%; text-align:inherit; background:none; border:none; cursor:pointer;
+      font:inherit; color:inherit; padding:9px 12px; }
+    .ptable .th-sort button:hover { color:var(--red); }
+    .ptable .th-sort button:focus-visible { outline:2px solid var(--red); outline-offset:-2px; }
+    .ptable .th-sort.is-sorted { color:var(--ink); }
+    .ptable .num.th-sort button { text-align:right; }
+    .total { color:#1a7f37; font-weight:700; }
+    /* projects.html's .badge, for "Generated". */
+    .badge { background:#e9e8e7; color:var(--ink-v); border-radius:6px; padding:1px 7px; font:600 11px/1.6 system-ui; text-transform:uppercase; display:inline-block; }
+    /* THE TEST MARKER IS A BADGE HERE, NOT A BUTTON. projects.html's .test-btn is a toggle
+       that WRITES `is_test` on the draft; this page is a reader, and filing a project in or
+       out of Test stays with the page that owns that decision. Same palette so the two read
+       as the same fact, dashed-border affordance dropped so it does not look pressable.
+       Nearly every row will carry it — polish-sandbox.js files each beta copy with
+       is_test:true — so it is deliberately quiet rather than a warning colour. */
+    .badge-test { background:#fdf6dd; color:#7a5c00; border:1px solid #c9a227; }
+    /* .tw-av / .tw-av-dim (the person chip) are defined ONCE, in auth.js's injected
+       stylesheet, which every page loads. Never re-declare them here. */
+    .est-cell { white-space:nowrap; }
+    /* ── the states a list has to have designed, not defaulted ─────────────── */
+    .empty,.loading,.failed { color:var(--ink-v); text-align:center; padding:40px; }
+    .card { background:#fff; border:1px solid rgba(27,28,28,.1); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+    .empty-h { color:var(--ink); font-weight:700; font-size:15px; margin:0 0 8px; }
+    .empty-p { font-size:13px; margin:0 auto; max-width:560px; }
+    .empty-mark { display:block; margin:0 auto 14px; color:#c9a227; }
+    .empty-act { margin-top:18px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+    .btn-quiet { background:transparent; color:var(--ink-v); border:1px solid rgba(27,28,28,.15); border-radius:9px; padding:9px 14px; font:600 13px system-ui; cursor:pointer; text-decoration:none; }
+    .btn-quiet:hover { color:var(--red); border-color:var(--red); background:rgba(200,16,46,.06); }
+    /* The read ceiling, stated rather than left to be discovered. */
+    .foot-note { color:var(--ink-v); font-size:12px; margin:12px auto 0; max-width:1100px; opacity:.8; }
+    .foot-note[hidden] { display:none; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
+    <div class="h1wrap">
+      <h1>Polish Estimate Database</h1>
+      <span class="tag">Beta</span>
+    </div>
+    <a class="btn" href="/polish-intake.html">Open the Polish Estimate beta</a>
+  </div>
+  <p class="hint">Every estimate priced in the Polish Estimate beta, newest first. Open one to reopen it in the beta calculator exactly as it was saved.</p>
+  <!-- THE ANALYTICS SENTENCE. Not-polluting-the-real-numbers is the reason this page was
+       asked for, and /api/analytics is basisboard_client.get_analytics() (main.py:562) — it
+       is built entirely from BasisBoard and never reads the drafts table, so this is a
+       statement of fact about the code rather than a promise about future behaviour. If
+       Analytics ever starts reading drafts, this line is the first thing to come out. -->
+  <p class="hint-quiet">These figures never reach <b>Analytics</b>. Analytics is built entirely from BasisBoard and does not read this tool's projects, so nothing priced here can move a real number.</p>
+  <!-- THE MONEY SENTENCE. See the Beta total header comment in js/polish-estimates.js for
+       the mechanism; this is the same fact in the estimator's language. -->
+  <p class="hint-quiet is-last"><b>Beta total</b> is what the beta calculator priced — not the estimate sheet's lump sum, and not necessarily what a proposal document would print.</p>
+  <div class="wrap">
+    <div id="toolbar" class="toolbar" hidden>
+      <input id="q" type="search" class="tw-search" placeholder="Search beta estimates…" aria-label="Search beta estimates" autocomplete="off" />
+      <select id="month" class="tw-select" aria-label="Filter by month">
+        <option value="">Any month</option>
+      </select>
+      <select id="sort" class="tw-select" aria-label="Sort beta estimates by">
+        <option value="updated">Date updated</option>
+        <option value="name">Name</option>
+        <option value="deadline">Deadline</option>
+        <option value="total">Beta total</option>
+      </select>
+      <button type="button" id="dir" class="tw-select tw-dir" aria-label="Toggle sort direction">↓ Desc</button>
+      <span id="count" class="tw-count" aria-live="polite"></span>
+      <button type="button" id="clear" class="chip" hidden>✕ Clear</button>
+    </div>
+    <div id="list" class="loading">Loading beta estimates…</div>
+    <p id="ceiling" class="foot-note" hidden></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <!-- Estimator names, initials and avatar colours — shared with the CRM board and the
+       Proposals Database so one person reads identically on all three. Must load BEFORE
+       polish-estimates.js, which reads window.TWCrm as it runs. -->
+  <script src="/js/crm-core.js"></script>
+  <script src="/js/polish-estimates.js"></script>
+</body>
+</html>

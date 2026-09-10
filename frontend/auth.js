@@ -449,6 +449,21 @@
       // different and stays different: the toolbar link on Estimate Review goes straight to
       // /polish-estimate.html, because there the project already exists.
       navItem("/polish-intake.html", "◐", "Polish Estimate", "BETA") +
+      // The beta's own filing cabinet, immediately after the calculator that fills it. Hanz,
+      // 2026-09-10: "the polish estimate database ... the beta polish estimates that does not add up
+      // to the analytics, just something to test and save the polish projects."
+      //
+      // A SECOND DOOR ONTO A FILTER THAT ALREADY EXISTS, and that is the point rather than an
+      // oversight. The Proposals Database has carried a "Beta Polish" tab since 2026-09-02
+      // (js/projects.js:131, test_projects_beta_tab.py) and it STAYS - this row does not supersede
+      // it. What the tab could not fix is where somebody goes LOOKING: it sits inside a page filed
+      // under Active, behind a chip that opens on "active" out of sessionStorage. Beta work being
+      // invisible where an estimator expects it is what produced Will's "it doesn't save" report,
+      // so the row is here, under Beta, beside the calculator.
+      //
+      // The glyph is the half-filled circle's mirror - this and Polish Estimate are one subject
+      // read two ways - and test_sidebar_labels.py forbids two rows sharing a glyph anyway.
+      navItem("/polish-estimates.html", "◑", "Polish Estimate Database", "BETA") +
       // Reference data, not a daily page - the materials Treadwell buys and the assemblies
       // built out of them. (The Polish Estimate beta does price its takeoff from these assemblies; no
       // live bid does.) The brick rather than another shaded square: the geometric set is low-distinction
