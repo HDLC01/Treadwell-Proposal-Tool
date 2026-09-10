@@ -134,8 +134,20 @@
          nav when the sidebar is open, so the right-hand gutter is far smaller than a centred-column
          calculation predicts. At 1750px the rail landed at x=1465 and the column still ran to
          x=1486: a 21px overlap, on exactly the text this widget was moved aside to stop covering.
-         The step-3 rail holds its reservation at every floating width, and so does this one. */
-      .container{margin-left:auto;margin-right:282px}
+         The step-3 rail holds its reservation at every floating width, and so does this one.
+
+         MOVED LEFT OFF THE RAIL, 2026-09-11, because reserving the lane and pinning the column
+         to the near edge of it are two different things and only the first one was asked for.
+         `margin-left:auto` put every spare pixel on the LEFT, so the form sat hard against the
+         panel with the whole gutter behind it -- at 1400px the column started at x=238 with 238
+         empty pixels to its left and 16 to its right. Centring it in the space the rail does not
+         claim splits that gutter instead: left edge 119, right edge 999, rail still at 1118.
+         The reservation itself is untouched, which is the invariant the paragraph above defends;
+         only the distribution of what is left over changes. `max(0px, ...)` is the floor for the
+         narrow end of this query -- an open sidebar takes ~240px, so a 1400px viewport leaves
+         ~1160px of body, the calc goes negative, and the column shrinks against its own
+         margin-right rather than sliding under the panel. */
+      .container{margin-left:max(0px,calc((100% - 282px - 880px) / 2));margin-right:282px}
     }
     .vrow{display:flex;gap:10px;align-items:flex-start}
     /* margin:0 overrides the shared input rule's margin-top:4px. .vrow is align-items:flex-start,
