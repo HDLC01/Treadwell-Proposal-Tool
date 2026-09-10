@@ -358,6 +358,52 @@ def test_only_the_known_condition_names_are_accepted():
     assert out["conditions"] == {}
 
 
+def test_the_carried_four_never_come_back_from_the_server():
+    """THIS IS WHY A GREEN CLIENT SUITE DOES NOT MEAN THE FEATURE SHIPPED.
+
+    The polish page renders nine switches, and applyVerbal now sets all nine — the engine five
+    plus the four carried through from the live intake (Renovation, Dye, Joint filler, Remove
+    existing joint filler). backend/tests/test_verbal_apply.py proves that half works. Read on
+    its own it reads like dictation can set them, and it cannot: `clean()` builds its
+    `conditions` by looping over MONEY_CONDITIONS, so a key outside that tuple is not filtered
+    out, it is never looked at. The prompt asks for those same five by name.
+
+    So the client is ready and the server is the decision. `reno` is a real candidate — Kyle's
+    C17 is IF(B10="New",0.05,0.15), so New-versus-Reno triples the patch material rate, which
+    is exactly the kind of flag this module demands a verbatim quote for. Whether a spoken "it's
+    a remodel" is allowed to do that on its own evidence is Hanz's call, not this file's.
+
+    Asserted two ways on purpose. The tuple itself, so widening it is a deliberate edit that
+    lands here; and the behaviour through `clean()` with a quote that IS in the transcript, so
+    the reason nothing comes back is the loop and not a failed evidence check."""
+    assert V.MONEY_CONDITIONS == (
+        "local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax"), (
+        "MONEY_CONDITIONS changed. If a carried-through key was added, the prompt has to ask "
+        "for it, `missing` has to accept it, and polish-verbal.js needs its label: %r"
+        % (V.MONEY_CONDITIONS,))
+
+    transcript = TRANSCRIPT + " Oh and it is a remodel, existing floor, and they do not want any joint filler."
+    out = V.clean({"conditions": {
+        "reno": {"value": True, "quote": "it is a remodel, existing floor"},
+        "joint_filler": {"value": False, "quote": "they do not want any joint filler"},
+        "hard_bid": {"value": True, "quote": "It's a hard bid, going out through the district"},
+    }}, transcript)
+    # The KEYS are the claim. What the accepted flag's context reads is quote_context's business
+    # and is pinned by its own tests -- it widens a quote to the surrounding sentence, so asserting
+    # the string here would couple this test to a window size that has nothing to do with it.
+    assert sorted(out["conditions"]) == ["hard_bid"], (
+        "a carried-through key came back from the server: %r" % (sorted(out["conditions"]),))
+    assert out["conditions"]["hard_bid"]["value"] is True
+    # And not as an "I heard it but could not prove it" either -- unsupported is for a flag whose
+    # quote is absent from the transcript. These two were quoted verbatim and are simply not
+    # part of the conversation the server is having.
+    assert out["unsupported"] == [], (
+        "a quoted carried key was reported as unsupported, which reads as a transcript problem "
+        "rather than a route that does not carry it: %r" % (out["unsupported"],))
+    assert "reno" not in out.get("missing", []), (
+        "the panel would ask the estimator for a flag this route cannot accept")
+
+
 # ── merging into a project that already has a takeoff ────────────────────────
 # There were two tests here for `merge_conditions()`, and they were the only callers it ever had.
 # The route RETURNS and does not write, so nothing on the server merges anything; the merge that

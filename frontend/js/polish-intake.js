@@ -381,7 +381,20 @@
     });
     var conditions = (res && res.conditions) || {};
     Object.keys(conditions).forEach(function (key) {
-      if (!isCondition(key)) return;
+      // ALL NINE THIS PAGE RENDERS, not just the five that reach the pricing engine.
+      // toggleCondition has taken a carried key since the nine shipped -- `if (!cc &&
+      // !isCondition(key)) return;` -- while this gate still asked only the engine five, so the
+      // two halves of the same page disagreed about what counts as a condition.
+      //
+      // NOT REACHABLE END-TO-END YET, AND READY ON PURPOSE. backend/verbal_intake.py builds its
+      // `conditions` by looping over MONEY_CONDITIONS -- five literals -- and its prompt asks for
+      // those five by name, so the server cannot hand back one of the carried four today; see
+      // test_the_carried_four_never_come_back_from_the_server. The seven-flag list that DOES
+      // include B10 New/Reno belongs to /api/autofill, a different route that writes cell keys
+      // and never calls this function. Widening the SERVER is a product decision -- whether a
+      // spoken "it's a renovation" may triple the patch rate on its own evidence. Widening the
+      // CLIENT is just making this page agree with itself, and it is where the trap below lives.
+      if (!carrySpec(key) && !isCondition(key)) return;
       var item = conditions[key];
       if (!item || typeof item.value !== "boolean") return;
       // THE HUMAN WINS. An estimator who corrected this switch after the first run is not asked to
@@ -391,7 +404,15 @@
       if (humanConditions[key]) { respected.push(key); return; }
       // Toggled only when it DIFFERS. Calling toggleCondition unconditionally would flip a switch
       // that was already right, which is the one way this could turn a correct form wrong.
-      if (!!M.conditions[key] !== item.value) toggleCondition(key, true);
+      //
+      // condOn, NOT M.conditions, AND THIS HALF IS NOT OPTIONAL. The carried four never live on
+      // the model -- migrateModel whitelists condition keys against freshModel().conditions and
+      // drops the rest -- so reading one there is `undefined`. Every carried flag would read as a
+      // change from off: `joint_filler: false` would leave Joint filler ON, because Joint filler
+      // ships on and `!!undefined !== false` is false. condOn is the one function that knows
+      // which of the two bindings a key lives in, and for the engine five it returns exactly
+      // `!!M.conditions[key]`, so nothing about the original five changes here.
+      if (condOn(key) !== item.value) toggleCondition(key, true);
       applied.push(key);
     });
     if (filled.length) {
