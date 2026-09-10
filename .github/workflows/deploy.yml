@@ -210,7 +210,7 @@ jobs:
                      # discarded and the script went on to exit 0 from its closing `if`. The two greps
                      # below caught a skip and caught zero passes, but a red test read exactly like a
                      # green one -- which is the same false reassurance this whole step exists to remove.
-                     # Placed AFTER the pip block on purpose: that block's `exit 0` early-out is a
+                     # Placed AFTER the pip block on purpose: the `exit 0` early-out in that block is a
                      # deliberate skip when the image cannot install pytest/pymupdf.
                      set -e
                      # test_box_resize.py (size), test_box_move.py (position) and test_docx_merge.py
@@ -233,7 +233,7 @@ jobs:
                      # reassurance this step was added to remove. Counted rather than hardcoded,
                      # so adding another PDF case does not quietly turn the gate off.
                      #
-                     # `-k "pdf or libreoffice"`, not `-k pdf`: the merge's renderer test is named for
+                     # `-k "pdf or libreoffice"`, not `-k pdf`: the merge renderer test is named for
                      # the renderer rather than for the format, and a gate matching only "pdf" would
                      # have let it skip in the one image that can actually run it -- silently, which is
                      # the reassurance-without-coverage this whole block exists to prevent.
