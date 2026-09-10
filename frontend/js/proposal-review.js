@@ -139,7 +139,23 @@
     if (!box) return;
     box.checked = !!(TW.getState() || {}).cover_letter_enabled;
     box.addEventListener("change", () => {
-      try { TW.setState({ cover_letter_enabled: !!box.checked }); } catch {}
+      try {
+        TW.setState({ cover_letter_enabled: !!box.checked });
+        // FLUSHED, NOT LEFT TO THE DEBOUNCE, and this is the bug Hanz reported twice as
+        // "nothing happens when I click cover letter". setState writes localStorage and
+        // SCHEDULES the server push; PR #456 made putDraft's keepalive opt-in, so a routine
+        // debounced save does not survive page teardown. Tick the box, then reload or navigate
+        // inside the debounce window, and the PUT dies with the page -- after which
+        // initDraftSync re-hydrates from a server draft that never received the flag and the
+        // tick is simply gone. Going straight through to Generate worked, which is what made
+        // this look intermittent rather than broken.
+        //
+        // A checkbox is a discrete, deliberate choice, not a keystroke in a stream: there is
+        // nothing to coalesce, so there is no reason to defer it. flushState cancels the timer
+        // and PUTs immediately. Fire-and-forget on purpose -- the estimator must not wait on a
+        // round trip to see the box tick, and the local write has already happened either way.
+        if (typeof TW.flushState === "function") TW.flushState();
+      } catch {}
     });
   })();
 
