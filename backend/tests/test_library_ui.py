@@ -1353,8 +1353,9 @@ def test_the_controls_are_drawn_glyphs_not_typed_emoji(ran):
     Read off the REAL rendered rows, so a glyph left behind in any one renderer fails."""
     ic = ran["icons"]
     assert ic["oldGlyphsGone"] and ic["noEmojiInRenderedRows"]
-    assert ic["glyphCount"] == 4, (
-        "expected duplicate, delete, list-delete and line-delete; found %s" % ic["glyphCount"])
+    assert ic["glyphCount"] == 5, (
+        "expected favorite, duplicate, delete, list-delete and line-delete; found %s"
+        % ic["glyphCount"])
     assert ic["allAreLucideShaped"], (
         "a glyph does not match the house geometry: 24 box, no fill, currentColor, width 2, round")
     assert ic["allHiddenFromTheTree"], (
