@@ -869,6 +869,8 @@ class LibraryItemIn(BaseModel):
     sku: Optional[str] = None
     vendor: Optional[str] = None
     notes: Optional[str] = None
+    # Shared/team-wide, not per-user -- see library.validate_item's note.
+    favorite: Optional[bool] = None
 
 
 class LibraryAssemblyIn(BaseModel):
@@ -877,6 +879,7 @@ class LibraryAssemblyIn(BaseModel):
     description: Optional[str] = None
     unit: Optional[str] = None
     lines: Optional[Any] = None
+    favorite: Optional[bool] = None
     # The version the editor believes it is changing. A line edit rewrites the WHOLE lines array,
     # so without this two people with the same assembly open silently overwrite each other.
     expected_updated_at: Optional[str] = None
