@@ -351,19 +351,38 @@
     font-size: 12px; color: #444; white-space: nowrap; cursor: pointer; }
   .ribbon-cl input { accent-color: var(--treadwell-red, #9e001f); margin: 0; cursor: pointer; }
 
-  /* THE DOCUMENT TABS SHARE THE FORMATTING RIBBON'S ROW. They are not page navigation -- the
-     step pills above are, and putting a within-step switch beside them would say the cover letter
-     is a fifth step. A row of their own was the other option and it was rejected for what it
-     costs: this canvas is a to-scale preview of a printed page, and every pixel of chrome is a
-     pixel of paper the estimator cannot see.
-
-     #fmt-ribbon becomes the flex row; .tw-fmtbar (mounted into it by proposal-review.js, which
-     this file does not touch) takes the rest of it. */
+  /* #fmt-ribbon becomes the flex row; .tw-fmtbar (mounted into it by proposal-review.js, which
+     this file does not touch) takes the rest of it. The cover letter, restored 2026-09-11, has no
+     tab of its own here any more -- ticking it reveals its page directly above the proposal's in
+     the same canvas (#cl-surface below) instead of a second document to switch to. */
   .fmt-ribbon { display: flex; align-items: stretch; }
   #fmt-ribbon > .tw-fmtbar { flex: 1 1 auto; min-width: 0; }
   .ribbon-tax span { font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #777; }
   .ribbon-tax select { font-size: 12px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px;
     background: #fff; color: #222; }
+
+  /* The cover letter's own page, mounted in #cl-surface directly above #doc-surface (both inside
+     #doc-zoom, so they scroll and zoom as one continuous canvas). `.tw-page` already draws the
+     sheet look; these only say how the letter's own layout differs from the proposal's. */
+  .cl-page.tw-flow { min-height: 792pt; }
+  .cl-body { position: relative; z-index: 1; }
+  .cl-txbx { outline: none; }
+  /* NEVER set `display` on #cl-surface itself -- coverletter-editor.js toggles its `hidden`
+     attribute directly, and a class-based `display` rule here would silently defeat it, the
+     exact bug hidden-attribute-cascade-trap.md documents happening four times already. */
+
+  /* THE LETTER DID NOT LOAD -- AMBER, NOT RED. The proposal is unaffected and the bid can still
+     go out today, so this is a mistake to correct and not a failure to fear. Same palette as
+     .pr-inert-warn for that reason, so the page keeps one meaning for one colour. */
+  .cl-warn { max-width: 612pt; margin: 0 auto; background: #fdf6e3; border: 1px solid #e8d9a8;
+    border-radius: 8px; padding: 14px 16px; color: #7a5c00; }
+  .cl-warn-text { margin: 0 0 10px; font-size: 13px; line-height: 1.45; }
+  .cl-warn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .cl-warn-btn { font: inherit; font-size: 12px; font-weight: 600; padding: 6px 12px;
+    border-radius: 6px; border: 1px solid #7a5c00; background: #7a5c00; color: #fff;
+    cursor: pointer; }
+  .cl-warn-btn-quiet { background: transparent; color: #7a5c00; }
+  .cl-warn-btn:hover { filter: brightness(1.08); }
   .options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
   .options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
   /* Same amber as the estimate strip's .bb-inert — an option configured into thin air is a
@@ -462,10 +481,11 @@
        proposal-review.js) so readForm + the doc repaint keep working. -->
   <!-- OPTIONAL, AND OFF UNTIL SOMEBODY ASKS FOR IT. Most bids do not want a cover letter, and a
        customer-facing page that appeared without being asked for is a page nobody proofread.
-       Ticking it is the whole interaction: there is nothing to edit and nothing to proofread on
-       screen, because the letter is generated from this template plus the values the proposal
-       already resolved, and it comes out as page 1 of the proposal document itself. It had its
-       own editor tab until 2026-09-09; Hanz removed it. -->
+       Ticking it reveals the letter's own editable page directly above the proposal's in the
+       same canvas (see #cl-surface, and frontend/js/coverletter-editor.js) — no separate tab,
+       matching the fact that the letter becomes page 1 of the one proposal document at generate
+       time. It had a separate editor tab until 2026-09-09 (Hanz removed it); the editing came
+       back 2026-09-11, on this same page rather than as a tab this time. -->
   <label class="ribbon-cl" title="Adds Treadwell's letterhead page in front of the proposal. Off by default.">
     <input type="checkbox" id="cl-toggle">
     <span>Cover letter</span>
@@ -656,6 +676,13 @@
 <div class="word-canvas">
   <div id="doc-zoom-outer">
     <div id="doc-zoom">
+      <!-- The optional cover letter's own page(s), mounted directly ABOVE the proposal so the
+           canvas reads as one continuous document — matching how the letter is actually merged
+           onto the front of the proposal .docx at generate time (backend/docx_merge.py). Built
+           and shown/hidden by frontend/js/coverletter-editor.js; empty and hidden until the
+           "Cover letter" checkbox is on. Genuinely emptied, never just visually hidden underneath
+           other content, so it never affects the proposal's own Terms-page pagination below it. -->
+      <div id="cl-surface" hidden></div>
       <div id="doc-surface">
         <div id="doc-loading" class="tw-page" style="padding:72pt 90pt;">Loading the proposal template…</div>
       </div>
@@ -729,6 +756,11 @@
 <script src="/js/crm-core.js"></script>
 <script src="/js/proposal-format-core.js?v=20260805-1"></script>
 <script src="/js/proposal-review.js?v=20260902-1"></script>
+<!-- AFTER proposal-review.js, always. The cover letter borrows that file's token resolver and its
+     "aim at nothing" call for the formatting ribbon, both of which are top-level functions in the
+     shared script scope; loaded first it would find neither. Every borrow is feature-detected, so
+     the letter still renders (with raw tokens) if that script threw. -->
+<script src="/js/coverletter-editor.js?v=20260911-1"></script>
 
 </body>
 </html>

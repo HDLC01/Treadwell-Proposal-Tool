@@ -61,12 +61,13 @@ PR_JS = (FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
 DONE_PAGE = (FRONTEND / "done.html").read_text(encoding="utf-8")
 DONE_JS = (FRONTEND / "js" / "done.js").read_text(encoding="utf-8")
 
-# Every name the deleted editor put into the product. Each one is a separate way for a revert or a
-# half-finished merge to bring a piece of it back: the script file, the object it published on
-# `window`, the two elements it owned, the off-stage class that parked the document that was not in
-# front, and the Files page's fourth download button.
-GONE = ("coverletter-editor.js", "TWCoverLetter", "cl-surface", "doc-tabs", "cl-offstage",
-        "dl-cover")
+# The DISCARDED HALF of the old editor, still gone on purpose after the 2026-09-11 restore.
+# `coverletter-editor.js`, `TWCoverLetter` and `cl-surface` came BACK that day (Hanz: bring the
+# editing back, on the same page as the proposal) and are no longer in this list. What did not
+# come back is the part that made the letter a SEPARATE document rather than page 1 of one: the
+# tab strip that switched between two surfaces, the off-stage class that parked whichever one was
+# not in front, and the Files page's fourth download button.
+GONE = ("doc-tabs", "cl-offstage", "dl-cover")
 
 
 def _node(harness):
@@ -876,16 +877,19 @@ def _frontend_files():
     return files
 
 
-def test_no_trace_of_the_deleted_editor_survives_in_the_frontend():
-    """A regression guard, and the reason it is worth its length: the editor was six interlocking
-    parts (a script, an object on `window`, two elements, an off-stage class, a download button)
-    and every one of them fails QUIETLY if it comes back alone. A `#doc-tabs` div with no script
-    behind it is a dead tab strip in the ribbon. A `<script src>` for a file that does not exist is
-    a console 404 and nothing else. `TWCoverLetter` referenced from done.js is `undefined` at the
-    moment the rebuild payload is assembled, which silently drops the flag — the exact failure
-    test_the_files_page_rebuild_carries_the_letter_too describes, arriving by a different door.
+def test_no_trace_of_the_discarded_tab_and_download_survives_in_the_frontend():
+    """A regression guard over the part of the old editor that stayed discarded when the rest of
+    it came back on 2026-09-11: the tab strip, the off-stage parking class, and the Files page's
+    fourth download button. Each fails QUIETLY if it comes back alone. A `#doc-tabs` div with no
+    tab-click wiring behind it is a dead strip in the ribbon nobody built. A `cl-offstage` class
+    reintroduced on either surface brings back the old two-tab visibility model that this restore
+    deliberately does not have — `#cl-surface` is shown/hidden with the ordinary `hidden`
+    attribute now, not moved off-screen, because there is no second "must still lay out" state to
+    protect once the letter is either present or absent rather than mid switch. A `dl-cover`
+    button implies a document that is downloadable on its own again, which the letter has not
+    been since it became page 1 of the proposal.
 
-    Scanned over every .js/.html/.css under frontend/, not just the three files this module reads,
+    Scanned over every .js/.html/.css under frontend/, not just the files this module reads,
     because the way a name like this comes back is a merge that resurrects the page but not the
     script, or a stylesheet rule kept "in case"."""
     offenders = {}
@@ -896,11 +900,8 @@ def test_no_trace_of_the_deleted_editor_survives_in_the_frontend():
         if hits:
             offenders[path.relative_to(FRONTEND).as_posix()] = hits
     assert offenders == {}, (
-        "the deleted cover-letter editor is referenced again: %r. Each of these fails silently on "
-        "its own — see this test's docstring." % offenders)
-    assert not (FRONTEND / "js" / "coverletter-editor.js").exists(), (
-        "frontend/js/coverletter-editor.js is back on disk; nothing loads it, so whatever is in "
-        "it is dead code that reads as a live feature")
+        "the discarded half of the old cover-letter editor is referenced again: %r. Each of "
+        "these fails silently on its own — see this test's docstring." % offenders)
 
 
 def test_the_scan_above_is_looking_for_things_that_could_have_been_there():

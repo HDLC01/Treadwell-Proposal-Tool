@@ -6995,7 +6995,8 @@
         // amount / tax phrase, option + manual line label/amount). Display-only —
         // never affects pricing or the .xlsx (see backend _sanitize_price_overrides).
         price_overrides: (state.price_overrides && typeof state.price_overrides === "object") ? state.price_overrides : {},
-        // THE OPTIONAL COVER LETTER — one flag, and since 2026-09-09 that is the whole feature.
+        // THE OPTIONAL COVER LETTER — the flag, and since 2026-09-11 once again the estimator's
+        // own edits to its wording.
         //
         // Inside proposal_payload, not merely on the POST body, because the payload is what gets
         // FROZEN into a sent revision: /api/admin/proposal-pdf re-renders a customer's document
@@ -7014,6 +7015,13 @@
         // fails the same way in reverse. Twelve other keys on this page go through liveKey for
         // exactly this reason; the note at its definition spells the mechanism out.
         cover_letter_enabled: !!liveKey("cover_letter_enabled"),
+        // The letter's own paragraph edits + the template version their ids were captured
+        // against — restored 2026-09-11 in coverletter-editor.js, which reads the SAME liveKey
+        // pattern this file does for exactly the reason above. Read through the ONE helper on
+        // window rather than duplicated here, so this file and that one cannot come to disagree
+        // about what the estimator asked for; an empty object when that script did not load,
+        // which the backend already treats as "no edits".
+        ...(window.TWCoverLetter ? TWCoverLetter.payloadFields() : {}),
       },
       // Also persist the lump sum string so Done can show it without
       // re-reading from HF (which lives on the Estimate Review page).
