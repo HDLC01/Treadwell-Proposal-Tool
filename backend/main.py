@@ -441,15 +441,34 @@ class GenerateIn(BaseModel):
     # letter that quietly re-rendered from the live draft would contradict the
     # pinned prices on the page below it.)
     #
-    # THE ONLY COVER-LETTER FIELD. The letter had a second editor tab of its
-    # own until 2026-09-09 — a document surface, a paragraph-override channel
-    # and a template_version to pin those override ids against. It is gone,
-    # and the wording now comes from the template plus the tokens already
-    # resolved for the proposal. An old draft's `proposal_payload` may still
-    # carry `cover_letter_paragraph_overrides` and
-    # `cover_letter_template_version`; pydantic ignores unknown keys, so those
-    # replays keep working and simply stop honouring edits nothing can make.
     cover_letter_enabled: bool = False
+    # The cover-letter document editor's free-text paragraph edits, restored
+    # 2026-09-11 — Hanz wanted the wording editable again, on the same Proposal
+    # Review canvas as the proposal itself rather than a separate tab this time.
+    #   {"<block id from /api/coverletter-template>": {text?, runs?, para?}}
+    #
+    # Its own channel rather than a bucket inside `paragraph_overrides`: those
+    # ids are positions in a walk over the PROPOSAL template, and mixing two
+    # documents' ids in one list is how an edit lands on the wrong paragraph.
+    #
+    # A DICT KEYED BY ID, like `box_overrides` and unlike the proposal's list of
+    # {id, text} — the entry cannot exist without its id, so there is no shape in
+    # which an override travels with no idea which paragraph it belongs to.
+    # Normalized back to the writer's list form (and validated entry by entry by
+    # the SAME sanitizer the proposal uses) in _sanitize_cover_letter_overrides.
+    cover_letter_paragraph_overrides: dict = Field(default_factory=dict)
+    # The cover-letter template version those ids were captured against, echoed
+    # from /api/coverletter-template. Same fail-safe as `template_version` above:
+    # non-empty and stale -> the overrides are DROPPED, because a regenerated
+    # template shifts every id after the changed paragraph.
+    #
+    # It is "<work_type>:<audience>@<mtime>", not a bare mtime, and that carries
+    # the frontend's per-template override keying (proposal-review.js's
+    # `overrideKey(wt, audience)`) onto the server. The seven cover-letter files
+    # are written by ONE generator run and can share an mtime, so mtime alone
+    # would let a Direct/Combo edit replay onto GC/Epoxy. See
+    # `_cover_letter_template_version`.
+    cover_letter_template_version: str = ""
 
 
 class VerbalIntakeIn(BaseModel):
@@ -3896,6 +3915,38 @@ def _sanitize_paragraph_overrides(overrides_in: list) -> list:
     return out
 
 
+def _sanitize_cover_letter_overrides(overrides_in) -> list:
+    """`{"<block id>": {text?, runs?, para?}}` → the writer's list form.
+
+    The id-keyed dict is folded back into an `id` field and the ENTRY ITSELF is
+    then validated by `_sanitize_paragraph_overrides` — the very same rules the
+    proposal's overrides pass through. That delegation is the point: the two
+    documents are edited in one UI, and a second, subtly different idea of what a
+    legal override looks like is how the cover letter would start accepting a
+    3000-run paragraph the proposal refuses.
+
+    Defensive like its delegate — a non-dict, a key that isn't an integer, or a
+    malformed entry is skipped, never raised. A hand-built request body cannot
+    500 /api/generate."""
+    if not isinstance(overrides_in, dict):
+        return []
+    staged = []
+    for raw_id, entry in list(overrides_in.items())[:_PARAGRAPH_OVERRIDES_MAX]:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            pid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        one = dict(entry)
+        one["id"] = pid          # the key is authoritative; an `id` inside loses
+        staged.append(one)
+    # Stable by id so the applied order can't depend on dict insertion order (a
+    # re-serialized draft round-trips its keys in whatever order it was stored).
+    staged.sort(key=lambda o: o["id"])
+    return _sanitize_paragraph_overrides(staged)
+
+
 # Cap + coerce the doc editor's per-option system_overrides. UNLIKE
 # _sanitize_paragraph_overrides, this is INDEX-PRESERVING: a malformed entry
 # coerces to {} in place rather than being dropped, because the list is
@@ -4494,6 +4545,113 @@ def _template_proposal_version(path: Path) -> str:
         return "0"
 
 
+def _cover_letter_template_version(work_type: str, audience: Optional[str]) -> str:
+    """The version string a cover-letter override id is pinned to:
+    `"<work_type>:<audience>@<mtime_ns>"`.
+
+    NOT the bare mtime the proposal uses, and the difference is load-bearing. A
+    block id is a position in a walk over ONE file; the proposal's templates are
+    eight files Kyle edits one at a time, so their mtimes distinguish them in
+    practice. The seven cover letters are written by ONE generator run, so two
+    variants can share an mtime — and a guard that only compared mtimes would
+    accept a Direct/Combo override set against GC/Epoxy and rewrite whichever
+    sentence happened to sit at that index, in a document a customer reads.
+
+    `cover_letter_writer.variant_key` resolves the pair the same way the picker
+    does (epoxy fallback, audience-agnostic gyp), so the stamp always names the
+    file that was actually opened."""
+    path = cover_letter_writer.pick_template(work_type, audience)
+    return (cover_letter_writer.variant_key(work_type, audience) + "@"
+            + _template_proposal_version(path))
+
+
+@app.get("/api/coverletter-template")
+def api_coverletter_template(request: Request, work_type: str = "epoxy",
+                             audience: str = "Direct") -> Response:
+    """The Cover Letter template for `(work_type, audience)`, as the same ordered
+    list of editable blocks `/api/proposal-template` returns — restored
+    2026-09-11 so Proposal Review can render the letter's own editable page(s)
+    ahead of the proposal's, in the SAME document canvas (no separate tab this
+    time — see cover_letter_enabled's docstring on GenerateIn).
+
+    Keyed on BOTH, exactly like the proposal: `cover_letter_writer` mirrors
+    `proposal_writer.TEMPLATE_PICKER`'s audience-first folders, including its
+    asymmetry (gyp ignores audience; sealer and budget have no letter and fall
+    back). An unmapped combination serves the fallback template rather than
+    404-ing, because an empty editor is a worse answer than the wrong-but-usable
+    one the proposal already gives.
+
+    `id` is the paragraph's index in `proposal_writer.iter_editable_blocks` over
+    THIS file — the walk `cover_letter_writer.fill_cover_letter` resolves
+    `cover_letter_paragraph_overrides` against. `template_version` is
+    `"<work_type>:<audience>@<mtime>"` (see `_cover_letter_template_version`), so
+    a stale cached id set is detectable after a deploy AND after an
+    audience/work-type switch; `_generate` drops overrides that no longer match.
+
+    Every block comes back with `in_block: null` — a letter has no
+    priced/repeatable regions, so every paragraph is freely editable. Exactly ONE
+    block, the floating date, comes back with `in_txbx: true` and a `txbx` index
+    into `geometry.boxes` (which therefore holds exactly one entry): Hanz's
+    example letter floats the date over the artwork rather than typing it on a
+    line, and the editor needs to know it cannot place that one freely. The
+    letterhead artwork arrives in `geometry.images`, served by
+    /api/coverletter-template/media."""
+    try:
+        template_path, blocks, geometry = cover_letter_writer.describe_template(
+            work_type, audience or None)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    payload = {
+        "work_type": work_type,
+        "audience": audience,
+        # Folder + file: `Epoxy.docx` alone does not say which of Direct/ and GC/
+        # the editor is showing, and those are two different documents.
+        "template_name": template_path.relative_to(
+            cover_letter_writer.TEMPLATES_ROOT / "CoverLetter").as_posix(),
+        "template_version": _cover_letter_template_version(work_type, audience or None),
+        "geometry": geometry,
+        "blocks": blocks,
+    }
+    return _versioned_json(
+        request, payload,
+        version=f"cl:{payload['template_version']}:s{_BLOCK_SCHEMA_VERSION}")
+
+
+@app.get("/api/coverletter-template/media")
+def api_coverletter_template_media(request: Request, work_type: str = "epoxy",
+                                   audience: str = "Direct", name: str = "") -> Response:
+    """One media part (by basename) from the picked cover-letter template's
+    package — the letterhead artwork the editor draws the page on.
+
+    Same whitelist-against-the-package's-own-listing as
+    /api/proposal-template/media: a crafted `name` can't reach any other part
+    (no separators survive the basename match), and unknown names 404."""
+    import zipfile
+    template_path = cover_letter_writer.pick_template(work_type, audience or None)
+    if not template_path.exists():
+        raise HTTPException(404, f"Cover letter template not found: {template_path.name}")
+    try:
+        with zipfile.ZipFile(str(template_path)) as z:
+            allowed = {n.rsplit("/", 1)[-1]: n for n in z.namelist()
+                       if n.startswith("word/media/") and "/" not in n[len("word/media/"):]}
+            part = allowed.get(name)
+            if not part:
+                raise HTTPException(404, "No such media in this template")
+            data = z.read(part)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(500, "Cover letter template package is unreadable.") from exc
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    ctype = _MEDIA_CONTENT_TYPES.get(ext, "application/octet-stream")
+    version = (f"cl:{name}:"
+               + _cover_letter_template_version(work_type, audience or None))
+    etag = 'W/"' + hashlib.md5(version.encode()).hexdigest()[:16] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag in (request.headers.get("if-none-match") or ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
+
+
 @app.post("/api/generate", response_model=GenerateOut)
 def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
     """The HTTP route. A real browser generate MAY write its values back to the draft."""
@@ -5032,11 +5190,26 @@ def _generate(payload: GenerateIn, request: Request, *,
                 f"so one cannot be added. Untick 'Cover letter' to generate the "
                 f"proposal on its own.")
         _cl_path = cover_letter_writer.pick_template(payload.work_type, _cl_audience)
+        _cl_cur_version = _cover_letter_template_version(payload.work_type, _cl_audience)
+        _cl_overrides = payload.cover_letter_paragraph_overrides
+        if (payload.cover_letter_template_version
+                and payload.cover_letter_template_version != _cl_cur_version):
+            # Same fail-safe as the proposal's template_version guard, plus the
+            # variant: the ids are positions in a walk over a SPECIFIC file, so a
+            # regenerated template — or a switch between Direct and GC, or
+            # between work types — can land an edit on the wrong paragraph.
+            log.warning(
+                "Dropping %d cover-letter paragraph override(s): stale "
+                "cover_letter_template_version %r != current %r",
+                len(_cl_overrides or {}),
+                payload.cover_letter_template_version, _cl_cur_version)
+            _cl_overrides = {}
         try:
             cover_letter_bytes = cover_letter_writer.fill_cover_letter(
                 work_type=payload.work_type,
                 audience=_cl_audience,
                 values=values,
+                paragraph_overrides=_sanitize_cover_letter_overrides(_cl_overrides),
             )
             docx_bytes = docx_merge.prepend_cover_letter(docx_bytes,
                                                          cover_letter_bytes)
