@@ -346,7 +346,9 @@ def test_adding_a_labor_line_prices_from_its_own_values(ran):
     Mutation: `newLaborRow()` returning a fixed id. Two added rows then share an id, and the next
     thing that keys off it (a save, a delete) touches the wrong one."""
     lab = ran["labor"]
-    assert lab["afterAdd"]["count"] == 3, "the add button did not append a line"
+    # 3, not 2: migrateModel() backfills the Travel row (#491) onto the fixture's saved two rows
+    # at boot, so the add lands after [Polishing, Mock-up, Travel], at count 4.
+    assert lab["afterAdd"]["count"] == 4, "the add button did not append a line"
     assert lab["newRowLabel"] == "Densify", "the new row's own text box does not reach the model"
     money_is(lab["newRowCost"], lab["newRowExpected"], "the added line")
     assert lab["newRowCost"] == "$1,920"
@@ -357,15 +359,17 @@ def test_adding_a_labor_line_prices_from_its_own_values(ran):
 
 @needs_node
 def test_deleting_a_labor_line_removes_the_one_that_was_asked_for(ran):
-    """Index 1 of [Polishing, Mock-up, Densify] is the mock-up. Deleting the wrong line is the
-    quietest possible data loss: the table still looks full.
+    """Index 1 of [Polishing, Mock-up, Travel, Densify] is the mock-up — Travel is the row
+    migrateModel() backfills (#491) onto the fixture's saved two rows before the page ever
+    renders. Deleting the wrong line is the quietest possible data loss: the table still looks
+    full.
 
     Mutation: `M.labor.splice(i, 1)` where i comes from `data-del-lab` on the row above, or a
     `splice(i)` with no count — which truncates everything from there down."""
     lab = ran["labor"]
-    assert lab["afterDelete"] == ["Polishing", "Densify"], (
+    assert lab["afterDelete"] == ["Polishing", "Travel", "Densify"], (
         "the delete took the wrong line: %r" % lab["afterDelete"])
-    assert lab["afterDeleteCells"] == 2, "the table still renders a cell for the deleted line"
+    assert lab["afterDeleteCells"] == 3, "the table still renders a cell for the deleted line"
     # The survivors keep their own money after the row between them went.
     assert lab["afterDeleteCosts"] == ["$3,864", "$1,920"], (
         "the rows below the deleted one did not keep their own costs: %r" % lab["afterDeleteCosts"])

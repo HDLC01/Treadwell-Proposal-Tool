@@ -373,7 +373,45 @@
         totals: (model.totals && typeof model.totals === "object") ? model.totals : {}
       };
       if (!(out.takeoff instanceof Array) || !out.takeoff.length) out.takeoff = fresh.takeoff;
-      if (!(out.labor instanceof Array) || !out.labor.length) out.labor = fresh.labor;
+      if (!(out.labor instanceof Array) || !out.labor.length) {
+        out.labor = fresh.labor;
+      } else {
+        // Travel joined `freshModel()`'s labor rows here on 2026-09-12 (#491), but a sandbox
+        // already saved before that keeps whatever row count it had FOREVER — the branch above
+        // only replaces the WHOLE array, and only when it is missing or empty, so a non-empty
+        // saved array (Hanz's real "Akoya Omakase (beta test)": polishing/mockup/jointfill, no
+        // travel) passes straight through untouched. Nothing else backfills a labor row, so
+        // Travel simply never arrived on reload no matter how many times the page was reopened.
+        //
+        // Fix is additive and keyed by id: append the blank Travel row only when it's missing.
+        // Existing rows are never touched — including one an estimator typed in by hand via
+        // "+ Add a labor line", and any guys/days/rate already entered on the original three —
+        // and a sandbox opened after Travel shipped already has the id, so nothing doubles up.
+        //
+        // NARROW ON PURPOSE, not a generic "diff against freshModel().labor and backfill every
+        // missing id" loop: `conditions` just below has exactly that shape because it was built
+        // in on day one (2df0136) with a real per-key merge from the start, so generalizing it
+        // costs nothing. `labor` never had one, and testing a generic version here showed real
+        // cost — `blockers()` and several page-harness fixtures build INTENTIONALLY short labor
+        // arrays (one row, to isolate a single scenario; two rows, to test add/delete UI
+        // mechanics) that are not stale drafts at all, and a generic backfill can't tell the two
+        // apart, so it silently padded rows those fixtures never asked for and broke assertions
+        // about row count and index that have nothing to do with Travel. The one-off costs three
+        // lines instead of a loop and touches nothing that isn't actually missing Travel.
+        // NEXT TIME A LABOR TASK IS ADDED: don't copy this block verbatim. Either (a) add another
+        // narrow `if` right below it, naming the new id explicitly — fine as long as it's one or
+        // two more — or (b) once there are several of these, replace all of them with the generic
+        // per-id loop this comment talks past, AND update `blockers()`'s and the page harnesses'
+        // short fixtures to carry a full row set, so a short array reliably means "a stale draft,"
+        // not "a test that only cares about one row." Don't add the generic loop without doing
+        // that second half — that's exactly what broke here.
+        var hasTravel = false;
+        for (var li = 0; li < model.labor.length; li++) {
+          if (model.labor[li] && model.labor[li].id === "travel") { hasTravel = true; break; }
+        }
+        out.labor = hasTravel ? model.labor
+          : model.labor.concat([{ id: "travel", label: "Travel", guys: "", days: "", rate: "" }]);
+      }
       var saved = (model.conditions && typeof model.conditions === "object") ? model.conditions : {};
       for (var k in fresh.conditions) {
         if (!fresh.conditions.hasOwnProperty(k)) continue;

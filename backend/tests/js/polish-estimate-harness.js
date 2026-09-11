@@ -720,30 +720,38 @@ const rendered = [];      // every string the page put on screen, for the Labour
         .map((x) => (/>([^<]*)</.exec(x) || ["", ""])[1]),
     };
 
-    // Add a line: it appears, it is editable, and it prices from ITS OWN values.
+    // Add a line: it appears, it is editable, and it prices from ITS OWN values. Travel is
+    // backfilled onto MODEL's saved (pre-#491) two rows at boot — see migrateModel's Travel
+    // comment — so the model already has three rows [Polishing, Mock-up, Travel] before this
+    // click, and the new row lands at index 3, not 2.
     clickOn(b, "[data-add-lab]");
     out.labor.afterAdd = { count: b.api.model().labor.length,
                            rebuilt: panels.htmlWrites > 0 };
-    typeInto(b, '[data-lab="2"][data-k="label"]', "Densify");
-    typeInto(b, '[data-lab="2"][data-k="guys"]', "2");
-    typeInto(b, '[data-lab="2"][data-k="days"]', "3");
-    typeInto(b, '[data-lab="2"][data-k="rate"]', "40");
-    out.labor.newRowCost = txt(b, '[data-lcost-for="2"]');
+    typeInto(b, '[data-lab="3"][data-k="label"]', "Densify");
+    typeInto(b, '[data-lab="3"][data-k="guys"]', "2");
+    typeInto(b, '[data-lab="3"][data-k="days"]', "3");
+    typeInto(b, '[data-lab="3"][data-k="rate"]', "40");
+    out.labor.newRowCost = txt(b, '[data-lcost-for="3"]');
     out.labor.newRowExpected = B.laborCost({ guys: "2", days: "3", rate: "40" });
-    out.labor.newRowLabel = b.api.model().labor[2].label;
+    out.labor.newRowLabel = b.api.model().labor[3].label;
     // …and the two rows above it are untouched by the new one's arithmetic.
     out.labor.row0StillAnchored = txt(b, '[data-lcost-for="0"]');
     out.labor.totalAfterAdd = txt(b, "[data-labor-total]");
     out.labor.totalAfterAddExpected = B.laborTotal(b.api.model().labor);
 
-    // Delete the RIGHT one: index 1 is the mock-up, and it is the one that goes — not the row
-    // above it and not the one that was added last.
+    // Delete the RIGHT one: index 1 is the mock-up, and it is the one that goes — not Polishing
+    // above it, not the backfilled Travel row (index 2), and not Densify, just added last.
     clickOn(b, '[data-del-lab="1"]');
     out.labor.afterDelete = b.api.model().labor.map((r) => r.label);
     out.labor.afterDeleteCells = b.doc.querySelectorAll("[data-lcost-for]").length;
-    out.labor.afterDeleteCosts = [0, 1].map((i) => txt(b, '[data-lcost-for="' + i + '"]'));
+    // Polishing (0) and Densify — which shifted up past Travel into index 2 — are the two rows
+    // either side of the gap; grabbing them (not 0/1) is what proves neither one's cost moved.
+    out.labor.afterDeleteCosts = [0, 2].map((i) => txt(b, '[data-lcost-for="' + i + '"]'));
 
-    // Take it down to one line. The ✕ is then not offered at all…
+    // Take it down to one line: three rows remain [Polishing, Travel, Densify]. Polishing goes
+    // first (an ordinary click, freshly queried), which is what actually reaches one line —
+    // deleting Travel next. The ✕ is then not offered at all…
+    clickOn(b, '[data-del-lab="0"]');
     const first = need(b, '[data-del-lab="0"]');
     clickEl(b, first);
     out.labor.atOneRow = { count: b.api.model().labor.length,
