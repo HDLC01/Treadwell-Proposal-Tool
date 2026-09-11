@@ -782,9 +782,9 @@ def test_a_v1_draft_opens_as_a_v2_model(ran):
     assert all(r["unit"] == "SF" for r in after["takeoff"])
     assert all(r["assembly_id"] == "" for r in after["takeoff"]), (
         "v1 had no assemblies, so inventing an id would point at nothing")
-    assert [r["guys"] for r in after["labor"]] == [4, 2, 2], "crew is the guys count"
-    assert [r["id"] for r in after["labor"]] == ["polishing", "mockup", "jointfill"]
-    assert [r["days"] for r in after["labor"]] == [6, 1, 2]
+    assert [r["guys"] for r in after["labor"]] == [4, 2, 2, ""], "crew is the guys count"
+    assert [r["id"] for r in after["labor"]] == ["polishing", "mockup", "jointfill", "travel"]
+    assert [r["days"] for r in after["labor"]] == [6, 1, 2, ""]
     assert after["conditions"] == before["conditions"]
     assert after["contingency"] == 0
     for gone in ("system", "tooling", "materials", "added", "adds", "options"):
@@ -812,14 +812,15 @@ def test_no_saved_model_however_broken_throws(ran):
 @needs_node
 def test_the_fresh_model_carries_the_templates_own_labour_seeds(ran):
     """A37 = 3 guys, C37 = $32.20/hr, B40 = half a day for the mock-up. Days are left blank on the
-    two an estimator has to judge, which is why a fresh model reports them as unfinished."""
+    two an estimator has to judge, which is why a fresh model reports them as unfinished. Travel
+    has no matching cell to transcribe, so it seeds fully blank rather than at 3 guys / $33."""
     fresh = ran["fresh"]
-    assert [r["guys"] for r in fresh["labor"]] == [3, 3, 3]
+    assert [r["guys"] for r in fresh["labor"]] == [3, 3, 3, ""]
     # $33.00 from 2026-08-26 (Kyle: "The new epoxy/polish/sealed rate is $33/hr"). These seeds
     # stand in for the workbook's own Polish!C37 / C44, so they move with it or the beta prices a
     # polish job at a rate the spreadsheet no longer uses.
-    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0]
-    assert [r["days"] for r in fresh["labor"]] == ["", 0.5, ""]
+    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0, ""]
+    assert [r["days"] for r in fresh["labor"]] == ["", 0.5, "", ""]
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False}
     assert len(fresh["takeoff"]) == 1 and fresh["takeoff"][0]["unit"] == "SF"
