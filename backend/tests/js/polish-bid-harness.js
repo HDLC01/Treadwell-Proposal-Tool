@@ -257,6 +257,24 @@ const V1 = {
   options: { salt_pepper: true, dye: true }
 };
 
+// A v2 sandbox saved on 2026-09-10, the day before Travel became a fourth labor row (#491): only
+// the original three rows, an estimator-typed value that must survive (4 guys on Polishing, not
+// the fresh-model default of 3), and a custom row added via "+ Add a labor line" that the Travel
+// backfill must leave alone. This is "Akoya Omakase (beta test)" in miniature.
+const STALE_V2_NO_TRAVEL = {
+  version: 2,
+  takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
+              unit: "SF" }],
+  labor: [
+    { id: "polishing", label: "Polishing", guys: 4, days: 6, rate: 33.0 },
+    { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
+    { id: "jointfill", label: "Joint filler", guys: 2, days: 3, rate: 33.0 },
+    { id: "u_1699999999_1", label: "Demo prep", guys: 2, days: 1, rate: 40 }
+  ],
+  conditions: { taxable: false },
+  contingency: 500
+};
+
 const MIGRATIONS = [
   { label: "a v1 draft off staging", before: V1 },
   { label: "v1 with no labour block at all", before: { areas: [{ sf: 9000 }] } },
@@ -264,6 +282,7 @@ const MIGRATIONS = [
   { label: "nothing saved yet", before: null },
   { label: "a v2 model missing half its keys", before: { version: 2, takeoff: [], labor: null } },
   { label: "a v2 model with one condition saved", before: { version: 2, conditions: { taxable: false } } },
+  { label: "a v2 draft saved before Travel existed", before: STALE_V2_NO_TRAVEL },
   { label: "garbage", before: "not a model" },
   { label: "a number", before: 7 },
   { label: "an array", before: [] }
@@ -275,6 +294,11 @@ for (const m of MIGRATIONS) {
 // Migrating twice must be the same as migrating once, or every save would reshape the model again.
 out.migrationIsIdempotent = JSON.stringify(P.migrateModel(P.migrateModel(V1)))
   === JSON.stringify(P.migrateModel(V1));
+
+// Same idempotency check, aimed at the Travel backfill specifically: re-migrating an
+// already-backfilled draft must not push a second Travel row onto the end.
+out.staleLaborBackfillIsIdempotent = JSON.stringify(P.migrateModel(P.migrateModel(STALE_V2_NO_TRAVEL)))
+  === JSON.stringify(P.migrateModel(STALE_V2_NO_TRAVEL));
 
 out.blockers = [
   { label: "a fresh model", model: P.freshModel(), says: P.blockers(P.freshModel()) },
