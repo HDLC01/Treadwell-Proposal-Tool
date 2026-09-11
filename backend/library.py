@@ -404,6 +404,13 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         if col in payload or not partial:
             out[col] = _clean_text(payload.get(col), limit) or None
 
+    # Shared/team-wide, not per-user: this is one library everybody reads from, so a starred
+    # item reads starred for whoever opens the tab next, the same way an edited cost or a
+    # renamed division already does. Coerced rather than validated -- any truthy/falsy value
+    # in means exactly what it says, and there is no invalid value to reject.
+    if "favorite" in payload or not partial:
+        out["favorite"] = bool(payload.get("favorite"))
+
     # "epoxy" pasted from somewhere becomes the Division the dropdown offers, so the row reads as a
     # known value instead of an off-list one. Case only — a division we don't recognise is left
     # exactly as typed, because this is a rename of a free-text column and old rows hold anything.
@@ -435,6 +442,9 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "sku": row.get("sku") or "",
         "vendor": row.get("vendor") or "",
         "notes": row.get("notes") or "",
+        # A row written before this column existed has never been starred by anybody -- reads
+        # False, same read-shaping every other column added to this table already gets.
+        "favorite": bool(row.get("favorite")),
         "owner_email": row.get("owner_email") or "",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
@@ -686,6 +696,10 @@ def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict
     if "lines" in payload or not partial:
         out["lines"] = _clean_lines(payload.get("lines"))
 
+    # Same shared/team-wide flag the items table carries -- see validate_item's note.
+    if "favorite" in payload or not partial:
+        out["favorite"] = bool(payload.get("favorite"))
+
     return out
 
 
@@ -720,6 +734,7 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             "roundup": bool((ln or {}).get("roundup", True)),
             "note": (ln or {}).get("note") or "",
         } for ln in lines if isinstance(ln, dict)],
+        "favorite": bool(row.get("favorite")),
         "owner_email": row.get("owner_email") or "",
         # Who last changed it, on the same terms as an item's — including a LINE change, which is
         # the edit that actually happens here. See _shape_item for why an absent column reads

@@ -906,25 +906,35 @@ def test_no_trace_of_the_discarded_tab_and_download_survives_in_the_frontend():
 
 def test_the_scan_above_is_looking_for_things_that_could_have_been_there():
     """The counterexample for the guard, which would otherwise be the easiest kind of green there
-    is: six strings that never appear anywhere pass whether or not the scan reads the right
+    is: three strings that never appear anywhere pass whether or not the scan reads the right
     directory, strips the right comments, or spells the names the way the product spelled them.
 
-    So every entry in `GONE` is checked against the CODE of the tree that had the editor in it. If
-    one of them was never really there — a typo, or a name invented while writing the test — the
-    guard above is vacuous for that name while the other five carry it, and vacuous is exactly
-    what this repo has been caught by. Reported per name, not as a total, so the fix is obvious.
+    So every entry in `GONE` is checked against the CODE of the tree that had the discarded half
+    of the editor still in it. If one of them was never really there — a typo, or a name invented
+    while writing the test — the guard above is vacuous for that name while the other two carry
+    it, and vacuous is exactly what this repo has been caught by. Reported per name, not as a
+    total, so the fix is obvious.
 
-    Skips rather than fails without `origin/staging`: a shallow or fetch-less checkout cannot
-    answer the question, and a skip says so where a failure would blame the product."""
+    PINNED TO A COMMIT, NOT A BRANCH TIP. This read `origin/staging` until 2026-09-11, when the
+    editor's restoration (same day) moved staging's tip forward and `git show origin/staging:...`
+    started returning the RESTORED files — which legitimately no longer carry `doc-tabs` or
+    `cl-offstage`, so this test started failing about code that was never wrong. A branch pointer
+    answers "what is there today", and today is exactly what this test must not read: it wants
+    the tree from the one moment the discarded half still existed, which only a fixed commit
+    keeps meaning after the branch moves again. `cf3e455^` is that moment — the commit
+    immediately before the editor's original 2026-09-09 removal.
+
+    Skips rather than fails without that commit: a shallow checkout cannot answer the question,
+    and a skip says so where a failure would blame the product."""
     proc = subprocess.run(
-        ["git", "show"] + ["origin/staging:" + p for p in (
+        ["git", "show"] + ["cf3e455^:" + p for p in (
             "frontend/proposal-review.html", "frontend/done.html",
             "frontend/js/done.js", "frontend/js/coverletter-editor.js",
             "frontend/styles.css", "frontend/js/proposal-review.js")],
         cwd=str(FRONTEND.parent), capture_output=True, text=True, encoding="utf-8",
         errors="replace")
     if proc.returncode != 0:
-        pytest.skip("origin/staging is not readable in this checkout: "
+        pytest.skip("cf3e455^ is not readable in this checkout: "
                     + (proc.stderr or "").strip())
     # One `git show` of six blobs concatenates them, so the comment strippers are applied
     # per-language over the whole thing: `.js` is the superset (it strips both // and /* */), and

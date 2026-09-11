@@ -101,9 +101,26 @@ function makeDom() {
   // and a renderer that focuses the search box (which clearAsmFilters legitimately does) throws
   // them out of the pass they were making. An empty list after a render is the assertion.
   const focused = [];
+  // Backing store for classList, one Set per element -- so `.on` set by one render is still
+  // there for the next one to read (renderPanel's favourite star toggles the same button across
+  // repeated calls, the way #f-clear's `[hidden]` already persists across renders via the plain
+  // `hidden` property below).
+  const classSets = {};
   const el = (id) => (nodes[id] = nodes[id] || {
-    id, innerHTML: "", textContent: "", hidden: false, value: "",
+    id, innerHTML: "", textContent: "", hidden: false, value: "", title: "",
     focus() { focused.push(this.id); },
+    // Same shape as tableFromHtml's row stub below -- one Set per element, add/remove/toggle/has.
+    classList: {
+      add: (c) => (classSets[id] = classSets[id] || new Set()).add(c),
+      remove: (c) => classSets[id] && classSets[id].delete(c),
+      toggle: (c, on) => (on ? el(id).classList.add(c) : el(id).classList.remove(c)),
+      has: (c) => !!classSets[id] && classSets[id].has(c),
+    },
+    // Attributes a renderer sets directly (aria-pressed, aria-label) rather than through one of
+    // the named properties above. Read back by the same name so a test can assert either.
+    attrs: {},
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
     // Filled in on demand by tests that need to walk a rendered table.
     rows: null,
     querySelectorAll(sel) {

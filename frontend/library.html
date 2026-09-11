@@ -89,6 +89,15 @@
       justify-content:center; transition:background .12s ease, color .12s ease; }
     .icon:hover { color:var(--red); background:var(--surf-low); }
     .icon.danger:hover { color:var(--red-dark); background:var(--red-tint); }
+    /* Starred, and stays gold whether or not the pointer is over it -- unlike danger/hover above,
+       "favorited" is a standing state of the row, not something only visible on hover. The SVG's
+       own fill="none" is a presentation ATTRIBUTE, which CSS fill always outranks regardless of
+       selector weight, so toggling the class is enough -- no need to touch the markup itself. */
+    .icon.fav.on { color:#e6a817; }
+    .icon.fav.on svg { fill:currentColor; }
+    .icon.fav:hover { color:#e6a817; }
+    /* The rail's read-only echo of the same state -- see the comment at its markup in library.js. */
+    .arow-fav { color:#e6a817; vertical-align:-2px; margin-left:4px; flex:none; }
     /* THE GLYPH IS NOT A CLICK TARGET. The delete and duplicate handlers read their data-
        attribute off the element that was clicked, and an <svg> child would answer null and
        swallow the press. The handlers now resolve through closest() as well, so this rule is
@@ -886,6 +895,14 @@
               <option value="SF">per SF</option>
               <option value="LF">per LF</option>
             </select>
+            <!-- renderPanel() sets the "on" class, aria-pressed, title and the star's own fill
+                 per the open assembly -- static here only for the shape and the click target. -->
+            <button class="icon fav" type="button" id="asm-fav" title="Mark as a favorite"
+                    aria-pressed="false" aria-label="Mark this assembly as a favorite">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            </button>
             <button class="icon danger" type="button" id="asm-del" title="Delete this assembly"
                     aria-label="Delete this assembly">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
