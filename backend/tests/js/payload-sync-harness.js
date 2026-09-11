@@ -509,6 +509,41 @@ out.staleComputedTaxOverrides = (() => {
   };
 })();
 
+// KYLE-3 (2026-09-11): a REAL hand edit -- a corrected dollar figure and reworded description,
+// captured with the SAME tax mode as today. Confirmed live: "I went back to the proposal screen
+// to make a correction and it didn't carry over." The base line's shape ("$X - ... as described
+// above (...)") is the shape EVERY real hand edit keeps, so the old shape-only staleness check
+// deleted this on every reload; only a genuine signal (zero-dollar freeze / known-phrase mismatch,
+// see staleComputedTaxOverrides above) may prune an override now.
+out.handEditedBaseSurvivesWhenTaxModeUnchanged = (() => {
+  const s = baseState();
+  s.price_overrides = { lines: {
+    base: "$13,500 - Polished Concrete Flooring, per revised scope as described above " +
+      "(material sales tax INCLUDED)",
+  } };
+  const sc = scopeFor(s, { lumpText: "$13,265.00", form: {} });
+  const pp = sc.syncPayloadPricing();
+  return {
+    remainingLines: s.price_overrides.lines,
+    payloadLines: pp.price_overrides.lines,
+  };
+})();
+
+// Same signal, the tax-line side: a hand-typed correction that is NOT frozen at $0 must survive
+// even though it still "looks like" the computed shape and differs from today's figure -- only a
+// $0 override next to a nonzero computed line is the KYLE-1 staleness signal.
+out.handEditedTaxLineSurvivesWhenNotZero = (() => {
+  const s = baseState();
+  s.price_overrides = { lines: { sales_tax: "$425 - Material Sales Tax" } };
+  const sc = scopeFor(s, { lumpText: "$13,265.00", form: {} });
+  const pp = sc.syncPayloadPricing();
+  return {
+    remainingLines: s.price_overrides.lines,
+    payloadLines: pp.price_overrides.lines,
+  };
+})();
+
+
 // ── 9. THE WIRING ────────────────────────────────────────────────────────────
 // A perfect syncPayloadPricing that nothing calls is the bug unchanged. These read the source
 // because the claim is about call sites, and each one is checked by EXECUTION elsewhere:

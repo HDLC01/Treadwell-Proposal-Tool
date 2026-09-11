@@ -58,10 +58,21 @@ function makeWorld(conditions) {
     };
   }
   const byId = {};
-  for (const key of Object.keys(conditions)) {
+  // Which switches had focus() called on them, and how many times the whole block was re-rendered.
+  // Only a key something DEPENDS ON forces a re-render; the rest take the cheap one-node repaint.
+  // Both are recorded because "it repainted" and "it repainted the expensive way" are different
+  // claims, and the verbal panel touching five keys should never pay for the expensive one.
+  const focuses = [];
+  const rerenders = [];
+  // The engine five come from the fixture; the carried four are always on this page, so they are
+  // always in the DOM. A world with only five switches cannot see the caret being put back.
+  const keys = Object.keys(conditions)
+    .concat(["reno", "dye", "joint_filler", "remove_existing_jf"]);
+  for (const key of keys) {
     byId["cond-" + key] = {
       className: "", attrs: {},
       setAttribute(k, v) { this.attrs[k] = v; painted.push([key, k, v]); },
+      focus() { focuses.push(key); },
     };
   }
   // The caption above the form. Counted as well as read: "it was repainted" and "it says the right
@@ -73,7 +84,7 @@ function makeWorld(conditions) {
     set textContent(v) { this._text = String(v); captionWrites.push(String(v)); },
   };
   return {
-    events, painted, inputs, byId, captionWrites,
+    events, painted, inputs, byId, captionWrites, focuses, rerenders,
     form: { querySelector: (sel) => inputs[(/\[name="([^"]+)"\]/.exec(sel) || [])[1]] || null },
   };
 }
@@ -90,14 +101,41 @@ function visit(conditions, steps, blob) {
     `"use strict";
     var CONDITIONS = [{ key: "local" }, { key: "hard_bid" }, { key: "prevailing_wage" },
                       { key: "taxable" }, { key: "remodel_tax" }];
+    // The four the polish page carries through from the live intake. They are NOT the engine's --
+    // they move no money and they are not on the model -- but the toggle path reads them, so a
+    // scope without them is a ReferenceError the moment anything is clicked. Same shape as the
+    // page's own list, including the one dependency, because hasDependents reads "needs".
+    var CARRY_CONDITIONS = [{ key: "reno", def: false }, { key: "dye", def: false },
+                            { key: "joint_filler", def: true },
+                            { key: "remove_existing_jf", def: false, needs: "joint_filler" }];
+    // SEEDED, NOT EMPTY, AND THIS IS WHAT MAKES THE COMPARISON TESTABLE. hydrate() fills carry
+    // from cell_values and falls back to cc.def, so a fresh project starts with Joint filler ON --
+    // one kit per 3,500 sq ft is how the sheet ships. An empty object would leave every carried
+    // key undefined, where reading the model and calling condOn agree on false, and a comparison
+    // pointed at the wrong binding could not be caught: a transcript saying no joint filler would
+    // look correctly handled either way. With the default seeded, the model read says "already
+    // off, nothing to do" and leaves the switch ON.
+    // (No backticks in this comment. It is inside a new Function template literal, where one
+    // would end the literal and Node would blame the line the literal opened on.)
+    var carry = {};
+    CARRY_CONDITIONS.forEach(function (cc) { carry[cc.key] = cc.def; });
     var $ = function (id) { return world.byId[id] || null; };
     var humanConditions = {};
     function renderCountyNote() { notes.push(1); }
     function saveSoon() { saves.push(1); }
-    ` + fn("isCondition") + fn("paintCondition") + fn("toggleCondition") + fn("paintProjLine") +
+    // The page rewrites the whole block's innerHTML; what matters to this harness is the EFFECT --
+    // every switch repainted and the caret gone -- so the stub reproduces that and counts itself.
+    function renderConditions() {
+      world.rerenders.push(1);
+      Object.keys(world.byId).forEach(function (id) {
+        if (id.indexOf("cond-") === 0) paintCondition(id.slice(5));
+      });
+    }
+    ` + fn("isCondition") + fn("carrySpec") + fn("condOn") + fn("hasDependents") +
+    fn("paintCondition") + fn("repaintCondition") + fn("toggleCondition") + fn("paintProjLine") +
     fn("applyVerbal") + `
     return { applyVerbal: applyVerbal, toggleCondition: toggleCondition, model: M,
-             human: humanConditions };`
+             carry: carry, human: humanConditions };`
   )(M, world.form, world, saves, notes, function (type, opts) {
     return { type, bubbles: !!(opts && opts.bubbles) };
   }, blob || {});
@@ -118,6 +156,11 @@ function visit(conditions, steps, blob) {
     results,
     applied: results.length === 1 ? results[0].applied : undefined,
     conditionsAfter: Object.assign({}, M.conditions),
+    // Whatever the run left on the carried-four binding, which is the only place those four
+    // live: migrateModel whitelists condition keys against freshModel().conditions, so a carried
+    // key written to the model would be dropped on the next load. It starts at the page's
+    // defaults, so an untouched run reads them back rather than reading {}.
+    carryAfter: Object.assign({}, scope.carry),
     humanOwned: Object.keys(scope.human).sort(),
     events: world.events,
     inputValues: Object.keys(world.inputs).reduce((acc, k) => {
@@ -127,6 +170,16 @@ function visit(conditions, steps, blob) {
     saves: saves.length,
     countyNoteRepaints: notes.length,
     painted: world.painted,
+    focuses: world.focuses,
+    rerenders: world.rerenders.length,
+    // Every switch's final class, keyed. aria-checked already rides `painted`, but the class is
+    // where "on" and "greyed" are, and it is the level a wrong comparison is visible at: a
+    // transcript that says no joint filler, mishandled, leaves this reading "sw on" while the
+    // estimator's own screen says the crew is filling joints.
+    classesAfter: Object.keys(world.byId).reduce((acc, id) => {
+      if (id.indexOf("cond-") === 0) acc[id.slice(5)] = world.byId[id].className;
+      return acc;
+    }, {}),
     captionWrites: world.captionWrites,
     caption: world.byId["proj-line"].textContent,
   };
@@ -179,6 +232,42 @@ out.captionFromBlob = run(BASE, { fields: { city: "Bonner Springs", state: "KS" 
 out.unknownCondition = run(BASE, {
   conditions: { union_job: { value: true, context: "x" },
                 county_remodel_rate: { value: true, context: "x" } },
+});
+
+// ═══ 4b. a CARRIED-THROUGH key handed back by the extraction ═══════════════
+// The nine switches this page renders, not the five the pricing engine reads. Both halves of the
+// widening are exercised here at once, because they are not separable:
+//
+//   * THE GATE. `!carrySpec(key) && !isCondition(key)` -- toggleCondition has taken a carried key
+//     since the nine shipped, and applyVerbal had not.
+//   * THE COMPARISON. condOn, not M.conditions. joint_filler is the fixture that tells them
+//     apart: it ships ON, it is not on the model, and `!!undefined !== false` is false -- so the
+//     old read would call "no joint filler on this one" a no-op and leave the switch on.
+//
+// NOT REACHABLE END-TO-END YET. verbal_intake.py builds its conditions by looping over
+// MONEY_CONDITIONS -- five literals -- so the server cannot hand this shape back today; that is
+// pinned in test_verbal_intake.py rather than left to this file's green run to imply. The
+// seven-flag list that includes B10 New/Reno is /api/autofill's, a different route.
+out.carryFromVerbal = run(BASE, {
+  conditions: { reno: { value: true, context: "the notes say it is a remodel" },
+                joint_filler: { value: false, context: "no joint filler on this one" } },
+});
+
+// ═══ 4c. a click on a carried-through key still works ══════════════════════
+// Straight through toggleCondition with no second argument, exactly as the delegated click
+// handler calls it. This is the path that threw ReferenceError while the scope had no carry
+// bindings -- every test in this file errored, and none of them was about the carried four.
+out.carryClicked = visit(BASE, [{ click: "joint_filler" }, { click: "dye" }]);
+
+// ═══ 4d. a carried key that is ALREADY RIGHT is left alone ═════════════════
+// The whole reason the comparison exists, now aimed at the four. toggleCondition is a TOGGLE:
+// looping over everything the server accepted and calling it would flip Joint filler OFF here,
+// on a transcript that agreed with the screen. Both keys are given at their default, so a page
+// that toggles unconditionally fails and a page that reads the wrong binding fails too -- reading
+// `!!M.conditions.joint_filler` here is false against a true value and would toggle.
+out.carryAlreadyRight = run(BASE, {
+  conditions: { dye: { value: false, context: "no dye on this one" },
+                joint_filler: { value: true, context: "joints get filled" } },
 });
 
 // ═══ 5. a non-boolean is not a decision ════════════════════════════════════

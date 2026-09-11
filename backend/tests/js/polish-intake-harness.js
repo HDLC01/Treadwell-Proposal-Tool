@@ -118,6 +118,12 @@ function grab(re, what) {
 // the repaint while disagreeing with what the page rendered.
 function makeDom(log, formValues) {
   const nodes = {};
+  // Which element last had focus() called on it. repaintCondition puts the caret back after the
+  // re-render Joint filler forces, and until this existed the page's own `again.focus &&` guard
+  // short-circuited against the stub -- so the restore was unobservable and a regression that
+  // dropped it would have gone on passing. Browser walks find keyboard bugs; a stub without a
+  // focus() cannot.
+  let focused = null;
 
   function node(id) {
     let html = "", hidden = false, cls = "", text = "";
@@ -135,6 +141,7 @@ function makeDom(log, formValues) {
       getAttribute(k) { return Object.prototype.hasOwnProperty.call(self.attrs, k)
         ? self.attrs[k] : null; },
       addEventListener(type, handler) { self.listeners.push({ type, handler }); },
+      focus() { focused = id; log.push("focus:" + id); },
       // Either quote style, because the page uses both: hydrate reaches for [name='bid_date'] and
       // applyVerbal/paintProjLine build [name="…"]. A stub that only understood one silently
       // returned null for half the page's own lookups.
@@ -182,7 +189,7 @@ function makeDom(log, formValues) {
   }
 
   const el = (id) => (nodes[id] = nodes[id] || node(id));
-  return { el, nodes, fields };
+  return { el, nodes, fields, focusedId: () => focused };
 }
 
 function makeDocument(log) {
@@ -219,6 +226,11 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // and a const the lifted function cannot see is a ReferenceError at boot, not a
   // product bug -- which is the whole reason grab() names what it is looking for.
   ${grab(/^  var CONDITION_CELLS = \{[\s\S]*?\n  \};$/m, "CONDITION_CELLS")}
+  // Added 2026-09-11 with the four carry-through toggles. Same rule as the cell map above: the
+  // list, the helpers over it AND the carry binding all have to be in this scope, because
+  // adoptModel/conditionCells/switchHtml every one of them reaches for it and a name the lifted
+  // function cannot see is a ReferenceError at boot -- which is what happened first try.
+  ${grab(/^  var CARRY_CONDITIONS = \[[\s\S]*?\n  \];$/m, "CARRY_CONDITIONS")}
   ${grab(/^  var COUNTY_LIMIT = [^\n]*$/m, "COUNTY_LIMIT")}
   var state = {};
   var M = null;
@@ -226,17 +238,26 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // Who settled each of the five. A real binding rather than a stub: a click through onClick has
   // to land in humanConditions, which is what stops a second verbal run overriding it.
   var humanConditions = {};
+  // The carry four's on/off. A real binding, not a stub, for the same reason humanConditions is:
+  // a click has to land in it and adoptModel has to reassign it, and a probe that read a stub
+  // would agree with itself instead of with the page.
+  var carry = {};
   var saveTimer = null;
   var counties = [];
   var countyMatches = [];
   var countyHighlight = -1;
   var countyPick = null;
+  ${fn("allConditions")}
+  ${fn("carrySpec")}
+  ${fn("condOn")}
+  ${fn("hasDependents")}
   ${fn("adoptModel")}
   ${fn("conditionCells")}
   ${fn("isCondition")}
   ${fn("switchHtml")}
   ${fn("renderConditions")}
   ${fn("paintCondition")}
+  ${fn("repaintCondition")}
   ${fn("toggleCondition")}
   ${fn("loadCounties")}
   ${fn("countyStateOf")}
@@ -268,6 +289,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
            DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: COUNTY_LIMIT,
            CONDITION_CELLS: CONDITION_CELLS, conditionCells: conditionCells,
+           CARRY_CONDITIONS: CARRY_CONDITIONS, carry: function () { return carry; },
            loadCounties: loadCounties, countyKeys: countyKeys,
            model: function () { return M; }, state: function () { return state; },
            countyPick: function () { return countyPick; } };
@@ -392,19 +414,30 @@ function build(opts) {
   return { api, dom, doc, win, TW, SB, clock, log, rec, store };
 }
 
-/** The switches as they were rendered: key, label, why, and whether the track is on. */
+/** The switches as they were rendered: key, label, why, whether the track is on, and whether it
+ *  is greyed out. */
 function readSwitches(markup) {
-  return String(markup).split('<div class="sw').slice(1).map((chunk) => ({
-    key: (/data-cond="([^"]*)"/.exec(chunk) || [])[1] || null,
-    id: (/id="([^"]*)"/.exec(chunk) || [])[1] || null,
-    on: /^ on"/.test(chunk),
-    ariaChecked: (/aria-checked="([^"]*)"/.exec(chunk) || [])[1] || null,
-    label: (/<span class="t">([^<]*)</.exec(chunk) || [])[1] || null,
-    why: (/<span class="c">([^<]*)</.exec(chunk) || [])[1] || null,
-    hasTrack: /<span class="track">/.test(chunk),
-    // The cell chips came off with the step. B4/B5/D5/B6/D6 must not be back.
-    namesACell: /class="cell"/.test(chunk),
-  }));
+  return String(markup).split('<div class="sw').slice(1).map((chunk) => {
+    // The rest of the class attribute, tokenised. It is no longer just " on": a dependent switch
+    // greys itself with `inert`, so "sw on inert" has to keep reading as ON. The old prefix test
+    // matched the first word and would have called that switch off -- a harness bug that would
+    // have looked exactly like a page bug.
+    const rest = (/^([^"]*)"/.exec(chunk) || ["", ""])[1];
+    const words = rest.split(/\s+/).filter(Boolean);
+    return {
+      key: (/data-cond="([^"]*)"/.exec(chunk) || [])[1] || null,
+      id: (/id="([^"]*)"/.exec(chunk) || [])[1] || null,
+      on: words.indexOf("on") >= 0,
+      inert: words.indexOf("inert") >= 0,
+      cls: ["sw"].concat(words).join(" "),
+      ariaChecked: (/aria-checked="([^"]*)"/.exec(chunk) || [])[1] || null,
+      label: (/<span class="t">([^<]*)</.exec(chunk) || [])[1] || null,
+      why: (/<span class="c">([^<]*)</.exec(chunk) || [])[1] || null,
+      hasTrack: /<span class="track">/.test(chunk),
+      // The cell chips came off with the step. B4/B5/D5/B6/D6 must not be back.
+      namesACell: /class="cell"/.test(chunk),
+    };
+  });
 }
 
 /** Fire the page's own delegated click listener at one switch. */
@@ -540,6 +573,119 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     await v1.api.boot();
     out.conditions.v1Render = readSwitches(v1.dom.nodes["conditions"].innerHTML)
       .map((s) => [s.key, s.on]);
+  }
+
+  // ── the four carried through from the live intake ───────────────────────────
+  //
+  // These cannot live on the model, and that is the point of probing them separately.
+  // migrateModel() whitelists condition keys against freshModel().conditions and drops the rest,
+  // so a key stored in polish_estimate.conditions would look saved and come back missing.
+  // cell_values is their one home, and the only way to see what lands in it is to run the writer.
+  {
+    const b = build();
+    await b.api.boot();
+    const before = b.rec.saves.length;
+    clickSwitch(b, "dye");
+    b.clock.fire();
+    const afterDye = b.rec.saves[b.rec.saves.length - 1];
+    out.carry = {
+      keys: b.api.CARRY_CONDITIONS.map((c) => c.key),
+      flippedInCarry: b.api.carry().dye,
+      notInTheModel: !("dye" in b.api.model().conditions),
+      savedOnce: b.rec.saves.length - before === 1,
+      // Every one of the four, both literals, on one save -- not just the one that was clicked.
+      // A page that only wrote the toggle it touched would leave Kyle's IF(B10="New",…) reading a
+      // blank on a brand-new project and triple the patch rate with nothing on screen.
+      cells: {
+        "Epoxy!B10": afterDye.cell_values["Epoxy!B10"],
+        "Polish!B10": afterDye.cell_values["Polish!B10"],
+        "Polish!E25": afterDye.cell_values["Polish!E25"],
+        "Polish!E29": afterDye.cell_values["Polish!E29"],
+        "Polish!F29": afterDye.cell_values["Polish!F29"],
+      },
+      // The engine five still land in both homes, unchanged by any of this.
+      engineCells: {
+        "Epoxy!B4": afterDye.cell_values["Epoxy!B4"],
+        "Polish!B4": afterDye.cell_values["Polish!B4"],
+        "Epoxy!B6": afterDye.cell_values["Epoxy!B6"],
+      },
+      savedConditionKeys: Object.keys(afterDye.polish_estimate.conditions),
+      savedConditions: afterDye.polish_estimate.conditions,
+      takeoffKept: (afterDye.polish_estimate.takeoff || []).length,
+      // What the calculator gets back on the next load. The carry keys must be absent from it --
+      // that is migrateModel's whitelist doing its job, and the reason cell_values is their home.
+      readBackConditionKeys: Object.keys(
+        P.migrateModel(JSON.parse(JSON.stringify(afterDye.polish_estimate))).conditions),
+    };
+
+    // MOVES NO MONEY, proven against the engine rather than asserted in a comment. The same
+    // markup chain, over the conditions this page saved before and after a carry flip, to the
+    // last cent. Dye is priced on the estimate screen as a starred default assembly instead.
+    const priced = (conds) => P.markupChain({ sf: 12500, material: 8000, labor: 30000,
+                                              conditions: conds, remodel_rate: null });
+    const bare = build();
+    await bare.api.boot();
+    bare.clock.fire();
+    const beforeAnyFlip = bare.rec.saves.length
+      ? bare.rec.saves[bare.rec.saves.length - 1].polish_estimate.conditions
+      : bare.api.model().conditions;
+    out.carry.priceIdentical =
+      JSON.stringify(priced(beforeAnyFlip)) ===
+      JSON.stringify(priced(afterDye.polish_estimate.conditions));
+    out.carry.priceTotal = priced(afterDye.polish_estimate.conditions).total;
+
+    // ── the dependent one greys out, and stays a real answer while it does ────
+    clickSwitch(b, "joint_filler");
+    b.clock.fire();
+    const greyed = readSwitches(b.dom.nodes["conditions"].innerHTML);
+    const rej = greyed.filter((sw) => sw.key === "remove_existing_jf")[0];
+    const jfSave = b.rec.saves[b.rec.saves.length - 1];
+    out.carry.dependent = {
+      jointFillerOff: b.api.carry().joint_filler === false,
+      cls: rej.cls,
+      inert: rej.inert,
+      why: rej.why,
+      // Greyed, not gone and not un-clickable: still a switch, still keyed, still explained.
+      stillARealSwitch: rej.hasTrack && rej.id === "cond-remove_existing_jf",
+      stillNine: greyed.length,
+      // The re-render Joint filler forces costs the caret; the page puts it back.
+      focusWentBack: b.dom.focusedId(),
+      // And the greyed switch's cell is still written, because "greyed" is about the price, not
+      // about the answer having stopped existing.
+      cellStillWritten: jfSave.cell_values["Polish!F29"],
+      jfCell: jfSave.cell_values["Polish!E29"],
+    };
+
+    // Answered while greyed: it records, and it stays greyed.
+    //
+    // READ OFF THE NODE, NOT THE CONTAINER. A key with no dependents takes the cheap path and
+    // repaints one element's class; the container's innerHTML is still the string the last
+    // re-render produced. Reading that string here said the switch was OFF while the cell said
+    // Yes -- a harness artefact that reads exactly like a page bug, and the reason paintCondition
+    // has to be checked where it actually writes.
+    clickSwitch(b, "remove_existing_jf");
+    b.clock.fire();
+    const rejNode = b.dom.nodes["cond-remove_existing_jf"];
+    out.carry.dependent.answeredWhileGreyed =
+      b.rec.saves[b.rec.saves.length - 1].cell_values["Polish!F29"];
+    out.carry.dependent.onWhileGreyed = {
+      cls: rejNode.className,
+      aria: rejNode.getAttribute("aria-checked"),
+      // The container is deliberately NOT re-rendered for a key nothing depends on, so the
+      // sentence under Remove existing joint filler is unchanged and the caret is undisturbed.
+      containerUntouched: readSwitches(b.dom.nodes["conditions"].innerHTML)
+        .filter((sw) => sw.key === "remove_existing_jf")[0].cls,
+      focusUnmoved: b.dom.focusedId(),
+    };
+
+    // ── and they come back from the cells on the next load ───────────────────
+    const h = build({ blob: { __draft_id: "v1-cells", cell_values: {
+      "Epoxy!B10": "Reno", "Polish!B10": "Reno", "Polish!E25": "Yes",
+      "Polish!E29": "No", "Polish!F29": "Yes" } } });
+    await h.api.boot();
+    const hydrated = readSwitches(h.dom.nodes["conditions"].innerHTML);
+    out.carry.hydrated = hydrated.map((sw) => [sw.key, sw.on]);
+    out.carry.hydratedInert = hydrated.filter((sw) => sw.inert).map((sw) => sw.key);
   }
 
   // ── clicking one flips the model, queues a save, and keeps the siblings ─────
@@ -778,6 +924,10 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const b = build({ copyBlob: { __draft_id: "proj-1-beta",
       project_name: "Nearman Creek (beta test)", city: "Bonner Springs", state: "KS",
       beta_sandbox_of: "proj-1",
+      // The carried four's answers, in the only place they live. Both of these are the OPPOSITE
+      // of the documented default, so "the page read the copy" and "the page read nothing" cannot
+      // produce the same screen.
+      cell_values: { "Epoxy!B10": "Reno", "Polish!B10": "Reno", "Polish!E29": "No" },
       polish_estimate: { takeoff: [{ area: "Copy bay", sf: 500 }],
                          conditions: { local: false, hard_bid: true, prevailing_wage: false,
                                        taxable: true, remodel_tax: false } } } });

@@ -353,6 +353,32 @@ def test_stale_computed_tax_line_overrides_do_not_survive_the_sync(ran):
 
 
 @needs_node
+def test_a_real_hand_edit_survives_when_the_tax_mode_has_not_changed(ran):
+    """KYLE-3: "I went back to the proposal screen to make a correction and it didn't carry over."
+
+    The base line's shape ("$X - ... as described above (...)") is the shape EVERY real hand edit
+    keeps, because that's the exact template the computed text is always built from. The old check
+    pruned an override whenever it merely resembled that shape and differed from today's text --
+    which is true of almost every genuine correction, not just stale ones. A correction made under
+    the SAME tax mode must survive: only a known tax-mode phrase that no longer matches today's
+    mode (see test_stale_computed_tax_line_overrides_do_not_survive_the_sync above) is staleness."""
+    o = ran["handEditedBaseSurvivesWhenTaxModeUnchanged"]
+    assert o["remainingLines"] == {"base": "$13,500 - Polished Concrete Flooring, per revised "
+                                            "scope as described above (material sales tax INCLUDED)"}
+    assert o["payloadLines"] == o["remainingLines"]
+
+
+@needs_node
+def test_a_hand_edited_tax_line_survives_unless_frozen_at_zero(ran):
+    """The other half of the same fix: a hand-typed sales-tax correction that is NOT $0 must
+    survive even though it still looks like the computed shape and differs from today's figure.
+    Only a $0 override sitting next to a nonzero computed line is the KYLE-1 staleness signal."""
+    o = ran["handEditedTaxLineSurvivesWhenNotZero"]
+    assert o["remainingLines"] == {"sales_tax": "$425 - Material Sales Tax"}
+    assert o["payloadLines"] == o["remainingLines"]
+
+
+@needs_node
 def test_gyp_area_buckets_reach_the_document(ran):
     """Gyp quotes three thicknesses as separate SF buckets and the template prints those tokens
     directly, so its area numbers live in keys nothing else uses. The whitelist carries them; this

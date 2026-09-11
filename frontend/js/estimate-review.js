@@ -356,13 +356,23 @@ function applyHeuristics(intake, putIfBlank) {
   //   ≤15k SF  → 3 guys × 5 days
   //   ≤30k SF  → 4 guys × 8 days
   //    >30k SF → 5 guys × 12 days
+  //
+  // A47/B47/C47/D5 are TEMPLATE coordinates — a row/column insert or delete on Epoxy moves the
+  // real cells elsewhere, so every address here must go through txAddr like every other
+  // coordinate-dependent read/write in this file. Without it, a struct-op leaves this
+  // heuristic's blank-check pointed at the OLD, now-vacated address: on the next page load it
+  // reads as blank and silently reseeds a fresh crew/rate value into whatever unrelated cell
+  // now sits there, corrupting the sheet's totals ("went back to the estimate sheet and it
+  // changed all my numbers"). A null translation (coordinate deleted outright) skips the write.
   if (sf > 0) {
     let crew = 2, days = 3;
     if (sf > 30000)      { crew = 5; days = 12; }
     else if (sf > 15000) { crew = 4; days = 8;  }
     else if (sf > 5000)  { crew = 3; days = 5;  }
-    putIfBlank("Epoxy!A47", crew);
-    putIfBlank("Epoxy!B47", days);
+    const a47 = txAddr("Epoxy", "A47");
+    const b47 = txAddr("Epoxy", "B47");
+    if (a47) putIfBlank("Epoxy!" + a47, crew);
+    if (b47) putIfBlank("Epoxy!" + b47, days);
   }
   // Labor rate from Prevailing Wage flag (D5). Default $33.00 standard, $48.00 PW.
   // The flag itself gets set by the AI Autofill button.
@@ -371,9 +381,11 @@ function applyHeuristics(intake, putIfBlank) {
   // Epoxy!C47 in the template. It has to match: putIfBlank only writes when the cell is empty,
   // so a stale default here re-seeds the OLD rate onto any project whose cell was cleared, and
   // the sheet would then disagree with itself depending on which screen touched it last.
-  const pwRaw = (intake.cell_values || {})["Epoxy!D5"] || "";
+  const d5 = txAddr("Epoxy", "D5");
+  const pwRaw = (d5 && (intake.cell_values || {})["Epoxy!" + d5]) || "";
   const pw = String(pwRaw).toLowerCase() === "yes";
-  putIfBlank("Epoxy!C47", pw ? 48.00 : 33.00);
+  const c47 = txAddr("Epoxy", "C47");
+  if (c47) putIfBlank("Epoxy!" + c47, pw ? 48.00 : 33.00);
 }
 
 // Quantity fields that belong to ONE work type, and which types they belong to.

@@ -51,6 +51,13 @@
     zip: "ZIP", contact_name: "Contact", contact_email: "Contact email", bid_date: "Bid date",
     local: "Local job", hard_bid: "Hard bid", prevailing_wage: "Prevailing wage",
     taxable: "Taxable", remodel_tax: "Remodel tax",
+    // The four the polish page carries through from the live intake, now that applyVerbal accepts
+    // them. label() falls back to the raw key, so without these a widened extraction would print
+    // "reno on" at an estimator. The words are the switches' own labels from CARRY_CONDITIONS:
+    // this panel's whole job is to name a switch that is on screen, and naming it differently
+    // from the switch is describing something the screen does not show.
+    reno: "Renovation", dye: "Dye", joint_filler: "Joint filler",
+    remove_existing_jf: "Remove existing joint filler",
   };
 
   // The resting labels of the two buttons that run an extraction. Named once because busy() puts

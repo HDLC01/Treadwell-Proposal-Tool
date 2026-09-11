@@ -530,9 +530,42 @@
         && COMPUTED_PRICE_LINE_KEYS.has(key)
         && looksLikeComputedPriceLine(key, v)
         && looksLikeComputedPriceLine(key, computed)) {
-      delete lines[key];
-      try { queuePovSave(); } catch {}
-      return null;
+      // KYLE-3 (2026-09-11): shape alone is not staleness. The base line's shape is "$X - anything
+      // - as described above (...)" -- almost every real hand edit keeps that ending, so shape
+      // matching deleted Kyle's own corrections on every revisit ("I went back to the proposal
+      // screen to make a correction and it didn't carry over"). Require an actual stale SIGNAL,
+      // not merely a resemblance:
+      //   - sales_tax / remodel / total: frozen at $0 while today's math says otherwise. Nobody
+      //     hand-types "$0 - Material Sales Tax" on a real bid; that shape only exists when tax
+      //     priced to nothing at capture time and the mode has since changed.
+      //   - base: still carries one of the three known tax-mode parentheticals, and that exact
+      //     parenthetical no longer matches today's mode. An edit with no parenthetical, or a
+      //     custom one, is never this signal -- only the boilerplate annotation self-heals.
+      let stale = false;
+      if (key === "base") {
+        const KNOWN_TAX_PHRASES = new Set([
+          "(material sales tax included)",
+          "(remodel tax and material sales tax included)",
+          "(tax exempt)",
+        ]);
+        const trailingTaxPhrase = (s) => {
+          const m = /\(([^)]*)\)\s*$/.exec(String(s == null ? "" : s).trim());
+          return m ? ("(" + m[1].trim().toLowerCase() + ")") : "";
+        };
+        const vPhrase = trailingTaxPhrase(v);
+        if (KNOWN_TAX_PHRASES.has(vPhrase)) stale = vPhrase !== trailingTaxPhrase(computed);
+      } else {
+        const isZeroDollarLine = (s) => {
+          const m = /\$[0-9][0-9,]*(?:\.\d{2})?/.exec(String(s == null ? "" : s));
+          return !!m && /^\$?0(\.00)?$/.test(m[0].replace(/,/g, ""));
+        };
+        stale = isZeroDollarLine(v) && !isZeroDollarLine(computed);
+      }
+      if (stale) {
+        delete lines[key];
+        try { queuePovSave(); } catch {}
+        return null;
+      }
     }
     return (typeof v === "string" && v.trim()) ? v : null;
   }
