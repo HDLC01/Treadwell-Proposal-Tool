@@ -654,32 +654,31 @@ def test_the_markers_really_do_tell_the_two_documents_apart():
         % _PROPOSAL_ONLY)
 
 
-def test_the_cover_letter_is_off_by_default_and_a_legacy_payload_still_replays():
-    """Off by default: every draft saved before this feature carries none of these keys, and
-    `GenerateIn(**proposal_payload)` is how the portal PDF, the revision replay and the To-Dropbox
-    re-upload rebuild those payloads.
-
-    AND THE TWO REMOVED KEYS MUST BE IGNORED, NOT REFUSED. Between 2026-08-28 and 2026-09-09 a
-    generate payload could also carry `cover_letter_paragraph_overrides` and
-    `cover_letter_template_version`, and drafts saved in that window still have them frozen inside
-    `proposal_payload`. Those payloads are replayed months later, by a customer opening a portal
-    link. Pydantic ignores unknown keys by default, so they keep working and simply stop honouring
-    edits nothing can make any more — but "by default" is a config away from being false, and
-    `extra="forbid"` on this model would turn every one of those drafts into a 422 on the
-    customer's side. Asserted, because nothing else would notice until it happened."""
+def test_the_cover_letter_is_off_by_default_and_overrides_default_empty():
+    """Off by default: every draft saved before this feature (or before the editor's 2026-09-11
+    return) carries none of these keys, and `GenerateIn(**proposal_payload)` is how the portal
+    PDF, the revision replay and the To-Dropbox re-upload rebuild those payloads. Pydantic's
+    defaults must cover that gap, or every one of those old drafts 422s instead of replaying."""
     gi = main.GenerateIn(**{"work_type": "epoxy", "values": {}})
     assert gi.cover_letter_enabled is False
+    assert gi.cover_letter_paragraph_overrides == {}
+    assert gi.cover_letter_template_version == ""
+
+
+def test_a_legacy_payload_from_the_editors_first_run_still_replays():
+    """A generate payload could carry `cover_letter_paragraph_overrides` and
+    `cover_letter_template_version` from 2026-08-28 until the editor was removed on 2026-09-09 —
+    and again since 2026-09-11, when it came back. A draft saved in EITHER window has them frozen
+    inside `proposal_payload`, replayed months later by a customer opening a portal link, so both
+    windows' payloads must parse the same way today."""
     legacy = main.GenerateIn(**{
         "work_type": "epoxy", "values": {}, "cover_letter_enabled": True,
-        "cover_letter_paragraph_overrides": {"3": {"text": "an edit nothing can make now"}},
+        "cover_letter_paragraph_overrides": {"3": {"text": "an edit from before the gap"}},
         "cover_letter_template_version": "epoxy:Direct@1756000000000000000"})
-    assert legacy.cover_letter_enabled is True, (
-        "a payload frozen while the editor existed no longer replays — a customer's pinned "
-        "revision would 422 instead of rendering")
-    for dead in ("cover_letter_paragraph_overrides", "cover_letter_template_version"):
-        assert not hasattr(legacy, dead), (
-            dead + " is back on GenerateIn; there is no editor to produce it and no sanitizer to "
-            "validate it")
+    assert legacy.cover_letter_enabled is True
+    assert legacy.cover_letter_paragraph_overrides == {
+        "3": {"text": "an edit from before the gap"}}
+    assert legacy.cover_letter_template_version == "epoxy:Direct@1756000000000000000"
 
 
 def test_disabled_means_the_proposal_alone_and_no_second_download():
