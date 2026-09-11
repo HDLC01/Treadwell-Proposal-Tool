@@ -793,6 +793,33 @@ def test_a_v1_draft_opens_as_a_v2_model(ran):
 
 
 @needs_node
+def test_a_stale_v2_draft_backfills_travel_without_disturbing_anything_else(ran):
+    """#491 added Travel as a fourth labor row to `freshModel()`, but a sandbox already saved
+    before that ships with three rows forever — `migrateModel` only ever replaced the WHOLE `labor`
+    array, and only when it was missing or empty, so a non-empty three-row array passed straight
+    through untouched. This is exactly what Hanz saw on "Akoya Omakase (beta test)": travel never
+    appeared no matter how many times the page was reopened. The fix backfills any row id
+    `freshModel()` seeds that the saved draft lacks, additively."""
+    m = [x for x in ran["migrations"] if "before Travel existed" in x["label"]][0]
+    before, after = m["before"], m["after"]
+    assert [r["id"] for r in after["labor"]] == \
+        ["polishing", "mockup", "jointfill", "u_1699999999_1", "travel"], (
+        "travel is appended, not spliced in ahead of the estimator's own custom row")
+    # The pre-existing rows, INCLUDING the estimator-typed 4-guy Polishing value and the hand-added
+    # custom row, must come across byte-for-byte — the backfill only ever appends.
+    assert after["labor"][:4] == before["labor"]
+    # The new row is exactly freshModel()'s blank Travel seed, not a guess at guys/days/rate.
+    travel = after["labor"][4]
+    assert travel == {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}
+    # Untouched elsewhere: this bug was about `labor` specifically, not a symptom of a bigger
+    # migration regression.
+    assert after["conditions"]["taxable"] is False and after["conditions"]["local"] is True
+    assert after["contingency"] == 500
+    assert ran["staleLaborBackfillIsIdempotent"], (
+        "re-opening an already-backfilled draft must not push a second travel row on")
+
+
+@needs_node
 def test_no_saved_model_however_broken_throws(ran):
     """A draft is whatever was in localStorage or the drafts table, including something a
     half-shipped build wrote. An estimator opening an old job gets a working screen."""
