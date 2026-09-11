@@ -562,7 +562,7 @@ state.lock_overrides = (state.lock_overrides && typeof state.lock_overrides === 
 // Hardcoded TEMPLATE coordinates (lock cells, totals cells, derive reads)
 // must follow the user's inserts/deletes. Mirrors _translate_addr in
 // backend/estimate_writer.py exactly.
-function structOpsFor(sheetId) { return state.tab_structs.filter(o => o.sheet === sheetId); }
+function structOpsFor(sheetId) { return (Array.isArray(state.tab_structs) ? state.tab_structs : []).filter(o => o.sheet === sheetId); }
 function _shiftIdx(idx, at, count, insert) {
   if (insert) return idx >= at ? idx + count : idx;
   if (idx >= at && idx < at + count) return null;          // deleted
