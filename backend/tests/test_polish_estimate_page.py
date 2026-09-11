@@ -664,7 +664,8 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
     assert m["blockers"] == ["Pick an assembly for takeoff row 1",
                             "Pick an assembly for takeoff row 2"]
     assert [[r["id"], r["guys"], r["days"], r["rate"]] for r in m["labor"]] == [
-        ["polishing", 4, 3, 34], ["mockup", 2, 1, 30], ["jointfill", 5, 2, 31]], (
+        ["polishing", 4, 3, 34], ["mockup", 2, 1, 30], ["jointfill", 5, 2, 31],
+        ["travel", "", "", ""]], (
         "v1 labor did not come across as guys/days/rate: %r" % m["labor"])
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
                               "taxable": False, "remodel_tax": True}, (
@@ -700,8 +701,10 @@ def test_intake_seeds_the_first_measurement_only_when_nothing_is_measured(ran):
         "intake's polish_sf overwrote a measured takeoff row: %r" % m["seededFromIntake"])
     assert m["freshFromIntake"] == 8250, (
         "a brand-new project did not pick up intake's square footage: %r" % m["freshFromIntake"])
-    # A fresh model also seeds the three labor rows the template itself carries.
-    assert m["freshLabor"] == [["polishing", 3, 33.0], ["mockup", 3, 33.0], ["jointfill", 3, 33.0]]
+    # A fresh model also seeds the four labor rows the template itself carries (Travel blank —
+    # it has no cell of its own to seed a guy count or rate from).
+    assert m["freshLabor"] == [["polishing", 3, 33.0], ["mockup", 3, 33.0], ["jointfill", 3, 33.0],
+                              ["travel", "", ""]]
 
 
 # ── H. boot ──────────────────────────────────────────────────────────────────
