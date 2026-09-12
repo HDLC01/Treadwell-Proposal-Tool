@@ -808,15 +808,95 @@ def test_a_stale_v2_draft_backfills_travel_without_disturbing_anything_else(ran)
     # The pre-existing rows, INCLUDING the estimator-typed 4-guy Polishing value and the hand-added
     # custom row, must come across byte-for-byte — the backfill only ever appends.
     assert after["labor"][:4] == before["labor"]
-    # The new row is exactly freshModel()'s blank Travel seed, not a guess at guys/days/rate.
+    # The new row is exactly freshModel()'s Travel seed — one definition, so the migration cannot
+    # hand out a different Travel from the one a brand-new sandbox gets. $33 and `hours` are the
+    # sheet's own (Polish rows 43-44); `guys` is blank here because the PAGE derives it on adopt.
     travel = after["labor"][4]
-    assert travel == {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}
+    assert travel == {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+                      "unit": "hours", "guys_auto": True}
     # Untouched elsewhere: this bug was about `labor` specifically, not a symptom of a bigger
     # migration regression.
     assert after["conditions"]["taxable"] is False and after["conditions"]["local"] is True
     assert after["contingency"] == 500
     assert ran["staleLaborBackfillIsIdempotent"], (
         "re-opening an already-backfilled draft must not push a second travel row on")
+
+
+@needs_node
+def test_travel_is_priced_per_hour_not_per_eight_hour_day(ran):
+    """The sheet heads the crew rows `Guys | Days` over `=(A37*B37*C37)*8`, and Travel `Guys |
+    HOURS` over `=(A44*B44*C44)` — no multiplier. Its middle number is already hours, so applying
+    the eight-hour day would bill a two-hour drive as sixteen.
+
+    Mutation: drop `unit` from laborCost's per-day branch. 6 × 2 × $33 becomes $3,168 instead of
+    $396 — an eightfold overcharge on a line nobody reads closely, on every out-of-town bid."""
+    t = ran["travelHourlyCost"]
+    assert t["hoursPerDay"] == 8, "the day is still eight hours for a crew row"
+    assert t["perHour"] == 6 * 2 * 33, "travel must not be multiplied by the day"
+    assert t["perDay"] == 6 * 2 * 33 * 8, "a row without unit=hours is still a day row"
+    assert t["perDay"] == t["perHour"] * 8
+
+
+@needs_node
+def test_the_travel_guys_column_is_the_man_day_sum(ran):
+    """Polish A44 is `=(A37*B37)+(A38*B38)+(A40*B40)+(A42*B42)` — guys × days over the crew rows.
+    So "Guys" on a travel row is not a head count, it is how many man-days are driving; the
+    sheet's own screenshot shows 18 against a 3-guy crew (3×5 + 3×0.5 + 3×0.5).
+
+    A travel row never counts itself, or turning travel on would inflate its own basis."""
+    d = ran["travelManDays"]
+    assert d["sheetScreenshot"] == 18, (
+        "3x5 + 3x0.5 + 3x0.5 is 18 man-days, and the hours row must not count itself: %r"
+        % d["sheetScreenshot"])
+    assert d["blanksContributeNothing"] == 0
+    assert d["empty"] == 0
+
+
+@needs_node
+def test_a_travel_row_with_no_hours_does_not_block_the_review_step(ran):
+    """THE CARVE-OUT THAT KEEPS REVIEW REACHABLE, and the reason it is needed is the auto-fill.
+
+    `blockers` reads a labor row as half-filled when 1 or 2 of guys/days/rate are empty, and
+    ignores a row where all three are — "switched off". Travel used to qualify: it seeded fully
+    blank. It no longer can. It arrives with $33 off the sheet and a Guys figure the page derives
+    from the man-days, so on a bid nobody has typed a travel hour into, exactly one box is empty.
+    Without the carve-out every draft in the system opens saying "Add the days for Travel",
+    including the local jobs that will never drive anywhere.
+
+    Hours is what means "we are doing this" — guys and rate are both defaults nobody chose."""
+    b = ran["travelBlockers"]
+    assert b["noHours"] == [], (
+        "a travel row with no hours is unused, not unfinished: %r" % b["noHours"])
+    assert any("Travel" in x for x in b["hoursButNoGuys"]), (
+        "a travel row that IS being used is checked like any other: %r" % b["hoursButNoGuys"])
+    assert any("Polishing" in x for x in b["crewRowStillChecked"]), (
+        "the carve-out must not leak onto the crew rows: %r" % b["crewRowStillChecked"])
+
+
+@needs_node
+def test_a_draft_saved_while_travel_was_a_day_row_is_brought_forward(ran):
+    """Travel shipped priced like a crew row and was corrected the same day. A sandbox opened in
+    between holds `{guys: 6, days: 2, rate: ""}` with no `unit` — which bills a 2-hour drive as 16
+    hours and then prices it at nothing, the rate being blank.
+
+    Additive, like the row backfill it sits beside: the fields Travel GAINED are filled, and the
+    `guys: 6` somebody typed is left exactly where it is. `guys_auto` is decided from the row
+    rather than defaulted on, because nothing auto-filled that 6 — turning the auto on would
+    overwrite it on the next keystroke anywhere in the panel."""
+    m = [x for x in ran["migrations"] if "priced per day" in x["label"]][0]
+    travel = [r for r in m["after"]["labor"] if r["id"] == "travel"][0]
+    assert travel["unit"] == "hours", "the row still prices by the eight-hour day"
+    assert travel["rate"] == 33, "a blank rate prices travel at nothing forever"
+    assert travel["guys"] == 6, "the estimator's own figure was overwritten"
+    assert travel["days"] == 2, "the estimator's own hours were overwritten"
+    assert travel["guys_auto"] is False, (
+        "auto would overwrite a hand-typed guys figure on the next keystroke")
+    # The crew row beside it is untouched.
+    pol = [r for r in m["after"]["labor"] if r["id"] == "polishing"][0]
+    assert (pol["guys"], pol["days"], pol["rate"]) == (3, 5, 33)
+    assert pol.get("unit") is None, "a crew row must not become an hours row"
+    assert ran["travelFieldBackfillIsIdempotent"], (
+        "re-opening an already-corrected draft must not rewrite its travel row again")
 
 
 @needs_node
@@ -839,15 +919,25 @@ def test_no_saved_model_however_broken_throws(ran):
 @needs_node
 def test_the_fresh_model_carries_the_templates_own_labor_seeds(ran):
     """A37 = 3 guys, C37 = $32.20/hr, B40 = half a day for the mock-up. Days are left blank on the
-    two an estimator has to judge, which is why a fresh model reports them as unfinished. Travel
-    has no matching cell to transcribe, so it seeds fully blank rather than at 3 guys / $33."""
+    two an estimator has to judge, which is why a fresh model reports them as unfinished.
+
+    TRAVEL IS TRANSCRIBED TOO, from Polish rows 43-44, which an earlier version of this test said
+    did not exist. They do: `Travel: Guys | Hours` over `=(A44*B44*C44)` at C44 = 33. So it seeds
+    at the same $33 as the crew rows, with hours blank (the one figure an estimator must judge)
+    and `guys` derived rather than typed -- A44 is the man-day sum of the rows above it, which is
+    what `guys_auto` marks and the page fills in."""
     fresh = ran["fresh"]
+    # Travel's guys is blank in the SEED and filled by the page on adopt: freshModel is the core's
+    # answer, and deriving it here would need the core to know about the page's sync.
     assert [r["guys"] for r in fresh["labor"]] == [3, 3, 3, ""]
     # $33.00 from 2026-08-26 (Kyle: "The new epoxy/polish/sealed rate is $33/hr"). These seeds
     # stand in for the workbook's own Polish!C37 / C44, so they move with it or the beta prices a
     # polish job at a rate the spreadsheet no longer uses.
-    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0, ""]
+    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0, 33.0]
     assert [r["days"] for r in fresh["labor"]] == ["", 0.5, "", ""]
+    # The two fields that make Travel price per HOUR instead of per eight-hour day.
+    assert [r.get("unit") for r in fresh["labor"]] == [None, None, None, "hours"]
+    assert [r.get("guys_auto") for r in fresh["labor"]] == [None, None, None, True]
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False}
     assert len(fresh["takeoff"]) == 1 and fresh["takeoff"][0]["unit"] == "SF"

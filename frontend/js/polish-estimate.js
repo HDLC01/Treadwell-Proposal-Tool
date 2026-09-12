@@ -50,6 +50,11 @@
   function adopt(blob) {
     state = blob || {};
     M = B.migrateModel(state.polish_estimate);
+    // BEFORE THE FIRST PAINT, not on the first edit. `changed()` is what normally keeps a derived
+    // Guys figure current, and nothing calls it on load -- so without this a reopened draft shows
+    // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
+    // in the meantime.
+    syncAutoGuys();
   }
 
   adopt(TW.getState());
@@ -251,12 +256,30 @@
     TW.flushState();
   });
 
+  /** Write the derived Guys figure INTO any auto travel row, so the model holds what the screen
+   *  shows.
+   *
+   *  The alternative was leaving `guys` blank and deriving it only at render time, and it splits
+   *  the row in two: the box would read 18 while `laborCost` multiplied by an empty string, so
+   *  Travel would price at $0 with a number sitting right there in it, `blockers` would read the
+   *  row as emptier than it looks, and the draft would save a figure nobody could see. One
+   *  assignment on the way through `changed()` keeps the screen, the price, the validation and
+   *  the saved blob describing the same row. */
+  function syncAutoGuys() {
+    var manDays = B.travelManDays(M.labor);
+    for (var i = 0; i < M.labor.length; i++) {
+      var r = M.labor[i];
+      if (r && r.unit === "hours" && r.guys_auto) r.guys = manDays;
+    }
+  }
+
   /** One place every edit funnels through, so nothing can change a value without the bid, the
    *  rail and the draft all catching up.
    *
    *  `rerender` false repaints the computed figures in place instead of rebuilding the panel:
    *  rebuilding mid-keystroke moves the caret out of the field being typed in. */
   function changed(rerender) {
+    syncAutoGuys();
     paintBid();
     paintRail();
     saveSoon();
@@ -412,41 +435,87 @@
       "One row per assembly. The library prices it against the measurement you give it.", html);
   }
 
-  function laborPanel() {
-    var rows = M.labor.map(function (r, i) {
-      return '<tr>' +
-        '<td><input data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
-        '" placeholder="Task"></td>' +
-        '<td class="r"><input class="n" data-lab="' + i + '" data-k="guys" value="' +
-        esc(nv(r.guys)) + '"></td>' +
-        '<td class="r"><input class="n" data-lab="' + i + '" data-k="days" value="' +
-        esc(nv(r.days)) + '"></td>' +
-        '<td class="r"><span class="mny">$<input class="n" data-lab="' + i +
-        '" data-k="rate" value="' + esc(nv(r.rate)) + '"></span></td>' +
-        '<td class="r calc" data-lcost-for="' + i + '">' +
-        esc(moneyAuto(B.laborCost(r))) + '</td>' +
-        '<td class="r">' + (M.labor.length > 1
-          ? '<button class="x" data-del-lab="' + i + '" title="Remove this line">✕</button>'
-          : '') + '</td></tr>';
-    }).join("");
+  /** One labor task, as its own card.
+   *
+   *  ONE CARD PER TASK BECAUSE THAT IS HOW THE SHEET READS. Kyle's Polish tab heads each task
+   *  separately -- `Labor: Guys | Days | Rate`, then `Mock-Up:`, then `Joint Filler:`, then
+   *  `Travel: Guys | HOURS` -- rather than running them as one table under one header. A single
+   *  table cannot say that Travel's middle column means something different from the three above
+   *  it, which is exactly the thing an estimator has to notice.
+   *
+   *  Same `.tk` vocabulary as takeoffPanel's rows, deliberately: it is the card pattern this page
+   *  already uses one step earlier, so Takeoff and Labor read as the same screen.
+   *
+   *  Every data- attribute the delegated handlers and the harness rely on is unchanged --
+   *  `data-lab` + `data-k` on the inputs, `data-lcost-for` on the cost box, `data-del-lab` -- and
+   *  `i` is still the row's real index in M.labor, which is what the delete splices by. */
+  function laborCard(r, i) {
+    var hours = r && r.unit === "hours";
+    var auto = !!(hours && r.guys_auto);
+    // Dimmed, not disabled, and not hidden: `.sw.inert`'s rule, for `.sw.inert`'s reason. A local
+    // job that does need drive time must not send somebody back to the intake step to type it,
+    // and a row that vanished would take an estimator's typed hours with it.
+    var inert = hours && !!(M.conditions || {}).local;
+    return '<div class="tk lab' + (inert ? " inert" : "") + '"><div class="tk-h">' +
+      '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
+      '" placeholder="Task" aria-label="Task name">' +
+      '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
+      esc(moneyAuto(B.laborCost(r))) + '</span>' +
+      (M.labor.length > 1
+        ? '<button class="x" data-del-lab="' + i + '" title="Remove this line">✕</button>'
+        : '') +
+      '</div><div class="tk-g lab-g">' +
 
-    rows += '<tr class="sum-row"><td>Labor total</td><td></td><td></td><td></td>' +
-      '<td class="r" data-labor-total>' + esc(moneyAuto(B.laborTotal(M.labor))) +
-      '</td><td></td></tr>';
+      '<div class="f"><label>Guys</label>' +
+      '<input class="n" data-lab="' + i + '" data-k="guys" value="' +
+      esc(nv(r.guys)) + '"' + (auto ? ' data-auto="1"' : '') + '>' +
+      // "Guys", never "Crew" -- Hanz renamed that column and
+      // test_nothing_on_screen_says_labour_or_crew holds the page to it.
+      '<p class="hint">' + (auto
+        ? 'Man-days from the tasks above. <button type="button" class="linkish" ' +
+          'data-lab-manual="' + i + '">Type my own</button>'
+        : (hours ? 'Man-days on the road. <button type="button" class="linkish" ' +
+                   'data-lab-auto="' + i + '">Back to auto</button>'
+                 : 'How many on it.')) + '</p></div>' +
+
+      '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
+      '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
+      '<p class="hint">' + (hours ? "Drive time, each way counted." : "How long it takes.") +
+      '</p></div>' +
+
+      '<div class="f"><label>Rate</label>' +
+      '<span class="mny">$<input class="n" data-lab="' + i + '" data-k="rate" value="' +
+      esc(nv(r.rate)) + '"></span>' +
+      '<p class="hint">Per hour.</p></div>' +
+
+      '<div class="f"><label>Cost</label>' +
+      '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '">' +
+      esc(moneyAuto(B.laborCost(r))) + '</div>' +
+      '<p class="hint">' + (hours ? "guys × hours × rate" :
+        "guys × days × rate × " + B.HOURS_PER_DAY) + '</p></div>' +
+
+      '</div>' + (inert
+        ? '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
+          'anyway if it needs drive time.</p>'
+        : "") + '</div>';
+  }
+
+  function laborPanel() {
+    var html = M.labor.map(laborCard).join("");
+
+    html += '<button class="addbtn" data-add-lab="1">＋ Add a labor line</button>';
+    html += '<p class="cap">Labor total <b data-labor-total>' +
+      esc(moneyAuto(B.laborTotal(M.labor))) + '</b>.</p>';
 
     var pw = !!(M.conditions || {}).prevailing_wage;
-    return shell("Labor",
-      "Guys × days × rate, at " + B.HOURS_PER_DAY + " hours a day.",
-      '<table><thead><tr><th>Task</th><th class="r" style="width:84px">Guys</th>' +
-      '<th class="r" style="width:84px">Days</th>' +
-      '<th class="r" style="width:112px">Rate / day</th>' +
-      '<th class="r" style="width:112px">Cost</th><th style="width:28px"></th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table>' +
-      '<button class="addbtn" data-add-lab="1">＋ Add a labor line</button>' +
-      '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
+    html += '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
       (pw ? ", so a 5% escalation is added on the review step" : "") +
       '. Change it on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
-      '">the intake step</a>.</p>');
+      '">the intake step</a>.</p>';
+
+    return shell("Labor",
+      "Guys × days × rate, at " + B.HOURS_PER_DAY + " hours a day. Travel is priced per hour.",
+      html);
   }
 
   // ── review ──────────────────────────────────────────────────────────────────
@@ -698,6 +767,27 @@
       changed(true);
       return;
     }
+    // The two ways across the auto/manual line, for somebody who would rather press a thing than
+    // discover that typing works. Going back to auto drops the typed figure on purpose -- that is
+    // what "back to auto" means, and the crew's man-days are one keystroke from being right again.
+    var manual = t.closest("[data-lab-manual]");
+    if (manual) {
+      var mi = parseInt(manual.getAttribute("data-lab-manual"), 10);
+      if (M.labor[mi]) {
+        M.labor[mi].guys_auto = false;
+        M.labor[mi].guys = B.travelManDays(M.labor);
+      }
+      changed(true);
+      refocus('[data-lab="' + mi + '"][data-k="guys"]');
+      return;
+    }
+    var auto = t.closest("[data-lab-auto]");
+    if (auto) {
+      var ai = parseInt(auto.getAttribute("data-lab-auto"), 10);
+      if (M.labor[ai]) M.labor[ai].guys_auto = true;
+      changed(true);
+      return;
+    }
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
@@ -752,11 +842,37 @@
     var li = el.getAttribute("data-lab");
     if (li !== null && k) {
       var j = parseInt(li, 10);
-      if (M.labor[j]) M.labor[j][k] = el.value;
+      if (M.labor[j]) {
+        // TYPING IN THE AUTO BOX IS HOW YOU LEAVE AUTO. Travel's Guys follows the crew's man-days
+        // until somebody disagrees with it, and the disagreement is the keystroke -- asking them
+        // to find a control first, to then be allowed to type the number they already have in
+        // mind, is a worse trade than the one line it takes to notice. `changed(true)` so the
+        // hint under the box repaints from "From the crew above" to the way back.
+        if (k === "guys" && M.labor[j].guys_auto) {
+          M.labor[j].guys_auto = false;
+          M.labor[j][k] = el.value;
+          changed(true);
+          refocus('[data-lab="' + j + '"][data-k="guys"]');
+          return;
+        }
+        M.labor[j][k] = el.value;
+      }
       changed(false);
       return;
     }
   });
+
+  /** Put the caret back in a box a full repaint just replaced, at the end of what is in it.
+   *
+   *  Only the auto-to-manual switch needs this: it is the one edit on this panel that has to
+   *  rebuild the card mid-keystroke (the hint under the box changes), and a rebuild that drops
+   *  the caret would make the first character somebody types the last one that lands. */
+  function refocus(sel) {
+    var el = document.querySelector(sel);
+    if (!el || !el.focus) return;
+    el.focus();
+    try { el.setSelectionRange(el.value.length, el.value.length); } catch (err) {}
+  }
 
   document.addEventListener("change", function (e) {
     var el = e.target;

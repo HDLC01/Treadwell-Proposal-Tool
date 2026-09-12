@@ -279,6 +279,23 @@ const STALE_V2_NO_TRAVEL = {
   contingency: 500
 };
 
+// The narrow window between Travel shipping (2026-09-12, priced like a crew row: no `unit`, blank
+// rate, guys typed by hand) and the same day's correction to the sheet's own Guys × HOURS × $33.
+// A sandbox opened in that window holds the first shape, and left alone would bill a 2-hour drive
+// as 16 hours and then price it at nothing, its rate being blank. The typed `guys: 6` is the part
+// that must survive: nothing auto-filled it back then, so somebody put it there on purpose.
+const TRAVEL_PRE_HOURS = {
+  version: 2,
+  takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
+              unit: "SF" }],
+  labor: [
+    { id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33.0 },
+    { id: "travel", label: "Travel", guys: 6, days: 2, rate: "" }
+  ],
+  conditions: {},
+  contingency: 0
+};
+
 const MIGRATIONS = [
   { label: "a v1 draft off staging", before: V1 },
   { label: "v1 with no labor block at all", before: { areas: [{ sf: 9000 }] } },
@@ -287,6 +304,7 @@ const MIGRATIONS = [
   { label: "a v2 model missing half its keys", before: { version: 2, takeoff: [], labor: null } },
   { label: "a v2 model with one condition saved", before: { version: 2, conditions: { taxable: false } } },
   { label: "a v2 draft saved before Travel existed", before: STALE_V2_NO_TRAVEL },
+  { label: "a v2 draft saved while Travel was priced per day", before: TRAVEL_PRE_HOURS },
   { label: "garbage", before: "not a model" },
   { label: "a number", before: 7 },
   { label: "an array", before: [] }
@@ -303,6 +321,42 @@ out.migrationIsIdempotent = JSON.stringify(P.migrateModel(P.migrateModel(V1)))
 // already-backfilled draft must not push a second Travel row onto the end.
 out.staleLaborBackfillIsIdempotent = JSON.stringify(P.migrateModel(P.migrateModel(STALE_V2_NO_TRAVEL)))
   === JSON.stringify(P.migrateModel(STALE_V2_NO_TRAVEL));
+// The same question for the row-already-there case, which takes the other branch entirely: one
+// appends a row, the other rewrites fields on a row that exists, and only the first was covered.
+out.travelFieldBackfillIsIdempotent =
+  JSON.stringify(P.migrateModel(P.migrateModel(TRAVEL_PRE_HOURS)))
+  === JSON.stringify(P.migrateModel(TRAVEL_PRE_HOURS));
+// Travel priced per HOUR: 6 man-days × 2 hours × $33 = $396, NOT ×8 (which would be $3,168).
+out.travelHourlyCost = {
+  perHour: P.laborCost({ guys: 6, days: 2, rate: 33, unit: "hours" }),
+  perDay: P.laborCost({ guys: 6, days: 2, rate: 33 }),
+  hoursPerDay: P.HOURS_PER_DAY
+};
+// A44's man-day sum, over rows that are not themselves travel.
+out.travelManDays = {
+  sheetScreenshot: P.travelManDays([
+    { guys: 3, days: 5 }, { guys: 3, days: 0.5 }, { guys: 3, days: 0.5 },
+    { guys: 99, days: 99, unit: "hours" }
+  ]),
+  blanksContributeNothing: P.travelManDays([{ guys: 3, days: "" }, { guys: "", days: 4 }]),
+  empty: P.travelManDays([])
+};
+// An hours row with no hours is UNUSED, not unfinished — the carve-out that keeps Review reachable.
+out.travelBlockers = {
+  noHours: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "travel", label: "Travel", guys: 18, days: "", rate: 33, unit: "hours" }] }),
+  // A travel row that IS being used is checked like any other. Carries `unit`/`guys_auto`/a rate
+  // so migrateModel leaves it alone — a blank rate cannot be used to prove this, because the
+  // migration fills one in from the sheet before blockers ever sees the row.
+  hoursButNoGuys: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "travel", label: "Travel", guys: "", days: 2, rate: 33,
+              unit: "hours", guys_auto: false }] }),
+  crewRowStillChecked: P.blockers({ version: 2,
+    takeoff: [{ assembly_id: "a1", measurement: 100, unit: "SF" }],
+    labor: [{ id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33 }] })
+};
 
 out.blockers = [
   { label: "a fresh model", model: P.freshModel(), says: P.blockers(P.freshModel()) },

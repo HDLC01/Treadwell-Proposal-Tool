@@ -720,9 +720,93 @@ const rendered = [];      // every string the page put on screen, for the Labour
         .test(panels.innerHTML),
       costCellsWearADollar: [0, 1].every((i) =>
         String(txt(b, '[data-lcost-for="' + i + '"]')).charAt(0) === "$"),
-      headings: (panels.innerHTML.match(/<th(?:\s[^>]*)?>([^<]*)</g) || [])
-        .map((x) => (/>([^<]*)</.exec(x) || ["", ""])[1]),
+      // The field labels of the FIRST labor card. This read `<th>` text until 2026-09-12, when the
+      // step stopped being one table and became a card per task — the sheet heads each task with
+      // its own `Guys | Days | Rate`, and Travel's middle column says HOURS rather than Days,
+      // which one shared header row cannot express. Scoped to the first card so the list stays the
+      // four field names rather than every label on the panel.
+      headings: ((panels.innerHTML.split('class="tk lab')[1] || "").split("</div></div>")[0]
+        .match(/<label>([^<]*)</g) || []).map((x) => (/>([^<]*)</.exec(x) || ["", ""])[1]),
+      // Travel's own labels, to prove the hours row is headed differently from the crew rows.
+      travelHeadings: ((panels.innerHTML.split('class="tk lab').slice(-1)[0] || "")
+        .split("</div></div>")[0]
+        .match(/<label>([^<]*)</g) || []).map((x) => (/>([^<]*)</.exec(x) || ["", ""])[1]),
+      // One card per task, not one table: the count is what proves the step was restructured.
+      cardCount: (panels.innerHTML.match(/class="tk lab/g) || []).length,
+      tableGone: panels.innerHTML.indexOf("<table") === -1,
     };
+
+    // ── the derived Guys figure, and the two ways across the auto/manual line ──
+    {
+      const c = build();
+      await c.api.init();
+      c.api.go(1);
+      const cp = c.dom.get("panels");
+      const travelIdx = () => c.api.model().labor.findIndex((r) => r.id === "travel");
+      const travelRow = () => c.api.model().labor[travelIdx()];
+      const before = travelRow().guys;
+      // Typing days into a crew row must move Travel's man-days with it.
+      typeInto(c, '[data-lab="0"][data-k="days"]', "4");
+      const afterCrewEdit = travelRow().guys;
+      // Typing in the auto box is how you leave auto — no control to find first.
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "7");
+      const afterTyping = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      // ...and it now IGNORES the crew, which is the whole point of having left auto.
+      typeInto(c, '[data-lab="0"][data-k="days"]', "9");
+      const stickyAfterCrewMoves = travelRow().guys;
+      // The way back.
+      clickOn(c, '[data-lab-auto="' + travelIdx() + '"]');
+      const afterBackToAuto = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      out.travelGuys = {
+        seeded: before, afterCrewEdit: afterCrewEdit,
+        afterTyping: afterTyping, stickyAfterCrewMoves: stickyAfterCrewMoves,
+        afterBackToAuto: afterBackToAuto,
+        // The box shows the derived figure rather than sitting empty next to a priced row.
+        boxShowsIt: String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value),
+        manualLinkOffered: cp.innerHTML.indexOf("data-lab-manual=") !== -1,
+      };
+    }
+
+    // ── dimmed on a local job, and still typeable ──
+    {
+      const loc = build({ blob: blob({ polish_estimate: {
+        version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
+        labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 },
+                { id: "travel", label: "Travel", guys: 6, days: "", rate: 33,
+                  unit: "hours", guys_auto: false }],
+        conditions: { local: true }, contingency: 0
+      } }) });
+      await loc.api.init();
+      loc.api.go(1);
+      const li = loc.api.model().labor.findIndex((r) => r.id === "travel");
+      const dimmedHtml = loc.dom.get("panels").innerHTML;
+      const costBefore = B.laborTotal(loc.api.model().labor);
+      typeInto(loc, '[data-lab="' + li + '"][data-k="days"]', "3");
+      out.travelLocal = {
+        dimmed: /class="tk lab inert"/.test(dimmedHtml),
+        saysWhy: dimmedHtml.indexOf("marked local") !== -1,
+        // NOT disabled: the house rule keeps a real `disabled` at .38-.5 and never dims a live
+        // control by opacity alone. Typing must still land.
+        noDisabledAttr: !/data-lab="[^"]*"[^>]*\sdisabled/.test(dimmedHtml),
+        typedAnyway: loc.api.model().labor[li].days,
+        costWasZeroWhileUnused: costBefore === B.laborCost(
+          { guys: 3, days: 2, rate: 33 }),
+        costAfterTyping: B.laborTotal(loc.api.model().labor),
+      };
+      // A non-local job leaves it undimmed.
+      const away = build({ blob: blob({ polish_estimate: {
+        version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
+        labor: [{ id: "travel", label: "Travel", guys: 6, days: 2, rate: 33,
+                  unit: "hours", guys_auto: false }],
+        conditions: { local: false }, contingency: 0
+      } }) });
+      await away.api.init();
+      away.api.go(1);
+      out.travelLocal.undimmedWhenAway =
+        !/class="tk lab inert"/.test(away.dom.get("panels").innerHTML);
+    }
 
     // Add a line: it appears, it is editable, and it prices from ITS OWN values. Travel is
     // backfilled onto MODEL's saved (pre-#491) two rows at boot — see migrateModel's Travel

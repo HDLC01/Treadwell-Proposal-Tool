@@ -195,10 +195,42 @@
 
   /** One labor row's cost. D37: guys × days × hourly rate × 8 hours.
    *
-   *  Kyle's screenshot: 3 guys × 5 days × $32.20 = $3,864. That figure is what pins the 8. */
+   *  Kyle's screenshot: 3 guys × 5 days × $32.20 = $3,864. That figure is what pins the 8.
+   *
+   *  EXCEPT AN HOURS ROW, WHICH IS NOT MULTIPLIED BY THE DAY. Travel is the only one today, and
+   *  the sheet is explicit about it: the crew rows read `Guys | Days` and compute
+   *  `=(A37*B37*C37)*8`, while Travel (Polish A43/B43) reads `Guys | HOURS` and computes
+   *  `=(A44*B44*C44)` with no multiplier at all. Its middle number is already hours, so applying
+   *  the 8 would bill a two-hour drive as sixteen.
+   *
+   *  Keyed on `unit` rather than on `id === "travel"` so the header can be drawn from the same
+   *  field, and so a custom "+ Add a labor line" row could be hours-based later without this
+   *  function learning another name. Absent `unit` means days, which is every row written before
+   *  this existed and every custom row an estimator adds today. */
   function laborCost(row) {
     row = row || {};
-    return num(row.guys) * num(row.days) * num(row.rate) * HOURS_PER_DAY;
+    var perDay = row.unit === "hours" ? 1 : HOURS_PER_DAY;
+    return num(row.guys) * num(row.days) * num(row.rate) * perDay;
+  }
+
+  /** The man-days a travel row is priced against: Σ guys × days over the rows that are NOT travel.
+   *
+   *  Polish A44 is `=(A37*B37)+(A38*B38)+(A40*B40)+(A42*B42)` — the crew rows' guys×days summed.
+   *  So the "Guys" column on a travel row is not a head count at all; it is how many man-days are
+   *  driving to the job, which is why the sheet's own screenshot shows 18 there against a 3-guy
+   *  crew (3×5 + 3×0.5 + 3×0.5).
+   *
+   *  Rows with no `days` contribute nothing, so a half-filled crew simply moves the figure as it
+   *  gets filled in. */
+  function travelManDays(rows) {
+    rows = rows || [];
+    var t = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit === "hours") continue;
+      t += num(r.guys) * num(r.days);
+    }
+    return t;
   }
 
   /** The labor rows added up, UNROUNDED. D45 is where the rounding happens
@@ -319,12 +351,30 @@
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
+  /** The Travel row as the sheet has it, built fresh each call so no two models share an object.
+   *
+   *  ONE DEFINITION, TWO CALLERS: `freshModel` seeds it into a new sandbox, and `migrateModel`
+   *  appends it to a draft saved before it existed. Written out twice, the two drifted within a
+   *  day — the migration's copy was still handing out the blank-rate version after the seed had
+   *  moved on. */
+  function travelSeed() {
+    return { id: "travel", label: "Travel", guys: "", days: "", rate: 33.0,
+             unit: "hours", guys_auto: true };
+  }
+
   /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
-   *  estimator has to judge. Kyle asked for Travel as a fourth named row, but it has no A37-style
-   *  cell of its own to transcribe (the sheet folds travel into hours on the crew rows instead —
-   *  see markupChain's D64 comment above), so guys/days/rate start blank rather than guessing at
-   *  a crew size or rate nobody supplied. */
+   *  estimator has to judge.
+   *
+   *  TRAVEL IS THE SHEET'S OWN ROW, transcribed like the other three rather than invented. Polish
+   *  A43/B43 head it `Guys | Hours` and C44 carries the same $33.00; its hours are left blank for
+   *  the same reason two of the crew rows leave days blank. (An earlier note here said the sheet
+   *  had no Travel row to copy and seeded it blank — that was wrong, written before the workbook
+   *  was read; rows 43-44 are right there under Joint Filler.)
+   *
+   *  `unit: "hours"` is what stops laborCost multiplying it by the 8-hour day, and `guys_auto`
+   *  is what keeps its Guys column equal to the crew's man-days until somebody types over it —
+   *  see travelManDays and the note on guys_auto in migrateModel. */
   function freshModel() {
     return {
       version: 2,
@@ -333,7 +383,7 @@
         { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33.0 },
         { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33.0 },
         { id: "jointfill", label: "Joint filler", guys: 3, days: "", rate: 33.0 },
-        { id: "travel", label: "Travel", guys: "", days: "", rate: "" }
+        travelSeed()
       ],
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
                     taxable: true, remodel_tax: false },
@@ -409,8 +459,40 @@
         for (var li = 0; li < model.labor.length; li++) {
           if (model.labor[li] && model.labor[li].id === "travel") { hasTravel = true; break; }
         }
-        out.labor = hasTravel ? model.labor
-          : model.labor.concat([{ id: "travel", label: "Travel", guys: "", days: "", rate: "" }]);
+        if (!hasTravel) {
+          out.labor = model.labor.concat([travelSeed()]);
+        } else {
+          // A TRAVEL ROW CAN ALSO BE OUT OF DATE, which is the second half of the same problem and
+          // the reason this is a map rather than the one-line pass-through it started as. Travel
+          // shipped on 2026-09-12 priced like a crew row — `guys × days × rate × 8`, no `unit`,
+          // blank rate — and was corrected hours later to the sheet's own Guys × HOURS × $33 with
+          // no multiplier. Every sandbox opened in between holds the first shape, and left alone
+          // it would bill a 2-hour drive as 16 and then price it at nothing, because its rate is
+          // blank. So the fields Travel gained are filled in the same additive way the row itself
+          // is: only what is missing, never over a number somebody typed.
+          //
+          // `guys_auto` is decided from the row rather than defaulted true: a draft where Travel
+          // already carries a guys figure had that typed by hand (nothing auto-filled it before
+          // this existed), so turning the auto back on would overwrite their number on the next
+          // keystroke anywhere in the panel.
+          out.labor = model.labor.map(function (r) {
+            if (!r || r.id !== "travel") return r;
+            var current = r.unit === "hours" &&
+                          Object.prototype.hasOwnProperty.call(r, "guys_auto") &&
+                          !isBlank(r.rate);
+            if (current) return r;
+            var next = {};
+            for (var kk in r) {
+              if (Object.prototype.hasOwnProperty.call(r, kk)) next[kk] = r[kk];
+            }
+            next.unit = "hours";
+            if (!Object.prototype.hasOwnProperty.call(next, "guys_auto")) {
+              next.guys_auto = isBlank(next.guys);
+            }
+            if (isBlank(next.rate)) next.rate = travelSeed().rate;
+            return next;
+          });
+        }
       }
       var saved = (model.conditions && typeof model.conditions === "object") ? model.conditions : {};
       for (var k in fresh.conditions) {
@@ -438,12 +520,21 @@
       for (var j = 0; j < fresh.labor.length; j++) {
         var seed = fresh.labor[j];
         var old = labour[V1_LABOUR_KEY[seed.id]] || {};
-        labor.push({
-          id: seed.id, label: seed.label,
-          guys: num(old.crew) || seed.guys,
-          days: isBlank(old.days) ? seed.days : num(old.days),
-          rate: num(old.rate) || seed.rate
-        });
+        // BUILT ON THE SEED, not listed field by field. This used to name the five v1 fields
+        // explicitly and rebuild each row from scratch, which silently dropped every field a seed
+        // gained afterwards: Travel's `unit`/`guys_auto` went missing, so a v1 draft opened with
+        // travel priced by the eight-hour day, and the v2 branch then added them back on the NEXT
+        // load — migrating twice differing from migrating once, which is the thing
+        // migrationIsIdempotent exists to catch. Copying the seed first means the next field to
+        // be added is carried here for free.
+        var row = {};
+        for (var sk in seed) {
+          if (Object.prototype.hasOwnProperty.call(seed, sk)) row[sk] = seed[sk];
+        }
+        row.guys = num(old.crew) || seed.guys;
+        row.days = isBlank(old.days) ? seed.days : num(old.days);
+        row.rate = num(old.rate) || seed.rate;
+        labor.push(row);
       }
 
       var v1cond = (model.conditions && typeof model.conditions === "object") ? model.conditions : {};
@@ -507,9 +598,24 @@
     // already filled sends the estimator hunting through fields that are fine.
     for (var j = 0; j < m.labor.length; j++) {
       var row = m.labor[j] || {};
+
+      // AN HOURS ROW WITH NO HOURS IS UNUSED, NOT UNFINISHED, and skipping it here is what keeps
+      // the Review step reachable. The rule below reads a row as half-filled when 1 or 2 of the
+      // three boxes are empty, and deliberately ignores a row where all three are — "switched
+      // off". Travel used to qualify for that: it seeded fully blank. It no longer can. It now
+      // arrives with a rate of $33 off the sheet and a Guys figure this page fills in from the
+      // crew's man-days, so on a bid nobody has typed a single travel hour into, exactly one box
+      // is empty — and without this line every draft in the system would open saying "Add the
+      // days for Travel", including the local jobs that will never drive anywhere.
+      //
+      // Hours is the field that means "we are doing this": guys and rate are both defaults the
+      // estimator never chose, so neither says anything about intent. A travel row WITH hours is
+      // checked like any other — miss the rate on it and it still complains.
+      if (row.unit === "hours" && !filledIn(row.days)) continue;
+
       var missing = [];
       if (!filledIn(row.guys)) missing.push("guys");
-      if (!filledIn(row.days)) missing.push("days");
+      if (!filledIn(row.days)) missing.push(row.unit === "hours" ? "hours" : "days");
       if (!filledIn(row.rate)) missing.push("rate");
       if (missing.length > 0 && missing.length < 3) {
         var which = missing.length === 1 ? missing[0]
@@ -526,7 +632,8 @@
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
     gpPct: gpPct, hardBidPct: hardBidPct,
-    laborCost: laborCost, laborTotal: laborTotal, takeoffSf: takeoffSf,
+    laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    takeoffSf: takeoffSf,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers
   };
