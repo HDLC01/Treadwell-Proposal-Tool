@@ -14,12 +14,12 @@
  *     figures below are back-solved for that, which is why they look arbitrary.
  *   * THE HARD-BID GATE, all four ways: the 60k rule, the local-and-13k rule, the else-less IF
  *     that yields nothing, and a line that is genuinely NEGATIVE (ROUNDUP away from zero).
- *   * THE TWO TAX BASES. Sales tax on materials only; the remodel tax on the labour side and the
- *     markups and never on materials. Every tax vector carries real materials AND real labour, so
+ *   * THE TWO TAX BASES. Sales tax on materials only; the remodel tax on the labor side and the
+ *     markups and never on materials. Every tax vector carries real materials AND real labor, so
  *     swapping the two bases moves the answer instead of cancelling out.
  *   * THE REMODEL TAX'S RATE, which is the ONE figure this engine does not take from the sheet.
  *     B75 hardcodes 10%; Kansas charges the state 6.5% plus the county portion on commercial
- *     remodel LABOUR, so markupChain takes `remodel_rate` from the project's county. Vectors
+ *     remodel LABOR, so markupChain takes `remodel_rate` from the project's county. Vectors
  *     below pin a real county rate, a lower one, the no-county fallback in all three shapes it
  *     arrives in, a Missouri county's explicit 0 (exempt, and NOT the fallback), a rate handed in
  *     with the toggle OFF (which must stay untaxed), and that 10% is no longer reachable at all.
@@ -37,12 +37,12 @@ const OFF = { local: false, hard_bid: false, prevailing_wage: false,
               taxable: false, remodel_tax: false };
 function cond(over) { return Object.assign({}, OFF, over || {}); }
 
-// A job with materials AND labour on it, used for every on/off pair below so the only thing that
+// A job with materials AND labor on it, used for every on/off pair below so the only thing that
 // differs between the two vectors is the flag being tested.
 const JOB = { material: 12000, labor: 8000, contingency: 0, sf: 12500 };
 function job(over) { return Object.assign({}, JOB, over || {}); }
 
-/* Sub-totals are back-solved: with no labour, D64 = m + ROUNDUP(m*2%). 6,371 lands on 6,499 and
+/* Sub-totals are back-solved: with no labor, D64 = m + ROUNDUP(m*2%). 6,371 lands on 6,499 and
  * 6,372 on 6,500 — one dollar of material either side of a $520 swing in GP. */
 const VECTORS = [
   // ── the GP bands, both sides of all four edges (B67 is strictly `<`) ────────
@@ -102,7 +102,7 @@ const VECTORS = [
   // The RATE is deliberately NOT the sheet's B75 10%. 0.07975 is Johnson County KS (6.5% state +
   // 1.475% county) out of backend/reference_tax.py, the figure Hanz and Kyle both quote. 0.0715 is
   // a lower county portion: the engine prices whatever rate it is handed, so it has to move.
-  { label: "remodel at Johnson County's 7.975%: on labour + markups, never on materials",
+  { label: "remodel at Johnson County's 7.975%: on labor + markups, never on materials",
     input: job({ remodel_rate: 0.07975, conditions: cond({ remodel_tax: true }) }) },
   { label: "remodel at a lower county rate of 7.15%: the tax follows the county",
     input: job({ remodel_rate: 0.0715, conditions: cond({ remodel_tax: true }) }) },
@@ -117,10 +117,10 @@ const VECTORS = [
     input: job({ remodel_rate: null, conditions: cond({ remodel_tax: true }) }) },
   { label: "remodel with an empty-string county rate: still the 6.5% floor",
     input: job({ remodel_rate: "", conditions: cond({ remodel_tax: true }) }) },
-  // An explicit 0 is "we know the county, and its rate is nothing." Missouri taxes remodel LABOUR
+  // An explicit 0 is "we know the county, and its rate is nothing." Missouri taxes remodel LABOR
   // as exempt, so a Missouri county carries no remodel rate ON PURPOSE and the page passes 0.
   // Fall that 0 back to 6.5% and every Missouri remodel is charged a Kansas tax it does not owe.
-  { label: "remodel in Missouri, county rate an explicit 0: exempt labour, so no tax at all",
+  { label: "remodel in Missouri, county rate an explicit 0: exempt labor, so no tax at all",
     input: job({ remodel_rate: 0, conditions: cond({ remodel_tax: true }) }) },
   // A rate on the input is a lookup result, not a decision. Only the toggle charges the tax.
   { label: "a county rate supplied with the remodel toggle OFF: nothing is taxed",
@@ -129,7 +129,7 @@ const VECTORS = [
     input: job({ conditions: cond() }) },
 
   // ── prevailing wage on and off ─────────────────────────────────────────────
-  { label: "prevailing wage: 5% escalation, and burden on labour PLUS escalation",
+  { label: "prevailing wage: 5% escalation, and burden on labor PLUS escalation",
     input: { material: 6372, labor: 4000, contingency: 0,
              conditions: cond({ prevailing_wage: true }), sf: 9000 } },
   { label: "no prevailing wage: no escalation line",
@@ -152,7 +152,7 @@ const VECTORS = [
     input: job({ sf: 12500, conditions: cond({ taxable: true }) }) },
 
   // ── a whole realistic job, every condition on, raw sums with cents on them ─
-  { label: "everything on, unrounded takeoff and labour sums",
+  { label: "everything on, unrounded takeoff and labor sums",
     input: { material: 18450.75, labor: 15467.2, contingency: 2500, remodel_rate: 0.07975,
              conditions: { local: true, hard_bid: true, prevailing_wage: true,
                            taxable: true, remodel_tax: true }, sf: 14200 } },
@@ -240,7 +240,7 @@ out.hardBidProbe = [];
 // ── the model: fresh, migrated, and what is blocking it ──────────────────────
 out.fresh = P.freshModel();
 
-// A v1 draft, shaped like the ones on staging: named areas, worksheet-row materials, and labour
+// A v1 draft, shaped like the ones on staging: named areas, worksheet-row materials, and labor
 // keyed polishing/mockup/joint_filler where `crew` is the GUYS COUNT.
 const V1 = {
   areas: [{ name: "Main sales floor", sf: 9000 }, { name: "Back of house", sf: "3,500" }],
@@ -250,6 +250,10 @@ const V1 = {
                 taxable: true, remodel_tax: true },
   materials: { 17: { qty: 12500, cost: 0.15 }, 29: { qty: 4, cost: 500 } },
   added: [{ name: "Stair nosing infill", qty: 46, cost: 12.5 }],
+  // `labour`, not `labor`, and it is not a typo to tidy: this is v1 SAVED DATA, and migrateModel
+  // reads `model.labour`. Renamed to match the prose around it, the migration silently finds
+  // nothing and every row falls back to the fresh-model seed — which is what "crew is the guys
+  // count" going red actually means.
   labour: { polishing: { crew: 4, days: 6, rate: 32.2 },
             mockup: { crew: 2, days: 1, rate: 32.2 },
             joint_filler: { crew: 2, days: 2, rate: 32.2 } },
@@ -277,7 +281,7 @@ const STALE_V2_NO_TRAVEL = {
 
 const MIGRATIONS = [
   { label: "a v1 draft off staging", before: V1 },
-  { label: "v1 with no labour block at all", before: { areas: [{ sf: 9000 }] } },
+  { label: "v1 with no labor block at all", before: { areas: [{ sf: 9000 }] } },
   { label: "v1 with no areas", before: { areas: [], labour: {} } },
   { label: "nothing saved yet", before: null },
   { label: "a v2 model missing half its keys", before: { version: 2, takeoff: [], labor: null } },
@@ -325,13 +329,13 @@ out.blockers = [
                 { assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
       labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 32.2 }],
       conditions: {}, contingency: 0 }) },
-  { label: "a labour row with guys and a rate but no days",
+  { label: "a labor row with guys and a rate but no days",
     says: P.blockers({ version: 2,
       takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
                   unit: "SF" }],
       labor: [{ id: "polishing", label: "Polishing", guys: 3, days: "", rate: 32.2 }],
       conditions: {}, contingency: 0 }) },
-  { label: "ready to price: a switched-off labour row is not half-filled",
+  { label: "ready to price: a switched-off labor row is not half-filled",
     says: P.blockers({ version: 2,
       takeoff: [{ assembly_id: "a1", assembly_name: "Salt & Pepper polish", measurement: 9000,
                   unit: "SF" }],

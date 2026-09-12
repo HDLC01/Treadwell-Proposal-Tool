@@ -25,7 +25,7 @@ identifier or a transposed write. The failures that matter on this page are all 
   * "nothing renders before the sandbox settles" is an ORDERING, checked as one.
 
 The condition KEYS are compared with the real js/polish-bid-core.js, whose markupChain() reads them
-by key to decide the hard-bid discount, the labour escalation and the two taxes. A key that drifted
+by key to decide the hard-bid discount, the labor escalation and the two taxes. A key that drifted
 here would be a prevailing-wage job quietly priced at standard rates, and nothing on screen would
 say so.
 
@@ -559,14 +559,14 @@ def test_the_bid_date_defaults_to_today_without_overwriting_one(ran):
 # DONT USE 10%."
 #
 # Kyle's workbook hardcodes the remodel tax at 10% (Polish!B75). That is not a real rate anywhere.
-# Kansas charges sales tax on commercial remodel LABOUR at the state rate plus the county portion
+# Kansas charges sales tax on commercial remodel LABOR at the state rate plus the county portion
 # only — 6.5% + 1.475% = 7.975% in Johnson County, less in most others — and the live estimating tool
 # has looked it up per county since 2026-06-02. markupChain() now takes `remodel_rate` as an input,
 # so the beta intake is where that rate comes from.
 #
 # ONE OPEN QUESTION, DELIBERATELY NOT DECIDED HERE. markupChain documents `null` ("nobody has said
 # which county" → stand the Kansas state rate up) and an explicit `0` ("we know, and it is nothing":
-# Missouri exempts remodel labour) as different inputs. js/polish-estimate.js hands it
+# Missouri exempts remodel labor) as different inputs. js/polish-estimate.js hands it
 # `B.num(state.county_remodel_rate)`, which flattens both to 0. The harness reports BOTH numbers —
 # `enginePct.raw` and `enginePct.asWired` — so the divergence is visible instead of averaged away.
 # The assertions below pin only what is not in question: a Kansas job is charged its county's real
@@ -630,7 +630,7 @@ def test_both_johnson_counties_are_offered_because_they_charge_different_rates(r
     Mutation: match on name only and take the first hit — every Johnson County job in Overland Park
     gets priced as Warrensburg."""
     assert ran["county"]["offeredForJohnson"] == [
-        ["Johnson County, MO", "remodel labour exempt"],
+        ["Johnson County, MO", "remodel labor exempt"],
         ["Johnson County, KS", "remodel 7.975%"]], (
         "the two Johnsons are not both offered, with their rates: %r"
         % ran["county"]["offeredForJohnson"])
@@ -641,7 +641,7 @@ def test_both_johnson_counties_are_offered_because_they_charge_different_rates(r
 def test_choosing_a_county_does_not_delete_the_takeoff(ran):
     """THE MERGE, from the county's direction. A pick rides the same debounced save as everything
     else on this page, and that save PUTs the whole blob — including `polish_estimate`, where the
-    calculator's finished takeoff and labour rows live.
+    calculator's finished takeoff and labor rows live.
 
     Mutation: write the four keys with a setState that drops polish_estimate, and choosing a county
     deletes a finished takeoff. Nobody finds out until the bid comes back at zero."""
@@ -656,7 +656,7 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot — see the toggle test above.
         {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}], (
-        "the labour rows did not survive picking a county")
+        "the labor rows did not survive picking a county")
     assert c["versionKept"] == 2, "the model's version was dropped by a county pick"
     assert c["conditionsKept"] == {
         "local": True, "hard_bid": False, "prevailing_wage": False,
@@ -670,7 +670,7 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
 @needs_node
 def test_a_missouri_county_is_left_without_a_remodel_rate_and_says_why(ran):
     """Missouri rows carry no `remodel_rate`, and that is CORRECT rather than missing data: MO taxes
-    the contractor on materials and leaves remodel labour exempt. So the key stays null instead of
+    the contractor on materials and leaves remodel labor exempt. So the key stays null instead of
     being filled in with a Kansas number, and the note says the rule out loud.
 
     Also the search that found it: "warrensburg" is a TOWN, matched out of the county's notes,
@@ -679,14 +679,14 @@ def test_a_missouri_county_is_left_without_a_remodel_rate_and_says_why(ran):
     Mutation: fall back to the state rate when a row has no remodel_rate, and every Missouri bid
     quietly grows a Kansas tax."""
     mo = ran["countyMo"]
-    assert mo["offered"] == [["Johnson County, MO", "remodel labour exempt"]], (
+    assert mo["offered"] == [["Johnson County, MO", "remodel labor exempt"]], (
         "searching the notes for a town did not find its county: %r" % mo["offered"])
     assert mo["keys"]["county"] == "Johnson County, MO"
     assert mo["keys"]["county_remodel_rate"] is None, (
         "a Missouri county was given a remodel rate: %r" % mo["keys"]["county_remodel_rate"])
     for note in (mo["noteWithRemodelOff"], mo["noteWithRemodelOn"]):
         assert "generally exempt" in note, (
-            "the note does not say Missouri remodel labour is generally exempt: %r" % note)
+            "the note does not say Missouri remodel labor is generally exempt: %r" % note)
     assert "turn it off for a missouri job" in mo["noteWithRemodelOn"].lower(), (
         "with Remodel tax left on for a Missouri job the note gives no instruction: %r"
         % mo["noteWithRemodelOn"])

@@ -1,7 +1,7 @@
 /* The county / city tax picker, once, for every page that needs it.
  *
  * WHY THIS FIELD EXISTS. Kyle's workbook hardcodes the remodel tax at 10% (Polish!B75). That is
- * not a real rate anywhere. Kansas charges sales tax on commercial remodel LABOUR at the state
+ * not a real rate anywhere. Kansas charges sales tax on commercial remodel LABOR at the state
  * rate plus the COUNTY portion only — 6.5% + 1.475% = 7.975% in Johnson County, less in most
  * others. Hanz, 2026-08-18: "For the Remodel tax please use the real state tax or city tax, DONT
  * USE 10%".
@@ -127,7 +127,7 @@
     function rowRate(c) {
       return c && c.remodel_rate != null
         ? "remodel " + pct(c.remodel_rate)
-        : "remodel labour exempt";
+        : "remodel labor exempt";
     }
 
     /** A row is either a CITY (kind: "city" — the full combined local rate, correct for a job site
@@ -216,7 +216,7 @@
         county: rowLabel(c),
         county_tax_rate: c.rate == null ? null : c.rate,
         // MISSOURI ROWS HAVE NO remodel_rate, and that is correct rather than missing data:
-        // Missouri remodel labour is generally exempt. Left null instead of filled in with
+        // Missouri remodel labor is generally exempt. Left null instead of filled in with
         // something.
         county_remodel_rate: c.remodel_rate == null ? null : c.remodel_rate,
         county_notes: c.notes || "",
@@ -263,15 +263,15 @@
           " until you choose one.";
       }
       // MISSOURI. The row carries no remodel rate on purpose — MO taxes the contractor on
-      // materials and leaves the labour exempt — so this says the rule and then says what to DO,
+      // materials and leaves the labor exempt — so this says the rule and then says what to DO,
       // rather than promising a number. Which number a Missouri job would land on if Remodel tax
       // were left on is decided in markupChain and in how js/polish-estimate.js hands it the rate,
       // not here; the one instruction this control can honestly give is to turn the toggle off.
       if (stateOf(pick) === "MO") {
-        return pick.county + " — Missouri remodel labour is generally exempt, so no remodel " +
+        return pick.county + " — Missouri remodel labor is generally exempt, so no remodel " +
           "tax applies." + (on
             ? " Remodel tax is on anyway: turn it off for a Missouri job unless you know this " +
-              "labour is taxable."
+              "labor is taxable."
             : " Remodel tax is off, so it is not affecting the price either way.");
       }
       var rate = pick.county_remodel_rate;
@@ -282,7 +282,7 @@
             " — and the toggle is off, so nothing is added yet.");
       }
       return "Remodel tax " + pct(rate) + " · " + pick.county + (on
-        ? ", on the labour and the markups. Never on materials."
+        ? ", on the labor and the markups. Never on materials."
         : " — but the Remodel tax toggle is off, so it is not affecting the price yet.");
     }
 

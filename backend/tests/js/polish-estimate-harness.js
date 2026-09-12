@@ -474,6 +474,10 @@ function readMk(built) {
 /** Every "Labour"/"Crew" in a blob of text, with enough around it to find. */
 function offenders(text) {
   const hits = [];
+  // THE BRITISH SPELLING, deliberately, and it must stay that way: this sweep exists to prove the
+  // page never renders "labour" (Hanz asked for "Labor") or "Crew". Rewriting this pattern to
+  // /labor/ turns it into an assertion that the page never says the word it is supposed to say
+  // everywhere, which is how a blind labour->labor sweep breaks the one test guarding the rename.
   const re = /labour|crew/gi;
   let m;
   while ((m = re.exec(String(text)))) {
@@ -675,7 +679,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       };
     }
 
-    // The same, on the labour side.
+    // The same, on the labor side.
     b.api.go(1);
     rendered.push(panels.innerHTML);
     const labRebuilds = panels.htmlWrites;
@@ -694,7 +698,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
   }
 
-  // ── D. labour maths, and the add/remove lines ──────────────────────────────
+  // ── D. labor maths, and the add/remove lines ──────────────────────────────
   {
     const b = build();
     await b.api.init();
@@ -952,6 +956,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
       tooling: "rental",
       materials: [{ row: 17, name: "Densifier", cost: 1200 }],
       added: [{ row: 28, name: "Extra", cost: 50 }],
+      // `labour`, not `labor` — v1 SAVED DATA, which migrateModel reads by that exact key. See the
+      // same note on polish-bid-harness.js's V1 fixture.
       labour: { polishing: { crew: 4, days: 3, rate: 34 },
                 mockup: { crew: 2, days: 1, rate: 30 },
                 joint_filler: { crew: 5, days: 2, rate: 31 } },
@@ -1065,7 +1071,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // ── J. the remodel tax uses the county's REAL rate, never the sheet's 10% ──
   //
   // Kyle's workbook hardcodes 10% at B75. That is not a real rate anywhere: Kansas charges sales
-  // tax on commercial remodel LABOUR at the state rate plus the county portion only. Hanz,
+  // tax on commercial remodel LABOR at the state rate plus the county portion only. Hanz,
   // 2026-08-18: "For the Remodel tax please use the real state tax or city tax, DONT USE 10%".
   // The page reads the rate off the draft under `county_remodel_rate`, the same key the live
   // estimate screen's county picker writes, so a project priced on either screen agrees.
@@ -1137,7 +1143,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
 
     // A MISSOURI county: chosen, and carrying no remodel rate on purpose, because Missouri taxes
-    // remodel labour as exempt. This must charge NOTHING — not the Kansas state fallback, which is
+    // remodel labor as exempt. This must charge NOTHING — not the Kansas state fallback, which is
     // what a null-is-the-same-as-zero reading would have done to every Missouri job.
     const mo = build({ blob: blob({ polish_estimate: clone(REMODEL_ON),
                                     county: "Jackson County, MO", county_remodel_rate: null }) });

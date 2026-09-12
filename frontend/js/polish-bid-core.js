@@ -14,7 +14,7 @@
 //   D31 material        =ROUNDUP(SUM(D17:D30),0)              the takeoff, rounded up
 //   D32 shipping        =ROUNDUP(D31*B32,0)                   B32 = 2%
 //   D33 material_total  =SUM(D31:D32)
-//   D45 labor           =ROUNDUP(SUM(D37:D44),0)              the labour rows, rounded up
+//   D45 labor           =ROUNDUP(SUM(D37:D44),0)              the labor rows, rounded up
 //   D46 escalation      =ROUNDUP((D45*C46),0)                 C46 =IF(D5="Yes",5%,0)  prevailing wage
 //   D47 burden          =ROUNDUP((D45+D46)*C47,0)             C47 = 12%
 //   D64 sub_total       =ROUNDUP(SUM(D33,D45:D47,D55,D61),0)  + tooling D55 and travel D61, both 0 here
@@ -29,7 +29,7 @@
 //   D69 super_pto       =ROUNDUP(SUM(D64:D68,D71,D74,D77)*B69,0)     B69 = 2.7%
 //   D70 soft_costs      =(ROUNDUP(SUM(D64:D69,D71,D74,D77)*B70,0))+0 B70 = 16%
 //   B75 remodel_pct     =IF(D6="yes",0.1,0)
-//   D75 remodel_tax     =ROUNDUP(SUM(D45:D47,D55,D61,D67:D71,D77)*B75,0)  labour + markups, NO materials
+//   D75 remodel_tax     =ROUNDUP(SUM(D45:D47,D55,D61,D67:D71,D77)*B75,0)  labor + markups, NO materials
 //   D76 taxes           =SUM(D74:D75)
 //   D78 bond            =ROUNDUP(SUM(D64,D67,D68,D69:D71,D74,D75:D77)*B78,0)   B78 = 0
 //   D79 fees_and_bond   =ROUNDUP(SUM(D77:D78),0)
@@ -52,7 +52,7 @@
 //    money. Same for `SUM(D64:D69,…)` in the soft-costs line.
 //
 // 4. Sales tax is charged on MATERIALS ONLY (D74 takes D33), and the remodel tax on the
-//    LABOUR SIDE PLUS THE MARKUPS and never on materials (D75 skips D33 deliberately). Getting
+//    LABOR SIDE PLUS THE MARKUPS and never on materials (D75 skips D33 deliberately). Getting
 //    these two bases the wrong way round produces a plausible total that is thousands out.
 //
 // 5. B68's inner IF has no else. Excel yields FALSE there, and FALSE sums as 0 — so a hard bid
@@ -76,7 +76,7 @@
    *
    *  Deliberately unlike library-core's num(), which returns null: every caller here is
    *  ARITHMETIC, and one null in the middle of the chain would poison every line below it. An
-   *  empty labour row has to cost nothing, not NaN. Tolerates "$1,200" and " 12,500 " because
+   *  empty labor row has to cost nothing, not NaN. Tolerates "$1,200" and " 12,500 " because
    *  these values get pasted out of spreadsheets. */
   function num(raw) {
     if (raw === null || raw === undefined || raw === "") return 0;
@@ -152,7 +152,7 @@
     /* THE ONE PLACE THIS ENGINE DELIBERATELY DEPARTS FROM KYLE'S SHEET.
      *
      * B75 hardcodes the remodel tax at 10%. That figure is not a real rate anywhere: Kansas
-     * charges sales tax on commercial remodel LABOUR at the state rate plus the county portion
+     * charges sales tax on commercial remodel LABOR at the state rate plus the county portion
      * only, which is 7.975% in Johnson County and lower in most others. The live estimating tool
      * has looked the real rate up per county since 2026-06-02 (see backend/reference_tax.py,
      * pulled from the KS DOR Address Tax Rate Locator), and Hanz's instruction on 2026-08-18 was
@@ -193,7 +193,7 @@
     return 0;
   }
 
-  /** One labour row's cost. D37: guys × days × hourly rate × 8 hours.
+  /** One labor row's cost. D37: guys × days × hourly rate × 8 hours.
    *
    *  Kyle's screenshot: 3 guys × 5 days × $32.20 = $3,864. That figure is what pins the 8. */
   function laborCost(row) {
@@ -201,7 +201,7 @@
     return num(row.guys) * num(row.days) * num(row.rate) * HOURS_PER_DAY;
   }
 
-  /** The labour rows added up, UNROUNDED. D45 is where the rounding happens
+  /** The labor rows added up, UNROUNDED. D45 is where the rounding happens
    *  (`=ROUNDUP(SUM(D37:D44),0)`), and markupChain does it — rounding twice would drift. */
   function laborTotal(rows) {
     rows = rows || [];
@@ -222,9 +222,9 @@
     return t;
   }
 
-  /** THE CHAIN. Materials and labour in, a bid out, one key per cell of Kyle's markup column.
+  /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
    *
-   *  `material` is the raw sum of the takeoff assemblies and `labor` the raw sum of the labour
+   *  `material` is the raw sum of the takeoff assemblies and `labor` the raw sum of the labor
    *  rows — both unrounded, because D31 and D45 are where the sheet rounds them. */
   function markupChain(input) {
     input = input || {};
@@ -236,7 +236,7 @@
     var shipping = roundUp(material * RATES.SHIPPING);                   // D32
     var material_total = material + shipping;                            // D33
 
-    // ── labour ──
+    // ── labor ──
     var labor = roundUp(input.labor);                                    // D45
     var escPct = cond.prevailing_wage ? RATES.ESCALATION : 0;            // C46
     var escalation = roundUp(labor * escPct);                            // D46
@@ -268,7 +268,7 @@
     var soft_costs = roundUp(
       (sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * RATES.SOFT_COSTS);
 
-    // ── the remodel tax, on the labour side and the markups. NEVER on materials. ──
+    // ── the remodel tax, on the labor side and the markups. NEVER on materials. ──
     //
     // The RATE is the county's real one, handed in by the caller from the project's county (see
     // RATES.SHEET_REMODEL for why this is not the sheet's 10%). With the remodel toggle on and no
@@ -276,7 +276,7 @@
     // estimator can correct beats an invented one they might not question.
     // NULL AND ZERO MEAN DIFFERENT THINGS HERE, and conflating them overcharges a whole state.
     // `null`/absent is "nobody has said which county" → stand the state rate up until they do.
-    // An explicit `0` is "we know, and it is nothing": Missouri taxes remodel labour as exempt, so
+    // An explicit `0` is "we know, and it is nothing": Missouri taxes remodel labor as exempt, so
     // a Missouri county has no remodel rate on purpose. Reading that 0 as "unknown" would charge a
     // Missouri job the Kansas rate. Same null-is-not-zero rule as per_unit and per_sf.
     var remodel_pct = 0;                                                 // B75
@@ -319,7 +319,7 @@
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
-  /** The labour rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
+  /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge. Kyle asked for Travel as a fourth named row, but it has no A37-style
    *  cell of its own to transcribe (the sheet folds travel into hours on the crew rows instead —
@@ -342,7 +342,7 @@
     };
   }
 
-  /** v1 kept its labour under these keys. `crew` was the GUYS COUNT, not a crew cost — reading it
+  /** v1 kept its labor under these keys. `crew` was the GUYS COUNT, not a crew cost — reading it
    *  as money would multiply a saved estimate by eight. */
   var V1_LABOUR_KEY = { polishing: "polishing", mockup: "mockup", jointfill: "joint_filler" };
 
@@ -350,7 +350,7 @@
     return v === null || v === undefined || (typeof v === "string" && v.replace(/\s/g, "") === "");
   }
 
-  /** True when a field holds a usable number. 0 counts: a labour row at 0 days is a row the
+  /** True when a field holds a usable number. 0 counts: a labor row at 0 days is a row the
    *  estimator has deliberately switched off, not a half-filled one. */
   function filledIn(v) {
     if (isBlank(v) || typeof v === "boolean") return false;

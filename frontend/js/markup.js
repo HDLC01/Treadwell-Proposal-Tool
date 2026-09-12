@@ -285,7 +285,20 @@
   // A rate's effect has to be visible the moment it is typed, and nothing real may be at
   // stake in that. These figures price NOTHING: they are the mockup's own sample job, and the
   // footnote on the page says so.
-  var SAMPLE_SUBTOTAL = 85000;
+  //
+  // THE SUB-TOTAL IS TYPEABLE, and only because of that "prices NOTHING". A band ladder reads
+  // very differently at $6,000 than at $85,000 -- which step you land on IS the thing being
+  // checked -- and picking one fixed job size hid that. Deliberately NOT persisted: it is a
+  // question you ask, not a setting you keep, and a remembered figure would have somebody
+  // reading last week's what-if as today's default.
+  var SAMPLE_SUBTOTAL_DEFAULT = 85000;
+  var SAMPLE_SUBTOTAL = SAMPLE_SUBTOTAL_DEFAULT;
+  // Exactly what is in the box mid-edit, or null when nobody is typing in it. The box echoes THIS
+  // rather than a re-formatted figure, because `fmtEdge` inserts separators: re-rendering "6500"
+  // as "6,500" on the fourth keystroke makes the string longer than the caret offset render()
+  // saved, and the caret jumps a character every time the thousands mark appears. Cleared on the
+  // way out, so the box settles back to a formatted figure once it is no longer being typed in.
+  var SUBTOTAL_RAW = null;
   var SAMPLE_CONTINGENCY = 2500;
   var SAMPLE_COUNTY_RATE = 0.07975;      // Johnson County, KS — reference_tax.py's own figure
 
@@ -1227,12 +1240,19 @@
 
     out += '<div class="mkrow ctx"><div class="line">' +
       '<span class="nm">Sub-total costs<span class="chip">The base</span></span>' +
-      '<span class="sub">material + labour + escalation + burden</span></div>' +
-      '<div class="rate"><span class="ftext locked">Comes off the takeoff and labour tabs' +
+      '<span class="sub">material + labor + escalation + burden</span></div>' +
+      '<div class="rate"><span class="ftext locked">Comes off the takeoff and labor tabs' +
       "</span></div>" +
       '<div class="applies"><span class="swro">Always</span></div>' +
-      '<div class="prev"><span class="amt">' + esc(money(SAMPLE_SUBTOTAL)) +
-      "</span></div></div>";
+      // The one typeable box in a row that is otherwise all read-only, so it says out loud that
+      // it is a what-if and not a filed rate. `data-focus` is what lets render() put the caret
+      // back mid-keystroke -- every preview below repaints on each character typed.
+      '<div class="prev"><span class="numwrap"><span class="unit pre">$</span>' +
+      '<input class="finput num" type="text" inputmode="decimal" spellcheck="false"' +
+      ' autocomplete="off" data-subtotal="1" data-focus="sample-subtotal"' +
+      ' aria-label="Sample sub-total the preview prices, in dollars"' +
+      ' value="' + esc(SUBTOTAL_RAW == null ? fmtEdge(SAMPLE_SUBTOTAL) : SUBTOTAL_RAW) + '" /></span>' +
+      '<span class="prevnote">try a job size</span></div></div>';
 
     for (var i = 0; i < rows.length; i++) out += rowHtml(rows[i], priced[rows[i].line_key]);
 
@@ -1729,6 +1749,21 @@
   $("mk-chain").addEventListener("input", function (ev) {
     var t = ev.target;
     if (!t || !t.getAttribute) return;
+
+    // THE WHAT-IF BOX REPAINTS ON EVERY KEYSTROKE, unlike every other input on this page, and the
+    // difference is what each one is for: a rate is a value being FILED, so it is validated on the
+    // way out of the box; this is a question being ASKED, and an answer that waited for blur would
+    // not be an answer. A half-typed figure falls back to the default rather than painting $NaN
+    // down every row below -- "1" on the way to "15000" is not an error worth showing.
+    if (t.getAttribute("data-subtotal")) {
+      if (rendering) return;
+      SUBTOTAL_RAW = t.value;
+      var typed = parseNum(t.value);
+      SAMPLE_SUBTOTAL = (typed != null && typed > 0) ? typed : SAMPLE_SUBTOTAL_DEFAULT;
+      render();
+      return;
+    }
+
     var k = t.getAttribute("data-formula") || t.getAttribute("data-simple");
     if (!k) return;
     if (ERRORS[key(k)]) {
@@ -1764,6 +1799,14 @@
     // this is the only honest answer to "what should the repaint focus?".
     var rel = ev.relatedTarget;
     var goingTo = (rel && rel.getAttribute) ? rel.getAttribute("data-focus") : null;
+
+    // Let go of the raw text so the box settles back to a separated figure ("6,500"), and so an
+    // abandoned half-entry does not sit there reading as the number the previews below used.
+    if (t.getAttribute("data-subtotal")) {
+      SUBTOTAL_RAW = null;
+      render({ focusKey: goingTo });
+      return;
+    }
 
     var sk = t.getAttribute("data-simple");
     if (sk) {

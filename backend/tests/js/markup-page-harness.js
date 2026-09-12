@@ -406,7 +406,14 @@ function build(opts) {
       // Everything the chain rendered, as text — used to prove a $0.00 never appears where a
       // line could not be priced.
       chainText: byClass(t, "mkrow").map((r) => r.text).join(" | "),
-      inputCount: byTag(t, "input").length,
+      // EVERY INPUT THAT FILES SOMETHING, which is what the admin gate is about. The sub-total
+      // what-if box is excluded on purpose: it moves a preview figure on this screen and writes
+      // nothing anywhere, so a non-admin using it can never earn the 403 that the gate exists to
+      // stop them walking into. Counted separately rather than dropped, so "it renders for
+      // everybody" stays a thing a test says out loud.
+      inputCount: byTag(t, "input").filter(
+        (n) => !Object.prototype.hasOwnProperty.call(n.attrs, "data-subtotal")).length,
+      subtotalBoxes: byAttr(t, "data-subtotal").length,
       switchCount: byAttr(t, "role", "switch").length,
       buttonCount: byTag(t, "button").length,
       stateText: byClass(t, "state").map((s) => s.text).join(" "),

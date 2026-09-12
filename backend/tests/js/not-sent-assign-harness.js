@@ -109,7 +109,7 @@ function liftPair(deps) {
     // renderNotSent now builds the same five-tab strip a sent project gets. `secTab` is lifted for
     // real — it is pure markup and cheap — but `applySecPanel` is recorded as a no-op here.
     //
-    // That is a division of labour, not a gap: applySecPanel reaches for SEC_TABS, ALL_SEC_CARDS,
+    // That is a division of labor, not a gap: applySecPanel reaches for SEC_TABS, ALL_SEC_CARDS,
     // SEC_ELIGIBLE, the chat scroll and two lazy fetches, none of which this file has any business
     // standing up. THIS harness tests the estimator picker. The strip itself is executed for real in
     // drawer-render-harness.js, which asserts all five tabs, their panels and their placeholder
@@ -121,7 +121,7 @@ function liftPair(deps) {
     // no business making — it tests the ESTIMATOR control. Recorded as a call rather than lifted,
     // so a rename in portal.js still fails loudly here instead of being silently absent.
     "\nfunction loadNotSentNotify(pid) { notifyCalls.push(pid); }" +
-    // Same division of labour for the close-lost control (2026-08-19). It has its own executed
+    // Same division of labor for the close-lost control (2026-08-19). It has its own executed
     // tests in not-sent-lost-harness.js, where the dialog and the request are the subject; here it
     // is recorded so a rename still fails loudly rather than going quiet.
     "\nfunction wireNotSentLost(pid, row) { lostCalls.push(pid); }" +
@@ -136,12 +136,12 @@ function liftPair(deps) {
     "\n" + source("nsCloseNote") +
     // The by-hand Won control (2026-08-19). Its MARKUP is lifted for real — renderNotSent embeds it,
     // it is pure string-building, and a stub would decide what this panel contains — while its
-    // WIRING is recorded, on the same division of labour as wireNotSentLost above: the request and
+    // WIRING is recorded, on the same division of labor as wireNotSentLost above: the request and
     // the repaint are drawer-render-harness.js's subject.
     "\n" + source("wonControlHtml") +
     "\nfunction wireWon(pid, row, repaint) { wonCalls.push(pid); }" +
     // Deleting a project (2026-08-24). The MARKUP is lifted for real, on the same division of
-    // labour as wonControlHtml above: renderNotSent embeds it, and a stub would decide what this
+    // labor as wonControlHtml above: renderNotSent embeds it, and a stub would decide what this
     // panel contains. Note this file's `window` carries NO TWAuth, so the real function takes its
     // non-admin branch and renders "" -- which is the useful half here, because it proves the
     // section is absent for anybody who is not an admin rather than merely gated at the endpoint.
