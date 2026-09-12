@@ -767,6 +767,36 @@ const rendered = [];      // every string the page put on screen, for the Labour
       };
     }
 
+    // ── the derived figure has to reach the SCREEN, not just the model ──
+    // A browser pass on staging found Travel's Guys box still reading 1.5 after days went into
+    // Polishing, because typing takes the `changed(false)` path: repaintNumbers refreshes the cost
+    // cells and the totals, and nothing repainted the derived INPUT. The model was right the whole
+    // time, which is exactly why every existing test passed.
+    {
+      const f = build({ blob: blob({ polish_estimate: null, polish_sf: 9000 }) });
+      await f.api.init();
+      f.api.go(1);
+      const ti = () => f.api.model().labor.findIndex((r) => r.id === "travel");
+      const boxVal = () => String(need(f, '[data-lab="' + ti() + '"][data-k="guys"]').value);
+      const seededBox = boxVal();
+      typeInto(f, '[data-lab="0"][data-k="days"]', "5");
+      out.travelLiveRepaint = {
+        seededBox: seededBox,
+        modelAfterCrewEdit: f.api.model().labor[ti()].guys,
+        boxAfterCrewEdit: boxVal(),
+        // And the cost that figure drives, which is the half a wrong box actually misprices.
+        costAfterCrewEdit: txt(f, '[data-lcost-for="' + ti() + '"]'),
+      };
+      typeInto(f, '[data-lab="' + ti() + '"][data-k="days"]', "2");
+      out.travelLiveRepaint.costWithHours = txt(f, '[data-lcost-for="' + ti() + '"]');
+      out.travelLiveRepaint.expectedWithHours = B.laborCost(
+        { guys: 16.5, days: 2, rate: 33, unit: "hours" });
+      out.travelLiveRepaint.modelWithHours = {
+        guys: f.api.model().labor[ti()].guys, days: f.api.model().labor[ti()].days,
+        rate: f.api.model().labor[ti()].rate
+      };
+    }
+
     // ── dimmed on a local job, and still typeable ──
     {
       const loc = build({ blob: blob({ polish_estimate: {

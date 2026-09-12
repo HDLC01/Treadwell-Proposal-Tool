@@ -710,6 +710,23 @@
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
         el.getAttribute("data-lcost-for"), 10)]));
     });
+    // A DERIVED BOX IS A NUMBER ON SCREEN, so it repaints here with the costs. Everything else in
+    // this function is text the estimator cannot type into, which is why nothing repainted an
+    // INPUT before — and it is exactly what made this go wrong: typing days into a task takes the
+    // `changed(false)` path, `syncAutoGuys` moved Travel's man-days to 16.5 in the model, the cost
+    // cell repainted off 16.5, and the Guys box went on showing the 1.5 it was rendered with. The
+    // screen then disagreed with itself — a box reading 1.5 beside a cost worked out from 16.5 —
+    // and a browser pass read that as the guys figure being dropped from the formula. It never
+    // was; only the box was stale.
+    //
+    // `data-auto` marks the ones the page owns. A box the estimator has taken over is not in this
+    // list (typing flips it to manual and rebuilds the card), so this cannot overwrite typing.
+    document.querySelectorAll('[data-lab][data-k="guys"][data-auto]').forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (!r) return;
+      var v = r.guys == null ? "" : String(r.guys);
+      if (el.value !== v) el.value = v;
+    });
 
     var one = function (sel, txt) {
       var el = document.querySelector(sel);

@@ -382,6 +382,41 @@ def test_the_travel_guys_figure_follows_the_tasks_above_it_until_somebody_disagr
 
 
 @needs_node
+def test_the_derived_guys_figure_repaints_on_screen_and_not_only_in_the_model(ran):
+    """THE SCREEN MUST NOT DISAGREE WITH ITSELF, and for one build it did.
+
+    Typing into a field takes the `changed(false)` path, which repaints the computed TEXT — costs,
+    totals, hints — and leaves the inputs alone, because until Travel arrived no input on this page
+    held a figure the page itself owned. So `syncAutoGuys` moved Travel's man-days to 16.5 in the
+    model, the cost cell repainted off 16.5, and the Guys box went on showing the 1.5 it had been
+    rendered with.
+
+    Every test passed: the model was right, the cost was right, the arithmetic was right. What was
+    wrong was only visible in a browser — a box reading 1.5 next to a cost worked out from 16.5,
+    with no way for an estimator to tell which number the bid used. A live pass read it as the guys
+    figure being dropped from the formula and called it a pricing bug, which is the reasonable
+    conclusion from what was on screen.
+
+    Mutation: drop the `[data-auto]` repaint from repaintNumbers. The cost stays right and this is
+    the only thing that goes red."""
+    t = ran["travelLiveRepaint"]
+    assert t["seededBox"] == "1.5", (
+        "a fresh draft's only days are the mock-up's half: %r" % t["seededBox"])
+    assert t["modelAfterCrewEdit"] == 16.5, "3x5 + 3x0.5 did not reach the model"
+    assert t["boxAfterCrewEdit"] == "16.5", (
+        "the box still reads the figure it was rendered with, while the cost beside it is worked "
+        "out from a different one: %r" % t["boxAfterCrewEdit"])
+    # Hours blank means the row is not used yet, whatever its guys says.
+    assert t["costAfterCrewEdit"] == "$0"
+    # And with hours typed, the row prices off the derived figure the box is now showing: 16.5
+    # man-days x 2 hours x $33 = $1,089. NOT x8, which would read $8,712.
+    assert t["costWithHours"] == "$1,089", (
+        "travel priced off something other than the figure on screen: %r" % t["costWithHours"])
+    assert t["expectedWithHours"] == 1089
+    assert t["modelWithHours"]["guys"] == 16.5
+
+
+@needs_node
 def test_travel_dims_on_a_local_job_and_is_still_typeable(ran):
     """The intake toggle's own words are "Local job. Under 70 miles. Off means travel and lodging
     get added" — so on a local job Travel is not expected, and the card says so.
