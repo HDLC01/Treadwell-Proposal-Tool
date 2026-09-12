@@ -320,7 +320,8 @@ def test_a_toggle_does_not_delete_the_takeoff(ran):
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot (#491's Travel row, added after this fixture's
         # labor array was written) — not something a toggle-save is expected to have dropped.
-        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}], (
+        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+         "unit": "hours", "guys_auto": True}], (
         "the labor rows did not survive flipping a toggle")
     assert t["versionKept"] == 2, "the model's version was dropped by an intake save"
     # And the four conditions nobody touched are still what they were.
@@ -342,7 +343,8 @@ def test_a_model_with_no_conditions_at_all_keeps_its_takeoff_too(ran):
         {"id": "polishing", "label": "Polishing", "guys": 4, "days": 3, "rate": 32.2},
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot — see the sibling test above.
-        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}]
+        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+         "unit": "hours", "guys_auto": True}]
     assert t["taxable"] is False, "the clicked toggle did not land"
     assert t["local"] is True, "the untouched defaults did not land alongside it"
 
@@ -655,7 +657,8 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
         {"id": "polishing", "label": "Polishing", "guys": 4, "days": 3, "rate": 32.2},
         {"id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5, "rate": 32.2},
         # Backfilled by migrateModel() at boot — see the toggle test above.
-        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}], (
+        {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+         "unit": "hours", "guys_auto": True}], (
         "the labor rows did not survive picking a county")
     assert c["versionKept"] == 2, "the model's version was dropped by a county pick"
     assert c["conditionsKept"] == {
