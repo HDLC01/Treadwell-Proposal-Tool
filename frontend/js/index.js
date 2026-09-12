@@ -151,7 +151,7 @@
       why: "Competitive bid. Tightens the margin the sheet applies.",
       def: false, cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
     { key: "prevailing_wage", label: "Prevailing wage", scope: ["epoxy", "polish", "combo", "gyp"],
-      why: "Raises every labour line to the prevailing rate.",
+      why: "Raises every labor line to the prevailing rate.",
       def: false, cells: ["Epoxy!D5"], on: "Yes", off: "No" },
     { key: "taxable", label: "Taxable", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Adds sales tax. The bid you see already includes it.",

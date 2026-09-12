@@ -862,12 +862,22 @@ def test_a_non_admin_gets_no_editable_control_anywhere(ran):
     about what somebody may do. The ladder's checkboxes count: `inputCount` is every input in the
     chain, checkbox or not.
 
+    EXCEPT THE SUB-TOTAL WHAT-IF BOX, which every role gets. The gate is about controls that FILE
+    something, and that box files nothing -- it moves a preview figure on this screen only, so no
+    amount of typing in it can earn the 403 this test exists to keep somebody out of. It is also
+    the control that most serves a non-admin: test_a_non_admin_reads_the_same_facts already says
+    the point of their read-only view is answering "what would this do", and a job size you cannot
+    change answers that for exactly one job size. Asserted present below rather than ignored.
+
     Mutation: drop the ADMIN gate (test_dropping_the_admin_gate_hands_a_non_admin_a_box)."""
     for name in ("nonAdminPolish", "nonAdminGyp"):
         snap = ran[name]
         assert snap["inputCount"] == 0, "%s rendered an editable box for a non-admin" % name
         assert snap["switchCount"] == 0, "%s rendered a switch for a non-admin" % name
         assert snap["buttonCount"] == 0, "%s rendered a button for a non-admin" % name
+        assert snap["subtotalBoxes"] == 1, (
+            "%s lost the sub-total what-if box; it writes nothing and is the one control a "
+            "read-only viewer is on this page to use" % name)
     assert ran["nonAdminRequests"] == ["GET"], "a non-admin's page wrote to the API"
 
 

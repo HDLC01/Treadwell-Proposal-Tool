@@ -3,7 +3,7 @@
 Hanz, 2026-09-02: *"For the polish beta we want to use the existing intake form v1 (not the beta).
 The v2 is just add it with the toggle buttons."* The county came with them. It belongs next to the
 **Remodel tax** toggle rather than up with the project fields, because that toggle is the only
-reason it is asked: Kansas taxes commercial remodel labour at the combined rate at the job site,
+reason it is asked: Kansas taxes commercial remodel labor at the combined rate at the job site,
 and Kyle's workbook hardcodes a flat 10% that is not a real rate anywhere in the state.
 
 It is the THIRD copy of this control (`polish-intake.js`, `estimate-review.js`), which is why it
@@ -222,12 +222,12 @@ def test_a_city_saves_no_tax_rate_because_the_table_serves_none(county):
 def test_a_missouri_row_says_exempt_rather_than_showing_a_rate(county):
     """And saves `null`, which is an answer -- not a missing value.
 
-    Missouri does not tax remodel labour the way Kansas does. A row showing 6.225% next to the
+    Missouri does not tax remodel labor the way Kansas does. A row showing 6.225% next to the
     word "remodel" would be quoting a sales-tax rate as a remodel rate.
     """
     s = county["rowShapes"]
     assert s["moLabel"] == "Jackson County, MO"
-    assert s["moRate"] == "remodel labour exempt"
+    assert s["moRate"] == "remodel labor exempt"
     assert s["moRemodelSaved"] is None, "Missouri must not carry a remodel rate"
     # The plain sales-tax rate is still saved -- it is the remodel rate that is absent.
     assert s["moTaxRateSaved"] == pytest.approx(0.06225)
@@ -268,7 +268,7 @@ def test_after_a_pick_the_box_shows_the_place_and_not_the_half_typed_search(coun
 
 @needs_node
 def test_the_note_after_a_pick_states_what_the_rate_applies_to(county):
-    """Labour and markups, never materials -- the rule the workbook implements and never said."""
+    """Labor and markups, never materials -- the rule the workbook implements and never said."""
     note = county["pick"]["note"]
     assert "7.975%" in note
     assert "Johnson County, KS" in note

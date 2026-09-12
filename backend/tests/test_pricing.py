@@ -88,7 +88,7 @@ def _full_bid(remodel_rate):
 
 
 def test_full_bid_accurate_county_rate():
-    """Figures moved on 2026-08-26 with Kyle's labour rate: $32.20 -> $33.00/hr for
+    """Figures moved on 2026-08-26 with Kyle's labor rate: $32.20 -> $33.00/hr for
     epoxy/polish/sealed. Every number here is downstream of that hour, so all three shifted
     together — and the sales tax did NOT, which is the check that the rate moved and the tax
     treatment did not."""
