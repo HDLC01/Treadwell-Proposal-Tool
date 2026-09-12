@@ -132,7 +132,7 @@ def ran():
 # ─── the chain, walked with Kyle's own formula text ──────────────────────────
 #
 # (first chain row, total cell) per layout: the SUB-TOTAL COSTS row downwards. A cell at or below
-# that row is EVALUATED from its formula; anything above it — material, labour, escalation, travel
+# that row is EVALUATED from its formula; anything above it — material, labor, escalation, travel
 # — is read from Excel's own cached value, because no markup rate can move it. That bound is what
 # keeps this a chain verifier rather than a re-implementation of the workbook.
 CHAIN = {
@@ -236,7 +236,7 @@ class Chain:
         if cached_from is not None:
             # A workbook openpyxl WROTE carries no cached results at all -- every formula reads
             # None on the data_only pass. So a generated file is evaluated with the chain from
-            # ITS OWN formulas and the above-chain inputs (material, labour, travel) from the
+            # ITS OWN formulas and the above-chain inputs (material, labor, travel) from the
             # template's cached values, which is exactly what the two files share.
             _f, self.v = _books(cached_from)
         self.rows = dict(CHAIN)

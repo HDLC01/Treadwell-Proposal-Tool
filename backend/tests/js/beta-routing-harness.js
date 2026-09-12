@@ -325,7 +325,7 @@ function parseSwitches(html) {
 
 // The reference table the county picker fetches. Six rows, shaped exactly like
 // reference_tax.list_tax_areas(): a `kind`, a combined `rate`, a `remodel_rate` that is null on
-// the Missouri row because Missouri remodel labour is generally exempt, and the `notes` field the
+// the Missouri row because Missouri remodel labor is generally exempt, and the `notes` field the
 // module's own filter searches (which is where the city names live).
 const COUNTY_TABLE = [
   // COPIED FROM THE LIVE TABLE, keys and all, on 2026-09-03. Three shapes, and the differences
@@ -841,7 +841,7 @@ function runHandler(which) {
 //
 // The county moved here from the polish beta's own step 1, which is being retired. It is a job
 // condition rather than a project field because it exists for the Remodel tax toggle directly
-// above it: Kansas taxes commercial remodel labour at the combined rate at the job site, and
+// above it: Kansas taxes commercial remodel labor at the combined rate at the job site, and
 // Kyle's workbook hardcodes a flat 10% that is not a real rate anywhere.
 //
 // EXECUTED, because every way this can break is invisible to a source read:

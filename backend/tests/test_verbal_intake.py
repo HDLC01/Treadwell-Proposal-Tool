@@ -28,7 +28,7 @@ around rather than a substitute for it.
 
 The second thing defended here is narrower and sharper: **nothing in this path may write a
 county.** `county_remodel_rate` is null for "nobody said" and 0 for "we know, and it is nothing"
-(Missouri exempts remodel labour), and those two are indistinguishable once written. A guessed 0
+(Missouri exempts remodel labor), and those two are indistinguishable once written. A guessed 0
 silently underprices the job with nothing on screen to notice. The county picker on the form is
 the only thing allowed to set it, so the four county keys are stripped unconditionally rather than
 merely left out of the prompt.
@@ -252,7 +252,7 @@ def test_a_condition_whose_value_is_not_a_boolean_is_dropped():
 @pytest.mark.parametrize("key", V.BANNED_KEYS)
 def test_no_county_key_survives_whatever_the_model_returns(key):
     """`county_remodel_rate` is null for "nobody said which county" and 0 for "we know, and it is
-    nothing" — Missouri exempts remodel labour. Those two are indistinguishable once written, so a
+    nothing" — Missouri exempts remodel labor. Those two are indistinguishable once written, so a
     guessed 0 underprices the job with nothing on screen to notice.
 
     Enforced HERE rather than trusted to the prompt. A model that returns the key anyway must not

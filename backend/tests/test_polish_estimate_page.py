@@ -679,7 +679,7 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
 
 @needs_node
 def test_the_dropped_v1_keys_are_gone(ran):
-    """system / tooling / materials / added / adds / options / labour are dropped on purpose:
+    """system / tooling / materials / added / adds / options / labor are dropped on purpose:
     assemblies replace all of them, and carrying half of them forward would price the same material
     twice.
 
@@ -837,6 +837,11 @@ def test_the_assembly_datalist_is_filled_from_the_library(ran):
 def test_nothing_on_screen_says_labour_or_crew(ran):
     """Hanz: "All labour should be renamed to 'Labor'." And "Crew" went with it — the column is
     Guys.
+
+    THE BRITISH SPELLING IS THIS TEST'S WHOLE SUBJECT, so neither the name above nor the pattern in
+    the harness's `offenders()` may be swept along by a labour->labor rename. Pointed at "labor"
+    instead, it asserts the page never says the word it is supposed to say in a dozen places, and
+    goes red everywhere at once — which is exactly what happened the first time this rename ran.
 
     SCOPED DELIBERATELY. The word may legitimately appear in code comments quoting the history of
     this rework (polish-bid-core.js documents the v1 `labour` key and why `crew` was a head count),
@@ -1004,7 +1009,7 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     10%".
 
     Kyle's workbook hardcodes 10% at B75, and that figure is not a real rate anywhere. Kansas
-    charges sales tax on commercial remodel LABOUR at the state rate plus the county portion only,
+    charges sales tax on commercial remodel LABOR at the state rate plus the county portion only,
     which is 7.975% in Johnson County. The live estimating tool has looked the real rate up per
     county since 2026-06-02, and the beta now reads the same `county_remodel_rate` key off the
     draft, so a project priced on either screen agrees with the other.
@@ -1073,7 +1078,7 @@ def test_a_county_rate_on_the_draft_does_not_switch_the_remodel_tax_on(ran):
 
 @needs_node
 def test_a_missouri_county_is_charged_nothing_not_the_kansas_fallback(ran):
-    """Missouri taxes remodel LABOUR as exempt, so a Missouri county carries no remodel rate on
+    """Missouri taxes remodel LABOR as exempt, so a Missouri county carries no remodel rate on
     purpose. That absence means "we know, and it is nothing" — not "we don't know".
 
     THE BUG THIS PREVENTS: reading the missing rate as unknown stands the Kansas state rate up and

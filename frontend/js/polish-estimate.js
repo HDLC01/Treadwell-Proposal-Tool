@@ -8,7 +8,7 @@
 // held as long as the beta only re-arranged inputs the worksheet already had.
 //
 // Will's 2026-08-17 pass asked for things the worksheet cannot represent — a takeoff whose rows are
-// ASSEMBLIES out of the Items & Assemblies library, labour lines an estimator can add, and the
+// ASSEMBLIES out of the Items & Assemblies library, labor lines an estimator can add, and the
 // markup chain shown as its own reviewable block. There is no cell to write an assembly into. So
 // the beta now prices itself, and the connection to Kyle's file is kept a different way: every
 // percentage and every step of the chain is transcribed in polish-bid-core.js, and
@@ -176,7 +176,7 @@
     var r = state.remodel_rate_override;
     if (r === null || r === undefined || r === "") r = state.county_remodel_rate;
     if (r !== null && r !== undefined && r !== "") return B.num(r);
-    // A county IS chosen but carries no remodel rate — that is Missouri, where remodel labour is
+    // A county IS chosen but carries no remodel rate — that is Missouri, where remodel labor is
     // generally exempt. Return a definite 0, not null: null would stand the Kansas state rate up
     // and charge a Missouri job a Kansas tax.
     if (state.county) return 0;
