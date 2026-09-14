@@ -184,7 +184,7 @@ let VIEW = "board";
 let ALL = ROWS;
 
 const LIFT = ["boardPool", "groupByReason", "kanbanHtml", "tableHtml", "cardActions",
-              "recipientLine", "chipsHtml", "cardRow"];
+              "recipientLine", "chipsHtml", "cardRow", "icon"];
 const bodies = [];
 const absent = [];
 for (const n of LIFT) {

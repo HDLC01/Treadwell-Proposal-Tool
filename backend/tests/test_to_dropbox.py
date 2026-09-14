@@ -212,7 +212,7 @@ def test_dropbox_events_become_bell_notifications(monkeypatch):
     items = n._dropbox_notifications()
     assert len(items) == 1                       # only the to_dropbox event
     it = items[0]
-    assert it["kind"] == "to_dropbox" and it["icon"] == "📁"
+    assert it["kind"] == "to_dropbox" and it["icon"] == "folder"
     assert it["title"] == "Acme Plant"
     assert "Gyp Estimates" in it["body"]
     assert it["link"] == "https://www.dropbox.com/xyz"   # opens the Dropbox folder

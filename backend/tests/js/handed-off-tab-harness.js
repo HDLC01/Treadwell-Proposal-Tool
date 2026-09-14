@@ -135,7 +135,7 @@ const TW = {
 };
 
 const LIFT = ["boardPool", "groupByReason", "lostCount", "syncTabs", "kanbanHtml", "tableHtml",
-              "cardActions", "recipientLine", "chipsHtml", "wonControlHtml"];
+              "cardActions", "recipientLine", "chipsHtml", "wonControlHtml", "icon"];
 
 const make = new Function(
   ...NAMES, "C", "TW", "getDollar", "sessionStorage",

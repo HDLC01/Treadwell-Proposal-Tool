@@ -497,7 +497,7 @@ const LIFTED = [
   // because a range is character offsets and offsets mean nothing once the paragraph underneath
   // has been re-filled — which, since the ribbon holds its target past blur, is something
   // refreshDocumentFills does to it routinely.
-  fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
+  fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"), fn("icon"),
   fn("fmtRangeSource"), fn("selectionLeftBlock"), fn("fmtRangeFor"),
   // applyFormat gained two guards in review: runsEqual (a press that changes nothing must not mark
   // the paragraph edited and ship an override) and selectionInSurface (do not re-place the document

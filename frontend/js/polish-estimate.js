@@ -27,6 +27,18 @@
 (function () {
   "use strict";
 
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
+
   var B = window.TWPolishBid;      // the markup chain, pinned to Kyle's Polish tab
   var L = window.TWLib;            // priceAssembly — the same maths the library page shows
   var S = window.TWPolishSandbox;  // never edit a live bid
@@ -342,7 +354,8 @@
       var pip = document.createElement("span");
       var status = st[s.key] || "";
       pip.className = "pip" + (i === at ? "" : (status ? " " + status : ""));
-      pip.textContent = (status === "ok" && i !== at) ? "✓" : String(i + 1);
+      if (status === "ok" && i !== at) pip.innerHTML = icon("check", 12);
+      else pip.textContent = String(i + 1);
       b.appendChild(pip);
       b.appendChild(document.createTextNode(s.label));
       b.addEventListener("click", function () { go(i); });
@@ -407,7 +420,7 @@
         '<span class="tag">ROW ' + (i + 1) + '</span>' +
         '<span class="tk-sub" data-measure-for="' + i + '">' + esc(measureText(r)) + '</span>' +
         (M.takeoff.length > 1
-          ? '<button class="x" data-del-row="' + i + '" title="Remove this row">✕</button>'
+          ? '<button class="x" data-del-row="' + i + '" title="Remove this row">' + icon("x", 12) + '</button>'
           : '') +
         '</div><div class="tk-g">' +
 
@@ -438,7 +451,8 @@
         '</div>' + warn + '</div>';
     }).join("");
 
-    html += '<button class="addbtn" data-add-row="1">＋ Add another assembly</button>';
+    html += '<button class="addbtn" data-add-row="1">' + icon("plus", 13)
+      + ' Add another assembly</button>';
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
       esc(B.fmtSf(B.takeoffSf(M.takeoff))) + ' SF</b>. LF rows are priced like any other but do ' +
@@ -486,7 +500,7 @@
       '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</span>' +
       (M.labor.length > 1
-        ? '<button class="x" data-del-lab="' + i + '" title="Remove this line">✕</button>'
+        ? '<button class="x" data-del-lab="' + i + '" title="Remove this line">' + icon("x", 12) + '</button>'
         : '') +
       '</div><div class="tk-g lab-g">' +
 
@@ -526,7 +540,8 @@
   function laborPanel() {
     var html = M.labor.map(laborCard).join("");
 
-    html += '<button class="addbtn" data-add-lab="1">＋ Add a labor line</button>';
+    html += '<button class="addbtn" data-add-lab="1">' + icon("plus", 13)
+      + ' Add a labor line</button>';
     html += '<p class="cap">Labor total <b data-labor-total>' +
       esc(moneyAuto(B.laborTotal(M.labor))) + '</b>.</p>';
 

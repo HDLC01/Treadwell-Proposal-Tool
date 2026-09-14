@@ -677,9 +677,9 @@ button {
   top: 0;
   right: 1px;
   z-index: 2;                  /* above the ::after overlay */
-  font-size: 10px;
-  line-height: 1;
+  line-height: 0;
   padding: 1px;
+  display: flex;
   cursor: pointer;
   opacity: 0.45;
   user-select: none;

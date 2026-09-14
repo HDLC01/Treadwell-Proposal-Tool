@@ -4,6 +4,18 @@
 // "Identifier 'state' has already been declared", so this file never ran and
 // the Dropbox section stayed hidden.
 (function () {
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   // Local to this IIFE on purpose — done.js is a separate scope and may own its own $.
   const $ = (id) => document.getElementById(id);
   const state = TW.getState();
@@ -100,7 +112,8 @@
       + esc(name ? "Creates " + name : "Creates a new project folder") + '">'
       + '<input type="radio" name="dbx-folder" class="dbx-radio" value="" data-new="1"'
       + (st.choice === "" ? " checked" : "") + '>'
-      + '<span class="dbx-folder-text"><span class="dbx-folder-name">＋ Create a new folder</span>'
+      + '<span class="dbx-folder-text"><span class="dbx-folder-name">' + icon("plus", 13)
+        + ' Create a new folder</span>'
       + (name ? '<span class="dbx-folder-parent">named ' + esc(name) + '</span>' : "")
       + '</span></label>';
   }
@@ -313,7 +326,7 @@
       const link = (url, label) => url
         ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + label + '</a>' : "";
       const links = [
-        link(j.folder_url, "📁 Open the Dropbox folder"),
+        link(j.folder_url, icon("folder", 14) + " Open the Dropbox folder"),
         link(j.xlsx_url, "Estimate (.xlsx)"),
         link(j.docx_url, "Proposal (.docx)"),
         link(j.pdf_url, "Proposal (PDF)"),
@@ -328,7 +341,7 @@
           + 'The existing file was not touched.</div>'
         : "";
       result.style.display = "";
-      result.innerHTML = '<div class="ok">✓ Filed to ' + esc(j.folder_path || "the project folder")
+      result.innerHTML = '<div class="ok">' + icon("check", 14) + ' Filed to ' + esc(j.folder_path || "the project folder")
         + (j.existing ? " (the folder you picked)" : "") + '</div>' + clash
         + '<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">' + links.join("") + '</div>';
     }
@@ -379,7 +392,7 @@
       try {
         const body = { draft_id: draftId, destination: dest.value, folder_owner: ownerValue() };
         // Sent even when it is EMPTY. "" is the estimator deliberately choosing the
-        // "＋ Create a new folder" row, and the server has a fallback that re-files into
+        // "Create a new folder" row, and the server has a fallback that re-files into
         // whatever folder this project went to last time whenever folder_path is absent —
         // so omitting it here would quietly ignore that choice and report success as
         // "(the folder you picked)". It also un-sticks the case where the recorded folder

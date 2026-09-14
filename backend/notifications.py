@@ -200,7 +200,7 @@ def _diff_pipeline(prev: Dict[str, Any], projects: List[Dict[str, Any]],
         name = p.get("name") or "A bid"
         if old is None:                                     # appeared since last snapshot
             changes.append({
-                "id": f"pl:new:{pid}:{now_iso}", "kind": "pipeline_new", "icon": "✨",
+                "id": f"pl:new:{pid}:{now_iso}", "kind": "pipeline_new", "icon": "star",
                 "severity": "info", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/crm.html",
                 "title": name,
                 "body": f"New bid in the pipeline · {p.get('stage_name') or 'Unstaged'}",
@@ -208,14 +208,14 @@ def _diff_pipeline(prev: Dict[str, Any], projects: List[Dict[str, Any]],
             continue
         if bool(p.get("awarded")) and not old.get("awarded"):
             changes.append({
-                "id": f"pl:award:{pid}:{now_iso}", "kind": "pipeline_awarded", "icon": "🏆",
+                "id": f"pl:award:{pid}:{now_iso}", "kind": "pipeline_awarded", "icon": "check-circle",
                 "severity": "high", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/crm.html",
                 "title": name, "body": "Bid awarded 🎉",
             })
         elif p.get("stage_id") != old.get("stage_id"):
             frm = old.get("stage_name")
             changes.append({
-                "id": f"pl:stage:{pid}:{now_iso}", "kind": "pipeline_stage", "icon": "➡️",
+                "id": f"pl:stage:{pid}:{now_iso}", "kind": "pipeline_stage", "icon": "arrow-right",
                 "severity": "info", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/crm.html",
                 "title": name,
                 "body": (f"Moved to {p.get('stage_name') or 'a new stage'}"
@@ -284,7 +284,7 @@ def _lead_events(messages: List[Dict[str, Any]], now_iso: str) -> List[Dict[str,
         proj = m.get("project") or {}
         company = ((m.get("company") or {}).get("name") or "").strip()
         out.append({
-            "id": f"lead:new:{m.get('id')}", "kind": "lead_new", "icon": "📥",
+            "id": f"lead:new:{m.get('id')}", "kind": "lead_new", "icon": "inbox",
             "severity": "info", "sort": _TIER_ACTIVITY, "ts": now_iso, "link": "/leads.html",
             "title": str(proj.get("name") or m.get("subject") or "New lead"),
             "body": "New lead" + (f" · {company}" if company else ""),
@@ -340,7 +340,7 @@ def add_lead_estimate(draft_id: str, title: str, body: str = "") -> None:
         # ACTIVITY, not CRM_STEP: this is the lead inbox's own follow-through, and it rides in
         # `lead_events` with the rest of the inbox. A crm_step is something a CUSTOMER did to a
         # proposal that exists; drafting an estimate is us reacting to a Basisboard invite.
-        "id": f"lead:est:{did}", "kind": "lead_estimate", "icon": "📐",
+        "id": f"lead:est:{did}", "kind": "lead_estimate", "icon": "calculator",
         "severity": "high", "sort": _TIER_ACTIVITY, "ts": _now_iso(),
         "link": f"/?d={did}&edit=1",
         "title": title or "A lead", "body": body or "Estimate drafted from a lead",
@@ -399,9 +399,9 @@ def _refresh_portal_messages(state: Dict[str, Any]) -> None:
 # toast filter in auth.js keys on it, and a deposit absolutely deserves a toast.
 # msg_type -> (icon, empty-body fallback)
 _PORTAL_MSG_TYPES = {
-    "deposit_submitted": ("💵", "Submitted deposit details"),
+    "deposit_submitted": ("cash", "Submitted deposit details"),
 }
-_PORTAL_MSG_DEFAULT = ("💬", "New message")
+_PORTAL_MSG_DEFAULT = ("message", "New message")
 
 
 def _portal_message_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -498,7 +498,7 @@ def _diff_crm(prev: Dict[str, Any], rows: List[Dict[str, Any]],
         old = prev.get(pid)
         if old is None:
             out.append({
-                "id": f"crm:sent:{pid}:{now_iso}", "kind": "crm_step", "icon": "📤",
+                "id": f"crm:sent:{pid}:{now_iso}", "kind": "crm_step", "icon": "arrow-right",
                 "severity": "info", "sort": _TIER_CRM_STEP, "ts": now_iso, "link": link,
                 "title": name, "body": "Proposal sent to the customer",
             })
@@ -627,7 +627,7 @@ def _deadline_notifications(projects: List[Dict[str, Any]], today) -> List[Dict[
         dl = _parse_date(p.get("deadline"))
         if dl is None:
             out.append({
-                "id": f"dl:none:{pid}", "kind": "deadline_none", "icon": "⚪",
+                "id": f"dl:none:{pid}", "kind": "deadline_none", "icon": "clock",
                 "severity": "low", "sort": _TIER_NO_DEADLINE,
                 "ts": p.get("updated_at") or p.get("created_at") or _EPOCH,
                 "title": name, "body": "No deadline set", "link": link,
@@ -638,19 +638,19 @@ def _deadline_notifications(projects: List[Dict[str, Any]], today) -> List[Dict[
         if days < 0:
             n = abs(days)
             out.append({
-                "id": f"dl:overdue:{pid}", "kind": "deadline_overdue", "icon": "🔴",
+                "id": f"dl:overdue:{pid}", "kind": "deadline_overdue", "icon": "clock",
                 "severity": "high", "sort": _TIER_OVERDUE, "ts": _date_iso(dl), "title": name,
                 "body": f"Overdue by {n} day{'s' if n != 1 else ''} ({dl_str})", "link": link,
             })
         elif days == 0:
             out.append({
-                "id": f"dl:today:{pid}", "kind": "deadline_today", "icon": "🟠",
+                "id": f"dl:today:{pid}", "kind": "deadline_today", "icon": "clock",
                 "severity": "high", "sort": _TIER_DUE_TODAY, "ts": _date_iso(dl), "title": name,
                 "body": f"Due today ({dl_str})", "link": link,
             })
         elif days <= 7:
             out.append({
-                "id": f"dl:soon:{pid}", "kind": "deadline_soon", "icon": "🟡",
+                "id": f"dl:soon:{pid}", "kind": "deadline_soon", "icon": "clock",
                 "severity": "medium", "sort": _TIER_DUE_SOON, "ts": _date_iso(dl - timedelta(days=7)),
                 "title": name,
                 "body": f"Due in {days} day{'s' if days != 1 else ''} ({dl_str})", "link": link,
@@ -676,7 +676,7 @@ def _dropbox_notifications() -> List[Dict[str, Any]]:
         label = d.get("label")
         out.append({
             "id": f"dbx:{e.get('id')}",
-            "kind": "to_dropbox", "icon": "📁", "severity": "info", "sort": _TIER_ACTIVITY,
+            "kind": "to_dropbox", "icon": "folder", "severity": "info", "sort": _TIER_ACTIVITY,
             "ts": e.get("created_at") or _EPOCH,
             "title": proj,
             "body": "Filed to Dropbox" + (f" · {label}" if label else ""),

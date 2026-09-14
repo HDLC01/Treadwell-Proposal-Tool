@@ -20,6 +20,18 @@
 // of those belongs to the Proposals Database, and a second writer for `is_test` or `archived` is
 // how two pages start disagreeing about the same project. This is a reader.
 (function () {
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   // Dates render in Treadwell's business timezone (Central), not the viewer's, so the row date
   // and the month bucket agree for every user. The dev box clock is ~13 hours ahead of Central.
   const fmtDate = (iso) => TW.fmtBizDate(iso);
@@ -177,7 +189,7 @@
       return `<th class="${cls} th-sort${on ? " is-sorted" : ""}" aria-sort="${
         on ? (SORTDIR === "asc" ? "ascending" : "descending") : "none"}">` +
         `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${
-          on ? (SORTDIR === "asc" ? " ↑" : " ↓") : ""}</button></th>`;
+          on ? (" " + icon(SORTDIR === "asc" ? "arrow-up" : "arrow-down", 12)) : ""}</button></th>`;
     }).join("");
 
     const body = rows.map((p) => {
@@ -259,7 +271,7 @@
     if (q.value !== SEARCH) q.value = SEARCH;
     document.getElementById("sort").value = SORTFIELD;
     const dir = document.getElementById("dir");
-    dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+    dir.innerHTML = SORTDIR === "asc" ? icon("arrow-up", 13) + " Asc" : icon("arrow-down", 13) + " Desc";
     dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
     document.getElementById("clear").hidden = !(SEARCH.trim() || MONTH);
   }

@@ -6,6 +6,11 @@
     let NAV_POLICY = null;
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
+    // One drawn glyph out of js/icons.js, which loads before this file. Never a typed character:
+    // an emoji or a dingbat is drawn by whatever font the machine has, cannot take the row's
+    // colour, and ignores every size token on the page. Guarded so a missing icons.js costs the
+    // page its pictures rather than its render.
+    function icon(name, size){ return typeof TWIcon === "function" ? TWIcon(name, size) : ""; }
     async function api(path, opts){ const r = await fetch(path, Object.assign({ headers: TW.authHeaders() }, opts||{})); return r.json().catch(()=>({ok:false,error:"bad response", status:r.status})); }
     // api() throws away the status, which is fine for the routes that answer {ok:false,error}. The
     // tab-policy route refuses with FastAPI's {detail:…} and a 400/403/500, and the reason it gives
@@ -181,7 +186,8 @@
         if (unknown(r)) return `<td class="rv-cell" data-role="${esc(role)}"` +
           `><span class="rv-no" title="${esc(NOT_KNOWN_WHY)}">?</span></td>`;
         const on = !!r.roles[role];
-        const glyph = on ? '<span class="rv-yes">✓</span>' : '<span class="rv-no">—</span>';
+        const glyph = on ? '<span class="rv-yes">' + icon("check", 15) + '</span>'
+                        : '<span class="rv-no">—</span>';
         const cap = caps[r.href];
         if (!editable) return `<td class="rv-cell" data-role="${esc(role)}">${glyph}</td>`;
         // Three reasons a switch cannot be touched, each with its own explanation on hover:
@@ -212,7 +218,7 @@
       const body = rows.map((r, i) => `<tr data-href="${esc(r.href)}" data-label="${esc(r.label)}"
           data-section="${esc(r.section)}">
           <td class="rv-sec">${i && rows[i-1].section === r.section ? "" : esc(r.section)}</td>
-          <td><span class="rv-ico">${esc(r.glyph)}</span>${esc(r.label)}${
+          <td><span class="rv-ico">${icon(r.glyph, 16)}</span>${esc(r.label)}${
             r.tag?`<span class="badge b-user" style="margin-left:6px">${esc(r.tag)}</span>`:""}
             <span class="rv-href">${esc(r.href)}</span>${scopeChip(caps[r.href])}${
               r.noSidebar?`<span class="badge b-user" style="margin-left:8px"
@@ -374,7 +380,7 @@
           <td>${money(p.total)}</td>
           <td>${p.work_type?`<span class="badge b-user">${esc(p.work_type)}</span>`:"—"}</td>
           <td>${fmtDate(p.updated_at)}</td>
-          <td style="text-align:right"><button class="act danger" data-act="delproj">🗑 Trash</button></td>
+          <td style="text-align:right"><button class="act danger" data-act="delproj">${icon("trash", 14)} Trash</button></td>
         </tr>`).join("") || '<tr><td colspan="6" style="color:#5c403f;padding:24px">No projects.</td></tr>';
       document.querySelectorAll("#ptbody [data-act='delproj']").forEach(el =>
         el.addEventListener("click", () => {
@@ -384,7 +390,7 @@
     }
     async function doDeleteProject(id, name){
       const ok = await TW.confirmDanger({ title:"Move to Trash?", before:"Move ", name:(name||id), after:" to Trash?",
-        detail:"It leaves the shared Proposals Database but stays restorable from the Trash page.", confirmText:"Move to Trash", tone:"warn", icon:"🗑" });
+        detail:"It leaves the shared Proposals Database but stays restorable from the Trash page.", confirmText:"Move to Trash", tone:"warn", icon:"trash" });
       if (!ok) return;
       const r = await api(`/api/admin/projects/${encodeURIComponent(id)}`, { method:"DELETE" });
       if (!r || r.ok===false){ alert((r&&r.error)||"Move to Trash failed"); }
@@ -414,7 +420,7 @@
           <td><button class="est-tog ${u.is_estimator?"on":""}" data-act="estimator"
                       aria-pressed="${u.is_estimator?"true":"false"}"
                       title="${u.is_estimator?"Remove from the estimator roster":"Add to the estimator roster"}"
-                >${u.is_estimator?"✓ Estimator":"Add"}</button></td>
+                >${u.is_estimator?(icon("check", 13) + " Estimator"):"Add"}</button></td>
           <td>${statusBadge(u.status)}</td>
           <td>${fmtDate(u.created_at)}</td>
           <td>${fmtDate(u.updated_at)}</td>

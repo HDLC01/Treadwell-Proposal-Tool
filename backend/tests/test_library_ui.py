@@ -1109,19 +1109,33 @@ def test_the_dialog_counts_how_many_of_itself_are_on_screen(ran):
 
 @needs_node
 def test_the_save_question_is_not_drawn_with_a_wastebasket(ran):
-    """The icon slot is filled with textContent, so an SVG could not go through `icon` — and the
-    warn tone's own default glyph is a wastebasket, over a dialog that says "Save this change?".
+    """The warn tone's own default glyph was a wastebasket, over a dialog that says "Save this
+    change?", and `iconSvg` was added so this one caller could pass a drawn glyph instead.
 
-    `iconSvg` takes markup this page writes itself. It is never a project name, a vendor, or
-    anything else a customer can type: the textContent path stays the only route for those."""
+    REWRITTEN 2026-09-15 with the emoji sweep. `opts.icon` is a js/icons.js NAME now, not a typed
+    character, so the slot is filled with innerHTML — and the safety property that made it
+    textContent in the first place has to be re-proved rather than assumed away. It holds for a
+    better reason than before: the name is LOOKED UP in icons.js's table and never concatenated
+    into the output, so a caller's string cannot become markup even when it is shaped like an
+    injection. That is what the hostile case below is for; this dialog carries customer-typed
+    project and vendor names in its other slots, and those still go through textContent.
+
+    `iconSvg` is unchanged and still takes literal markup this page writes itself."""
     g = ran["confirmIcon"]
     assert g["svgReachesTheSlot"], "the SVG did not reach the icon slot"
     assert g["svgNotWrittenAsText"], "the markup was also written as text and will render literally"
-    assert g["warnDefaultUnchanged"], "a warn caller that passed no icon lost its glyph"
-    assert g["dangerDefaultUnchanged"], "a danger caller that passed no icon lost its glyph"
-    assert g["plainIconStillText"], "a caller passing `icon` no longer gets it as text"
-    assert g["plainIconNotInjected"], (
-        "`icon` is now injected as markup — that slot carries customer-typed names")
+    assert g["warnDefaultIsDrawn"], (
+        "the warn tone's default icon is not a drawn <svg> — a typed glyph is rendered by whatever "
+        "font the machine has and cannot take the dialog's tone colour")
+    assert g["dangerDefaultIsDrawn"], "the danger tone's default icon is not a drawn <svg>"
+    assert g["namedIconIsThatGlyph"], (
+        "passing icon=\"pencil\" did not draw icons.js's pencil")
+    assert g["unknownIconDrawsAnEmptyBox"], (
+        "an icon name that is not in the table did not draw an empty box — a renderer half-way "
+        "through a row must not throw over a typo")
+    assert g["hostileIconNeverReachesTheDom"], (
+        "a caller's `icon` string reached the DOM — that slot sits in a dialog that renders "
+        "customer-typed names")
 
 
 # ══ the name a new row is created under ══════════════════════════════════════

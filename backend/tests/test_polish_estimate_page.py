@@ -1036,8 +1036,10 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
     assert "hyperformula" not in markup.lower(), "the beta calculator loads a formula engine again"
     assert "xl-core.js" not in markup, "the beta calculator loads the workbook helpers again"
     srcs = re.findall(r'<script[^>]*src="([^"]+)"', markup)
+    # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
+    # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/auth.js", "/shared.js",
+                    "/js/icons.js", "/auth.js", "/shared.js",
                     "/js/library-core.js", "/js/polish-bid-core.js", "/js/polish-sandbox.js",
                     "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)

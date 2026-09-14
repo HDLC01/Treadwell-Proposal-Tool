@@ -3,6 +3,18 @@
 // server, never in the browser. Mirrors the old Treadwell CRM kanban: columns =
 // stages, cards = projects.
 (function () {
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   function money(n) { return (typeof n === "number") ? "$" + n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : ""; }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
@@ -38,7 +50,7 @@
     // Customer Portal CRM, where we only know him by kyle.loseke@wetreadwell.com.
     const est = (p.estimators || []).filter(Boolean).map((n) =>
       window.TWCrm.avatarHtml(n) + esc(n)).join(" ");
-    const won = p.awarded ? '<span class="deal-won" title="Awarded">✓</span>' : "";
+    const won = p.awarded ? '<span class="deal-won" title="Awarded">' + icon("check", 13) + '</span>' : "";
     return '<div class="deal">' +
       '<p class="deal-title">' + esc(p.name) + won + '</p>' +
       (p.location ? '<p class="deal-sub">' + esc(p.location) + '</p>' : '') +

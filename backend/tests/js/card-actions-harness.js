@@ -255,6 +255,7 @@ const body = `"use strict";
   ${fn("cardActions")}
   ${fn("kanbanHtml")}
   ${fn("tableHtml")}
+  ${fn("icon")}
   ${fn("cardRowOf")}
   ${fn("markCardWon")}
   ${fn("markCardHandoff")}
