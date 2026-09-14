@@ -633,6 +633,7 @@
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
     gpPct: gpPct, hardBidPct: hardBidPct,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
+    filledIn: filledIn,
     takeoffSf: takeoffSf,
     markupChain: markupChain,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers
