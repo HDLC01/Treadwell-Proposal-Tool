@@ -1,4 +1,16 @@
 // Externalized from projects.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+    /** One drawn glyph out of js/icons.js, which every page loads before this file.
+     *
+     *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+     *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+     *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+     *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+     *  rather than its render.
+     */
+    function icon(name, size) {
+      return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+    }
     document.getElementById("new-project").addEventListener("click", (e) => {
       e.preventDefault();
       // Fresh start: clear LOCAL state only (server copies are kept) so intake
@@ -300,7 +312,7 @@
      *  never sent and so have no CRM card at all. */
     const estBtn = (p) => `<button type="button" class="est-btn" title="${
       isAssigned(p) ? "Reassign this project" : "Assign an estimator"}"` +
-      ` aria-label="Assign an estimator to ${esc(p.project_name||"this project")}">✎</button>`;
+      ` aria-label="Assign an estimator to ${esc(p.project_name||"this project")}">${icon("pencil", 13)}</button>`;
 
     /** The active roster, fetched once per page. Assigning is occasional and the list
      *  barely changes, so re-fetching it per dialog would be waste. A failed fetch
@@ -433,7 +445,7 @@
                  : "Treated as a test project because of its name. Click to say it is a real bid.")
         : "Not a customer bid? Click to file it under Test and take it out of Active.";
       return `<button type="button" class="test-btn${t ? " is-test" : ""}" data-test="${t ? 1 : 0}"` +
-             ` title="${why}">${t ? "✓ Test" : "Test?"}</button>`;
+             ` title="${why}">${t ? (icon("check", 13) + " Test") : "Test?"}</button>`;
     }
 
     function cardsHtml(shown) {
@@ -456,11 +468,11 @@
             <span>updated ${fmtDate(p.updated_at)}</span>
           </div>
           <div class="card-foot">
-            <button type="button" class="trash-btn" title="Move to Trash">🗑 Trash</button>
+            <button type="button" class="trash-btn" title="Move to Trash">${icon("trash", 13)} Trash</button>
             <div class="foot-actions">
               ${testBtn(p)}
-              <button type="button" class="files-btn" title="${p.sent_revision>0?"Files, sent versions, and re-send to the customer":"Generate + download the files (no need to re-walk intake)"}">📄 Files</button>
-              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">📋 Info sheet</button>
+              <button type="button" class="files-btn" title="${p.sent_revision>0?"Files, sent versions, and re-send to the customer":"Generate + download the files (no need to re-walk intake)"}">${icon("file", 13)} Files</button>
+              <button type="button" class="info-btn" title="Project Info Sheet — the hand-off to accounting and ops">${icon("clipboard", 13)} Info sheet</button>
               <!-- Already sent: say "Revise", because opening and changing it is
                    exactly what produces the next revision. Same destination — the
                    label is what was unclear, not the route. -->
@@ -492,7 +504,7 @@
         const on = SORTFIELD === c.sort;
         return `<th class="${cls} th-sort${on?" is-sorted":""}" aria-sort="${
           on ? (SORTDIR==="asc"?"ascending":"descending") : "none"}">` +
-          `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${on?(SORTDIR==="asc"?" ↑":" ↓"):""}</button></th>`;
+          `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${on?(" " + icon(SORTDIR==="asc"?"arrow-up":"arrow-down", 12)):""}</button></th>`;
       }).join("");
       const rows = shown.map(p => {
         const email = estimatorOf(p);
@@ -512,9 +524,9 @@
                     data-archived="${p.archived?1:0}"
                     title="Click to mark ${p.archived?"active":"inactive"}">${p.archived?"Inactive":"Active"}</button>
             ${testBtn(p)}
-            <button type="button" class="files-btn" title="Files + re-send">📄</button>
-            <button type="button" class="info-btn" title="Project Info Sheet">📋</button>
-            <button type="button" class="trash-btn" title="Move to Trash">🗑</button>
+            <button type="button" class="files-btn" title="Files + re-send">${icon("file", 14)}</button>
+            <button type="button" class="info-btn" title="Project Info Sheet">${icon("clipboard", 14)}</button>
+            <button type="button" class="trash-btn" title="Move to Trash">${icon("trash", 14)}</button>
           </td>
         </tr>`;
       }).join("");
@@ -667,14 +679,14 @@
       const view = document.getElementById("view");
       if (sort) sort.value = SORTFIELD;
       if (dir) {
-        dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+        dir.innerHTML = SORTDIR === "asc" ? icon("arrow-up", 13) + " Asc" : icon("arrow-down", 13) + " Desc";
         dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
         dir.title = SORTDIR === "asc"
           ? "Ascending (A→Z · oldest · soonest · low→high) — click for descending"
           : "Descending (Z→A · newest · latest · high→low) — click for ascending";
       }
       if (view) {
-        view.textContent = VIEW === "table" ? "▦ Cards" : "☰ Table";
+        view.innerHTML = VIEW === "table" ? icon("cards", 14) + " Cards" : icon("table", 14) + " Table";
         view.title = VIEW === "table" ? "Back to project cards" : "Show every project as one sortable list";
         view.setAttribute("aria-pressed", VIEW === "table" ? "true" : "false");
       }

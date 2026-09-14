@@ -23,6 +23,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");            // js/icons.js is evaluated, not stubbed — see dialogChecks()
 
 const ROOT = path.resolve(process.argv[2]);
 
@@ -2468,8 +2469,16 @@ async function dialogChecks() {
     return m[0];
   }
 
+  // TWIcon is the REAL js/icons.js, evaluated once here, because the dialog's glyph now comes out
+  // of that table rather than being a character typed into shared.js. Stubbing it would make
+  // "the icon slot cannot be filled with caller markup" a claim about the stub.
+  const iconsCtx = { window: {} };
+  vm.createContext(iconsCtx);
+  vm.runInContext(read(path.join(ROOT, "js", "icons.js")), iconsCtx, { filename: "icons.js" });
+  const TWIcon = iconsCtx.window.TWIcon;
+
   const runDialog = new Function("document", "requestAnimationFrame", "setTimeout",
-    "injectModalCss", "opts", `
+    "injectModalCss", "TWIcon", "opts", `
     "use strict";
     // The dialog keeps a count of how many of itself are on screen, for callers that must not put
     // a second question on top of one being asked. LIFTED, not restated: it lives outside
@@ -2477,6 +2486,9 @@ async function dialogChecks() {
     // executor — which surfaces as a rejected promise and an empty overlay rather than as an error.
     ${sharedGrab(/^  let openModals = 0;$/m, "the openModals counter")}
     ${sharedGrab(/^  function modalOpen\(\) \{[^\n]*$/m, "modalOpen()")}
+    // Lifted for the same reason: confirmDanger calls it, so a missing icon() is a ReferenceError
+    // inside the promise executor rather than a failing assertion.
+    ${sharedGrab(/^  function icon\(name, size\) \{[\s\S]*?^  \}$/m, "icon()")}
     ${confirmSrc}
     // A FACTORY, not one call, so a scenario can put two dialogs up in ONE scope and watch the
     // counter. That is the whole reason it is a count and not a boolean: with a flag, the first of
@@ -2494,7 +2506,7 @@ async function dialogChecks() {
     const frames = [];
     const later = [];
     const built = runDialog(doc, (fn2) => frames.push(fn2),
-      (fn2) => { later.push(fn2); return 1; }, () => {}, opts);
+      (fn2) => { later.push(fn2); return 1; }, () => {}, TWIcon, opts);
     const promise = built.first;
     frames.forEach((f) => f());                     // the rAF the real helper focuses inside
     // NO SILENT FALLBACK. An empty body means the helper threw inside its own promise executor —
@@ -2608,25 +2620,39 @@ async function dialogChecks() {
     };
   }
 
-  // THE ICON. The slot is filled with textContent, so an SVG cannot go through `icon` — and the
-  // warn tone's own default is a WASTEBASKET, which is the wrong glyph over "Save this change?".
-  // `iconSvg` is markup this page writes itself (never a project name), and every caller that
-  // does not pass it keeps the exact glyph it draws today.
+  // THE ICON. Until 2026-09-15 the slot was filled with textContent and `icon` was a typed
+  // character — the warn tone defaulting to a WASTEBASKET, which is the wrong picture over "Save
+  // this change?". `icon` is a js/icons.js NAME now, so the three things worth proving changed
+  // with it: every dialog draws an <svg> rather than an emoji, a NAME reaches the right glyph, and
+  // a caller's string still cannot become markup — because it is looked up in a table and never
+  // concatenated into the output. `iconSvg` is unchanged and still takes literal markup.
   const svgAsk = askWith({ tone: "warn", title: "Save this change?", name: "Densifier",
                            focus: "container", dismiss: "explicit",
                            iconSvg: '<svg class="ic"><path d="M1 1"></path></svg>' });
   const warnDefault = askWith({ tone: "warn", title: "Remove this vendor?", name: "Sika" });
-  const glyphAsk = askWith({ tone: "warn", title: "x", name: "y", icon: "✎" });
+  const namedAsk = askWith({ tone: "warn", title: "x", name: "y", icon: "pencil" });
+  // A name nothing will ever match, shaped like an injection attempt. The slot carries
+  // customer-typed project and vendor names elsewhere in this dialog, so "a caller's icon string
+  // cannot reach the DOM" has to hold for a hostile one, not just an unknown one.
+  const HOSTILE = '"><img src=x onerror=alert(1)>';
+  const hostileAsk = askWith({ tone: "warn", title: "x", name: "y", icon: HOSTILE });
+  const drawn = (a) => (a.icon() || {}).innerHTML || "";
+  const EMOJI = /[\u{1F000}-\u{1FAFF}←-➿️]/u;
   out.confirmIcon = {
-    svgReachesTheSlot: /<svg class="ic">/.test((svgAsk.icon() || {}).innerHTML || ""),
+    svgReachesTheSlot: /<svg class="ic">/.test(drawn(svgAsk)),
     // …and it is not ALSO written as text, which would draw the markup as a literal string.
     svgNotWrittenAsText: !/svg/.test((svgAsk.icon() || {}).textContent || ""),
-    // UNCHANGED for everybody else: the warn default is still the wastebasket glyph and a caller
-    // passing `icon` still gets it as text.
-    warnDefaultUnchanged: (warnDefault.icon() || {}).textContent === "\u{1F5D1}",
-    dangerDefaultUnchanged: (plainAsk.icon() || {}).textContent === "⚠️",
-    plainIconStillText: (glyphAsk.icon() || {}).textContent === "✎",
-    plainIconNotInjected: ((glyphAsk.icon() || {}).innerHTML || "") === "",
+    // Both tone defaults are DRAWN, and neither is a typed glyph any more.
+    warnDefaultIsDrawn: /^<svg /.test(drawn(warnDefault)) && !EMOJI.test(drawn(warnDefault)),
+    dangerDefaultIsDrawn: /^<svg /.test(drawn(plainAsk)) && !EMOJI.test(drawn(plainAsk)),
+    // The name picks the right glyph: icons.js's own pencil, character for character.
+    namedIconIsThatGlyph: drawn(namedAsk) === TWIcon("pencil", 26),
+    // An unknown name draws an EMPTY box of the right size rather than throwing or guessing…
+    unknownIconDrawsAnEmptyBox: /^<svg [^>]*><\/svg>$/.test(drawn(hostileAsk)),
+    // …and no fragment of what the caller passed appears anywhere in the slot.
+    hostileIconNeverReachesTheDom:
+      drawn(hostileAsk).indexOf("img") === -1 && drawn(hostileAsk).indexOf("onerror") === -1
+      && ((hostileAsk.icon() || {}).textContent || "").indexOf("img") === -1,
   };
 }
 

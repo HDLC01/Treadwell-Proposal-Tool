@@ -27,6 +27,9 @@ const ROOT = path.resolve(process.argv[2]);
 // Line endings normalised on read: git hands these out with CRLF on a Windows checkout.
 const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const AUTH_SRC = read(path.join(ROOT, "auth.js"));
+// The rail draws inline SVG from js/icons.js, which every page loads immediately before auth.js.
+// Evaluated into each context below so the sidebar and the matrix render their real glyphs.
+const ICONS_SRC = read(path.join(ROOT, "js", "icons.js"));
 const ADMIN_SRC = read(path.join(ROOT, "js", "admin.js"));
 
 // ── as much of a browser as auth.js touches ──────────────────────────────────
@@ -70,6 +73,7 @@ function browser(pathname) {
 function loadAuth(pathname) {
   const win = browser(pathname);
   vm.createContext(win);
+  vm.runInContext(ICONS_SRC, win, { filename: "icons.js" });
   vm.runInContext(AUTH_SRC, win, { filename: "auth.js" });
   if (!win.TWAuth) throw new Error("auth.js did not publish window.TWAuth");
   return win;
@@ -105,6 +109,7 @@ async function signIn(role, me, pathname) {
     }),
   };
   vm.createContext(win);
+  vm.runInContext(ICONS_SRC, win, { filename: "icons.js" });
   vm.runInContext(AUTH_SRC, win, { filename: "auth.js" });
 
   // THE REFUSAL PATH NEVER SETTLES `ready` — on purpose, so no page module boots against the
@@ -177,17 +182,20 @@ function adminGrab(re, what) {
  * page itself uses: shell() calls roleMatrixHtml() with no argument and it falls back to what boot()
  * fetched. Handing it in here is the same code path with the fetch removed. */
 function renderAdminMatrix(win, me, policy) {
-  const make = new Function("window", "ME", "policy", `
+  // TWIcon is the real one out of the loaded context, and admin.js's icon() is lifted beside the
+  // renderers that call it.
+  const make = new Function("window", "ME", "policy", "TWIcon", `
     "use strict";
     var TWAuth = window.TWAuth;
     ${adminGrab(/^    const ROLE_LABEL = \{[^}]*\};$/m, "ROLE_LABEL")}
     ${adminFn("esc")}
+    ${adminFn("icon")}
     ${adminFn("roleLabelOf")}
     ${adminFn("roleDiffSentence")}
     ${adminFn("roleMatrixHtml")}
     return roleMatrixHtml(policy);
   `);
-  return make(win, { role: me, email: "someone@wetreadwell.com" }, policy || null);
+  return make(win, { role: me, email: "someone@wetreadwell.com" }, policy || null, win.TWIcon);
 }
 
 /** Rows the rendered panel shows: which cells are ticked, and what switch each one drew. */
@@ -198,7 +206,8 @@ function rowsFromPanel(html) {
     const cell = /<td class="rv-cell" data-role="([^"]*)"[^>]*>([\s\S]*?)<\/td>/g;
     let m;
     while ((m = cell.exec(r)) !== null) {
-      roles[m[1]] = /✓/.test(m[2]);
+      // The tick is a drawn <svg> now, so the marker is the class admin.js puts it in.
+      roles[m[1]] = /class="rv-yes"/.test(m[2]);
       const btn = /<button([^>]*)>/.exec(m[2]);
       switches[m[1]] = btn ? {
         on: /class="rv-sw rv-on"/.test(btn[0]),

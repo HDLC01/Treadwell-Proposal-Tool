@@ -29,6 +29,18 @@
 // or "sent to the estimator" and must not name anybody. Putting the address on the line would mean
 // stamping it into portal_followups.detail at send time, in the portal.
 (function () {
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -222,7 +234,7 @@
       return `<th class="${cls} th-sort${on ? " is-sorted" : ""}"${tip} aria-sort="${
         on ? (DIR === "asc" ? "ascending" : "descending") : "none"}">` +
         `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${
-          on ? (DIR === "asc" ? " ↑" : " ↓") : ""}</button></th>`;
+          on ? (" " + icon(DIR === "asc" ? "arrow-up" : "arrow-down", 12)) : ""}</button></th>`;
     }).join("");
   }
 
@@ -293,7 +305,7 @@
           title="Record a call, text or email you sent yourself. Does NOT email the customer.">Log a call</button>
         <button type="button" data-act="sent" aria-expanded="${OPEN.has(p.proposal_id)}"
           title="Every follow-up on this project: what the automation emailed, which side got it, and what a person logged.">Emails${
-          OPEN.has(p.proposal_id) ? " ▴" : " ▾"}</button>
+          OPEN.has(p.proposal_id) ? (" " + icon("chev-up", 12)) : (" " + icon("chev-down", 12))}</button>
         <button type="button" data-act="open" title="Open in Active Projects">Open</button>
       </div></td>
     </tr>` + (OPEN.has(p.proposal_id) ? histRow(p) : "");
@@ -567,7 +579,7 @@
     if (s) s.value = SORT;
     if (q && q.value !== Q) q.value = Q;
     if (d) {
-      d.textContent = DIR === "asc" ? "↑ Asc" : "↓ Desc";
+      d.innerHTML = DIR === "asc" ? icon("arrow-up", 13) + " Asc" : icon("arrow-down", 13) + " Desc";
       d.setAttribute("aria-pressed", DIR === "asc" ? "true" : "false");
     }
   }

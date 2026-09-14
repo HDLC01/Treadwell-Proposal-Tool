@@ -190,6 +190,29 @@
   // renders overlap.
   let RENDER_DENY = [];
 
+  /** js/icons.js's table, which every page loads immediately before this file.
+   *
+   *  Behind one function, and guarded, for two reasons. A missing icons.js should cost the rail
+   *  its pictures, not the rail — the sidebar is how you get anywhere, and a TypeError here would
+   *  take every page's navigation down at once. And the nav harness in
+   *  backend/tests/js/nav-visibility-harness.js runs THIS FILE in a bare VM; it loads icons.js
+   *  into that context so the rendered markup is the real one, and this guard is what makes the
+   *  failure mode legible if some future harness forgets to. */
+  function icon(name, size) {
+    return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : "";
+  }
+
+  /** One sidebar row.
+   *
+   *  `glyph` IS STILL THE SECOND ARGUMENT AND IS STILL A SHORT STRING — it is an js/icons.js name
+   *  ("board", "trash") rather than the typed character it was until 2026-09-15. Keeping it a
+   *  short name rather than inlining the SVG at the call site is what lets the three things that
+   *  read it keep reading it: parseNav below, the Admin page's role matrix (which draws the same
+   *  icon beside the label), and test_sidebar_labels.py's "no two rows share a glyph", which is
+   *  as true of two rows sharing `trash` as of two rows sharing 🗑.
+   *
+   *  The DRAWN glyph lives in the span; the NAME lives in data-ico, because the span now holds an
+   *  <svg> and a parser that read the span's text would read the markup instead. */
   function navItem(href, glyph, label, tag) {
     // A denied tab leaves the menu entirely. Returning "" rather than hiding it with CSS is the
     // point of Hanz choosing real blocking: the server refuses this tab's own routes too, so a
@@ -200,7 +223,8 @@
     // untouched, and rendered as a chip rather than folded into the label so it reads as a
     // status on the page rather than part of its name.
     return '<a class="tw-nav-item' + (active ? " active" : "") + '" href="' + href + '">' +
-      '<span class="tw-nav-ico">' + glyph + '</span><span class="tw-nav-label">' + label + '</span>' +
+      '<span class="tw-nav-ico" data-ico="' + glyph + '">' + icon(glyph, 17) + '</span>' +
+      '<span class="tw-nav-label">' + label + '</span>' +
       (tag ? '<span class="tw-nav-tag">' + tag + '</span>' : "") + '</a>';
   }
 
@@ -220,7 +244,7 @@
   // back in the UI. The section/glyph/label are only what the switch is LABELLED with; what the
   // policy governs is the href, and nav_access.py is the authority on that.
   const NO_SIDEBAR_TABS = [
-    { section: "Active", href: "/info-sheet.html", glyph: "📋", label: "Info Sheet", tag: "" },
+    { section: "Active", href: "/info-sheet.html", glyph: "clipboard", label: "Info Sheet", tag: "" },
   ];
 
   // Pull the nav entries back out of rendered sidebar markup: one row per item, in order, tagged
@@ -230,10 +254,15 @@
   // Matches navItem()'s and the section headings' output above. If either changes shape this
   // returns fewer rows, which test_role_visibility_matrix.py fails on (it diffs the parse against
   // the markup with its own regex, and against what the Admin page renders).
+  //
+  // THE GLYPH IS READ OFF data-ico, NOT OFF THE SPAN'S TEXT. The icon span holds an <svg> since
+  // 2026-09-15, so `([^<]*)` between the tags would match the empty string before `<svg` and the
+  // rest of the pattern would never line up. data-ico carries the icons.js NAME, which is what
+  // every consumer of this parse actually wants: a short, stable, comparable token.
   const NAV_ENTRY_RE = new RegExp(
     '<div class="tw-section">([^<]*)<\\/div>' +
     '|<a class="tw-nav-item[^"]*" href="([^"]*)">' +
-    '<span class="tw-nav-ico">([^<]*)<\\/span>' +
+    '<span class="tw-nav-ico" data-ico="([^"]*)">[\\s\\S]*?<\\/span>' +
     '<span class="tw-nav-label">([^<]*)<\\/span>' +
     '(?:<span class="tw-nav-tag">([^<]*)<\\/span>)?', "g");
 
@@ -367,7 +396,7 @@
       '<img class="tw-bison" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell">' +
       '<div class="tw-brandtext"><div class="tw-brandname">Treadwell</div>' +
       '<div class="tw-brandsub">Proposal Tool</div></div>' +
-      '<button class="tw-collapse" id="tw-collapse" title="Hide menu">‹</button></div>' +
+      '<button class="tw-collapse" id="tw-collapse" title="Hide menu">' + icon("chev-left", 18) + '</button></div>' +
       '<nav class="tw-nav">' +
       // THREE HEADINGS, NOT EIGHT. Hanz, 2026-08-25, after a week of using the tool daily:
       //   "Instead of Separate Headers for the Side bar we have to change that to ACtive, Beta and
@@ -393,7 +422,7 @@
       // below the Proposals Database - right when the Database was where you started a bid, wrong once
       // this board could start one too. The page you run the meeting from should not be something you
       // scroll past.
-      navItem("/portal.html", "◆", "Active Projects") +
+      navItem("/portal.html", "board", "Active Projects") +
       // BACK IN THE MENU ON 2026-08-24, and this is the THIRD decision about it; the first two
       // took it out. All three are written down because the last reader of a half-told version deleted
       // this page from the menu twice.
@@ -411,14 +440,14 @@
       // answers "where does each live job stand", this answers "who has not been chased". Its own rows
       // even open that page (/portal.html?open=...&sec=followup), so filing it anywhere else would put
       // the link under one heading and land the click under another.
-      navItem("/followups.html", "⏱", "Follow-ups") +
+      navItem("/followups.html", "clock", "Follow-ups") +
       // The daily queue, in the order the work actually arrives: it comes in, you price it,
       // you watch what is due. Bid Calendar sits right after Bid Pipeline because the two answer halves
       // of one question - the board is "where does each bid stand", the calendar is "what is due, and
       // when". Both read the Basisboard bids; neither writes to them.
-      navItem("/leads.html", "▤", "Lead Inbox") +
-      navItem("/crm.html", "▦", "Bid Pipeline") +
-      navItem("/calendar.html", "▧", "Bid Calendar") +
+      navItem("/leads.html", "inbox", "Lead Inbox") +
+      navItem("/crm.html", "funnel", "Bid Pipeline") +
+      navItem("/calendar.html", "calendar", "Bid Calendar") +
       // THE LOOK-BACK PAGES. These four had three headings between them until 2026-08-25 -
       // Analytics, Database, Records - and none of the three earned a line of its own. Their ORDER still
       // carries the decision that arranged them: Analytics above the Proposals Database at Hanz's ask on
@@ -433,10 +462,10 @@
       // its switch. That row now reads section "Active", because "Proposals" is one of the headings this
       // change removed, and a rowless tab filed under a heading that no longer exists is a row the matrix
       // cannot group.
-      navItem("/analytics.html", "◫", "Analytics") +
-      navItem("/projects.html", "▣", "Proposals Database") +
-      navItem("/history.html", "⟲", "History") +
-      navItem("/trash.html", "🗑", "Trash") +
+      navItem("/analytics.html", "chart", "Analytics") +
+      navItem("/projects.html", "database", "Proposals Database") +
+      navItem("/history.html", "history", "History") +
+      navItem("/trash.html", "trash", "Trash") +
       // THE BETAS, TOGETHER. One sat under Proposals and the other under a Library heading of
       // its own, which put work that is still being proven in the middle of the daily list. Both keep
       // their BETA tag as well as the heading: the heading says which shelf, and the tag is what survives
@@ -448,7 +477,7 @@
       // pricing before the five switches that change the price have been seen. The mid-flow door is
       // different and stays different: the toolbar link on Estimate Review goes straight to
       // /polish-estimate.html, because there the project already exists.
-      navItem("/polish-intake.html", "◐", "Polish Estimate", "BETA") +
+      navItem("/polish-intake.html", "calculator", "Polish Estimate", "BETA") +
       // The beta's own filing cabinet, immediately after the calculator that fills it. Hanz,
       // 2026-09-10: "the polish estimate database ... the beta polish estimates that does not add up
       // to the analytics, just something to test and save the polish projects."
@@ -461,26 +490,27 @@
       // invisible where an estimator expects it is what produced Will's "it doesn't save" report,
       // so the row is here, under Beta, beside the calculator.
       //
-      // The glyph is the half-filled circle's mirror - this and Polish Estimate are one subject
-      // read two ways - and test_sidebar_labels.py forbids two rows sharing a glyph anyway.
-      navItem("/polish-estimates.html", "◑", "Polish Estimate Database", "BETA") +
+      // The glyph is `archive` - a filing cabinet for a filing cabinet, and distinct from Polish
+      // Estimate's `calculator` even though the two are one subject read two ways - and
+      // test_sidebar_labels.py forbids two rows sharing a glyph anyway.
+      navItem("/polish-estimates.html", "archive", "Polish Estimate Database", "BETA") +
       // Reference data, not a daily page - the materials Treadwell buys and the assemblies
       // built out of them. (The Polish Estimate beta does price its takeoff from these assemblies; no
-      // live bid does.) The brick rather than another shaded square: the geometric set is low-distinction
-      // enough without two rows sharing a glyph, and a brick says "materials" at a glance.
-      navItem("/library.html", "🧱", "Items and Assemblies", "BETA") +
+      // live bid does.) The glyph is `layers` - stacked material, and distinct from every other
+      // row's icon on this list, which is the one thing that actually matters here.
+      navItem("/library.html", "layers", "Items and Assemblies", "BETA") +
       // The admin-editable rate table behind the polish beta's markup line, third because it
       // is reference data the same way the library is, not a page an estimator opens daily.
-      navItem("/markup.html", "%", "Markup", "BETA") +
+      navItem("/markup.html", "percent", "Markup", "BETA") +
       '<div class="tw-section">Settings</div>' +
-      navItem("/notifications.html", "✉", "Notification Sending") +
+      navItem("/notifications.html", "mail", "Notification Sending") +
       // Kept at Hanz's request on 2026-08-11 after the Follow-ups board came out; the full
       // sequence is on Follow-ups above. Beside Notification Sending because the two answer one question
       // from opposite ends: who hears from us, and what they hear. This page is the only editor for the
       // four recurring customer emails, and its save REPLACES the single settings row with no history, so
       // an unreachable version of it is one wording change away from being unrecoverable.
-      navItem("/followup-settings.html", "⏲", "Auto Followups") +
-      (isAdmin ? navItem("/admin.html", "◇", "Admin") : "") +
+      navItem("/followup-settings.html", "timer", "Auto Followups") +
+      (isAdmin ? navItem("/admin.html", "shield", "Admin") : "") +
       '</nav>' +
       '<div class="tw-user"><div class="tw-avatar" style="background:' +
       avatarColor(u.name, u.email) + '">' + esc(initials(u.name, u.email)) + '</div>' +
@@ -488,7 +518,7 @@
       '<span class="tw-username">' + esc(u.name || u.email || "Signed in") + '</span>' +
       '<span class="tw-badge ' + roleClass + '">' + roleLabel + '</span></div>' +
       '<div class="tw-useremail">' + esc(u.email || "") + '</div></div>' +
-      '<button class="tw-signout" id="tw-signout" title="Sign out">⏻</button></div>';
+      '<button class="tw-signout" id="tw-signout" title="Sign out">' + icon("power", 17) + '</button></div>';
     RENDER_DENY = [];        // the markup is built; nothing else may read this
     // Spec mode stops here: the caller wanted the markup, not a sidebar on the page.
     if (spec) return aside.innerHTML;
@@ -506,10 +536,11 @@
     document.body.appendChild(backdrop);
     const burger = document.createElement("button"); burger.id = "tw-burger";
     burger.title = "Menu";
-    // aria-label as well as the glyph: the ☰ reads as "trigram for heaven" to a screen reader.
+    // aria-label because the glyph is a decorative <svg>: aria-hidden, so it announces nothing at
+    // all. (As a typed ☰ it announced "trigram for heaven", which was no better.)
     burger.setAttribute("aria-label", "Menu");
     burger.setAttribute("aria-controls", "tw-sidebar");
-    burger.innerHTML = "☰"; document.body.appendChild(burger);
+    burger.innerHTML = icon("menu", 20); document.body.appendChild(burger);
     const collapse = document.getElementById("tw-collapse");
 
     // ── THE VIEWPORT OWNS THE OPEN STATE, NOT THE ACCOUNT ────────────────────────────────
@@ -572,7 +603,7 @@
     // viewport (e.g. the estimate worksheet) gets a full bar of height back.
     // Otherwise fall back to a fixed 52px top bar (pages without a header).
     const bellHTML =
-      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">🔔' +
+      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">' + icon("bell", 18) + '' +
       '<span class="tw-bell-badge" id="tw-bell-badge" hidden></span></button>';
     const pageHeader = document.querySelector("header.topbar");
     if (pageHeader) {
@@ -644,7 +675,7 @@
     card.className = "tw-refuse";
     card.innerHTML =
       '<div class="tw-refuse-card">' +
-      '<div class="tw-refuse-ico" aria-hidden="true">🔒</div>' +
+      '<div class="tw-refuse-ico" aria-hidden="true">' + icon("lock", 30) + '</div>' +
       '<h1 class="tw-refuse-h">' + esc(label) + " isn't available on your account.</h1>" +
       '<p class="tw-refuse-p">An admin can turn it on for members from the Admin page. ' +
       'Nothing you were doing was lost.</p>' +
@@ -684,6 +715,12 @@
     let items = [], unread = 0, open = false;
     let toasted = loadToasted();   // ids already previewed (per browser) so we never repeat
 
+    // `n.icon` used to be a raw emoji character; backend/notifications.py now sends a
+    // js/icons.js glyph NAME instead ("folder", "clock", …), read directly at each call site
+    // below (icon(n.icon || "info", size)) rather than through a kind-keyed lookup table — the
+    // bell renderer stays the generic reader it was built to be, so a new notification kind
+    // needs no frontend change: the backend that invents the kind also names its icon.
+
     // Which message ids we've already shown a toast for — survives navigation via
     // localStorage, capped so it can't grow without bound.
     function loadToasted() {
@@ -698,7 +735,7 @@
       const el = document.createElement("div");
       el.className = "tw-toast";
       el.innerHTML =
-        '<span class="tw-toast-ico">' + esc(n.icon || "💬") + '</span>' +
+        '<span class="tw-toast-ico">' + icon(n.icon || "info", 17) + '</span>' +
         '<span class="tw-toast-main">' +
         '<span class="tw-toast-title">' + esc(n.title || "") + '</span>' +
         '<span class="tw-toast-body">' + esc(n.body || "") + '</span>' +
@@ -736,12 +773,13 @@
       const list = document.getElementById("tw-notif-list");
       if (!list) return;
       if (!items.length) {
-        list.innerHTML = '<div class="tw-notif-empty">You’re all caught up 🎉</div>';
+        list.innerHTML = '<div class="tw-notif-empty">' + icon("check-circle", 22) +
+          ' <span>You’re all caught up</span></div>';
         return;
       }
       list.innerHTML = items.map(n =>
         '<a class="tw-notif-item sev-' + esc(n.severity || "info") + '" href="' + esc(n.link || "#") + '">' +
-        '<span class="tw-notif-ico">' + esc(n.icon || "•") + '</span>' +
+        '<span class="tw-notif-ico">' + icon(n.icon || "info", 16) + '</span>' +
         '<span class="tw-notif-main"><span class="tw-notif-title">' + esc(n.title || "") + '</span>' +
         '<span class="tw-notif-body">' + esc(n.body || "") + '</span></span>' +
         '<span class="tw-notif-time">' + esc(relTime(n.ts)) + '</span></a>'
@@ -805,7 +843,19 @@
   function injectSidebarStyles() {
     if (document.getElementById("tw-sidebar-css")) return;
     const css = `
+/* EVERY glyph js/icons.js draws carries this class. Two things all of them need, which no
+   call site should have to remember: the glyph must not swallow a click meant for the control it
+   sits in (an invisible element that steals the press is a bug this codebase has shipped before),
+   and beside words it must sit on their optical centre rather than on the baseline.
+
+   A CLASS, not svg[aria-hidden][focusable]: the CSS resolver in backend/tests/test_phone_shell.py
+   cannot parse attribute selectors and refuses one outright rather than going quietly blind, and
+   that resolver is what decides whether the phone drawer can be clicked through. */
+.tw-ico{pointer-events:none;vertical-align:-.16em;}
 :root{--tw-red:#c8102e;--tw-red-dark:#9e001f;--tw-ink:#1b1c1c;--tw-ink-v:#5c403f;
+/* the same amber styles.css calls --warning; declared here too because this sheet is injected
+   on every page, login included, and must not depend on which stylesheet came with it */
+--tw-warn:#f59e0b;
 --tw-surf-low:#f5f3f3;--tw-surf-high:#e9e8e7;--tw-w:240px;}
 body{transition:margin-left .2s ease;}
 /* THE CLOSED DRAWER IS INERT, not merely off-screen. visibility:hidden takes the whole subtree
@@ -830,7 +880,8 @@ transition:transform .2s ease,visibility 0s linear 0s;}
 .tw-bison{width:54px;height:34px;display:block;flex:none;}
 .tw-brandname{font-size:18px;font-weight:600;line-height:1.1;}
 .tw-brandsub{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--tw-ink-v);}
-.tw-collapse{margin-left:auto;border:none;background:none;color:var(--tw-ink-v);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:6px;}
+.tw-collapse{margin-left:auto;border:none;background:none;color:var(--tw-ink-v);cursor:pointer;line-height:1;padding:4px 6px;border-radius:6px;
+display:inline-flex;align-items:center;justify-content:center;}
 .tw-collapse:hover{background:var(--tw-surf-low);}
 .tw-nav{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:3px;}
 .tw-section{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
@@ -840,7 +891,9 @@ color:var(--tw-ink-v);opacity:.7;padding:0 10px;margin:14px 0 4px;}
 text-decoration:none;color:var(--tw-ink);}
 .tw-nav-item:hover{background:var(--tw-surf-low);}
 .tw-nav-item.active{background:rgba(200,16,46,.1);color:var(--tw-red-dark);font-weight:600;}
-.tw-nav-ico{width:20px;text-align:center;color:var(--tw-ink-v);font-size:15px;}
+/* The rail's glyphs are inline <svg> (js/icons.js), never a typed character, so the box is
+   sized here and the drawing takes its colour from this rule rather than from an emoji font. */
+.tw-nav-ico{width:20px;flex:none;color:var(--tw-ink-v);display:inline-flex;align-items:center;justify-content:center;}
 .tw-nav-tag{margin-left:auto;font:700 8.5px/1 system-ui;letter-spacing:.06em;
   padding:3px 5px;border-radius:4px;background:rgba(200,16,46,.12);
   color:var(--tw-red-dark);white-space:nowrap;}
@@ -880,7 +933,8 @@ color:#fff;vertical-align:middle;text-transform:uppercase;}
 .tw-badge.admin{background:#264b8b;color:#fff;}
 .tw-badge.user{background:var(--tw-surf-high);color:var(--tw-ink-v);}
 .tw-useremail{font-size:11px;color:var(--tw-ink-v);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.tw-signout{border:none;background:none;color:var(--tw-ink-v);font-size:16px;cursor:pointer;flex:none;padding:4px;border-radius:6px;}
+.tw-signout{border:none;background:none;color:var(--tw-ink-v);cursor:pointer;flex:none;padding:5px;border-radius:6px;
+display:inline-flex;align-items:center;justify-content:center;}
 .tw-signout:hover{background:var(--tw-surf-high);color:var(--tw-red-dark);}
 #tw-burger{position:fixed;top:12px;left:12px;z-index:9996;width:44px;height:44px;border-radius:9px;
 border:1px solid rgba(27,28,28,.12);background:#fff;color:var(--tw-ink);font-size:18px;cursor:pointer;
@@ -928,7 +982,7 @@ box-sizing:border-box;font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe U
 color:var(--tw-ink);}
 .tw-refuse-card{max-width:46ch;text-align:center;background:#fff;border:1px solid rgba(27,28,28,.12);
 border-radius:14px;padding:30px 28px 26px;box-shadow:0 10px 30px rgba(0,0,0,.07);}
-.tw-refuse-ico{font-size:30px;line-height:1;margin-bottom:12px;}
+.tw-refuse-ico{line-height:1;margin-bottom:12px;color:var(--tw-ink-v);display:flex;justify-content:center;}
 .tw-refuse-h{font-size:17px;font-weight:600;line-height:1.35;margin:0 0 8px;}
 .tw-refuse-p{margin:0 0 18px;color:var(--tw-ink-v);}
 .tw-refuse-go{display:inline-block;text-decoration:none;background:var(--tw-red);color:#fff;
@@ -960,12 +1014,18 @@ font-weight:700;font-size:14px;border-bottom:1px solid rgba(27,28,28,.08);positi
 .tw-notif-empty{padding:26px 14px;text-align:center;color:var(--tw-ink-v);}
 .tw-notif-item{display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:9px;text-decoration:none;color:var(--tw-ink);}
 .tw-notif-item:hover{background:var(--tw-surf-low);}
-.tw-notif-ico{font-size:15px;line-height:1.3;flex:none;width:18px;text-align:center;}
+.tw-notif-ico{line-height:1;flex:none;width:18px;color:var(--tw-ink-v);display:inline-flex;align-items:center;justify-content:center;padding-top:2px;}
 .tw-notif-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
 .tw-notif-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tw-notif-body{color:var(--tw-ink-v);font-size:12px;}
 .tw-notif-time{color:var(--tw-ink-v);font-size:11px;flex:none;white-space:nowrap;padding-top:1px;}
 .tw-notif-item.sev-high .tw-notif-title{color:var(--tw-red-dark);}
+/* Deadline rows used to say their urgency with a coloured emoji circle - red, orange, yellow,
+   white. The glyph is one drawn clock now and the SEVERITY is what colours it, which is the
+   same information out of the stylesheet that already owns severity. */
+.tw-notif-item.sev-high .tw-notif-ico{color:var(--tw-red-dark);}
+.tw-notif-item.sev-medium .tw-notif-ico{color:var(--tw-warn);}
+.tw-notif-item.sev-low .tw-notif-ico{opacity:.5;}
 /* bottom-right toast previews for new customer messages */
 #tw-toasts{position:fixed;right:16px;bottom:16px;z-index:9990;display:flex;flex-direction:column;gap:10px;
 width:min(360px,calc(100vw - 28px));pointer-events:none;}
@@ -975,7 +1035,7 @@ padding:12px 12px 12px 13px;box-shadow:0 12px 34px rgba(0,0,0,.20);cursor:pointe
 transform:translateX(120%);opacity:0;transition:transform .32s cubic-bezier(.22,1,.36,1),opacity .32s ease;
 font:400 13px/1.4 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--tw-ink);}
 .tw-toast.tw-toast-in{transform:translateX(0);opacity:1;}
-.tw-toast-ico{font-size:16px;line-height:1.25;flex:none;}
+.tw-toast-ico{line-height:1;flex:none;color:var(--tw-ink-v);display:inline-flex;align-items:center;padding-top:2px;}
 .tw-toast-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
 .tw-toast-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tw-toast-body{color:var(--tw-ink-v);font-size:12px;display:-webkit-box;-webkit-line-clamp:3;

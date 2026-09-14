@@ -58,7 +58,7 @@
     /* ── the test-copy banner's own shape ────────────────────────────────────────
        #sandbox-note reuses the shared .alert/.alert-warn for its colour, padding and radius, but
        showCopyNote()/showDirectNote() in js/polish-sandbox.js BUILD REAL ELEMENTS into it -- a
-       <span class="ic"> holding the ⧉ glyph and, on the copy notice, two <b>s naming the test copy
+       <span class="ic"> holding the `copy` glyph and, on the copy notice, two <b>s naming the test copy
        and the real project. .alert supplies none of the shape those need. Without the flex row the
        glyph runs straight into the sentence with no gap; without the ink override the two project
        NAMES read in the warning brown rather than as names, which is the whole point of bolding
@@ -485,6 +485,7 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script src="/js/icons.js"></script>
 <script src="/auth.js"></script>
 <script src="/shared.js"></script>
 <!-- polish-bid-core owns the model's shape and the condition keys the pricing chain reads. This

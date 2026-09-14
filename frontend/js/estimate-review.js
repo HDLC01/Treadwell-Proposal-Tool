@@ -1,4 +1,16 @@
 // Externalized from estimate-review.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+/** One drawn glyph out of js/icons.js, which every page loads before this file.
+ *
+ *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+ *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+ *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+ *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+ *  rather than its render.
+ */
+function icon(name, size) {
+  return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+}
 // ─── HyperFormula engine ─────────────────────────────────────────────
 // One global engine instance holds all 16 sheets. As the user edits
 // a cell, HF recomputes downstream formulas and we update the DOM for
@@ -1386,13 +1398,13 @@ function renderTabs() {
     label.textContent = t.label;
     btn.appendChild(label);
 
-    // Visible ✎ rename affordance on EVERY tab. Double-click still renames, but
+    // Visible pencil rename affordance on EVERY tab. Double-click still renames, but
     // Kyle couldn't discover that ("Not sure how to rename the tabs"), so expose
     // a button beside the name. stopPropagation so it neither opens nor drags the
     // tab; cancelClick so the pending single-click doesn't steal focus.
     const ren = document.createElement("span");
     ren.className = "tab-rename-btn";
-    ren.textContent = "✎";
+    ren.innerHTML = icon("pencil", 12);
     ren.title = "Rename tab";
     ren.addEventListener("pointerdown", (e) => e.stopPropagation());
     ren.addEventListener("click", (e) => { e.stopPropagation(); cancelClick(); startRename(btn, t.id); });
@@ -1427,7 +1439,7 @@ function renderTabs() {
   renderBidOptions();   // keep the base-bid picker + option chips in sync with the tabs
 }
 
-// The "⧉ Copy sheet" button lives in the header (beside Texture) so it's always
+// The "Copy sheet" button lives in the header (beside Texture) so it's always
 // visible — the tab bar overflows horizontally and would hide a button at its end.
 (function wireCopySheetButton() {
   const btn = document.getElementById("copy-sheet-btn");
@@ -1451,7 +1463,7 @@ function refreshLockButton() {
   const addr = _activeCellAddr();
   if (!addr || !activeSheet) {
     lockCellBtn.disabled = true;
-    lockCellBtn.textContent = "🔒 Lock cell";
+    lockCellBtn.innerHTML = icon("lock", 14) + " Lock cell";
     lockCellBtn.title = "Select a cell, then lock or unlock it (locked cells can't be edited in Excel)";
     return;
   }
@@ -1459,7 +1471,8 @@ function refreshLockButton() {
   // Label reflects the PERMANENT (merged) lock state, NOT inp.readOnly — a
   // per-cell temporary unlock leaves readOnly=false while still permanently locked.
   const locked = lockedCellsFor(activeSheet).has(addr);
-  lockCellBtn.textContent = locked ? `🔓 Unlock ${addr}` : `🔒 Lock ${addr}`;
+  lockCellBtn.innerHTML = locked ? icon("unlock", 14) + ` Unlock ${addr}`
+                                 : icon("lock", 14) + ` Lock ${addr}`;
   lockCellBtn.title = locked
     ? `Unlock ${addr} so it can be edited in Excel`
     : `Lock ${addr} so it can't be fat-fingered in Excel`;
@@ -1492,7 +1505,10 @@ wireBidBar();   // base-bid toggles + per-tab option controls (delegated, once)
   const bar = document.getElementById("bid-bar");
   const btn = document.getElementById("bid-collapse");
   if (!bar || !btn) return;
-  const apply = (c) => { bar.classList.toggle("collapsed", c); btn.textContent = c ? "▸ Show" : "▾ Hide"; };
+  const apply = (c) => {
+    bar.classList.toggle("collapsed", c);
+    btn.innerHTML = c ? icon("chev-right", 12) + " Show" : icon("chev-down", 12) + " Hide";
+  };
   let c = false; try { c = localStorage.getItem("tw_bidbar_collapsed") === "1"; } catch {}
   apply(c);
   btn.addEventListener("click", () => {
@@ -2369,13 +2385,13 @@ function makeDataCell(cell, sheet, r, c, dropdowns) {
     d.classList.add("locked");
     const lk = document.createElement("span");
     lk.className = "cell-lock";
-    lk.textContent = "🔒";
+    lk.innerHTML = icon("lock", 11);
     lk.title = "Locked — click to unlock for editing";
     const setLocked = (lock) => {
       inp.readOnly = lock;
       d.classList.toggle("locked", lock);
       d.classList.toggle("unlocked", !lock);
-      lk.textContent = lock ? "🔒" : "🔓";
+      lk.innerHTML = icon(lock ? "lock" : "unlock", 11);
       lk.title = lock ? "Locked — click to unlock for editing" : "Unlocked — click to re-lock";
       // The formula bar mirrors this cell's lock — keep its readOnly in step
       // so the bar can't sidestep a 🔒 (or stay stuck locked after a 🔓).
@@ -4387,12 +4403,12 @@ document.getElementById("autofill-btn").addEventListener("click", async (e) => {
         .map(k => FLAG_LABELS[k]);
       const narrFilled = Object.keys(carriedNarrative);
       const html =
-        `<div style="font-weight:700;color:#0f5132;margin-bottom:4px;">✓ Autofilled ${n} value${n===1?"":"s"}</div>` +
+        `<div style="font-weight:700;color:#0f5132;margin-bottom:4px;">${icon("check", 13)} Autofilled ${n} value${n===1?"":"s"}</div>` +
         `<div style="margin:4px 0;"><b>Flags:</b><br>${filledFlags.join("<br>")}</div>` +
         (narrFilled.length ? `<div style="margin:4px 0;"><b>Proposal text:</b><br>${narrFilled.join(", ")}</div>` : "") +
         (missingFlags.length ? `<div style="margin-top:6px;color:#a16207;"><b>AI skipped:</b> ${missingFlags.join(", ")}<br><span style="font-size:11px;">(re-click Autofill to retry, or edit manually)</span></div>` : "");
       showAutofillBanner(html, "success");
-      btn.textContent = `✓ Filled ${n}`;
+      btn.innerHTML = icon("check", 13) + ` Filled ${n}`;
       if (activeSheet) {
         delete sheetCache[activeSheet];
         await showSheet(activeSheet);

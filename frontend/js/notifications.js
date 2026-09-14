@@ -18,6 +18,18 @@
 // shared one list that could only be set to everything or nothing.
 (function () {
   "use strict";
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -267,11 +279,11 @@
         '<div id="pp-alert" class="alert"></div>' +
         '<div id="pp-list"><span class="note">Loading…</span></div>' +
         '<nav id="pp-pager" class="pp-pager" hidden aria-label="Project pages">' +
-          '<button type="button" class="pp-pg" id="pp-prev">‹ Prev</button>' +
+          '<button type="button" class="pp-pg" id="pp-prev">' + icon("chev-left", 13) + ' Prev</button>' +
           // aria-live so the page you just moved to is ANNOUNCED; without it the only feedback
           // for a keyboard user is a list they cannot see changing under them.
           '<span class="pp-pgn" id="pp-pgn" aria-live="polite"></span>' +
-          '<button type="button" class="pp-pg" id="pp-next">Next ›</button>' +
+          '<button type="button" class="pp-pg" id="pp-next">Next ' + icon("chev-right", 13) + '</button>' +
         '</nav>' +
       '</div>';
     if (ADMIN) {
@@ -842,7 +854,7 @@
     const ok = await TW.confirmDanger({
       title: "Reset to global?",
       message: "Clear " + emails.length + " per-project exception(s) and use the global default for this project?",
-      confirmText: "Reset", tone: "warn", icon: "↺",
+      confirmText: "Reset", tone: "warn", icon: "refresh",
     });
     if (!ok) return;
     try {

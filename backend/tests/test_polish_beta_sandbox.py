@@ -509,10 +509,26 @@ def test_the_notice_names_the_source_and_says_it_is_untouched(sandbox):
 
 def test_the_notice_cannot_be_markup():
     """Project names are typed by estimators and read back by everyone. This one is built from a
-    project name on every code path, so it is text nodes only."""
+    project name on every code path, so every VALUE in it goes in as a text node.
+
+    THE RULE WAS "no innerHTML in these two functions" until 2026-09-15, and it is now "no
+    innerHTML of anything but an icon() call". The emoji sweep replaced the notice's typed ⧉ with
+    a drawn glyph out of js/icons.js, and that glyph is markup — a literal from our own source,
+    built by looking a NAME up in a table, with no route by which a project name could reach it.
+
+    The blanket ban was the cruder guard and it is worth saying what was given up: it would have
+    caught `el.innerHTML = name` written anywhere in these functions, and this one only catches it
+    if the right-hand side is not an icon() call. What is still true, and is the thing the test is
+    actually for, is that no value flowing into this notice is parsed as markup. The assertion
+    below reads every innerHTML assignment rather than just counting them, so a second one that
+    carries anything else fails here."""
+    assign = re.compile(r"\.innerHTML\s*=\s*([^;]+);")
     for fn in ("showCopyNote", "showDirectNote"):
         body = _block(PAGE, fn)
-        assert "innerHTML" not in body, "%s builds a project name into markup" % fn
+        for rhs in assign.findall(body):
+            assert re.fullmatch(r'icon\("[a-z-]+",\s*\d+\)', rhs.strip()), (
+                "%s assigns %r to innerHTML. Only a literal icon() call may go in as markup here; "
+                "every value in this notice is built from a project name." % (fn, rhs.strip()))
         assert "textContent" in body or "createTextNode" in body
 
 

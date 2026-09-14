@@ -132,7 +132,7 @@ function build() {
     fn("dbxState"),
     "  const DBX = dbxState();",          // the page's own module state, same identifier
     fn("dbxPreselect"), fn("dbxMatches"), fn("dbxVisible"), fn("dbxChosenFolder"),
-    fn("dbxFolderRow"), fn("dbxNewRow"), fn("dbxFoldersHtml"), fn("dbxNote"),
+    fn("dbxFolderRow"), fn("dbxNewRow"), fn("dbxFoldersHtml"), fn("dbxNote"), fn("icon"),
     fn("dbxGoLabel"), fn("dbxGoDisabled"), fn("dbxSyncGo"), fn("dbxChoose"),
     fn("dbxWireRadios"), fn("dbxRenderFolders"), fn("dbxBeginLoad"), fn("dbxApply"),
     fn("dbxWireSearch"),
