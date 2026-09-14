@@ -211,7 +211,7 @@ const SOURCE = [
   decl("ROSTER"), decl("STEPS"), decl("CELLS"), decl("INERT"), decl("RAW"), decl("GROUPS"),
   decl("stepIds"), decl("kindOf"), decl("stepsOfRow"), decl("listFor"), decl("onList"),
   decl("MX_LABEL"), decl("stepLabel"),
-  fn("alertOf"), fn("rosterCardHtml"), fn("matrixCardHtml"), fn("mxAlert"), fn("render"),
+  fn("alertOf"), fn("rosterCardHtml"), fn("matrixCardHtml"), fn("mxAlert"), fn("render"), fn("icon"),
   fn("paintGroup"), fn("mxPeople"), fn("mxCell"), fn("mxNext"), fn("mxColumn"),
   fn("paintLegend"), fn("paintMatrix"), fn("toggleCell"),
   fn("repaintGroups"), fn("load"), fn("toggle"), fn("addEmail"), fn("removeOne"), fn("peopleFor"),

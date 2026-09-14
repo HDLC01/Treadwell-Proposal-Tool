@@ -10,6 +10,18 @@
 (function () {
   "use strict";
 
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
+
   var X = window.TWAgg, C = window.TWCharts;
   var STATE_KEY = "tw_analytics_state";
 
@@ -176,7 +188,7 @@
       return '<div class="msel" data-dim="' + d.key + '">' +
         '<button class="chip' + (n ? " sel" : "") + '" data-pop="' + d.key + '">' +
         esc(d.label) + (n ? ' <span class="n">' + n + "</span>" : "") +
-        '<span class="caret">▼</span></button></div>';
+        '<span class="caret">' + icon("chev-down", 12) + '</span></button></div>';
     }).join("");
 
     $("filterbar").innerHTML =

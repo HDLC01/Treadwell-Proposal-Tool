@@ -1,4 +1,16 @@
 // Externalized from done.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   const state = TW.getState();
   const result = state.generate_result;
 
@@ -276,7 +288,7 @@
       a.href = blobUrl; a.download = name;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
-      button.textContent = "✓";
+      button.innerHTML = icon("check", 14);
     } catch (err) {
       console.error("Revision download failed", err);
       button.textContent = "failed";
@@ -1096,7 +1108,7 @@
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
-        button.textContent = "✓ Downloaded";
+        button.innerHTML = icon("check", 14) + " Downloaded";
         setTimeout(() => { button.textContent = orig; button.disabled = false; }, 1800);
       } catch (err) {
         console.error("Download failed", err);

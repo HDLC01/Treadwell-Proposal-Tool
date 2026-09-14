@@ -850,9 +850,9 @@
         <option value="estimator">Estimator</option>
         <option value="total">Total</option>
       </select>
-      <button type="button" id="crm-dir" class="tw-select tw-dir" aria-label="Toggle sort direction">↓ Desc</button>
-      <button type="button" id="crm-view" class="tw-clear tw-view" aria-label="Switch between the board and a table">☰ Table</button>
-      <button type="button" id="crm-clear" class="tw-clear" hidden>✕ Clear</button>
+      <button type="button" id="crm-dir" class="tw-select tw-dir" aria-label="Toggle sort direction"><svg class="tw-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg> Desc</button>
+      <button type="button" id="crm-view" class="tw-clear tw-view" aria-label="Switch between the board and a table"><svg class="tw-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9.5h18M3 15h18M9.5 9.5V20"></path></svg> Table</button>
+      <button type="button" id="crm-clear" class="tw-clear" hidden><svg class="tw-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"></path></svg> Clear</button>
       <span id="count" class="count"></span>
       <a href="/notifications.html" class="btn btn-s" style="min-height:40px;display:inline-flex;align-items:center;text-decoration:none">Notification Sending →</a>
     </div>
@@ -864,6 +864,7 @@
   <aside id="drawer"></aside>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
   <!-- Board logic (stages, dates, ordering) — must load BEFORE portal.js, which
