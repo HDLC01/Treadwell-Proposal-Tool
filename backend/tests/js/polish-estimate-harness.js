@@ -734,6 +734,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
       // One card per task, not one table: the count is what proves the step was restructured.
       cardCount: (panels.innerHTML.match(/class="tk lab/g) || []).length,
       tableGone: panels.innerHTML.indexOf("<table") === -1,
+      // The auto/manual toggle is gated on `hours` -- a crew row (cards 0 and 1 here; card 2 is
+      // the auto-appended Travel row) must never get one. Clicking it would run Travel's own
+      // handler and overwrite the crew row's Guys with the man-day sum.
+      noToggleOnCrewRows: [0, 1].every((i) => {
+        var slice = (panels.innerHTML.split('class="tk lab')[i + 1] || "")
+          .split("</div></div>")[0];
+        return slice.indexOf("data-lab-manual=") === -1 &&
+          slice.indexOf("data-lab-auto=") === -1;
+      }),
+      // The toggle lives in the header (before the fields grid starts), on Travel's own card
+      // (card index 2, the auto-appended row) -- not the old inline hint link.
+      toggleInHeader: /class="labtoggle" data-lab-manual="2"/.test(
+        (panels.innerHTML.split('class="tk lab')[3] || "").split('class="tk-g')[0]),
+      linkishGone: panels.innerHTML.indexOf("linkish") === -1,
     };
 
     // ── the derived Guys figure, and the two ways across the auto/manual line ──
@@ -797,14 +811,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
       };
     }
 
-    // ── dimmed on a local job, and still typeable ──
+    // ── dimmed on a local job while UNTOUCHED, and lifts live the moment somebody types ──
+    // `guys_auto: true` here (not false, as this fixture read until this change) -- it now has
+    // to represent an untouched row to still dim, because touched-vs-untouched is the new half
+    // of the rule. See `notDimmedWhenAlreadyManual` below for the guys_auto:false half.
     {
       const loc = build({ blob: blob({ polish_estimate: {
         version: 2,
         takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
         labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 },
                 { id: "travel", label: "Travel", guys: 6, days: "", rate: 33,
-                  unit: "hours", guys_auto: false }],
+                  unit: "hours", guys_auto: true }],
         conditions: { local: true }, contingency: 0
       } }) });
       await loc.api.init();
@@ -812,6 +829,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const li = loc.api.model().labor.findIndex((r) => r.id === "travel");
       const dimmedHtml = loc.dom.get("panels").innerHTML;
       const costBefore = B.laborTotal(loc.api.model().labor);
+      // The card BEFORE typing -- captured as a live node, not a string, because the point of
+      // this test is proving the LIVE repaint works. `syncAutoGuys` derives Travel's guys from
+      // Polishing (3 x 2 = 6), the same figure the old fixture pinned by hand.
+      const cardNode = () => loc.doc.querySelector('[data-lab-card="' + li + '"]');
+      const classBeforeTyping = cardNode().className;
       typeInto(loc, '[data-lab="' + li + '"][data-k="days"]', "3");
       out.travelLocal = {
         dimmed: /class="tk lab inert"/.test(dimmedHtml),
@@ -823,8 +845,61 @@ const rendered = [];      // every string the page put on screen, for the Labour
         costWasZeroWhileUnused: costBefore === B.laborCost(
           { guys: 3, days: 2, rate: 33 }),
         costAfterTyping: B.laborTotal(loc.api.model().labor),
+        derivedGuys: loc.api.model().labor[li].guys,
+        // THE LIVE LIFT. Typing Hours takes the `changed(false)` repaint path -- no rebuild -- so
+        // this is the SAME node before and after, its className mutated in place by
+        // repaintNumbers. A test reading `dimmedHtml` (a string snapshot) here would pass even
+        // with that repaint block deleted entirely, because the stub's className setter never
+        // touches innerHTML -- which is why this reads the live node instead.
+        classBeforeTyping: classBeforeTyping,
+        classAfterTypingHours: cardNode().className,
       };
-      // A non-local job leaves it undimmed.
+      // Backspacing the hours back out re-dims, live, on the same node -- the flicker is
+      // deliberate (clearing the one field that means "we're using this" is "we aren't, after
+      // all"), not an oversight.
+      typeInto(loc, '[data-lab="' + li + '"][data-k="days"]', "");
+      out.travelLocal.classAfterClearingHours = cardNode().className;
+    }
+
+    // Typing GUYS also lifts it -- the actual reported scenario. A fresh build so it starts
+    // untouched again; typing into an auto Guys box takes it off auto and rebuilds (`changed(true)`
+    // via the existing auto-flip handler), so this exercises the OTHER path to the same class.
+    {
+      const locG = build({ blob: blob({ polish_estimate: {
+        version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
+        labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 },
+                { id: "travel", label: "Travel", guys: 6, days: "", rate: 33,
+                  unit: "hours", guys_auto: true }],
+        conditions: { local: true }, contingency: 0
+      } }) });
+      await locG.api.init();
+      locG.api.go(1);
+      const liG = locG.api.model().labor.findIndex((r) => r.id === "travel");
+      typeInto(locG, '[data-lab="' + liG + '"][data-k="guys"]', "9");
+      out.travelLocal.classAfterTypingGuys =
+        locG.doc.querySelector('[data-lab-card="' + liG + '"]').className;
+    }
+
+    // A row already switched to manual (guys typed over, hours still blank) must NOT dim -- the
+    // other half of the new rule, distinct from "untouched", and the coverage the fixture change
+    // above would otherwise have deleted outright.
+    {
+      const manual = build({ blob: blob({ polish_estimate: {
+        version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
+        labor: [{ id: "travel", label: "Travel", guys: 6, days: "", rate: 33,
+                  unit: "hours", guys_auto: false }],
+        conditions: { local: true }, contingency: 0
+      } }) });
+      await manual.api.init();
+      manual.api.go(1);
+      out.travelLocal.notDimmedWhenAlreadyManual =
+        !/class="tk lab inert"/.test(manual.dom.get("panels").innerHTML);
+    }
+
+    // A non-local job leaves it undimmed.
+    {
       const away = build({ blob: blob({ polish_estimate: {
         version: 2,
         takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
