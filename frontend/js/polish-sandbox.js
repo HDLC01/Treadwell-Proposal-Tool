@@ -42,6 +42,18 @@
 
   var $ = function (id) { return document.getElementById(id); };
 
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
+
   // ── the beta is a sandbox: it never edits a live bid ────────────────────────
   //
   // Hanz, 2026-08-11: "The current polish excel sheet and the beta shuold be two different
@@ -280,7 +292,7 @@
     el.textContent = "";
     var ic = document.createElement("span");
     ic.className = "ic";
-    ic.textContent = "⧉";
+    ic.innerHTML = icon("copy", 14);
     el.appendChild(ic);
     var p = document.createElement("span");
     p.appendChild(document.createTextNode("You are editing a test copy. Everything here saves to "));
@@ -305,7 +317,7 @@
     el.textContent = "";
     var ic = document.createElement("span");
     ic.className = "ic";
-    ic.textContent = "⧉";
+    ic.innerHTML = icon("copy", 14);
     el.appendChild(ic);
     var p = document.createElement("span");
     p.textContent = pending

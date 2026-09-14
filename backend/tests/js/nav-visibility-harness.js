@@ -31,6 +31,10 @@ const read = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 
 const AUTH_SRC = read(path.join(ROOT, "auth.js"));
 const ADMIN_SRC = read(path.join(ROOT, "js", "admin.js"));
+// The rail's glyphs are inline SVG from js/icons.js, which every page loads immediately before
+// auth.js. Evaluated into each context below rather than stubbed: a stubbed TWIcon would prove the
+// sidebar agrees with this harness's idea of an icon, which is not a claim worth making.
+const ICONS_SRC = read(path.join(ROOT, "js", "icons.js"));
 
 // ── as much of a browser as auth.js touches on the way to the nav ────────────
 // Deliberately not a DOM emulator. Spec mode never appends anything; these stubs exist so the
@@ -73,6 +77,7 @@ function browser() {
 function loadAuth(src) {
   const win = browser();
   vm.createContext(win);
+  vm.runInContext(ICONS_SRC, win, { filename: "icons.js" });
   vm.runInContext(src, win, { filename: "auth.js" });
   if (!win.TWAuth) throw new Error("auth.js did not publish window.TWAuth");
   return win;
@@ -114,6 +119,7 @@ async function renderForReal(src, role) {
     }),
   };
   vm.createContext(win);
+  vm.runInContext(ICONS_SRC, win, { filename: "icons.js" });
   vm.runInContext(src, win, { filename: "auth.js" });
   await win.TWAuth.ready;
   const bar = appended.filter((el) => el.id === "tw-sidebar");
@@ -152,7 +158,9 @@ function entriesFromMarkup(markup) {
   let m;
   while ((m = re.exec(nav)) !== null) {
     if (m[1] !== undefined) { section = m[1].replace(/&amp;/g, "&"); continue; }
-    const ico = /<span class="tw-nav-ico">([^<]*)<\/span>/.exec(m[4]);
+    // The span holds an <svg> now; the icons.js NAME rides data-ico. Same information, and this
+    // is still parsed independently of auth.js's own regex.
+    const ico = /<span class="tw-nav-ico" data-ico="([^"]*)">/.exec(m[4]);
     const label = /<span class="tw-nav-label">([^<]*)<\/span>/.exec(m[4]);
     const tag = /<span class="tw-nav-tag">([^<]*)<\/span>/.exec(m[4]);
     out.push({
@@ -191,17 +199,22 @@ function adminGrab(re, what) {
 
 /** The page's roleMatrixHtml(), running against the given live TWAuth as role `me`. */
 function renderAdminMatrix(win, me) {
-  const make = new Function("window", "ME", `
+  // TWIcon is a PARAMETER, not a stub: it is the same window.TWIcon loadAuth() built from the real
+  // js/icons.js, so the ticks and row icons this renders are the ones the page draws. admin.js's
+  // icon() is lifted alongside the renderers that call it — a renderer whose helper is missing dies
+  // with a ReferenceError rather than failing the claim under test.
+  const make = new Function("window", "ME", "TWIcon", `
     "use strict";
     var TWAuth = window.TWAuth;
     ${adminGrab(/^    const ROLE_LABEL = \{[^}]*\};$/m, "ROLE_LABEL")}
     ${adminFn("esc")}
+    ${adminFn("icon")}
     ${adminFn("roleLabelOf")}
     ${adminFn("roleDiffSentence")}
     ${adminFn("roleMatrixHtml")}
     return roleMatrixHtml();
   `);
-  return make(win, { role: me, email: "someone@wetreadwell.com" });
+  return make(win, { role: me, email: "someone@wetreadwell.com" }, win.TWIcon);
 }
 
 /** Rows the rendered panel actually shows: label + which role cells are ticked. */
@@ -212,7 +225,9 @@ function rowsFromPanel(html) {
     const cells = [];
     const re = /<td class="rv-cell" data-role="([^"]*)"[^>]*>([\s\S]*?)<\/td>/g;
     let m;
-    while ((m = re.exec(r)) !== null) cells.push([m[1], /✓/.test(m[2])]);
+    // The tick is a drawn <svg> rather than a typed ✓ since 2026-09-15, so the marker read here is
+    // the class admin.js puts it in. Still this file's own second opinion, still not a source grep.
+    while ((m = re.exec(r)) !== null) cells.push([m[1], /class="rv-yes"/.test(m[2])]);
     const roles = {};
     cells.forEach(([role, on]) => { roles[role] = on; });
     return {
@@ -247,16 +262,16 @@ roles.forEach((r) => {
 // Anchored on the end of the nav and on an item that is not itself gated, so this run stays
 // independent of the ONE real gate. Anchoring the gated probe on the Admin item would mean a
 // mutation that drops that gate breaks the harness instead of failing the test that is about it.
-const OPEN_ANCHOR = 'navItem("/trash.html", "🗑", "Trash") +';
+const OPEN_ANCHOR = 'navItem("/trash.html", "trash", "Trash") +';
 const GATED_ANCHOR = "      '</nav>' +";
 if (AUTH_SRC.indexOf(OPEN_ANCHOR) === -1 || AUTH_SRC.indexOf(GATED_ANCHOR) === -1) {
   throw new Error("the sidebar expression has moved; re-point the probe anchors in this harness");
 }
 const probeSrc = AUTH_SRC
   .replace(OPEN_ANCHOR,
-    OPEN_ANCHOR + '\n      navItem("/probe-open.html", "★", "Probe Open", "NEW") +')
+    OPEN_ANCHOR + '\n      navItem("/probe-open.html", "star", "Probe Open", "NEW") +')
   .replace(GATED_ANCHOR,
-    '      (isAdmin ? navItem("/probe-gated.html", "☆", "Probe Gated") : "") +\n' + GATED_ANCHOR);
+    '      (isAdmin ? navItem("/probe-gated.html", "info", "Probe Gated") : "") +\n' + GATED_ANCHOR);
 const probeWin = loadAuth(probeSrc);
 const probeMatrix = probeWin.TWAuth.navMatrix();
 const probePanel = rowsFromPanel(renderAdminMatrix(probeWin, "admin"));

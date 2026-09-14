@@ -1,6 +1,18 @@
 // Customer Portal admin page — proxies to the portal's admin API via the
 // proposal-tool backend (/api/portal/*). Externalized (no inline scripts; CSP).
 (function () {
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -307,7 +319,7 @@
       ? "Showing the board as of " + esc(TW.fmtBizDateTime(new Date((j.portal_fetched_at || 0) * 1000).toISOString())) +
         ". The customer portal isn't responding, so nothing here has changed since then."
       : "The customer portal isn't responding. This is your own project list — anything a customer has done since isn't shown.";
-    el.innerHTML = '<span>⚠</span><span>' + msg + '</span>';
+    el.innerHTML = '<span>' + icon("warning", 15) + '</span><span>' + msg + '</span>';
     el.hidden = false;
   }
 
@@ -532,7 +544,7 @@
     const head = COLS.map((c) => {
       if (!c.sort) return `<th class="${c.num ? "num" : ""}">${esc(c.label)}</th>`;
       const on = SORTFIELD === c.sort;
-      const arrow = on ? (SORTDIR === "asc" ? " ↑" : " ↓") : "";
+      const arrow = on ? " " + icon(SORTDIR === "asc" ? "arrow-up" : "arrow-down", 12) : "";
       return `<th class="${c.num ? "num " : ""}th-sort${on ? " is-sorted" : ""}" aria-sort="${
         on ? (SORTDIR === "asc" ? "ascending" : "descending") : "none"}">` +
         `<button type="button" data-sortby="${c.sort}">${esc(c.label)}${arrow}</button></th>`;
@@ -1695,7 +1707,7 @@
         // A tick, not a trophy: confirmDanger's own warn default is a WASTEBASKET, which is the
         // wrong picture entirely on the one dialog here that is good news. Kept to the same kind of
         // glyph the other two in this file use (the pause and the play) rather than an emoji.
-        confirmText: "Mark it won", cancelText: "Not yet", tone: "warn", icon: "✓",
+        confirmText: "Mark it won", cancelText: "Not yet", tone: "warn", icon: "check",
       });
       if (!ok) return;
       post(mark, { status: "won" }, { won_at: new Date().toISOString() });
@@ -2259,7 +2271,7 @@
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
-      button.textContent = "✓";
+      button.innerHTML = icon("check", 14);
     } catch (err) {
       console.error("revision download failed", err);
       button.textContent = "failed";
@@ -3631,7 +3643,7 @@
           detail: "Nothing is being sent until " + TW.fmtBizDay(pausedUntil(p))
             + ". Turning automation on clears that, so the reminders start again. The customer is"
             + " not emailed by this.",
-          confirmText: "Turn it on", cancelText: "Leave it paused", tone: "warn", icon: "▶",
+          confirmText: "Turn it on", cancelText: "Leave it paused", tone: "warn", icon: "play",
         });
         if (!ok) return;
       }
@@ -3659,7 +3671,7 @@
         before: "Stop chasing ", name: p.project_name || "this project",
         after: " for " + months + " month" + (months === 1 ? "" : "s") + "?",
         detail: "Nothing is sent to the customer until then. They aren't emailed about this.",
-        confirmText: "Pause", cancelText: "Keep chasing", tone: "warn", icon: "⏸",
+        confirmText: "Pause", cancelText: "Keep chasing", tone: "warn", icon: "pause",
       });
       if (!ok) return;
       act(path("/status"), e.target, { body: JSON.stringify({ status: "delayed", months }) });
@@ -3935,7 +3947,7 @@
       after: " yet.",
       detail: "Handing off takes it off the Active board and onto the Handed Off tab. Operations"
         + " will need those details from somewhere. You can bring it back.",
-      confirmText: "Hand it off", cancelText: "Not yet", tone: "warn", icon: "\u2192",
+      confirmText: "Hand it off", cancelText: "Not yet", tone: "warn", icon: "arrow-right",
     });
   }
 
@@ -3952,7 +3964,7 @@
       before: "Put ", name: p.project_name || "this project",
       after: " back under " + reopenDestination(p) + "?",
       detail: "Follow-up reminders start again." + (extra ? " " + extra : ""),
-      confirmText: "Bring it back", cancelText: "Leave it", tone: "warn", icon: "\u21A9",
+      confirmText: "Bring it back", cancelText: "Leave it", tone: "warn", icon: "undo",
     });
   }
 
@@ -4051,7 +4063,7 @@
         detail: "The link the customer already has keeps working: it reads the version pinned"
               + " when you sent it. Restore it from Trash and the reminders stay off.",
         confirmText: "Move it to Trash", cancelText: "Keep it",
-        tone: "danger", icon: "🗑",
+        tone: "danger", icon: "trash",
       } : {
         title: "Delete this project?",
         name: name,
@@ -4059,7 +4071,7 @@
         detail: "It was never sent, so nothing changes for the customer. You can restore it"
               + " from Trash.",
         confirmText: "Move it to Trash", cancelText: "Keep it",
-        tone: "danger", icon: "🗑",
+        tone: "danger", icon: "trash",
       });
       if (!ok) return;
       btn.disabled = true;
@@ -4497,7 +4509,7 @@
         title: "Mark the deposit as received?",
         before: "Record the deposit for ", name: p.project_name || "this project", after: " as received?",
         detail: what + "Check the money has actually landed. The customer is told it is in.",
-        confirmText: "Mark received", cancelText: "Not yet", tone: "warn", icon: "💵",
+        confirmText: "Mark received", cancelText: "Not yet", tone: "warn", icon: "cash",
       });
       if (!ok) return;
       act("/api/portal/proposal/" + encodeURIComponent(pid) + "/deposit-received", btn);
@@ -4635,7 +4647,7 @@
     const sort = $("crm-sort"), dir = $("crm-dir");
     if (sort) sort.value = SORTFIELD;
     if (!dir) return;
-    dir.textContent = SORTDIR === "asc" ? "↑ Asc" : "↓ Desc";
+    dir.innerHTML = SORTDIR === "asc" ? icon("arrow-up", 13) + " Asc" : icon("arrow-down", 13) + " Desc";
     dir.setAttribute("aria-pressed", SORTDIR === "asc" ? "true" : "false");
     dir.title = SORTDIR === "asc"
       ? "Ascending (oldest · A→Z · low→high) — click for descending"
@@ -4683,7 +4695,7 @@
   function syncViewToggle() {
     const b = $("crm-view");
     if (!b) return;
-    b.textContent = VIEW === "table" ? "▦ Board" : "☰ Table";
+    b.innerHTML = VIEW === "table" ? icon("board", 14) + " Board" : icon("table", 14) + " Table";
     b.title = VIEW === "table" ? "Switch back to the pipeline columns" : "Show every proposal as one sortable list";
     b.setAttribute("aria-pressed", VIEW === "table" ? "true" : "false");
   }

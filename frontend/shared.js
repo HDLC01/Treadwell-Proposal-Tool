@@ -652,7 +652,7 @@
       "box-shadow:0 24px 60px rgba(0,0,0,.30);text-align:center;transform:translateY(10px) scale(.97);transition:transform .16s ease;",
       "font:400 14px/1.55 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}",
       ".tw-ov.tw-in .tw-dlg{transform:none;}",
-      ".tw-dlg-ic{width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:25px;margin:0 auto 14px;}",
+      ".tw-dlg-ic{width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}",
       // Only reaches a dialog whose caller asked to hold the focus (opts.focus === "container").
       // The ring belongs on a control; on the modal wrapper it outlines the whole card.
       ".tw-dlg[tabindex]:focus{outline:none;}",
@@ -689,6 +689,18 @@
   let openModals = 0;
   function modalOpen() { return openModals > 0; }
 
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the row's
+   *  colour, and ignores every size token on the page. Exported on TW so a page that needs one
+   *  icon does not grow a private copy of the table. `typeof TWIcon` rather than `window.TWIcon`
+   *  because the harnesses lift this function into a bare Function scope with no `window`; and
+   *  guarded either way, so a missing icons.js costs a dialog its picture rather than the page its
+   *  render. */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
+
   /** The shared two-button modal. Resolves true for the confirm button, false for anything else.
    *
    *  THREE OPT-INS ADDED 2026-08-27, ALL DEFAULT-OFF. There are twenty-odd call sites for this
@@ -708,10 +720,15 @@
    *  aimed at, and an inert backdrop means clicking the next cell cannot silently revert an edit
    *  somebody meant to make. Escape closes either way: an unclosable dialog is worse than both.
    *
-   *  `iconSvg` is separate from `icon` on purpose. `icon` goes through textContent because the
-   *  same dialog renders customer-typed project and vendor names, and there is no route by which
-   *  one of those should ever be parsed as markup. `iconSvg` is only ever a literal written in
-   *  our own source. */
+   *  `opts.icon` IS A js/icons.js NAME — "trash", "check", "pause" — not a character. It was a
+   *  typed glyph until 2026-09-15 and went through textContent, which was the safe way to render
+   *  something a caller might have built out of a project name. A name is safer still: it never
+   *  reaches the markup, it only indexes icons.js's table, and an unknown one draws an empty box.
+   *  The dialog's other text keeps textContent, because THAT is where the customer-typed project
+   *  and vendor names go and none of them should ever be parsed as markup.
+   *
+   *  `iconSvg` stays separate and still takes literal markup, for a caller that needs a glyph this
+   *  dialog's tone colours differently or that icons.js does not carry. */
   function confirmDanger(opts) {
     opts = opts || {};
     const tone = opts.tone === "warn" ? "warn" : "danger";
@@ -743,7 +760,7 @@
       // iconSvg, which is markup out of our own source and never a value anybody typed.
       const icEl = dlg.querySelector(".tw-dlg-ic");
       if (opts.iconSvg) icEl.innerHTML = opts.iconSvg;
-      else icEl.textContent = opts.icon || (tone === "warn" ? "🗑" : "⚠️");
+      else icEl.innerHTML = icon(opts.icon || (tone === "warn" ? "trash" : "warning"), 26);
       dlg.querySelector(".tw-dlg-h").textContent = opts.title || "Are you sure?";
       const mEl = dlg.querySelector(".tw-dlg-m");
       // message may carry an emphasised name → support {name} highlight
@@ -1084,6 +1101,7 @@
     authHeaders,
     confirmDanger,
     modalOpen,
+    icon,
     injectModalCss,
     fmtBizDate,
     fmtBizDateTime,

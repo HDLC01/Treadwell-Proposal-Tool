@@ -105,7 +105,7 @@ def test_a_proposal_id_never_seen_before_is_one_send_not_three():
     Mutation: delete the `if old is None` branch. This test and the next both fail."""
     items = n._diff_crm({}, [_row(proposal="sent", deposit="requested")], TS)
     assert _bodies(items) == ["Proposal sent to the customer"]
-    assert items[0]["icon"] == "📤"
+    assert items[0]["icon"] == "arrow-right"
 
 
 def test_the_first_send_still_names_the_project():

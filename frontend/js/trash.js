@@ -1,4 +1,16 @@
 // Externalized from trash.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+    /** One drawn glyph out of js/icons.js, which every page loads before this file.
+     *
+     *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+     *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+     *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+     *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+     *  rather than its render.
+     */
+    function icon(name, size) {
+      return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+    }
     const fmtDate = (iso) => TW.fmtBizDate(iso);   // business timezone (Central), see shared.js
     function money(n){ return (typeof n==="number") ? "$"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : (n||""); }
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -32,7 +44,7 @@
           </div>
           <div class="card-foot">
             <button type="button" class="purge-btn" title="Delete permanently">Delete forever</button>
-            <button type="button" class="restore-btn">↩ Restore</button>
+            <button type="button" class="restore-btn">${icon("undo", 13)} Restore</button>
           </div>
         </div>`).join("");
       el.querySelectorAll(".card").forEach(c => {

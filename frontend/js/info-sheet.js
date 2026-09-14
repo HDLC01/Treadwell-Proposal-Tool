@@ -21,6 +21,18 @@
 (function () {
   "use strict";
 
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
+
   const host      = document.getElementById("sheet-grid");
   const viewport  = document.getElementById("xl-viewport");
   const tabBar    = document.getElementById("tab-bar");
@@ -450,7 +462,7 @@
       a.download = "$Project Info Sheet- " + (projLabel.textContent || "Project") + ".xlsx";
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1500);
-      dlBtn.textContent = "✓ Downloaded";
+      dlBtn.innerHTML = icon("check", 13) + " Downloaded";
       setTimeout(() => { dlBtn.textContent = orig; dlBtn.disabled = false; }, 1800);
     } catch (err) {
       console.error("Info sheet download failed", err);
@@ -468,7 +480,7 @@
     draftId = TW.getDraftId();
     if (!draftId) {
       host.innerHTML =
-        '<div class="info-empty"><div class="info-empty-mark">📋</div>' +
+        '<div class="info-empty"><div class="info-empty-mark">' + icon("clipboard", 30) + '</div>' +
         "<h2>Pick a project first</h2><p>The info sheet fills itself in from a " +
         "project's estimate, so it needs to know which job you mean.</p>" +
         '<a class="btn-primary" href="/projects.html">Choose a project →</a></div>';

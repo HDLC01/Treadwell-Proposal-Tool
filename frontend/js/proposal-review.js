@@ -1,4 +1,16 @@
 // Externalized from proposal-review.html (CSP: drop script-src 'unsafe-inline'). Do not add inline scripts.
+
+  /** One drawn glyph out of js/icons.js, which every page loads before this file.
+   *
+   *  NEVER an emoji — an emoji is drawn by whatever font the machine has, cannot take the
+   *  row's colour, and ignores every size token on the page. `typeof TWIcon` rather than
+   *  `window.TWIcon` because the test harnesses lift these renderers into a bare Function
+   *  scope with no `window`; an icons.js that failed to load then costs a page its pictures
+   *  rather than its render.
+   */
+  function icon(name, size) {
+    return typeof TWIcon === "function" ? TWIcon(name, size) : "";
+  }
   const state = TW.getState();
   if (!state.project_name) {
     document.querySelector(".word-canvas").innerHTML = `
@@ -2543,11 +2555,11 @@
       '</datalist>' +
       '<span class="tw-fmtsep" data-para="sep" aria-hidden="true"></span>' +
       '<button type="button" data-para="bullet" aria-label="Bullet point"' +
-      ' title="Bullet point on or off">▪</button>' +
+      ' title="Bullet point on or off">' + icon("list", 13) + '</button>' +
       '<button type="button" data-para="outdent" aria-label="Decrease indent"' +
-      ' title="Less indent (moves left, all the way to the margin)">⇤</button>' +
+      ' title="Less indent (moves left, all the way to the margin)">' + icon("indent-less", 13) + '</button>' +
       '<button type="button" data-para="indent" aria-label="Increase indent"' +
-      ' title="More indent (moves right)">⇥</button>' +
+      ' title="More indent (moves right)">' + icon("indent-more", 13) + '</button>' +
       '<span class="tw-fmtsep" aria-hidden="true"></span>' +
       '<button type="button" data-fmt="reset" title="Back to the template’s own formatting">Reset</button>';
     // The ribbon's own row. `document.body` is the last resort only: a page without the host

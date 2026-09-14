@@ -89,7 +89,7 @@ const LIFT = [
 ];
 let code = "";
 for (const [kind, name] of LIFT) code += declSrc(kind, name) + "\n";
-for (const name of ["stateOf", "dueLabel", "head", "histRow", "row"]) code += fnSrc(name) + "\n";
+for (const name of ["stateOf", "dueLabel", "head", "histRow", "row", "icon"]) code += fnSrc(name) + "\n";
 vm.runInContext(code, sandbox, { filename: "followups.js (lifted)" });
 
 const run = (expr) => vm.runInContext(expr, sandbox);

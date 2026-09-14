@@ -463,7 +463,7 @@ const LIFTED = [
   // The ribbon itself. fmtTargetBlock / markFmtTarget / renderFmtBar are what showFmtBar became
   // when it stopped floating; leaving any of them out is not a lift-time failure but a
   // ReferenceError on the first focusin, which is every case below.
-  fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"),
+  fn("fmtTargetBlock"), fn("markFmtTarget"), fn("renderFmtBar"), fn("icon"),
   // One editing host per box: LINE_SEL is the single list of editable line families, and
   // lineAtSelection / lineTarget / editingBox are how every handler in the wiring region below now
   // finds the line it is about. They resolve the CARET rather than the event target, because a

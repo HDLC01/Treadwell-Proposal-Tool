@@ -479,11 +479,11 @@
     flex-shrink: 0; font-size: 11px; padding: 5px 8px; width: 130px;
     border: 1px solid var(--treadwell-red); border-radius: 3px;
   }
-  /* Visible rename (✎) affordance on every tab — discoverable alternative to
+  /* Visible rename (pencil) affordance on every tab — discoverable alternative to
      double-click (Kyle: "add a little button/icon beside the sheetname"). */
   .xl-tab-bar.full button .tab-rename-btn {
-    font-size: 11px; line-height: 1; color: #b9b3b1; margin-left: 2px;
-    padding: 0 3px; border-radius: 3px; opacity: .7; cursor: pointer;
+    line-height: 0; color: #b9b3b1; margin-left: 2px; display: inline-flex; align-items: center;
+    padding: 2px 3px; border-radius: 3px; opacity: .7; cursor: pointer;
   }
   .xl-tab-bar.full button .tab-rename-btn:hover {
     color: #fff; background: var(--treadwell-red); opacity: 1;
@@ -743,7 +743,7 @@
 <main>
   <div class="top-toolbar">
     <h1>Estimate Review <span id="type-badge" class="type-badge">EPOXY</span></h1>
-    <button type="button" id="autofill-btn" class="btn-ai">↺ Autofill with AI</button>
+    <button type="button" id="autofill-btn" class="btn-ai"><svg class="tw-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.5 12a8.5 8.5 0 0 1 14.6-5.9L21 8.6"></path><path d="M21 4v4.6h-4.6"></path><path d="M20.5 12a8.5 8.5 0 0 1-14.6 5.9L3 15.4"></path><path d="M3 20v-4.6h4.6"></path></svg> Autofill with AI</button>
     <div class="inline-county" style="position: relative;">
       <label for="county-input">County (Remodel Tax)</label>
       <input type="text" id="county-input" class="county-input" placeholder="Search counties…">
@@ -766,20 +766,20 @@
       <input type="text" id="tex-name" class="tex">
     </div>
     <button type="button" id="copy-sheet-btn" class="btn-ai" style="white-space:nowrap;"
-            title="Duplicate the current worksheet, with all of its contents">⧉ Copy sheet</button>
+            title="Duplicate the current worksheet, with all of its contents"><svg class="tw-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg> Copy sheet</button>
     <button type="button" id="lock-cell-btn" class="btn-ai" style="white-space:nowrap;" disabled
-            title="Select a cell, then lock or unlock it (locked cells can't be edited in Excel)">🔒 Lock cell</button>
+            title="Select a cell, then lock or unlock it (locked cells can't be edited in Excel)"><svg class="tw-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg> Lock cell</button>
     <!-- The polish beta's only route out of this screen, on polish jobs only. It lives in this
          toolbar row rather than above the grid because the thing it replaces was a banner that
          cost ~60px of sheet; a link in a row that already exists costs nothing.
          The copy names the test copy on purpose. The beta does not continue this bid: on a real
          project it takes a copy filed under Test and leaves the bid alone, so "Try it" would be
          a lie about where the estimator's numbers end up.
-         Same ◐ glyph and BETA tag as the sidebar entry, so the two doors read as one place.
+         Same `calculator` glyph and BETA tag as the sidebar entry, so the two doors read as one place.
          Unhidden, and given the ?d= draft id, by offerPolishBeta() in js/estimate-review.js. -->
     <a id="polish-beta-link" class="beta-link" href="/polish-estimate.html" hidden
        title="Price this polish job in the beta: the same numbers as seven short steps instead of a spreadsheet. It opens a TEST COPY of this project, filed under the Test tab, and leaves this bid exactly as it is."
-       >◐ Polish estimate <span class="bl-tag">BETA</span> <span class="bl-note">· opens a test copy</span></a>
+       ><svg class="tw-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="5" y="3" width="14" height="18" rx="2"></rect><path d="M8.5 7h7M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16.5h.01M12 16.5h.01M15.5 16.5h.01"></path></svg> Polish estimate <span class="bl-tag">BETA</span> <span class="bl-note">· opens a test copy</span></a>
     <div class="nav-btns">
       <button type="button" id="back-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 12px;">← Back</button>
       <button type="button" id="continue-btn" class="btn-primary" style="padding: 5px 12px; font-size: 12px;">Continue to Proposal →</button>
@@ -794,7 +794,7 @@
     <div class="bb-row bb-head">
       <span class="bb-lbl">Base bid &amp; options</span>
       <span class="bb-hint" id="bid-options-hint">Pick which sheet is the <b>Base&nbsp;bid</b> (round button). Tick another sheet to <b>add&nbsp;it&nbsp;as&nbsp;an&nbsp;option</b> — shown on the proposal as its own total, or as an add/deduct off the base.</span>
-      <button type="button" id="bid-collapse" class="bb-collapse" title="Collapse this bar to give the worksheet more room">▾ Hide</button>
+      <button type="button" id="bid-collapse" class="bb-collapse" title="Collapse this bar to give the worksheet more room"><svg class="tw-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg> Hide</button>
     </div>
     <div id="bid-bar-body">
       <div class="bb-row" id="bid-options-list"></div>
@@ -873,6 +873,7 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script src="/js/icons.js"></script>
 <script src="/auth.js"></script>
 <script src="/shared.js"></script>
 <!-- Shared person rendering (names, initials, avatar colours) — one source of

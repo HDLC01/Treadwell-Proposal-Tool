@@ -907,8 +907,10 @@ def test_the_page_loads_no_formula_engine(html):
     # because it calls window.TWPolishIntake.applyVerbal, which that file publishes as it boots.
     # The order is asserted, not just the membership: swapped, the panel would find no hook and
     # silently fill nothing.
+    # /js/icons.js is FIRST, ahead of auth.js: the sidebar auth.js draws asks it for every glyph
+    # in the rail. See the house rule at the top of frontend/js/icons.js.
     assert srcs == ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0",
-                    "/auth.js", "/shared.js", "/js/polish-bid-core.js",
+                    "/js/icons.js", "/auth.js", "/shared.js", "/js/polish-bid-core.js",
                     "/js/polish-sandbox.js", "/js/polish-intake.js",
                     "/js/polish-verbal.js"], (
         "the page's script list has changed: %r" % srcs)

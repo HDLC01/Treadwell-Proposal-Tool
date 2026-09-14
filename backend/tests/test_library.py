@@ -435,7 +435,9 @@ def test_the_page_and_the_sidebar_both_say_it_is_a_beta():
     auth = (root / "auth.js").read_text(encoding="utf-8")
     assert 'class="beta"' in html and "Beta test" in html
     assert ".beta {" in html, "the marker has no style and would inherit body text"
-    assert 'navItem("/library.html", "\U0001f9f1", "Items and Assemblies", "BETA")' in auth
+    # The second argument was a brick emoji until 2026-09-15; it is a js/icons.js NAME now, and
+    # what this line is actually about is the BETA tag, not which picture the row wears.
+    assert 'navItem("/library.html", "layers", "Items and Assemblies", "BETA")' in auth
     assert ".tw-nav-tag{" in auth, "the sidebar tag has no style"
 
 

@@ -105,7 +105,7 @@
     .tk-sub{margin-left:auto;font:600 13px var(--mono);font-variant-numeric:tabular-nums}
     .tk-g{display:grid;gap:14px;grid-template-columns:2.1fr 1fr .75fr 1.15fr;align-items:start}
     @media (max-width:760px){ .tk-g{grid-template-columns:1fr} }
-    .x{background:none;border:0;color:var(--ink-3);cursor:pointer;font-size:15px;flex:none}
+    .x{background:none;border:0;color:var(--ink-3);cursor:pointer;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:2px}
     .x:hover{color:var(--red)}
     /* The row's own money. A box rather than bare text so it reads as a field's answer, but
        never an input: it is the library's price for the measurement beside it. */
@@ -136,10 +136,10 @@
        rather than tucked under the Guys box as a link. Flex:none so it keeps its own width
        instead of being squeezed by .labname's flex:1 1 auto; nowrap so its two words never break
        and grow the header a second line. */
-    .labtoggle{flex:none;white-space:nowrap;background:transparent;color:var(--ink-v);
-       border:1px solid var(--line);border-radius:var(--r-s);padding:4px 9px;
+    .labtoggle{flex:none;white-space:nowrap;background:transparent;color:var(--red);
+       border:1px solid var(--red);border-radius:var(--r-s);padding:4px 9px;
        font:600 11.5px var(--sans);cursor:pointer}
-    .labtoggle:hover{color:var(--red);border-color:var(--red)}
+    .labtoggle:hover{color:var(--red-dark);border-color:var(--red-dark)}
     /* NOT APPLICABLE RIGHT NOW, AND STILL TYPEABLE -- `.sw.inert`'s convention in styles.css, and
        its reasoning: say plainly that an input is not affecting the price rather than disabling it
        and losing what somebody set. The house rule keeps a real `disabled` at .38-.5 and never
@@ -278,6 +278,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
   <script src="/auth.js"></script>
   <script src="/shared.js"></script>
   <!-- library-core before the page script: the page does `var L = window.TWLib` at parse time.
