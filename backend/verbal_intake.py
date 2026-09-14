@@ -33,7 +33,7 @@ THE THREE RULES THAT MATTER, in the order they cost money if broken:
   2. **NOTHING HERE MAY WRITE A COUNTY.** `county_remodel_rate` carries a live hazard the rest of
      the app depends on: null means "nobody said which county" and falls back to the Kansas state
      rate, while an explicit 0 means "we know, and it is nothing" (Missouri exempts remodel
-     labour). A guessed 0 is indistinguishable from a researched one and silently underprices the
+     labor). A guessed 0 is indistinguishable from a researched one and silently underprices the
      job. The county picker on the intake form is the only thing allowed to set those four keys.
 
      THE MECHANISM IS THE WHITELIST: `fields` is built by walking TEXT_FIELDS, so a key that is

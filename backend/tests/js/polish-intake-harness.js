@@ -509,7 +509,7 @@ function readCountyField(built) {
  *
  *  TWO calls on purpose, and the pair is the point. The engine documents `null` ("nobody has said
  *  which county" → stand the Kansas state rate up) and an explicit `0` ("we know, and it is
- *  nothing" → Missouri exempts remodel labour) as DIFFERENT inputs. js/polish-estimate.js hands it
+ *  nothing" → Missouri exempts remodel labor) as DIFFERENT inputs. js/polish-estimate.js hands it
  *  `B.num(state.county_remodel_rate)`, which flattens both to 0. So `raw` is the engine's contract
  *  and `asWired` is what a beta bid is actually charged today; where they disagree, the disagreement
  *  belongs in the open rather than inside one number.
@@ -978,7 +978,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   // ── the county, and the real remodel-tax rate ───────────────────────────────
   //
   // Kyle's workbook hardcodes the remodel tax at 10%. That is not a real rate anywhere: Kansas
-  // charges sales tax on commercial remodel LABOUR at the state rate plus the county portion, which
+  // charges sales tax on commercial remodel LABOR at the state rate plus the county portion, which
   // is 7.975% in Johnson County. Hanz, 2026-08-18: "For the Remodel tax please use the real state
   // tax or city tax, DONT USE 10%". markupChain() takes `remodel_rate` as an input, and this field
   // is where it comes from — so what is executed here is: the list arrives from the API, a search
@@ -1044,7 +1044,7 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
   }
 
   // ── a Missouri county ───────────────────────────────────────────────────────
-  // MO rows carry no `remodel_rate` and that is CORRECT, not missing data: Missouri remodel labour
+  // MO rows carry no `remodel_rate` and that is CORRECT, not missing data: Missouri remodel labor
   // is generally exempt. The note has to say so, and the key has to stay null rather than being
   // filled in with a Kansas number.
   {

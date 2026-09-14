@@ -26,8 +26,8 @@ THE FAILURES THIS IS SHAPED AROUND.
     ROUNDUP goes AWAY from zero, so -1,234.2 becomes -1,235; `Math.ceil` would make it -1,234 and
     silently raise every hard bid.
   * **The two tax bases swapped.** Sales tax is on MATERIALS only; the remodel tax is on the
-    labour side plus the markups and never on materials. Both bases are exercised with real
-    material and real labour on the job, so swapping them moves the total instead of cancelling.
+    labor side plus the markups and never on materials. Both bases are exercised with real
+    material and real labor on the job, so swapping them moves the total instead of cancelling.
   * **The remodel tax charged at the sheet's 10%.** B75 hardcodes a rate that exists nowhere in
     Kansas law. The engine charges the county's real one instead — the state 6.5% plus the county
     portion, 7.975% in Johnson County, handed in as `remodel_rate` — and keeps the sheet's figure
@@ -36,7 +36,7 @@ THE FAILURES THIS IS SHAPED AROUND.
     are meant to disagree, so it is the one place drift could hide behind "that's deliberate".
   * **A missing county rate confused with a zero one.** Absent/null/"" is "nobody has picked a
     county" and falls back to the Kansas state 6.5%; an explicit 0 is a KNOWN rate of nothing,
-    because Missouri taxes remodel labour as exempt. Flatten the two through `num()` and every
+    because Missouri taxes remodel labor as exempt. Flatten the two through `num()` and every
     Missouri remodel is charged a Kansas tax on a screen that looks completely normal.
   * **`SUM(D64:D68)` read as five live rows.** D65 is empty and D66 holds the TEXT "Totals".
   * **Rounding once at the end.** The sheet rounds up at every step and the difference compounds
@@ -82,7 +82,7 @@ FIX_SHEET_REMODEL = (
 # ── Layer 1: the formulas this engine was transcribed from ────────────────────
 # Read out of the template. Every one of them is quoted in polish-bid-core.js's header.
 PINNED = {
-    # labour: guys x days x hourly rate x hours-per-day
+    # labor: guys x days x hourly rate x hours-per-day
     "D37": '=(A37*B37*C37)*IF($E$35="8 hour days",8,10)',
     "E35": "8 hour days",
     # materials
@@ -90,7 +90,7 @@ PINNED = {
     "B32": 0.02,
     "D32": "=ROUNDUP(D31*B32,0)",
     "D33": "=SUM(D31:D32)",
-    # labour, escalated and burdened
+    # labor, escalated and burdened
     "D45": "=ROUNDUP(SUM(D37:D44),0)",
     "C46": '=IF(D5="Yes",5%,0)',
     "D46": "=ROUNDUP((D45*C46),0)",
@@ -223,7 +223,7 @@ def test_the_flat_rates_come_from_the_cells_that_hold_them(ran, polish):
 @needs_node
 def test_a_day_is_eight_hours_because_the_sheet_says_so(ran, polish):
     """D37 multiplies by `IF($E$35="8 hour days",8,10)`. Switch E35 to ten-hour days and every
-    labour line in this tool is 20% light."""
+    labor line in this tool is 20% light."""
     assert polish["E35"].value == "8 hour days"
     assert '8,10' in polish["D37"].value
     assert ran["constants"]["hoursPerDay"] == 8, (
@@ -330,13 +330,13 @@ def _remodel_pct(inp, cond):
     """B75's rate — the ONE place this re-derivation departs from the formula string it pins.
 
     B75 is `=IF(D6="yes",0.1,0)`. Transliterating that literally is exactly what must NOT happen:
-    Kansas charges sales tax on commercial remodel LABOUR at the state 6.5% plus the county portion
+    Kansas charges sales tax on commercial remodel LABOR at the state 6.5% plus the county portion
     only, so the engine takes the county's rate as an input and this mirrors that rule instead.
     Nothing here resolves to SHEET_REMODEL_RATE, and nothing in the engine does either.
 
     NULL IS NOT ZERO, and `_num` would flatten the two. Absent / None / "" is "no county picked
     yet" and stands the state rate up until one is; an explicit 0 is a KNOWN rate of nothing —
-    Missouri taxes remodel labour as exempt — and must be charged as nothing. Reading that 0 as
+    Missouri taxes remodel labor as exempt — and must be charged as nothing. Reading that 0 as
     "unknown" would put a Kansas tax on every Missouri remodel."""
     if not cond.get("remodel_tax"):
         return 0.0
@@ -451,7 +451,7 @@ def _by(ran, needle):
 
 
 def _remodel_base(out):
-    """D75's base: `SUM(D45:D47,D55,D61,D67:D71,D77)` — the labour side and every markup. D33 is
+    """D75's base: `SUM(D45:D47,D55,D61,D67:D71,D77)` — the labor side and every markup. D33 is
     deliberately absent; D55 (tooling) and D61 (travel) are zero in the beta. Note the base does
     not depend on the RATE, which is what lets these tests re-price it at a different one."""
     return (out["labor"] + out["escalation"] + out["burden"] + out["gp"] + out["hard_bid"]
@@ -489,7 +489,7 @@ def test_the_hard_bid_line_is_negative_and_rounds_away_from_zero(ran):
 
 @needs_node
 def test_sales_tax_is_charged_on_materials_only(ran):
-    """D74 takes D33, not the sub-total. Taxing the whole cost would add ~9.5% of the LABOUR to
+    """D74 takes D33, not the sub-total. Taxing the whole cost would add ~9.5% of the LABOR to
     every taxable job — about $1,000 on this one."""
     on = _by(ran, "9.475% on the MATERIAL total only")
     off = _by(ran, "not taxable")
@@ -503,13 +503,13 @@ def test_sales_tax_is_charged_on_materials_only(ran):
 
 @needs_node
 def test_the_remodel_tax_skips_materials(ran):
-    """D75 sums D45:D47 and D67:D71 — the labour side and the markups. D33 is deliberately absent.
+    """D75 sums D45:D47 and D67:D71 — the labor side and the markups. D33 is deliberately absent.
 
     This is a test about the BASE, so it is re-expressed against whatever rate its vector actually
     prices at rather than a hardcoded one. The vector carries $12,000 of material and a real,
     non-zero county rate, so a base that wrongly included D33 answers a DIFFERENT number — the two
     cannot agree by cancellation, which is the only thing that makes a base test worth running."""
-    on = _by(ran, "on labour + markups, never on materials")
+    on = _by(ran, "on labor + markups, never on materials")
     off = _by(ran, "not a remodel: no remodel-tax line")
     assert off["remodel_tax"] == 0 and off["remodel_pct"] == 0
     rate = on["remodel_pct"]
@@ -519,7 +519,7 @@ def test_the_remodel_tax_skips_materials(ran):
 
     base = _remodel_base(on)
     assert on["remodel_tax"] == round_up(base * rate), (
-        "D75 came out %r; the labour side plus the markups at %r is %r"
+        "D75 came out %r; the labor side plus the markups at %r is %r"
         % (on["remodel_tax"], rate, round_up(base * rate)))
     with_materials = round_up((base + on["material_total"]) * rate)
     assert with_materials != on["remodel_tax"], (
@@ -575,7 +575,7 @@ def test_no_county_yet_is_the_state_floor_and_a_zero_county_rate_is_exempt(ran):
 
     Absent / null / "" all mean "nobody has picked a county", and the engine stands the Kansas STATE
     rate up until somebody does. An explicit 0 is the opposite: a KNOWN rate of nothing. Missouri
-    taxes remodel LABOUR as exempt, so a Missouri county carries no remodel rate on purpose and the
+    taxes remodel LABOR as exempt, so a Missouri county carries no remodel rate on purpose and the
     page hands down a 0.
 
     Read that 0 as "unknown" and every Missouri remodel job is charged 6.5% of Kansas tax it does
@@ -597,7 +597,7 @@ def test_no_county_yet_is_the_state_floor_and_a_zero_county_rate_is_exempt(ran):
     exempt = _by(ran, "an explicit 0")
     plain_off = _by(ran, "not a remodel: no remodel-tax line")
     assert exempt["remodel_pct"] == 0, (
-        "a county rate of exactly 0 is Missouri's exempt labour, and it resolved to %r — a 0 read "
+        "a county rate of exactly 0 is Missouri's exempt labor, and it resolved to %r — a 0 read "
         "as 'unknown' taxes every Missouri remodel at a Kansas rate" % exempt["remodel_pct"])
     assert exempt["remodel_tax"] == 0, (
         "an exempt county was charged %r of remodel tax" % exempt["remodel_tax"])
@@ -657,15 +657,15 @@ def test_the_sheets_ten_percent_remodel_rate_is_recorded_and_never_charged(ran, 
 
 
 @needs_node
-def test_prevailing_wage_escalates_labour_and_the_burden_follows(ran):
-    """C46 is 5% of labour, and D47 burdens labour PLUS the escalation — so prevailing wage moves
+def test_prevailing_wage_escalates_labor_and_the_burden_follows(ran):
+    """C46 is 5% of labor, and D47 burdens labor PLUS the escalation — so prevailing wage moves
     two lines, not one."""
     on = _by(ran, "prevailing wage: 5% escalation")
     off = _by(ran, "no prevailing wage")
     assert off["escalation"] == 0
     assert on["escalation"] == round_up(on["labor"] * 0.05)
     assert on["burden"] == round_up((on["labor"] + on["escalation"]) * 0.12)
-    assert on["burden"] > off["burden"], "the burden is being taken on bare labour"
+    assert on["burden"] > off["burden"], "the burden is being taken on bare labor"
     assert on["total"] > off["total"]
 
 
@@ -715,9 +715,9 @@ def test_pasted_figures_price_the_same_as_typed_ones(ran):
     assert out["sf"] == 12500 and out["per_sf"] is not None
 
 
-# ── the labour rows ───────────────────────────────────────────────────────────
+# ── the labor rows ───────────────────────────────────────────────────────────
 @needs_node
-def test_a_labour_row_is_guys_times_days_times_rate_times_eight(ran):
+def test_a_labor_row_is_guys_times_days_times_rate_times_eight(ran):
     for l in ran["labor"]:
         want = _num(l["row"].get("guys")) * _num(l["row"].get("days")) * _num(l["row"].get("rate")) * 8
         assert round(l["cost"], 6) == round(want, 6), l["label"]
@@ -728,7 +728,7 @@ def test_a_labour_row_is_guys_times_days_times_rate_times_eight(ran):
 
 
 @needs_node
-def test_the_labour_total_is_left_unrounded_for_d45_to_round(ran):
+def test_the_labor_total_is_left_unrounded_for_d45_to_round(ran):
     """D45 is `=ROUNDUP(SUM(D37:D44),0)` — one rounding, at the sum. Rounding each row first and
     the sum again is a different number, and it is the sheet's job to say which."""
     t = ran["laborTotal"]
@@ -772,7 +772,7 @@ def test_roundup_goes_away_from_zero_and_survives_float_dust(ran):
 @needs_node
 def test_a_v1_draft_opens_as_a_v2_model(ran):
     """v1 had named areas and materials typed straight into worksheet rows; v2 has assemblies. The
-    areas survive as measurements waiting for an assembly, the labour comes across with `crew`
+    areas survive as measurements waiting for an assembly, the labor comes across with `crew`
     read as the GUYS COUNT — reading it as money would multiply a saved estimate by eight — and
     the six replaced keys are dropped rather than half-carried."""
     m = [x for x in ran["migrations"] if "v1 draft" in x["label"]][0]
@@ -808,15 +808,95 @@ def test_a_stale_v2_draft_backfills_travel_without_disturbing_anything_else(ran)
     # The pre-existing rows, INCLUDING the estimator-typed 4-guy Polishing value and the hand-added
     # custom row, must come across byte-for-byte — the backfill only ever appends.
     assert after["labor"][:4] == before["labor"]
-    # The new row is exactly freshModel()'s blank Travel seed, not a guess at guys/days/rate.
+    # The new row is exactly freshModel()'s Travel seed — one definition, so the migration cannot
+    # hand out a different Travel from the one a brand-new sandbox gets. $33 and `hours` are the
+    # sheet's own (Polish rows 43-44); `guys` is blank here because the PAGE derives it on adopt.
     travel = after["labor"][4]
-    assert travel == {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": ""}
+    assert travel == {"id": "travel", "label": "Travel", "guys": "", "days": "", "rate": 33,
+                      "unit": "hours", "guys_auto": True}
     # Untouched elsewhere: this bug was about `labor` specifically, not a symptom of a bigger
     # migration regression.
     assert after["conditions"]["taxable"] is False and after["conditions"]["local"] is True
     assert after["contingency"] == 500
     assert ran["staleLaborBackfillIsIdempotent"], (
         "re-opening an already-backfilled draft must not push a second travel row on")
+
+
+@needs_node
+def test_travel_is_priced_per_hour_not_per_eight_hour_day(ran):
+    """The sheet heads the crew rows `Guys | Days` over `=(A37*B37*C37)*8`, and Travel `Guys |
+    HOURS` over `=(A44*B44*C44)` — no multiplier. Its middle number is already hours, so applying
+    the eight-hour day would bill a two-hour drive as sixteen.
+
+    Mutation: drop `unit` from laborCost's per-day branch. 6 × 2 × $33 becomes $3,168 instead of
+    $396 — an eightfold overcharge on a line nobody reads closely, on every out-of-town bid."""
+    t = ran["travelHourlyCost"]
+    assert t["hoursPerDay"] == 8, "the day is still eight hours for a crew row"
+    assert t["perHour"] == 6 * 2 * 33, "travel must not be multiplied by the day"
+    assert t["perDay"] == 6 * 2 * 33 * 8, "a row without unit=hours is still a day row"
+    assert t["perDay"] == t["perHour"] * 8
+
+
+@needs_node
+def test_the_travel_guys_column_is_the_man_day_sum(ran):
+    """Polish A44 is `=(A37*B37)+(A38*B38)+(A40*B40)+(A42*B42)` — guys × days over the crew rows.
+    So "Guys" on a travel row is not a head count, it is how many man-days are driving; the
+    sheet's own screenshot shows 18 against a 3-guy crew (3×5 + 3×0.5 + 3×0.5).
+
+    A travel row never counts itself, or turning travel on would inflate its own basis."""
+    d = ran["travelManDays"]
+    assert d["sheetScreenshot"] == 18, (
+        "3x5 + 3x0.5 + 3x0.5 is 18 man-days, and the hours row must not count itself: %r"
+        % d["sheetScreenshot"])
+    assert d["blanksContributeNothing"] == 0
+    assert d["empty"] == 0
+
+
+@needs_node
+def test_a_travel_row_with_no_hours_does_not_block_the_review_step(ran):
+    """THE CARVE-OUT THAT KEEPS REVIEW REACHABLE, and the reason it is needed is the auto-fill.
+
+    `blockers` reads a labor row as half-filled when 1 or 2 of guys/days/rate are empty, and
+    ignores a row where all three are — "switched off". Travel used to qualify: it seeded fully
+    blank. It no longer can. It arrives with $33 off the sheet and a Guys figure the page derives
+    from the man-days, so on a bid nobody has typed a travel hour into, exactly one box is empty.
+    Without the carve-out every draft in the system opens saying "Add the days for Travel",
+    including the local jobs that will never drive anywhere.
+
+    Hours is what means "we are doing this" — guys and rate are both defaults nobody chose."""
+    b = ran["travelBlockers"]
+    assert b["noHours"] == [], (
+        "a travel row with no hours is unused, not unfinished: %r" % b["noHours"])
+    assert any("Travel" in x for x in b["hoursButNoGuys"]), (
+        "a travel row that IS being used is checked like any other: %r" % b["hoursButNoGuys"])
+    assert any("Polishing" in x for x in b["crewRowStillChecked"]), (
+        "the carve-out must not leak onto the crew rows: %r" % b["crewRowStillChecked"])
+
+
+@needs_node
+def test_a_draft_saved_while_travel_was_a_day_row_is_brought_forward(ran):
+    """Travel shipped priced like a crew row and was corrected the same day. A sandbox opened in
+    between holds `{guys: 6, days: 2, rate: ""}` with no `unit` — which bills a 2-hour drive as 16
+    hours and then prices it at nothing, the rate being blank.
+
+    Additive, like the row backfill it sits beside: the fields Travel GAINED are filled, and the
+    `guys: 6` somebody typed is left exactly where it is. `guys_auto` is decided from the row
+    rather than defaulted on, because nothing auto-filled that 6 — turning the auto on would
+    overwrite it on the next keystroke anywhere in the panel."""
+    m = [x for x in ran["migrations"] if "priced per day" in x["label"]][0]
+    travel = [r for r in m["after"]["labor"] if r["id"] == "travel"][0]
+    assert travel["unit"] == "hours", "the row still prices by the eight-hour day"
+    assert travel["rate"] == 33, "a blank rate prices travel at nothing forever"
+    assert travel["guys"] == 6, "the estimator's own figure was overwritten"
+    assert travel["days"] == 2, "the estimator's own hours were overwritten"
+    assert travel["guys_auto"] is False, (
+        "auto would overwrite a hand-typed guys figure on the next keystroke")
+    # The crew row beside it is untouched.
+    pol = [r for r in m["after"]["labor"] if r["id"] == "polishing"][0]
+    assert (pol["guys"], pol["days"], pol["rate"]) == (3, 5, 33)
+    assert pol.get("unit") is None, "a crew row must not become an hours row"
+    assert ran["travelFieldBackfillIsIdempotent"], (
+        "re-opening an already-corrected draft must not rewrite its travel row again")
 
 
 @needs_node
@@ -837,17 +917,27 @@ def test_no_saved_model_however_broken_throws(ran):
 
 
 @needs_node
-def test_the_fresh_model_carries_the_templates_own_labour_seeds(ran):
+def test_the_fresh_model_carries_the_templates_own_labor_seeds(ran):
     """A37 = 3 guys, C37 = $32.20/hr, B40 = half a day for the mock-up. Days are left blank on the
-    two an estimator has to judge, which is why a fresh model reports them as unfinished. Travel
-    has no matching cell to transcribe, so it seeds fully blank rather than at 3 guys / $33."""
+    two an estimator has to judge, which is why a fresh model reports them as unfinished.
+
+    TRAVEL IS TRANSCRIBED TOO, from Polish rows 43-44, which an earlier version of this test said
+    did not exist. They do: `Travel: Guys | Hours` over `=(A44*B44*C44)` at C44 = 33. So it seeds
+    at the same $33 as the crew rows, with hours blank (the one figure an estimator must judge)
+    and `guys` derived rather than typed -- A44 is the man-day sum of the rows above it, which is
+    what `guys_auto` marks and the page fills in."""
     fresh = ran["fresh"]
+    # Travel's guys is blank in the SEED and filled by the page on adopt: freshModel is the core's
+    # answer, and deriving it here would need the core to know about the page's sync.
     assert [r["guys"] for r in fresh["labor"]] == [3, 3, 3, ""]
     # $33.00 from 2026-08-26 (Kyle: "The new epoxy/polish/sealed rate is $33/hr"). These seeds
     # stand in for the workbook's own Polish!C37 / C44, so they move with it or the beta prices a
     # polish job at a rate the spreadsheet no longer uses.
-    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0, ""]
+    assert [r["rate"] for r in fresh["labor"]] == [33.0, 33.0, 33.0, 33.0]
     assert [r["days"] for r in fresh["labor"]] == ["", 0.5, "", ""]
+    # The two fields that make Travel price per HOUR instead of per eight-hour day.
+    assert [r.get("unit") for r in fresh["labor"]] == [None, None, None, "hours"]
+    assert [r.get("guys_auto") for r in fresh["labor"]] == [None, None, None, True]
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
                                   "taxable": True, "remodel_tax": False}
     assert len(fresh["takeoff"]) == 1 and fresh["takeoff"][0]["unit"] == "SF"
@@ -865,8 +955,8 @@ def test_what_blocks_a_price_is_said_in_words_an_estimator_can_act_on(ran):
     # Name only the empty box. "guys, days and rate" at a row whose guys and rate are already
     # filled sends the estimator hunting through fields that are fine.
     assert "Add the days for Polishing" in \
-        says["a labour row with guys and a rate but no days"]
+        says["a labor row with guys and a rate but no days"]
     # A row at 0 days is switched off on purpose, and a wholly empty one was never started.
     # Neither is half-filled, and neither should stop a bid.
-    assert says["ready to price: a switched-off labour row is not half-filled"] == []
+    assert says["ready to price: a switched-off labor row is not half-filled"] == []
     assert says["a model that is not a model at all"], "a broken model is not ready to price"

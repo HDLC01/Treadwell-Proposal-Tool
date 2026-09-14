@@ -266,6 +266,13 @@
     /* NEVER $0.00. A line that cannot be priced says so. */
     .prev .unpriced { font:700 12.5px var(--ui); color:var(--red-dark); }
     .prev .nodash { font:700 13px var(--mono); color:var(--ink-v); }
+    /* The sub-total what-if box. Sized to sit in the same right-aligned column as the amounts it
+       drives, and captioned, because a lone typeable box in a row of read-only ones needs to say
+       what typing in it does -- it changes the preview, never a filed rate. */
+    .prev .numwrap { justify-content:flex-end; }
+    .prev .finput { width:104px; text-align:right; font:700 14px var(--mono);
+      font-variant-numeric:tabular-nums; }
+    .prevnote { font:italic 400 10.5px var(--ui); color:var(--ink-v); }
 
     .mkrow.grand { background:var(--red-tint); }
     .mkrow.grand .line .nm { color:var(--red-dark); font-weight:700; }
@@ -319,7 +326,7 @@
          reachSentence() in markup.js, which prints under the rate box and again in the row's own
          disclosure. The badge's old present-tense promise that these rows overrode the beta's
          constants stays out by name; see the second pin in test_markup_page.py. -->
-    <p class="hint"><b>Kyle's markup rates, per sheet tab.</b>
+    <p class="hint"><b>Markup rates, per sheet tab.</b>
       Super &amp; PTO and Soft Costs price the real bid; the other lines are stored and not read
       yet, and every row says which of the two it is.</p>
 

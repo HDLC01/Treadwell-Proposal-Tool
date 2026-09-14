@@ -333,8 +333,114 @@ def test_a_day_is_eight_hours(ran):
     money_is(lab["halfDayCell"], lab["halfDayExpected"], "the half-day row")
     assert lab["halfDayCell"] == "$386.40"
     money_is(lab["totalCell"], lab["totalExpected"], "labor total")
-    assert lab["headings"] == ["Task", "Guys", "Days", "Rate / day", "Cost", ""], (
-        "the labor columns changed: %r" % lab["headings"])
+    assert lab["headings"] == ["Guys", "Days", "Rate", "Cost"], (
+        "the labor fields changed: %r" % lab["headings"])
+    # And the hours row is headed differently, which is the whole reason the step is cards now:
+    # Travel's middle number is drive-time HOURS, priced without the eight-hour day.
+    assert lab["travelHeadings"] == ["Guys", "Hours", "Rate", "Cost"], (
+        "Travel no longer reads as an hours row: %r" % lab["travelHeadings"])
+
+
+@needs_node
+def test_each_labor_task_is_its_own_card(ran):
+    """The sheet heads every task separately — `Labor: Guys | Days | Rate`, then `Mock-Up:`, then
+    `Joint Filler:`, then `Travel: Guys | HOURS` — rather than running them as one table under one
+    header, and the step now reads the same way.
+
+    It is not decoration. One shared header row cannot say that Travel's middle column means
+    something different from the three above it, and that is exactly the thing an estimator has to
+    notice before typing a number into it."""
+    lab = ran["labor"]
+    assert lab["cardCount"] == 3, (
+        "one card per labor row: %r" % lab["cardCount"])
+    assert lab["tableGone"], "the labor step still renders a <table>"
+
+
+@needs_node
+def test_the_travel_guys_figure_follows_the_tasks_above_it_until_somebody_disagrees(ran):
+    """Polish A44 derives Travel's Guys from the rows above it, so it moves as days get typed
+    rather than waiting to be copied across by hand.
+
+    AND THE KEYSTROKE IS THE DISAGREEMENT. Typing in the box is what leaves auto — asking somebody
+    to find a control first, to then be allowed to type the number they already have in mind, is a
+    worse trade than noticing. Once left, the figure stops following the tasks above; the way back
+    is offered, because otherwise there is none short of knowing to clear the field."""
+    t = ran["travelGuys"]
+    assert t["seeded"] == 16.5, "3x5 + 3x0.5 man-days: %r" % t["seeded"]
+    assert t["afterCrewEdit"] == 13.5, (
+        "the derived figure did not follow a task above it: %r" % t["afterCrewEdit"])
+    assert t["boxShowsIt"] not in ("", "None"), (
+        "the box sits empty next to a row that is being priced off the figure")
+    assert t["manualLinkOffered"], "no way across to typing one's own figure"
+    assert t["afterTyping"] == {"guys": "7", "auto": False}, (
+        "typing in the box did not take it off auto: %r" % t["afterTyping"])
+    assert t["stickyAfterCrewMoves"] == "7", (
+        "a hand-typed figure was overwritten when a task above it changed: %r"
+        % t["stickyAfterCrewMoves"])
+    assert t["afterBackToAuto"] == {"guys": 28.5, "auto": True}, (
+        "back-to-auto did not resume following the tasks above: %r" % t["afterBackToAuto"])
+
+
+@needs_node
+def test_the_derived_guys_figure_repaints_on_screen_and_not_only_in_the_model(ran):
+    """THE SCREEN MUST NOT DISAGREE WITH ITSELF, and for one build it did.
+
+    Typing into a field takes the `changed(false)` path, which repaints the computed TEXT — costs,
+    totals, hints — and leaves the inputs alone, because until Travel arrived no input on this page
+    held a figure the page itself owned. So `syncAutoGuys` moved Travel's man-days to 16.5 in the
+    model, the cost cell repainted off 16.5, and the Guys box went on showing the 1.5 it had been
+    rendered with.
+
+    Every test passed: the model was right, the cost was right, the arithmetic was right. What was
+    wrong was only visible in a browser — a box reading 1.5 next to a cost worked out from 16.5,
+    with no way for an estimator to tell which number the bid used. A live pass read it as the guys
+    figure being dropped from the formula and called it a pricing bug, which is the reasonable
+    conclusion from what was on screen.
+
+    Mutation: drop the `[data-auto]` repaint from repaintNumbers. The cost stays right and this is
+    the only thing that goes red."""
+    t = ran["travelLiveRepaint"]
+    assert t["seededBox"] == "1.5", (
+        "a fresh draft's only days are the mock-up's half: %r" % t["seededBox"])
+    assert t["modelAfterCrewEdit"] == 16.5, "3x5 + 3x0.5 did not reach the model"
+    assert t["boxAfterCrewEdit"] == "16.5", (
+        "the box still reads the figure it was rendered with, while the cost beside it is worked "
+        "out from a different one: %r" % t["boxAfterCrewEdit"])
+    # Hours blank means the row is not used yet, whatever its guys says.
+    assert t["costAfterCrewEdit"] == "$0"
+    # And with hours typed, the row prices off the derived figure the box is now showing: 16.5
+    # man-days x 2 hours x $33 = $1,089. NOT x8, which would read $8,712.
+    assert t["costWithHours"] == "$1,089", (
+        "travel priced off something other than the figure on screen: %r" % t["costWithHours"])
+    assert t["expectedWithHours"] == 1089
+    assert t["modelWithHours"]["guys"] == 16.5
+
+
+@needs_node
+def test_travel_dims_on_a_local_job_and_is_still_typeable(ran):
+    """The intake toggle's own words are "Local job. Under 70 miles. Off means travel and lodging
+    get added" — so on a local job Travel is not expected, and the card says so.
+
+    DIMMED, NOT DISABLED, NOT HIDDEN. `.sw.inert`'s convention and its reasoning: say plainly that
+    an input is not affecting the price rather than disabling it and losing what somebody set. A
+    local job that does need drive time must not send an estimator back to a different screen to
+    record it, and a row that vanished would take their typed hours with it. The house rule keeps
+    a real `disabled` at .38-.5 and never dims a live control by opacity alone, so nothing here
+    carries `disabled`.
+
+    Presentation only: the dimming must not reach laborCost, laborTotal or blockers."""
+    t = ran["travelLocal"]
+    assert t["dimmed"], "a local job does not dim the travel card"
+    assert t["saysWhy"], "the card dims without saying why"
+    assert t["noDisabledAttr"], "a dimmed travel card must not disable its own inputs"
+    assert t["typedAnyway"] == "3", (
+        "typing into a dimmed travel card did not land: %r" % t["typedAnyway"])
+    assert t["costWasZeroWhileUnused"], "an unused travel row charged something"
+    # 6 man-days x 3 hours x $33 = $594 on top of the crew's $1,584 — priced per hour, and priced
+    # at all, on a job the page had just called local.
+    assert t["costAfterTyping"] == (3 * 2 * 33 * 8) + (6 * 3 * 33), (
+        "a dimmed row that was typed into did not reach the total: %r" % t["costAfterTyping"])
+    assert t["undimmedWhenAway"], "an out-of-town job dimmed travel anyway"
 
 
 @needs_node
@@ -667,9 +773,12 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
         "the carried measurements are not on screen: %r" % m["measureCells"])
     assert m["blockers"] == ["Pick an assembly for takeoff row 1",
                             "Pick an assembly for takeoff row 2"]
+    # Travel's 24 is DERIVED, not carried: v1 had no travel row, and its Guys column is the man-day
+    # sum of the three rows beside it — 4x3 + 2x1 + 5x2. Its hours stay blank, which is the figure
+    # an estimator has to supply and the one that decides whether the row is used at all.
     assert [[r["id"], r["guys"], r["days"], r["rate"]] for r in m["labor"]] == [
         ["polishing", 4, 3, 34], ["mockup", 2, 1, 30], ["jointfill", 5, 2, 31],
-        ["travel", "", "", ""]], (
+        ["travel", 24, "", 33]], (
         "v1 labor did not come across as guys/days/rate: %r" % m["labor"])
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
                               "taxable": False, "remodel_tax": True}, (
@@ -679,7 +788,7 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
 
 @needs_node
 def test_the_dropped_v1_keys_are_gone(ran):
-    """system / tooling / materials / added / adds / options / labour are dropped on purpose:
+    """system / tooling / materials / added / adds / options / labor are dropped on purpose:
     assemblies replace all of them, and carrying half of them forward would price the same material
     twice.
 
@@ -705,10 +814,11 @@ def test_intake_seeds_the_first_measurement_only_when_nothing_is_measured(ran):
         "intake's polish_sf overwrote a measured takeoff row: %r" % m["seededFromIntake"])
     assert m["freshFromIntake"] == 8250, (
         "a brand-new project did not pick up intake's square footage: %r" % m["freshFromIntake"])
-    # A fresh model also seeds the four labor rows the template itself carries (Travel blank —
-    # it has no cell of its own to seed a guy count or rate from).
+    # A fresh model also seeds the four labor rows the template itself carries. Travel's 1.5 is
+    # DERIVED on adopt rather than seeded: the only crew row carrying days out of the box is the
+    # mock-up's half day, so the man-days come to 3 x 0.5. Its rate is the sheet's own C44 = $33.
     assert m["freshLabor"] == [["polishing", 3, 33.0], ["mockup", 3, 33.0], ["jointfill", 3, 33.0],
-                              ["travel", "", ""]]
+                              ["travel", 1.5, 33]]
 
 
 # ── H. boot ──────────────────────────────────────────────────────────────────
@@ -837,6 +947,11 @@ def test_the_assembly_datalist_is_filled_from_the_library(ran):
 def test_nothing_on_screen_says_labour_or_crew(ran):
     """Hanz: "All labour should be renamed to 'Labor'." And "Crew" went with it — the column is
     Guys.
+
+    THE BRITISH SPELLING IS THIS TEST'S WHOLE SUBJECT, so neither the name above nor the pattern in
+    the harness's `offenders()` may be swept along by a labour->labor rename. Pointed at "labor"
+    instead, it asserts the page never says the word it is supposed to say in a dozen places, and
+    goes red everywhere at once — which is exactly what happened the first time this rename ran.
 
     SCOPED DELIBERATELY. The word may legitimately appear in code comments quoting the history of
     this rework (polish-bid-core.js documents the v1 `labour` key and why `crew` was a head count),
@@ -1004,7 +1119,7 @@ def test_the_remodel_tax_uses_the_countys_real_rate_not_the_sheets_ten_percent(r
     10%".
 
     Kyle's workbook hardcodes 10% at B75, and that figure is not a real rate anywhere. Kansas
-    charges sales tax on commercial remodel LABOUR at the state rate plus the county portion only,
+    charges sales tax on commercial remodel LABOR at the state rate plus the county portion only,
     which is 7.975% in Johnson County. The live estimating tool has looked the real rate up per
     county since 2026-06-02, and the beta now reads the same `county_remodel_rate` key off the
     draft, so a project priced on either screen agrees with the other.
@@ -1073,7 +1188,7 @@ def test_a_county_rate_on_the_draft_does_not_switch_the_remodel_tax_on(ran):
 
 @needs_node
 def test_a_missouri_county_is_charged_nothing_not_the_kansas_fallback(ran):
-    """Missouri taxes remodel LABOUR as exempt, so a Missouri county carries no remodel rate on
+    """Missouri taxes remodel LABOR as exempt, so a Missouri county carries no remodel rate on
     purpose. That absence means "we know, and it is nothing" — not "we don't know".
 
     THE BUG THIS PREVENTS: reading the missing rate as unknown stands the Kansas state rate up and
