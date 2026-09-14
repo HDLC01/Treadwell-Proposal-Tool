@@ -273,6 +273,19 @@
     }
   }
 
+  /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
+   *  `guys_auto` going false is what typing in Guys already does (the `data-k="guys"` handler
+   *  below flips it); `filledIn(r.days)` is Hours holding a real number. Either one is the
+   *  estimator saying "we need this anyway", so either one lifts the dim -- not just Hours, since
+   *  Guys is the box somebody is looking at when they start typing.
+   *
+   *  ONE FUNCTION, used by both the first paint (laborCard) and the live repaint
+   *  (repaintNumbers), so the two cannot disagree about a row that is being typed into right now. */
+  function laborInert(r) {
+    return !!(r && r.unit === "hours") && !!(M.conditions || {}).local &&
+      !!r.guys_auto && !B.filledIn(r.days);
+  }
+
   /** One place every edit funnels through, so nothing can change a value without the bid, the
    *  rail and the draft all catching up.
    *
@@ -454,11 +467,22 @@
     var auto = !!(hours && r.guys_auto);
     // Dimmed, not disabled, and not hidden: `.sw.inert`'s rule, for `.sw.inert`'s reason. A local
     // job that does need drive time must not send somebody back to the intake step to type it,
-    // and a row that vanished would take an estimator's typed hours with it.
-    var inert = hours && !!(M.conditions || {}).local;
-    return '<div class="tk lab' + (inert ? " inert" : "") + '"><div class="tk-h">' +
+    // and a row that vanished would take an estimator's typed hours with it. Untouched only --
+    // see laborInert -- so typing in either box beside it un-dims the card live.
+    var inert = laborInert(r);
+    // The way in and out of the derived Guys figure, gated on `hours` -- a crew row must never
+    // get this button, because clicking it would run the same handler as Travel's and overwrite
+    // that row's own Guys with the man-day sum. A bare <button>, no wrapper, so its own click
+    // target is what data-lab-manual/-auto sits on.
+    var toggle = !hours ? "" : (auto
+      ? '<button type="button" class="labtoggle" data-lab-manual="' + i +
+        '" aria-label="Type my own Guys figure">Type my own</button>'
+      : '<button type="button" class="labtoggle" data-lab-auto="' + i +
+        '" aria-label="Back to the automatic Guys figure">Back to auto</button>');
+    return '<div class="tk lab' + (inert ? " inert" : "") + '" data-lab-card="' + i +
+      '"><div class="tk-h">' +
       '<input class="labname" data-lab="' + i + '" data-k="label" value="' + esc(nv(r.label)) +
-      '" placeholder="Task" aria-label="Task name">' +
+      '" placeholder="Task" aria-label="Task name">' + toggle +
       '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
       esc(moneyAuto(B.laborCost(r))) + '</span>' +
       (M.labor.length > 1
@@ -471,12 +495,8 @@
       esc(nv(r.guys)) + '"' + (auto ? ' data-auto="1"' : '') + '>' +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
-      '<p class="hint">' + (auto
-        ? 'Man-days from the tasks above. <button type="button" class="linkish" ' +
-          'data-lab-manual="' + i + '">Type my own</button>'
-        : (hours ? 'Man-days on the road. <button type="button" class="linkish" ' +
-                   'data-lab-auto="' + i + '">Back to auto</button>'
-                 : 'How many on it.')) + '</p></div>' +
+      '<p class="hint">' + (auto ? 'Man-days from the tasks above.'
+        : (hours ? 'Man-days on the road.' : 'How many on it.')) + '</p></div>' +
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
       '<input class="n" data-lab="' + i + '" data-k="days" value="' + esc(nv(r.days)) + '">' +
@@ -494,7 +514,10 @@
       '<p class="hint">' + (hours ? "guys × hours × rate" :
         "guys × days × rate × " + B.HOURS_PER_DAY) + '</p></div>' +
 
-      '</div>' + (inert
+      '</div>' + (hours
+        // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
+        // whether it shows, so the card's class is the one source of truth for both the dimming
+        // and the caption, and the two cannot drift apart on a live repaint.
         ? '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
           'anyway if it needs drive time.</p>'
         : "") + '</div>';
@@ -726,6 +749,15 @@
       if (!r) return;
       var v = r.guys == null ? "" : String(r.guys);
       if (el.value !== v) el.value = v;
+    });
+    // The Travel card's own dim state, live: typing in Guys or Hours takes this path
+    // (`changed(false)`), never a rebuild, so nothing else repaints the card's class. Keyed
+    // attribute + whole-className assignment -- laborCard is the only other writer of this
+    // string, and laborInert is the only source either one reads.
+    document.querySelectorAll("[data-lab-card]").forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-lab-card"), 10)];
+      if (!r) return;
+      el.className = "tk lab" + (laborInert(r) ? " inert" : "");
     });
 
     var one = function (sel, txt) {

@@ -419,7 +419,7 @@ def test_the_derived_guys_figure_repaints_on_screen_and_not_only_in_the_model(ra
 @needs_node
 def test_travel_dims_on_a_local_job_and_is_still_typeable(ran):
     """The intake toggle's own words are "Local job. Under 70 miles. Off means travel and lodging
-    get added" — so on a local job Travel is not expected, and the card says so.
+    get added" — so on a local job, an UNTOUCHED Travel row is not expected, and the card says so.
 
     DIMMED, NOT DISABLED, NOT HIDDEN. `.sw.inert`'s convention and its reasoning: say plainly that
     an input is not affecting the price rather than disabling it and losing what somebody set. A
@@ -430,17 +430,60 @@ def test_travel_dims_on_a_local_job_and_is_still_typeable(ran):
 
     Presentation only: the dimming must not reach laborCost, laborTotal or blockers."""
     t = ran["travelLocal"]
-    assert t["dimmed"], "a local job does not dim the travel card"
+    assert t["dimmed"], "a local job does not dim an untouched travel card"
     assert t["saysWhy"], "the card dims without saying why"
     assert t["noDisabledAttr"], "a dimmed travel card must not disable its own inputs"
     assert t["typedAnyway"] == "3", (
         "typing into a dimmed travel card did not land: %r" % t["typedAnyway"])
     assert t["costWasZeroWhileUnused"], "an unused travel row charged something"
-    # 6 man-days x 3 hours x $33 = $594 on top of the crew's $1,584 — priced per hour, and priced
-    # at all, on a job the page had just called local.
-    assert t["costAfterTyping"] == (3 * 2 * 33 * 8) + (6 * 3 * 33), (
+    # guys x 3 hours x $33 on top of the crew's $1,584 — priced per hour, and priced at all, on a
+    # job the page had just called local. `guys` reads the harness's OWN derived figure rather
+    # than a hardcoded 6, so this cannot pass by two numbers coincidentally agreeing.
+    assert t["costAfterTyping"] == (3 * 2 * 33 * 8) + (t["derivedGuys"] * 3 * 33), (
         "a dimmed row that was typed into did not reach the total: %r" % t["costAfterTyping"])
     assert t["undimmedWhenAway"], "an out-of-town job dimmed travel anyway"
+
+
+@needs_node
+def test_travel_undims_live_the_moment_you_type_in_it(ran):
+    """A browser pass found the Travel card staying dim while actively being typed into — the old
+    rule was `hours && local`, with no notion of touched-vs-untouched. Typing in EITHER Guys or
+    Hours is the estimator saying "we need this anyway", so either one lifts the dim, live, not
+    only after some later full re-render.
+
+    Mutation-tested: this is the one test in the module that would still pass if the
+    `repaintNumbers` class-toggle block were deleted entirely, UNLESS it reads the live DOM node
+    rather than a string snapshot — the stub's `className` setter never touches `innerHTML`."""
+    t = ran["travelLocal"]
+    assert t["classBeforeTyping"] == "tk lab inert", (
+        "the untouched card did not start dimmed: %r" % t["classBeforeTyping"])
+    assert t["classAfterTypingHours"] == "tk lab", (
+        "typing Hours did not lift the dim live: %r" % t["classAfterTypingHours"])
+    assert t["classAfterTypingGuys"] == "tk lab", (
+        "typing Guys did not lift the dim: %r" % t["classAfterTypingGuys"])
+    # Clearing the one field that means "we're using this" is "we aren't, after all" — a
+    # deliberate flicker, not an oversight.
+    assert t["classAfterClearingHours"] == "tk lab inert", (
+        "backspacing Hours back to empty did not re-dim the card: %r"
+        % t["classAfterClearingHours"])
+    # The other half of the rule: a row already switched to manual (guys typed over) must not dim
+    # even with hours still blank — "touched" is not the same fact as "hours filled in".
+    assert t["notDimmedWhenAlreadyManual"], (
+        "a row already taken off auto dimmed anyway, with no hours typed")
+
+
+@needs_node
+def test_the_type_my_own_toggle_is_a_visible_header_button(ran, html):
+    """Moved out of the small-print hint under Guys and into the card header, as a real button
+    rather than an underlined link — the hint under Guys is too quiet to notice."""
+    lab = ran["labor"]
+    assert lab["toggleInHeader"], "the toggle is not in the Travel card's header"
+    assert lab["noToggleOnCrewRows"], (
+        "a crew row offers the auto/manual toggle — clicking it would overwrite that row's own "
+        "Guys with the man-day sum")
+    assert lab["linkishGone"], "the old underlined-link markup is still being rendered"
+    assert ".labtoggle" in html, "the page no longer defines the header button's own style"
+    assert ".linkish" not in html, "the old link style is still on the page"
 
 
 @needs_node
