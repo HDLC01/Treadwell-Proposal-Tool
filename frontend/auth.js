@@ -603,7 +603,7 @@
     // viewport (e.g. the estimate worksheet) gets a full bar of height back.
     // Otherwise fall back to a fixed 52px top bar (pages without a header).
     const bellHTML =
-      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">' + icon("bell", 18) + '' +
+      '<button class="tw-bell" id="tw-bell" title="Notifications" aria-label="Notifications">' + icon("bell", 24) + '' +
       '<span class="tw-bell-badge" id="tw-bell-badge" hidden></span></button>';
     const pageHeader = document.querySelector("header.topbar");
     if (pageHeader) {
