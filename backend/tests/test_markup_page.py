@@ -969,6 +969,28 @@ def test_the_global_tab_is_not_the_chain_and_has_no_lump_sum(ran):
 
 
 @needs_node
+def test_no_row_sits_inside_another_row_on_any_tab(ran):
+    """THE ROWS HAVE TO BE SIBLINGS, on the chain tabs and on Global alike.
+
+    `.mkrow` is itself a four-column grid, so a row that ends up INSIDE another row does not
+    render as a row at all -- it renders as one of that row's four columns. #516 pulled the
+    job-size box out into subtotalBoxHtml and took the context row's closing `</div>` with it, so
+    every row below became a child of the context row: the Global tab drew its four lines side by
+    side across the four columns, wrapping one word per line, and the tab was unusable.
+
+    NOTHING THREW AND NOTHING WENT RED. The browser auto-closes an open div, and every text,
+    order, figure and preview assertion in this file kept passing, because `byClass` walks
+    descendants and went on finding all the rows -- in the wrong place. Rendering the markup was
+    never enough on its own; where the rows LAND had to be asserted too.
+
+    Mutation: drop the `+ "</div>"` after either subtotalBoxHtml call in markup.js."""
+    for scenario in ("dayOnePolish", "globalDayOne"):
+        assert ran[scenario]["nestedRows"] == 0, (
+            "%s put a .mkrow inside another .mkrow -- on screen those render as COLUMNS of the "
+            "outer row rather than rows of the table" % scenario)
+
+
+@needs_node
 def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
     """Which is exactly true today, and the reason `global` is absent from PRICES_THE_BID.
 
