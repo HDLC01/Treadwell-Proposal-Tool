@@ -68,7 +68,10 @@ def test_rebuilds_documents_from_the_snapshot(monkeypatch):
     monkeypatch.setattr(main.drafts, "get_revision",
                         lambda did, no: {"revision_no": no, "data": {"proposal_payload": snapshot_payload}})
 
-    def fake_generate(payload, request, *, persist=True):
+    # **kw, not a fixed signature: _generate grows keyword-only options (persist,
+    # want_estimate) and a stub that enumerates them turns each new one into a TypeError
+    # in a test that is not about that option at all.
+    def fake_generate(payload, request, *, persist=True, **kw):
         seen["values"] = payload.values
         seen["persist"] = persist
         return _gen_out()
@@ -118,7 +121,10 @@ def test_proposal_pdf_renders_a_specific_revision(monkeypatch):
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}
 
-    def fake_generate(payload, request, *, persist=True):
+    # **kw, not a fixed signature: _generate grows keyword-only options (persist,
+    # want_estimate) and a stub that enumerates them turns each new one into a TypeError
+    # in a test that is not about that option at all.
+    def fake_generate(payload, request, *, persist=True, **kw):
         seen["name"] = payload.values.get("project_name")
         seen["persist"] = persist
         return _gen_out("tok")
@@ -149,7 +155,10 @@ def test_proposal_pdf_without_revision_still_uses_the_live_draft(monkeypatch):
                         lambda did: {"data": {"proposal_payload": {"values": {"project_name": "LIVE"}}}})
     seen = {}
 
-    def fake_generate(payload, request, *, persist=True):
+    # **kw, not a fixed signature: _generate grows keyword-only options (persist,
+    # want_estimate) and a stub that enumerates them turns each new one into a TypeError
+    # in a test that is not about that option at all.
+    def fake_generate(payload, request, *, persist=True, **kw):
         seen["name"] = payload.values.get("project_name")
         seen["persist"] = persist
         return _gen_out("tok2")

@@ -2681,7 +2681,10 @@ def api_admin_proposal_pdf(draft_id: str, request: Request,
     # not 500 the render the portal waits on; now the letter is page 1 of the proposal, and a
     # customer whose PDF quietly lost the page the estimator approved is the worse of the two
     # failures. Builds it, and refuses loudly if it cannot.
-    out = _generate(GenerateIn(**pp), request, persist=False)
+    # want_estimate=False — the next line reads the DOCX token and this handler never touches the
+    # workbook. Building one cost the customer ~3.2s of the ~3.5s they spent on a spinner, to
+    # produce a file cached under a token that was never requested and expired unread.
+    out = _generate(GenerateIn(**pp), request, persist=False, want_estimate=False)
     tok = (out.docx_download_url or "").rsplit("/", 1)[-1]
     entry = _FILE_CACHE.get(tok)
     if not entry:
@@ -4671,7 +4674,8 @@ def api_generate(payload: GenerateIn, request: Request) -> GenerateOut:
 
 
 def _generate(payload: GenerateIn, request: Request, *,
-              persist: bool = True) -> GenerateOut:
+              persist: bool = True,
+              want_estimate: bool = True) -> GenerateOut:
     """Final generate: fill xlsx + docx, return download links (xlsx / docx /
     on-demand pdf). The estimator downloads + files them manually.
 
@@ -4680,6 +4684,21 @@ def _generate(payload: GenerateIn, request: Request, *,
     moment; writing its values back would push that moment over the live draft (an old revision's
     replay is literally time travel). Only a browser POST, which carries the current state,
     persists.
+
+    `want_estimate=False` SKIPS THE .xlsx ENTIRELY, and exactly one caller passes it: the
+    customer's on-demand PDF at /api/admin/proposal-pdf, which reads `docx_download_url` and
+    nothing else. It was filling a 653 KB workbook, caching it under a token nobody would ever
+    request, and throwing it away — about 3.2 s of the ~3.5 s a customer spent staring at a
+    spinner. The other two persist=False callers genuinely need the file: the revision download
+    RETURNS the xlsx link, and To-Dropbox uploads the xlsx by name.
+
+    DO NOT READ THIS AS THE `want_cover_letter` FLAG COMING BACK. That one changed the DOCUMENT —
+    a customer received a proposal whose first page was missing, and could not tell. This changes
+    no document at all: the .docx and the PDF rendered from it are byte-for-byte what they were,
+    and `totals` comes off `payload.computed_bid`, never off the workbook. The only difference is
+    an artefact nobody asked for is not built. A caller that DOES need the xlsx and passes False
+    gets an empty `xlsx_download_url`, which its own `_FILE_CACHE.get` already turns into a
+    refusal rather than a wrong file.
 
     THERE IS NO LONGER A WAY TO ASK FOR THE PROPOSAL WITHOUT THE LETTER, and that is the point.
     Three callers used to pass `want_cover_letter=False` — the customer PDF, a revision's file
@@ -5065,22 +5084,25 @@ def _generate(payload: GenerateIn, request: Request, *,
     if _ppo:
         values["_phase_price_override"] = _ppo
 
-    # Fill estimate workbook
-    try:
-        xlsx_bytes = estimate_writer.fill_estimate(
-            values,
-            cell_values=payload.cell_values,
-            extras=payload.extras,
-            alternate=alternate_arg,
-            tab_copies=payload.tab_copies,
-            tab_labels=payload.tab_labels,
-            tab_order=payload.tab_order,
-            tab_structs=payload.tab_structs,
-            lock_overrides=payload.lock_overrides,
-        )
-    except Exception as exc:
-        log.exception("Estimate fill failed")
-        raise HTTPException(500, "Failed to generate the estimate. Please try again.") from exc
+    # Fill estimate workbook — unless the caller has said it will not read it. See the
+    # `want_estimate` paragraph in this function's docstring for why exactly one caller does.
+    xlsx_bytes: Optional[bytes] = None
+    if want_estimate:
+        try:
+            xlsx_bytes = estimate_writer.fill_estimate(
+                values,
+                cell_values=payload.cell_values,
+                extras=payload.extras,
+                alternate=alternate_arg,
+                tab_copies=payload.tab_copies,
+                tab_labels=payload.tab_labels,
+                tab_order=payload.tab_order,
+                tab_structs=payload.tab_structs,
+                lock_overrides=payload.lock_overrides,
+            )
+        except Exception as exc:
+            log.exception("Estimate fill failed")
+            raise HTTPException(500, "Failed to generate the estimate. Please try again.") from exc
 
     # Version guard for the document editor's paragraph_overrides. Their ids are
     # positions in iter_editable_blocks over a SPECIFIC template file; a re-annotation
@@ -5253,7 +5275,10 @@ def _generate(payload: GenerateIn, request: Request, *,
     # The docx token doubles as the PDF source: /api/file/{docx_token}/pdf renders
     # it on demand via LibreOffice.
     safe_name = (project_name or "proposal").replace(" ", "_")[:80]
-    xlsx_token = _cache_file(
+    # No workbook was built, so there is nothing to hand a token to. Caching b"" under a real
+    # token would be worse than an empty string: the caller's `_FILE_CACHE.get` would SUCCEED and
+    # the estimator would download a zero-byte .xlsx named after their project.
+    xlsx_token = "" if xlsx_bytes is None else _cache_file(
         xlsx_bytes,
         f"{safe_name}_estimate.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -5319,7 +5344,9 @@ def _generate(payload: GenerateIn, request: Request, *,
     return GenerateOut(
         work_type=payload.work_type,
         audience=payload.audience,
-        xlsx_download_url=f"/api/file/{xlsx_token}",
+        # Empty, not "/api/file/", when no workbook was built. A bare prefix would be a URL that
+        # looks real, 404s on click, and reads as a broken download rather than an absent one.
+        xlsx_download_url=f"/api/file/{xlsx_token}" if xlsx_token else "",
         docx_download_url=f"/api/file/{docx_token}",
         pdf_download_url=f"/api/file/{docx_token}/pdf",
         # Authoritative totals from the 5.7-recipe engine (computed on
