@@ -21,9 +21,16 @@ WHAT THIS PAGE MUST NOT DO -- the properties worth the harness:
   * **A non-admin is shown nothing editable.** `_require_admin` in main.py is the real gate; this
     is only so nobody is handed a control that 403s. It fails closed -- ADMIN starts false and is
     settled before the first paint.
-  * **The tabs come from the API.** Five sheet LAYOUTS, and deliberately no Combo: a combo job is
-    two option lines each priced off its own tab, so markup.py refuses the string by name and a
-    Combo tab here would offer to store a rate nothing could ever read.
+  * **The tabs come from the API.** Five sheet LAYOUTS plus Global, and deliberately no Combo: a
+    combo job is two option lines each priced off its own tab, so markup.py refuses the string by
+    name and a Combo tab here would offer to store a rate nothing could ever read.
+  * **ONE HOME PER LINE.** Four lines are the same rule on every sheet and are filed once, on
+    Global; a sheet tab shows them read-only and reads their value from there. Three things must
+    hold at once and each has its own test below: the Global tab is NOT the chain (no compounding,
+    no running total, no lump sum); Gyp's hard-bid row stays ABSENT whatever is filed on Global,
+    because Gyp!B73 is EMPTY and that is a fact about the tab; and a row filed at a line's OLD
+    home — production has one, polish / bond / 1% — is shown as misfiled rather than applied,
+    hidden or migrated.
 
 AND, SINCE THE 2026-09-05 REDESIGN, three more:
 
@@ -155,20 +162,32 @@ def test_the_rows_are_markups_own_chain_in_markups_own_order(ran):
 
 
 @needs_node
-def test_the_editable_lines_are_exactly_the_api_line_keys(ran):
+def test_the_editable_lines_on_a_tab_are_exactly_the_api_TAB_line_keys(ran):
     """Editable == has a switch and a control. Read off the rendered rows, not off a list.
 
-    markup.LINE_KEYS is CHAIN minus the two the backend refuses by name, and an admin offered a
-    box for a line the API would refuse is being set up to collect a 400."""
+    THE SPLIT, from both ends. A sheet tab offers a box for the three lines that differ per tab
+    and nothing else; the Global tab offers one for the four that do not. An admin handed a box
+    for a line the API would refuse is being set up to collect a 400 — and hard_bid and bond are
+    now exactly that on a sheet tab."""
     editable = [r["line"] for r in ran["dayOnePolish"]["rows"] if r["inputs"]]
-    assert editable == list(markup.LINE_KEYS)
+    assert editable == list(markup.TAB_LINE_KEYS)
+
+    on_global = [r["line"] for r in ran["globalDayOne"]["rows"] if r["inputs"]]
+    assert on_global == list(markup.GLOBAL_LINE_KEYS)
 
 
 @needs_node
-def test_the_tabs_are_the_five_sheet_layouts_from_the_api(ran):
-    """Five LAYOUTS, in the API's order, off the API's own `layouts` array."""
+def test_the_tabs_are_the_sheet_layouts_plus_global_from_the_api(ran):
+    """Six LAYOUTS, in the API's order, off the API's own `layouts` array — five sheets and then
+    Global, which is not a sheet.
+
+    LAST, and selected LAST too: the page opens on LAYOUTS[0] and the tab somebody came to this
+    screen to edit is a sheet tab. Putting Global first would change what every admin sees on
+    arrival without anybody deciding to."""
     assert [t["layout"] for t in ran["dayOnePolish"]["tabs"]] == list(markup.LAYOUTS)
-    assert len(markup.LAYOUTS) == 5
+    assert len(markup.LAYOUTS) == 6
+    assert ran["globalTabSelected"] == ["polish:true", "seal:false", "epoxy:false",
+                                        "leveling:false", "gyp:false", "global:false"]
 
 
 @needs_node
@@ -211,8 +230,11 @@ def test_a_flat_rate_line_is_one_number_box_not_an_expression(ran):
 
     Mutation: test_a_simple_control_for_an_expression_it_cannot_hold_misrepresents_it proves the
     choice of control is read off the formula rather than assumed."""
-    for line_key, built_in in (("super_pto", "2.7"), ("soft_costs", "16"), ("bond", "0")):
-        r = row(ran["dayOnePolish"], line_key)
+    for snap, line_key, built_in in (("dayOnePolish", "super_pto", "2.7"),
+                                     ("dayOnePolish", "soft_costs", "16"),
+                                     # bond's one number box is on the tab that owns bond.
+                                     ("globalDayOne", "bond", "0")):
+        r = row(ran[snap], line_key)
         assert r["advanced"] is False, "%s opened in the expression box" % line_key
         assert [i["part"] for i in r["inputs"]] == ["value"], (
             "%s has %r, not one number box" % (line_key, [i["part"] for i in r["inputs"]]))
@@ -536,15 +558,20 @@ def test_a_filed_zero_still_prices_as_zero_beside_it(ran):
     """The other half of the distinction, on the same screen.
 
     bond is filed as `'0'` with applies=true on the Gyp scenario -- it exists and prices to
-    nothing -- and it reads $0.00 with a live box holding a real 0. If the two rows ever render
-    alike, one of the two facts has been lost."""
+    nothing -- and it reads $0.00 in dollars off an $85,000 sub-total. If the two rows ever render
+    alike, one of the two facts has been lost.
+
+    The zero is filed on GLOBAL and read from the Gyp tab, which is where bond lives now, so this
+    fixture says a second thing: a Global row reaches a sheet tab, while the tab's OWN empty cell
+    still beats it on the row above. No box on this tab, hence no `parts` here -- the box is in
+    test_the_global_tab_keeps_a_filed_zero_apart_from_an_absent_line, on the tab that owns it."""
     absent = row(ran["gyp"], "hard_bid")
     zero = row(ran["gyp"], "bond")
     assert zero["rate"] == "0%" and zero["figure"] == "$0.00"
     assert zero["absentClass"] is False
-    assert parts(zero) == {"value": "0"}
     assert zero["appliesText"] == "Yes"
     assert zero["preview"] != absent["preview"]
+    assert zero["inputs"] == [], "bond is set on the Global tab; this one offered a box"
 
 
 @needs_node
@@ -573,13 +600,17 @@ def test_an_absent_line_filed_by_hand_renders_the_same_way(ran):
 def test_a_line_switched_off_keeps_the_one_control_that_undoes_it(ran):
     """Both routes into the off state, because they are different code paths reaching one row.
 
-    `filedAbsent` arrives with `applies=false` already on the row; `switchedOff` gets there by an
+    `globalAbsent` arrives with `applies=false` already on the row; `switchedOff` gets there by an
     admin flipping the switch on this page. Either way the row HAS a rule id, so there is
     something to stop overriding -- and no control, so nothing else could offer it.
 
+    Both are read on the tab the line is FILED on, which is the only tab that can offer to remove
+    it: an off hard-bid row seen from Polish is off because of a Global rule, and undoing it from
+    there would be a sheet tab quietly editing every other sheet tab.
+
     Mutation: stop calling dropBtnHtml from the ABSENT branch
     (test_an_off_row_with_no_way_back_is_the_corner_this_undoes)."""
-    for name, line in (("filedAbsent", "hard_bid"), ("switchedOff", "soft_costs")):
+    for name, line in (("globalAbsent", "hard_bid"), ("switchedOff", "soft_costs")):
         r = row(ran[name], line)
         assert r["absentClass"] is True, "%s/%s is not the off row this is about" % (name, line)
         assert r["inputs"] == [], (
@@ -612,16 +643,22 @@ def test_the_way_back_from_an_off_row_actually_removes_the_rule(ran):
     paints and does nothing would be a worse corner than no button -- so the DELETE, the words on
     the confirm, and the state of the row afterwards are all asserted, not the markup alone."""
     d = ran["filedAbsentDrop"]
-    assert d["deletes"] == ["/api/markup/rules/polish-hard_bid"], d["deletes"]
+    assert d["deletes"] == ["/api/markup/rules/global-hard_bid"], d["deletes"]
     c = d["confirm"] or {}
     assert c.get("name") == "Hard bid discount", c
     # The expensive misreading, said out loud: removing a rule is not "charge nothing here".
     assert "does not price the line at nothing" in c.get("detail", ""), c
     after = row(d["after"], "hard_bid")
     assert after["absentClass"] is False, "the row is still off after its rule was removed"
-    assert (after["rate"], after["figure"]) == ("-4%", "-$4,857.16"), (
+    assert after["figure"] == "-4%", (
         "the line did not come back at its built-in rate: %r" % after["preview"])
     assert after["drops"] == [], "there is still an override to stop after the rule is gone"
+    # AND THE SHEET TAB THAT WAS READING IT. Removing one Global row hands the give-back back to
+    # every layout at once, in dollars, off each tab's own chain -- which is the whole point of
+    # the line living in one place.
+    back = row(ran["filedAbsentDropPolish"], "hard_bid")
+    assert (back["rate"], back["figure"]) == ("-4%", "-$4,857.16"), back["preview"]
+    assert back["absentClass"] is False
 
 
 @needs_node
@@ -657,12 +694,21 @@ def test_an_unreadable_formula_makes_its_own_line_unpriceable(ran):
     """A filed formula with an unbalanced paren. It reports the parse error rather than a total --
     and because no simple control can read it, the row opens in Advanced so the person can see
     the formula the message is about."""
-    r = row(ran["invalid"], "hard_bid")
+    r = row(ran["invalidGlobal"], "hard_bid")
     assert r["figure"] == "Unpriceable"
     assert r["advanced"] is True
     shown = [e for e in r["errmsg"] if not e["hidden"]]
     assert shown and "position" in shown[0]["text"], (
         "a filed formula that cannot be read gives no account of itself")
+
+    # AND ON THE SHEET TAB THAT READS IT, where there is no box to retype it in: the row that
+    # cannot be priced still says WHY, or the only route to the reason is guessing which tab the
+    # rate came from.
+    tab = row(ran["invalid"], "hard_bid")
+    assert tab["figure"] == "Unpriceable"
+    shown = [e for e in tab["errmsg"] if not e["hidden"]]
+    assert shown and "position" in shown[0]["text"], (
+        "the sheet tab reads Unpriceable and gives no account of why: %r" % tab["errmsg"])
 
 
 @needs_node
@@ -783,10 +829,15 @@ def test_the_two_context_lines_are_marked_as_set_elsewhere(ran):
         assert r["ctxClass"] is True, "%s does not read as context" % line_key
         assert r["chip"] == "Set elsewhere", r["chip"]
         assert r["helpLabel"] == "Why it isn't here", r["helpLabel"]
-    # And the rows an admin DOES set are not marked that way.
-    for line_key in markup.LINE_KEYS:
+    # And the rows an admin DOES set on this tab are not marked that way.
+    for line_key in markup.TAB_LINE_KEYS:
         r = row(ran["dayOnePolish"], line_key)
         assert r["ctxClass"] is False, "%s reads as somebody else's to set" % line_key
+        assert r["chip"] == ""
+    # The four on Global are not marked that way on THEIR tab either.
+    for line_key in markup.GLOBAL_LINE_KEYS:
+        r = row(ran["globalDayOne"], line_key)
+        assert r["ctxClass"] is False, "%s reads as somebody else's to set on Global" % line_key
         assert r["chip"] == ""
 
 
@@ -813,11 +864,12 @@ def test_the_read_only_lines_have_no_control_at_all(ran):
 def test_no_row_is_left_without_an_explanation(ran):
     """Every rendered line says what it does, including the ones nobody can edit -- it just says
     it in the row's own disclosure now instead of in a column of prose repeated eight times."""
-    for r in ran["dayOnePolish"]["rows"]:
-        assert r["explain"].strip(), "%s renders with no explanation" % r["line"]
-        assert r["label"].strip()
-        assert r["sub"].strip(), "%s has no one-line caption" % r["line"]
-        assert r["helpLabel"].strip()
+    for snap in ("dayOnePolish", "globalDayOne"):
+        for r in ran[snap]["rows"]:
+            assert r["explain"].strip(), "%s/%s renders with no explanation" % (snap, r["line"])
+            assert r["label"].strip()
+            assert r["sub"].strip(), "%s/%s has no one-line caption" % (snap, r["line"])
+            assert r["helpLabel"].strip()
 
 
 @needs_node
@@ -847,9 +899,286 @@ def test_the_intro_is_one_sentence_with_the_rest_behind_a_disclosure():
     assert html.count('<p class="hint">') == 1, (
         "the intro is back to more than one paragraph of standing prose")
     assert 'class="help how"' in html, "the 'How the chain works' disclosure is gone"
+    # WHITESPACE-NORMALISED for the facts below, for the reason
+    # test_the_page_only_claims_a_filed_rate_prices_nothing_while_that_is_true records: a sentence
+    # re-wrapped by an editor is not a sentence deleted, and reading it as one is how that pin
+    # first went red.
+    flat = " ".join(html.split())
     for fact in ("How the chain works", "sheet layouts", "no Combo",
-                 "running total of everything above it"):
-        assert fact in html, "the intro lost a fact worth keeping: %r" % fact
+                 "running total of everything above it",
+                 # The sixth tab, and the three things a reader has to be told before they can
+                 # trust either a figure on it or a greyed row on a sheet tab. Each one is a
+                 # question somebody will otherwise ask: what is Global, why can I not type here,
+                 # and why is there no total.
+                 "Global is the sixth", "no second box",
+                 "no running total and no lump sum",
+                 "no Global rate gives them that line"):
+        assert fact in flat, "the intro lost a fact worth keeping: %r" % fact
+
+
+# ── the Global tab ───────────────────────────────────────────────────
+# Four lines are the same rule on every priced sheet -- bond is 0 everywhere, the hard-bid
+# give-back is one formula on all six sheets that carry one, travel lodging and food are one
+# figure each on all eleven -- so they are filed ONCE and every sheet tab reads them from there.
+# What follows is the three properties that has to buy, and the one it must not cost.
+
+
+@needs_node
+def test_the_global_tab_is_the_four_lines_that_are_one_rule_everywhere(ran):
+    """Its rows are the API's `global_line_keys`, and nothing else.
+
+    NOT the chain: gp, contingency, super_pto, soft_costs and remodel_tax are all absent, because
+    none of them is set here. gp alone is five tiers on polish, six on seal and seven on gyp --
+    one Global row for it would be one number standing in for three different ladders.
+
+    The row list is the FIRST of two gates; `editableHere` is the second and refuses a per-tab
+    line on Global independently, which is why the mutation below produces dead rows rather than
+    boxes. Two gates on purpose: this one is about what a reader is shown, that one is about what
+    a save could contain.
+
+    Mutation: test_a_global_tab_built_from_the_chain_shows_lines_it_does_not_set."""
+    assert ran["globalDayOne"]["rowOrder"] == list(markup.GLOBAL_LINE_KEYS)
+    for line_key in markup.TAB_LINE_KEYS:
+        assert line_key not in ran["globalDayOne"]["rowOrder"], (
+            "%s is a different rate on every tab and the Global tab offered to set it once"
+            % line_key)
+    for line_key in markup._NOT_EDITABLE:
+        assert line_key not in ran["globalDayOne"]["rowOrder"]
+
+
+@needs_node
+def test_the_global_tab_is_not_the_chain_and_has_no_lump_sum(ran):
+    """NO COMPOUNDING, so no running total and no total.
+
+    Two of these four are not chain lines at all -- travel lodging is a per-night cost, not a
+    markup on anything -- and the other two have nothing above them on this tab to be a percentage
+    OF. A "Total lump sum" row here would be a figure made of unrelated numbers, printed in the
+    same red box a real bid is printed in. The column says what each figure IS instead.
+
+    Mutation: test_pricing_the_global_tab_as_a_chain_invents_a_lump_sum."""
+    snap = ran["globalDayOne"]
+    assert snap["grand"] is None, "the Global tab printed a lump sum out of four unrelated lines"
+    assert snap["head"] == "LineRateAppliesWhat it comes to"
+    assert "Total lump sum" not in snap["chainText"]
+    for r in snap["rows"]:
+        assert "→" not in r["run"], (
+            "%s printed a running total on a tab where nothing runs into anything: %r"
+            % (r["line"], r["run"]))
+    assert "no running total and no lump sum on this tab" in snap["foot"], snap["foot"]
+    assert "don't compound" in snap["foot"], snap["foot"]
+
+
+@needs_node
+def test_no_row_sits_inside_another_row_on_any_tab(ran):
+    """THE ROWS HAVE TO BE SIBLINGS, on the chain tabs and on Global alike.
+
+    `.mkrow` is itself a four-column grid, so a row that ends up INSIDE another row does not
+    render as a row at all -- it renders as one of that row's four columns. #516 pulled the
+    job-size box out into subtotalBoxHtml and took the context row's closing `</div>` with it, so
+    every row below became a child of the context row: the Global tab drew its four lines side by
+    side across the four columns, wrapping one word per line, and the tab was unusable.
+
+    NOTHING THREW AND NOTHING WENT RED. The browser auto-closes an open div, and every text,
+    order, figure and preview assertion in this file kept passing, because `byClass` walks
+    descendants and went on finding all the rows -- in the wrong place. Rendering the markup was
+    never enough on its own; where the rows LAND had to be asserted too.
+
+    Mutation: drop the `+ "</div>"` after either subtotalBoxHtml call in markup.js."""
+    for scenario in ("dayOnePolish", "globalDayOne"):
+        assert ran[scenario]["nestedRows"] == 0, (
+            "%s put a .mkrow inside another .mkrow -- on screen those render as COLUMNS of the "
+            "outer row rather than rows of the table" % scenario)
+
+
+@needs_node
+def test_every_global_line_says_plainly_that_it_reaches_no_bid(ran):
+    """Which is exactly true today, and the reason `global` is absent from PRICES_THE_BID.
+
+    gp and hard_bid have no address in the writer's target table on any layout; bond has none
+    anywhere while Kyle's own bond row double-counts the tax; and the two travel figures would
+    need a dollars-only parser and a 22-cell target table that do not exist. So all four rows say
+    so, rather than letting an admin file a rate, watch it save with a green tick, and move no
+    price."""
+    for r in ran["globalDayOne"]["rows"]:
+        assert "does not read this line yet" in r["explain"], (
+            "%s claims something about a bid: %r" % (r["line"], r["explain"]))
+
+
+@needs_node
+def test_a_travel_figure_is_dollars_and_says_what_it_is_per(ran):
+    """$70 is not a rate and must not read as one, and "$70.00" with nothing after it is a number
+    waiting to be multiplied by the wrong thing.
+
+    The same bare-number reading priceChain makes: 1 or more is money, under 1 is a rate. So the
+    box carries a $ and the figure carries the word it is per."""
+    lodging = row(ran["globalDayOne"], "travel_lodging")
+    assert lodging["figure"] == "$70.00", lodging["preview"]
+    assert lodging["run"] == "a night", lodging["preview"]
+    assert lodging["rate"] == "", "a dollar figure printed a percentage"
+    assert "$" in lodging["rateText"], lodging["rateText"]
+
+    food = row(ran["globalDayOne"], "travel_per_diem")
+    assert food["figure"] == "$45.00" and food["run"] == "a day"
+
+    # …and a rate on the same tab still reads as a rate, with no base invented for it.
+    bond = row(ran["globalDayOne"], "bond")
+    assert bond["figure"] == "0%", bond["preview"]
+    assert "$" not in bond["preview"], (
+        "0%% was turned into a dollar figure off a base this tab does not have: %r"
+        % bond["preview"])
+
+
+@needs_node
+def test_the_give_back_is_read_against_a_job_size_you_can_type(ran):
+    """The one Global line whose answer depends on the job. Its ladder is the same rungs it has
+    always had, and the figure beside it says which job size produced it -- otherwise "-4%" is a
+    number with no visible cause on a tab that has no sub-total."""
+    r = row(ran["globalDayOne"], "hard_bid")
+    assert [b["values"] for b in r["bands"]] == [["60,000", "-4"], ["13,000", "-2.5"], []]
+    assert r["figure"] == "-4%"
+    assert r["run"] == "on a $85,000 job", r["preview"]
+    assert ran["globalDayOne"]["subtotalBoxes"] == 1, (
+        "the job-size box went, so the ladder's rungs can only be read by doing the arithmetic")
+
+
+@needs_node
+def test_a_rate_typed_on_global_is_filed_against_global(ran):
+    """Not against whichever sheet tab the admin came from. The layout in the body IS the home."""
+    assert ran["globalEditBody"] == {"layout": "global", "line_key": "travel_lodging",
+                                     "applies": True, "notes": "", "formula": "80"}
+    assert row(ran["globalEdited"], "travel_lodging")["figure"] == "$80.00"
+
+
+@needs_node
+def test_the_global_tab_keeps_a_filed_zero_apart_from_an_absent_line(ran):
+    """The distinction markup.py exists to keep, on the tab that now owns both of its examples.
+
+    bond filed as `'0'` exists and prices to nothing: a live box holding a real 0, and 0% in the
+    column. hard_bid switched off does not exist at all: no box, no figure, and a sentence that
+    says so in words that are true HERE -- "no sheet layout charges this line", not "the cell is
+    empty on this tab", because on this tab there is no cell."""
+    zero = row(ran["globalZeroAndAbsent"], "bond")
+    absent = row(ran["globalZeroAndAbsent"], "hard_bid")
+    assert parts(zero) == {"value": "0"}
+    assert zero["figure"] == "0%" and zero["absentClass"] is False
+    assert absent["inputs"] == [] and absent["figure"] == "—"
+    assert absent["absentClass"] is True
+    assert "not used on any sheet layout" in absent["rateText"].lower()
+    assert "No sheet layout charges this line, which is not the same as 0%" in absent["rateText"]
+    assert "cell is empty" not in absent["rateText"], (
+        "a Global row sent somebody to the workbook to look at a cell that is fine")
+    assert zero["preview"] != absent["preview"]
+
+
+@needs_node
+def test_a_global_line_reads_on_every_sheet_tab_and_is_typed_on_none_of_them(ran):
+    """ONE HOME, seen from the tabs. A hard bid filed once at -6% prices the Polish chain at -6%,
+    and Polish offers no box for it -- five boxes for one rule is five ways to disagree with it,
+    and whichever of the two rows won would be deciding a price.
+
+    READ-ONLY IS NOT A REDACTION: the rungs are all there, and so is the dollar figure, because
+    what this tab charges is the fact somebody came to the row for."""
+    for line_key in ("hard_bid", "bond"):
+        r = row(ran["dayOnePolish"], line_key)
+        assert r["inputs"] == [] and r["switches"] == [], (
+            "%s is set on Global and Polish offered a control for it" % line_key)
+        assert r["chip"] == "Set on Global", r["chip"]
+        assert any("Set on the Global tab" in n for n in r["notes"]), r["notes"]
+
+    priced = row(ran["globalReachPolish"], "hard_bid")
+    assert priced["figure"] == "-$7,285.74", (
+        "a rate filed once on Global did not reach the Polish chain: %r" % priced["preview"])
+    assert priced["rate"] == "-6%"
+    assert any("every sheet layout reads this same rate" in n for n in priced["notes"]), (
+        priced["notes"])
+    # …and a second tab, because "reaches the tab I was looking at" is not the property.
+    assert "-6%" in row(ran["globalReachSeal"], "hard_bid")["rateText"]
+
+
+@needs_node
+def test_the_gypsum_tabs_keep_their_empty_hard_bid_whatever_global_says(ran):
+    """THE EXCEPTION THAT HAD TO SURVIVE THE MOVE.
+
+    Gyp!B73 is EMPTY, not 0 -- the gypsum tabs have no hard-bid line at all. That is a fact about
+    the TAB, it is held on the tab (`gyp: { hard_bid: NOT_ON_TAB }`), and a rule filed once for
+    every layout must not hand those tabs a line their workbook does not have. The fixture files
+    -6% on Global and the Gyp row stays absent: no figure, no control, and the caption that names
+    the tab.
+
+    Mutation: test_letting_a_global_row_beat_the_tabs_own_empty_cell_gives_gyp_a_hard_bid."""
+    r = row(ran["globalReachGyp"], "hard_bid")
+    assert r["absentClass"] is True, "a Global rate gave the gypsum tabs a hard-bid line"
+    assert r["inputs"] == [] and r["checks"] == [] and r["bands"] == []
+    assert r["figure"] == "—", "the absent line priced a give-back off a cell that is empty"
+    assert r["appliesText"] == "Not used"
+    assert "not used on gypsum underlayment" in r["rateText"].lower()
+    assert "-6" not in r["rateText"], (
+        "the Global rate is being shown on a tab that has no such line: %r" % r["rateText"])
+    # And the same rule DOES reach the tab beside it, or this proves only that nothing works.
+    assert row(ran["globalReachPolish"], "hard_bid")["figure"] == "-$7,285.74"
+
+
+# ── the rule filed before its line moved home ────────────────────────
+# `markup_rules` on production holds exactly one live row: polish / bond / applies=true / "1%",
+# written while Bond was a per-tab line. It reaches no bid -- bond has no address in the writer's
+# target table on any layout -- so the move costs no money. What it costs is somewhere to SEE it.
+
+
+@needs_node
+def test_a_rule_filed_at_a_lines_old_home_is_shown_and_never_applied(ran):
+    """Both halves, because either one alone is a different bug.
+
+    APPLIED would be the expensive half: a tab row quietly beating the Global row is the
+    precedence question this design exists to not have, and the Polish total would move off a rate
+    nobody chose today. HIDDEN would be the permanent half: a rate somebody typed on purpose,
+    sitting in the table, mentioned on no screen.
+
+    Mutations: test_applying_the_row_at_the_old_home_moves_a_price, and
+    test_saying_nothing_about_the_row_at_the_old_home_makes_it_invisible."""
+    r = row(ran["misfiled"], "bond")
+    # NOT APPLIED. The built-in 0% still prices the line, and the whole tab still totals what an
+    # unconfigured Polish tab totals.
+    assert r["figure"] == "$0.00" and r["rate"] == "0%"
+    assert ran["misfiled"]["grand"]["preview"] == "$153,165.41", (
+        "the row filed at the old home moved the price: %r" % ran["misfiled"]["grand"])
+    # SAID OUT LOUD. The rate, where it is filed, why nothing reads it, and what to do about it.
+    said = [n for n in r["notes"] if "1%" in n]
+    assert said, "the rule's own rate is not on screen anywhere: %r" % r["notes"]
+    assert "Filed under Polish" in said[0], said
+    assert "nothing reads it" in said[0], said
+    assert "Global" in said[0], said
+    # AND A CONTROL THAT ACTS ON IT, worded as what it is: there is no override to stop.
+    assert r["drops"] == ["Remove this misfiled rule"], r["drops"]
+
+
+@needs_node
+def test_removing_the_row_at_the_old_home_says_it_changes_no_price(ran):
+    """Clicked for real, through the page's own delegated handler. The confirm must not borrow the
+    override wording: nothing falls back to anything, because nothing was reading it."""
+    d = ran["misfiledDrop"]
+    assert d["deletes"] == ["/api/markup/rules/polish-bond"], d["deletes"]
+    c = d["confirm"] or {}
+    assert c.get("title") == "Remove this misfiled rule?", c
+    assert c.get("name") == "Bond"
+    assert "Removing it changes no price" in c.get("detail", ""), c
+    assert "Global tab" in c.get("detail", ""), c
+    assert "the chain uses" not in c.get("detail", ""), (
+        "a rule nothing reads was described as an override being handed back")
+    after = row(d["after"], "bond")
+    assert after["drops"] == [], "the row is still offering to remove a rule that is gone"
+    assert not [n for n in after["notes"] if "1%" in n], after["notes"]
+    assert d["after"]["grand"]["preview"] == "$153,165.41", "removing it moved a price"
+
+
+@needs_node
+def test_a_non_admin_is_told_about_the_row_at_the_old_home_and_offered_no_control(ran):
+    """Whoever finds it may not be the person who can act on it, and "ask Hanz" is only useful if
+    they know what to ask about. The note is not admin-only; the button is."""
+    r = row(ran["misfiledReadOnly"], "bond")
+    assert [n for n in r["notes"] if "nothing reads it" in n], r["notes"]
+    assert r["buttons"] == [], (
+        "a read-only viewer was handed a control that would 403: %r"
+        % [b["text"] for b in r["buttons"]])
 
 
 # ── a non-admin ──────────────────────────────────────────────────────
@@ -870,7 +1199,7 @@ def test_a_non_admin_gets_no_editable_control_anywhere(ran):
     change answers that for exactly one job size. Asserted present below rather than ignored.
 
     Mutation: drop the ADMIN gate (test_dropping_the_admin_gate_hands_a_non_admin_a_box)."""
-    for name in ("nonAdminPolish", "nonAdminGyp"):
+    for name in ("nonAdminPolish", "nonAdminGyp", "nonAdminGlobal"):
         snap = ran[name]
         assert snap["inputCount"] == 0, "%s rendered an editable box for a non-admin" % name
         assert snap["switchCount"] == 0, "%s rendered a switch for a non-admin" % name
@@ -936,7 +1265,11 @@ def test_an_empty_rules_table_is_the_normal_first_state(ran):
 
 @needs_node
 def test_a_tab_with_something_filed_counts_it(ran):
-    assert "2 of 5 lines on Gyp are overridden here" in ran["gyp"]["fallback"]["text"]
+    """Three editable lines on a sheet tab now, not five: hard_bid and bond are set on Global, so
+    they are not lines this tab's admin has or has not got round to. The Gyp fixture files gp
+    here and bond THERE, and only the one filed here is counted."""
+    assert "1 of 3 lines on Gyp are overridden here" in ran["gyp"]["fallback"]["text"]
+    assert "4 lines on Global" not in ran["gyp"]["fallback"]["text"]
 
 
 # ── typing, blurring, and the keyboard ───────────────────────────────
@@ -1017,7 +1350,8 @@ def test_the_switch_is_a_real_button_the_keyboard_can_reach(ran):
                 "a tabindex on a real button is a sign it was copied off a div")
             assert sw["checked"] in ("true", "false")
             assert sw["ariaLabel"], "a switch with no label is unreadable to a screen reader"
-    assert ran["dayOnePolish"]["switchCount"] == len(markup.LINE_KEYS)
+    assert ran["dayOnePolish"]["switchCount"] == len(markup.TAB_LINE_KEYS)
+    assert ran["globalDayOne"]["switchCount"] == len(markup.GLOBAL_LINE_KEYS)
 
 
 @needs_node
@@ -1106,25 +1440,34 @@ def test_a_failed_load_is_a_designed_state_with_a_way_out(ran):
 def test_collapsing_applies_into_a_zero_formula_loses_the_absent_state(tmp_path):
     """THE mistake this feature is shaped to prevent, committed on purpose.
 
-    Re-derive `applies` from anything other than the column and Gyp's empty hard-bid cell becomes
-    an editable box on a row that reads as a live line. Proves
-    test_gyps_absent_hard_bid_is_greyed_and_has_nothing_to_type_into is not vacuous."""
+    Re-derive `applies` from anything other than the column and a switched-off line becomes an
+    editable box on a row that reads as a live one. Proves
+    test_gyps_absent_hard_bid_is_greyed_and_has_nothing_to_type_into is not vacuous.
+
+    Read on the line's own tab, because that is where the box would appear; the sheet tab reading
+    the same rule flips out of its absent state too, and both halves are asserted."""
     mutant = mutate(tmp_path,
                     "      st.applies = rule.applies !== false;",
                     "      st.applies = true;")
-    r = row(mutant["filedAbsent"], "hard_bid")
+    r = row(mutant["globalAbsent"], "hard_bid")
     assert r["absentClass"] is False and r["inputs"], (
         "the mutation changed nothing, so the absent-state assertions prove nothing")
+    assert row(mutant["filedAbsent"], "hard_bid")["absentClass"] is False, (
+        "the sheet tab reading that rule stayed absent, so it is not reading the column at all")
 
 
 @needs_node
 def test_printing_zero_for_a_broken_line_is_caught(tmp_path):
     """Proves test_a_broken_chain_never_prints_a_dollar_zero_anywhere is not vacuous."""
+    # TWICE, because there are two preview renderers now: the chain's and the Global tab's. A
+    # mutation that hit only one would leave "Unpriceable" meaning two different things, which is
+    # the drift that makes one of them quietly stop being true.
     mutant = mutate(tmp_path,
                     '      return \'<span class="unpriced">Unpriceable</span>\';',
-                    '      return \'<span class="amt">$0.00</span>\';')
+                    '      return \'<span class="amt">$0.00</span>\';', expect_count=2)
     assert "$0.00" in mutant["invalid"]["chainText"], "the mutation changed nothing"
     assert row(mutant["invalid"], "hard_bid")["figure"] == "$0.00"
+    assert row(mutant["invalidGlobal"], "hard_bid")["figure"] == "$0.00"
 
 
 @needs_node
@@ -1261,6 +1604,109 @@ def test_a_simple_control_for_an_expression_it_cannot_hold_misrepresents_it(tmp_
     assert r["advanced"] is False, "the mutation changed nothing"
     assert "IF(taxable" not in r["rateText"], (
         "the mutant still shows the stored formula, so nothing was misrepresented")
+
+
+@needs_node
+def test_a_global_tab_built_from_the_chain_shows_lines_it_does_not_set(tmp_path):
+    """Proves test_the_global_tab_is_the_four_lines_that_are_one_rule_everywhere is not vacuous.
+
+    Hand the Global tab the chain's rows as well and it grows a GP row, a Super & PTO row, a Soft
+    Costs row and the two context lines -- nine rows on a tab that sets four.
+
+    They come out DEAD rather than editable, and that is worth knowing: `editableHere` is a second
+    gate and refuses a per-tab line on Global on its own, so a leak in the row list cannot by
+    itself hand somebody a box the API would 400. What the row list carries alone is a tab full of
+    rows reading "Not set here" to somebody who came to set something -- and, on a tab with no
+    chain, a Contingency row whose whole explanation is about a chain.
+
+    ADDED to the Global list rather than replacing it, so the mutant still renders the rows the
+    later scenarios type into: a mutation that made the harness throw would be a red test about
+    the harness, not about the page."""
+    mutant = mutate(tmp_path,
+                    "      out = GLOBAL_KEYS.slice();",
+                    "      out = GLOBAL_KEYS.concat(CHAIN);")
+    order = mutant["globalDayOne"]["rowOrder"]
+    assert order != list(markup.GLOBAL_LINE_KEYS), "the mutation changed nothing"
+    for line_key in list(markup.TAB_LINE_KEYS) + list(markup._NOT_EDITABLE):
+        assert line_key in order, (
+            "%s did not reach the mutant's Global tab, so the row list is not what was mutated"
+            % line_key)
+    dead = [r for r in mutant["globalDayOne"]["rows"] if r["line"] in markup.TAB_LINE_KEYS]
+    assert dead and all(r["inputs"] == [] for r in dead), (
+        "the mutant handed out a box for a per-tab line, which editableHere should have refused")
+    assert all("Not set here" in r["rateText"] for r in dead), (
+        "the leaked rows render as something other than dead: %r"
+        % [r["rateText"] for r in dead])
+
+
+@needs_node
+def test_pricing_the_global_tab_as_a_chain_invents_a_lump_sum(tmp_path):
+    """Proves test_the_global_tab_is_not_the_chain_and_has_no_lump_sum is not vacuous.
+
+    Send the Global tab through the chain renderer and $70 a night, $45 a day and a give-back rate
+    are compounded into one another and printed as a "Total lump sum" -- a figure made of
+    unrelated numbers, in the same red box a real bid is printed in."""
+    mutant = mutate(tmp_path,
+                    "    if (LAYOUT === GLOBAL) return globalHtml();",
+                    "    if (false) return globalHtml();")
+    grand = mutant["globalDayOne"]["grand"]
+    assert grand is not None, "the mutation changed nothing"
+    assert "$" in grand["preview"], (
+        "the mutant printed no figure, so this proves nothing about the lump sum: %r" % grand)
+    assert any("→" in r["run"] for r in mutant["globalDayOne"]["rows"]), (
+        "the mutant printed no running total either")
+
+
+@needs_node
+def test_letting_a_global_row_beat_the_tabs_own_empty_cell_gives_gyp_a_hard_bid(tmp_path):
+    """Proves test_the_gypsum_tabs_keep_their_empty_hard_bid_whatever_global_says is not vacuous.
+
+    THE ONE MISTAKE THIS FEATURE COULD HAVE MADE. Check the filed rule before the tab's own
+    absence and a rate filed once, for every layout, hands the gypsum tabs a give-back line whose
+    workbook cell is EMPTY -- a discount on a bid for a line Kyle's sheet does not have. The
+    ordering of those two branches is the whole of the exception, which is why it is mutated
+    rather than read."""
+    mutant = mutate(tmp_path,
+                    "    if (b && b.applies === false) {",
+                    "    if (false && b.applies === false) {")
+    r = row(mutant["globalReachGyp"], "hard_bid")
+    assert r["absentClass"] is False, "the mutation changed nothing"
+    assert r["figure"] != "—", (
+        "the mutant left the row unpriced, so this proves nothing about the give-back: %r"
+        % r["preview"])
+    assert "-6" in r["rateText"], (
+        "the mutant shows no rate on the gypsum row: %r" % r["rateText"])
+
+
+@needs_node
+def test_applying_the_row_at_the_old_home_moves_a_price(tmp_path):
+    """Proves the "never applied" half of
+    test_a_rule_filed_at_a_lines_old_home_is_shown_and_never_applied is not vacuous.
+
+    Let a tab-side row beat the line's own home and the live production row -- polish / bond /
+    1%, filed before Bond moved -- starts pricing the Polish tab. That is the precedence question
+    this design exists to not have, answered by accident, in dollars."""
+    mutant = mutate(tmp_path,
+                    "    var rule = ruleFor(homeOf(lineKey), lineKey);",
+                    "    var rule = ruleFor(LAYOUT, lineKey) || ruleFor(homeOf(lineKey), lineKey);")
+    r = row(mutant["misfiled"], "bond")
+    assert r["rate"] == "1%", "the mutation changed nothing: %r" % r["preview"]
+    assert mutant["misfiled"]["grand"]["preview"] != "$153,165.41", (
+        "the mutant priced the row and the total did not move, so the total is not reading it")
+
+
+@needs_node
+def test_saying_nothing_about_the_row_at_the_old_home_makes_it_invisible(tmp_path):
+    """Proves the "shown" half is not vacuous either.
+
+    Drop the note and the rule is still in the table, still read by nothing, and now mentioned on
+    no screen at all -- which is the state it would have been left in by simply filtering it out
+    of the page. A rate somebody chose on purpose deserves better than that."""
+    mutant = mutate(tmp_path, "    if (!r.misfiled) return \"\";", "    if (true) return \"\";")
+    notes = row(mutant["misfiled"], "bond")["notes"]
+    assert not [n for n in notes if "nothing reads it" in n], "the mutation changed nothing"
+    assert not [n for n in notes if "1%" in n], (
+        "the rate is still on screen some other way, so the note is not what was carrying it")
 
 
 @needs_node

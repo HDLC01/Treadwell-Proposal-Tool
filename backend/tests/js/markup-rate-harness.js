@@ -495,6 +495,14 @@ out.builtin = MK.BUILTIN;
     // bond: unwired on EVERY layout while Kyle's D84 double-counts the tax rows
     bondEpoxy: say("epoxy", row("bond", { formula: "1%" })),
     bondGyp: say("gyp", row("bond", { formula: "0%" })),
+    // …and the tab those two are actually edited on now, plus the two lines that only exist
+    // there. `global` is in no target table at all, so all four must claim nothing: making the
+    // travel figures reach a bid needs a dollars-only parser and a 22-cell table that do not
+    // exist, and that change moves money.
+    bondGlobal: say("global", row("bond", { formula: "1%" })),
+    hardBidGlobal: say("global", row("hard_bid", { formula: "-4%" })),
+    travelLodgingGlobal: say("global", row("travel_lodging", { formula: "70" })),
+    travelPerDiemGlobal: say("global", row("travel_per_diem", { formula: "45" })),
     // gyp soft costs: the per-(layout, line) hole
     gypSoftCosts: say("gyp", row("soft_costs", { formula: "9%" })),
     polishSoftCosts: say("polish", row("soft_costs", { formula: "16%" })),

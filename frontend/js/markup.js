@@ -49,6 +49,18 @@
 // A BROKEN LINE NEVER READS AS $0.00. An unparseable formula, or one that evaluates to Kyle's own
 // "error" sentinel, makes its own line and every line below it read "Unpriceable" — which is
 // markup-core.js's stated safety property carried up into the screen.
+//
+// THE SIXTH TAB IS NOT A SHEET, AND IT IS NOT THE CHAIN. Four lines are the same rule on every
+// priced sheet — bond is 0 everywhere, the hard-bid give-back is one formula on all six sheets
+// that have one, travel lodging is $70 a night and travel food $45 a day on all eleven — so they
+// are filed ONCE, on Global, and every sheet tab reads them from there. Two of the four are not
+// chain lines at all, so that tab has no compounding, no running total and no lump sum; each row
+// says what it comes to on its own.
+//
+// ONE HOME PER LINE, NOT A DEFAULT WITH AN OVERRIDE. A sheet tab shows hard_bid and bond
+// READ-ONLY, because a second box on five tabs is five ways to disagree with the one rule. The
+// exception that survives all of it is Gyp: Gyp!B73 is EMPTY, not 0, so the gypsum tabs have no
+// hard-bid line — a fact about the TAB, held on the tab, and it wins over any Global row.
 (function () {
   "use strict";
 
@@ -77,6 +89,10 @@
    *  in the wrong place. */
   var CHAIN = ["gp", "hard_bid", "contingency", "super_pto", "soft_costs", "remodel_tax", "bond"];
 
+  /** markup.py's reserved layout. Not a sheet tab: the one home for the lines that are the same
+   *  rule on every sheet. The string is compared in a dozen places, so it is named once. */
+  var GLOBAL = "global";
+
   /** markup.py's `_NOT_EDITABLE`, VERBATIM — not paraphrased, and not re-worded to fit the
    *  column. These two lines are refused BY NAME by the backend and the user is entitled to the
    *  same reason the API would give them. test_markup_page.py compares these strings against the
@@ -96,7 +112,9 @@
     super_pto: "Superintendent & PTO",
     soft_costs: "Soft costs",
     remodel_tax: "Remodel tax",
-    bond: "Bond"
+    bond: "Bond",
+    travel_lodging: "Travel lodging",
+    travel_per_diem: "Travel food"
   };
 
   /** The one-line caption under a line's name. Free to read — it is the half of the old WHAT IT
@@ -108,8 +126,14 @@
     super_pto: "a flat rate on everything above",
     soft_costs: "overhead the field never sees",
     remodel_tax: "set by the county table",
-    bond: "the workbook ships this at zero"
+    bond: "the workbook ships this at zero",
+    travel_lodging: "one night away, the same on every sheet",
+    travel_per_diem: "one day's food, the same on every sheet"
   };
+
+  /** What the figure beside a Global line is PER. A rate needs no such word; $70 does, and "$70"
+   *  with nothing after it is the kind of number somebody multiplies by the wrong thing. */
+  var UNIT_NOTE = { travel_lodging: "a night", travel_per_diem: "a day" };
 
   /** The rest of it, behind the row's own disclosure. Good writing, and it does not belong
    *  repeated in every row of a table of eight numbers. */
@@ -132,7 +156,12 @@
     bond: "Bond premium on the running total. The workbook ships this line at zero, and zero " +
       "is a real answer here — it is not the same as switching the line off. Kyle's own bond " +
       "row counts the two tax lines twice, so a rate filed here would over-charge until he " +
-      "corrects the sheet."
+      "corrects the sheet.",
+    travel_lodging: "A night away, charged per night on the workbook's travel block. Kyle's " +
+      "sheets carry the same figure on all eleven priced tabs, which is why it is set once here " +
+      "instead of five times.",
+    travel_per_diem: "A day's food while the crew is away, charged per day. The same figure on " +
+      "all eleven priced tabs."
   };
 
   /** A chip beside the name, for the lines an admin does not set. Short, and it says the one
@@ -147,7 +176,10 @@
     seal: "sealed concrete",
     epoxy: "epoxy",
     leveling: "self-leveling",
-    gyp: "gypsum underlayment"
+    gyp: "gypsum underlayment",
+    // Not a material, because Global is not a sheet. It reads in the one sentence that uses it:
+    // a switched-off Global line is "Not used on any sheet layout", which is exactly what it is.
+    global: "any sheet layout"
   };
 
   // ── the built-in constants, per tab ────────────────────────────────────────
@@ -192,8 +224,23 @@
                 soft_costs: F("13%"), bond: F("0%") },
     // A different species: 7 GP tiers on edges not on record, NO hard-bid rate at all, and soft
     // costs is an expression rather than a rate.
+    //
+    // `hard_bid: NOT_ON_TAB` STAYS HERE, on the tab, now that the line is filed on Global. It is
+    // a fact about Kyle's gypsum sheets — B73 is EMPTY, not 0 — and a rule filed once for every
+    // layout cannot give those tabs a line the workbook does not have. rowState checks it BEFORE
+    // it looks at the Global row, which is the whole of that exception in code.
     gyp: { hard_bid: NOT_ON_TAB, super_pto: F("4.1%"), soft_costs: F(GYP_SOFT_COSTS),
-           bond: F("0%") }
+           bond: F("0%") },
+    // THE FOUR LINES THAT DO NOT DIFFER PER TAB, which is what the Global tab is for. bond and
+    // hard_bid are the SAME strings the tabs above carry, deliberately: Global is where they are
+    // edited now, and a tab with nothing filed falls back to its own copy, so the two have to
+    // agree or the same line would price differently depending on which row was read.
+    //
+    // The travel figures are Kyle's own literals off all eleven priced sheets, and they are
+    // DOLLARS, not rates — written bare for that reason, the same way priceChain and the box's
+    // own $ / % affordance read a bare number of 1 or more.
+    global: { hard_bid: F(HARD_BID), bond: F("0%"),
+              travel_lodging: F("70"), travel_per_diem: F("45") }
   };
 
   // ── which rows actually reach the estimate workbook ────────────────────────
@@ -225,6 +272,12 @@
   // bond base on all eleven sheets. Bond is 0 in the template, so filing a rate is
   // what would first expose it — as an over-charge. His formula, his fix; see the
   // note over MARKUP_RATE_TARGETS.
+  //
+  // `global` IS ABSENT TOO, and it is the whole tab rather than one line: hard_bid and bond have
+  // no address on any layout (above), and the two travel lines have none either — reaching a bid
+  // with them needs a dollars-only parser, a 22-cell target table and a decision about
+  // 'Stnd Alts', which is a change that moves money and is not this one. So every row on that tab
+  // reads "The estimate workbook does not read this line yet", which is exactly true today.
   var PRICES_THE_BID = {
     polish:   ["super_pto", "soft_costs"],
     seal:     ["super_pto", "soft_costs"],
@@ -311,6 +364,11 @@
   var ADMIN = false;
   var LAYOUTS = [];
   var LINE_KEYS = [];
+  /** The two halves of the editable vocabulary, both off the API response — which line is filed
+   *  per tab and which is filed once on Global. Empty until the server says, and empty means the
+   *  page behaves exactly as it did before the split: see editableHere(). */
+  var GLOBAL_KEYS = [];
+  var TAB_KEYS = [];
   var RULES = [];                  // every live rule, all layouts
   var LAYOUT = "";                 // the tab on screen
   /** Typed-but-unsaved edits, keyed "<layout>/<line_key>". A rate the admin is still working
@@ -383,6 +441,28 @@
 
   function key(lineKey) { return LAYOUT + "/" + lineKey; }
   function nounFor(layout) { return LAYOUT_NOUN[layout] || "this tab"; }
+
+  // ── where a line lives ─────────────────────────────────────────────────────
+  // ONE HOME PER LINE. Three lines differ per tab and are filed per tab; four are one rule for
+  // every sheet and are filed once on Global. Both lists come from the API, so this page cannot
+  // drift from what the backend will accept — and if a server ships neither list, it also ships no
+  // `global` layout, so every answer below collapses to what this page did before the split.
+
+  function isGlobalLine(k) { return GLOBAL_KEYS.indexOf(k) >= 0; }
+  function knownHome(k) { return isGlobalLine(k) || TAB_KEYS.indexOf(k) >= 0; }
+
+  /** The layout whose ROW prices this line on the tab currently on screen. A global line is read
+   *  from its one home even while a sheet tab is showing, which is what stops five tabs carrying
+   *  five answers to one question. */
+  function homeOf(k) { return isGlobalLine(k) ? GLOBAL : LAYOUT; }
+
+  /** Can this line be TYPED on the tab on screen? A line the API offers but neither list claims
+   *  (an `escalation` added on the server, say) is tab-side, which is where every line was before
+   *  Global existed — appearing as an empty rate box beats vanishing. */
+  function editableHere(k) {
+    if (!knownHome(k)) return LAYOUT !== GLOBAL;
+    return LAYOUT === GLOBAL ? isGlobalLine(k) : !isGlobalLine(k);
+  }
   function labelFor(layout) {
     return String(layout || "").charAt(0).toUpperCase() + String(layout || "").slice(1);
   }
@@ -616,14 +696,37 @@
 
   // ── the row model ──────────────────────────────────────────────────────────
 
-  /** Every displayed line, in the order the chain compounds.
+  /** Every displayed line, in the order the chain compounds — on a SHEET tab.
    *
    *  Built from CHAIN plus anything in the API's `line_keys` that CHAIN has not heard of, so a
-   *  line added on the backend appears at the end instead of vanishing. */
+   *  line added on the backend appears at the end instead of vanishing.
+   *
+   *  THE GLOBAL TAB IS NOT THE CHAIN and gets its own list. Rendering CHAIN there would put gp,
+   *  contingency, super_pto, soft_costs and remodel_tax on a tab that sets none of them, under a
+   *  running total that would be arithmetic on unrelated numbers.
+   *
+   *  A global line is NOT appended to a sheet tab from `line_keys`: hard_bid and bond are already
+   *  in CHAIN, where the compounding order puts them, and the travel lines are not chain lines and
+   *  have nothing to do with a sheet tab's price. */
   function displayOrder() {
-    var out = CHAIN.slice();
-    for (var i = 0; i < LINE_KEYS.length; i++) {
-      if (out.indexOf(LINE_KEYS[i]) < 0) out.push(LINE_KEYS[i]);
+    var out, i;
+    if (LAYOUT === GLOBAL) {
+      out = GLOBAL_KEYS.slice();
+    } else {
+      out = CHAIN.slice();
+      for (i = 0; i < LINE_KEYS.length; i++) {
+        if (out.indexOf(LINE_KEYS[i]) < 0 && !isGlobalLine(LINE_KEYS[i])) out.push(LINE_KEYS[i]);
+      }
+    }
+    // A RULE FILED WHERE NOTHING WOULD SHOW IT IS STILL SHOWN. One live row on production predates
+    // the split — polish / bond / 1%, written when Bond was a per-tab line — and the backend now
+    // refuses to write another, so more can only arrive by hand. Either way, the only thing worse
+    // than a rule nothing reads is a rule nobody can SEE: it is appended here and the row says
+    // what it is. It never prices anything; rowState reads each line from its own home.
+    for (i = 0; i < RULES.length; i++) {
+      if (RULES[i].layout === LAYOUT && out.indexOf(RULES[i].line_key) < 0) {
+        out.push(RULES[i].line_key);
+      }
     }
     return out;
   }
@@ -637,31 +740,52 @@
 
   /** One row's whole truth: is it editable, does it apply, what prices it, which control it gets,
    *  and where the numbers in that control came from. `source` is what the note reads off —
-   *  "filed" (a row in the table), "builtin" (the hardcoded constant), "unknown" (neither). */
+   *  "filed" (a row in the table), "builtin" (the hardcoded constant), "unknown" (neither).
+   *
+   *  THREE ANSWERS TO "WHOSE ROW IS THIS", not two:
+   *    editable    typed here. gp / super_pto / soft_costs on a sheet tab; the four global lines
+   *                on Global.
+   *    elsewhere   a global line seen from a sheet tab. It still PRICES this tab's chain — the
+   *                hard-bid give-back compounds here whatever tab you are on — it is just read
+   *                from its one home and not typed here.
+   *    context     contingency and remodel_tax, which nobody sets on this page at all.
+   *  `priced` is the first two: the rows that resolve to a value. */
   function rowState(lineKey) {
-    var editable = LINE_KEYS.indexOf(lineKey) >= 0;
-    var readOnlyWhy = NOT_EDITABLE[lineKey] || (editable ? "" : "Not editable on this page.");
+    var context = !!NOT_EDITABLE[lineKey];
+    var here = editableHere(lineKey) && !context;
+    var elsewhere = !context && !here && isGlobalLine(lineKey);
+    var readOnlyWhy = NOT_EDITABLE[lineKey]
+      || (here ? "" : elsewhere ? "Set on the Global tab." : "Not editable on this page.");
     var st = {
       line_key: lineKey,
       label: LABELS[lineKey] || labelFor(lineKey),
       sub: SUBS[lineKey] || "",
-      chip: CHIPS[lineKey] || "",
+      chip: CHIPS[lineKey] || (elsewhere ? "Set on Global" : ""),
       helpLabel: HELP_LABEL[lineKey] || "What this does",
       explain: NOT_EDITABLE[lineKey] || EXPLAIN[lineKey] || "",
-      editable: editable && !NOT_EDITABLE[lineKey],
+      editable: here,
+      elsewhere: elsewhere,
+      priced: here || elsewhere,
       readOnlyWhy: readOnlyWhy,
-      rule: null, id: null, notes: "",
+      rule: null, id: null, notes: "", misfiled: null,
       applies: true, formula: "", builtin: "", source: "unknown", dirty: false,
       filedText: "", simple: null, simpleFiled: false, canSimple: false, sdraft: false,
       advanced: false, baseline: ""
     };
-    if (!st.editable) return st;
+    if (!st.priced) return st;
 
-    var rule = ruleFor(LAYOUT, lineKey);
+    var rule = ruleFor(homeOf(lineKey), lineKey);
     var b = (BUILTIN[LAYOUT] || {})[lineKey];
     if (b && b.formula) st.builtin = b.formula;
 
-    if (rule) {
+    // THE TAB'S OWN ABSENCE WINS, and it is checked FIRST for exactly one reason: Gyp!B73 is
+    // EMPTY, not 0, so the gypsum tabs have no hard-bid line — and a rule filed once for every
+    // layout must not hand them one. No line an admin can type here has an absent built-in, so
+    // this order changes nothing else; it is the whole of the Gyp exception.
+    if (b && b.applies === false) {
+      st.applies = false;
+      st.source = "builtin";
+    } else if (rule) {
       st.rule = rule;
       st.id = rule.id;
       st.notes = rule.notes || "";
@@ -670,11 +794,17 @@
       st.applies = rule.applies !== false;
       st.formula = rule.formula || "";
       st.source = "filed";
-    } else if (b && b.applies === false) {
-      st.applies = false;
-      st.source = "builtin";
     } else if (st.builtin) {
       st.source = "builtin";
+    }
+
+    // A row filed under THIS tab for a line that lives on Global. NOT applied — one home per
+    // line, and a tab row quietly beating a global one is a price moving without anybody choosing
+    // it — but carried so the row can say it is there, and so the one control it can offer (get
+    // rid of it) has an id to work with.
+    if (elsewhere) {
+      st.misfiled = ruleFor(LAYOUT, lineKey);
+      st.id = st.misfiled ? st.misfiled.id : null;
     }
 
     var pending = LOCAL[key(lineKey)];
@@ -767,11 +897,11 @@
 
       if (!r.applies) { out[k] = { state: "absent" }; continue; }
 
-      // A CHAIN line the backend has stopped offering as editable and that has no sample value
-      // here. Unreachable today (LINE_KEYS is CHAIN minus _NOT_EDITABLE) and deliberately does
-      // NOT break the chain: a vocabulary change on the server should not read as a broken
-      // formula on somebody's tab.
-      if (!r.editable && k !== "contingency" && k !== "remodel_tax") {
+      // A CHAIN line the backend has stopped offering at all and that has no sample value here.
+      // `priced`, not `editable`: hard_bid and bond are read-only on a sheet tab now and they
+      // still compound through it. Unreachable today and deliberately does NOT break the chain —
+      // a vocabulary change on the server should not read as a broken formula on somebody's tab.
+      if (!r.priced && k !== "contingency" && k !== "remodel_tax") {
         out[k] = { state: "unknownline" };
         continue;
       }
@@ -837,6 +967,75 @@
     return out;
   }
 
+  /** What each GLOBAL line comes to, on its own. Not priceChain, and not a tidied copy of it.
+   *
+   *  NO BASE, SO NO DOLLARS FOR A RATE. A global line is not a percentage of the line above it —
+   *  there is nothing above it on this tab — so a rate is reported AS A RATE and a dollar figure
+   *  as dollars, which is the same reading priceChain makes of the same number and the same
+   *  reading the box's own $ / % affordance makes. Turning 0% into a dollar figure would need a
+   *  base this tab does not have, and inventing one prints money nobody can check.
+   *
+   *  NO CASCADE EITHER. A broken line breaks ITSELF: there is no chain here to carry the damage
+   *  downward, and blaming three healthy rows on one typo would send somebody to the wrong row.
+   *  It still reads Unpriceable rather than $0.00, which is the property that never changes. */
+  function priceGlobal(rows) {
+    var out = {};
+    var broken = null;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var k = r.line_key;
+      if (!r.priced) { out[k] = { state: "unknownline" }; continue; }
+      if (!r.applies) { out[k] = { state: "absent" }; continue; }
+
+      var text = r.effective;
+      if (!text) {
+        out[k] = { state: "nobuiltin" };
+        broken = broken || r.label;
+        continue;
+      }
+      var checked = M.validate(text);
+      if (!checked.ok) {
+        out[k] = { state: "invalid", error: checked.error };
+        broken = broken || r.label;
+        continue;
+      }
+      var value;
+      try {
+        value = M.run(text, context(SAMPLE_SUBTOTAL, {}));
+      } catch (e) {
+        out[k] = { state: "invalid", error: (e && e.message) ? e.message : String(e) };
+        broken = broken || r.label;
+        continue;
+      }
+      if (typeof value !== "number" || !isFinite(value)) {
+        out[k] = { state: "invalid",
+                   error: "that came out as " + JSON.stringify(value) + ", not a number" };
+        broken = broken || r.label;
+        continue;
+      }
+      var isRate = Math.abs(value) < 1;
+      out[k] = {
+        state: "ok",
+        rate: isRate ? value : null,
+        amount: isRate ? null : value,
+        // What the figure is PER. A give-back that steps by job size is only true of the job size
+        // in the box above it, and $70 that does not say "a night" is a number waiting to be
+        // multiplied by the wrong thing.
+        note: UNIT_NOTE[k] ||
+          ((r.simple && r.simple.kind !== "flat") ? "on a $" + fmtEdge(SAMPLE_SUBTOTAL) + " job"
+                                                  : "")
+      };
+    }
+    out.__total = broken ? { state: "unpriceable", dependsOn: broken } : { state: "ok" };
+    return out;
+  }
+
+  /** Whichever pass this tab is read by. One place, so the banner above the table and the rows
+   *  below it can never be computed two different ways. */
+  function priceRows(rows) {
+    return LAYOUT === GLOBAL ? priceGlobal(rows) : priceChain(rows);
+  }
+
   // ── rendering ──────────────────────────────────────────────────────────────
 
   function tabsHtml() {
@@ -875,6 +1074,26 @@
         "&rarr; " + esc(money(p.running)) + "</span>");
   }
 
+  /** The same column on the Global tab, where the figure means something different.
+   *
+   *  ONE FIGURE, NO ARROW. There is no running total to print because these lines do not
+   *  compound, and the figure is the line's own answer: `0%`, `$70.00`, `-4%`. The refusal states
+   *  are word for word the chain's, because "Unpriceable" must not come to mean two things. */
+  function globalPreviewHtml(p) {
+    if (!p) return "";
+    if (p.state === "absent") {
+      return '<span class="nodash" aria-label="not used on any sheet layout">&mdash;</span>';
+    }
+    if (p.state === "invalid" || p.state === "nobuiltin") {
+      return '<span class="unpriced">Unpriceable</span>';
+    }
+    if (p.state === "unknownline") {
+      return '<span class="nodash" aria-label="not priced">&mdash;</span>';
+    }
+    return '<span class="amt">' + esc(p.rate == null ? money(p.amount) : pct(p.rate)) + "</span>" +
+      (p.note ? '<span class="run">' + esc(p.note) + "</span>" : "");
+  }
+
   /** Soft delete, worded as what it does. "Delete" would read as "charge nothing"; the chain
    *  falls back to its hardcoded constant for a line with no rule.
    *
@@ -892,8 +1111,11 @@
     // twice -- and the first version of this fix handed a non-admin a delete button on Gyp's
     // empty hard-bid row. One function, one rule.
     if (!ADMIN || !r.id) return "";
+    // A misfiled row is not an override and must not be worded as one: there is nothing to stop
+    // overriding, because nothing reads it. See misfiledHtml.
     return '<button class="ghostlink" type="button" data-drop="' + esc(r.line_key) + '"' +
-      ' data-focus="d-' + esc(r.line_key) + '">Stop overriding this line</button>';
+      ' data-focus="d-' + esc(r.line_key) + '">' +
+      (r.misfiled ? "Remove this misfiled rule" : "Stop overriding this line") + "</button>";
   }
 
   /** The message under a control. `err` is passed IN rather than read out of ERRORS, because a
@@ -915,6 +1137,69 @@
    *  one component quietly becomes two. */
   function wbnoteHtml(text) {
     return '<span class="wbnote">' + icon("info") + "<span>" + esc(text) + "</span></span>";
+  }
+
+  /** THE ROW NOBODY WOULD OTHERWISE SEE.
+   *
+   *  `markup_rules` on production carries one live rule written before Bond moved to the Global
+   *  tab — polish / bond / applies=true / "1%" — and the backend now refuses to write another, so
+   *  more can only arrive by hand. It reaches no bid today and it reaches no bid after this
+   *  change; what changes is that this page no longer has a box for it, so without this note it
+   *  would sit in the table with nothing on any screen mentioning it. Somebody chose 1% on
+   *  purpose. They get told it is there, told why nothing reads it, and given the control that
+   *  removes it — the decision stays theirs.
+   *
+   *  NOT auto-migrated to Global, deliberately: moving it would silently change its meaning from
+   *  "the polish tab" to "every sheet layout", which is a bigger change than leaving it alone. */
+  function misfiledHtml(r) {
+    if (!r.misfiled) return "";
+    var what = r.misfiled.applies === false
+      ? "switched off"
+      : (r.misfiled.formula || "with no formula");
+    return '<span class="wbnote warn">' + icon("slash") + "<span>" +
+      esc("Filed under " + labelFor(LAYOUT) + " as " + what + ", from before " +
+          r.label + " moved to the Global tab, so nothing reads it. Set it on Global if the " +
+          "rate still matters, or remove it.") +
+      "</span></span>";
+  }
+
+  /** Why a greyed row has no figure, in the words that are true of THIS row. Three different
+   *  facts wear the same absent state and only one of them is about a cell: Kyle's hard-bid cell
+   *  is EMPTY on the gypsum tabs; somebody switched a Global line off, which is every layout at
+   *  once; or somebody switched this tab's own line off. Saying "the cell is empty on this tab"
+   *  for the second one would send a reader to the workbook to find a cell that is fine. */
+  function absentWhy(r) {
+    if (LAYOUT === GLOBAL) {
+      return "No sheet layout charges this line, which is not the same as 0%.";
+    }
+    if (r.elsewhere && r.source === "filed") {
+      return "Switched off on the Global tab, so no sheet layout charges it — which is not the " +
+        "same as 0%.";
+    }
+    return "The cell is empty on this tab, which is not the same as 0%.";
+  }
+
+  /** A line whose home is the Global tab, seen from a sheet tab.
+   *
+   *  READ-ONLY IS NOT A REDACTION. The rate, or the whole ladder, is right here: what this tab
+   *  charges is the fact somebody came to the row for, and the give-back genuinely compounds
+   *  through this tab's chain. What is not here is a box — five boxes for one rule is five ways
+   *  to disagree with it, and whichever of the two rows won would be deciding a price. */
+  function elsewhereCellHtml(r, p) {
+    var shown = r.filedText || (r.simple ? simpleTo(r.simple) : "") || r.builtin;
+    var out = (r.simple && r.simple.kind !== "flat")
+      ? bandsHtml(r, r.simple, true)
+      : '<span class="ftext mono' + (r.filedText ? "" : " dim") + '">' +
+        esc(shown || "No built-in on this page for " + labelFor(LAYOUT)) + "</span>";
+    // A FORMULA FILED ON GLOBAL THAT CANNOT BE READ BREAKS THIS TAB'S CHAIN, so this tab has to
+    // say why. There is no box here to retype it in, and without the message the only route to
+    // the reason is guessing which tab the rate came from and going to look.
+    out += errHtml(r.line_key, (p && p.state === "invalid") ? p.error : "");
+    out += wbnoteHtml(r.filedText
+      ? "Set on the Global tab, where it is filed — every sheet layout reads this same rate."
+      : "Set on the Global tab. Nothing is filed there, so this tab uses the constant built " +
+        "into the estimator.");
+    return out + misfiledHtml(r) + btnsHtml(dropBtnHtml(r));
   }
 
   /** The reach sentence where it is read for free: beside the box, not inside a closed
@@ -1100,7 +1385,9 @@
 
     // ── ABSENT ──────────────────────────────────────────────────────────────
     // No control, no empty box, no zero. A caption that names the tab, and nothing to type into.
-    if (r.editable && !r.applies) {
+    // `priced`, not `editable`: Gyp's hard-bid row is absent AND read-only now, and it is the row
+    // this state was designed for.
+    if (r.priced && !r.applies) {
       // THE REACH NOTE BELONGS ON THIS ROW MOST OF ALL. Switching a line off here files
       // `applies=false`, which markup.py keeps apart from a filed zero on purpose — so the
       // workbook goes on charging its own rate for the line, and the row has to say so rather
@@ -1114,11 +1401,17 @@
       return '<span class="absent-note">' + icon("slash", 13) +
         " Not used on " + esc(nounFor(LAYOUT)) + "</span>" +
         reachNoteHtml(r) +
+        // An off row can be misfiled too, and the drop button below is already the control that
+        // removes it — which is why misfiledHtml carries only the words.
+        misfiledHtml(r) +
         '<span class="wbnote">' + icon("info") +
-        "<span>The cell is empty on this tab, which is not the same as 0%." +
+        "<span>" + esc(absentWhy(r)) +
         (r.dirty ? " Unsaved." : "") + "</span></span>" +
         btnsHtml(dropBtnHtml(r));
     }
+
+    // ── set on the Global tab: read here, typed there ───────────────────────
+    if (r.elsewhere) return elsewhereCellHtml(r, p);
 
     // ── context: in the chain, set somewhere else ───────────────────────────
     if (!r.editable) {
@@ -1152,6 +1445,11 @@
   }
 
   function appliesCellHtml(r) {
+    // A global line seen from a sheet tab gets the same two words the switch shows, without the
+    // switch. Whether THIS tab charges the line is a real fact about this tab — Gyp has no
+    // hard-bid line at all — it is just not a decision taken from here. "Always" would be a
+    // flat lie on the Gyp row.
+    if (r.elsewhere) return '<span class="swro">' + (r.applies ? "Yes" : "Not used") + "</span>";
     if (!r.editable) return '<span class="swro">Always</span>';
     if (!ADMIN) {
       return '<span class="swro">' + (r.applies ? "Yes" : "Not used") + "</span>";
@@ -1185,8 +1483,8 @@
     return out;
   }
 
-  function rowHtml(r, p) {
-    var absent = r.editable && !r.applies;
+  function rowHtml(r, p, previewFn) {
+    var absent = r.priced && !r.applies;
     // ── WHETHER THIS ROW REACHES THE WORKBOOK ────────────────────────────────
     // Two changes met here and both had to survive. The redesign deleted the WHAT IT DOES column
     // and moved every line's prose into the row's own disclosure; the rate wiring had just added
@@ -1206,6 +1504,10 @@
     // The two preview-driven rewrites this line used to sit behind went with the column and are
     // not reinstated: `downstream` now prints "depends on <line>" where the missing figure is,
     // and `nobuiltin` reads Unpriceable with the reason in its own rate cell.
+    //
+    // `previewFn` is passed IN because the Global tab's fourth column answers a different
+    // question — what the line comes to on its own, with no running total — and a renderer that
+    // branched on LAYOUT inside itself would make one function mean two things.
     var explain = r.explain;
     explain += reachSentence(r);
     var cls = "mkrow" + (absent ? " absent" : "") + (r.editable ? "" : " ctx");
@@ -1213,7 +1515,7 @@
       '<div class="line">' + lineCellHtml(r, explain) + "</div>" +
       '<div class="rate">' + rateCellHtml(r, p) + "</div>" +
       '<div class="applies">' + appliesCellHtml(r) + "</div>" +
-      '<div class="prev">' + previewHtml(p) + "</div>" +
+      '<div class="prev">' + (previewFn || previewHtml)(p) + "</div>" +
       "</div>";
   }
 
@@ -1230,6 +1532,7 @@
       return '<p class="state"><b>No sheet layouts came back.</b>The chain cannot be shown ' +
         "without them — reload, and tell Hanz if it happens twice.</p>";
     }
+    if (LAYOUT === GLOBAL) return globalHtml();
 
     var rows = rowStates();
     var priced = priceChain(rows);
@@ -1244,15 +1547,13 @@
       '<div class="rate"><span class="ftext locked">Comes off the takeoff and labor tabs' +
       "</span></div>" +
       '<div class="applies"><span class="swro">Always</span></div>' +
-      // The one typeable box in a row that is otherwise all read-only, so it says out loud that
-      // it is a what-if and not a filed rate. `data-focus` is what lets render() put the caret
-      // back mid-keystroke -- every preview below repaints on each character typed.
-      '<div class="prev"><span class="numwrap"><span class="unit pre">$</span>' +
-      '<input class="finput num" type="text" inputmode="decimal" spellcheck="false"' +
-      ' autocomplete="off" data-subtotal="1" data-focus="sample-subtotal"' +
-      ' aria-label="Sample sub-total the preview prices, in dollars"' +
-      ' value="' + esc(SUBTOTAL_RAW == null ? fmtEdge(SAMPLE_SUBTOTAL) : SUBTOTAL_RAW) + '" /></span>' +
-      '<span class="prevnote">try a job size</span></div></div>';
+      // The `</div>` closes `.mkrow ctx`, opened at the top of this expression. It is here and
+      // not inside subtotalBoxHtml because the row is opened here: a builder that closed a div it
+      // did not open is how this broke. Extracting the box into a helper dropped this one tag,
+      // and since `.mkrow` is itself a four-column grid, every row below became a COLUMN of the
+      // unclosed context row instead of a row of the table. The browser auto-closes, so nothing
+      // threw and no string assertion noticed — see the balance test in test_markup_page.py.
+      subtotalBoxHtml("try a job size") + "</div>";
 
     for (var i = 0; i < rows.length; i++) out += rowHtml(rows[i], priced[rows[i].line_key]);
 
@@ -1267,6 +1568,63 @@
         ? '<span class="amt">' + esc(money(total.amount)) + "</span>"
         : '<span class="unpriced">Unpriceable</span>') +
       "</div></div>";
+    return out;
+  }
+
+  /** The what-if box. ONE copy, two rows.
+   *
+   *  The chain's sub-total row and the Global tab's job-size row ask the same question with the
+   *  same control and the same `data-focus` — which is what lets render() put the caret back
+   *  mid-keystroke, because every figure below repaints on each character typed. A second
+   *  hand-rolled copy of this markup is how one component quietly becomes two. */
+  function subtotalBoxHtml(note) {
+    return '<div class="prev"><span class="numwrap"><span class="unit pre">$</span>' +
+      '<input class="finput num" type="text" inputmode="decimal" spellcheck="false"' +
+      ' autocomplete="off" data-subtotal="1" data-focus="sample-subtotal"' +
+      ' aria-label="Sample sub-total the preview prices, in dollars"' +
+      ' value="' + esc(SUBTOTAL_RAW == null ? fmtEdge(SAMPLE_SUBTOTAL) : SUBTOTAL_RAW) + '" /></span>' +
+      '<span class="prevnote">' + esc(note) + "</span></div>";
+  }
+
+  /** The GLOBAL tab. Four lines that are the same rule on every sheet, and NOT a chain.
+   *
+   *  NO LUMP SUM AND NO RUNNING TOTAL, because there is nothing here to add up: two of the four
+   *  are not chain lines at all, and the other two have no line above them on this tab to be a
+   *  percentage of. A "Total" row here would be a figure made of unrelated numbers, printed in
+   *  the same red box the tabs print a real bid in.
+   *
+   *  The job-size box stays, and only for the hard-bid give-back: which rung of it applies IS the
+   *  thing being checked, and a ladder you cannot read against a job size is a ladder you have to
+   *  do arithmetic on. It prices nothing, on this tab least of all. */
+  function globalHtml() {
+    var rows = rowStates();
+    if (!rows.length) {
+      return '<p class="state"><b>No global lines came back.</b>The server didn\'t say which ' +
+        "lines are set here — reload, and tell Hanz if it happens twice.</p>";
+    }
+    var priced = priceGlobal(rows);
+
+    var out = '<div class="mkrow head">' +
+      "<div>Line</div><div>Rate</div><div>Applies</div>" +
+      '<div class="prev">What it comes to</div></div>';
+
+    out += '<div class="mkrow ctx"><div class="line">' +
+      '<span class="nm">Job size<span class="chip">A what-if</span></span>' +
+      '<span class="sub">only the hard-bid give-back reads it</span></div>' +
+      '<div class="rate"><span class="ftext locked">These lines don\'t compound — each one ' +
+      "stands on its own</span></div>" +
+      '<div class="applies"><span class="swro">&mdash;</span></div>' +
+      // The `</div>` closes `.mkrow ctx`, opened at the top of this expression. It is here and
+      // not inside subtotalBoxHtml because the row is opened here: a builder that closed a div it
+      // did not open is how this broke. Extracting the box into a helper dropped this one tag,
+      // and since `.mkrow` is itself a four-column grid, every row below became a COLUMN of the
+      // unclosed context row instead of a row of the table. The browser auto-closes, so nothing
+      // threw and no string assertion noticed — see the balance test in test_markup_page.py.
+      subtotalBoxHtml("try a job size") + "</div>";
+
+    for (var i = 0; i < rows.length; i++) {
+      out += rowHtml(rows[i], priced[rows[i].line_key], globalPreviewHtml);
+    }
     return out;
   }
 
@@ -1336,6 +1694,11 @@
     var fallback = $("mk-fallback");
     if (!LOADED || !LAYOUT) {
       fallback.hidden = true;
+    } else if (!overrides.length && LAYOUT === GLOBAL) {
+      fallback.hidden = false;
+      fallback.textContent = "Nothing is filed on Global yet, and that is the normal first " +
+        "state — every line below is the figure the estimator and the workbook already use. " +
+        "Changing one here changes it for every sheet layout at once.";
     } else if (!overrides.length) {
       fallback.hidden = false;
       fallback.textContent = "Nothing is filed for " + labelFor(LAYOUT) + " yet, and that is " +
@@ -1349,20 +1712,30 @@
         "priced by the constant built into the estimator.";
     }
 
-    var priced = rows.length ? priceChain(rows) : { __total: { state: "ok" } };
+    var priced = rows.length ? priceRows(rows) : { __total: { state: "ok" } };
     var broken = priced.__total.state !== "ok" ? priced.__total.dependsOn : "";
     $("mk-broken").hidden = !broken;
     $("mk-broken-line").textContent = broken ? broken + " can't be priced." : "";
-    $("mk-broken-rest").textContent = broken
-      ? "Every line below it reads Unpriceable rather than zero, and " + labelFor(LAYOUT) +
-        " can't be generated until it's fixed."
-      : "";
+    // TWO DIFFERENT CONSEQUENCES, said apart. On a sheet tab a broken line takes the whole chain
+    // below it down. On Global nothing is below anything — but the line is read by every sheet
+    // tab that charges it, so it breaks THEIR chains, which is the half somebody standing on this
+    // tab cannot see.
+    $("mk-broken-rest").textContent = !broken ? ""
+      : LAYOUT === GLOBAL
+        ? "It reads Unpriceable rather than zero, here and on every sheet tab that charges it."
+        : "Every line below it reads Unpriceable rather than zero, and " + labelFor(LAYOUT) +
+          " can't be generated until it's fixed.";
 
-    $("mk-foot").textContent = "Preview figures are computed against a sample " +
-      money(SAMPLE_SUBTOTAL) + " job with a " + pct(SAMPLE_COUNTY_RATE) + " county remodel " +
-      "rate, so a rate's effect is visible the moment it's typed — they price nothing real. " +
-      "The arrow under each amount is the running total through that line, which is the next " +
-      "line's base. The chain that prices a bid reads these same rows.";
+    $("mk-foot").textContent = LAYOUT === GLOBAL
+      ? "Each figure is what that line comes to on its own — these lines don't compound, so " +
+        "there is no running total and no lump sum on this tab. The job size above only decides " +
+        "which rung of the hard-bid give-back is read; it prices nothing real. Every sheet tab " +
+        "reads these same rows."
+      : "Preview figures are computed against a sample " +
+        money(SAMPLE_SUBTOTAL) + " job with a " + pct(SAMPLE_COUNTY_RATE) + " county remodel " +
+        "rate, so a rate's effect is visible the moment it's typed — they price nothing real. " +
+        "The arrow under each amount is the running total through that line, which is the next " +
+        "line's base. The chain that prices a bid reads these same rows.";
   }
 
   // ── errors on a row, without a repaint ─────────────────────────────────────
@@ -1616,7 +1989,19 @@
   async function drop(lineKey) {
     var r = rowState(lineKey);
     if (!r.id) return;
-    var ok = await TW.confirmDanger({
+    // A MISFILED ROW IS NOT AN OVERRIDE, so it does not get the override's words. Nothing reads
+    // it, so nothing falls back to anything when it goes — and saying "the chain uses X again"
+    // there would be the opposite of true.
+    var ok = await TW.confirmDanger(r.misfiled ? {
+      tone: "warn",
+      title: "Remove this misfiled rule?",
+      name: r.label,
+      after: " is set on the Global tab now, so this " + labelFor(LAYOUT) +
+        " row is read by nothing.",
+      detail: "Removing it changes no price. If the rate still matters, file it on the Global " +
+        "tab first — there it applies to every sheet layout.",
+      confirmText: "Remove it"
+    } : {
       tone: "warn",
       title: "Stop overriding this line?",
       name: r.label,
@@ -1863,6 +2248,12 @@
       var json = await res.json();
       RULES = json.rules || [];
       LINE_KEYS = json.line_keys || [];
+      // BOTH HALVES OF THE SPLIT, off the same response as the tab strip, so the page cannot
+      // offer a box for a line the API would refuse. A server too old to ship them also ships no
+      // `global` layout, so every home question below answers "tab" and this page behaves exactly
+      // as it did before Global existed — degraded, never half-applied.
+      GLOBAL_KEYS = json.global_line_keys || [];
+      TAB_KEYS = json.tab_line_keys || [];
       // THE TABS COME FROM THE API, so the editor cannot keep a drifting second copy of them.
       // `combo` is filtered anyway: markup.py refuses the string by name because a combo job is
       // two option lines each priced off its own tab, and a Combo tab here would offer to store a

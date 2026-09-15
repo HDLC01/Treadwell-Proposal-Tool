@@ -235,8 +235,17 @@ function makeDoc() {
 }
 
 // ── the run ──────────────────────────────────────────────────────────────────
-const LAYOUTS = ["polish", "seal", "epoxy", "leveling", "gyp"];
-const LINE_KEYS = ["gp", "hard_bid", "super_pto", "soft_costs", "bond"];
+// The API's own vocabularies, written here by hand rather than imported, so a change on either
+// side is a failing test. `global` is a LAYOUT and is not a sheet tab: it is the one home for the
+// four lines that are the same rule on every sheet, and it goes LAST because the page opens on
+// LAYOUTS[0] and that has to stay a sheet tab.
+const LAYOUTS = ["polish", "seal", "epoxy", "leveling", "gyp", "global"];
+const GLOBAL_LINE_KEYS = ["hard_bid", "bond", "travel_lodging", "travel_per_diem"];
+const TAB_LINE_KEYS = ["gp", "super_pto", "soft_costs"];
+// The union, in the order the rows come back — the chain first, then the two lines that are not
+// chain lines at all.
+const LINE_KEYS = ["gp", "hard_bid", "super_pto", "soft_costs", "bond",
+                   "travel_lodging", "travel_per_diem"];
 
 // The two built-ins the simple controls have to round-trip byte for byte, written here
 // INDEPENDENTLY of markup.js so a change on either side is a failing test rather than a rate
@@ -273,7 +282,9 @@ function build(opts) {
       return {
         ok: true, status: 200,
         json: async () => ({ ok: true, rules: (o.rules || []).map((r) => Object.assign({}, r)),
-                             layouts: o.layouts || LAYOUTS, line_keys: o.line_keys || LINE_KEYS }),
+                             layouts: o.layouts || LAYOUTS, line_keys: o.line_keys || LINE_KEYS,
+                             global_line_keys: o.global_line_keys || GLOBAL_LINE_KEYS,
+                             tab_line_keys: o.tab_line_keys || TAB_LINE_KEYS }),
       };
     }
     if (method === "PUT") {
@@ -406,6 +417,13 @@ function build(opts) {
       // Everything the chain rendered, as text — used to prove a $0.00 never appears where a
       // line could not be priced.
       chainText: byClass(t, "mkrow").map((r) => r.text).join(" | "),
+      // ROWS NESTED INSIDE OTHER ROWS, which every other field here is blind to. `byClass` walks
+      // descendants, so when #516 dropped the context row's closing tag and each row below it
+      // became a CHILD of that row, every text and order assertion in this file still passed —
+      // the rows were all still found, just in the wrong place. On screen `.mkrow` is a
+      // four-column grid, so the nested rows rendered as four COLUMNS and the tab was unusable.
+      // `all()` matches the root it is given, so a row containing another row scores 2, not 1.
+      nestedRows: byClass(t, "mkrow").filter((r) => byClass(r, "mkrow").length > 1).length,
       // EVERY INPUT THAT FILES SOMETHING, which is what the admin gate is about. The sub-total
       // what-if box is excluded on purpose: it moves a preview figure on this screen and writes
       // nothing anywhere, so a non-admin using it can never earn the 403 that the gate exists to
@@ -483,7 +501,7 @@ async function main() {
   // ═══ 2. the poisoned vocabulary: a `combo` the API must never be able to
   //        put on screen, and a line_key CHAIN has never heard of ════════════
   {
-    const s = build({ layouts: ["polish", "combo", "seal", "epoxy", "leveling", "gyp"],
+    const s = build({ layouts: ["polish", "combo", "seal", "epoxy", "leveling", "gyp", "global"],
                       line_keys: LINE_KEYS.concat(["escalation"]) });
     await drain();
     out.poisoned = s.snap();
@@ -497,9 +515,13 @@ async function main() {
 
   // ═══ 3. Gyp: hard_bid ABSENT (the built-in default) beside a genuine ZERO
   //        filed on bond. The two states on one screen, which is the whole
-  //        reason markup.py stores them differently. ═══════════════════════
+  //        reason markup.py stores them differently.
+  //
+  //        The zero is filed on GLOBAL now, because that is where bond lives —
+  //        so this fixture also says that a Global row reaches a sheet tab,
+  //        while the tab's own empty cell still beats it on the row above. ══
   {
-    const s = build({ rules: [rule("gyp", "bond", { formula: "0", applies: true }),
+    const s = build({ rules: [rule("global", "bond", { formula: "0", applies: true }),
                               rule("gyp", "gp", { formula: "30%" })] });
     await drain();
     s.clickTab("gyp");
@@ -507,11 +529,18 @@ async function main() {
     out.gyp = s.snap();
   }
 
-  // ═══ 4. an ABSENT row filed explicitly (applies=false, formula null) ══════
+  // ═══ 4. an ABSENT row filed explicitly (applies=false, formula null), on the
+  //        line's own home ════════════════════════════════════════════════════
   {
-    const s = build({ rules: [rule("polish", "hard_bid", { applies: false, formula: null })] });
+    const s = build({ rules: [rule("global", "hard_bid", { applies: false, formula: null })] });
     await drain();
+    // Seen from a SHEET tab first: the line is off for every layout, and the sheet tab reads that
+    // off the Global row's own `applies` column rather than re-deriving it from anything.
     out.filedAbsent = s.snap();
+
+    s.clickTab("global");
+    await drain();
+    out.globalAbsent = s.snap();
 
     // AND THE WAY BACK MUST ACTUALLY WORK FROM HERE. An off row has no box to type in, so this
     // button is its only exit -- one that painted and did nothing would be a worse corner than no
@@ -521,14 +550,45 @@ async function main() {
     out.filedAbsentDrop = { confirm: s.confirms[0] || null,
                             deletes: s.dels().map((r) => r.url),
                             after: s.snap() };
+    // …and the sheet tab that was reading it gets its built-in give-back back, in dollars.
+    s.clickTab("polish");
+    await drain();
+    out.filedAbsentDropPolish = s.snap();
+  }
+
+  // ═══ 4b. THE ROW THAT IS ON PRODUCTION RIGHT NOW ═════════════════════════
+  //   polish / bond / applies=true / "1%", filed before Bond moved to the Global tab. It is read
+  //   by nothing — this page prices bond from its home and the backend refuses to write another
+  //   one — so the only question is whether a person can SEE it. Deleting it or migrating it are
+  //   both decisions somebody has to take; the page's job is to make the decision possible.
+  {
+    const s = build({ rules: [rule("polish", "bond", { formula: "1%", applies: true })] });
+    await drain();
+    out.misfiled = s.snap();
+    s.clickIn("d-bond");
+    await drain();
+    out.misfiledDrop = { confirm: s.confirms[0] || null,
+                         deletes: s.dels().map((r) => r.url),
+                         after: s.snap() };
+
+    // The same row, read by somebody who cannot act on it: still said, still no control.
+    const n = build({ role: "estimator",
+                      rules: [rule("polish", "bond", { formula: "1%", applies: true })] });
+    await drain();
+    out.misfiledReadOnly = n.snap();
   }
 
   // ═══ 5. an invalid formula: the cascade, and never a $0.00 ════════════════
+  //   Filed on GLOBAL, because that is where hard_bid lives — and read first from a SHEET tab,
+  //   because one broken Global line breaks the chain of every tab that charges it.
   {
-    const s = build({ rules: [rule("polish", "hard_bid",
+    const s = build({ rules: [rule("global", "hard_bid",
       { formula: "IF(hard_bid_on, ROUNDUP((subtoal+gp)*-4%), 0" })] });
     await drain();
     out.invalid = s.snap();
+    s.clickTab("global");
+    await drain();
+    out.invalidGlobal = s.snap();
   }
 
   // ═══ 6. a formula that PARSES and evaluates to Kyle's "error" sentinel ════
@@ -541,6 +601,10 @@ async function main() {
 
   // ═══ 7. a non-admin ══════════════════════════════════════════════════════
   {
+    // The gyp/hard_bid row is MISFILED — hard_bid lives on Global — so this fixture also carries
+    // the one row a non-admin can be shown and cannot act on, and it is what the dropBtnHtml
+    // mutation below aims at: the ABSENT branch is the only path that reaches that button
+    // without passing an `if (!ADMIN)` first.
     const s = build({ role: "estimator",
                       rules: [rule("polish", "soft_costs", { formula: "16%" }),
                               rule("gyp", "hard_bid", { applies: false, formula: null })] });
@@ -549,6 +613,9 @@ async function main() {
     s.clickTab("gyp");
     await drain();
     out.nonAdminGyp = s.snap();
+    s.clickTab("global");
+    await drain();
+    out.nonAdminGlobal = s.snap();
     out.nonAdminRequests = s.requests.map((r) => r.method);
   }
 
@@ -667,8 +734,11 @@ async function main() {
   {
     const s = build({ rules: [] });
     await drain();
-    out.ladder = { gp: s.snap().rows.find((r) => r.line === "gp"),
-                   hard_bid: s.snap().rows.find((r) => r.line === "hard_bid") };
+    // GP's ladder is read on the sheet tab it belongs to; the hard bid's is read on GLOBAL, which
+    // is where it is edited now. A sheet tab shows the same rungs read-only — that is
+    // out.globalReachPolish, below.
+    out.ladder = { gp: s.snap().rows.find((r) => r.line === "gp"), hard_bid: null };
+    out.ladderTabHardBid = s.snap().rows.find((r) => r.line === "hard_bid");
 
     // Tab from the first band's ceiling to its rate WITHOUT typing. Nothing is saved and — the
     // point — nothing is repainted, so the box the browser is moving into still exists.
@@ -694,6 +764,11 @@ async function main() {
     s.typeAndLeave("s-gp-edge-1", "$16,000", null);
     await drain();
     out.commaEdit = { body: (s.puts()[1] || {}).body || null };
+
+    // …and the give-back's own ladder, on the tab that owns it.
+    s.clickTab("global");
+    await drain();
+    out.ladder.hard_bid = s.snap().rows.find((r) => r.line === "hard_bid");
   }
 
   // ═══ 15. the ladder round-trips byte for byte ════════════════════════════
@@ -707,14 +782,23 @@ async function main() {
                      "edge-3", "rate-3", "rate-4"]) {
       s.leave("s-gp-" + p, null);
     }
+    // The give-back's four boxes live on Global now, so the walk goes there for them.
+    s.clickTab("global");
+    await drain();
     for (const p of ["edge-0", "rate-0", "edge-1", "rate-1"]) {
       s.leave("s-hard_bid-" + p, null);
     }
     await drain();
     out.roundTripPuts = s.puts().map((r) => r.body);
 
-    // And the same for every flat box, whose baseline is EMPTY rather than the built-in.
-    for (const k of ["super_pto", "soft_costs", "bond"]) s.leave("s-" + k + "-value", null);
+    // And the same for every flat box, whose baseline is EMPTY rather than the built-in — the
+    // three on Global first, then back to the sheet tab for its two.
+    for (const k of ["bond", "travel_lodging", "travel_per_diem"]) {
+      s.leave("s-" + k + "-value", null);
+    }
+    s.clickTab("polish");
+    await drain();
+    for (const k of ["super_pto", "soft_costs"]) s.leave("s-" + k + "-value", null);
     await drain();
     out.roundTripPutsAfterFlat = s.puts().map((r) => r.body);
   }
@@ -797,6 +881,8 @@ async function main() {
   {
     const s = build({ rules: [] });
     await drain();
+    s.clickTab("global");
+    await drain();
     out.localBefore = s.snap().rows.find((r) => r.line === "hard_bid");
     s.tick2("s-hard_bid-local-0");
     await drain();
@@ -808,7 +894,9 @@ async function main() {
   //   A bond filed as a flat `750` is dollars, not a rate -- the same reading priceChain makes
   //   off the same number, so the box and the figure beside it cannot describe different money.
   {
-    const s = build({ rules: [rule("polish", "bond", { formula: "750" })] });
+    const s = build({ rules: [rule("global", "bond", { formula: "750" })] });
+    await drain();
+    s.clickTab("global");
     await drain();
     out.dollars = s.snap().rows.find((r) => r.line === "bond");
     s.typeAndLeave("s-bond-value", "1,250", null);
@@ -826,6 +914,58 @@ async function main() {
     s.typeAndLeave("s-soft_costs-value", "17", null);       // any repaint at all
     await drain();
     out.helpOpen = s.snap().rows.find((r) => r.line === "gp").helpOpen;
+  }
+
+  // ═══ 22. THE GLOBAL TAB, with nothing filed ══════════════════════════════
+  //   Four lines and no chain: no gp, no contingency, no soft costs, no running total and no
+  //   lump sum. Two of the four are not chain lines at all, so a total here would be a figure
+  //   made of unrelated numbers in the same red box a real bid is printed in.
+  {
+    const s = build({ rules: [] });
+    await drain();
+    out.globalTabSelected = s.snap().tabs.map((t) => t.layout + ":" + t.selected);
+    s.clickTab("global");
+    await drain();
+    out.globalDayOne = s.snap();
+
+    // A rate typed here files against the `global` layout, not against whichever sheet tab the
+    // admin happened to come from.
+    s.typeAndLeave("s-travel_lodging-value", "80", null);
+    await drain();
+    out.globalEditBody = (s.puts()[0] || {}).body || null;
+    out.globalEdited = s.snap();
+  }
+
+  // ═══ 23. one Global rule, read by every sheet tab — EXCEPT where the tab
+  //         has no such line at all ═══════════════════════════════════════════
+  //   Gyp!B73 is EMPTY, not 0. A rule filed once for every layout must not hand the gypsum tabs
+  //   a hard-bid line their workbook does not have, so the tab's own absence wins.
+  //   Gyp's own GP is filed too, so its chain prices at all: without a gp rate the tab reads
+  //   Unpriceable from the top and the hard-bid row would show "—" for a reason that has nothing
+  //   to do with the exception being tested.
+  {
+    const s = build({ rules: [rule("global", "hard_bid", { formula: "-6%" }),
+                              rule("gyp", "gp", { formula: "30%" })] });
+    await drain();
+    out.globalReachPolish = s.snap();
+    s.clickTab("seal");
+    await drain();
+    out.globalReachSeal = s.snap();
+    s.clickTab("gyp");
+    await drain();
+    out.globalReachGyp = s.snap();
+  }
+
+  // ═══ 24. a filed ZERO beside a genuine ABSENT, on the tab that owns both ══
+  //   The same distinction as scenario 3, on one screen, in the two rows that are now EDITABLE
+  //   rather than read-off-elsewhere: bond prices to nothing, hard bid does not exist.
+  {
+    const s = build({ rules: [rule("global", "bond", { formula: "0", applies: true }),
+                              rule("global", "hard_bid", { applies: false, formula: null })] });
+    await drain();
+    s.clickTab("global");
+    await drain();
+    out.globalZeroAndAbsent = s.snap();
   }
 
   console.log(JSON.stringify(out));

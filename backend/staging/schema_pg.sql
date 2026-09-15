@@ -233,10 +233,16 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- supabase_schema.sql; see backend/markup.py for why the key is the TAB (Seal / Epoxy blank /
 -- Leveling are tabs no work type names), why there is no 'combo', and why `applies` is not the
 -- same as a zero formula (the Gyp tabs have NO hard-bid rate — the cell is empty).
+--
+-- 'global' IS A LAYOUT AND IS NOT A TAB. The four lines that are the same rule on every sheet —
+-- hard_bid, bond, travel_lodging ($70 a night), travel_per_diem ($45 a day) — are filed once under
+-- it and read BY every tab. ONE HOME PER LINE, not a default a tab may override: two rows for one
+-- line is a precedence question, and that question decides a price. Enforced in markup.py, not by
+-- a CHECK here, for the reason the layout comment already gives.
 create table if not exists public.markup_rules (
   id           text primary key,
-  layout       text not null,                 -- polish | seal | epoxy | leveling | gyp
-  line_key     text not null,                 -- gp | hard_bid | contingency | super_pto | …
+  layout       text not null,                 -- polish | seal | epoxy | leveling | gyp | global
+  line_key     text not null,                 -- gp | hard_bid | … | travel_lodging (global-only)
   -- An EXPRESSION, not a rate: Gyp's soft-costs cell is a whole IF(OR(...)) that returns the
   -- string "error" rather than guess. NULL when the line does not apply.
   formula      text,
