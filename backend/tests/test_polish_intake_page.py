@@ -379,6 +379,47 @@ def test_the_beta_is_polish_and_the_city_is_kept_combined(ran):
 
 
 @needs_node
+def test_a_condition_answered_on_review_survives_a_trip_to_intake(ran):
+    """THE BUG THIS PAIR EXISTS FOR, found by audit on 2026-09-15 and fixed the same day.
+
+    The Review step gained clickable condition switches, and for one commit it wrote only
+    `polish_estimate.conditions` — not the Yes/No cells. This page's adoptModel lets the CELL win
+    over the model ("THE CELL WINS WHERE THERE IS ONE"), a rule that is only safe while every
+    writer writes both, which its own comment says outright: "the cell can never be the staler of
+    the two."
+
+    So: turn Sales tax off on Review, then follow either of Review's OWN links to this page —
+    remodelSource()'s "pick a county", or the Labor step's "Change it on the intake step" — and
+    Epoxy!B6 still said "Yes", so the estimator got their old answer handed back. Touch anything
+    here and save() wrote the model from it, making the revert permanent. A silently reverted
+    `taxable` moves the bid by 9.475% of materials, on a screen whose job is to be trusted.
+
+    The fix is that the Review step writes those cells too, through the one shared
+    `B.conditionCellWrites` — see test_polish_estimate_page.test_the_save_writes_the_condition_
+    cells_and_no_others for the other half.
+
+    NOT A VACUOUS PAIR, and `revertsWhenCellNotWritten` is what proves it: the same visit with the
+    cell left saying "Yes" — exactly what the buggy version produced — still reverts. If the
+    cell-wins rule ever stops running, that counterexample goes false and this test says so
+    instead of passing for the wrong reason.
+
+    Mutation: drop the cell_values line from polish-estimate.js's saveSoon. The harness's
+    `fromReview` blob stops being reachable in the product, and this test keeps passing on a
+    fixture the product can no longer produce — which is why the estimate page owns the assertion
+    that it writes them."""
+    rt = ran["roundTrip"]
+    assert rt["revertsWhenCellNotWritten"] is True, (
+        "the cell-wins rule is not running, so the rest of this test proves nothing")
+    assert rt["taxableOnScreen"] is False, "the switch showed the answer Review replaced"
+    assert rt["model"] is False, "the model was overwritten from a cell that agreed with it"
+    # And passing through — setting some OTHER condition — must not write the old answer back.
+    assert rt["savedModel"] is False, "a later save put the reverted answer back on the model"
+    assert rt["savedCell"] == "No", "a later save put the reverted answer back in the cell"
+    assert rt["theOtherOneLanded"] is True, (
+        "the visit did not actually save anything, so nothing was proved about what it preserved")
+
+
+@needs_node
 def test_a_stray_condition_key_invents_nothing(ran):
     """Only the five. Mutation: write whatever `data-cond` says, and a sixth key lands in the model
     where cellWrites() will never look for it."""

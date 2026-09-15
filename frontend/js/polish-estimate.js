@@ -17,7 +17,12 @@
 //
 // Two consequences worth stating plainly:
 //
-//   * This page NO LONGER writes state.cell_values. The downloaded .xlsx therefore shows the
+//   * This page NO LONGER writes the takeoff or pricing cells into state.cell_values — with ONE
+//     exception, added 2026-09-15 when the Review step's condition switches shipped: the five
+//     Yes/No condition cells, through B.conditionCellWrites. Those are not a rendering of the bid,
+//     they are the contract this screen shares with the intake page, which reads them back and
+//     lets the cell win over the model. A writer that skips them hands the estimator their old
+//     answer back on the next visit to Intake. The downloaded .xlsx therefore shows the
 //     template's own Polish tab, not what was priced here. That is survivable only because the
 //     beta works on test projects by construction (see polish-sandbox.js) — it must be revisited
 //     before any of this prices a real bid.
@@ -222,6 +227,18 @@
                                            // page never prices FROM it
       TW.setState(Object.assign({}, TW.getState(), {
         polish_estimate: M,
+        // THE FIVE CONDITION CELLS, AND ONLY THOSE. See the file header: this page does not write
+        // the takeoff or the pricing cells, because it no longer prices through the workbook. It
+        // has to write these, because they are not a rendering of the bid — they are the contract
+        // this screen shares with the intake page, which reads them back on load and lets the CELL
+        // win over the model (polish-intake.js adoptModel, "THE CELL WINS WHERE THERE IS ONE").
+        //
+        // That rule's safety condition is that every writer writes both places. This page became a
+        // second writer the moment the Review step's switches shipped, and for one commit it wrote
+        // only the model: flip Sales tax off here, follow either of this step's own links to
+        // Intake — remodelSource()'s "pick a county", or the Labor step's "Change it on the intake
+        // step" — and the old answer came back, then intake's next save made the revert permanent.
+        cell_values: B.conditionCellWrites(M.conditions, TW.getState().cell_values),
         // proposal-review reads this for the SF token, and /api/generate's files-mode rebuild
         // gates on it.
         polish_sf: b.sf,

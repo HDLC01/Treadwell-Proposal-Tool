@@ -1185,8 +1185,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
       debounced: queued.armed === 1 && queued.sent === 0,
       sentOnce: b.rec.saves.length - before === 1,
       keys: Object.keys(save).sort(),
-      // No cell_values key at all: this page stopped writing worksheet cells.
       hasCellValues: Object.prototype.hasOwnProperty.call(save, "cell_values"),
+      // Exactly which worksheet cells this page contributes. Since 2026-09-15 it writes the five
+      // conditions' Yes/No literals and NOTHING else -- they are the contract it shares with the
+      // intake page, which reads them back and lets the cell win over the model.
+      cellValueKeys: Object.keys(save.cell_values || {}).sort(),
+      cellValues: save.cell_values || null,
       version: save.polish_estimate.version,
       polishSf: save.polish_sf,
       modelTotals: save.polish_estimate.totals.total,
