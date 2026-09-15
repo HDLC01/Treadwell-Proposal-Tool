@@ -585,9 +585,13 @@ def test_the_markup_block_is_the_chain_line_for_line(ran):
         assert key in exp, "the review shows a %r line the chain does not compute" % key
         money_is(cell, exp[key], "review line %r" % key)
     # The lines Kyle's sheet has, in the order he reads them down.
+    # `fees` is NOT in this list, and `contingency` never was: both are typed by the estimator
+    # rather than computed, so neither has a keyed money cell to compare -- they are boxes. The
+    # Fees line joined them on 2026-09-16; its own coverage is
+    # test_the_fees_line_is_typed_and_marked_up_the_way_the_sheet_marks_it_up.
     for key in ("material", "shipping", "material_total", "labor", "escalation", "burden",
                 "labor_total", "sub_total", "gp", "hard_bid", "super_pto", "soft_costs",
-                "sales_tax", "remodel_tax", "taxes", "fees", "bond", "fees_and_bond", "total"):
+                "sales_tax", "remodel_tax", "taxes", "bond", "fees_and_bond", "total"):
         assert key in r["rendered"]["money"], "the review block has lost its %r line" % key
     assert r["rendered"]["persf"] == r["expectedPerSf"], (
         "the price per SF beside the lump sum is %r, not %r"
@@ -797,6 +801,81 @@ def test_bond_is_a_switch_that_changes_no_number(ran):
     assert bond["expectedAfter"]["bond"] == 0 and bond["expectedAfter"]["bond_pct"] == 0
 
 
+@needs_node
+def test_travel_is_listed_even_when_it_costs_nothing(ran):
+    """Hanz, 2026-09-16: "Travel should show up in Review."
+
+    Review lists a labor row only when it prices above zero, so an unfilled Travel row was invisible
+    here -- the one line an estimator is most likely to have forgotten was also the only one they
+    could not check.
+
+    Travel is now always listed; every other row keeps the rule. The difference is what a zero
+    MEANS on each. An empty Polishing or Joint filler row is unfinished work, and the blockers
+    panel at the top of this step already names it -- repeating it here would say the same thing
+    twice and put a $0 beside a line that is going to cost thousands. An empty Travel row is a
+    legitimate answer, because a local job has no travel, so its zero is a DECISION. A review step
+    exists to show decisions.
+
+    THE FIXTURE IS THE ARGUMENT. Travel and Joint filler both cost exactly $0 here, and they differ
+    in nothing except which one is travel -- so "travel appears" cannot pass by travel happening to
+    be priced, and "the others are hidden" cannot pass by them happening to be absent.
+
+    Mutation: drop the `&& r.id !== "travel"` guard. Travel disappears again and every other
+    assertion in this file still passes. Mutate it the other way -- list every row -- and Joint
+    filler reappears at $0 beside the blocker that already names it."""
+    z = ran["review"]["zeroTravel"]
+    assert z["travelCost"] == 0 and z["jointFillerCost"] == 0, (
+        "the fixture no longer isolates the rule: travel=%r joint filler=%r"
+        % (z["travelCost"], z["jointFillerCost"]))
+    assert "Travel" in z["labels"], (
+        "an unpriced Travel row is still missing from Review: %r" % z["labels"])
+    assert "Joint filler" not in z["labels"], (
+        "an unpriced non-travel row was listed: %r" % z["labels"])
+    # And the priced row beside them is unaffected -- the change is about zeros, not about order.
+    assert z["labels"][0] == "Polishing" and z["labels"][1] == "Travel", (
+        "the labor rows are out of order: %r" % z["labels"])
+
+
+@needs_node
+def test_the_fees_line_is_typed_and_marked_up_the_way_the_sheet_marks_it_up(ran):
+    """Hanz, 2026-09-16: "Fees + Textura should be an editable field in Review."
+
+    D77 is `=ROUNDUP(B77*C77,0)` and Kyle ships both factors blank, so the line has always read
+    $0 with nothing to click. It is now a typed box, the same shape as Contingency -- the workbook
+    leaves those cells open, and a line an estimator cannot fill in is one they have to remember
+    to add somewhere else.
+
+    THE SURPRISING HALF, which is why it is measured rather than eyeballed: $800 of fees does NOT
+    raise the bid by $800. D77 sits inside GP's own divisor (D67), and inside the bases of
+    super/PTO (D69), soft costs (D70) and the remodel tax (D75) -- so it compounds. On this
+    fixture $800 moves the total by $1,545, of which $430 is GP alone. That is Kyle's column doing
+    what it does, not a defect, and an estimator who checks the arithmetic will see the difference
+    and need it to be deliberate.
+
+    Mutation: `var fees = roundUp(num(input.fees))` -> `roundUp(RATES.FEES)`. The box still takes
+    a number and still saves it; the bid simply ignores it. Every other test in this file passes.
+    """
+    f = ran["review"]["fees"]
+    assert f["model"] == "800", "the typed fee never reached the model: %r" % f["model"]
+    assert f["noRebuild"], "typing a fee rebuilt the review panel and would drop the caret"
+    # The box seeds from the model, so a reload shows what was typed rather than an empty field.
+    assert f["inputValue"] == "0", "the fees box does not render the model's own figure"
+    # A fresh model and an older draft both start at the sheet's own zero, never undefined.
+    assert f["freshSeed"] == 0 and f["backfilled"] == 0, (
+        "fees is not seeded from the workbook's blank: fresh=%r backfilled=%r"
+        % (f["freshSeed"], f["backfilled"]))
+    # Every line the fee feeds moves, and each lands on the chain's own figure.
+    for key in ("gp", "super_pto", "soft_costs", "remodel_tax", "total"):
+        assert f["before"][key] != f["after"]["money"][key], (
+            "%r did not move when a fee was typed: still %r" % (key, f["before"][key]))
+        money_is(f["after"]["money"][key], f["expected"][key], "%r with a fee" % key)
+    # THE COMPOUNDING ITSELF. A fee that only added itself would leave this equal to 800.
+    moved = dollars(f["after"]["money"]["total"]) - dollars(f["before"]["total"])
+    assert moved > 800, (
+        "an $800 fee moved the bid by %r -- D77 is no longer inside the markup bases" % moved)
+    assert f["expected"]["fees"] == 800, "the chain did not take the typed figure as the fee"
+
+
 # ── F. the save contract ─────────────────────────────────────────────────────
 @needs_node
 def test_the_save_carries_what_the_rest_of_the_app_reads(ran):
@@ -990,7 +1069,10 @@ def test_the_dropped_v1_keys_are_gone(ran):
     live."""
     m = ran["migration"]
     assert m["dropped"] == [], "a v1 key survived migration: %r" % m["dropped"]
-    assert m["keys"] == ["conditions", "contingency", "labor", "takeoff", "totals", "version"], (
+    # `fees` joined the shape on 2026-09-16, when the Fees + Textura line became typeable on the
+    # Review step. A v1 draft has no such figure, so migration seeds it from the sheet's own zero.
+    assert m["keys"] == ["conditions", "contingency", "fees", "labor", "takeoff", "totals",
+                         "version"], (
         "the v2 model's shape has changed: %r" % m["keys"])
 
 
