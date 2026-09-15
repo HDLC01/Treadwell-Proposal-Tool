@@ -563,10 +563,17 @@
       (amt ? '<span class="amt">' + esc(amt) + '</span>' : '') + '</div>' + inner + '</div>';
   }
 
-  /** rows: [label, middle, money, rowClass]. `money` may be pre-built HTML for a keyed cell. */
+  /** rows: [label, middle, money, rowClass]. `money` may be pre-built HTML for a keyed cell.
+   *
+   *  `label` is escaped by default -- most of it is user data (an assembly name, a labor line's
+   *  own typed label) and has to be. The one row that needs to embed a real control (Labor
+   *  escalation's prevailing-wage switch) passes `{ raw: "<...>" }` instead of a bare string, so
+   *  that one label opts out explicitly rather than this function guessing "looks like HTML" on
+   *  a string that could just as easily be a customer's literal `<` in an assembly name. */
   function revTable(rows) {
     return '<table class="rev-t"><tbody>' + rows.map(function (r) {
-      return '<tr' + (r[3] ? ' class="' + r[3] + '"' : '') + '><td>' + esc(r[0]) +
+      var label = (r[0] && typeof r[0] === "object" && "raw" in r[0]) ? r[0].raw : esc(r[0]);
+      return '<tr' + (r[3] ? ' class="' + r[3] + '"' : '') + '><td>' + label +
         '</td><td class="r">' + esc(r[1] == null ? "" : r[1]) + '</td><td class="r">' +
         (r[2] == null ? "" : r[2]) + '</td></tr>';
     }).join("") + '</tbody></table>';
@@ -596,7 +603,7 @@
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
     tkRows.push(["Materials", "", mkAmt(b, "material")]);
     tkRows.push(["Shipping", B.pct(B.RATES.SHIPPING), mkAmt(b, "shipping")]);
-    tkRows.push(["Material total", "", mkAmt(b, "material_total"), "tot"]);
+    tkRows.push(["Material Subtotal", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, moneyAuto(b.material_total), revTable(tkRows));
 
     // Labor
@@ -609,10 +616,10 @@
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
     labRows.push(["Labor", "", mkAmt(b, "labor")]);
-    labRows.push(["Labor escalation", b.escalation
-      ? B.pct(B.RATES.ESCALATION) : "prevailing wage off", mkAmt(b, "escalation")]);
+    labRows.push([{ raw: condSwitch("prevailing_wage", "Labor escalation") },
+      b.escalation ? B.pct(B.RATES.ESCALATION) : "", mkAmt(b, "escalation")]);
     labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
-    labRows.push(["Labor total", "", mkAmt(b, "labor_total"), "tot"]);
+    labRows.push(["Labor Subtotal", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
 
     html += '<div class="rev">' + markupTable(b) + '</div>';
@@ -620,24 +627,33 @@
       "Costs, then the markup Kyle's sheet applies, then the lump sum.", html);
   }
 
-  /** Built at RENDER time, never at parse time.
+  /** Any condition Intake has a toggle for and Review already talks about gets a real, clickable
+   *  toggle here too -- not just a read-only echo of Intake's own answer. Same track-and-knob
+   *  language as Intake's `.sw` (styles.css), sized to sit inside a table cell instead of its own
+   *  full padded row: `polish-estimate.html` does not link styles.css (standalone, like every
+   *  other page carrying its own tokens), so this is `.mw-sw`, not `.sw`.
    *
-   *  withDraft has to be asked for the id the page settled on, and this module is parsed before
-   *  shared.js has finished deciding — on a sandbox copy the id at parse time is still the REAL
-   *  project's, so a link baked in then walks the estimator onto the live bid. Same reason shell()
-   *  builds its Continue href inside the function. */
-  function intakeNote() {
-    return ' <span class="note">off · <a href="' +
-      esc(TW.withDraft("/polish-intake.html")) + '">edit in Intake</a></span>';
+   *  Returns the switch + label only -- callers compose it with whatever extra context that
+   *  SPECIFIC row still needs (remodelSource()'s county note, hard_bid's threshold note, ...),
+   *  so nothing those already said gets lost by routing through here. */
+  function condSwitch(key, label) {
+    var on = !!(M.conditions || {})[key];
+    return '<span class="mw-sw' + (on ? " on" : "") + '" data-cond="' + esc(key) +
+      '" role="switch" tabindex="0" aria-checked="' + (on ? "true" : "false") + '">' +
+      '<span class="track"></span>' + esc(label) + '</span>';
   }
 
   /** Where the remodel rate came from, said out loud beside the row.
    *
    *  Worth the words: Kyle's sheet charges a flat 10% here, so an estimator who knows the workbook
    *  will read this line expecting that number. Naming the county, or naming the state fallback,
-   *  is what stops the difference looking like a bug. */
+   *  is what stops the difference looking like a bug.
+   *
+   *  Off has nothing left to say now that the switch beside it shows the state directly -- the
+   *  old "off · edit in Intake" text was only ever standing in for a control that did not exist
+   *  here yet. */
   function remodelSource() {
-    if (!(M.conditions || {}).remodel_tax) return intakeNote();
+    if (!(M.conditions || {}).remodel_tax) return "";
     var rate = remodelRate();
     // `county` already reads "Johnson County, KS" — the shape the live estimate screen's picker
     // writes and the beta intake matches, so both screens store one thing. Printing it as-is:
@@ -673,9 +689,12 @@
 
     r += '<tr class="band"><td colspan="3">Markup</td></tr>';
     r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct"), "gp");
-    r += row("Hard bid discount" + (b.hard_bid_pct ? "" :
-      ' <span class="note">' + ((M.conditions || {}).hard_bid
-        ? "under the discount threshold" : "hard bid off") + '</span>'),
+    // Only the surprising case still needs words. Hard bid OFF and no discount is what the switch
+    // beside it already says; hard bid ON and STILL no discount is the one that reads like a bug,
+    // so that is the one that gets explained.
+    r += row(condSwitch("hard_bid", "Hard bid discount") +
+      (!b.hard_bid_pct && (M.conditions || {}).hard_bid
+        ? ' <span class="note">under the discount threshold</span>' : ''),
       keyedPct("hard_bid_pct"), "hard_bid", b.hard_bid_pct ? "" : "off");
     r += row("Superintendent &amp; PTO", esc(B.pct(B.RATES.SUPER_PTO)), "super_pto");
     r += row("Soft costs", esc(B.pct(B.RATES.SOFT_COSTS)), "soft_costs");
@@ -684,14 +703,15 @@
       esc(nv(M.contingency)) + '" inputmode="decimal"></td></tr>';
 
     r += '<tr class="band"><td colspan="3">Taxes &amp; fees</td></tr>';
-    r += row("Sales tax <span class=\"note\">on materials</span>" +
-      ((M.conditions || {}).taxable ? "" : intakeNote()),
+    r += row(condSwitch("taxable", "Sales tax") + ' <span class="note">on materials</span>',
       keyedPct("sales_tax_pct"), "sales_tax", b.sales_tax_pct ? "" : "off");
-    r += row("Remodel tax" + remodelSource(), keyedPct("remodel_pct"), "remodel_tax",
-      b.remodel_pct ? "" : "off");
+    r += row(condSwitch("remodel_tax", "Remodel tax") + remodelSource(),
+      keyedPct("remodel_pct"), "remodel_tax", b.remodel_pct ? "" : "off");
     r += row("Total taxes", "", "taxes", "tot");
     r += row("Fees + Textura", "", "fees", b.fees ? "" : "off");
-    r += row("Bond", esc(B.pct(B.RATES.BOND)), "bond", b.bond ? "" : "off");
+    r += row(condSwitch("bond", "Bond") +
+      ' <span class="note">the sheet ships this at 0% either way</span>',
+      keyedPct("bond_pct"), "bond", b.bond ? "" : "off");
     r += row("Total fees + bond", "", "fees_and_bond", "tot");
 
     r += '<tr class="grand"><td>Total lump sum</td>' +
@@ -856,6 +876,16 @@
     if (dl) {
       M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
       if (!M.labor.length) M.labor.push(newLaborRow());
+      changed(true);
+      return;
+    }
+    // Review's own toggles -- same idea as polish-intake.js's onClick/toggleCondition, just
+    // flipping the one flag in place rather than routing through that page's carry-four/legacy-
+    // cell bookkeeping, none of which any of these five keys need.
+    var cond = t.closest("[data-cond]");
+    if (cond) {
+      var ck = cond.getAttribute("data-cond");
+      M.conditions[ck] = !M.conditions[ck];
       changed(true);
       return;
     }

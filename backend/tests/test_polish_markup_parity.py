@@ -785,7 +785,14 @@ def test_a_v1_draft_opens_as_a_v2_model(ran):
     assert [r["guys"] for r in after["labor"]] == [4, 2, 2, ""], "crew is the guys count"
     assert [r["id"] for r in after["labor"]] == ["polishing", "mockup", "jointfill", "travel"]
     assert [r["days"] for r in after["labor"]] == [6, 1, 2, ""]
-    assert after["conditions"] == before["conditions"]
+    # Every condition the v1 draft stated survives untouched. `bond` is the one it could not have
+    # stated — it postdates every v1 draft — so migrateModel backfills freshModel's default rather
+    # than leaving the key absent for markupChain to read as undefined.
+    for key, was in before["conditions"].items():
+        assert after["conditions"][key] == was, (
+            "migration changed the v1 draft's %r: %r -> %r" % (key, was, after["conditions"][key]))
+    assert set(after["conditions"]) - set(before["conditions"]) == {"bond"}
+    assert after["conditions"]["bond"] is False
     assert after["contingency"] == 0
     for gone in ("system", "tooling", "materials", "added", "adds", "options"):
         assert gone not in after, "%s is replaced by assemblies and must not be carried over" % gone
@@ -938,8 +945,10 @@ def test_the_fresh_model_carries_the_templates_own_labor_seeds(ran):
     # The two fields that make Travel price per HOUR instead of per eight-hour day.
     assert [r.get("unit") for r in fresh["labor"]] == [None, None, None, "hours"]
     assert [r.get("guys_auto") for r in fresh["labor"]] == [None, None, None, True]
+    # Bond joins them off, matching B78, which the sheet ships at zero. It is stored so the Review
+    # step's switch has somewhere to write; markupChain() never reads it.
     assert fresh["conditions"] == {"local": True, "hard_bid": False, "prevailing_wage": False,
-                                  "taxable": True, "remodel_tax": False}
+                                  "taxable": True, "remodel_tax": False, "bond": False}
     assert len(fresh["takeoff"]) == 1 and fresh["takeoff"][0]["unit"] == "SF"
 
 
