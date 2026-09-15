@@ -690,23 +690,35 @@ def test_the_two_taxes_switched_off_are_zeroed_and_marked_off(ran):
 
 
 @needs_node
-def test_the_two_cost_cards_total_to_a_subtotal_by_name(ran):
-    """Hanz, 2026-09-15: "Change Materials to Material Subtotal and Labor to Labor Subtotal."
+def test_each_cost_card_runs_from_a_subtotal_to_a_total(ran):
+    """Settled with Hanz over three passes on 2026-09-15/16, looking at the live screen.
 
-    They are subtotals in the strict sense — each is the bottom of its own card and both feed
-    "Sub-total costs" at the top of the markup block, which in turn is only the start of the chain.
-    "Material total" read like the end of the story on a screen whose whole point is that it is not.
+    Each card carries two figures and they were previously "Materials" and "Material Subtotal",
+    which said nothing about how the two related. They are now the RUNNING figure and the CLOSING
+    one: Material Subtotal is the takeoff lines added up, then shipping, then Material Total ends
+    the card. Labor the same: Labor Subtotal is the rows added up, then escalation and burden,
+    then Labor Total. Hanz, on seeing both words side by side: "Material Subtotal should be Total
+    and the material inside the sheet that's not bold should have the subtotal."
 
-    Mutation: put either label back to "… total". The figure is unchanged and the word is the
-    defect, which is exactly the kind that no arithmetic assertion anywhere else in this file
-    would catch."""
-    labels = ran["review"]["totalRowLabels"]
-    assert labels[:2] == ["Material Subtotal", "Labor Subtotal"], (
-        "the two cost cards do not end in named subtotals: %r" % labels)
-    # The markup block's own two totals are genuine ends-of-a-run and keep the plain word. Pinned
-    # here so a later sweep does not "make them consistent" and undo the distinction.
-    assert labels[2:] == ["Total taxes", "Total fees + bond"], (
-        "the markup block's totals changed name: %r" % labels[2:])
+    The markup block that follows then opens on a plain "Subtotal" — it was "Sub-total costs",
+    the odd spelling out of three rows that are all the same kind of thing.
+
+    ORDER IS THE CLAIM, not merely presence. A swap would leave both words on screen and both
+    attached to the wrong number, which no arithmetic assertion in this file would catch — every
+    figure would still be correct, and the screen would still be lying about which is which.
+
+    Mutation: swap either pair. The totals are unchanged, the words are all still there, and this
+    is the only test that goes red."""
+    assert ran["review"]["labelOrder"] == [
+        "Material Subtotal", "Material Total",
+        "Labor Subtotal", "Labor Total",
+        "<td>Subtotal</td>",
+    ], "the subtotal/total pairs are out of order or renamed: %r" % ran["review"]["labelOrder"]
+    # The bold row that closes each card is the TOTAL, and the markup block's own two totals keep
+    # the plain word — pinned so a later "make it consistent" sweep does not undo the distinction.
+    assert ran["review"]["totalRowLabels"] == [
+        "Material Total", "Labor Total", "Total taxes", "Total fees + bond"], (
+        "the bold closing rows are not the totals: %r" % ran["review"]["totalRowLabels"])
 
 
 # ── E2. the Review step answers its own questions ────────────────────────────
