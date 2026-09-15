@@ -813,25 +813,58 @@ def test_the_save_carries_what_the_rest_of_the_app_reads(ran):
 
 
 @needs_node
-def test_the_save_writes_no_worksheet_cells(ran):
+def test_the_save_writes_the_condition_cells_and_no_others(ran):
     """This page stopped writing state.cell_values when the workbook left it: there is no cell to
-    write an assembly into. Writing a partial map would be worse than writing none — done.js posts
-    the whole thing to /api/generate, and a half-filled Polish tab reads as a real estimate.
+    write an assembly into. Writing a partial PRICING map would be worse than writing none —
+    done.js posts the whole thing to /api/generate, and a half-filled Polish tab reads as a real
+    estimate.
 
-    Mutation: bring back a `cell_values` key. The downloaded .xlsx then shows figures that no longer
-    match the screen, and there is nothing on either to say which is which.
+    THE ONE EXCEPTION, added 2026-09-15 with the Review step's switches. The five conditions'
+    Yes/No cells are not a rendering of the bid; they are the contract this screen shares with the
+    intake page, which reads them back on load and lets the CELL win over the model
+    (polish-intake.js adoptModel: "THE CELL WINS WHERE THERE IS ONE"). That rule is only safe
+    while every writer writes both places — intake's own comment says "the cell can never be the
+    staler of the two" — and this page became a second writer the moment those switches shipped.
+
+    For one commit it wrote only the model, and the bug was live: turn Sales tax off on Review,
+    follow either of Review's own links to Intake (remodelSource()'s "pick a county", or the Labor
+    step's "Change it on the intake step"), and the old answer came back — then intake's next save
+    made the revert permanent. A silently reverted `taxable` moves the bid by 9.475% of materials.
+
+    Mutation: drop the `cell_values` line from saveSoon. This goes red, and so does
+    test_a_condition_answered_on_review_survives_a_trip_to_intake.
+
+    Mutation the other way: write the takeoff or pricing cells here too. `cellValueKeys` grows and
+    this goes red — which is the half of the old rule that still holds.
 
     THE RESIDUAL HAZARD, stated rather than asserted away. The payload is
     `Object.assign({}, TW.getState(), {…})`, so a map a draft ALREADY carries — from the old
     seven-step beta, which did write Polish!* cells — rides through untouched. Generating that
     project would fill the worksheet from the old beta's figures while this screen shows the new
-    ones. What is checked here is only what this page is responsible for: it contributes nothing to
-    that map. Clearing a stale one would be an improvement and would still pass."""
-    assert ran["save"]["hasCellValues"] is False, (
-        "the save carries a cell_values map: %r" % ran["save"]["keys"])
+    ones. Clearing a stale one would be an improvement and would still pass."""
+    # The five conditions' cells, and nothing else. local and hard_bid each carry a Polish mirror;
+    # the other three are formulas on the Polish tab and must NOT be written there.
+    assert ran["save"]["cellValueKeys"] == [
+        "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6",
+        "Polish!B4", "Polish!B5"], (
+        "the save's worksheet cells are not exactly the five conditions': %r"
+        % ran["save"]["cellValueKeys"])
+    # And the literals are the model's own answers. The fixture has local and taxable on, the other
+    # three off, so a mapping written backwards cannot pass this.
+    assert ran["save"]["cellValues"] == {
+        "Epoxy!B4": "Yes", "Polish!B4": "Yes",      # local
+        "Epoxy!B5": "No", "Polish!B5": "No",        # hard_bid
+        "Epoxy!D5": "No",                           # prevailing_wage
+        "Epoxy!B6": "Yes",                          # taxable
+        "Epoxy!D6": "No",                           # remodel_tax
+    }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
+    # A draft that already carried a worksheet map keeps it, and gains only those same five.
     carried = ran["save"]["legacyCellValues"] or {}
-    assert set(carried) <= {"Polish!D82"}, (
-        "the page added a worksheet cell of its own to a draft that already had a map: %r" % carried)
+    assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B5", "Epoxy!B6", "Epoxy!D5",
+                            "Epoxy!D6", "Polish!B4", "Polish!B5"}, (
+        "the page added a worksheet cell beyond the five conditions', or dropped a carried one: %r"
+        % carried)
+    assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
 
 
 @needs_node

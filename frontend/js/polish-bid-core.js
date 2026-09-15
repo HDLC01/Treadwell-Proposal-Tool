@@ -362,6 +362,59 @@
              unit: "hours", guys_auto: true };
   }
 
+  /** The five conditions that ALSO live as Yes/No literals in Kyle's workbook.
+   *
+   *  HERE, IN THE SHARED MODULE, BECAUSE THERE ARE NOW TWO SCREENS THAT CAN CHANGE A CONDITION.
+   *  It used to live in polish-intake.js, when that page was the only writer. The rule it
+   *  supports is stated there: the intake page reads these cells back on load and lets the CELL
+   *  win over the model, because a project that arrived from the live intake has no
+   *  polish_estimate yet and the estimator's answers are sitting in cell_values.
+   *
+   *  That rule is only safe while EVERY writer writes both places, which the intake page's own
+   *  comment says out loud: "the cell can never be the staler of the two". The Review step became
+   *  a second writer on 2026-09-15 and for one commit wrote only the model — so turning Sales tax
+   *  off on Review and then following either of Review's own links back to Intake handed the
+   *  estimator their old answer, and intake's next save made the revert permanent. A silently
+   *  reverted `taxable` moves the bid by 9.475% of materials.
+   *
+   *  One mapping used by both, for the same reason syncPayloadPricing calls computeTokenValues
+   *  rather than re-deriving the money: a second copy is how the two screens drift again.
+   *
+   *  Only Epoxy!B4 and B5 are paired with a Polish cell: Polish!B4/B5 hold their own Yes/No,
+   *  while Polish!D5, B6 and D6 are the formulas =Epoxy!D5 / =Epoxy!B6 / =Epoxy!D6, and writing
+   *  them would replace a live reference with a literal. */
+  var CONDITION_CELLS = {
+    local:           { cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No" },
+    hard_bid:        { cells: ["Epoxy!B5", "Polish!B5"], on: "Yes", off: "No" },
+    prevailing_wage: { cells: ["Epoxy!D5"],              on: "Yes", off: "No" },
+    taxable:         { cells: ["Epoxy!B6"],              on: "Yes", off: "No" },
+    remodel_tax:     { cells: ["Epoxy!D6"],              on: "Yes", off: "No" }
+  };
+
+  /** `cells` with those five literals written over it.
+   *
+   *  MERGED, never a fresh object: cell_values also carries the AI autofill's flags and every
+   *  cell the estimator edited by hand on the estimate grid.
+   *
+   *  Never a blank for "off" — both literals are written explicitly, because a blank Yes/No cell
+   *  is not "No" to Kyle's formulas, it is whatever the IF() defaults to.
+   *
+   *  `bond` is deliberately not in the mapping and so is untouched here: the sheet's bond rate is
+   *  a hardcoded cell, not a Yes/No flag, so there is no legacy cell to keep in sync and nothing
+   *  for the intake page to read back. That is also why bond is the one condition the Review step
+   *  could always flip safely. */
+  function conditionCellWrites(conditions, cells) {
+    var out = Object.assign({}, cells || {});
+    var c = conditions || {};
+    for (var key in CONDITION_CELLS) {
+      if (!CONDITION_CELLS.hasOwnProperty(key)) continue;
+      var spec = CONDITION_CELLS[key];
+      var lit = c[key] ? spec.on : spec.off;
+      for (var i = 0; i < spec.cells.length; i++) out[spec.cells[i]] = lit;
+    }
+    return out;
+  }
+
   /** The labor rows the template itself seeds: A37 = 3 guys at C37 = $33.00/hr, the mock-up at
    *  B40 = half a day, and joint filling at C44 = $33.00. Days are left blank on the two an
    *  estimator has to judge.
@@ -632,6 +685,7 @@
     money: money, money2: money2, pct: pct, fmtSf: fmtSf,
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS,
     gpPct: gpPct, hardBidPct: hardBidPct,
+    CONDITION_CELLS: CONDITION_CELLS, conditionCellWrites: conditionCellWrites,
     laborCost: laborCost, laborTotal: laborTotal, travelManDays: travelManDays,
     filledIn: filledIn,
     takeoffSf: takeoffSf,
