@@ -26,6 +26,87 @@
     catch { return false; }
   })();
 
+  /** The Total the document was actually filled with, off the payload being sent to /api/generate.
+   *
+   *  `values.total_formatted` and not `proposal_lump_sum`: this has to be the figure the DOCUMENT
+   *  received, because the whole job of the stamp is to answer "is the price on screen the price
+   *  in these files". Reading the draft's own number instead would stamp what the sidebar believed
+   *  at that moment, which is the thing being checked rather than the thing to check it against. */
+  function builtAt(payload) {
+    const v = (payload && payload.values) || {};
+    return typeof v.total_formatted === "string" ? v.total_formatted : null;
+  }
+
+  /** A money string as a number. "$36,700.00" → 36700. null when there is nothing to read.
+   *
+   *  THE DIGIT TEST IS THE WHOLE POINT. Stripping non-numerics out of "—" leaves "", and
+   *  `Number("")` is 0 — a perfectly finite, perfectly wrong zero. Without this the card renders
+   *  an em dash as a price of nothing, and the staleness check reads an unpriced draft as having
+   *  moved to $0.00. Both were live until the harness ran. */
+  function money(s) {
+    if (s == null) return null;
+    const cleaned = String(s).replace(/[^0-9.-]/g, "");
+    if (!/\d/.test(cleaned)) return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /** The price moved after these files were built.
+   *
+   *  `generate_result` is persisted and never cleared, so a project generated once lands straight
+   *  on the PREVIOUS downloads and never rebuilds — proposal-review.js's Continue drops the result
+   *  only when the cover letter changed, and says in its own comment that "the same staleness still
+   *  applies to a price edited after a generate". That was survivable while this card named no
+   *  figure. It stopped being survivable when it started naming one: the card would print the
+   *  draft's current price beside documents containing the old one, which is the same sentence
+   *  that has burned this page twice — the claim's input was not the input the document was built
+   *  from.
+   *
+   *  So the price the payload was ACTUALLY filled with is stamped beside the result at generate
+   *  time, and a disagreement sends the estimator back to a live Generate button instead of to
+   *  downloads that are quietly out of date. Compared as NUMBERS with the same cent tolerance
+   *  publishDrift uses: `lump_sum_display` is #tb-total's own text and `total_formatted` is
+   *  fmtUSDdoc() of the number parsed out of it, so the two are the same quantity formatted by
+   *  two different functions and a string compare would report drift on every project.
+   *
+   *  A draft generated BEFORE this shipped carries no stamp. Unknown is not the same as changed,
+   *  so those keep their downloads rather than every already-generated project demanding a
+   *  regenerate on the day this lands. */
+  function priceMovedSinceGenerate(st) {
+    const built = money(st.generated_lump_sum);
+    const now = money(st.lump_sum_display);
+    if (built == null || now == null) return false;
+    return Math.abs(built - now) >= 0.01;
+  }
+
+  /** Put the price on the generated card, or take the row away entirely.
+   *
+   *  Read LIVE rather than off the module-top `state` snapshot: doGenerate leaves that snapshot
+   *  behind the setState it just made, and the stamp is written in the same call — so a snapshot
+   *  read here would show the PREVIOUS build's figure on the very visit that produced a new one.
+   *  That is the one-shot-snapshot trap this codebase keeps meeting, and money is the worst place
+   *  to meet it again.
+   *
+   *  The stamp first, because it is the figure the document was actually filled with.
+   *  `lump_sum_display` is the fallback for a project generated before the stamp existed — and by
+   *  the time this runs the mode decider has already established the two agree, or sent the
+   *  estimator to a Generate button instead.
+   *
+   *  No figure means no row. A "—" where money belongs reads as zero, and a zero on the card an
+   *  estimator checks a price on is worse than saying nothing. */
+  function paintLumpSum() {
+    const live = TW.getState() || {};
+    const lump = live.generated_lump_sum || live.lump_sum_display || "";
+    const row = document.getElementById("lump-row");
+    const val = document.getElementById("lump-sum");
+    if (!row || !val) return;
+    // `el.hidden`, never a style write: .fp-money carries its own [hidden] rule precisely because
+    // a class `display` beats the attribute, and a style write here would go on to fight both.
+    if (money(lump) == null) { row.hidden = true; return; }
+    val.textContent = lump;
+    row.hidden = false;
+  }
+
   // ─── Decide which mode to show ────────────────────────────────────
   // Wait for initDraftSync to settle draft ownership first: for a foreign /
   // mis-keyed blob it reloads the page (and this promise never resolves), so
@@ -34,12 +115,18 @@
     try { await (TW.draftReady || Promise.resolve()); } catch {}
     const st = TW.getState();
     const res = st.generate_result;
+    // Decided HERE rather than in proposal-review's Continue, where the cover-letter version of
+    // this lives. Every route into this page has to be covered — the Files step pill, "View
+    // files" off the Projects list, a reload, a second tab — and only this one is on all of them.
+    const stale = !!res && priceMovedSinceGenerate(st);
     if (filesMode && (st.proposal_payload || st.project_name || st.job_name)) {
       viewFiles();                       // generate fresh + show downloads
-    } else if (res) {
+    } else if (res && !stale) {
       showPostGenerate(res);             // already generated — show download buttons
     } else if (st.proposal_payload && st.project_name) {
       showPreGenerate();                 // ready to generate — show review card
+    } else if (res) {
+      showPostGenerate(res);             // priced-out but nothing better to offer than the files
     } else {
       emptyEl.style.display = "";        // no project in flight
     }
@@ -106,7 +193,7 @@
     };
     try {
       const out = await TW.postJSON("/api/generate", payload);
-      TW.setState({ generate_result: out });
+      TW.setState({ generate_result: out, generated_lump_sum: builtAt(payload) });
       emptyEl.style.display = "none";
       showPostGenerate(out);
     } catch (err) {
@@ -1048,7 +1135,7 @@
     btn.textContent = "Generating…";
     try {
       const out = await TW.postJSON("/api/generate", state.proposal_payload);
-      TW.setState({ generate_result: out });
+      TW.setState({ generate_result: out, generated_lump_sum: builtAt(state.proposal_payload) });
       // Swap views — pre → post
       preEl.style.display = "none";
       showPostGenerate(out);
@@ -1066,6 +1153,8 @@
     const audience = state.audience || "Direct";
     document.getElementById("project-line").textContent =
       `${state.project_name} · ${wt} · ${audience}`;
+
+    paintLumpSum();
 
     // Carry the draft across so the info sheet opens on THIS project rather than
     // whichever one the browser last held.
