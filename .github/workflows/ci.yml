@@ -23,13 +23,110 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── has this exact tree already passed? ──────────────────────────────────────
+  #
+  # A prod promotion is a cherry-pick of commits that are already on staging, so its TREE is
+  # byte-identical to one CI has just run green — different commit sha, same bytes. Running the
+  # suite again feeds identical inputs to an identical suite and can only produce the identical
+  # answer, and it cost Hanz ~10 minutes on a labels-only change that went through the suite four
+  # times end to end.
+  #
+  # THE CLAIM IS TREE IDENTITY, NOT CONFIDENCE. This does not skip tests because a change looks
+  # small, because it is "frontend only", or because somebody checked it by hand — every one of
+  # those has been wrong here, and two of this session's worst defects were pure frontend. It
+  # skips only when the thing about to be tested is bit-for-bit the thing that was tested.
+  #
+  # `fetch-depth: 0` because resolving another branch's commit to its tree needs that commit
+  # locally. The portal's sha is part of the fingerprint on purpose: test_close_reason_vocabulary
+  # compares this repo against the PORTAL'S main, so the same tree can legitimately change answer
+  # when the portal moves, and a fingerprint that ignored it would cache a stale pass.
+  fingerprint:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.look.outputs.skip }}
+      tree: ${{ steps.look.outputs.tree }}
+      matched: ${{ steps.look.outputs.matched }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Look for a green run on this exact tree
+        id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PORTAL_REF: main
+        run: |
+          set -euo pipefail
+          TREE=$(git rev-parse HEAD^{tree})
+          echo "tree=$TREE" >> "$GITHUB_OUTPUT"
+          echo "this tree: $TREE"
+
+          # The portal half of the fingerprint. A failure to read it must NOT silently widen the
+          # match -- an unknown portal sha means we cannot prove equivalence, so we run.
+          PORTAL=$(gh api "repos/HDLC01/Treadwell-Portal/commits/${PORTAL_REF}" --jq .sha 2>/dev/null || echo "")
+          if [ -z "$PORTAL" ]; then
+            echo "could not read the portal sha -- running the suite"
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "portal main: $PORTAL"
+
+          # Successful CI runs, newest first. Only completed successes count; a cancelled or
+          # in-progress run proves nothing.
+          RUNS=$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?status=success&per_page=60" \
+                   --jq '.workflow_runs[] | "\(.head_sha) \(.id)"' 2>/dev/null || echo "")
+
+          MATCH=""
+          # `if`, not `[ … ] && continue`: under `set -e` a trailing && list that evaluates false
+          # is a live footgun, and the failure mode here would be a silent early exit that reads
+          # as "no match" — which is at least the safe direction, but invisible.
+          while read -r SHA RUNID; do
+            if [ -z "${SHA:-}" ]; then continue; fi
+            # The commit may not be an ancestor of HEAD (it usually is not -- that is the point),
+            # so fetch it before asking for its tree. A sha that has since been GC'd just misses.
+            git cat-file -e "${SHA}^{commit}" 2>/dev/null || \
+              git fetch --quiet --depth=1 origin "$SHA" 2>/dev/null || continue
+            OTHER=$(git rev-parse "${SHA}^{tree}" 2>/dev/null || echo "")
+            if [ "$OTHER" = "$TREE" ]; then
+              # Same tree -- but was it tested against the same portal? The run's own job log is
+              # not queryable cheaply, so use the run's creation time as the bound: if the portal
+              # has not moved since that run started, the comparison it made still holds.
+              CREATED=$(gh api "repos/${REPO}/actions/runs/${RUNID}" --jq .created_at 2>/dev/null || echo "")
+              PORTAL_AT=$(gh api "repos/HDLC01/Treadwell-Portal/commits/${PORTAL_REF}" --jq .commit.committer.date 2>/dev/null || echo "")
+              if [ -n "$CREATED" ] && [ -n "$PORTAL_AT" ] && [[ "$PORTAL_AT" < "$CREATED" ]]; then
+                MATCH="$SHA"; echo "matched run $RUNID on $SHA (portal unchanged since)"; break
+              fi
+              echo "tree matched $SHA but the portal moved since that run -- not reusing"
+            fi
+          done <<< "$RUNS"
+
+          if [ -n "$MATCH" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "matched=$MATCH" >> "$GITHUB_OUTPUT"
+            echo "::notice::Suite skipped -- tree $TREE already passed on $MATCH"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "no green run on this tree -- running the suite"
+          fi
+
   test:
+    needs: fingerprint
+    # The job still EXISTS when skipped, so the required-check name stays satisfied and branch
+    # protection does not have to be edited. Only the expensive steps are gated.
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     steps:
+      - name: Reusing an earlier green run
+        if: needs.fingerprint.outputs.skip == 'true'
+        run: |
+          echo "Tree ${{ needs.fingerprint.outputs.tree }} already passed on commit ${{ needs.fingerprint.outputs.matched }}."
+          echo "Identical bytes, identical suite -- nothing new to learn from a second run."
+
       - uses: actions/checkout@v7
+        if: needs.fingerprint.outputs.skip != 'true'
 
       # ── the sibling checkout the cross-repo close-out guard needs ─────────
       # NO CREDENTIAL IS REQUIRED. HDLC01/Treadwell-Portal is a PUBLIC repo, so the
@@ -49,6 +146,7 @@ jobs:
       # clones as siblings — is supplied by TW_PORTAL_REPO on the test step instead.
       # Nothing in the suite globs the repo root, so an extra directory here is inert.
       - name: Check out the customer portal beside this repo
+        if: needs.fingerprint.outputs.skip != 'true'
         uses: actions/checkout@v7
         with:
           repository: HDLC01/Treadwell-Portal
@@ -56,6 +154,7 @@ jobs:
           path: portal
 
       - uses: actions/setup-python@v7
+        if: needs.fingerprint.outputs.skip != 'true'
         with:
           python-version: '3.11'          # matches the production Dockerfile
           cache: pip
@@ -64,6 +163,7 @@ jobs:
       # requirements-dev.txt starts with "-r requirements.txt", so this one
       # install pulls in both the runtime and the test dependencies.
       - name: Install dependencies
+        if: needs.fingerprint.outputs.skip != 'true'
         run: pip install -r requirements-dev.txt
 
       # -n auto spreads the suite over the runner's 4 vCPUs. Locally this took the full run from
@@ -77,6 +177,7 @@ jobs:
       #
       # --durations comes from backend/pytest.ini, so every run names its own slowest tests.
       - name: Run tests
+        if: needs.fingerprint.outputs.skip != 'true'
         env:
           # Where the step above put the portal. Without this the cross-repo tests look for
           # a sibling directory that does not exist on a runner, skip, and the guard fails
