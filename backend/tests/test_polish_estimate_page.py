@@ -660,8 +660,8 @@ def test_the_two_taxes_switched_off_are_zeroed_and_marked_off(ran):
     step that can turn it on — rather than quietly missing.
 
     Mutation: gate the rows on `b.sales_tax` instead of `b.sales_tax_pct`. A taxable job whose
-    materials happen to price at nothing is then labelled "off · edit in Intake", which sends the
-    estimator to flip a switch that is already on."""
+    materials happen to price at nothing is then marked off, which tells the estimator to flip a
+    switch that is already on."""
     o = ran["review"]["off"]
     for key in ("sales_tax", "remodel_tax"):
         assert dollars(o["rendered"]["money"][key]) == 0, (
@@ -671,15 +671,118 @@ def test_the_two_taxes_switched_off_are_zeroed_and_marked_off(ran):
             "the %r row is not marked off: class=%r" % (key, o["rowClasses"][key]))
     assert o["rendered"]["pcts"]["sales_tax_pct"] == "0%"
     assert o["rendered"]["pcts"]["remodel_pct"] == "0%"
-    assert o["salesTaxRowSaysWhere"] and o["remodelRowSaysWhere"], (
-        "a switched-off tax row does not say where to turn it back on")
-    # Hard bid off says WHY there is no discount, rather than showing a bare zero.
-    assert o["rowClasses"]["hard_bid"] == "off" and o["hardBidReason"]
+    # A switched-off tax row carries its own switch, showing off — it used to carry an "off · edit
+    # in Intake" link instead, which is a signpost where a control belongs.
+    assert o["switches"]["taxable"]["on"] is False
+    assert o["switches"]["remodel_tax"]["on"] is False
+    assert o["rowClasses"]["hard_bid"] == "off"
+    # Hard bid OFF says nothing — the switch beside it already did. Hard bid ON with the bid still
+    # under the threshold is the case that reads like a bug, so that is the case that gets words.
+    assert not o["thresholdNoteWhenOff"], (
+        "the hard bid row explains a threshold that is not why the discount is missing")
+    assert o["thresholdNoteWhenOnButZero"], (
+        "hard bid is on and the discount is zero, and the row does not say why")
     # …and the whole block still agrees with the chain for that model.
     for key, cell in o["rendered"]["money"].items():
         money_is(cell, o["expected"][key], "review line %r with the taxes off" % key)
     # With the two taxes off, and only then, the escalation line is dark too (prevailing wage off).
     assert dollars(o["rendered"]["money"]["escalation"]) == 0
+
+
+@needs_node
+def test_the_two_cost_cards_total_to_a_subtotal_by_name(ran):
+    """Hanz, 2026-09-15: "Change Materials to Material Subtotal and Labor to Labor Subtotal."
+
+    They are subtotals in the strict sense — each is the bottom of its own card and both feed
+    "Sub-total costs" at the top of the markup block, which in turn is only the start of the chain.
+    "Material total" read like the end of the story on a screen whose whole point is that it is not.
+
+    Mutation: put either label back to "… total". The figure is unchanged and the word is the
+    defect, which is exactly the kind that no arithmetic assertion anywhere else in this file
+    would catch."""
+    labels = ran["review"]["totalRowLabels"]
+    assert labels[:2] == ["Material Subtotal", "Labor Subtotal"], (
+        "the two cost cards do not end in named subtotals: %r" % labels)
+    # The markup block's own two totals are genuine ends-of-a-run and keep the plain word. Pinned
+    # here so a later sweep does not "make them consistent" and undo the distinction.
+    assert labels[2:] == ["Total taxes", "Total fees + bond"], (
+        "the markup block's totals changed name: %r" % labels[2:])
+
+
+# ── E2. the Review step answers its own questions ────────────────────────────
+@needs_node
+def test_every_condition_review_talks_about_is_a_real_switch_here(ran):
+    """Hanz, 2026-09-15: "any condition toggle present in BOTH Intake and Review should become a
+    real, clickable toggle in Review."
+
+    Review named five conditions and could set none of them — Sales tax and Remodel tax carried an
+    "off · edit in Intake" link, Hard bid and Labor escalation carried a bare "off"/"prevailing
+    wage off", and Bond carried nothing at all. An estimator reading the markup block and spotting
+    a wrong flag had to leave the page, flip it, and come back.
+
+    `local` is deliberately NOT here: it is an Intake toggle Review never mentions (it dims the
+    Travel row on the Labor step), so it fails the "present in both" test this exists to satisfy.
+
+    Mutation: render the label without `data-cond`. Every switch still draws, and not one of them
+    does anything when clicked."""
+    sw = ran["review"]["switches"]
+    assert sorted(sw) == ["bond", "hard_bid", "prevailing_wage", "remodel_tax", "taxable"], (
+        "the Review step's switches are not the conditions it talks about: %r" % sorted(sw))
+    for key, s in sw.items():
+        assert s["hasTrack"], "%r rendered as a label with no toggle track" % key
+        assert s["role"] == "switch", "%r is not announced as a switch: %r" % (key, s["role"])
+        assert s["focusable"], "%r cannot be reached by keyboard at all" % key
+    # The model in this fixture has all five on, so `on` and `aria-checked` are a real claim about
+    # state and not a constant that would pass with the state wired backwards.
+    for key, s in sw.items():
+        assert s["on"] is True and s["aria"] == "true", (
+            "%r shows off while the model says on: %r" % (key, s))
+
+
+@needs_node
+def test_clicking_a_review_switch_answers_the_question_and_reprices(ran):
+    """The click goes through the page's own delegated listener, so this is the shipped path and
+    not a helper called directly.
+
+    Mutation: flip the flag without calling `changed(true)`. The model is right, the save is
+    queued, and the numbers on screen still show the old answer until the estimator reloads."""
+    for key, c in ran["review"]["clicks"].items():
+        assert c["flipped"], "clicking the %r switch did not change the model" % key
+        assert c["othersUntouched"], "clicking %r moved another condition too" % key
+        assert c["queuedASave"], "the %r answer was never queued for the draft" % key
+        # The switch redraws showing the NEW answer. Without this the estimator clicks, the number
+        # moves, and the control still reads the way it did before.
+        assert c["reRendered"]["on"] == c["expectedOn"] and (
+            c["reRendered"]["aria"] == ("true" if c["expectedOn"] else "false")), (
+            "the %r switch still shows the old answer after being clicked: %r"
+            % (key, c["reRendered"]))
+        money_is(c["totalAfter"], c["expectedAfter"]["total"],
+                 "the lump sum after clicking %r" % key)
+
+
+@needs_node
+def test_bond_is_a_switch_that_changes_no_number(ran):
+    """The one row that must NOT move when it is clicked.
+
+    Hanz, asked directly on 2026-09-15, chose "toggle exists, still prices at 0%". `RATES.BOND` is
+    a hardcoded 0 (B78 ships at zero) and there is nowhere in the beta to store a real rate, so the
+    switch exists to stop the row looking permanently dead and to carry the answer — not to unlock
+    a price. It must stay that way until Kyle fixes his own sheet: the workbook's bond formula
+    counts sales and remodel tax TWICE in its base, so a real rate applied through it overcharges.
+
+    Mutation: wire the switch to a nonzero rate — `bond_pct = M.conditions.bond ? 0.01 : 0`. Every
+    other test in this file still passes and the bid silently grows by about 1%."""
+    bond = ran["review"]["clicks"]["bond"]
+    assert bond["flipped"], "the bond switch did not record the answer"
+    assert bond["totalBefore"] == bond["totalAfter"], (
+        "turning Bond on moved the lump sum: %r -> %r"
+        % (bond["totalBefore"], bond["totalAfter"]))
+    assert dollars(bond["bondMoneyAfter"]) == 0, (
+        "Bond charged something once switched on: %r" % bond["bondMoneyAfter"])
+    assert bond["bondPctAfter"] == "0%", (
+        "the bond rate is no longer zero once switched on: %r" % bond["bondPctAfter"])
+    # And the chain itself agrees — not just the rendering of it.
+    assert bond["expectedAfter"]["bond"] == 0 and bond["expectedAfter"]["bond_pct"] == 0
 
 
 # ── F. the save contract ─────────────────────────────────────────────────────
@@ -823,8 +926,10 @@ def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):
         ["polishing", 4, 3, 34], ["mockup", 2, 1, 30], ["jointfill", 5, 2, 31],
         ["travel", 24, "", 33]], (
         "v1 labor did not come across as guys/days/rate: %r" % m["labor"])
+    # Bond is backfilled off — a v1 draft predates the flag entirely, and freshModel's default is
+    # what migrateModel's generic conditions loop fills in for any key the saved blob never stated.
     assert m["conditions"] == {"local": False, "hard_bid": True, "prevailing_wage": True,
-                              "taxable": False, "remodel_tax": True}, (
+                              "taxable": False, "remodel_tax": True, "bond": False}, (
         "the v1 job conditions were not preserved: %r" % m["conditions"])
     assert m["contingency"] == 0 and m["totals"] == {}
 
@@ -937,7 +1042,9 @@ def test_the_page_prices_the_copy_the_sandbox_moved_it_onto(ran):
     assert c["rows"] == 1, "the source project's takeoff is still on screen: %r rows" % c["rows"]
     money_is(c["cost"], c["expected"], "the copy's only takeoff row")
     # Continue and the intake link carry the draft the page SETTLED on. shared.js's _WIZARD_PATH
-    # does not cover the beta pages, and the id it would have stamped is the real project's.
+    # does not cover the beta pages, and the id it would have stamped is the real project's. The
+    # intake link is remodelSource()'s "pick a county" — the last one Review builds at render time,
+    # now that the switched-off rows carry their own control instead of a link back to Intake.
     assert c["continueHref"] == "/proposal-review.html?d=proj-1-beta", (
         "Continue points at the wrong draft: %r" % c["continueHref"])
     assert c["intakeHref"] == "/polish-intake.html?d=proj-1-beta"

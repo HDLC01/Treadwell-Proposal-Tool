@@ -66,7 +66,9 @@
     { key: "taxable", label: "Taxable",
       why: "Adds sales tax. The bid you see already includes it." },
     { key: "remodel_tax", label: "Remodel tax",
-      why: "Occupied remodel. Adds the county remodel rate on top." }
+      why: "Occupied remodel. Adds the county remodel rate on top." },
+    { key: "bond", label: "Bond",
+      why: "Bond premium on the running total. The sheet ships this at 0% either way." }
   ];
 
   // Taken FROM the pricing engine rather than restated: most jobs are local and taxable, and the
