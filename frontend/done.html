@@ -120,6 +120,23 @@
      element name takes it to (0,1,1) and the answer stops depending on where it sits. */
   p.fp-project { font-size: 13px; margin: 0; }
   p.fp-note { font-size: 11.5px; margin: 4px 0 0; }
+  /* The price, in its own column between who-it-is and what-to-download. A sanity check read at
+     a glance, so it gets size and tabular figures rather than another sentence to read past —
+     but not red, which on this page is reserved for the one irreversible action (the send).
+
+     THE [hidden] RULE IS LOAD-BEARING, for the same reason it is on .stale-doc and .fp-field
+     below: a class `display` beats the plain `hidden` attribute's UA rule, so without this the
+     row would sit there showing "—" on every project that has no figure. */
+  .fp-money { flex: 0 0 auto; text-align: right; }
+  .fp-money[hidden] { display: none; }
+  .fp-money-k {
+    display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--ink-variant);
+  }
+  .fp-money-v {
+    display: block; font-size: 20px; font-weight: 700; color: var(--ink);
+    font-variant-numeric: tabular-nums; line-height: 1.25;
+  }
   .fp-dl { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 
   /* ── 2 · the two lanes ───────────────────────────────────────────────────────────── */
@@ -402,6 +419,9 @@
   }
   @media (max-width: 820px) {
     .fp-ready { flex-direction: column; align-items: flex-start; gap: 14px; }
+    /* The card stacks, so the price reads down the left edge with everything else rather than
+       hanging off the right of its own shrink-to-fit box. */
+    .fp-money { text-align: left; }
     .fp-dl { width: 100%; }
     /* `1 1 140px`, not `1 1 0`. With three buttons a zero basis shared the row evenly; with a
        fourth it squeezed all of them into one 380px line and "↓ Cover letter .docx" wrapped
@@ -525,6 +545,21 @@
         <h1>Proposal generated</h1>
         <p class="lede fp-project" id="project-line">—</p>
         <p class="hint fp-note">Links expire when this session ends. The PDF renders when you click it.</p>
+      </div>
+      <!-- THE PRICE, BESIDE THE FILES THAT CONTAIN IT. Hanz, 2026-09-15: "just to give them an
+           idea of how much it costs before sending out." The pre-generate card has always shown
+           this and the generated one never did, so the last thing an estimator saw before pressing
+           Generate was the figure, and the first thing after it was three download buttons.
+
+           Its own column rather than another line under the project, because it is read at a
+           glance for a sanity check, not read in sequence with the rest. Hidden outright when
+           there is no figure -- a "—" where money belongs invites being read as zero.
+
+           The card only renders at all when the price and the files agree; done.js sends a
+           priced-out project back to a live Generate button instead. -->
+      <div class="fp-money" id="lump-row" hidden>
+        <span class="fp-money-k">Lump sum</span>
+        <span class="fp-money-v" id="lump-sum">—</span>
       </div>
       <!-- `.secondary` — the variant styles.css has always carried and this page never used.
            Three solid-red buttons were competing with the only irreversible action here. -->
