@@ -87,15 +87,36 @@ def test_a_page_that_does_not_use_the_cdn_does_not_open_a_connection_to_it(page)
         "%s warms cdn.jsdelivr.net but loads nothing from it" % page.name)
 
 
-def test_nothing_was_preloaded_or_self_hosted_along_the_way():
+def test_no_cdn_library_was_preloaded_or_self_hosted_along_the_way():
     """jsdelivr already serves these two libraries `immutable` with a year-long max-age, so a
     repeat visitor pays nothing for them at all. `preload` would make this app download them again
     on pages that only need the connection warm, and vendoring them under our own
     `no-cache, must-revalidate` would turn a free cache hit into a revalidation on every load. The
-    hint is the whole change."""
+    hint is the whole change, as far as the CDN is concerned.
+
+    NARROWED, DELIBERATELY, AND HERE IS THE HONEST ACCOUNT. This assertion used to read
+    `'rel="preload"' not in html` -- no preload of anything, anywhere. That was wider than every
+    reason given above, all of which are about the two jsdelivr BUNDLES: immutable upstream
+    caching, and what self-hosting would cost under our own revalidation headers. None of it says
+    anything about a same-origin request of our own.
+
+    /api/public-config is now preloaded on every page, and it is the opposite case on each count.
+    Nobody serves it immutable, auth.js has to fetch it before it can construct the Supabase client
+    whatever we do, and the browser cannot discover it until auth.js has downloaded and run. See
+    tests/test_public_config_preload.py.
+
+    So the rule this file protects is kept and stated properly: do not preload a CROSS-ORIGIN
+    resource, and do not preload either library under any origin. A blanket ban on the keyword was
+    never the rule -- it was shorthand for one, and the shorthand stopped being true."""
     for page in _pages():
         html = page.read_text(encoding="utf-8", errors="replace")
-        assert 'rel="preload"' not in html, "%s preloads something off a CDN" % page.name
+        for href in re.findall(r'<link rel="preload"[^>]*href="([^"]+)"', html):
+            assert not re.match(r"https?://|//", href), (
+                "%s preloads %s off another origin" % (page.name, href))
+            for lib in ("supabase-js", "hyperformula"):
+                assert lib not in href, (
+                    "%s preloads the %s bundle, which jsdelivr already serves immutable"
+                    % (page.name, lib))
         for lib in ("supabase-js@", "hyperformula@"):
             assert '"/%s' % lib not in html and "/js/%s" % lib not in html, (
                 "%s looks like it self-hosts %s" % (page.name, lib))

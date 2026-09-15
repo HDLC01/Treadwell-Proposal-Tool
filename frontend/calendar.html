@@ -7,6 +7,8 @@
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- auth.js cannot ask for this until it has downloaded and run, so the browser has no way to discover it earlier. Preloading starts the request at parse time, in parallel with auth.js itself, instead of one round trip after it. -->
+  <link rel="preload" href="/api/public-config" as="fetch" crossorigin />
   <!-- Styles itself, like followups.html and portal.html, so it needs its own opt-out:
        without it Chromium synthesizes a dark theme, which flattens the urgency stripe
        and the stage dots into each other. There is no dark theme in this repo. -->
