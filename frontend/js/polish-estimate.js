@@ -618,9 +618,9 @@
                    esc(rowCost(r).text)]);
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
-    tkRows.push(["Materials", "", mkAmt(b, "material")]);
+    tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
     tkRows.push(["Shipping", B.pct(B.RATES.SHIPPING), mkAmt(b, "shipping")]);
-    tkRows.push(["Material Subtotal", "", mkAmt(b, "material_total"), "tot"]);
+    tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, moneyAuto(b.material_total), revTable(tkRows));
 
     // Labor
@@ -632,11 +632,11 @@
                     esc(moneyAuto(B.laborCost(r)))]);
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
-    labRows.push(["Labor", "", mkAmt(b, "labor")]);
+    labRows.push(["Labor Subtotal", "", mkAmt(b, "labor")]);
     labRows.push([{ raw: condSwitch("prevailing_wage", "Labor escalation") },
       b.escalation ? B.pct(B.RATES.ESCALATION) : "", mkAmt(b, "escalation")]);
     labRows.push(["Labor burden", B.pct(B.RATES.BURDEN), mkAmt(b, "burden")]);
-    labRows.push(["Labor Subtotal", "", mkAmt(b, "labor_total"), "tot"]);
+    labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, moneyAuto(b.labor_total), revTable(labRows));
 
     html += '<div class="rev">' + markupTable(b) + '</div>';
@@ -701,7 +701,7 @@
       return '<span data-mkpct="' + key + '">' + esc(B.pct(b[key])) + '</span>';
     };
 
-    r += '<tr class="sub"><td>Sub-total costs</td><td class="pct"></td>' +
+    r += '<tr class="sub"><td>Subtotal</td><td class="pct"></td>' +
       '<td class="amt" data-mk="sub_total">' + esc(moneyAuto(b.sub_total)) + '</td></tr>';
 
     r += '<tr class="band"><td colspan="3">Markup</td></tr>';

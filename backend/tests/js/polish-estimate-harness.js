@@ -1035,6 +1035,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
       totalRowLabels: String(panels.innerHTML).split("<tr").slice(1)
         .filter((c) => /^[^>]*class="tot"/.test(c))
         .map((c) => (/<td>([\s\S]*?)<\/td>/.exec(c) || [])[1]),
+      // The subtotal/total pairs in the order they appear down the screen. Order is the claim:
+      // the running figure is the SUBTOTAL and the line that closes the card is the TOTAL, and a
+      // swap would leave both words present and both wrong.
+      labelOrder: String(panels.innerHTML)
+        .match(/Material Subtotal|Material Total|Labor Subtotal|Labor Total|<td>Subtotal<\/td>/g)
+        || [],
       expectedPerSf: B.money2(expectedChain(live, ASMS, ITEMS).per_sf) + " / SF",
     };
 
