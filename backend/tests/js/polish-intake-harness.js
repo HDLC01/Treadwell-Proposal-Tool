@@ -225,7 +225,12 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // Added 2026-09-03 with the cell map. adoptModel() and save() both reach for it now,
   // and a const the lifted function cannot see is a ReferenceError at boot, not a
   // product bug -- which is the whole reason grab() names what it is looking for.
-  ${grab(/^  var CONDITION_CELLS = \{[\s\S]*?\n  \};$/m, "CONDITION_CELLS")}
+  //
+  // Repointed 2026-09-15: the map moved into polish-bid-core.js, because the Review step became a
+  // second writer of these same five cells and two copies is how the two screens drift. This line
+  // is now an alias, and it resolves through the window.TWPolishBid binding lifted above --
+  // which is why that grab has to stay ahead of this one.
+  ${grab(/^  var CONDITION_CELLS = B\.CONDITION_CELLS;$/m, "CONDITION_CELLS")}
   // Added 2026-09-11 with the four carry-through toggles. Same rule as the cell map above: the
   // list, the helpers over it AND the carry binding all have to be in this scope, because
   // adoptModel/conditionCells/switchHtml every one of them reaches for it and a name the lifted
@@ -686,6 +691,49 @@ const out = { coreKeys: Object.keys(P.freshModel().conditions) };
     const hydrated = readSwitches(h.dom.nodes["conditions"].innerHTML);
     out.carry.hydrated = hydrated.map((sw) => [sw.key, sw.on]);
     out.carry.hydratedInert = hydrated.filter((sw) => sw.inert).map((sw) => sw.key);
+
+    // ── AN ANSWER GIVEN ON THE REVIEW STEP SURVIVES ARRIVING HERE ────────────
+    // The exact blob the Estimate page writes when its Sales tax switch is turned off: the model
+    // says taxable=false AND the cell says "No", because that page writes both. Before it wrote
+    // the cell, the model said false, Epoxy!B6 still said "Yes", and this page's cell-wins rule
+    // handed the estimator their old answer straight back -- then save() rewrote the model from
+    // it, making the revert permanent.
+    const fromReview = build({ blob: { __draft_id: "review-said-no",
+      polish_estimate: { version: 2, takeoff: [], labor: [],
+        conditions: { local: true, hard_bid: false, prevailing_wage: false,
+                      taxable: false, remodel_tax: false, bond: false } },
+      cell_values: { "Epoxy!B4": "Yes", "Polish!B4": "Yes", "Epoxy!B5": "No", "Polish!B5": "No",
+                     "Epoxy!D5": "No", "Epoxy!B6": "No", "Epoxy!D6": "No" } } });
+    await fromReview.api.boot();
+    const rt = readSwitches(fromReview.dom.nodes["conditions"].innerHTML);
+    out.roundTrip = {
+      taxableOnScreen: (rt.filter((sw) => sw.key === "taxable")[0] || {}).on,
+      model: fromReview.api.model().conditions.taxable,
+    };
+
+    // And the half that made the revert PERMANENT: this page's own save must not put the old
+    // answer back. Driven by touching a DIFFERENT switch, which is the realistic visit -- the
+    // estimator came here to set Prevailing wage, not to re-answer Sales tax.
+    clickSwitch(fromReview, "prevailing_wage");
+    fromReview.clock.fire();
+    const wrote = fromReview.rec.saves[fromReview.rec.saves.length - 1] || {};
+    out.roundTrip.savedModel = ((wrote.polish_estimate || {}).conditions || {}).taxable;
+    out.roundTrip.savedCell = (wrote.cell_values || {})["Epoxy!B6"];
+    out.roundTrip.theOtherOneLanded =
+      ((wrote.polish_estimate || {}).conditions || {}).prevailing_wage;
+
+    // THE COUNTERFACTUAL, so this pair cannot pass vacuously. The same visit with the cell still
+    // saying "Yes" -- which is exactly what a Review step that wrote only the model would leave
+    // behind -- must show the revert. If this does not disagree with the case above, the cell-wins
+    // rule is not actually running and the assertions prove nothing.
+    const stale = build({ blob: { __draft_id: "review-said-no-cell-stale",
+      polish_estimate: { version: 2, takeoff: [], labor: [],
+        conditions: { local: true, hard_bid: false, prevailing_wage: false,
+                      taxable: false, remodel_tax: false, bond: false } },
+      cell_values: { "Epoxy!B6": "Yes" } } });
+    await stale.api.boot();
+    out.roundTrip.revertsWhenCellNotWritten =
+      stale.api.model().conditions.taxable === true;
   }
 
   // ── clicking one flips the model, queues a save, and keeps the siblings ─────
