@@ -6779,11 +6779,12 @@ def api_lead_create_estimate(message_id: str, request: Request) -> Dict[str, Any
 # Serve the 4 HTML pages from ../frontend. Mount AFTER the API routes
 # so /api/* takes precedence.
 #
-# We intentionally disable HTTP caching on the static files because this
-# tool is iterating frequently (filename fixes, layout tweaks). A
-# browser sitting on a stale done.html would miss the fetch+Blob
-# downloader and downloads would still come down with UUID names —
-# don't make users hard-refresh every time.
+# Every static file is revalidated with us on EVERY request, because this tool
+# iterates frequently (filename fixes, layout tweaks) and a browser sitting on a
+# stale done.html would miss the fetch+Blob downloader and downloads would still
+# come down with UUID names — don't make users hard-refresh every time. See
+# NoCacheStaticFiles below for how that guarantee is kept without re-sending a
+# file that has not changed.
 # Frontend dir — handle BOTH layouts:
 #   local dev:  backend/main.py + frontend/  → parent.parent/frontend
 #   Docker:     /app/main.py   + /app/frontend/ → parent/frontend
@@ -6798,19 +6799,62 @@ FRONTEND_DIR = next(
 
 
 class NoCacheStaticFiles(StaticFiles):
-    """Serve static files with `Cache-Control: no-store, must-revalidate`
-    so the browser always re-fetches HTML/JS/CSS during dev + early
-    production. Cheap because the files are tiny."""
+    """Serve the frontend with `Cache-Control: no-cache, must-revalidate`: the browser
+    asks us about EVERY file on EVERY request, and only re-downloads the ones that
+    actually changed.
 
-    def is_not_modified(self, response_headers, request_headers) -> bool:
-        # Disable If-Modified-Since / ETag short-circuit
-        return False
+    THE GUARANTEE THIS CLASS EXISTS FOR IS UNCHANGED. It was written because a browser
+    sitting on a stale done.html missed the fetch+Blob downloader and proposals came
+    down named after their UUID. The tool still ships several times a day, so a
+    deployed file has to reach the estimator on their next page load — not on their
+    next hard refresh. That is still exactly what happens here.
+
+    WHY `no-cache` IS NOT `no-store`, AND WHY THE NAME IS MISLEADING. `no-cache` does
+    not mean "do not cache"; it means "you may store this, but you MUST ask the origin
+    before you reuse it, every single time". So the freshness rule above holds
+    unchanged: the browser still comes to us for done.html on every load, and if the
+    file moved it gets the new body. The only thing that changes is our answer when it
+    did NOT move — `304 Not Modified` with no body, instead of the whole file again.
+    `no-store` forbade the storing, so there was never a copy to validate against and
+    every reply had to be a full 200. That cost the boot chain shared by all ~23 pages
+    (/js/icons.js, /auth.js, /shared.js, /styles.css — 211 KB raw, ~69 KB gzipped) a
+    complete re-transfer on every one of the four wizard steps.
+
+    THE VALIDATOR IS WHAT MAKES IT SAFE, so be explicit about it. Starlette's
+    FileResponse sets `ETag: md5(st_mtime-st_size)` from the file on disk. A deploy is
+    `git pull` + `docker compose up -d --build`; git rewrites the mtime of every file
+    it changes and Docker's COPY carries that mtime into the image. A changed file
+    therefore gets a new ETag, `is_not_modified()` says no, and the browser is sent a
+    200 with the new bytes on its very next request. Staleness would need a changed
+    file whose mtime AND size both survived the deploy unchanged, which the pull
+    itself rules out.
+
+    `is_not_modified` is deliberately NOT overridden here any more. The override this
+    replaced returned False unconditionally, which killed the 304 at its source: the
+    browser dutifully sent `If-None-Match`, and we ignored it and shipped the full
+    body regardless. Re-adding it would silently undo this whole change while every
+    header below still read correctly — which is why
+    tests/test_static_asset_caching.py asserts the 304 and not just the header.
+
+    `must-revalidate` stays, and it is not the redundancy it looks like next to
+    `no-cache`: `no-cache` governs the ordinary path, `must-revalidate` additionally
+    forbids falling back to the stored copy when the revalidation itself FAILS —
+    offline, or a 5xx from us mid-deploy. Serving a stale page when we are unreachable
+    is precisely the failure this class was written for, so it keeps its braces.
+
+    `Pragma: no-cache` and `Expires: 0` are gone. Neither says anything to a cache that
+    understands `Cache-Control`: `Expires` is ignored whenever `Cache-Control` is
+    present, and `Pragma` has no defined meaning in a RESPONSE at all (RFC 9111 makes
+    it a request directive). The only listener left for them is an HTTP/1.0-era cache,
+    and to that cache `Expires: 0` reads "never reuse this" — making it the one header
+    whose sole remaining effect could be to defeat the conditional GET this change is
+    for. They were belt-and-braces for `no-store`; under `no-cache` they are two
+    headers on every asset response that can only subtract.
+    """
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-store, must-revalidate, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
         return resp
 
 
