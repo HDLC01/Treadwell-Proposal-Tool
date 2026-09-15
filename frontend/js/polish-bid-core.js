@@ -281,7 +281,20 @@
     // ── the two taxes' rates, and the fees line, all of which feed the markups below ──
     var sales_tax_pct = cond.taxable ? RATES.SALES_TAX : 0;              // B74
     var sales_tax = roundUp(material_total * sales_tax_pct);             // D74 — MATERIALS ONLY
-    var fees = roundUp(RATES.FEES);                                      // D77 — B77×C77, both blank
+    // D77. The sheet computes this as B77×C77 -- a quantity times a rate -- and ships both blank,
+    // so it has always been zero here. It is now a figure the estimator types on the Review step,
+    // for the same reason contingency (D71) is: the workbook leaves the cells open, and a line an
+    // estimator cannot fill in is one they have to remember to add somewhere else.
+    //
+    // ONE DOLLAR FIGURE, NOT TWO CELLS. Collapsing B77×C77 into the product they make loses
+    // nothing the bid uses -- every formula below reads D77, never its two factors -- and asking
+    // for a quantity and a rate would be asking an estimator to decompose a number they already
+    // have in hand.
+    //
+    // IT IS MARKED UP, and that is the sheet's own behaviour rather than a choice made here: D77
+    // sits inside GP's base (D67), super/PTO's (D69), soft costs' (D70) and the remodel tax's
+    // (D75). A fee typed here therefore grows the bid by more than itself.
+    var fees = roundUp(num(input.fees));                                 // D77 -- B77×C77
 
     // ── markups ──
     var gp_pct = gpPct(sub_total);                                       // B67
@@ -441,6 +454,10 @@
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
                     taxable: true, remodel_tax: false, bond: false },
       contingency: 0,
+      // D77, the Fees + Textura line. Seeded from RATES.FEES rather than a bare 0 so the constant
+      // stays the one place that says what the workbook ships -- the parity test pins B77×C77 as
+      // blank, and a literal here would let the two drift apart silently.
+      fees: RATES.FEES,
       totals: {}
     };
   }
@@ -472,7 +489,7 @@
       var out = {
         version: 2,
         takeoff: model.takeoff, labor: model.labor,
-        conditions: {}, contingency: model.contingency,
+        conditions: {}, contingency: model.contingency, fees: model.fees,
         totals: (model.totals && typeof model.totals === "object") ? model.totals : {}
       };
       if (!(out.takeoff instanceof Array) || !out.takeoff.length) out.takeoff = fresh.takeoff;
@@ -553,6 +570,9 @@
         out.conditions[k] = (k in saved) ? !!saved[k] : fresh.conditions[k];
       }
       if (isBlank(out.contingency)) out.contingency = 0;
+      // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
+      // missing one must read as the zero the sheet ships.
+      if (isBlank(out.fees)) out.fees = fresh.fees;
       return out;
     }
 
@@ -599,7 +619,7 @@
       // system / tooling / materials / added / adds / options are dropped on purpose: assemblies
       // replace all six, and carrying half of them forward would price the same material twice.
       return { version: 2, takeoff: takeoff, labor: labor, conditions: cond,
-               contingency: 0, totals: {} };
+               contingency: 0, fees: fresh.fees, totals: {} };
     }
 
     /* An unversioned blob that is not v1 either, but which STATES something we recognise.
