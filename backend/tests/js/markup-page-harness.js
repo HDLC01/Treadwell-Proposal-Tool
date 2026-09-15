@@ -417,6 +417,13 @@ function build(opts) {
       // Everything the chain rendered, as text — used to prove a $0.00 never appears where a
       // line could not be priced.
       chainText: byClass(t, "mkrow").map((r) => r.text).join(" | "),
+      // ROWS NESTED INSIDE OTHER ROWS, which every other field here is blind to. `byClass` walks
+      // descendants, so when #516 dropped the context row's closing tag and each row below it
+      // became a CHILD of that row, every text and order assertion in this file still passed —
+      // the rows were all still found, just in the wrong place. On screen `.mkrow` is a
+      // four-column grid, so the nested rows rendered as four COLUMNS and the tab was unusable.
+      // `all()` matches the root it is given, so a row containing another row scores 2, not 1.
+      nestedRows: byClass(t, "mkrow").filter((r) => byClass(r, "mkrow").length > 1).length,
       // EVERY INPUT THAT FILES SOMETHING, which is what the admin gate is about. The sub-total
       // what-if box is excluded on purpose: it moves a preview figure on this screen and writes
       // nothing anywhere, so a non-admin using it can never earn the 403 that the gate exists to

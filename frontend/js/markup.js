@@ -1547,7 +1547,13 @@
       '<div class="rate"><span class="ftext locked">Comes off the takeoff and labor tabs' +
       "</span></div>" +
       '<div class="applies"><span class="swro">Always</span></div>' +
-      subtotalBoxHtml("try a job size");
+      // The `</div>` closes `.mkrow ctx`, opened at the top of this expression. It is here and
+      // not inside subtotalBoxHtml because the row is opened here: a builder that closed a div it
+      // did not open is how this broke. Extracting the box into a helper dropped this one tag,
+      // and since `.mkrow` is itself a four-column grid, every row below became a COLUMN of the
+      // unclosed context row instead of a row of the table. The browser auto-closes, so nothing
+      // threw and no string assertion noticed — see the balance test in test_markup_page.py.
+      subtotalBoxHtml("try a job size") + "</div>";
 
     for (var i = 0; i < rows.length; i++) out += rowHtml(rows[i], priced[rows[i].line_key]);
 
@@ -1608,7 +1614,13 @@
       '<div class="rate"><span class="ftext locked">These lines don\'t compound — each one ' +
       "stands on its own</span></div>" +
       '<div class="applies"><span class="swro">&mdash;</span></div>' +
-      subtotalBoxHtml("try a job size");
+      // The `</div>` closes `.mkrow ctx`, opened at the top of this expression. It is here and
+      // not inside subtotalBoxHtml because the row is opened here: a builder that closed a div it
+      // did not open is how this broke. Extracting the box into a helper dropped this one tag,
+      // and since `.mkrow` is itself a four-column grid, every row below became a COLUMN of the
+      // unclosed context row instead of a row of the table. The browser auto-closes, so nothing
+      // threw and no string assertion noticed — see the balance test in test_markup_page.py.
+      subtotalBoxHtml("try a job size") + "</div>";
 
     for (var i = 0; i < rows.length; i++) {
       out += rowHtml(rows[i], priced[rows[i].line_key], globalPreviewHtml);
