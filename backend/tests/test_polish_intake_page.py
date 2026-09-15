@@ -63,10 +63,10 @@ def html():
     return (FRONTEND / "polish-intake.html").read_text(encoding="utf-8")
 
 
-# ── the nine toggles a polish job gets ───────────────────────────────────────
+# ── the ten toggles a polish job gets ────────────────────────────────────────
 @needs_node
-def test_a_polish_job_renders_all_nine_conditions_as_toggles(ran):
-    """NINE switches, in the order the live intake shows them for a polish job, each a toggle.
+def test_a_polish_job_renders_all_ten_conditions_as_toggles(ran):
+    """TEN switches, in the order the live intake shows them for a polish job, each a toggle.
 
     Hanz, 2026-09-11: "ytou didnt follow this on the beta polish, the toggle buttons are different
     for each work type." js/index.js scopes ten conditions by work type and hands a polish job
@@ -75,13 +75,18 @@ def test_a_polish_job_renders_all_nine_conditions_as_toggles(ran):
     job differently. test_intake_conditions.py pins the live set; this pins that this page matches
     it.
 
+    Bond is the tenth and this page's own — the live intake has no Bond question because the
+    workbook's bond rate is a hardcoded cell, not a Yes/No flag. It is here so the Review step's
+    Bond row has a control instead of a permanently dead "off", and it moves no money: see
+    test_polish_estimate_page.test_bond_is_a_switch_that_changes_no_number.
+
     Mutation: drop back to the engine five, or reorder them. Either way the two intake screens
     stop agreeing about what was asked."""
     keys = [s["key"] for s in ran["conditions"]["rendered"]]
-    assert keys == ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax",
+    assert keys == ["local", "hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond",
                     "reno", "dye", "joint_filler", "remove_existing_jf"]
     assert [s["label"] for s in ran["conditions"]["rendered"]] == [
-        "Local job", "Hard bid", "Prevailing wage", "Taxable", "Remodel tax",
+        "Local job", "Hard bid", "Prevailing wage", "Taxable", "Remodel tax", "Bond",
         "Renovation", "Dye", "Joint filler", "Remove existing joint filler"]
     assert ran["conditions"]["allAreSwitches"], "a condition rendered without its toggle track"
     assert ran["conditions"]["allHaveWhy"], (
@@ -97,12 +102,17 @@ def test_the_keys_are_the_ones_the_pricing_engine_reads(ran):
     Mutation: rename `remodel_tax` to `remodel` here. The toggle still works, still saves, still
     reads back — and the remodel tax silently never reaches the bid.
 
-    NINE RENDER, FIVE PRICE, and this is the assertion that keeps those two facts apart. The four
+    TEN RENDER, FIVE PRICE, and this is the assertion that keeps those two facts apart. The four
     carried through from the live intake are cells in Kyle's workbook, not inputs to this page's
     library-based engine — see test_the_carried_through_four_move_no_money. Folding them into
-    CONDITIONS to shorten the code would break this test, and that is the point."""
+    CONDITIONS to shorten the code would break this test, and that is the point.
+
+    `pageKeys == coreKeys` is the SIX the model stores, not the five the chain reads: `bond` lives
+    on the model so the Review step's switch has somewhere to write, and markupChain() never looks
+    it up — bond_pct is RATES.BOND unconditionally. That is deliberate and pinned separately, so do
+    not read this assertion as "the engine reads all six"."""
     assert ran["conditions"]["pageKeys"] == ran["coreKeys"]
-    assert len(ran["conditions"]["rendered"]) == 9, "the screen and the engine drifted apart"
+    assert len(ran["conditions"]["rendered"]) == 10, "the screen and the engine drifted apart"
 
 
 @needs_node
@@ -114,12 +124,12 @@ def test_the_documented_defaults_are_what_a_new_project_shows(ran):
     with joint_filler flipped, every polish bid loses a kit per 3,500 sq ft."""
     assert ran["conditions"]["defaults"] == {
         "local": True, "hard_bid": False, "prevailing_wage": False,
-        "taxable": True, "remodel_tax": False}
-    # Local + Taxable + Joint filler on, the other six off — the live intake's defaults, which are
-    # how Kyle's sheet ships.
+        "taxable": True, "remodel_tax": False, "bond": False}
+    # Local + Taxable + Joint filler on, the other seven off — the live intake's defaults, which
+    # are how Kyle's sheet ships. Bond off matches B78 shipping at zero.
     assert ran["conditions"]["freshRender"] == [
         ["local", True], ["hard_bid", False], ["prevailing_wage", False],
-        ["taxable", True], ["remodel_tax", False],
+        ["taxable", True], ["remodel_tax", False], ["bond", False],
         ["reno", False], ["dye", False], ["joint_filler", True],
         ["remove_existing_jf", False]]
 
@@ -134,10 +144,12 @@ def test_a_v1_model_still_has_its_conditions_read(ran):
     assert ran["conditions"]["v1Render"][:5] == [
         ["local", False], ["hard_bid", False], ["prevailing_wage", True],
         ["taxable", True], ["remodel_tax", False]]
-    # The carried four are NOT in polish_estimate.conditions and never were, so a v1 model states
-    # nothing about them and they show their documented defaults. They come back from cell_values
-    # instead — test_the_carried_through_four_come_back_from_their_cells.
+    # Bond and the carried four are NOT in polish_estimate.conditions and never were, so a v1 model
+    # states nothing about them and they show their documented defaults. The carried four come back
+    # from cell_values instead — test_the_carried_through_four_come_back_from_their_cells. Bond has
+    # no cell to come back from, so `false` is the whole of its story on an older draft.
     assert ran["conditions"]["v1Render"][5:] == [
+        ["bond", False],
         ["reno", False], ["dye", False], ["joint_filler", True],
         ["remove_existing_jf", False]]
 
@@ -237,7 +249,7 @@ def test_remove_existing_joint_filler_greys_out_but_keeps_its_answer(ran):
     assert dep["jointFillerOff"] is True
     assert dep["inert"] is True and dep["cls"] == "sw inert"
     assert dep["stillARealSwitch"], "the greyed switch stopped being a switch"
-    assert dep["stillNine"] == 9, "greying one out removed it from the block"
+    assert dep["stillNine"] == 10, "greying one out removed it from the block"
     assert "Not affecting the price while Joint filler is off." in dep["why"]
     # Its cell is still written, and so is Joint filler's own.
     assert dep["cellStillWritten"] == "No"
@@ -273,7 +285,7 @@ def test_the_carried_through_four_come_back_from_their_cells(ran):
     visit, and the estimator's Renovation flag is gone."""
     assert ran["carry"]["hydrated"] == [
         ["local", True], ["hard_bid", False], ["prevailing_wage", False],
-        ["taxable", True], ["remodel_tax", False],
+        ["taxable", True], ["remodel_tax", False], ["bond", False],
         # Epoxy!B10 Reno, Polish!E25 Yes, Polish!E29 No, Polish!F29 Yes.
         ["reno", True], ["dye", True], ["joint_filler", False],
         ["remove_existing_jf", True]]
@@ -508,6 +520,7 @@ def test_the_page_renders_the_copy_the_sandbox_moved_it_onto(ran):
     # says Reno and no joint filler; both are the opposite of the default, so this cannot pass by
     # accident.
     assert c["rendered"][5:] == [
+        ["bond", False],
         ["reno", True], ["dye", False], ["joint_filler", False],
         ["remove_existing_jf", False]]
     assert json.loads(c["savedTakeoff"]) == [{"area": "Copy bay", "sf": 500}], (
@@ -663,7 +676,7 @@ def test_choosing_a_county_does_not_delete_the_takeoff(ran):
     assert c["versionKept"] == 2, "the model's version was dropped by a county pick"
     assert c["conditionsKept"] == {
         "local": True, "hard_bid": False, "prevailing_wage": False,
-        "taxable": True, "remodel_tax": False}, (
+        "taxable": True, "remodel_tax": False, "bond": False}, (
         "the five job conditions did not survive picking a county")
     assert c["debounced"] and c["savedOnce"], (
         "a pick does not go through the page's own 600ms debounce, so it either writes on every "

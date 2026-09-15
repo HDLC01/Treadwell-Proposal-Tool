@@ -386,7 +386,7 @@
         travelSeed()
       ],
       conditions: { local: true, hard_bid: false, prevailing_wage: false,
-                    taxable: true, remodel_tax: false },
+                    taxable: true, remodel_tax: false, bond: false },
       contingency: 0,
       totals: {}
     };

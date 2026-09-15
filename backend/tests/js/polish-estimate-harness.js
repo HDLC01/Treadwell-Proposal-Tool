@@ -460,6 +460,36 @@ function rowClasses(markup) {
   });
   return out;
 }
+/** Every condition switch the Review step rendered, by key: is it on, and is it a real switch.
+ *
+ *  Parsed out of the emitted HTML rather than mirrored from a list in this file, so "rendered a
+ *  label but no track" and "rendered on when the model says off" are both visible. Same approach
+ *  beta-routing-harness.js takes for the intake page's own `.sw`. */
+function switches(markup) {
+  const out = {};
+  String(markup).split('<span class="mw-sw').slice(1).forEach((chunk) => {
+    const key = (/data-cond="([^"]*)"/.exec(chunk) || [])[1];
+    if (!key) return;
+    const head = chunk.slice(0, chunk.indexOf(">"));
+    out[key] = {
+      on: /^ on"/.test(chunk),
+      aria: (/aria-checked="([^"]*)"/.exec(head) || [])[1],
+      role: (/role="([^"]*)"/.exec(head) || [])[1],
+      hasTrack: /<span class="track"><\/span>/.test(chunk),
+      focusable: /tabindex="0"/.test(head),
+    };
+  });
+  return out;
+}
+/** One switch node the delegated click handler can find, shaped the way the page's own listener
+ *  reaches for it: `closest("[data-cond]")` answers itself and `getAttribute` knows its key. */
+function switchNode(key) {
+  const node = {
+    getAttribute: (a) => (a === "data-cond" ? key : null),
+    closest: function (sel) { return sel === "[data-cond]" ? this : null; },
+  };
+  return node;
+}
 function readMk(built) {
   const money = {};
   built.doc.querySelectorAll("[data-mk]").forEach((el) => {
@@ -984,7 +1014,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
   {
     const live = clone(MODEL);
     live.conditions = { local: true, hard_bid: true, prevailing_wage: true, taxable: true,
-                        remodel_tax: true };
+                        remodel_tax: true, bond: true };
     const b = build({ blob: blob({ polish_estimate: clone(live) }) });
     await b.api.init();
     b.api.go(2);
@@ -997,8 +1027,14 @@ const rendered = [];      // every string the page put on screen, for the Labour
       expectedPct: (function () {
         const c = expectedChain(live, ASMS, ITEMS);
         return { gp_pct: B.pct(c.gp_pct), hard_bid_pct: B.pct(c.hard_bid_pct),
-                 sales_tax_pct: B.pct(c.sales_tax_pct), remodel_pct: B.pct(c.remodel_pct) };
+                 sales_tax_pct: B.pct(c.sales_tax_pct), remodel_pct: B.pct(c.remodel_pct),
+                 bond_pct: B.pct(c.bond_pct) };
       })(),
+      switches: switches(panels.innerHTML),
+      // The label in the first column of every totalled row, in order.
+      totalRowLabels: String(panels.innerHTML).split("<tr").slice(1)
+        .filter((c) => /^[^>]*class="tot"/.test(c))
+        .map((c) => (/<td>([\s\S]*?)<\/td>/.exec(c) || [])[1]),
       expectedPerSf: B.money2(expectedChain(live, ASMS, ITEMS).per_sf) + " / SF",
     };
 
@@ -1045,7 +1081,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // ── the two taxes switched off in the model ──────────────────────────────
     const off = clone(MODEL);
     off.conditions = { local: true, hard_bid: false, prevailing_wage: false, taxable: false,
-                       remodel_tax: false };
+                       remodel_tax: false, bond: false };
     const o = build({ blob: blob({ polish_estimate: clone(off) }) });
     await o.api.init();
     o.api.go(2);
@@ -1054,13 +1090,70 @@ const rendered = [];      // every string the page put on screen, for the Labour
       rendered: readMk(o),
       rowClasses: rowClasses(o.dom.get("panels").innerHTML),
       expected: expectedChain(off, ASMS, ITEMS),
-      // The rows that are off point at the step that can turn them on.
-      salesTaxRowSaysWhere: /Sales tax[\s\S]{0,220}?edit in Intake/.test(
-        o.dom.get("panels").innerHTML),
-      remodelRowSaysWhere: /remodel tax[\s\S]{0,220}?edit in Intake/i.test(
-        o.dom.get("panels").innerHTML),
-      hardBidReason: /hard bid off/.test(o.dom.get("panels").innerHTML),
+      // The rows that are off carry their own switch, so the state is not just readable, it is
+      // reachable -- this used to be an "off · edit in Intake" link back to the other step.
+      switches: switches(o.dom.get("panels").innerHTML),
+      // Hard bid ON but still no discount is the case that reads like a bug, so it is the case
+      // that gets words. Off says nothing, because the switch beside it already did.
+      thresholdNoteWhenOff: /under the discount threshold/.test(o.dom.get("panels").innerHTML),
     };
+    {
+      // Hard bid ON, and the bid still under the threshold: the one row that must explain itself.
+      // hardBidPct() gives a local job nothing under a $13,000 sub-total, so the takeoff and labor
+      // are cut right down -- the point is a priced job whose discount is legitimately zero, not
+      // an empty model.
+      const ht = clone(off);
+      ht.conditions.hard_bid = true;
+      ht.takeoff = [{ assembly_id: "a5", assembly_name: "Densifier Only", measurement: 200,
+                      unit: "SF" }];
+      ht.labor = [{ id: "polishing", label: "Polishing", guys: 1, days: 1, rate: 33 }];
+      const h = build({ blob: blob({ polish_estimate: clone(ht) }) });
+      await h.api.init();
+      h.api.go(2);
+      const hc = expectedChain(ht, ASMS, ITEMS);
+      out.review.off.thresholdNoteWhenOnButZero =
+        /under the discount threshold/.test(h.dom.get("panels").innerHTML) &&
+        hc.hard_bid_pct === 0 && hc.sub_total > 0 && hc.sub_total < 13000;
+    }
+  }
+
+  // ── E2. the Review step's switches are real controls ──────────────────────
+  // Every condition Review talks about can be answered HERE, not only back on Intake. Each click
+  // goes through the page's own delegated listener, so this exercises the shipped path.
+  {
+    const start = clone(MODEL);
+    start.conditions = { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+                         remodel_tax: false, bond: false };
+    out.review.clicks = {};
+    for (const key of ["hard_bid", "prevailing_wage", "taxable", "remodel_tax", "bond"]) {
+      const c = build({ blob: blob({ polish_estimate: clone(start) }) });
+      await c.api.init();
+      c.api.go(2);
+      const before = readMk(c);
+      const wasOn = !!start.conditions[key];
+      c.doc.fire("click", { target: switchNode(key) });
+      const after = readMk(c);
+      out.review.clicks[key] = {
+        flipped: c.api.model().conditions[key] === !wasOn,
+        // Every other key is left exactly as it was -- one click answers one question.
+        othersUntouched: Object.keys(start.conditions).every(
+          (k) => k === key || c.api.model().conditions[k] === start.conditions[k]),
+        reRendered: switches(c.dom.get("panels").innerHTML)[key],
+        expectedOn: !wasOn,
+        totalBefore: before.money.total,
+        totalAfter: after.money.total,
+        expectedAfter: (function () {
+          const m = clone(start);
+          m.conditions[key] = !wasOn;
+          return expectedChain(m, ASMS, ITEMS);
+        })(),
+        bondMoneyAfter: after.money.bond,
+        bondPctAfter: after.pcts.bond_pct,
+        // An answer given on Review has to reach the draft, or it is lost on the next load the
+        // same way a typed contingency would be.
+        queuedASave: c.clock.armed(),
+      };
+    }
   }
 
   // ── F. the save contract ──────────────────────────────────────────────────
@@ -1239,6 +1332,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
       __draft_id: "proj-1-beta", project_name: "Nearman Creek (beta test)",
       city: "Bonner Springs", state: "KS", beta_sandbox_of: "proj-1",
       polish_estimate: Object.assign(clone(MODEL), {
+        // Remodel tax on with no county picked is what makes remodelSource() render its "pick a
+        // county" link -- the one link the Review step still builds at RENDER time, and so the
+        // one that proves withDraft was asked for the id the page SETTLED on.
+        conditions: { local: true, hard_bid: false, prevailing_wage: false, taxable: true,
+                      remodel_tax: true, bond: false },
         takeoff: [{ assembly_id: "a5", assembly_name: "Densifier Only", measurement: 500,
                     unit: "SF" }] }) }) });
     await copy.api.init();
