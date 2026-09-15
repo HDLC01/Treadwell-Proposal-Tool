@@ -1133,6 +1133,32 @@ def test_prices_the_bid_matches_the_writers_own_target_table(ran):
 
 
 @needs_node
+def test_the_global_tab_has_no_target_table_and_claims_none(ran):
+    """THE FOURTH TAB-LEVEL EXCLUSION, and it is an omission, so it is said out loud here.
+
+    `global` is deliberately absent from PRICES_THE_BID. Two of its four lines (hard_bid, bond)
+    have no address on any layout for the reasons above; the other two are travel figures that
+    would need a dollars-only parser -- the current one refuses anything without a `%` and
+    anything at 1 or more, which is every dollar amount there is -- plus a 22-cell target table
+    and a decision about 'Stnd Alts'. That change moves money and is not this one.
+
+    Asserted both ways, because an omission is the easiest thing in this file to read as an
+    oversight and helpfully correct: nothing in the writer's table is keyed `global`, and the
+    admin page claims nothing for it."""
+    assert "global" not in ran["pricesTheBid"], (
+        "markup.js tells an admin the Global lines price a bid; no writer writes one. If the "
+        "travel lines have been wired up, this test and its docstring are what needs updating")
+    assert "global" not in ran["layoutOf"].values(), (
+        "a template sheet now maps to the `global` markup layout -- `global` is not a sheet")
+    for layout, keys in ran["targetTable"].items():
+        assert set(keys) <= {"super_pto", "soft_costs"}, (layout, keys)
+        for travel in ("travel_lodging", "travel_per_diem"):
+            assert travel not in keys, (
+                "%s has a %s address; wiring the travel figures up moves money and needs its own "
+                "change" % (layout, travel))
+
+
+@needs_node
 def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
     """Five states, because they are five different things for the admin to do next.
 
@@ -1155,6 +1181,12 @@ def test_the_admin_page_says_whether_each_row_reaches_the_workbook(ran):
         "bond is unwired on every layout while Kyle's D84 double-counts the tax rows, and an "
         "admin filing 1%% must be told it moves no price -- not left to find out from a bid")
     assert "does not read this line yet" in s["bondGyp"]
+
+    # The Global tab, where hard_bid and bond are now edited and where the two travel figures
+    # live. It is in NO target table, so every one of its rows must claim nothing.
+    for name in ("bondGlobal", "hardBidGlobal", "travelLodgingGlobal", "travelPerDiemGlobal"):
+        assert "does not read this line yet" in s[name], (
+            "a Global row promises a price: %s -> %r" % (name, s[name]))
 
     assert "Prices the bid" in s["polishSoftCosts"] and "16%" in s["polishSoftCosts"]
     assert "Prices the bid" in s["filed"] and "4%" in s["filed"]

@@ -364,14 +364,27 @@ alter table public.library_assemblies add column if not exists updated_by text;
 -- the tab, and Seal / Epoxy blank / Leveling are tabs a bid can sit on that no work type names.
 -- There is deliberately no 'combo' — a combo job is two option lines, each priced off its own
 -- tab, so it has no markup of its own.
+--
+-- …EXCEPT for the four lines that do NOT differ per tab, which is what the 'global' layout is:
+-- bond is 0 on every priced sheet, the hard-bid rule is one formula on all six sheets that carry
+-- one, and travel lodging/food are $70 a night and $45 a day on all eleven. Filed once.
 create table if not exists public.markup_rules (
   id           text primary key,
-  -- polish | seal | epoxy | leveling | gyp. Checked in markup.py rather than by a CHECK
-  -- constraint, for the reason the two-databases rule gives: an unapplied CHECK surfaces as a
-  -- 502 on whichever database missed it, and this list will grow when Kyle adds a tab.
+  -- polish | seal | epoxy | leveling | gyp | global. The five are sheet TABS; `global` is not a
+  -- tab at all but the one home for the lines that are the same rule on every sheet, and its rows
+  -- are read BY every tab. Checked in markup.py rather than by a CHECK constraint, for the reason
+  -- the two-databases rule gives: an unapplied CHECK surfaces as a 502 on whichever database
+  -- missed it, and this list grew exactly that way when `global` was added.
   layout       text not null,
   -- gp | hard_bid | contingency | super_pto | soft_costs | remodel_tax | bond, in the order the
-  -- chain compounds — each line's base is the running sum above it.
+  -- chain compounds — each line's base is the running sum above it — plus travel_lodging and
+  -- travel_per_diem, which are `global` lines and not chain lines at all ($70 a night, $45 a day).
+  --
+  -- ONE HOME PER LINE, enforced in markup.py and not here: gp / super_pto / soft_costs are filed
+  -- per tab, hard_bid / bond / travel_lodging / travel_per_diem once on `global`. A row filed
+  -- under the other one is read by nothing. One such row predates the split on production
+  -- (polish / bond / 1%); it is shown on the page as misfiled rather than migrated, because
+  -- moving it would change its meaning from one tab to every tab.
   line_key     text not null,
   -- AN EXPRESSION, not a rate, and NULL when the line does not apply. Gyp's soft-costs cell is
   --   IF(OR(B5="Yes",B5="No"), IF(B5="Yes",.09,.1) - IF(E69>334900,.05,IF(E69>234450,.035,0)),
